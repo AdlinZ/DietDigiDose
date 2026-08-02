@@ -1,0 +1,27 @@
+{
+  "name": "dietdigidose",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev:client": "pnpm --dir ./client start",
+    "dev:server": "pnpm --dir ./server dev",
+    "dev:admin": "pnpm --dir ./admin dev",
+    "dev": "pnpm dlx concurrently --names client,server \"pnpm dev:client\" \"pnpm dev:server\"",
+    "build:client": "pnpm --dir ./client build",
+    "build:server": "pnpm --dir ./server build",
+    "build:admin": "pnpm --dir ./admin build",
+    "preinstall": "npx only-allow pnpm",
+    "lint:client": "pnpm --dir ./client lint",
+    "lint:server": "pnpm --dir ./server lint",
+    "lint:admin": "pnpm --dir ./admin lint",
+    "lint:all": "pnpm lint:client && pnpm lint:server && pnpm lint:admin",
+    "test:client": "pnpm --dir ./client test",
+    "audit:prod": "pnpm audit --prod --registry=https://registry.npmjs.org"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "pnpm": ">=9.0.0"
+  }
+}

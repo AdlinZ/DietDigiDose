@@ -1,0 +1,47 @@
+{
+  "name": "server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "dev": "tsx watch src/index.ts",
+    "import:open-food-facts": "tsx scripts/import-open-food-facts.ts",
+    "import:howtocook": "tsx scripts/import-howtocook.ts",
+    "import:wikibooks-recipes": "tsx scripts/import-wikibooks-recipes.ts",
+    "import:taiwan-fda": "tsx scripts/import-taiwan-fda.ts",
+    "backfill:ingredient-groups": "tsx scripts/backfill-ingredient-groups.ts",
+    "localize:ingredient-names": "tsx scripts/localize-ingredient-names.ts",
+    "preinstall": "npx only-allow pnpm",
+    "start": "NODE_ENV=production PORT=${PORT:-9091} node dist/index.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.95.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.1",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.20",
+    "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.45.2",
+    "drizzle-zod": "^0.8.3",
+    "express": "^4.22.1",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.2.0",
+    "opencc-js": "^1.4.1",
+    "pg": "^8.16.3",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.0.0",
+    "@types/pg": "^8.16.0",
+    "drizzle-kit": "^0.31.8",
+    "esbuild": "0.27.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3"
+  }
+}

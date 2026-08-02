@@ -1,0 +1,10 @@
+packages:
+  - client
+  - server
+  - admin
+
+overrides:
+  esbuild: 0.27.2
+
+patchedDependencies:
+  expo@54.0.33: patches/expo@54.0.33.patch

@@ -3,6 +3,7 @@ import { ExpoConfig, ConfigContext } from 'expo/config';
 const appName = process.env.EXPO_PUBLIC_APP_NAME || 'DietDigiDose';
 const appSlug = process.env.EXPO_PUBLIC_APP_SLUG || 'dietdigidose';
 const androidPackage = process.env.EXPO_PUBLIC_ANDROID_PACKAGE || 'com.dietdigidose.app';
+const allowInsecureHttp = process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP === '1';
 
 export default ({ config }: ConfigContext): ExpoConfig => {
   return {
@@ -16,9 +17,20 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      ...config.ios,
+      "supportsTablet": true,
+      ...(allowInsecureHttp ? {
+        "infoPlist": {
+          ...config.ios?.infoPlist,
+          "NSAppTransportSecurity": {
+            ...(config.ios?.infoPlist?.NSAppTransportSecurity as Record<string, unknown> | undefined),
+            "NSAllowsArbitraryLoads": true
+          }
+        }
+      } : {})
     },
     "android": {
+      ...config.android,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -66,6 +78,14 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           "cameraPermission": `新项目需要访问相机以拍摄照片和视频。`,
           "microphonePermission": `新项目需要访问麦克风以录制视频声音。`,
           "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": allowInsecureHttp
+          }
         }
       ]
     ],

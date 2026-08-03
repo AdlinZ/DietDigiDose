@@ -17,11 +17,12 @@ import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { LineChart } from "react-native-chart-kit";
+import { addLocalDays, toLocalDateKey } from "@/utils/date";
+import { dietApi, healthApi, recipesApi } from "@/services/api";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 
 interface HealthData {
   id: number;
@@ -58,7 +59,7 @@ export default function ProfileScreen() {
   const [waterMl, setWaterMl] = useState(1450);
   const [favoriteCount, setFavoriteCount] = useState(0);
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = toLocalDateKey();
 
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener("open-quick-record", () => {
@@ -74,15 +75,12 @@ export default function ProfileScreen() {
     }
     try {
       setLoading(true);
-      const [healthRes, dietRes, favoriteRes] = await Promise.all([
-        authFetch(`${API_BASE}/api/v1/health-data/latest`),
-        authFetch(`${API_BASE}/api/v1/diet-records`),
-        authFetch(`${API_BASE}/api/v1/recipes/favorites/count`),
+      const [healthJson, dietJson, favoriteJson] = await Promise.all([
+        healthApi.latest(authFetch),
+        dietApi.list(authFetch),
+        recipesApi.favoriteCount(authFetch),
       ]);
-      const healthJson = await healthRes.json();
-      const dietJson = await dietRes.json();
-      const favoriteJson = await favoriteRes.json();
-      setFavoriteCount(favoriteRes.ok ? Number(favoriteJson?.count || 0) : 0);
+      setFavoriteCount(Number(favoriteJson?.count || 0));
 
       const latestHealth = Array.isArray(healthJson) ? healthJson[0] : healthJson;
       setHealthData(latestHealth);
@@ -96,9 +94,8 @@ export default function ProfileScreen() {
       // Compute diet trend for last 7 days
       const last7Days: { date: string; calories: number }[] = [];
       for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const dateStr = d.toISOString().split("T")[0];
+        const d = addLocalDays(-i);
+        const dateStr = toLocalDateKey(d);
         const dayRecords = dietList.filter((r: DietRecord) => r.recorded_at === dateStr);
         const totalCalories = dayRecords.reduce(
           (sum: number, r: DietRecord) => sum + (r.calories || 0),
@@ -126,17 +123,7 @@ export default function ProfileScreen() {
 
     if (!isAuthenticated) return;
     try {
-      await authFetch(`${API_BASE}/api/v1/health-data`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recorded_date: today,
-          water_ml: newWater,
-          height: healthData?.height || 175,
-          weight: healthData?.weight || 62.5,
-          body_fat: healthData?.body_fat || 18.5,
-        }),
-      });
+      await healthApi.saveLog(authFetch, { recorded_date: today, water_ml: newWater });
     } catch (e) {
       console.error("Update water failed", e);
     }
@@ -187,10 +174,12 @@ export default function ProfileScreen() {
     );
   }
 
-  const heightVal = healthData?.height || 175;
-  const weightVal = healthData?.weight || 62.5;
-  const bodyFatVal = healthData?.body_fat || 18.5;
-  const calculatedBmi = weightVal ? weightVal / Math.pow(heightVal / 100, 2) : null;
+  const heightVal = healthData?.height ?? null;
+  const weightVal = healthData?.weight ?? null;
+  const bodyFatVal = healthData?.body_fat ?? null;
+  const calculatedBmi = weightVal != null && heightVal != null
+    ? weightVal / Math.pow(heightVal / 100, 2)
+    : null;
   const bmi = healthData?.bmi ?? calculatedBmi;
 
   const bmiStatus =
@@ -361,12 +350,12 @@ export default function ProfileScreen() {
 
           {/* 4维健康指标 */}
           <View className="flex-row justify-between bg-[#FDF8F0] p-3.5 rounded-2xl mb-3.5 border border-[#EBE3D5]/50">
-            <HealthStat label="身高" value={`${heightVal}`} unit="cm" color="#2D6A4F" />
-            <HealthStat label="体重" value={`${weightVal}`} unit="kg" color="#D4A276" />
-            <HealthStat label="体脂率" value={`${bodyFatVal}`} unit="%" color="#E07A5F" />
+            <HealthStat label="身高" value={heightVal == null ? "—" : `${heightVal}`} unit={heightVal == null ? "" : "cm"} color="#2D6A4F" />
+            <HealthStat label="体重" value={weightVal == null ? "—" : `${weightVal}`} unit={weightVal == null ? "" : "kg"} color="#D4A276" />
+            <HealthStat label="体脂率" value={bodyFatVal == null ? "—" : `${bodyFatVal}`} unit={bodyFatVal == null ? "" : "%"} color="#E07A5F" />
             <HealthStat
               label="BMI"
-              value={bmi ? bmi.toFixed(1) : "--"}
+              value={bmi == null ? "—" : bmi.toFixed(1)}
               unit={bmiStatus}
               color={bmiColor}
             />

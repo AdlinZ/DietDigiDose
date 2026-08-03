@@ -19,7 +19,7 @@ import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { SmartDateInput } from "@/components/SmartDateInput";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
@@ -28,66 +28,11 @@ import {
   INVENTORY_SCAN_JOB_STORAGE_KEY,
   getUserStorageKey,
 } from "@/utils/userStorage";
-
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
-const MAX_AI_IMAGE_BASE64_LENGTH = 7_500_000;
-
-interface InventoryItem {
-  id: number;
-  food_name: string;
-  category: string;
-  quantity: string;
-  expiration_date: string;
-  storage_location: string;
-  image_url: string | null;
-  is_available: boolean;
-}
-
-type StorageLocation = "冷藏" | "冷冻" | "常温";
-
-interface Recipe {
-  id: number;
-  title: string;
-  description: string;
-  image_url: string;
-  cook_time: number;
-  difficulty: string;
-  calories: number;
-  protein: number;
-  carbs: number;
-  fat: number;
-  category: string;
-  tags: string[];
-}
-
-interface KitchenwareItem {
-  id: number;
-  name: string;
-  category: string;
-  status: string;
-  image_url: string | null;
-  note?: string;
-  purchase_date?: string;
-  last_maintained_at?: string;
-}
-
-interface KitchenwareCatalogItem {
-  id: number;
-  name: string;
-  category: string;
-  aliases: string;
-  cooking_methods: string;
-  care_note: string | null;
-}
-
-interface DetectedFood {
-  id: string;
-  foodName: string;
-  quantity: string;
-  suggestedStorageLocation: string;
-  estimatedExpireDays: number;
-  selected: boolean;
-}
+import { dateKeyAfterDays } from "@/utils/date";
+import { daysUntilDateKey, getInventoryStatus } from "@/utils/inventory";
+import { aiApi, inventoryApi, kitchenwareApi, recipesApi } from "@/services/api";
+import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, Recipe, StorageLocation } from "./types";
+import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, normalizeDetectedFoods } from "./scan";
 
 export default function InventoryScreen() {
   const { width: windowWidth } = useWindowDimensions();
@@ -141,26 +86,16 @@ export default function InventoryScreen() {
     }
     try {
       setSavingKitchenware(true);
-      const url = editingKitchenware
-        ? `${API_BASE}/api/v1/kitchenware/${editingKitchenware.id}`
-        : `${API_BASE}/api/v1/kitchenware`;
-      const res = await authFetch(url, {
-        method: editingKitchenware ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const payload = {
           name: kwName,
           category: kwCategory,
           status: kwStatus,
           note: kwNote,
           image_url: kwImageUrl.trim() || null,
           purchase_date: kwPurchaseDate || null,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        Alert.alert("保存失败", data.error || "请稍后重试");
-        return;
-      }
+      };
+      if (editingKitchenware) await kitchenwareApi.update(authFetch, editingKitchenware.id, payload);
+      else await kitchenwareApi.create(authFetch, payload);
       setKitchenwareModalVisible(false);
       await fetchData();
       Alert.alert("保存成功", `厨具【${kwName}】已保存到我的装备库。`);
@@ -189,7 +124,7 @@ export default function InventoryScreen() {
   const [category, setCategory] = useState("蔬菜");
   const [quantity, setQuantity] = useState("1份");
   const [expirationDate, setExpirationDate] = useState(
-    new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0]
+    dateKeyAfterDays(7)
   );
   const [storageLocation, setStorageLocation] = useState("冷藏");
   const [imageUrl, setImageUrl] = useState("");
@@ -201,35 +136,10 @@ export default function InventoryScreen() {
   const [savingDetectedFoods, setSavingDetectedFoods] = useState(false);
   const [pendingScanJobId, setPendingScanJobId] = useState<string | null>(null);
 
-  const suggestedDate = (days: number) =>
-    new Date(Date.now() + days * 86400000).toISOString().split("T")[0];
-
-  const inferFoodCategory = (name: string) => {
-    if (/[牛猪鸡羊鱼虾蟹贝肉]|培根|火腿/.test(name)) return "肉食";
-    if (/奶|芝士|黄油/.test(name)) return "乳制品";
-    if (/苹果|香蕉|[橙柚梨桃]|葡萄|草莓|蓝莓|西瓜/.test(name)) return "水果";
-    if (/[酱油醋盐糖米面粉豆]|罐头|披萨|泡芙/.test(name)) return "粮油干货";
-    return "蔬菜";
-  };
-
-  const normalizeDetectedFoods = (items: unknown): DetectedFood[] =>
-    (Array.isArray(items) ? items : [])
-      .filter((item: { foodName?: unknown }) => typeof item.foodName === "string" && item.foodName.trim())
-      .slice(0, 30)
-      .map((item: { foodName: string; quantity?: string; suggestedStorageLocation?: string; estimatedExpireDays?: number }, index: number) => ({
-        id: `${Date.now()}-${index}`,
-        foodName: item.foodName.trim(),
-        quantity: item.quantity || "1份",
-        suggestedStorageLocation: ["冷藏", "冷冻", "常温"].includes(item.suggestedStorageLocation || "") ? item.suggestedStorageLocation! : "冷藏",
-        estimatedExpireDays: Math.max(1, Math.min(Number(item.estimatedExpireDays) || 7, 365)),
-        selected: true,
-      }));
+  const suggestedDate = (days: number) => dateKeyAfterDays(days);
 
   const getScanJob = async (jobId: string) => {
-    const res = await authFetch(`${API_BASE}/api/v1/ai/inventory-scan-jobs/${jobId}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "识别任务已失效");
-    return data as { status: string; items?: unknown; error?: string };
+    return aiApi.inventoryScan<{ status: string; items?: unknown; error?: string }>(authFetch, jobId);
   };
 
   const waitForScanJob = async (jobId: string): Promise<DetectedFood[]> => {
@@ -259,16 +169,8 @@ export default function InventoryScreen() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/ai/inventory-scan-jobs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64 }),
-        signal: controller.signal,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.jobId) {
-        throw new Error(data.error || "AI 识别任务创建失败，请稍后重试");
-      }
+      const data = await aiApi.createInventoryScan<{ jobId?: string }>(authFetch, base64, controller.signal);
+      if (!data.jobId) throw new Error("AI 识别任务创建失败，请稍后重试");
 
       setPendingScanJobId(data.jobId);
       if (inventoryScanJobStorageKey) {
@@ -377,19 +279,16 @@ export default function InventoryScreen() {
     setSavingDetectedFoods(true);
     try {
       const results = await Promise.allSettled(selectedFoods.map((item) =>
-        authFetch(`${API_BASE}/api/v1/inventory`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        inventoryApi.create(authFetch, {
             food_name: item.foodName,
             category: inferFoodCategory(item.foodName),
             quantity: item.quantity,
             expiration_date: suggestedDate(item.estimatedExpireDays),
             storage_location: item.suggestedStorageLocation,
-          }),
+            image_url: null,
         })
       ));
-      const addedCount = results.filter((result) => result.status === "fulfilled" && result.value.ok).length;
+      const addedCount = results.filter((result) => result.status === "fulfilled").length;
       const failedCount = selectedFoods.length - addedCount;
       if (addedCount > 0) await fetchData();
       if (failedCount === 0) {
@@ -483,11 +382,8 @@ export default function InventoryScreen() {
     // Fetch recipes regardless of auth state
     try {
       setLoadingRecipes(true);
-      const res = await fetch(`${API_BASE}/api/v1/recipes`);
-      if (res.ok) {
-        const data = await res.json();
-        setRecipes(Array.isArray(data) ? data : []);
-      }
+      const data = await recipesApi.list<Recipe>();
+      setRecipes(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("Fetch recipes error:", e);
     } finally {
@@ -504,23 +400,14 @@ export default function InventoryScreen() {
     try {
       setLoadingItems(true);
       setLoadingKitchenware(true);
-      const [inventoryRes, kitchenwareRes, catalogRes] = await Promise.all([
-        authFetch(`${API_BASE}/api/v1/inventory`),
-        authFetch(`${API_BASE}/api/v1/kitchenware`),
-        authFetch(`${API_BASE}/api/v1/kitchenware/catalog`),
+      const [inventoryData, kitchenwareData, catalogData] = await Promise.all([
+        inventoryApi.list(authFetch),
+        kitchenwareApi.list<KitchenwareItem>(authFetch),
+        kitchenwareApi.catalog<KitchenwareCatalogItem>(authFetch),
       ]);
-      if (inventoryRes.ok) {
-        const data = await inventoryRes.json();
-        setItems(Array.isArray(data) ? data : []);
-      }
-      if (kitchenwareRes.ok) {
-        const data = await kitchenwareRes.json();
-        setKitchenware(Array.isArray(data) ? data : []);
-      }
-      if (catalogRes.ok) {
-        const data = await catalogRes.json();
-        setKitchenwareCatalog(Array.isArray(data) ? data : []);
-      }
+      setItems(Array.isArray(inventoryData) ? inventoryData : []);
+      setKitchenware(Array.isArray(kitchenwareData) ? kitchenwareData : []);
+      setKitchenwareCatalog(Array.isArray(catalogData) ? catalogData : []);
     } catch (e) {
       console.error("Fetch inventory or kitchenware error:", e);
     } finally {
@@ -540,7 +427,7 @@ export default function InventoryScreen() {
     setFoodName("");
     setCategory("蔬菜");
     setQuantity("100g");
-    setExpirationDate(new Date(Date.now() + 5 * 86400000).toISOString().split("T")[0]);
+    setExpirationDate(dateKeyAfterDays(5));
     setStorageLocation("冷藏");
     setImageUrl("");
     setEntryMode("choose");
@@ -590,18 +477,8 @@ export default function InventoryScreen() {
         image_url: imageUrl.trim() || null,
       };
 
-      const url = editingItem
-        ? `${API_BASE}/api/v1/inventory/${editingItem.id}`
-        : `${API_BASE}/api/v1/inventory`;
-      const method = editingItem ? "PUT" : "POST";
-
-      const res = await authFetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok) {
+      if (editingItem) await inventoryApi.update(authFetch, editingItem.id, payload);
+      else await inventoryApi.create(authFetch, payload);
         if (!editingItem && pendingScanJobId) {
           if (inventoryScanJobStorageKey) {
             await AsyncStorage.removeItem(inventoryScanJobStorageKey);
@@ -610,10 +487,6 @@ export default function InventoryScreen() {
         }
         setModalVisible(false);
         fetchData();
-      } else {
-        const err = await res.json();
-        Alert.alert("错误", err.error || "保存失败");
-      }
     } catch (e) {
       Alert.alert("错误", "网络异常");
     } finally {
@@ -629,14 +502,10 @@ export default function InventoryScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            const res = await authFetch(`${API_BASE}/api/v1/inventory/${id}`, {
-              method: "DELETE",
-            });
-            if (res.ok) {
+            await inventoryApi.remove(authFetch, id);
               setModalVisible(false);
               setEditingItem(null);
               fetchData();
-            }
           } catch (e) {
             console.error(e);
           }
@@ -679,12 +548,7 @@ export default function InventoryScreen() {
     );
 
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/inventory/${item.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storage_location: storageLocation }),
-      });
-      if (!res.ok) throw new Error("保存失败");
+      await inventoryApi.update(authFetch, item.id, { storage_location: storageLocation });
     } catch {
       setItems((currentItems) =>
         currentItems.map((currentItem) =>
@@ -734,14 +598,7 @@ export default function InventoryScreen() {
 
   const handleMaintainKitchenware = async (item: KitchenwareItem) => {
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/kitchenware/${item.id}/maintain`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        Alert.alert("更新失败", data.error || "请稍后重试");
-        return;
-      }
+      await kitchenwareApi.maintain(authFetch, item.id);
       await fetchData();
       Alert.alert("保养完成", `已更新【${item.name}】的保养记录。`);
     } catch {
@@ -756,11 +613,12 @@ export default function InventoryScreen() {
         text: "移除",
         style: "destructive",
         onPress: async () => {
-          const res = await authFetch(`${API_BASE}/api/v1/kitchenware/${item.id}`, {
-            method: "DELETE",
-          });
-          if (res.ok) await fetchData();
-          else Alert.alert("移除失败", "请稍后重试");
+          try {
+            await kitchenwareApi.remove(authFetch, item.id);
+            await fetchData();
+          } catch {
+            Alert.alert("移除失败", "请稍后重试");
+          }
         },
       },
     ]);
@@ -768,13 +626,11 @@ export default function InventoryScreen() {
 
   // Status helper for inventory items
   const getStatusBadge = (expDate: string) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const exp = new Date(expDate);
-    exp.setHours(0, 0, 0, 0);
-    const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 3600 * 24));
+    const diffDays = daysUntilDateKey(expDate);
 
-    if (diffDays < 0) {
+    if (diffDays === null) {
+      return { text: "日期异常", bg: "bg-gray-500/15", color: "text-gray-600" };
+    } else if (diffDays < 0) {
       return { text: "已过期", bg: "bg-red-500/15", color: "text-red-600" };
     } else if (diffDays <= 3) {
       return { text: `临期 ${diffDays}天`, bg: "bg-amber-500/15", color: "text-amber-700" };
@@ -801,12 +657,8 @@ export default function InventoryScreen() {
   });
 
   const priorityItems = items.filter((item) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const expiration = new Date(item.expiration_date);
-    expiration.setHours(0, 0, 0, 0);
-    const diffDays = Math.ceil((expiration.getTime() - today.getTime()) / (1000 * 3600 * 24));
-    return diffDays <= 3;
+    const status = getInventoryStatus(item).freshness;
+    return status === "expired" || status === "expiring";
   });
   const expiringCount = priorityItems.length;
 
@@ -1250,11 +1102,7 @@ export default function InventoryScreen() {
                                 }}
                               >
                                 {group.items.map((item) => {
-                                  const today = new Date();
-                                  today.setHours(0, 0, 0, 0);
-                                  const exp = new Date(item.expiration_date);
-                                  exp.setHours(0, 0, 0, 0);
-                                  const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 3600 * 24));
+                                  const diffDays = daysUntilDateKey(item.expiration_date) ?? 0;
 
                                   let badgeBg = "bg-emerald-500/15";
                                   let statusBadgeText = `保鲜${diffDays}天`;
@@ -1876,7 +1724,7 @@ export default function InventoryScreen() {
                   </View>
                   <View className="flex-row gap-2 mb-3">
                     {[{ label: "3天", days: 3 }, { label: "7天", days: 7 }, { label: "30天", days: 30 }].map(({ label, days }) => {
-                      const date = new Date(Date.now() + days * 86400000).toISOString().split("T")[0];
+                      const date = dateKeyAfterDays(days);
                       const selected = expirationDate === date;
                       return (
                         <TouchableOpacity key={label} onPress={() => setExpirationDate(date)} className={`flex-1 items-center py-1.5 rounded-xl border ${selected ? "bg-[#2D6A4F] border-[#2D6A4F]" : "bg-white border-[#EBE3D5]"}`}>

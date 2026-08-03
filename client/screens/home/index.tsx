@@ -15,120 +15,29 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Screen } from "@/components/Screen";
+import { MedicalDisclaimer } from "@/components/MedicalDisclaimer";
 import { useFocusEffect } from "expo-router";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
+import { toLocalDateKey } from "@/utils/date";
+import { daysUntilDateKey } from "@/utils/inventory";
+import { ingredientNamesMatch, normalizeIngredientName } from "@/utils/ingredients";
+import { aiApi } from "@/services/api";
+import type { InventoryHighlight, RankedRecipe, RecommendationCard } from "./types";
+import { getRecommendationPeriod } from "./recommendations";
+import { useHomeData } from "./useHomeData";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const RECIPE_BATCH_SIZE = 3;
-
-const normalizeIngredientName = (value: string) =>
-  value.toLocaleLowerCase().replace(/[\s·、，,。()（）/\\_-]/g, "");
-
-const ingredientNamesMatch = (left: string, right: string) => {
-  const normalizedLeft = normalizeIngredientName(left);
-  const normalizedRight = normalizeIngredientName(right);
-  if (!normalizedLeft || !normalizedRight) return false;
-  return normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft);
-};
-
-interface Recipe {
-  id: number;
-  title: string;
-  description: string;
-  image_url: string;
-  cook_time: number;
-  difficulty: string;
-  calories: number;
-  protein: number;
-  carbs: number;
-  fat: number;
-  category: string;
-  tags: string[];
-  ingredients: Array<{ name?: string; amount?: string } | string>;
-}
-
-interface RankedRecipe extends Recipe {
-  inventoryMatchNames: string[];
-  expiringMatchCount: number;
-}
-
-interface InventoryItem {
-  id: number;
-  food_name: string;
-  category: string;
-  quantity: string;
-  expiration_date: string;
-  storage_location: string;
-  image_url: string | null;
-  is_available: boolean;
-}
-
-interface DietRecord {
-  id: number;
-  meal_type: string;
-  food_name: string;
-  amount: string;
-  calories: number | null;
-  protein: number;
-  carbs: number;
-  fat: number;
-  recorded_at: string;
-}
-
-interface Post {
-  id: number;
-  user_id: number;
-  username: string;
-  nickname: string;
-  avatar_url: string;
-  content: string;
-  image_url: string | null;
-  likes_count: number;
-  created_at: string;
-}
-
-interface RecommendationCard {
-  title: string;
-  tag: string;
-  desc: string;
-  calories: string;
-  prompt: string;
-}
-
-interface InventoryHighlight {
-  eyebrow: string;
-  title: string;
-  description: string;
-  icon: "carrot" | "boxes-stacked" | "basket-shopping" | "plus";
-  tone: "amber" | "green";
-  prompt?: string;
-}
-
-const getRecommendationPeriod = (hour: number) => {
-  if (hour >= 11 && hour < 14) return "午间";
-  if (hour >= 14 && hour < 18) return "下午茶";
-  if (hour >= 18 && hour < 22) return "晚间";
-  if (hour >= 22 || hour < 5) return "深夜";
-  return "晨间";
-};
 
 export default function HomeScreen() {
   const router = useSafeRouter();
   const { isAuthenticated, user } = useAuth();
   const authFetch = useAuthFetch();
 
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
-  const [expiringItems, setExpiringItems] = useState<InventoryItem[]>([]);
-  const [todayRecords, setTodayRecords] = useState<DietRecord[]>([]);
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [healthLogs, setHealthLogs] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState("全部");
   const [searchQuery, setSearchQuery] = useState("");
   const [visibleRecipeCount, setVisibleRecipeCount] = useState(RECIPE_BATCH_SIZE);
@@ -138,78 +47,30 @@ export default function HomeScreen() {
   const [aiRecCards, setAiRecCards] = useState<RecommendationCard[]>([]);
   const aiRecommendationRequestKey = useRef("");
   const [activeRecommendationCard, setActiveRecommendationCard] = useState(0);
-  const smartFeedOffset = useRef(new Animated.Value(0)).current;
-  const smartFeedOpacity = useRef(new Animated.Value(1)).current;
+  const [smartFeedOffset] = useState(() => new Animated.Value(0));
+  const [smartFeedOpacity] = useState(() => new Animated.Value(1));
   const [activeInventoryHighlight, setActiveInventoryHighlight] = useState(0);
-  const inventoryHighlightOffset = useRef(new Animated.Value(0)).current;
-  const inventoryHighlightOpacity = useRef(new Animated.Value(1)).current;
+  const [inventoryHighlightOffset] = useState(() => new Animated.Value(0));
+  const [inventoryHighlightOpacity] = useState(() => new Animated.Value(1));
   const [activeCommunityPost, setActiveCommunityPost] = useState(0);
-  const communityPostOffset = useRef(new Animated.Value(0)).current;
-  const communityPostOpacity = useRef(new Animated.Value(1)).current;
+  const [communityPostOffset] = useState(() => new Animated.Value(0));
+  const [communityPostOpacity] = useState(() => new Animated.Value(1));
   const [activeCaloriePanel, setActiveCaloriePanel] = useState(0);
-  const caloriePanelOffset = useRef(new Animated.Value(0)).current;
-  const caloriePanelOpacity = useRef(new Animated.Value(1)).current;
-  const calorieProgress = useRef(new Animated.Value(0)).current;
+  const [caloriePanelOffset] = useState(() => new Animated.Value(0));
+  const [caloriePanelOpacity] = useState(() => new Animated.Value(1));
+  const [calorieProgress] = useState(() => new Animated.Value(0));
 
   const categories = ["全部", "减脂", "增肌", "营养餐单"];
-  const today = new Date().toISOString().split("T")[0];
-
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setVisibleRecipeCount(RECIPE_BATCH_SIZE);
-      lastRecipeBatchLoadAt.current = 0;
-      const fetchPromises: Promise<Response>[] = [
-        fetch(`${API_BASE}/api/v1/recipes`),
-        fetch(`${API_BASE}/api/v1/community/posts`),
-      ];
-      if (isAuthenticated) {
-        fetchPromises.push(
-          authFetch(`${API_BASE}/api/v1/inventory`),
-          authFetch(`${API_BASE}/api/v1/diet-records?date=${today}`),
-          authFetch(`${API_BASE}/api/v1/health-data`)
-        );
-      }
-      const results = await Promise.all(fetchPromises);
-      const recipesData = await results[0].json();
-      const postsData = await results[1].json();
-
-      setRecipes(Array.isArray(recipesData) ? recipesData : []);
-      setPosts(Array.isArray(postsData) ? postsData : []);
-
-      if (isAuthenticated && results.length >= 5) {
-        const inventoryData = await results[2].json();
-        const dietData = await results[3].json();
-        const healthData = await results[4].json();
-        
-        const allInventory = Array.isArray(inventoryData) ? inventoryData : [];
-        setInventoryItems(allInventory);
-        setTodayRecords(Array.isArray(dietData) ? dietData : []);
-        setHealthLogs(Array.isArray(healthData) ? healthData : []);
-
-        // 筛选临期食材 (3天内)
-        const now = new Date();
-        const threeDaysLater = new Date(now);
-        threeDaysLater.setDate(threeDaysLater.getDate() + 3);
-        const expiring = allInventory.filter(
-          (item: InventoryItem) =>
-            item.is_available &&
-            new Date(item.expiration_date) <= threeDaysLater &&
-            new Date(item.expiration_date) >= now
-        );
-        setExpiringItems(expiring);
-      }
-    } catch (error) {
-      console.error("Home fetchData error:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, [isAuthenticated, authFetch, today]);
+  const today = toLocalDateKey();
+  const { recipes, inventoryItems, expiringItems, todayRecords, posts, healthLogs, loading, error, refresh } =
+    useHomeData(authFetch, isAuthenticated, today);
 
   useFocusEffect(
     useCallback(() => {
-      fetchData();
-    }, [fetchData])
+      setVisibleRecipeCount(RECIPE_BATCH_SIZE);
+      lastRecipeBatchLoadAt.current = 0;
+      void refresh();
+    }, [refresh])
   );
 
   // 计算今日三大营养素
@@ -223,7 +84,7 @@ export default function HomeScreen() {
   const todayWaterMl = healthLogs.find((log) => log.recorded_date === today)?.water_ml || 0;
   const priorityInventoryItem = expiringItems[0];
   const priorityExpiryDays = priorityInventoryItem
-    ? Math.max(0, Math.ceil((new Date(priorityInventoryItem.expiration_date).getTime() - Date.now()) / 86400000))
+    ? Math.max(0, daysUntilDateKey(priorityInventoryItem.expiration_date) ?? 0)
     : null;
   const storageCounts = {
     refrigerated: inventoryItems.filter((item) => (item.storage_location || "冷藏") === "冷藏").length,
@@ -267,7 +128,6 @@ export default function HomeScreen() {
   const smartFeedCardCount = mealRecommendationCount + 1 + (expiringItems.length > 0 ? 1 : 0) + (todayWaterMl < 1600 ? 1 : 0);
 
   useEffect(() => {
-    setActiveRecommendationCard(0);
     smartFeedOffset.setValue(0);
     smartFeedOpacity.setValue(1);
     if (smartFeedCardCount < 2) return;
@@ -322,7 +182,6 @@ export default function HomeScreen() {
   }, [calPercent, calorieProgress]);
 
   useEffect(() => {
-    setActiveCaloriePanel(0);
     let panelIndex = 0;
     const intervalId = setInterval(() => {
       panelIndex = (panelIndex + 1) % 3;
@@ -362,7 +221,6 @@ export default function HomeScreen() {
   }, [caloriePanelOffset, caloriePanelOpacity]);
 
   useEffect(() => {
-    setActiveInventoryHighlight(0);
     inventoryHighlightOffset.setValue(0);
     inventoryHighlightOpacity.setValue(1);
     if (inventoryHighlights.length < 2) return;
@@ -387,7 +245,6 @@ export default function HomeScreen() {
   }, [inventoryHighlightOffset, inventoryHighlightOpacity, inventoryHighlights.length]);
 
   useEffect(() => {
-    setActiveCommunityPost(0);
     communityPostOffset.setValue(0);
     communityPostOpacity.setValue(1);
     if (communityPosts.length < 2) return;
@@ -422,13 +279,7 @@ export default function HomeScreen() {
     let active = true;
     const fetchAIRecommendations = async () => {
       try {
-        const response = await authFetch(`${API_BASE}/api/v1/ai/home-recommendations`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ period }),
-        });
-        if (!response.ok) throw new Error("AI 推荐请求失败");
-        const data = await response.json();
+        const data = await aiApi.homeRecommendations<{ cards?: unknown[] }>(authFetch, period);
         const cards: RecommendationCard[] = Array.isArray(data.cards)
           ? data.cards
             .filter((card: unknown): card is Record<string, unknown> => !!card && typeof card === "object")
@@ -497,8 +348,11 @@ export default function HomeScreen() {
   const hasMoreRecipes = visibleRecipeCount < filteredRecipes.length;
 
   useEffect(() => {
-    setVisibleRecipeCount(RECIPE_BATCH_SIZE);
-    lastRecipeBatchLoadAt.current = 0;
+    const resetId = setTimeout(() => {
+      setVisibleRecipeCount(RECIPE_BATCH_SIZE);
+      lastRecipeBatchLoadAt.current = 0;
+    }, 0);
+    return () => clearTimeout(resetId);
   }, [activeCategory, searchQuery]);
 
   const insets = useSafeAreaInsets();
@@ -619,6 +473,12 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {error ? (
+          <TouchableOpacity onPress={() => void refresh()} className="mx-5 mt-3 rounded-2xl border border-red-200 bg-red-50 p-3">
+            <Text className="text-xs font-bold text-red-700">{error} · 点击重试</Text>
+          </TouchableOpacity>
+        ) : null}
 
         {/* ⏰ 时段智能推荐轮播卡片 (Time-Aware Carousel) */}
         {(() => {
@@ -822,6 +682,9 @@ export default function HomeScreen() {
                 )}
                 </View>
               </Animated.View>
+              <View className="mt-2">
+                <MedicalDisclaimer compact />
+              </View>
             </View>
           );
         })()}
@@ -887,8 +750,8 @@ export default function HomeScreen() {
                 ) : activeCaloriePanel === 1 ? (
                   <View className="flex-row items-center">
                     {[
-                      { label: "体重", value: `${healthLogs[0]?.weight || 62.5} kg` },
-                      { label: "体脂率", value: `${healthLogs[0]?.body_fat || 18.5}%` },
+                      { label: "体重", value: healthLogs[0]?.weight == null ? "—" : `${healthLogs[0].weight} kg` },
+                      { label: "体脂率", value: healthLogs[0]?.body_fat == null ? "—" : `${healthLogs[0].body_fat}%` },
                       { label: "饮水", value: `${todayWaterMl} ml` },
                     ].map((metric, index) => (
                       <View key={metric.label} className={`flex-1 items-center ${index < 2 ? "border-r border-[#EBE3D5]" : ""}`}>
@@ -906,7 +769,7 @@ export default function HomeScreen() {
                       </Text>
                     </View>
                     <Text className="text-xs font-black text-[#E3A92F]">
-                      {todayRecords[0]?.calories || 0} kcal
+                      {todayRecords[0]?.calories == null ? "—" : `${todayRecords[0].calories} kcal`}
                     </Text>
                   </View>
                 )}
@@ -1251,12 +1114,12 @@ export default function HomeScreen() {
                       <Text className="text-sm font-black text-[#3D3229]">{item.food_name}</Text>
                     </View>
                     <Text className="text-xs text-[#8B7D6B]">
-                      {item.amount || "1份"} · 蛋白 {item.protein}g | 碳水 {item.carbs}g | 脂肪 {item.fat}g
+                      {item.amount || "1份"} · 蛋白 {item.protein == null ? "—" : `${item.protein}g`} | 碳水 {item.carbs == null ? "—" : `${item.carbs}g`} | 脂肪 {item.fat == null ? "—" : `${item.fat}g`}
                     </Text>
                   </View>
 
                   <View className="items-end">
-                    <Text className="text-sm font-black text-[#2D6A4F]">{item.calories || 0} kcal</Text>
+                    <Text className="text-sm font-black text-[#2D6A4F]">{item.calories == null ? "—" : `${item.calories} kcal`}</Text>
                   </View>
                 </View>
               ))}

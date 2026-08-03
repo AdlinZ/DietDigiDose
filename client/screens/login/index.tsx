@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
-import { FontAwesome6 } from '@expo/vector-icons';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 
 const REMEMBERED_IDENTIFIER_KEY = '@remembered_login_identifier';
 
@@ -61,7 +61,7 @@ export default function LoginScreen() {
 
   return (
     <Screen>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} disabled={Platform.OS === 'web'}>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <KeyboardAvoidingView
           style={styles.container}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}

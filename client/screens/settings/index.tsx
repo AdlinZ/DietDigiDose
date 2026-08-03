@@ -14,11 +14,11 @@ import {
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth } from "@/contexts/AuthContext";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 
 export default function SettingsScreen() {
   const router = useSafeRouter();
-  const { user, isAuthenticated, logout, updateProfile } = useAuth();
+  const { user, isAuthenticated, logout, updateProfile, deleteAccount } = useAuth();
 
   // Notification Toggles
   const [expiringAlert, setExpiringAlert] = useState(true);
@@ -35,6 +35,9 @@ export default function SettingsScreen() {
   // Logout confirmation modal
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [clearingCache, setClearingCache] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   const handleSaveCalorie = async () => {
     const val = parseInt(calorieTarget);
@@ -57,13 +60,30 @@ export default function SettingsScreen() {
     setClearingCache(true);
     setTimeout(() => {
       setClearingCache(false);
-      Alert.alert("成功", "已成功清理 14.8 MB 本地临时缓存");
+      Alert.alert("成功", "本地临时缓存已清理");
     }, 600);
   };
 
   const confirmLogout = () => {
     setLogoutModalOpen(false);
     logout();
+    router.replace("/login");
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (!deletePassword) {
+      Alert.alert("请输入密码", "需要验证当前密码后才能永久删除账号。");
+      return;
+    }
+    setDeletingAccount(true);
+    const result = await deleteAccount(deletePassword);
+    setDeletingAccount(false);
+    if (!result.success) {
+      Alert.alert("删除失败", result.error || "请稍后重试");
+      return;
+    }
+    setDeleteModalOpen(false);
+    setDeletePassword("");
     router.replace("/login");
   };
 
@@ -203,8 +223,24 @@ export default function SettingsScreen() {
               {clearingCache ? (
                 <ActivityIndicator size="small" color="#2D6A4F" />
               ) : (
-                <Text className="text-xs text-[#8B7D6B]">14.8 MB</Text>
+                <Text className="text-xs text-[#8B7D6B]">立即清理</Text>
               )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => router.push({ pathname: "/legal", params: { type: "privacy" } })}
+              className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6] active:bg-[#FDF8F0]"
+            >
+              <Text className="text-sm font-bold text-[#3D3229]">隐私政策</Text>
+              <FontAwesome6 name="chevron-right" size={12} color="#B0A495" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => router.push({ pathname: "/legal", params: { type: "terms" } })}
+              className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6] active:bg-[#FDF8F0]"
+            >
+              <Text className="text-sm font-bold text-[#3D3229]">用户协议</Text>
+              <FontAwesome6 name="chevron-right" size={12} color="#B0A495" />
             </TouchableOpacity>
 
             <View className="p-4 flex-row items-center justify-between">
@@ -221,13 +257,18 @@ export default function SettingsScreen() {
 
         {/* Section 4: 退出登录 */}
         {isAuthenticated && (
-          <TouchableOpacity
-            onPress={() => setLogoutModalOpen(true)}
-            className="bg-white border border-[#E76F51]/30 py-4 rounded-2xl items-center flex-row justify-center gap-2 shadow-xs active:bg-red-50 mt-2"
-          >
-            <FontAwesome6 name="arrow-right-from-bracket" size={15} color="#E76F51" />
-            <Text className="text-sm font-bold text-[#E76F51]">退出当前账号登录</Text>
-          </TouchableOpacity>
+          <View className="gap-3 mt-2">
+            <TouchableOpacity
+              onPress={() => setLogoutModalOpen(true)}
+              className="bg-white border border-[#E76F51]/30 py-4 rounded-2xl items-center flex-row justify-center gap-2 shadow-xs active:bg-red-50"
+            >
+              <FontAwesome6 name="arrow-right-from-bracket" size={15} color="#E76F51" />
+              <Text className="text-sm font-bold text-[#E76F51]">退出当前账号登录</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setDeleteModalOpen(true)} className="py-3 items-center">
+              <Text className="text-xs font-bold text-[#A33A2B] underline">永久删除账号与数据</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </ScrollView>
 
@@ -297,6 +338,41 @@ export default function SettingsScreen() {
                 className="flex-1 bg-[#E76F51] py-3 rounded-2xl items-center shadow-xs active:opacity-90"
               >
                 <Text className="text-xs font-bold text-white">确认退出</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={deleteModalOpen} animationType="fade" transparent>
+        <View className="flex-1 bg-black/50 items-center justify-center p-6">
+          <View className="bg-white rounded-[28px] p-6 w-full max-w-sm shadow-lg">
+            <Text className="text-lg font-black text-[#A33A2B] text-center">永久删除账号</Text>
+            <Text className="text-xs text-[#66594D] mt-2 mb-4 leading-5 text-center">
+              库存、饮食、健康、社区内容及本机个人缓存会被删除，且无法恢复。请输入当前密码确认。
+            </Text>
+            <TextInput
+              value={deletePassword}
+              onChangeText={setDeletePassword}
+              secureTextEntry
+              autoCapitalize="none"
+              placeholder="当前密码"
+              className="bg-[#FDF8F0] border border-[#EBE3D5] rounded-2xl px-4 py-3 text-sm text-[#3D3229] mb-4"
+            />
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                disabled={deletingAccount}
+                onPress={() => { setDeleteModalOpen(false); setDeletePassword(""); }}
+                className="flex-1 bg-[#F5EFE6] py-3 rounded-2xl items-center"
+              >
+                <Text className="text-xs font-bold text-[#66594D]">取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={deletingAccount}
+                onPress={confirmDeleteAccount}
+                className="flex-1 bg-[#A33A2B] py-3 rounded-2xl items-center"
+              >
+                {deletingAccount ? <ActivityIndicator color="#FFF" /> : <Text className="text-xs font-bold text-white">永久删除</Text>}
               </TouchableOpacity>
             </View>
           </View>

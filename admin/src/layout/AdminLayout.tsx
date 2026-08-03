@@ -1,4 +1,4 @@
-import { Outlet, NavLink, useLocation, useNavigate, Link } from 'react-router-dom';
+import { Outlet, NavLink, useLocation, useNavigate, Link } from 'react-router';
 import {
   LayoutDashboard,
   Users,

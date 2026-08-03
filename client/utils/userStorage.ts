@@ -29,3 +29,11 @@ export function storageBelongsToCurrentUser(
 export async function purgeLegacyUnscopedPrivateStorage() {
   await AsyncStorage.multiRemove(LEGACY_UNSCOPED_PRIVATE_KEYS);
 }
+
+export async function purgeUserPrivateStorage(userId?: number | null) {
+  if (!Number.isInteger(userId) || Number(userId) <= 0) return;
+  const suffix = `:user:${userId}`;
+  const keys = await AsyncStorage.getAllKeys();
+  const userKeys = keys.filter((key) => key.endsWith(suffix));
+  if (userKeys.length) await AsyncStorage.multiRemove(userKeys);
+}

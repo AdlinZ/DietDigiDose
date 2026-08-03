@@ -1,11 +1,11 @@
 import React, { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, KeyboardAvoidingView, Platform } from "react-native";
 import { Screen } from "@/components/Screen";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuthFetch } from "@/contexts/AuthContext";
+import { foodsApi } from "@/services/api";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 
 export default function CustomFoodScreen() {
   const router = useSafeRouter();
@@ -30,26 +30,16 @@ export default function CustomFoodScreen() {
 
     setLoading(true);
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/foods/custom`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      await foodsApi.submitCustom(authFetch, {
           name: name.trim(),
           calories_100g: Number(calories),
           protein_100g: protein ? Number(protein) : 0,
           carbs_100g: carbs ? Number(carbs) : 0,
           fat_100g: fat ? Number(fat) : 0,
-        }),
       });
-
-      if (res.ok) {
-        Alert.alert("提交成功", "感谢您的贡献！数据已提交，等待管理员审核后全网共享～", [
-          { text: "好的", onPress: () => router.back() }
-        ]);
-      } else {
-        const err = await res.json();
-        Alert.alert("提交失败", err.error || "发生了未知错误");
-      }
+      Alert.alert("提交成功", "感谢您的贡献！数据已提交，等待管理员审核后全网共享～", [
+        { text: "好的", onPress: () => router.back() }
+      ]);
     } catch (error) {
       Alert.alert("网络错误", "请检查网络连接");
     } finally {

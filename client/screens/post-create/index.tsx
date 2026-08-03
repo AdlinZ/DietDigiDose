@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { ActivityIndicator, Alert, Image, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import * as ImagePicker from "expo-image-picker";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import { SmartDateInput } from "@/components/SmartDateInput";
+import { communityApi } from "@/services/api";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 const CATEGORIES = ["寻味", "榜单", "活动", "问答"];
 
 export default function PostCreateScreen() {
@@ -64,19 +64,13 @@ export default function PostCreateScreen() {
     }
     try {
       setPublishing(true);
-      const response = await authFetch(`${API_BASE}/api/v1/community/posts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      await communityApi.createPost(authFetch, {
           content: [title.trim(), content.trim()].filter(Boolean).join("\n"),
           image_urls: imageUrls,
           category,
           event_start_at: category === "活动" ? eventStartAt : null,
           event_end_at: category === "活动" ? eventEndAt : null,
-        }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "发布失败");
       router.back();
     } catch (error) {
       Alert.alert("发布失败", error instanceof Error ? error.message : "请稍后重试");

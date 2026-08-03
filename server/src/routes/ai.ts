@@ -1,12 +1,23 @@
 import { Router } from "express";
 import { createHash, randomUUID } from "node:crypto";
-import { authMiddleware, optionalAuthMiddleware, type AuthRequest } from "../middleware/auth.js";
+import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { db } from "../storage/db.js";
 import { chatCompletion, analyzeImage, transcribeAudio, type ChatMessage } from "../services/aiService.js";
 import { buildUserContext, generateSystemPrompt } from "../services/contextBuilder.js";
 import { aiToolsSchema } from "../services/aiTools.js";
+import { validateBody } from "../middleware/validate.js";
+import {
+  aiChatSchema,
+  aiHomeRecommendationsSchema,
+  aiImageSchema,
+  aiTranscribeSchema,
+  aiVisionSchema,
+  aiVoiceCommandSchema,
+} from "../validation/schemas.js";
+import { uuidParam } from "../middleware/validateParam.js";
 
 const router = Router();
+router.param("jobId", uuidParam);
 
 type InventoryScanItem = {
   foodName: string;
@@ -77,10 +88,11 @@ const processInventoryScanJob = async (jobId: string, userId: number, image: str
     db.prepare("UPDATE inventory_scan_jobs SET status = 'completed', result_json = ?, error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .run(JSON.stringify(items), jobId);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "识别图片失败";
-    console.error("[AI Inventory Scan Job Error]", { jobId, message });
+    const internalMessage = error instanceof Error ? error.message : "识别图片失败";
+    const publicMessage = "识别图片失败，请稍后重试";
+    console.error("[AI Inventory Scan Job Error]", { jobId, message: internalMessage });
     db.prepare("UPDATE inventory_scan_jobs SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .run(message.slice(0, 500), jobId);
+      .run(publicMessage, jobId);
   }
 };
 
@@ -96,7 +108,7 @@ const recordChatTurn = (userId: number, sessionId: string, userContent: string, 
 /**
  * 1. AI 对话 / 营养大厨答疑 (含 Function Calling 自动写库)
  */
-router.post("/chat", authMiddleware, async (req: AuthRequest, res) => {
+router.post("/chat", authMiddleware, validateBody(aiChatSchema), async (req: AuthRequest, res) => {
   try {
     const { messages = [], prompt, sessionId: requestedSessionId } = req.body;
     const userId = req.userId!;
@@ -147,14 +159,14 @@ router.post("/chat", authMiddleware, async (req: AuthRequest, res) => {
     });
   } catch (error: any) {
     console.error("[AI Router Chat Error]", error);
-    return res.status(500).json({ error: "AI 对话请求失败", details: error.message });
+    return res.status(500).json({ error: "AI 对话请求失败" });
   }
 });
 
 /**
  * 首页时段推荐：模型读取用户库存、当天饮食及热量目标，返回可直接渲染的多张卡片。
  */
-router.post("/home-recommendations", authMiddleware, async (req: AuthRequest, res) => {
+router.post("/home-recommendations", authMiddleware, validateBody(aiHomeRecommendationsSchema), async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
     const period = typeof req.body?.period === "string" ? req.body.period.slice(0, 40) : "当前时段";
@@ -197,7 +209,7 @@ router.post("/home-recommendations", authMiddleware, async (req: AuthRequest, re
 /**
  * 2. 拍照识别菜品与热量评估
  */
-router.post("/vision-food", authMiddleware, async (req: AuthRequest, res) => {
+router.post("/vision-food", authMiddleware, validateBody(aiVisionSchema), async (req: AuthRequest, res) => {
   try {
     const { image, userPrompt } = req.body;
     if (!image) {
@@ -238,7 +250,7 @@ router.post("/vision-food", authMiddleware, async (req: AuthRequest, res) => {
  * 3. 创建可恢复的食材图片识别任务。
  * 上传成功后立刻返回任务 ID；后续识别在服务端继续，即使客户端关闭也不会丢失。
  */
-router.post("/inventory-scan-jobs", authMiddleware, (req: AuthRequest, res) => {
+router.post("/inventory-scan-jobs", authMiddleware, validateBody(aiImageSchema), (req: AuthRequest, res) => {
   const { image } = req.body;
   if (typeof image !== "string" || !image.trim()) {
     return res.status(400).json({ error: "缺少图片数据" });
@@ -258,6 +270,17 @@ router.post("/inventory-scan-jobs", authMiddleware, (req: AuthRequest, res) => {
   `).get(userId, imageHash) as { id: string; status: string; result_json: string | null; error_message: string | null } | undefined;
 
   if (existing) {
+    if (existing.status === "failed") {
+      db.prepare("UPDATE inventory_scan_jobs SET status = 'queued', error_message = NULL, result_json = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
+        .run(existing.id, userId);
+      void processInventoryScanJob(existing.id, userId, image);
+      return res.status(202).json({
+        jobId: existing.id,
+        status: "queued",
+        deduplicated: true,
+        retried: true,
+      });
+    }
     return res.status(existing.status === "completed" ? 200 : 202).json({
       jobId: existing.id,
       status: existing.status,
@@ -294,7 +317,7 @@ router.get("/inventory-scan-jobs/:jobId", authMiddleware, (req: AuthRequest, res
 /**
  * 4. 兼容旧客户端的同步扫描接口。
  */
-router.post("/scan-receipt", authMiddleware, async (req: AuthRequest, res) => {
+router.post("/scan-receipt", authMiddleware, validateBody(aiImageSchema), async (req: AuthRequest, res) => {
   try {
     const { image } = req.body;
     if (!image) {
@@ -322,7 +345,7 @@ router.post("/scan-receipt", authMiddleware, async (req: AuthRequest, res) => {
 /**
  * 4. 做饭模式语音指令与疑问识别 (Voice Command Router)
  */
-router.post("/voice-command", authMiddleware, async (req: AuthRequest, res) => {
+router.post("/voice-command", authMiddleware, validateBody(aiVoiceCommandSchema), async (req: AuthRequest, res) => {
   try {
     const { speechText, currentStep = 0, recipeTitle = "" } = req.body;
     if (!speechText) {
@@ -364,7 +387,7 @@ router.post("/voice-command", authMiddleware, async (req: AuthRequest, res) => {
 /**
  * 4. 语音识别转文本 (ASR Transcribe) 接口
  */
-router.post("/transcribe", optionalAuthMiddleware, async (req: AuthRequest, res) => {
+router.post("/transcribe", authMiddleware, validateBody(aiTranscribeSchema), async (req: AuthRequest, res) => {
   try {
     const { audioBase64, mimeType } = req.body || {};
     const result = await transcribeAudio(audioBase64 || "", {

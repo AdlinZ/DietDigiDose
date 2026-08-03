@@ -1,8 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { purgeLegacyUnscopedPrivateStorage } from '@/utils/userStorage';
-
-const EXPO_PUBLIC_BACKEND_BASE_URL = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || 'http://localhost:9091';
+import { purgeLegacyUnscopedPrivateStorage, purgeUserPrivateStorage } from '@/utils/userStorage';
+import { ApiError, authApi } from '@/services/api';
 
 interface User {
   id: number;
@@ -23,6 +22,7 @@ interface AuthContextType {
   register: (identifier: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   updateProfile: (data: Partial<User>) => Promise<{ success: boolean; error?: string }>;
+  deleteAccount: (password: string) => Promise<{ success: boolean; error?: string }>;
   refreshUser: () => Promise<void>;
 }
 
@@ -30,14 +30,6 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const TOKEN_KEY = '@auth_token';
 const USER_KEY = '@auth_user';
-
-const parseResponseJson = async (response: Response) => {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
-};
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -67,20 +59,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
           // Verify token asynchronously with backend
           try {
-            const res = await fetch(`${EXPO_PUBLIC_BACKEND_BASE_URL}/api/v1/auth/me`, {
-              headers: { 'Authorization': `Bearer ${savedToken}` },
-            });
-            if (res.ok) {
-              const freshUser = await parseResponseJson(res);
-              if (freshUser) {
-                await AsyncStorage.setItem(USER_KEY, JSON.stringify(freshUser));
-                setUser(freshUser);
-              }
-            } else if (res.status === 401) {
-              // Token strictly invalid or expired
-              await clearAuthState();
-            }
-          } catch {
+            const freshUser = await authApi.me<User>(savedToken);
+            await AsyncStorage.setItem(USER_KEY, JSON.stringify(freshUser));
+            setUser(freshUser);
+          } catch (error) {
+            if (error instanceof ApiError && error.status === 401) await clearAuthState();
             // Network error/server down during verify: keep local cached auth state so user stays logged in offline
           }
         }
@@ -95,15 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (identifier: string, password: string) => {
     try {
       await purgeLegacyUnscopedPrivateStorage();
-      const response = await fetch(`${EXPO_PUBLIC_BACKEND_BASE_URL}/api/v1/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password }),
-      });
-      const data = await parseResponseJson(response);
-      if (!response.ok) {
-        return { success: false, error: data?.error || data?.message || '登录失败' };
-      }
+      const data = await authApi.login<{ token: string; user: User }>(identifier, password);
       if (!data?.token || !data?.user) {
         return { success: false, error: '返回数据不完整' };
       }
@@ -113,22 +88,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(data.user);
       return { success: true };
     } catch (e) {
-      return { success: false, error: '网络错误，请稍后重试' };
+      return { success: false, error: e instanceof Error ? e.message : '网络错误，请稍后重试' };
     }
   }, []);
 
   const register = useCallback(async (identifier: string, password: string) => {
     try {
       await purgeLegacyUnscopedPrivateStorage();
-      const response = await fetch(`${EXPO_PUBLIC_BACKEND_BASE_URL}/api/v1/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password }),
-      });
-      const data = await parseResponseJson(response);
-      if (!response.ok) {
-        return { success: false, error: data?.error || data?.message || '注册失败' };
-      }
+      const data = await authApi.register<{ token: string; user: User }>(identifier, password);
       if (!data?.token || !data?.user) {
         return { success: false, error: '返回数据不完整' };
       }
@@ -138,7 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(data.user);
       return { success: true };
     } catch (e) {
-      return { success: false, error: '网络错误，请稍后重试' };
+      return { success: false, error: e instanceof Error ? e.message : '网络错误，请稍后重试' };
     }
   }, []);
 
@@ -149,22 +116,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const updateProfile = useCallback(async (profileData: Partial<User>) => {
     if (!token) return { success: false, error: '未登录' };
     try {
-      const response = await fetch(`${EXPO_PUBLIC_BACKEND_BASE_URL}/api/v1/auth/profile`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(profileData),
-      });
-      const data = await parseResponseJson(response);
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          await clearAuthState();
-          return { success: false, error: '登录已过期，请重新登录' };
-        }
-        return { success: false, error: data?.error || data?.message || '更新失败' };
-      }
+      const data = await authApi.updateProfile<User>(token, profileData);
       if (!data) {
         return { success: false, error: '返回数据异常' };
       }
@@ -173,27 +125,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(updatedUser);
       return { success: true };
     } catch (e) {
-      return { success: false, error: '网络错误，请稍后重试' };
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+        await clearAuthState();
+        return { success: false, error: '登录已过期，请重新登录' };
+      }
+      return { success: false, error: e instanceof Error ? e.message : '网络错误，请稍后重试' };
     }
   }, [token, user, clearAuthState]);
 
   const refreshUser = useCallback(async () => {
     if (!token) return;
     try {
-      const response = await fetch(`${EXPO_PUBLIC_BACKEND_BASE_URL}/api/v1/auth/me`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      if (response.ok) {
-        const data = await parseResponseJson(response);
-        await AsyncStorage.setItem(USER_KEY, JSON.stringify(data));
-        setUser(data);
-      } else if (response.status === 401 || response.status === 403) {
-        await clearAuthState();
-      }
+      const data = await authApi.me<User>(token);
+      await AsyncStorage.setItem(USER_KEY, JSON.stringify(data));
+      setUser(data);
     } catch (e) {
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) await clearAuthState();
       // Ignore
     }
   }, [token, clearAuthState]);
+
+  const deleteAccount = useCallback(async (password: string) => {
+    if (!token || !user) return { success: false, error: '请先登录' };
+    try {
+      await authApi.deleteAccount(token, password);
+      await purgeUserPrivateStorage(user.id);
+      await clearAuthState();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '账号删除失败' };
+    }
+  }, [clearAuthState, token, user]);
 
   return (
     <AuthContext.Provider value={{
@@ -205,6 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       register,
       logout,
       updateProfile,
+      deleteAccount,
       refreshUser,
     }}>
       {children}

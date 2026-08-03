@@ -24,6 +24,7 @@ export default function RootLayout() {
             <Stack.Screen name="post-create" />
             <Stack.Screen name="ai-assistant" />
             <Stack.Screen name="settings" />
+            <Stack.Screen name="legal" />
           </Stack>
       </Provider>
     </>

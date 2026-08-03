@@ -425,6 +425,7 @@ export async function chatCompletion(
         model,
         latencyMs: Date.now() - startedAt,
         success: false,
+        failureReason: err instanceof Error ? err.message : String(err),
       });
     }
     const replyText = getFallbackResponse(messages);
@@ -569,6 +570,8 @@ export async function transcribeAudio(
   options: { userId?: number; mimeType?: string } = {}
 ): Promise<{ text: string }> {
   const { apiKey, baseUrl } = getAIConfig();
+  const startedAt = Date.now();
+  const asrModel = getSystemSetting("AI_ASR_MODEL") || "FunAudioLLM/SenseVoiceSmall";
   if (!audioBase64 || audioBase64.length === 0) {
     return { text: "" };
   }
@@ -583,7 +586,7 @@ export async function transcribeAudio(
       const formData = new FormData();
       const blob = new Blob([audioBuffer], { type: mimeType });
       formData.append("file", blob, `speech.${extension}`);
-      formData.append("model", getSystemSetting("AI_ASR_MODEL") || "FunAudioLLM/SenseVoiceSmall");
+      formData.append("model", asrModel);
 
       const response = await fetch(`${baseUrl}/audio/transcriptions`, {
         method: "POST",
@@ -596,20 +599,46 @@ export async function transcribeAudio(
       if (response.ok) {
         const data = (await response.json()) as { text?: string };
         if (data && typeof data.text === "string" && data.text.trim()) {
-          logAIUsage({
-            userId: options.userId ?? 1,
-            endpoint: "voice-transcribe",
-            model: "SenseVoiceSmall",
-            promptTokens: Math.ceil(audioBuffer.length / 100),
-            completionTokens: data.text.length,
-          });
+          if (options.userId) {
+            logAIUsage({
+              userId: options.userId,
+              endpoint: "voice-transcribe",
+              model: asrModel,
+              promptTokens: Math.ceil(audioBuffer.length / 100),
+              completionTokens: data.text.length,
+              latencyMs: Date.now() - startedAt,
+            });
+          }
           return { text: data.text.trim() };
         }
       }
+      throw new Error(`语音服务响应异常: ${response.status}`);
     } catch (err) {
       console.warn("[transcribeAudio API Error]", err);
+      if (options.userId) {
+        logAIUsage({
+          userId: options.userId,
+          endpoint: "voice-transcribe",
+          model: asrModel,
+          latencyMs: Date.now() - startedAt,
+          success: false,
+          failureReason: err instanceof Error ? err.message : String(err),
+        });
+      }
+      throw err;
     }
   }
 
-  return { text: "今晚吃什么推荐一下" };
+  const error = new Error("语音识别服务尚未配置");
+  if (options.userId) {
+    logAIUsage({
+      userId: options.userId,
+      endpoint: "voice-transcribe",
+      model: asrModel,
+      latencyMs: Date.now() - startedAt,
+      success: false,
+      failureReason: error.message,
+    });
+  }
+  throw error;
 }

@@ -12,11 +12,11 @@ import {
   Platform,
   Alert,
 } from "react-native";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
-import { API_BASE } from "@/utils/config";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
+import { aiApi } from "@/services/api";
 import {
   CHAT_SESSIONS_STORAGE_KEY,
   getUserStorageKey,
@@ -83,6 +83,7 @@ interface AIChefModalProps {
 export function AIChefModal({ visible, onClose }: AIChefModalProps) {
   const router = useSafeRouter();
   const { user } = useAuth();
+  const authFetch = useAuthFetch();
   const chatStorageKey = getUserStorageKey(CHAT_SESSIONS_STORAGE_KEY, user?.id);
   const [loadedChatStorageKey, setLoadedChatStorageKey] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
@@ -238,16 +239,11 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
     setLoading(true);
 
     try {
-      const savedToken = await AsyncStorage.getItem("@auth_token");
-      if (!savedToken) {
+      if (!user) {
         onClose();
         router.push("/login");
         return;
       }
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      headers["Authorization"] = `Bearer ${savedToken}`;
 
       const historyPayload = messages.map((m) => ({
         role: m.sender === "user" ? "user" : "assistant",
@@ -255,17 +251,7 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
       }));
       historyPayload.push({ role: "user", content: text.trim() });
 
-      const response = await fetch(`${API_BASE}/api/v1/ai/chat`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ messages: historyPayload }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`请求失败: ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await aiApi.chat<Record<string, any>>(authFetch, { messages: historyPayload });
       const responseText = data.reply || "智能大厨正在整理您的食谱建议...";
 
       const aiMsg: Message = {
@@ -292,7 +278,7 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
     } finally {
       setLoading(false);
     }
-  }, [inputText, loading, messages, onClose, router]);
+  }, [authFetch, inputText, loading, messages, onClose, router, user]);
 
   // 底部 4 大快捷动作处理器
   const handleActionVisionFood = async () => {

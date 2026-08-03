@@ -16,494 +16,12 @@ import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
+import { communityApi } from "@/services/api";
+import type { ActivityStatus, Post } from "./types";
+import { formatActivityDate, getActivityStatus, parseCommunityDate } from "./activity";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
-
-interface Post {
-  id: number;
-  user_id: number;
-  username: string;
-  nickname: string;
-  avatar_url: string;
-  category?: string;
-  content: string;
-  image_url: string | null;
-  image_urls?: string[];
-  likes_count: number;
-  comment_count?: number;
-  views_count?: number;
-  is_liked?: boolean;
-  event_start_at?: string | null;
-  event_end_at?: string | null;
-  participant_count?: number;
-  is_joined?: boolean;
-  question_status?: "open" | "resolved" | null;
-  accepted_comment_id?: number | null;
-  author_is_expert?: boolean;
-  recommendation_reason?: string;
-  recommendation_score?: number;
-  created_at: string;
-}
-
-type ActivityStatus = "ongoing" | "upcoming" | "ended";
-
-const parseCommunityDate = (value?: string | null) => {
-  if (!value) return null;
-  const date = new Date(value.includes("T") ? value : value.replace(" ", "T"));
-  return Number.isNaN(date.getTime()) ? null : date;
-};
-
-const getActivityStatus = (post: Post, now = Date.now()): ActivityStatus => {
-  const startTime = parseCommunityDate(post.event_start_at)?.getTime();
-  const endTime = parseCommunityDate(post.event_end_at)?.getTime();
-  if (startTime && startTime > now) return "upcoming";
-  if (endTime && endTime < now) return "ended";
-  return "ongoing";
-};
-
-const formatActivityDate = (value?: string | null) => {
-  const date = parseCommunityDate(value);
-  if (!date) return "长期开放";
-  return `${date.getMonth() + 1}月${date.getDate()}日`;
-};
-
-// 1:1 精致 Mock 数据集 (涵盖 寻味, 榜单, 活动, 问答 4 大板块)
-/* Legacy visual seed data retained only for migration reference; the UI now reads API data exclusively.
-const DEFAULT_MOCK_POSTS: Post[] = [
-  // === 寻味 (Recipes & Gourmet Food) ===
-  {
-    id: 101,
-    user_id: 1,
-    username: "demo",
-    nickname: "绿色食物分享家",
-    avatar_url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80",
-    category: "寻味",
-    content: "绿色食物推荐：用新鲜黄瓜、胡萝卜、西兰花与红甘蓝搭配特级橄榄油，解锁满满膳食纤维与活力能量！",
-    image_url: "https://images.unsplash.com/photo-1540420773420-3366772f4999?w=800&auto=format&fit=crop&q=80",
-    likes_count: 1000,
-    is_liked: false,
-    created_at: "10分钟前",
-  },
-  {
-    id: 102,
-    user_id: 2,
-    username: "chef_david",
-    nickname: "主厨David",
-    avatar_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
-    category: "寻味",
-    content: "健康早餐场景：全麦吐司配切片牛油果，太阳蛋搭配新鲜切块番茄，开启仪式感拉满的一天。",
-    image_url: "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=800&auto=format&fit=crop&q=80",
-    likes_count: 10000,
-    is_liked: true,
-    created_at: "25分钟前",
-  },
-  {
-    id: 103,
-    user_id: 3,
-    username: "family_kitchen",
-    nickname: "元气烘焙日记",
-    avatar_url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80",
-    category: "寻味",
-    content: "厨房食材储存系统：用分装玻璃罐将五谷杂粮与干货分类归纳，保持厨房整洁与食材新鲜。防潮防尘，一目了然！",
-    image_url: "https://images.unsplash.com/photo-1556911220-e15b29be8c8f?w=800&auto=format&fit=crop&q=80",
-    likes_count: 5300,
-    is_liked: false,
-    created_at: "1小时前",
-  },
-  {
-    id: 105,
-    user_id: 2,
-    username: "chef_david",
-    nickname: "主厨David",
-    avatar_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
-    category: "寻味",
-    content: "三文鱼藜麦极简减脂餐：高温煎香鱼皮，油脂自然渗入藜麦，简单黑胡椒调味就足够惊艳！",
-    image_url: "https://images.unsplash.com/photo-1467003909585-2f8a72700288?w=800&auto=format&fit=crop&q=80",
-    likes_count: 3200,
-    is_liked: false,
-    created_at: "3小时前",
-  },
-
-  // === 榜单 (Rankings & Hot Charts) ===
-  {
-    id: 104,
-    user_id: 1,
-    username: "demo",
-    nickname: "绿色食物分享家",
-    avatar_url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80",
-    category: "榜单",
-    content: "2026年度社区【低卡减脂餐热度榜 TOP 1】：羽衣甘蓝鸡胸肉低脂沙拉，点赞突破 1.2w！",
-    image_url: "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800&auto=format&fit=crop&q=80",
-    likes_count: 12800,
-    is_liked: true,
-    created_at: "2小时前",
-  },
-  {
-    id: 201,
-    user_id: 2,
-    username: "chef_david",
-    nickname: "主厨David",
-    avatar_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
-    category: "榜单",
-    content: "优质高蛋白食材星级榜：三文鱼、虾仁、牛腱子肉、无糖希腊酸奶对比图鉴与烹饪建议。",
-    image_url: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&auto=format&fit=crop&q=80",
-    likes_count: 9500,
-    is_liked: false,
-    created_at: "4小时前",
-  },
-  {
-    id: 202,
-    user_id: 3,
-    username: "family_kitchen",
-    nickname: "元气烘焙日记",
-    avatar_url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80",
-    category: "榜单",
-    content: "社区热议厨房神器红榜：分装密封玻璃罐推荐，干货防潮整理，收纳美学极致体验！",
-    image_url: "https://images.unsplash.com/photo-1556911220-e15b29be8c8f?w=800&auto=format&fit=crop&q=80",
-    likes_count: 7400,
-    is_liked: false,
-    created_at: "7小时前",
-  },
-  {
-    id: 203,
-    user_id: 4,
-    username: "nutritionist_lisa",
-    nickname: "注册营养师Lisa",
-    avatar_url: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80",
-    category: "榜单",
-    content: "本周食友评选【最受好评减脂早餐吃法】，全麦牛油果水煮蛋吐司高票夺冠！",
-    image_url: "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=800&auto=format&fit=crop&q=80",
-    likes_count: 8800,
-    is_liked: true,
-    created_at: "9小时前",
-  },
-
-  // === 活动 (Events & Community Challenges) ===
-  {
-    id: 106,
-    user_id: 3,
-    username: "family_kitchen",
-    nickname: "元气烘焙日记",
-    avatar_url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80",
-    category: "活动",
-    content: "#7天减脂餐打卡挑战# 第21天：精准搭配蛋白质、碳水与微量元素，今天体脂率又下降了0.3%！",
-    image_url: "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800&auto=format&fit=crop&q=80",
-    likes_count: 8600,
-    is_liked: true,
-    created_at: "5小时前",
-  },
-  {
-    id: 301,
-    user_id: 1,
-    username: "demo",
-    nickname: "绿色食物分享家",
-    avatar_url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80",
-    category: "活动",
-    content: "#周末低卡烘焙大赛# 正式开启！分享你的低糖无面粉烘焙食谱，赢取精美厨具礼盒！",
-    image_url: "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=800&auto=format&fit=crop&q=80",
-    likes_count: 6700,
-    is_liked: false,
-    created_at: "6小时前",
-  },
-  {
-    id: 302,
-    user_id: 2,
-    username: "chef_david",
-    nickname: "主厨David",
-    avatar_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
-    category: "活动",
-    content: "#无糖饮食7天挑战赛# 超过 3,200 位食友在线参与，一起来戒糖换发神采！",
-    image_url: "https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=800&auto=format&fit=crop&q=80",
-    likes_count: 5200,
-    is_liked: false,
-    created_at: "10小时前",
-  },
-  {
-    id: 303,
-    user_id: 4,
-    username: "nutritionist_lisa",
-    nickname: "注册营养师Lisa",
-    avatar_url: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80",
-    category: "活动",
-    content: "#晒晒你的减脂餐桌# 摄影打卡活动热辣进行中，发布照片即送社区专属勋章与营养评估指导！",
-    image_url: "https://images.unsplash.com/photo-1547592180-85f173990554?w=800&auto=format&fit=crop&q=80",
-    likes_count: 4100,
-    is_liked: true,
-    created_at: "12小时前",
-  },
-
-  // === 问答 (Q&A & Nutrition Knowledge) ===
-  {
-    id: 107,
-    user_id: 4,
-    username: "nutritionist_lisa",
-    nickname: "注册营养师Lisa",
-    avatar_url: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80",
-    category: "问答",
-    content: "【营养科普】为什么减脂期推荐优先选择希腊酸奶而非普通风味酸奶？看这三点蛋白质与糖分对比就明白了！",
-    image_url: "https://images.unsplash.com/photo-1488477181946-6428a0291777?w=800&auto=format&fit=crop&q=80",
-    likes_count: 6400,
-    is_liked: false,
-    created_at: "6小时前",
-  },
-  {
-    id: 401,
-    user_id: 2,
-    username: "chef_david",
-    nickname: "主厨David",
-    avatar_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
-    category: "问答",
-    content: "【食友提问】减脂期晚上饿了吃什么不会胖？营养师为你推荐3款低热量加餐食物！",
-    image_url: "https://images.unsplash.com/photo-1517673132405-a56a62b18caf?w=800&auto=format&fit=crop&q=80",
-    likes_count: 4900,
-    is_liked: false,
-    created_at: "8小时前",
-  },
-  {
-    id: 402,
-    user_id: 1,
-    username: "demo",
-    nickname: "绿色食物分享家",
-    avatar_url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80",
-    category: "问答",
-    content: "【食材大解密】牛油果虽然健康但油脂高，一天吃半个还是一整颗合适？权威解读来了！",
-    image_url: "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=800&auto=format&fit=crop&q=80",
-    likes_count: 5800,
-    is_liked: true,
-    created_at: "11小时前",
-  },
-  {
-    id: 403,
-    user_id: 3,
-    username: "family_kitchen",
-    nickname: "元气烘焙日记",
-    avatar_url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80",
-    category: "问答",
-    content: "【烹饪小贴士】橄榄油、椰子油和黄油，不同烹饪温度下该怎么挑选？避坑实用指南。",
-    image_url: "https://images.unsplash.com/photo-1476224203421-9ac39bcb3327?w=800&auto=format&fit=crop&q=80",
-    likes_count: 3600,
-    is_liked: false,
-    created_at: "14小时前",
-  },
-
-  // === 扩充 - 寻味 (Recipes & Gourmet Food) ===
-  {
-    id: 109,
-    user_id: 3,
-    username: "family_kitchen",
-    nickname: "元气烘焙日记",
-    avatar_url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80",
-    category: "寻味",
-    content: "蓝莓奇亚籽高蛋白奶昔杯：冷藏后呈现啫喱般丝滑口感，抗氧化因子爆棚，夏日解暑神仙加餐！",
-    image_url: "https://images.unsplash.com/photo-1553530666-ba11a7da3888?w=800&auto=format&fit=crop&q=80",
-    likes_count: 4800,
-    is_liked: true,
-    created_at: "15分钟前",
-  },
-  {
-    id: 110,
-    user_id: 2,
-    username: "chef_david",
-    nickname: "主厨David",
-    avatar_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
-    category: "寻味",
-    content: "烤虾仁菠菜藜麦能量碗：高蛋白、低碳水，色泽鲜亮诱人，夏天吃清爽无负担。",
-    image_url: "https://images.unsplash.com/photo-1543339308-43e59d6b73a6?w=800&auto=format&fit=crop&q=80",
-    likes_count: 6200,
-    is_liked: false,
-    created_at: "40分钟前",
-  },
-  {
-    id: 111,
-    user_id: 5,
-    username: "fitness_jack",
-    nickname: "健身达人Jack",
-    avatar_url: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80",
-    category: "寻味",
-    content: "慢炖香草番茄鸡胸肉：摒弃柴柴的口感，锁住肉汁，配一小碗黑米饭堪称神仙组合！",
-    image_url: "https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?w=800&auto=format&fit=crop&q=80",
-    likes_count: 3900,
-    is_liked: true,
-    created_at: "1.5小时前",
-  },
-  {
-    id: 112,
-    user_id: 1,
-    username: "demo",
-    nickname: "绿色食物分享家",
-    avatar_url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80",
-    category: "寻味",
-    content: "抹茶羽衣甘蓝低卡拿铁：用燕麦奶代替全脂奶，加入少许代糖，下午茶的健康新选择。",
-    image_url: "https://images.unsplash.com/photo-1536256263959-770b48d82b0a?w=800&auto=format&fit=crop&q=80",
-    likes_count: 7100,
-    is_liked: false,
-    created_at: "2.5小时前",
-  },
-
-  // === 扩充 - 榜单 (Rankings & Hot Charts) ===
-  {
-    id: 204,
-    user_id: 6,
-    username: "diet_helper",
-    nickname: "减脂小助手",
-    avatar_url: "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80",
-    category: "榜单",
-    content: "🏆 2026年【办公室打工人冷餐便当红榜】：方便携带、不易变质的 5 款低卡餐推荐。",
-    image_url: "https://images.unsplash.com/photo-1547592180-85f173990554?w=800&auto=format&fit=crop&q=80",
-    likes_count: 11200,
-    is_liked: false,
-    created_at: "3.5小时前",
-  },
-  {
-    id: 205,
-    user_id: 4,
-    username: "nutritionist_lisa",
-    nickname: "注册营养师Lisa",
-    avatar_url: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80",
-    category: "榜单",
-    content: "🥑 全球最适合减脂期使用的【优质植物油脂星级榜】：特级初榨橄榄油、亚麻籽油、牛油果油评测。",
-    image_url: "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=800&auto=format&fit=crop&q=80",
-    likes_count: 8900,
-    is_liked: true,
-    created_at: "5小时前",
-  },
-  {
-    id: 206,
-    user_id: 2,
-    username: "chef_david",
-    nickname: "主厨David",
-    avatar_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
-    category: "榜单",
-    content: "🥇 社区选出【低碳水替代主食排行榜】：魔芋面、花菜米、西葫芦丝、黑米藜麦饭排名公开！",
-    image_url: "https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=800&auto=format&fit=crop&q=80",
-    likes_count: 10400,
-    is_liked: false,
-    created_at: "6.5小时前",
-  },
-  {
-    id: 207,
-    user_id: 1,
-    username: "demo",
-    nickname: "绿色食物分享家",
-    avatar_url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80",
-    category: "榜单",
-    content: "📊 减脂期最受追捧的 4 款【无糖低卡小零食】：冻干无花果、高蛋白黑巧、无盐坚果组合。",
-    image_url: "https://images.unsplash.com/photo-1608219992759-8d74ed8d76eb?w=800&auto=format&fit=crop&q=80",
-    likes_count: 6700,
-    is_liked: true,
-    created_at: "8.5小时前",
-  },
-
-  // === 扩充 - 活动 (Events & Community Challenges) ===
-  {
-    id: 304,
-    user_id: 4,
-    username: "nutritionist_lisa",
-    nickname: "注册营养师Lisa",
-    avatar_url: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80",
-    category: "活动",
-    content: "💧 #21天每天喝水2000ml打卡# 挑战第三周！皮肤变透亮，基础代谢显著提升！",
-    image_url: "https://images.unsplash.com/photo-1548839140-29a749e1cf4e?w=800&auto=format&fit=crop&q=80",
-    likes_count: 7800,
-    is_liked: false,
-    created_at: "9.5小时前",
-  },
-  {
-    id: 305,
-    user_id: 6,
-    username: "diet_helper",
-    nickname: "减脂小助手",
-    avatar_url: "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80",
-    category: "活动",
-    content: "🍱 #自带减脂便当去上班# 话题大奖赛！连续打卡 5 天即可抽取无油空气炸锅！",
-    image_url: "https://images.unsplash.com/photo-1511690656952-34342bb7c2f2?w=800&auto=format&fit=crop&q=80",
-    likes_count: 9100,
-    is_liked: true,
-    created_at: "11小时前",
-  },
-  {
-    id: 306,
-    user_id: 5,
-    username: "fitness_jack",
-    nickname: "健身达人Jack",
-    avatar_url: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80",
-    category: "活动",
-    content: "🧘‍♀️ #早起空腹拉伸+低糖早餐计划# 已有 5,600 人加入，每天 10 分钟告别水肿！",
-    image_url: "https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=800&auto=format&fit=crop&q=80",
-    likes_count: 8300,
-    is_liked: false,
-    created_at: "13小时前",
-  },
-  {
-    id: 307,
-    user_id: 3,
-    username: "family_kitchen",
-    nickname: "元气烘焙日记",
-    avatar_url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80",
-    category: "活动",
-    content: "🥗 #低卡沙拉酱盲测大赛# 你最爱哪款酱汁？快来分享你的低脂油醋汁私房调配比例！",
-    image_url: "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800&auto=format&fit=crop&q=80",
-    likes_count: 5900,
-    is_liked: false,
-    created_at: "15小时前",
-  },
-
-  // === 扩充 - 问答 (Q&A & Nutrition Knowledge) ===
-  {
-    id: 404,
-    user_id: 4,
-    username: "nutritionist_lisa",
-    nickname: "注册营养师Lisa",
-    avatar_url: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80",
-    category: "问答",
-    content: "❓ 【营养问答】为什么吃同样热量的米饭和牛肉，牛肉更不容易饿？带你了解食物热效应（TEF）。",
-    image_url: "https://images.unsplash.com/photo-1544025162-d76694265947?w=800&auto=format&fit=crop&q=80",
-    likes_count: 7300,
-    is_liked: true,
-    created_at: "16小时前",
-  },
-  {
-    id: 405,
-    user_id: 6,
-    username: "diet_helper",
-    nickname: "减脂小助手",
-    avatar_url: "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80",
-    category: "问答",
-    content: "🥑 【避坑指南】减脂期如何正确计算食材热量？生重 vs 熟重到底怎么区分？",
-    image_url: "https://images.unsplash.com/photo-1490645935967-10de6ba17061?w=800&auto=format&fit=crop&q=80",
-    likes_count: 8500,
-    is_liked: false,
-    created_at: "18小时前",
-  },
-  {
-    id: 406,
-    user_id: 3,
-    username: "family_kitchen",
-    nickname: "元气烘焙日记",
-    avatar_url: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80",
-    category: "问答",
-    content: "🍞 【食友求助】全麦面包成分表第一位必须是全麦粉吗？怎么识别假全麦？",
-    image_url: "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=800&auto=format&fit=crop&q=80",
-    likes_count: 6100,
-    is_liked: false,
-    created_at: "20小时前",
-  },
-  {
-    id: 407,
-    user_id: 2,
-    username: "chef_david",
-    nickname: "主厨David",
-    avatar_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
-    category: "问答",
-    content: "🍳 【食谱答疑】空气炸锅烤鸡胸肉怎样做到外酥里嫩、不柴不干？三大关键步骤公开。",
-    image_url: "https://images.unsplash.com/photo-1532550907401-a500c9a57435?w=800&auto=format&fit=crop&q=80",
-    likes_count: 9400,
-    is_liked: true,
-    created_at: "22小时前",
-  },
-]; */
 
 export default function CommunityScreen() {
   const router = useSafeRouter();
@@ -512,6 +30,7 @@ export default function CommunityScreen() {
 
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("寻味");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -533,15 +52,12 @@ export default function CommunityScreen() {
   const fetchPosts = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await authFetch(`${API_BASE}/api/v1/community/posts`);
-      if (res.ok) {
-        const data = await res.json();
-        setPosts(Array.isArray(data) ? data : []);
-      } else {
-        setPosts([]);
-      }
+      setFetchError(null);
+      const data = await communityApi.posts<Post>("", authFetch);
+      setPosts(Array.isArray(data) ? data : []);
     } catch (e) {
       setPosts([]);
+      setFetchError(e instanceof Error ? e.message : "社区内容加载失败");
     } finally {
       setLoading(false);
     }
@@ -584,9 +100,7 @@ export default function CommunityScreen() {
     }
 
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/community/posts/${id}/like`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "点赞失败");
+      const data = await communityApi.toggleLike(authFetch, id);
       setPosts((prev) => prev.map((item) => item.id === id ? { ...item, likes_count: data.likes_count, is_liked: data.is_liked } : item));
     } catch (e) {
       fetchPosts();
@@ -609,9 +123,7 @@ export default function CommunityScreen() {
     } : item));
 
     try {
-      const response = await authFetch(`${API_BASE}/api/v1/community/posts/${post.id}/join`, { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "活动操作失败");
+      const data = await communityApi.toggleJoin(authFetch, post.id);
       setPosts((current) => current.map((item) => item.id === post.id ? {
         ...item,
         is_joined: Boolean(data.is_joined),
@@ -1153,6 +665,12 @@ export default function CommunityScreen() {
             ) : null}
           </View>
         )}
+
+        {fetchError ? (
+          <TouchableOpacity onPress={() => void fetchPosts()} className="mx-5 my-2 rounded-2xl border border-red-200 bg-red-50 p-3">
+            <Text className="text-xs font-bold text-red-700">{fetchError} · 点击重试</Text>
+          </TouchableOpacity>
+        ) : null}
 
       {/* 社区内容区：榜单使用排名列表，其余板块保留双列瀑布流 */}
         {loading && posts.length === 0 ? (

@@ -11,9 +11,12 @@
     "import:taiwan-fda": "tsx scripts/import-taiwan-fda.ts",
     "backfill:ingredient-groups": "tsx scripts/backfill-ingredient-groups.ts",
     "localize:ingredient-names": "tsx scripts/localize-ingredient-names.ts",
+    "db:backup": "tsx scripts/database-backup.ts backup",
+    "db:restore": "tsx scripts/database-backup.ts restore",
     "preinstall": "npx only-allow pnpm",
     "start": "NODE_ENV=production PORT=${PORT:-9091} node dist/index.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1 test/**/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.95.3",

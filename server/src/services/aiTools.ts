@@ -1,4 +1,5 @@
 import { db } from "../storage/db.js";
+import { currentDateKey, dateKeyAfterDays } from "../utils/date.js";
 
 /**
  * OpenAI Function Calling 工具 Schema 定义
@@ -207,7 +208,7 @@ export async function executeAITool(
   args: any
 ): Promise<{ success: boolean; message: string; details?: any }> {
   try {
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = currentDateKey();
 
     if (toolName === "record_diet_meal") {
       const mealType = args.mealType || "午餐";
@@ -237,7 +238,7 @@ export async function executeAITool(
       const quantity = args.quantity || "1份";
       const expireDays = args.expireDays ?? 7;
 
-      const expDate = new Date(Date.now() + expireDays * 86400000).toISOString().split("T")[0];
+      const expDate = dateKeyAfterDays(expireDays);
 
       const result = db.prepare(`
         INSERT INTO inventory_items (user_id, food_name, category, storage_location, quantity, expiration_date)
@@ -308,6 +309,7 @@ export async function executeAITool(
     return { success: false, message: `未知的工具名称: ${toolName}` };
   } catch (err: any) {
     console.error(`[AI Tool Execution Error] ${toolName}:`, err);
-    return { success: false, message: `执行工具失败: ${err.message}` };
+    console.error("[AI Tool Execution Error]", err instanceof Error ? err.message : err);
+    return { success: false, message: "执行工具失败，请稍后重试" };
   }
 }

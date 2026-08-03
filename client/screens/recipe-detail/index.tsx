@@ -9,12 +9,13 @@ import {
 } from "react-native";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
+import { inventoryApi, recipesApi, type InventoryItem } from "@/services/api";
+import { ingredientNamesMatch } from "@/utils/ingredients";
+import { getInventoryStatus } from "@/utils/inventory";
 
 type IconName = ComponentProps<typeof FontAwesome6>["name"];
 
@@ -61,6 +62,7 @@ export default function RecipeDetailScreen() {
   const [preparedIngredients, setPreparedIngredients] = useState<Set<string>>(() => new Set());
   const [isFavorited, setIsFavorited] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
 
   const fetchRecipe = useCallback(async () => {
     if (!id) {
@@ -69,9 +71,7 @@ export default function RecipeDetailScreen() {
     }
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE}/api/v1/recipes/${id}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setRecipe(await response.json());
+      setRecipe(await recipesApi.detail(Number(id)) as Recipe);
     } catch (error) {
       console.error("Failed to fetch recipe:", error);
       setRecipe(null);
@@ -89,11 +89,20 @@ export default function RecipeDetailScreen() {
       setIsFavorited(false);
       return;
     }
-    void authFetch(`${API_BASE}/api/v1/recipes/${id}/favorite`)
-      .then(async (response) => response.ok ? response.json() : null)
+    void recipesApi.favoriteState(authFetch, Number(id))
       .then((data) => setIsFavorited(Boolean(data?.is_favorited)))
       .catch(() => setIsFavorited(false));
   }, [authFetch, id, isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setInventory([]);
+      return;
+    }
+    void inventoryApi.list(authFetch)
+      .then(setInventory)
+      .catch(() => setInventory([]));
+  }, [authFetch, isAuthenticated]);
 
   if (loading) {
     return (
@@ -140,6 +149,19 @@ export default function RecipeDetailScreen() {
       .map((ingredient, index) => ({ ingredient, index, key: `${group}-${ingredient.name}-${index}` }))
       .filter(({ ingredient }) => (ingredient.group || "辅料") === group),
   })).filter(({ items }) => items.length > 0);
+  const ingredientAvailability = (recipe.ingredients || []).map((ingredient) => {
+    const matchingItem = inventory.find((item) =>
+      item.is_available && ingredientNamesMatch(ingredient.name, item.food_name),
+    );
+    return {
+      name: ingredient.name,
+      matchingItem,
+      isExpiring: matchingItem ? getInventoryStatus(matchingItem).freshness === "expiring" : false,
+    };
+  });
+  const matchedIngredients = ingredientAvailability.filter((item) => item.matchingItem);
+  const missingIngredients = ingredientAvailability.filter((item) => !item.matchingItem);
+  const expiringIngredients = ingredientAvailability.filter((item) => item.isExpiring);
   const togglePrepared = (key: string) => {
     setPreparedIngredients((current) => {
       const next = new Set(current);
@@ -158,10 +180,8 @@ export default function RecipeDetailScreen() {
     setIsFavorited(nextFavorited);
     setFavoriteLoading(true);
     try {
-      const response = await authFetch(`${API_BASE}/api/v1/recipes/${recipe.id}/favorite`, {
-        method: nextFavorited ? "POST" : "DELETE",
-      });
-      if (!response.ok) setIsFavorited(!nextFavorited);
+      if (nextFavorited) await recipesApi.favorite(authFetch, recipe.id);
+      else await recipesApi.unfavorite(authFetch, recipe.id);
     } catch {
       setIsFavorited(!nextFavorited);
     } finally {
@@ -301,6 +321,27 @@ export default function RecipeDetailScreen() {
           <View className="mx-4 mt-4 gap-4 md:mx-8 md:flex-row md:items-start">
             <View className="rounded-[24px] border border-[#E8DFD2] bg-[#FFFDF9] p-5 md:w-[38%] md:p-6">
               <SectionTitle icon="basket-shopping" eyebrow="准备工作" title="备料清单" />
+              {isAuthenticated ? (
+                <View className="mt-4 rounded-2xl border border-[#DDE8DF] bg-[#F4F8F5] p-3">
+                  <Text className="text-xs font-black text-[#2D6A4F]">
+                    库存匹配 {matchedIngredients.length} 种 · 缺少 {missingIngredients.length} 种
+                  </Text>
+                  {expiringIngredients.length ? (
+                    <Text className="mt-1 text-[11px] font-bold text-[#A8663F]">
+                      临期优先：{expiringIngredients.map((item) => item.name).join("、")}
+                    </Text>
+                  ) : null}
+                  {missingIngredients.length ? (
+                    <Text className="mt-1 text-[11px] text-[#7A6F63]">
+                      需要补充：{missingIngredients.map((item) => item.name).join("、")}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : (
+                <TouchableOpacity onPress={() => router.push("/login")} className="mt-4 rounded-2xl bg-[#F5F1E9] p-3">
+                  <Text className="text-[11px] font-bold text-[#6C6258]">登录后查看库存匹配、缺少和临期食材</Text>
+                </TouchableOpacity>
+              )}
               <View className="mt-4 flex-row items-center justify-between rounded-2xl bg-[#F5F1E9] px-3 py-2.5">
                 <Text className="text-[11px] text-[#7A6F63]">点击食材，标记已经备好</Text>
                 <Text className="text-sm font-black text-[#2D6A4F]">
@@ -361,6 +402,10 @@ export default function RecipeDetailScreen() {
                 steps: JSON.stringify(recipe.steps || []),
                 ingredients: JSON.stringify(recipe.ingredients || []),
                 cookTime: recipe.cook_time || 30,
+                calories: recipe.calories,
+                protein: recipe.protein,
+                carbs: recipe.carbs,
+                fat: recipe.fat,
               })
             }
             className="flex-row items-center justify-center rounded-2xl bg-[#2D6A4F] px-5 py-3.5 shadow-sm active:opacity-85 md:px-8"

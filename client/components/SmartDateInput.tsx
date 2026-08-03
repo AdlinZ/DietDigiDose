@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import dayjs from 'dayjs';
-import { FontAwesome6 } from '@expo/vector-icons';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 
 // --------------------------------------------------------
 // 1. 配置 Dayjs 

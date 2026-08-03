@@ -2,7 +2,7 @@ import { useState } from "react";
 import { View, Text, TouchableOpacity, Image, Platform, DeviceEventEmitter } from "react-native";
 import { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { AIChefModal } from "./AIChefModal";
 
 import { useSafeRouter } from "@/hooks/useSafeRouter";

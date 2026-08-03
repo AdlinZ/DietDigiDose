@@ -3,13 +3,20 @@ import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
+import { runMigrations } from './migrations.js';
+import { dateKeyAfterDays } from '../utils/date.js';
 
-const dbDir = path.resolve(process.cwd(), 'data');
+const configuredDatabasePath = process.env.DATABASE_PATH?.trim();
+const dbDir = configuredDatabasePath
+  ? path.dirname(path.resolve(configuredDatabasePath))
+  : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const dbPath = path.join(dbDir, 'dietdigidose.db');
+export const dbPath = configuredDatabasePath
+  ? path.resolve(configuredDatabasePath)
+  : path.join(dbDir, 'dietdigidose.db');
 export const db = new Database(dbPath);
 
 // Enable WAL for performance
@@ -169,6 +176,13 @@ export function initDatabase() {
       weight REAL,
       body_fat REAL,
       water_ml INTEGER DEFAULT 0,
+      height_cm REAL,
+      waist_cm REAL,
+      hip_cm REAL,
+      resting_heart_rate INTEGER,
+      blood_pressure_systolic INTEGER,
+      blood_pressure_diastolic INTEGER,
+      sleep_hours REAL,
       recorded_date TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -382,12 +396,6 @@ export function initDatabase() {
     );
   `);
 
-  // Keep databases created before the goal field compatible with the latest profile schema.
-  const healthProfileColumns = db.prepare("PRAGMA table_info(user_health_profiles)").all() as { name: string }[];
-  if (!healthProfileColumns.some((column) => column.name === "health_goal")) db.exec("ALTER TABLE user_health_profiles ADD COLUMN health_goal TEXT DEFAULT 'healthy'");
-  if (!healthProfileColumns.some((column) => column.name === "activity_level")) db.exec("ALTER TABLE user_health_profiles ADD COLUMN activity_level TEXT DEFAULT 'moderate'");
-  if (!healthProfileColumns.some((column) => column.name === "dietary_preference")) db.exec("ALTER TABLE user_health_profiles ADD COLUMN dietary_preference TEXT DEFAULT '无特别偏好'");
-
   // 11. AI Usage Logs (用量统计)
   db.exec(`
     CREATE TABLE IF NOT EXISTS ai_usage_logs (
@@ -400,6 +408,8 @@ export function initDatabase() {
       total_tokens INTEGER DEFAULT 0,
       latency_ms INTEGER DEFAULT 0,
       success INTEGER DEFAULT 1,
+      estimated_cost_usd REAL DEFAULT 0,
+      failure_reason TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -453,75 +463,13 @@ export function initDatabase() {
     ON ai_usage_logs(user_id, created_at);
   `);
 
-  try {
-    db.exec(`ALTER TABLE community_posts ADD COLUMN category TEXT DEFAULT '寻味';`);
-  } catch (e) {
-    // Column may already exist
-  }
-
-  for (const migration of [
-    `ALTER TABLE users ADD COLUMN email TEXT`,
-    `ALTER TABLE users ADD COLUMN phone TEXT`,
-    `ALTER TABLE community_posts ADD COLUMN views_count INTEGER DEFAULT 0`,
-    `ALTER TABLE community_posts ADD COLUMN comment_count INTEGER DEFAULT 0`,
-    `ALTER TABLE community_posts ADD COLUMN image_urls TEXT`,
-    `ALTER TABLE community_posts ADD COLUMN event_start_at DATETIME`,
-    `ALTER TABLE community_posts ADD COLUMN event_end_at DATETIME`,
-    `ALTER TABLE community_posts ADD COLUMN question_status TEXT DEFAULT 'open'`,
-    `ALTER TABLE community_posts ADD COLUMN accepted_comment_id INTEGER`,
-    `ALTER TABLE community_comments ADD COLUMN image_url TEXT`,
-    `ALTER TABLE users ADD COLUMN is_verified_expert INTEGER DEFAULT 0`,
-  ]) {
-    try { db.exec(migration); } catch { /* Column already exists. */ }
-  }
+  runMigrations(db);
 
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique ON users(phone) WHERE phone IS NOT NULL;
   `);
 
-  try {
-    db.exec(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user';`);
-  } catch (e) {
-    // Column may already exist
-  }
-
-  const softDeleteMigrations = [
-    `ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0`,
-    `ALTER TABLE users ADD COLUMN last_login_at DATETIME`,
-    `ALTER TABLE users ADD COLUMN last_login_ip TEXT`,
-    `ALTER TABLE community_posts ADD COLUMN deleted_at DATETIME`,
-    `ALTER TABLE community_posts ADD COLUMN deleted_by INTEGER`,
-    `ALTER TABLE recipes ADD COLUMN deleted_at DATETIME`,
-    `ALTER TABLE recipes ADD COLUMN deleted_by INTEGER`,
-    `ALTER TABLE recipes ADD COLUMN author_user_id INTEGER`,
-    `ALTER TABLE recipes ADD COLUMN source TEXT DEFAULT 'official'`,
-    `ALTER TABLE recipes ADD COLUMN status TEXT DEFAULT 'approved'`,
-    `ALTER TABLE recipes ADD COLUMN reviewed_by INTEGER`,
-    `ALTER TABLE recipes ADD COLUMN reviewed_at DATETIME`,
-    `ALTER TABLE recipes ADD COLUMN reject_reason TEXT`,
-    `ALTER TABLE recipes ADD COLUMN external_id TEXT`,
-    `ALTER TABLE recipes ADD COLUMN source_url TEXT`,
-    `ALTER TABLE recipes ADD COLUMN data_license TEXT`,
-    `ALTER TABLE recipes ADD COLUMN source_revision TEXT`,
-    `ALTER TABLE recipes ADD COLUMN source_attribution TEXT`,
-    `ALTER TABLE recipes ADD COLUMN nutrition_json TEXT`,
-    `ALTER TABLE recipes ADD COLUMN updated_at DATETIME`,
-    `ALTER TABLE ingredients_library ADD COLUMN deleted_at DATETIME`,
-    `ALTER TABLE ingredients_library ADD COLUMN deleted_by INTEGER`,
-    `ALTER TABLE ingredients_library ADD COLUMN barcode TEXT`,
-    `ALTER TABLE ingredients_library ADD COLUMN brands TEXT`,
-    `ALTER TABLE ingredients_library ADD COLUMN micronutrients_json TEXT`,
-    `ALTER TABLE ingredients_library ADD COLUMN data_license TEXT`,
-    `ALTER TABLE ingredients_library ADD COLUMN original_name TEXT`,
-  ];
-  for (const migration of softDeleteMigrations) {
-    try {
-      db.exec(migration);
-    } catch {
-      // Column already exists.
-    }
-  }
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_community_posts_deleted_at ON community_posts(deleted_at);
@@ -646,11 +594,21 @@ export function logAIUsage(params: {
   totalTokens?: number;
   latencyMs?: number;
   success?: boolean;
+  estimatedCostUsd?: number;
+  failureReason?: string;
 }): void {
   try {
+    const inputRate = Number(process.env.AI_INPUT_COST_PER_MILLION_USD) || 0;
+    const outputRate = Number(process.env.AI_OUTPUT_COST_PER_MILLION_USD) || 0;
+    const estimatedCostUsd = params.estimatedCostUsd ?? (
+      ((params.promptTokens || 0) * inputRate + (params.completionTokens || 0) * outputRate) / 1_000_000
+    );
     db.prepare(`
-      INSERT INTO ai_usage_logs (user_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens, latency_ms, success)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO ai_usage_logs (
+        user_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens,
+        latency_ms, success, estimated_cost_usd, failure_reason
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       params.userId,
       params.endpoint,
@@ -659,7 +617,9 @@ export function logAIUsage(params: {
       params.completionTokens || 0,
       params.totalTokens || 0,
       params.latencyMs || 0,
-      params.success !== false ? 1 : 0
+      params.success !== false ? 1 : 0,
+      Math.max(0, estimatedCostUsd),
+      params.failureReason?.slice(0, 500) || null,
     );
   } catch (e) {
     console.error('[logAIUsage Error]', e);
@@ -964,11 +924,7 @@ function seedDefaultData() {
   }
 
   // Helper date function (YYYY-MM-DD)
-  const getDateStr = (offsetDays: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() + offsetDays);
-    return d.toISOString().split('T')[0];
-  };
+  const getDateStr = (offsetDays: number) => dateKeyAfterDays(offsetDays);
 
   // 1. Seed Inventory Items if empty or sparse (< 8)
   const invCount = db.prepare('SELECT COUNT(*) as count FROM inventory_items WHERE user_id = ?').get(userId) as { count: number };

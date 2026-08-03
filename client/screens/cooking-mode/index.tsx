@@ -12,12 +12,12 @@ import {
 } from "react-native";
 import { Screen } from "@/components/Screen";
 import { useSafeSearchParams, useSafeRouter } from "@/hooks/useSafeRouter";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useFocusEffect } from "expo-router";
 import * as Speech from "expo-speech";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
+import { useAuthFetch } from "@/contexts/AuthContext";
+import { toLocalDateKey } from "@/utils/date";
+import { aiApi, inventoryApi } from "@/services/api";
 
 interface CookingStep {
   text: string;
@@ -33,15 +33,29 @@ interface ChatMessage {
 }
 
 export default function CookingModeScreen() {
-  const { recipeId, title, steps: stepsParam, ingredients: ingredientsParam } =
+  const {
+    recipeId,
+    title,
+    steps: stepsParam,
+    ingredients: ingredientsParam,
+    calories,
+    protein,
+    carbs,
+    fat,
+  } =
     useSafeSearchParams<{
       recipeId: number;
       title: string;
       steps: string;
       ingredients: string;
+      calories?: number;
+      protein?: number;
+      carbs?: number;
+      fat?: number;
     }>();
 
   const router = useSafeRouter();
+  const authFetch = useAuthFetch();
   const [currentStep, setCurrentStep] = useState(0);
   const [cookingSteps, setCookingSteps] = useState<CookingStep[]>([]);
   const [ingredients, setIngredients] = useState<
@@ -57,6 +71,7 @@ export default function CookingModeScreen() {
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [voiceInputText, setVoiceInputText] = useState("");
   const [voiceProcessing, setVoiceProcessing] = useState(false);
+  const [isCompleting, setIsCompleting] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -83,22 +98,14 @@ export default function CookingModeScreen() {
 
     setVoiceProcessing(true);
     try {
-      const savedToken = await AsyncStorage.getItem("@auth_token");
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (savedToken) headers["Authorization"] = `Bearer ${savedToken}`;
-
-      const res = await fetch(`${BACKEND_URL}/api/v1/ai/voice-command`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const data = await aiApi.voiceCommand<{ type: string; action?: string; answerText?: string }>(
+        authFetch,
+        {
           speechText: text,
           currentStep,
           recipeTitle: title || "当前菜品",
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
+        },
+      );
         if (data.type === "CONTROL") {
           if (data.action === "NEXT_STEP") {
             if (currentStep < cookingSteps.length - 1) {
@@ -127,7 +134,6 @@ export default function CookingModeScreen() {
           setShowAIChat(true);
           Speech.speak(reply, { language: "zh-CN", rate: 1.0 });
         }
-      }
     } catch (e: any) {
       Alert.alert("提示", "处理语音指令失败");
     } finally {
@@ -236,6 +242,57 @@ export default function CookingModeScreen() {
     setTimerSeconds(0);
   };
 
+  const navigateToDietRecord = () => {
+    const hour = new Date().getHours();
+    const mealType = hour < 10 ? "早餐" : hour < 15 ? "午餐" : hour < 21 ? "晚餐" : "加餐";
+    router.replace("/diet-record", {
+      prefill_food: title || "自制餐食",
+      prefill_amount: "1份",
+      prefill_calories: calories,
+      prefill_protein: protein,
+      prefill_carbs: carbs,
+      prefill_fat: fat,
+      prefill_meal_type: mealType,
+      recorded_at: toLocalDateKey(),
+    });
+  };
+
+  const markMatchedInventoryUsed = async () => {
+    const inventory = await inventoryApi.list(authFetch);
+    if (!Array.isArray(inventory)) return 0;
+    const normalize = (value: string) => value.toLocaleLowerCase().replace(/[\s·、，,。()（）/\\_-]/g, "");
+    const ingredientNames = ingredients.filter((item) => item.checked).map((item) => normalize(item.name));
+    const matches = inventory.filter((item: { food_name?: string; is_available?: boolean }) => {
+      const foodName = normalize(String(item.food_name || ""));
+      return item.is_available && ingredientNames.some((name) => name && (foodName.includes(name) || name.includes(foodName)));
+    });
+    const results = await Promise.all(matches.map((item: { id: number }) =>
+      inventoryApi.update(authFetch, item.id, { is_available: false })
+    ));
+    return results.length;
+  };
+
+  const finishCooking = async (consumeInventory: boolean) => {
+    if (isCompleting) return;
+    try {
+      setIsCompleting(true);
+      if (consumeInventory) {
+        const usedCount = await markMatchedInventoryUsed();
+        if (usedCount === 0) {
+          Alert.alert("未匹配到库存", "没有找到已勾选且名称匹配的库存食材，仍可继续记录这餐。", [
+            { text: "继续记录", onPress: navigateToDietRecord },
+          ]);
+          return;
+        }
+      }
+      navigateToDietRecord();
+    } catch (error) {
+      Alert.alert("完成失败", error instanceof Error ? error.message : "请稍后重试");
+    } finally {
+      setIsCompleting(false);
+    }
+  };
+
   const handleCompleteStep = () => {
     const newSteps = [...cookingSteps];
     newSteps[currentStep].completed = true;
@@ -246,8 +303,10 @@ export default function CookingModeScreen() {
     if (currentStep < cookingSteps.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
-      Alert.alert("完成!", "恭喜你完成了这道菜!", [
-        { text: "太棒了!", onPress: () => router.back() },
+      Alert.alert("完成烹饪", "要将这次烹饪同步到库存和饮食记录吗？", [
+        { text: "仅完成", onPress: () => router.back(), style: "cancel" },
+        { text: "记录这餐", onPress: () => void finishCooking(false) },
+        { text: "用掉已勾选食材并记录", onPress: () => void finishCooking(true) },
       ]);
     }
   };
@@ -280,13 +339,7 @@ export default function CookingModeScreen() {
       const prompt = `当前正在做菜【${currentDish}】，正在进行第 ${currentStep + 1} 步：${currentStepText}。
 用户提问：“${chatInput.trim()}”。请给出实用简短的烹饪建议。`;
 
-      const response = await fetch(`${BACKEND_URL}/api/v1/ai/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-      });
-
-      const data = await response.json();
+      const data = await aiApi.chat<{ reply?: string }>(authFetch, { prompt });
 
       const assistantMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),

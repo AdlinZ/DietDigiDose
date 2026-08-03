@@ -16,11 +16,14 @@
     "lint:admin": "pnpm --dir ./admin lint",
     "lint:all": "pnpm lint:client && pnpm lint:server && pnpm lint:admin",
     "test:client": "pnpm --dir ./client test",
+    "test:server": "pnpm --dir ./server test",
+    "test:admin": "pnpm --dir ./admin test",
+    "test:all": "pnpm test:client && pnpm test:server && pnpm test:admin",
     "audit:prod": "pnpm audit --prod --registry=https://registry.npmjs.org"
   },
   "dependencies": {},
   "devDependencies": {},
-  "packageManager": "pnpm@9.0.0",
+  "packageManager": "pnpm@10.18.0",
   "engines": {
     "pnpm": ">=9.0.0"
   }

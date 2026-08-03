@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Keyboa
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
-import { FontAwesome6 } from '@expo/vector-icons';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import * as ImagePicker from 'expo-image-picker';
 import { DEFAULT_AVATARS, getAvatarSource, getPresetAvatarValue } from '@/utils/defaultAvatar';
 
@@ -54,7 +54,7 @@ export default function ProfileEditScreen() {
 
   return (
     <Screen>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} disabled={Platform.OS === 'web'}>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <KeyboardAvoidingView
           style={styles.container}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}

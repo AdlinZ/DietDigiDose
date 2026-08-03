@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { KeyRound } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import api from '../services/api';
 import logoUrl from '../../../client/assets/logo.png';
 

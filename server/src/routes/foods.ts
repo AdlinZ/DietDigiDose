@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { db } from '../storage/db.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validate.js';
+import { customFoodSchema } from '../validation/schemas.js';
 import { searchFoodUSDA } from '../services/foodApiAdapter.js';
 
 const router = Router();
@@ -69,20 +71,16 @@ router.get('/search', async (req, res) => {
 });
 
 // POST /api/v1/foods/custom (User Submits UGC Food)
-router.post('/custom', authMiddleware, (req: any, res) => {
+router.post('/custom', authMiddleware, validateBody(customFoodSchema), (req: any, res) => {
   try {
     const { name, calories_100g, protein_100g, carbs_100g, fat_100g } = req.body;
     
-    if (!name || calories_100g === undefined) {
-      return res.status(400).json({ error: '食材名称和卡路里为必填项' });
-    }
-
     const insert = db.prepare(`
       INSERT INTO user_custom_foods (user_id, name, calories_100g, protein_100g, carbs_100g, fat_100g, status)
       VALUES (?, ?, ?, ?, ?, ?, 'pending')
     `);
     
-    const info = insert.run(req.userId, name, calories_100g, protein_100g || 0, carbs_100g || 0, fat_100g || 0);
+    const info = insert.run(req.userId, name, calories_100g, protein_100g, carbs_100g, fat_100g);
     
     res.json({ success: true, id: info.lastInsertRowid, message: '提交成功，等待管理员审核后将公开' });
   } catch (error) {

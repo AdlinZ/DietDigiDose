@@ -14,11 +14,11 @@ import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import { addLocalDays, toLocalDateKey } from "@/utils/date";
+import { aiApi, ApiError, dietApi } from "@/services/api";
 
 import * as ImagePicker from "expo-image-picker";
-
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 
 interface DietRecord {
   id: number;
@@ -26,9 +26,9 @@ interface DietRecord {
   food_name: string;
   amount: string;
   calories: number | null;
-  protein: number;
-  carbs: number;
-  fat: number;
+  protein: number | null;
+  carbs: number | null;
+  fat: number | null;
   recorded_at: string;
   image_url: string | null;
 }
@@ -59,7 +59,7 @@ export default function DietRecordScreen() {
   const { isAuthenticated, user } = useAuth();
   const authFetch = useAuthFetch();
 
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = toLocalDateKey();
   const [selectedDate, setSelectedDate] = useState(todayStr);
   const [records, setRecords] = useState<DietRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,24 +69,25 @@ export default function DietRecordScreen() {
   const [mealType, setMealType] = useState("早餐");
   const [foodName, setFoodName] = useState("");
   const [amount, setAmount] = useState("1份");
-  const [calories, setCalories] = useState("350");
-  const [protein, setProtein] = useState("20");
-  const [carbs, setCarbs] = useState("40");
-  const [fat, setFat] = useState("10");
+  const [calories, setCalories] = useState("");
+  const [protein, setProtein] = useState("");
+  const [carbs, setCarbs] = useState("");
+  const [fat, setFat] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
 
   // 监听路由预填参数
   useEffect(() => {
-    if (params.prefill_food) {
+      if (params.prefill_food) {
       setFoodName(String(params.prefill_food));
-      if (params.prefill_calories) setCalories(String(params.prefill_calories));
-      if (params.prefill_protein) setProtein(String(params.prefill_protein));
-      if (params.prefill_carbs) setCarbs(String(params.prefill_carbs));
-      if (params.prefill_fat) setFat(String(params.prefill_fat));
+      if (params.prefill_calories !== undefined) setCalories(String(params.prefill_calories));
+      if (params.prefill_protein !== undefined) setProtein(String(params.prefill_protein));
+      if (params.prefill_carbs !== undefined) setCarbs(String(params.prefill_carbs));
+      if (params.prefill_fat !== undefined) setFat(String(params.prefill_fat));
       if (params.prefill_amount) setAmount(String(params.prefill_amount));
       if (params.prefill_meal_type) setMealType(String(params.prefill_meal_type));
+      if (params.recorded_at) setSelectedDate(String(params.recorded_at));
       setModalVisible(true);
     }
   }, [params]);
@@ -100,9 +101,8 @@ export default function DietRecordScreen() {
 
   // 生成过去 7 天的日期数组
   const pastSevenDays = Array.from({ length: 7 }).map((_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    const dateStr = d.toISOString().split("T")[0];
+    const d = addLocalDays(-(6 - i));
+    const dateStr = toLocalDateKey(d);
     const dayName = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
     const isToday = dateStr === todayStr;
     return { dateStr, dayNum: d.getDate(), dayName, isToday };
@@ -115,13 +115,8 @@ export default function DietRecordScreen() {
     }
     try {
       setLoading(true);
-      const res = await authFetch(
-        `${API_BASE}/api/v1/diet-records?date=${selectedDate}`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setRecords(Array.isArray(data) ? data : []);
-      }
+      const data = await dietApi.list(authFetch, selectedDate);
+      setRecords(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -139,10 +134,10 @@ export default function DietRecordScreen() {
     setMealType(meal);
     setFoodName("");
     setAmount("1份");
-    setCalories("350");
-    setProtein("20");
-    setCarbs("40");
-    setFat("10");
+    setCalories("");
+    setProtein("");
+    setCarbs("");
+    setFat("");
     setImageUrl("");
     setModalVisible(true);
   };
@@ -175,27 +170,17 @@ export default function DietRecordScreen() {
       }
 
       setAiAnalyzing(true);
-      const res = await authFetch(`${API_BASE}/api/v1/ai/vision-food`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: asset.base64 }),
-      });
-
-      if (res.ok) {
-        const json = await res.json();
-        if (json.data) {
-          if (json.data.foodName) setFoodName(json.data.foodName);
+      const json = await aiApi.visionFood<{ data?: Record<string, number | string>; rawText?: string }>(authFetch, asset.base64);
+      if (json.data) {
+          if (json.data.foodName) setFoodName(String(json.data.foodName));
           if (json.data.estimatedWeightGrams) setAmount(`${json.data.estimatedWeightGrams}g`);
           if (json.data.calories) setCalories(String(json.data.calories));
           if (json.data.proteinGrams !== undefined) setProtein(String(json.data.proteinGrams));
           if (json.data.carbsGrams !== undefined) setCarbs(String(json.data.carbsGrams));
           if (json.data.fatGrams !== undefined) setFat(String(json.data.fatGrams));
           Alert.alert("AI 识别成功", `已自动识别【${json.data.foodName}】并估算营养成分！`);
-        } else if (json.rawText) {
-          Alert.alert("AI 识别提示", json.rawText);
-        }
-      } else {
-        Alert.alert("提示", "AI 识图失败，请手动录入");
+      } else if (json.rawText) {
+        Alert.alert("AI 识别提示", json.rawText);
       }
     } catch (e: any) {
       Alert.alert("错误", e.message || "识图出现异常");
@@ -211,33 +196,28 @@ export default function DietRecordScreen() {
     }
     try {
       setSaving(true);
+      const parseNullableNumber = (value: string) => {
+        if (!value.trim()) return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      };
       const payload = {
         meal_type: mealType,
         food_name: foodName,
         amount,
-        calories: parseInt(calories) || 0,
-        protein: parseFloat(protein) || 0,
-        carbs: parseFloat(carbs) || 0,
-        fat: parseFloat(fat) || 0,
+        calories: parseNullableNumber(calories),
+        protein: parseNullableNumber(protein),
+        carbs: parseNullableNumber(carbs),
+        fat: parseNullableNumber(fat),
         recorded_at: selectedDate,
         image_url: imageUrl.trim() || null,
       };
 
-      const res = await authFetch(`${API_BASE}/api/v1/diet-records`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok) {
-        setModalVisible(false);
-        fetchRecords();
-      } else {
-        const err = await res.json();
-        Alert.alert("错误", err.error || "添加失败");
-      }
+      await dietApi.create(authFetch, payload);
+      setModalVisible(false);
+      fetchRecords();
     } catch (e) {
-      Alert.alert("错误", "网络异常");
+      Alert.alert("错误", e instanceof ApiError ? e.message : "网络异常");
     } finally {
       setSaving(false);
     }
@@ -251,10 +231,8 @@ export default function DietRecordScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            const res = await authFetch(`${API_BASE}/api/v1/diet-records/${id}`, {
-              method: "DELETE",
-            });
-            if (res.ok) fetchRecords();
+            await dietApi.remove(authFetch, id);
+            fetchRecords();
           } catch (e) {
             console.error(e);
           }
@@ -551,11 +529,11 @@ export default function DietRecordScreen() {
                                   <View className="flex-row items-center gap-1 bg-[#E07A5F]/10 px-1.5 py-0.5 rounded-md">
                                     <FontAwesome6 name="fire" size={9} color="#E07A5F" />
                                     <Text className="text-[10px] font-bold text-[#E07A5F]">
-                                      {r.calories || 0} kcal
+                                      {r.calories == null ? "—" : `${r.calories} kcal`}
                                     </Text>
                                   </View>
                                   <Text className="text-[10px] text-[#8B7D6B]">
-                                    P: {r.protein}g · C: {r.carbs}g · F: {r.fat}g
+                                    P: {r.protein == null ? "—" : `${r.protein}g`} · C: {r.carbs == null ? "—" : `${r.carbs}g`} · F: {r.fat == null ? "—" : `${r.fat}g`}
                                   </Text>
                                 </View>
                               </View>

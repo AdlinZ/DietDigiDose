@@ -7,16 +7,18 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import { toLocalDateKey } from "@/utils/date";
+import { healthApi } from "@/services/api";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 const EMTPY_VALUE_PLACEHOLDER = "—";
-const FALLBACK_STATUS = new Set([400, 422]);
 
 interface HealthLog {
   id: number;
@@ -65,18 +67,18 @@ export default function HealthDataScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
 
-  const [weight, setWeight] = useState("62.5");
-  const [heightCm, setHeightCm] = useState("170");
-  const [bodyFat, setBodyFat] = useState("18.5");
-  const [waistCm, setWaistCm] = useState("74");
-  const [hipCm, setHipCm] = useState("96");
-  const [waterMl, setWaterMl] = useState("1650");
-  const [heartRate, setHeartRate] = useState("72");
-  const [sysBP, setSysBP] = useState("118");
-  const [diaBP, setDiaBP] = useState("76");
-  const [sleepHours, setSleepHours] = useState("7.5");
+  const [weight, setWeight] = useState("");
+  const [heightCm, setHeightCm] = useState("");
+  const [bodyFat, setBodyFat] = useState("");
+  const [waistCm, setWaistCm] = useState("");
+  const [hipCm, setHipCm] = useState("");
+  const [waterMl, setWaterMl] = useState("");
+  const [heartRate, setHeartRate] = useState("");
+  const [sysBP, setSysBP] = useState("");
+  const [diaBP, setDiaBP] = useState("");
+  const [sleepHours, setSleepHours] = useState("");
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = toLocalDateKey();
 
   const fetchHealthData = useCallback(async () => {
     if (!isAuthenticated) {
@@ -86,19 +88,13 @@ export default function HealthDataScreen() {
     try {
       setLoading(true);
       setRequestError(null);
-      const res = await authFetch(`${API_BASE}/api/v1/health-data`);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await healthApi.list(authFetch);
         const normalized = Array.isArray(data)
           ? data.map((item) =>
               normalizeHealthLog(typeof item === "object" && item !== null ? (item as Record<string, unknown>) : {}),
             )
           : [];
         setLogs(normalized);
-      } else {
-        const msg = await parseApiError(res);
-        setRequestError(`获取身体数据失败：${msg}`);
-      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "网络异常";
       setRequestError(`获取身体数据失败：${msg}`);
@@ -204,43 +200,13 @@ export default function HealthDataScreen() {
   };
 
   const postHealthPayload = async (payload: Record<string, unknown>): Promise<boolean> => {
-    const corePayload = sanitizePayload({
-      recorded_date: payload.recorded_date,
-      weight: payload.weight,
-      body_fat: payload.body_fat,
-      water_ml: payload.water_ml,
-    });
-
-    const hasExtendedFields = Object.keys(payload).some(
-      (key) => !["recorded_date", "weight", "body_fat", "water_ml"].includes(key)
-    );
-
-    const response = await authFetch(`${API_BASE}/api/v1/health-data/log`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (response.ok) {
+    try {
+      await healthApi.saveLog(authFetch, payload);
       return true;
-    }
-
-    if (hasExtendedFields && FALLBACK_STATUS.has(response.status)) {
-      const fallbackRes = await authFetch(`${API_BASE}/api/v1/health-data/log`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(corePayload),
-      });
-
-      if (fallbackRes.ok) {
-        return true;
-      }
-      setRequestError(await parseApiError(fallbackRes, "服务端参数不兼容，已回退为基础字段仍失败"));
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "身体指标保存失败");
       return false;
     }
-
-    setRequestError(await parseApiError(response, "身体指标保存失败"));
-    return false;
   };
 
   const latestLog = logs.reduce<HealthLog | null>((acc, log) => {
@@ -288,15 +254,6 @@ export default function HealthDataScreen() {
     const newPayload = sanitizePayload({
       recorded_date: today,
       water_ml: newWater,
-      weight: toDateNum(todayWeight, 62.5),
-      height_cm: toDateNum(todayHeight, 170),
-      body_fat: toDateNum(todayBodyFat, 18.5),
-      waist_cm: toDateNum(todayWaist, 74),
-      hip_cm: toDateNum(todayHip, 96),
-      resting_heart_rate: toDateNum(todayHeart, 72),
-      blood_pressure_systolic: toDateNum(todaySys, 118),
-      blood_pressure_diastolic: toDateNum(todayDia, 76),
-      sleep_hours: todaySleep ?? 7.5,
     });
 
     try {
@@ -525,8 +482,11 @@ export default function HealthDataScreen() {
       </ScrollView>
 
       <Modal visible={modalVisible} animationType="slide" transparent>
-        <View className="flex-1 bg-black/40 justify-end">
-          <View className="bg-white rounded-t-[32px] p-6">
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          className="flex-1 bg-black/40 justify-end"
+        >
+          <View className="bg-white rounded-t-[32px] p-6 max-h-[92%]">
             <View className="flex-row items-center justify-between mb-4 border-b border-[#F5EFE6] pb-3">
               <Text className="text-lg font-black text-[#3D3229]">更新身体数据</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
@@ -534,7 +494,7 @@ export default function HealthDataScreen() {
               </TouchableOpacity>
             </View>
 
-            <View className="space-y-4">
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerClassName="gap-4 pb-4">
               <TextInputBlock label="体重 (kg)" value={weight} onChangeText={setWeight} />
               <TextInputBlock label="身高 (cm)" value={heightCm} onChangeText={setHeightCm} />
               <TextInputBlock label="体脂率 (%)" value={bodyFat} onChangeText={setBodyFat} />
@@ -578,9 +538,9 @@ export default function HealthDataScreen() {
                   <Text className="text-base font-bold text-white">打卡保存</Text>
                 )}
               </TouchableOpacity>
-            </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </Screen>
   );
@@ -628,15 +588,4 @@ function MetricCard({
       <Text className="text-xl font-black text-[#3D3229]">{value}</Text>
     </View>
   );
-}
-
-async function parseApiError(response: Response, fallback = "请求失败") {
-  try {
-    const data = await response.json();
-    if (typeof data?.error === "string") return data.error;
-    if (typeof data?.message === "string") return data.message;
-    return fallback;
-  } catch {
-    return fallback;
-  }
 }

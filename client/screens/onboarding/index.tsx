@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { FontAwesome6 } from '@expo/vector-icons';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import { Screen } from '@/components/Screen';
 import { useAuthFetch } from '@/contexts/AuthContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
+import { healthApi } from '@/services/api';
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || 'http://localhost:9091';
 type Gender = '男' | '女' | '保密';
 type HealthGoal = 'lose_weight' | 'reduce_fat' | 'gain_muscle' | 'maintain' | 'healthy';
 type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active';
@@ -68,8 +68,7 @@ export default function OnboardingScreen() {
   const finish = async () => {
     if (!goal) return; setError(''); setSaving(true);
     try {
-      const response = await authFetch(`${API_BASE}/api/v1/health-data/profile`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gender, age, height, weight, target_weight: needsTargetWeight ? targetWeight : null, health_goal: goal, activity_level: activityLevel, dietary_preference: preference }) });
-      if (!response.ok) { const data = await response.json().catch(() => null); setError(data?.error || '健康档案保存失败，请重试'); return; }
+      await healthApi.saveProfile(authFetch, { gender, age, height, weight, target_weight: needsTargetWeight ? targetWeight : null, health_goal: goal, activity_level: activityLevel, dietary_preference: preference });
       router.replace('/');
     } catch { setError('网络异常，请检查网络后重试'); } finally { setSaving(false); }
   };

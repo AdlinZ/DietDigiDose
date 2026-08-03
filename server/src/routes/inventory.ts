@@ -1,34 +1,22 @@
 import { Router } from "express";
-import jwt from "jsonwebtoken";
-import { JWT_SECRET } from "../config/security.js";
 import { db } from "../storage/db.js";
+import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
+import { validateBody } from "../middleware/validate.js";
+import { inventoryCreateSchema, inventoryUpdateSchema } from "../validation/schemas.js";
+import { sendError } from "../utils/http.js";
+import { positiveIntegerParam } from "../middleware/validateParam.js";
 
 const router = Router();
-
-function getUserIdFromReq(req: any): number | null {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
-  try {
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: number };
-    return decoded.userId;
-  } catch {
-    return null;
-  }
-}
+router.param("id", positiveIntegerParam);
+router.use(authMiddleware);
 
 // GET /api/v1/inventory
-router.get("/", (req, res) => {
-  const userId = getUserIdFromReq(req);
-  if (!userId) {
-    return res.status(401).json({ error: "未登录" });
-  }
-
+router.get("/", (req: AuthRequest, res) => {
   const items = db.prepare(`
     SELECT * FROM inventory_items
     WHERE user_id = ?
     ORDER BY expiration_date ASC
-  `).all(userId);
+  `).all(req.userId);
 
   // Convert SQLite 1/0 integer to boolean for JS
   const formatted = items.map((item: any) => ({
@@ -40,22 +28,13 @@ router.get("/", (req, res) => {
 });
 
 // POST /api/v1/inventory
-router.post("/", (req, res) => {
-  const userId = getUserIdFromReq(req);
-  if (!userId) {
-    return res.status(401).json({ error: "未登录" });
-  }
-
+router.post("/", validateBody(inventoryCreateSchema), (req: AuthRequest, res) => {
   const { food_name, category, quantity, expiration_date, storage_location, image_url } = req.body;
-  if (!food_name || !category || !expiration_date) {
-    return res.status(400).json({ error: "食材名称、分类和到期时间不能为空" });
-  }
-
   const result = db.prepare(`
     INSERT INTO inventory_items (user_id, food_name, category, quantity, expiration_date, storage_location, image_url, is_available)
     VALUES (?, ?, ?, ?, ?, ?, ?, 1)
   `).run(
-    userId,
+    req.userId,
     food_name,
     category,
     quantity || "1份",
@@ -72,18 +51,13 @@ router.post("/", (req, res) => {
 });
 
 // PUT /api/v1/inventory/:id
-router.put("/:id", (req, res) => {
-  const userId = getUserIdFromReq(req);
-  if (!userId) {
-    return res.status(401).json({ error: "未登录" });
-  }
-
+router.put("/:id", validateBody(inventoryUpdateSchema), (req: AuthRequest, res) => {
   const { food_name, category, quantity, expiration_date, storage_location, image_url, is_available } = req.body;
   const itemId = req.params.id;
 
-  const item: any = db.prepare("SELECT * FROM inventory_items WHERE id = ? AND user_id = ?").get(itemId, userId);
+  const item: any = db.prepare("SELECT * FROM inventory_items WHERE id = ? AND user_id = ?").get(itemId, req.userId);
   if (!item) {
-    return res.status(404).json({ error: "食材不存在或无权修改" });
+    return sendError(res, 404, "食材不存在或无权修改", "INVENTORY_NOT_FOUND");
   }
 
   db.prepare(`
@@ -105,7 +79,7 @@ router.put("/:id", (req, res) => {
     image_url,
     is_available !== undefined ? (is_available ? 1 : 0) : null,
     itemId,
-    userId
+    req.userId
   );
 
   const updated = db.prepare("SELECT * FROM inventory_items WHERE id = ?").get(itemId) as Record<string, any>;
@@ -117,15 +91,10 @@ router.put("/:id", (req, res) => {
 });
 
 // DELETE /api/v1/inventory/:id
-router.delete("/:id", (req, res) => {
-  const userId = getUserIdFromReq(req);
-  if (!userId) {
-    return res.status(401).json({ error: "未登录" });
-  }
-
-  const result = db.prepare("DELETE FROM inventory_items WHERE id = ? AND user_id = ?").run(req.params.id, userId);
+router.delete("/:id", (req: AuthRequest, res) => {
+  const result = db.prepare("DELETE FROM inventory_items WHERE id = ? AND user_id = ?").run(req.params.id, req.userId);
   if (result.changes === 0) {
-    return res.status(404).json({ error: "未找到相关食材" });
+    return sendError(res, 404, "未找到相关食材", "INVENTORY_NOT_FOUND");
   }
 
   res.json({ message: "删除成功" });

@@ -1,13 +1,13 @@
 import { useCallback, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { Screen } from "@/components/Screen";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
+import { recipesApi } from "@/services/api";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 
 type FavoriteRecipe = {
   id: number;
@@ -34,9 +34,8 @@ export default function FavoritesScreen() {
     }
     try {
       setLoading(true);
-      const response = await authFetch(`${API_BASE}/api/v1/recipes/favorites`);
-      const data = await response.json();
-      setRecipes(response.ok && Array.isArray(data) ? data : []);
+      const data = await recipesApi.favorites(authFetch);
+      setRecipes(Array.isArray(data) ? data : []);
     } catch {
       setRecipes([]);
     } finally {
@@ -50,8 +49,7 @@ export default function FavoritesScreen() {
     const previous = recipes;
     setRecipes((current) => current.filter((recipe) => recipe.id !== recipeId));
     try {
-      const response = await authFetch(`${API_BASE}/api/v1/recipes/${recipeId}/favorite`, { method: "DELETE" });
-      if (!response.ok) setRecipes(previous);
+      await recipesApi.unfavorite(authFetch, recipeId);
     } catch {
       setRecipes(previous);
     }

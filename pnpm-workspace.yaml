@@ -34,4 +34,4 @@ overrides:
   yaml: 2.8.3
 
 patchedDependencies:
-  expo@54.0.33: patches/expo@54.0.33.patch
+  expo@54.0.36: patches/expo@54.0.36.patch

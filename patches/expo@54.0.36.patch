@@ -1,13 +1,16 @@
 diff --git a/src/async-require/hmr.ts b/src/async-require/hmr.ts
-index 33ce50ee2950c40d2b0553b148710f1e24e44f3d..3d78cb02dd7e96ac9727a2935d8178f2c7e95982 100644
+index 33ce50ee2950c40d2b0553b148710f1e24e44f3d..976e766c08f8df764578ffbeb09c924937d7f9b0 100644
 --- a/src/async-require/hmr.ts
 +++ b/src/async-require/hmr.ts
-@@ -216,6 +216,40 @@ const HMRClient: HMRClientNativeInterface = {
-
+@@ -217,3 +217,44 @@ const HMRClient: HMRClientNativeInterface = {
      client.on('update-done', () => {
        hideLoading();
-+      if (process.env.EXPO_PUBLIC_COZE_PROJECT_ID && typeof window !== 'undefined' && window.location) {
-+        if((window as any).__updateTimeoutId) {
++      if (
++        process.env.EXPO_PUBLIC_COZE_PROJECT_ID &&
++        typeof window !== 'undefined' &&
++        window.location
++      ) {
++        if ((window as any).__updateTimeoutId) {
 +          clearTimeout((window as any).__updateTimeoutId);
 +        }
 +        const updateDoneTime = Date.now();
@@ -25,8 +28,11 @@ index 33ce50ee2950c40d2b0553b148710f1e24e44f3d..3d78cb02dd7e96ac9727a2935d8178f2
 +                } else {
 +                  throw new Error(`Server status: ${response.status}`);
 +                }
-+              }).catch((error) => {
-+                console.warn(`[HMR] Check failed (${error.message}). Retries left: ${retriesLeft}`);
++              })
++              .catch((error) => {
++                console.warn(
++                  `[HMR] Check failed (${error.message}). Retries left: ${retriesLeft}`
++                );
 +                if (retriesLeft > 0) {
 +                  setTimeout(() => {
 +                    checkServerAndReload(retriesLeft - 1);
@@ -41,5 +47,3 @@ index 33ce50ee2950c40d2b0553b148710f1e24e44f3d..3d78cb02dd7e96ac9727a2935d8178f2
 +      }
 +      console.log('[HMR] Update done.');
      });
-
-     client.on('error', (data: { type: string; message: string }) => {

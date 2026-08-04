@@ -1,8 +1,12 @@
 import { Router } from "express";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { db } from "../storage/db.js";
+import { validateBody } from "../middleware/validate.js";
+import { kitchenwareSchema } from "../validation/schemas.js";
+import { positiveIntegerParam } from "../middleware/validateParam.js";
 
 const router = Router();
+router.param("id", positiveIntegerParam);
 const CATEGORIES = new Set(["小家电", "烹饪锅具", "刀具餐具", "烘焙工具", "其他"]);
 const STATUSES = new Set(["常用", "良好", "需保养", "维修中", "闲置"]);
 
@@ -49,7 +53,7 @@ router.get("/catalog", (_req, res) => {
 });
 
 // POST /api/v1/kitchenware
-router.post("/", (req: AuthRequest, res) => {
+router.post("/", validateBody(kitchenwareSchema), (req: AuthRequest, res) => {
   const input = normalizeInput(req.body || {});
   const validationError = validateInput(input);
   if (validationError) return res.status(400).json({ error: validationError });
@@ -73,7 +77,7 @@ router.post("/", (req: AuthRequest, res) => {
 });
 
 // PUT /api/v1/kitchenware/:id
-router.put("/:id", (req: AuthRequest, res) => {
+router.put("/:id", validateBody(kitchenwareSchema), (req: AuthRequest, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare(`
     SELECT id FROM kitchenware_items

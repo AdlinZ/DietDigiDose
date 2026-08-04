@@ -93,10 +93,10 @@ pnpm dev:admin
 
 默认地址：
 
-- Expo Web：由 Expo CLI 输出，通常为 `http://localhost:8081`
+- Expo Web：`http://localhost:8080`
 - API：`http://localhost:9091`
 - API 健康检查：`http://localhost:9091/api/v1/health`
-- 管理后台：`http://localhost:5174`
+- 管理后台：`http://localhost:5173`
 
 SQLite 数据库会在 `server/data/dietdigidose.db` 中自动创建，该目录只用于本地运行并已被 Git 忽略。
 

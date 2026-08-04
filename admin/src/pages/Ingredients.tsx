@@ -264,31 +264,88 @@ export default function Ingredients() {
         </div>
       )}
 
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-text-main">食材库管理</h1>
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-text-main flex items-center gap-2">
+            <Apple className="w-7 h-7 text-primary" />
+            食材库管理
+          </h1>
+          <p className="text-xs text-text-muted mt-1">管理官方标准食物营养成分库及用户自定义提交的待审核食材</p>
+        </div>
         <div className="flex space-x-2">
           <button
+            type="button"
             onClick={() => setActiveTab('library')}
             className={cn(
-              "px-4 py-2 rounded-xl font-medium transition-colors",
+              "px-4 py-2 rounded-xl text-xs font-medium transition-colors shadow-sm",
               activeTab === 'library'
                 ? 'bg-primary text-white'
-                : 'bg-white text-gray-600 hover:bg-gray-50'
+                : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-100'
             )}
           >
             官方标准库 ({total || library.length})
           </button>
           <button
+            type="button"
             onClick={() => setActiveTab('ugc')}
             className={cn(
-              "px-4 py-2 rounded-xl font-medium transition-colors",
+              "px-4 py-2 rounded-xl text-xs font-medium transition-colors shadow-sm relative",
               activeTab === 'ugc'
                 ? 'bg-primary text-white'
-                : 'bg-white text-gray-600 hover:bg-gray-50'
+                : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-100'
             )}
           >
             用户提交审核 ({pendingUgc.length})
+            {pendingUgc.length > 0 && (
+              <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500" />
+              </span>
+            )}
           </button>
+        </div>
+      </div>
+
+      {/* Top Metric Summary Cards */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
+          <div>
+            <p className="text-xs font-medium text-text-muted">标准食材收录</p>
+            <p className="mt-1.5 text-2xl font-bold text-text-main">{loading && !total ? '—' : (total || library.length)}</p>
+          </div>
+          <div className="rounded-2xl bg-primary/10 p-3 text-primary">
+            <Apple className="h-6 w-6" />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
+          <div>
+            <p className="text-xs font-medium text-text-muted">待审核 UGC 食材</p>
+            <p className="mt-1.5 text-2xl font-bold text-orange-600">{loading ? '—' : pendingUgc.length}</p>
+          </div>
+          <div className="rounded-2xl bg-orange-50 p-3 text-orange-600">
+            <PlusCircle className="h-6 w-6" />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
+          <div>
+            <p className="text-xs font-medium text-text-muted">涵盖食物大类</p>
+            <p className="mt-1.5 text-2xl font-bold text-text-main">{CATEGORIES.length - 1} 类</p>
+          </div>
+          <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-600">
+            <Filter className="h-6 w-6" />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
+          <div>
+            <p className="text-xs font-medium text-text-muted">权威数据来源</p>
+            <p className="mt-1.5 text-2xl font-bold text-blue-600">{Object.keys(SOURCE_LABELS).length} 来源</p>
+          </div>
+          <div className="rounded-2xl bg-blue-50 p-3 text-blue-600">
+            <Database className="h-6 w-6" />
+          </div>
         </div>
       </div>
 
@@ -342,7 +399,16 @@ export default function Ingredients() {
               <>
               <div className="overflow-x-auto rounded-xl border border-gray-100">
                 <table className="w-full min-w-[920px] text-sm">
-                  <thead className="bg-gray-50 text-left text-xs text-gray-500"><tr><th className="px-4 py-3 font-medium">食材</th><th className="px-4 py-3 font-medium">分类 / 来源</th><th className="px-4 py-3 font-medium">热量</th><th className="px-4 py-3 font-medium">三大营养素 / 100g</th><th className="px-4 py-3 font-medium">微量营养</th><th className="px-4 py-3 font-medium text-right">操作</th></tr></thead>
+                  <thead className="bg-gray-50 text-left text-xs text-gray-500 border-b border-gray-100">
+                    <tr>
+                      <th className="px-4 py-3 font-medium min-w-[220px] whitespace-nowrap">食材</th>
+                      <th className="px-4 py-3 font-medium min-w-[130px] whitespace-nowrap">分类 / 来源</th>
+                      <th className="px-4 py-3 font-medium min-w-[100px] whitespace-nowrap">热量</th>
+                      <th className="px-4 py-3 font-medium min-w-[220px] whitespace-nowrap">三大营养素 / 100g</th>
+                      <th className="px-4 py-3 font-medium min-w-[120px] whitespace-nowrap">微量营养</th>
+                      <th className="px-4 py-3 font-medium text-right min-w-[110px] whitespace-nowrap">操作</th>
+                    </tr>
+                  </thead>
                   <tbody className="divide-y divide-gray-100">
                 {filteredLibrary.map((item) => (
                   <tr
@@ -351,7 +417,7 @@ export default function Ingredients() {
                     onClick={() => openDetailModal(item)}
                   >
                     <td className="px-4 py-3"><div className="flex items-center gap-3"><div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">{item.image_url ? <img src={item.image_url} alt={item.name} className="w-9 h-9 rounded-lg object-cover" /> : <Apple className="w-4 h-4 text-primary" />}</div><div className="min-w-0"><button type="button" onClick={(event) => { event.stopPropagation(); openDetailModal(item); }} className="font-medium text-text-main hover:text-primary text-left max-w-[240px] truncate block focus:outline-none focus:underline">{item.name}</button>{item.original_name && item.original_name !== item.name && <div className="text-xs text-gray-400 truncate max-w-[240px]" title={item.original_name}>原名：{item.original_name}</div>}{item.brands && <div className="text-xs text-gray-400 truncate max-w-[240px]">{item.brands}</div>}</div></div></td>
-                    <td className="px-4 py-3"><div>{item.category || '未分类'}</div><div className="text-xs text-gray-400 mt-1">{item.source}</div></td><td className="px-4 py-3 font-medium">{item.calories_100g ?? '—'} <span className="text-xs font-normal text-gray-400">kcal</span></td><td className="px-4 py-3 text-gray-600">碳 {item.carbs_100g ?? 0}g　蛋 {item.protein_100g ?? 0}g　脂 {item.fat_100g ?? 0}g</td><td className="px-4 py-3">{item.micronutrients_json ? <span className="inline-flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-1 rounded-full"><Database size={12} /> 已收录</span> : <span className="text-xs text-gray-400">未收录</span>}</td>
+                    <td className="px-4 py-3 whitespace-nowrap"><div className="whitespace-nowrap">{item.category || '未分类'}</div><div className="text-xs text-gray-400 mt-1 whitespace-nowrap">{item.source}</div></td><td className="px-4 py-3 font-medium whitespace-nowrap">{item.calories_100g ?? '—'} <span className="text-xs font-normal text-gray-400">kcal</span></td><td className="px-4 py-3 text-gray-600 whitespace-nowrap">碳 {item.carbs_100g ?? 0}g　蛋 {item.protein_100g ?? 0}g　脂 {item.fat_100g ?? 0}g</td><td className="px-4 py-3 whitespace-nowrap">{item.micronutrients_json ? <span className="inline-flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-1 rounded-full whitespace-nowrap"><Database size={12} /> 已收录</span> : <span className="text-xs text-gray-400 whitespace-nowrap">未收录</span>}</td>
                     <td className="px-4 py-3"><div className="flex justify-end gap-1">
                       <button
                         onClick={(event) => { event.stopPropagation(); openDetailModal(item); }}

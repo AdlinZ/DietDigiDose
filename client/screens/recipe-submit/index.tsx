@@ -9,12 +9,12 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import * as ImagePicker from "expo-image-picker";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
-import { API_BASE } from "@/utils/config";
+import { recipesApi } from "@/services/api";
 
 type IngredientGroup = "主料" | "辅料" | "调味料";
 type IngredientInput = { name: string; amount: string; group: IngredientGroup };
@@ -78,9 +78,7 @@ export default function RecipeSubmitScreen() {
     if (!token) return;
     try {
       setLoadingMine(true);
-      const response = await authFetch(`${API_BASE}/api/v1/recipes/mine`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "获取投稿失败");
+      const data = await recipesApi.mine<MyRecipe>(authFetch);
       setMyRecipes(Array.isArray(data) ? data : []);
     } catch (error) {
       Alert.alert("加载失败", error instanceof Error ? error.message : "暂时无法获取投稿");
@@ -127,13 +125,7 @@ export default function RecipeSubmitScreen() {
 
     try {
       setSubmitting(true);
-      const endpoint = editingId
-        ? `${API_BASE}/api/v1/recipes/submissions/${editingId}`
-        : `${API_BASE}/api/v1/recipes/submissions`;
-      const response = await authFetch(endpoint, {
-        method: editingId ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await recipesApi.submit(authFetch, {
           title: form.title.trim(),
           description: form.description.trim(),
           image_url: form.imageUrl,
@@ -155,10 +147,7 @@ export default function RecipeSubmitScreen() {
           tags: form.tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean),
           ingredients,
           steps,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "提交失败");
+      }, editingId || undefined);
 
       Alert.alert("提交成功", data.message || "食谱已进入审核");
       setForm(emptyForm());
@@ -208,14 +197,11 @@ export default function RecipeSubmitScreen() {
         text: "确认撤回",
         style: "destructive",
         onPress: async () => {
-          const response = await authFetch(`${API_BASE}/api/v1/recipes/submissions/${recipe.id}`, {
-            method: "DELETE",
-          });
-          if (response.ok) {
+          try {
+            await recipesApi.withdraw(authFetch, recipe.id);
             fetchMine();
-          } else {
-            const data = await response.json();
-            Alert.alert("撤回失败", data.error || "请稍后重试");
+          } catch (error) {
+            Alert.alert("撤回失败", error instanceof Error ? error.message : "请稍后重试");
           }
         },
       },

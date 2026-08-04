@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Image, View } from "react-native";
-import { FontAwesome6 } from "@expo/vector-icons";
+import { View } from "react-native";
+import { Image } from "expo-image";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 
 interface RecipeCoverProps {
   uri?: string | null;
@@ -30,7 +31,9 @@ export function RecipeCover({
     <Image
       source={{ uri }}
       className={className}
-      resizeMode="cover"
+      contentFit="cover"
+      cachePolicy="memory-disk"
+      transition={180}
       onError={() => setFailedUri(uri || null)}
     />
   );

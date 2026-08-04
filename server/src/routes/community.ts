@@ -1,22 +1,20 @@
 import { Router } from "express";
-import jwt from "jsonwebtoken";
 import { db } from "../storage/db.js";
-import { JWT_SECRET } from "../config/security.js";
+import { authMiddleware, optionalAuthMiddleware, type AuthRequest } from "../middleware/auth.js";
+import { validateBody } from "../middleware/validate.js";
+import { communityCommentSchema, communityPostSchema } from "../validation/schemas.js";
+import { positiveIntegerParam } from "../middleware/validateParam.js";
 
 const router = Router();
+router.param("id", positiveIntegerParam);
+router.param("postId", positiveIntegerParam);
+router.param("commentId", positiveIntegerParam);
+router.use(optionalAuthMiddleware);
 
-function getUserIdFromReq(req: any): { userId: number; user: any } | null {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
-  try {
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: number };
-    const user = db.prepare("SELECT id, username, avatar_url, role, is_verified_expert FROM users WHERE id = ?").get(decoded.userId);
-    if (!user) return null;
-    return { userId: decoded.userId, user };
-  } catch {
-    return null;
-  }
+function getAuthenticatedUser(req: AuthRequest): { userId: number; user: any } | null {
+  if (!req.userId) return null;
+  const user = db.prepare("SELECT id, username, avatar_url, role, is_verified_expert FROM users WHERE id = ?").get(req.userId);
+  return user ? { userId: req.userId, user } : null;
 }
 
 function postSelect(userId: number | null) {
@@ -126,8 +124,8 @@ function recommendPosts(posts: any[], userId: number | null) {
 
 // GET /api/v1/community/users?query=xxx
 // 提及选择器只需要最少的公开资料，避免把用户完整资料暴露给评论端。
-router.get("/users", (req, res) => {
-  const auth = getUserIdFromReq(req);
+router.get("/users", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
   if (!auth) return res.status(401).json({ error: "未登录" });
   const query = String(req.query.query || "").trim();
   const pattern = `%${query.replace(/[%_\\]/g, "\\$&")}%`;
@@ -142,9 +140,9 @@ router.get("/users", (req, res) => {
 });
 
 // GET /api/v1/community/posts
-router.get("/posts", (req, res) => {
+router.get("/posts", (req: AuthRequest, res) => {
   const { category, sort } = req.query;
-  const userId = getUserIdFromReq(req)?.userId ?? null;
+  const userId = req.userId ?? null;
   let posts;
   if (category) {
     posts = db.prepare(`
@@ -163,8 +161,8 @@ router.get("/posts", (req, res) => {
 });
 
 // GET /api/v1/community/posts/:id
-router.get("/posts/:id", (req, res) => {
-  const userId = getUserIdFromReq(req)?.userId ?? null;
+router.get("/posts/:id", (req: AuthRequest, res) => {
+  const userId = req.userId ?? null;
   const post = db.prepare(`${postSelect(userId)} WHERE p.id = ? AND p.deleted_at IS NULL`).get(req.params.id) as any;
   if (!post) {
     return res.status(404).json({ error: "帖子不存在" });
@@ -174,8 +172,8 @@ router.get("/posts/:id", (req, res) => {
 });
 
 // POST /api/v1/community/posts
-router.post("/posts", (req, res) => {
-  const auth = getUserIdFromReq(req);
+router.post("/posts", authMiddleware, validateBody(communityPostSchema), (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
   if (!auth) {
     return res.status(401).json({ error: "未登录" });
   }
@@ -226,8 +224,8 @@ router.post("/posts", (req, res) => {
 });
 
 // POST /api/v1/community/posts/:id/join - 参加或退出活动
-router.post("/posts/:id/join", (req, res) => {
-  const auth = getUserIdFromReq(req);
+router.post("/posts/:id/join", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
   if (!auth) return res.status(401).json({ error: "未登录" });
   const post = db.prepare(`
     SELECT id, category, event_end_at
@@ -257,8 +255,8 @@ router.post("/posts/:id/join", (req, res) => {
 });
 
 // POST /api/v1/community/posts/:id/like
-router.post("/posts/:id/like", (req, res) => {
-  const auth = getUserIdFromReq(req);
+router.post("/posts/:id/like", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
   if (!auth) {
     return res.status(401).json({ error: "未登录" });
   }
@@ -284,8 +282,8 @@ router.post("/posts/:id/like", (req, res) => {
   res.json({ ...(updated as object), is_liked: isLiked });
 });
 
-router.get("/posts/:id/comments", (req, res) => {
-  const userId = getUserIdFromReq(req)?.userId ?? -1;
+router.get("/posts/:id/comments", (req: AuthRequest, res) => {
+  const userId = req.userId ?? -1;
   const comments = db.prepare(`
     SELECT
       c.*,
@@ -306,8 +304,8 @@ router.get("/posts/:id/comments", (req, res) => {
   })));
 });
 
-router.post("/posts/:id/comments", (req, res) => {
-  const auth = getUserIdFromReq(req);
+router.post("/posts/:id/comments", authMiddleware, validateBody(communityCommentSchema), (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
   if (!auth) return res.status(401).json({ error: "未登录" });
   const content = String(req.body.content || "").trim();
   const imageUrl = typeof req.body.image_url === "string" ? req.body.image_url : null;
@@ -327,8 +325,8 @@ router.post("/posts/:id/comments", (req, res) => {
 });
 
 // POST /api/v1/community/posts/:postId/comments/:commentId/accept - 提问者采纳回答
-router.post("/posts/:postId/comments/:commentId/accept", (req, res) => {
-  const auth = getUserIdFromReq(req);
+router.post("/posts/:postId/comments/:commentId/accept", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
   if (!auth) return res.status(401).json({ error: "未登录" });
   const post = db.prepare(`
     SELECT id, user_id, category, accepted_comment_id
@@ -355,8 +353,8 @@ router.post("/posts/:postId/comments/:commentId/accept", (req, res) => {
   });
 });
 
-router.post("/comments/:id/like", (req, res) => {
-  const auth = getUserIdFromReq(req);
+router.post("/comments/:id/like", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
   if (!auth) return res.status(401).json({ error: "未登录" });
   const comment = db.prepare("SELECT id FROM community_comments WHERE id = ?").get(req.params.id);
   if (!comment) return res.status(404).json({ error: "评论不存在" });

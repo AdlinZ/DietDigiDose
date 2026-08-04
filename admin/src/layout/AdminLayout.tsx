@@ -1,4 +1,4 @@
-import { Outlet, NavLink, useLocation, useNavigate, Link } from 'react-router-dom';
+import { Outlet, NavLink, useLocation, useNavigate, Link } from 'react-router';
 import {
   LayoutDashboard,
   Users,
@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Layers3,
   SlidersHorizontal,
+  Bell,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { useEffect, useState } from 'react';
@@ -69,6 +70,7 @@ export default function AdminLayout() {
     { to: '/admin/community', icon: MessageSquare, label: '社区审核' },
   ];
   const finalNavItems = [
+    { to: '/admin/notifications', icon: Bell, label: '通知中心' },
     { to: '/admin/security', icon: ShieldCheck, label: '安全审计' },
   ];
 

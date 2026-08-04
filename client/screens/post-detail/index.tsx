@@ -18,12 +18,12 @@ import {
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import { getAvatarSource } from "@/utils/defaultAvatar";
+import { communityApi } from "@/services/api";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 
 interface Post {
   id: number;
@@ -131,13 +131,12 @@ export default function PostDetailScreen() {
 
     try {
       setLoading(true);
-      const res = await authFetch(`${API_BASE}/api/v1/community/posts/${params.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setPost(data);
-        const commentsRes = await authFetch(`${API_BASE}/api/v1/community/posts/${params.id}/comments`);
-        if (commentsRes.ok) setComments(await commentsRes.json());
-      }
+      const [data, commentsData] = await Promise.all([
+        communityApi.post<Post>(Number(params.id), authFetch),
+        communityApi.comments<CommentItem>(Number(params.id), authFetch),
+      ]);
+      setPost(data);
+      setComments(commentsData);
     } catch (e) {
       console.error(e);
     } finally {
@@ -169,9 +168,7 @@ export default function PostDetailScreen() {
     });
 
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/community/posts/${post.id}/like`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "点赞失败");
+      const data = await communityApi.toggleLike(authFetch, post.id);
       setPost((current) => current ? { ...current, likes_count: data.likes_count, is_liked: data.is_liked } : current);
     } catch (e) {
       fetchPostDetail();
@@ -194,9 +191,7 @@ export default function PostDetailScreen() {
       participant_count: Math.max(0, (post.participant_count || 0) + (post.is_joined ? -1 : 1)),
     });
     try {
-      const response = await authFetch(`${API_BASE}/api/v1/community/posts/${post.id}/join`, { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "活动操作失败");
+      const data = await communityApi.toggleJoin(authFetch, post.id);
       setPost((current) => current ? {
         ...current,
         is_joined: Boolean(data.is_joined),
@@ -211,11 +206,7 @@ export default function PostDetailScreen() {
   const handleAcceptAnswer = async (commentId: number) => {
     if (!post || post.category !== "问答") return;
     try {
-      const response = await authFetch(`${API_BASE}/api/v1/community/posts/${post.id}/comments/${commentId}/accept`, {
-        method: "POST",
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "采纳失败");
+      const data = await communityApi.acceptComment<{ accepted_comment_id: number; question_status: "open" | "resolved" }>(authFetch, post.id, commentId);
       setPost((current) => current ? {
         ...current,
         accepted_comment_id: data.accepted_comment_id,
@@ -244,11 +235,7 @@ export default function PostDetailScreen() {
       return;
     }
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/community/posts/${post.id}/comments`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: commentText.trim(), image_url: commentImageUrl }),
-      });
-      const comment = await res.json();
-      if (!res.ok) throw new Error(comment.error || "评论发布失败");
+      const comment = await communityApi.createComment<CommentItem>(authFetch, post.id, { content: commentText.trim(), image_url: commentImageUrl });
       setComments((current) => [comment, ...current]);
       setPost((current) => current ? { ...current, comment_count: (current.comment_count || 0) + 1 } : current);
       setCommentText("");
@@ -288,8 +275,7 @@ export default function PostDetailScreen() {
 
   const loadMentionUsers = useCallback(async (query = "") => {
     try {
-      const response = await authFetch(`${API_BASE}/api/v1/community/users?query=${encodeURIComponent(query)}`);
-      if (response.ok) setMentionUsers(await response.json());
+      setMentionUsers(await communityApi.users<MentionUser>(authFetch, query));
     } catch {
       setMentionUsers([]);
     }
@@ -334,9 +320,7 @@ export default function PostDetailScreen() {
       )
     );
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/community/comments/${commentId}/like`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "点赞失败");
+      const data = await communityApi.toggleCommentLike(authFetch, commentId);
       setComments((prev) => prev.map((comment) => comment.id === commentId ? { ...comment, likes_count: data.likes_count, is_liked: data.is_liked } : comment));
     } catch {
       setComments((prev) => prev.map((comment) => comment.id === commentId ? target : comment));

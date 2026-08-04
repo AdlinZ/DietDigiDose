@@ -19,7 +19,7 @@ import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { SmartDateInput } from "@/components/SmartDateInput";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
@@ -28,65 +28,25 @@ import {
   INVENTORY_SCAN_JOB_STORAGE_KEY,
   getUserStorageKey,
 } from "@/utils/userStorage";
+import { dateKeyAfterDays } from "@/utils/date";
+import { daysUntilDateKey, getInventoryStatus } from "@/utils/inventory";
+import { aiApi, inventoryApi, kitchenwareApi, recipesApi } from "@/services/api";
+import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, Recipe, StorageLocation } from "./types";
+import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, normalizeDetectedFoods } from "./scan";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
-const MAX_AI_IMAGE_BASE64_LENGTH = 7_500_000;
+const KITCHENWARE_STARTER_KITS = [
+  { name: "轻食减脂", items: ["空气炸锅", "平底锅", "电子秤", "玻璃保鲜盒"] },
+  { name: "中式家常", items: ["炒锅", "汤锅", "蒸锅", "菜刀", "砧板"] },
+  { name: "烘焙入门", items: ["烤箱", "烤盘", "蛋糕模具", "打蛋器", "硅胶刮刀"] },
+] as const;
 
-interface InventoryItem {
-  id: number;
-  food_name: string;
-  category: string;
-  quantity: string;
-  expiration_date: string;
-  storage_location: string;
-  image_url: string | null;
-  is_available: boolean;
-}
-
-type StorageLocation = "冷藏" | "冷冻" | "常温";
-
-interface Recipe {
-  id: number;
-  title: string;
-  description: string;
-  image_url: string;
-  cook_time: number;
-  difficulty: string;
-  calories: number;
-  protein: number;
-  carbs: number;
-  fat: number;
-  category: string;
-  tags: string[];
-}
-
-interface KitchenwareItem {
-  id: number;
-  name: string;
-  category: string;
-  status: string;
-  image_url: string | null;
-  note?: string;
-  purchase_date?: string;
-  last_maintained_at?: string;
-}
-
-interface KitchenwareCatalogItem {
-  id: number;
-  name: string;
-  category: string;
-  aliases: string;
-  cooking_methods: string;
-  care_note: string | null;
-}
-
-interface DetectedFood {
-  id: string;
-  foodName: string;
-  quantity: string;
-  suggestedStorageLocation: string;
-  estimatedExpireDays: number;
-  selected: boolean;
+function catalogList(value: string) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 export default function InventoryScreen() {
@@ -122,6 +82,8 @@ export default function InventoryScreen() {
   const [kwImageUrl, setKwImageUrl] = useState("");
   const [kwPurchaseDate, setKwPurchaseDate] = useState("");
   const [savingKitchenware, setSavingKitchenware] = useState(false);
+  const [selectedCatalogKitchenware, setSelectedCatalogKitchenware] = useState<KitchenwareCatalogItem | null>(null);
+  const [addingStarterKit, setAddingStarterKit] = useState<string | null>(null);
 
   const openKitchenwareModal = (item?: KitchenwareItem) => {
     setEditingKitchenware(item || null);
@@ -141,26 +103,16 @@ export default function InventoryScreen() {
     }
     try {
       setSavingKitchenware(true);
-      const url = editingKitchenware
-        ? `${API_BASE}/api/v1/kitchenware/${editingKitchenware.id}`
-        : `${API_BASE}/api/v1/kitchenware`;
-      const res = await authFetch(url, {
-        method: editingKitchenware ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const payload = {
           name: kwName,
           category: kwCategory,
           status: kwStatus,
           note: kwNote,
           image_url: kwImageUrl.trim() || null,
           purchase_date: kwPurchaseDate || null,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        Alert.alert("保存失败", data.error || "请稍后重试");
-        return;
-      }
+      };
+      if (editingKitchenware) await kitchenwareApi.update(authFetch, editingKitchenware.id, payload);
+      else await kitchenwareApi.create(authFetch, payload);
       setKitchenwareModalVisible(false);
       await fetchData();
       Alert.alert("保存成功", `厨具【${kwName}】已保存到我的装备库。`);
@@ -168,6 +120,46 @@ export default function InventoryScreen() {
       Alert.alert("保存失败", "网络异常，请稍后重试");
     } finally {
       setSavingKitchenware(false);
+    }
+  };
+
+  const addCatalogKitchenware = async (item: KitchenwareCatalogItem) => {
+    if (kitchenware.some((owned) => owned.name === item.name)) {
+      Alert.alert("已在装备库", `你已录入【${item.name}】。`);
+      return;
+    }
+    try {
+      setSavingKitchenware(true);
+      await kitchenwareApi.create(authFetch, {
+        name: item.name, category: item.category, status: "良好", note: item.care_note || "", image_url: null, purchase_date: null,
+      });
+      setSelectedCatalogKitchenware(null);
+      await fetchData();
+      Alert.alert("已加入装备库", `已添加【${item.name}】，现在可用于食谱匹配和保养提醒。`);
+    } catch {
+      Alert.alert("添加失败", "网络异常，请稍后重试");
+    } finally {
+      setSavingKitchenware(false);
+    }
+  };
+
+  const addStarterKit = async (kit: typeof KITCHENWARE_STARTER_KITS[number]) => {
+    const targets = kitchenwareCatalog.filter((item) => kit.items.some((name) => name === item.name) && !kitchenware.some((owned) => owned.name === item.name));
+    if (!targets.length) {
+      Alert.alert("已配置完成", `「${kit.name}」套装中的厨具已都在你的装备库。`);
+      return;
+    }
+    try {
+      setAddingStarterKit(kit.name);
+      await Promise.all(targets.map((item) => kitchenwareApi.create(authFetch, {
+        name: item.name, category: item.category, status: "良好", note: item.care_note || "", image_url: null, purchase_date: null,
+      })));
+      await fetchData();
+      Alert.alert("套装已加入", `已将 ${targets.length} 件「${kit.name}」装备加入你的资产库。`);
+    } catch {
+      Alert.alert("添加失败", "部分厨具可能未保存，请刷新后重试。");
+    } finally {
+      setAddingStarterKit(null);
     }
   };
 
@@ -189,7 +181,7 @@ export default function InventoryScreen() {
   const [category, setCategory] = useState("蔬菜");
   const [quantity, setQuantity] = useState("1份");
   const [expirationDate, setExpirationDate] = useState(
-    new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0]
+    dateKeyAfterDays(7)
   );
   const [storageLocation, setStorageLocation] = useState("冷藏");
   const [imageUrl, setImageUrl] = useState("");
@@ -201,35 +193,18 @@ export default function InventoryScreen() {
   const [savingDetectedFoods, setSavingDetectedFoods] = useState(false);
   const [pendingScanJobId, setPendingScanJobId] = useState<string | null>(null);
 
-  const suggestedDate = (days: number) =>
-    new Date(Date.now() + days * 86400000).toISOString().split("T")[0];
+  useEffect(() => {
+    if (isAuthenticated) return;
+    setModalVisible(false);
+    setBatchReviewVisible(false);
+    setKitchenwareModalVisible(false);
+    setSelectedCatalogKitchenware(null);
+  }, [isAuthenticated]);
 
-  const inferFoodCategory = (name: string) => {
-    if (/[牛猪鸡羊鱼虾蟹贝肉]|培根|火腿/.test(name)) return "肉食";
-    if (/奶|芝士|黄油/.test(name)) return "乳制品";
-    if (/苹果|香蕉|[橙柚梨桃]|葡萄|草莓|蓝莓|西瓜/.test(name)) return "水果";
-    if (/[酱油醋盐糖米面粉豆]|罐头|披萨|泡芙/.test(name)) return "粮油干货";
-    return "蔬菜";
-  };
-
-  const normalizeDetectedFoods = (items: unknown): DetectedFood[] =>
-    (Array.isArray(items) ? items : [])
-      .filter((item: { foodName?: unknown }) => typeof item.foodName === "string" && item.foodName.trim())
-      .slice(0, 30)
-      .map((item: { foodName: string; quantity?: string; suggestedStorageLocation?: string; estimatedExpireDays?: number }, index: number) => ({
-        id: `${Date.now()}-${index}`,
-        foodName: item.foodName.trim(),
-        quantity: item.quantity || "1份",
-        suggestedStorageLocation: ["冷藏", "冷冻", "常温"].includes(item.suggestedStorageLocation || "") ? item.suggestedStorageLocation! : "冷藏",
-        estimatedExpireDays: Math.max(1, Math.min(Number(item.estimatedExpireDays) || 7, 365)),
-        selected: true,
-      }));
+  const suggestedDate = (days: number) => dateKeyAfterDays(days);
 
   const getScanJob = async (jobId: string) => {
-    const res = await authFetch(`${API_BASE}/api/v1/ai/inventory-scan-jobs/${jobId}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "识别任务已失效");
-    return data as { status: string; items?: unknown; error?: string };
+    return aiApi.inventoryScan<{ status: string; items?: unknown; error?: string }>(authFetch, jobId);
   };
 
   const waitForScanJob = async (jobId: string): Promise<DetectedFood[]> => {
@@ -259,16 +234,8 @@ export default function InventoryScreen() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/ai/inventory-scan-jobs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: base64 }),
-        signal: controller.signal,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.jobId) {
-        throw new Error(data.error || "AI 识别任务创建失败，请稍后重试");
-      }
+      const data = await aiApi.createInventoryScan<{ jobId?: string }>(authFetch, base64, controller.signal);
+      if (!data.jobId) throw new Error("AI 识别任务创建失败，请稍后重试");
 
       setPendingScanJobId(data.jobId);
       if (inventoryScanJobStorageKey) {
@@ -377,19 +344,16 @@ export default function InventoryScreen() {
     setSavingDetectedFoods(true);
     try {
       const results = await Promise.allSettled(selectedFoods.map((item) =>
-        authFetch(`${API_BASE}/api/v1/inventory`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        inventoryApi.create(authFetch, {
             food_name: item.foodName,
             category: inferFoodCategory(item.foodName),
             quantity: item.quantity,
             expiration_date: suggestedDate(item.estimatedExpireDays),
             storage_location: item.suggestedStorageLocation,
-          }),
+            image_url: null,
         })
       ));
-      const addedCount = results.filter((result) => result.status === "fulfilled" && result.value.ok).length;
+      const addedCount = results.filter((result) => result.status === "fulfilled").length;
       const failedCount = selectedFoods.length - addedCount;
       if (addedCount > 0) await fetchData();
       if (failedCount === 0) {
@@ -483,11 +447,8 @@ export default function InventoryScreen() {
     // Fetch recipes regardless of auth state
     try {
       setLoadingRecipes(true);
-      const res = await fetch(`${API_BASE}/api/v1/recipes`);
-      if (res.ok) {
-        const data = await res.json();
-        setRecipes(Array.isArray(data) ? data : []);
-      }
+      const data = await recipesApi.list<Recipe>();
+      setRecipes(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("Fetch recipes error:", e);
     } finally {
@@ -504,23 +465,14 @@ export default function InventoryScreen() {
     try {
       setLoadingItems(true);
       setLoadingKitchenware(true);
-      const [inventoryRes, kitchenwareRes, catalogRes] = await Promise.all([
-        authFetch(`${API_BASE}/api/v1/inventory`),
-        authFetch(`${API_BASE}/api/v1/kitchenware`),
-        authFetch(`${API_BASE}/api/v1/kitchenware/catalog`),
+      const [inventoryData, kitchenwareData, catalogData] = await Promise.all([
+        inventoryApi.list(authFetch),
+        kitchenwareApi.list<KitchenwareItem>(authFetch),
+        kitchenwareApi.catalog<KitchenwareCatalogItem>(authFetch),
       ]);
-      if (inventoryRes.ok) {
-        const data = await inventoryRes.json();
-        setItems(Array.isArray(data) ? data : []);
-      }
-      if (kitchenwareRes.ok) {
-        const data = await kitchenwareRes.json();
-        setKitchenware(Array.isArray(data) ? data : []);
-      }
-      if (catalogRes.ok) {
-        const data = await catalogRes.json();
-        setKitchenwareCatalog(Array.isArray(data) ? data : []);
-      }
+      setItems(Array.isArray(inventoryData) ? inventoryData : []);
+      setKitchenware(Array.isArray(kitchenwareData) ? kitchenwareData : []);
+      setKitchenwareCatalog(Array.isArray(catalogData) ? catalogData : []);
     } catch (e) {
       console.error("Fetch inventory or kitchenware error:", e);
     } finally {
@@ -536,16 +488,23 @@ export default function InventoryScreen() {
   );
 
   const openAddModal = useCallback(() => {
+    if (!isAuthenticated) {
+      Alert.alert("登录后录入食材", "登录后才能保存和管理你的食材。", [
+        { text: "取消", style: "cancel" },
+        { text: "去登录", onPress: () => router.push("/login") },
+      ]);
+      return;
+    }
     setEditingItem(null);
     setFoodName("");
     setCategory("蔬菜");
     setQuantity("100g");
-    setExpirationDate(new Date(Date.now() + 5 * 86400000).toISOString().split("T")[0]);
+    setExpirationDate(dateKeyAfterDays(5));
     setStorageLocation("冷藏");
     setImageUrl("");
     setEntryMode("choose");
     setModalVisible(true);
-  }, []);
+  }, [isAuthenticated, router]);
 
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener("open-add-food", () => {
@@ -575,6 +534,14 @@ export default function InventoryScreen() {
   };
 
   const handleSaveItem = async () => {
+    if (!isAuthenticated) {
+      setModalVisible(false);
+      Alert.alert("请先登录", "登录后才能将食材保存到食材库。", [
+        { text: "取消", style: "cancel" },
+        { text: "去登录", onPress: () => router.push("/login") },
+      ]);
+      return;
+    }
     if (!foodName.trim()) {
       Alert.alert("提示", "请输入食材名称");
       return;
@@ -590,18 +557,8 @@ export default function InventoryScreen() {
         image_url: imageUrl.trim() || null,
       };
 
-      const url = editingItem
-        ? `${API_BASE}/api/v1/inventory/${editingItem.id}`
-        : `${API_BASE}/api/v1/inventory`;
-      const method = editingItem ? "PUT" : "POST";
-
-      const res = await authFetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok) {
+      if (editingItem) await inventoryApi.update(authFetch, editingItem.id, payload);
+      else await inventoryApi.create(authFetch, payload);
         if (!editingItem && pendingScanJobId) {
           if (inventoryScanJobStorageKey) {
             await AsyncStorage.removeItem(inventoryScanJobStorageKey);
@@ -610,10 +567,6 @@ export default function InventoryScreen() {
         }
         setModalVisible(false);
         fetchData();
-      } else {
-        const err = await res.json();
-        Alert.alert("错误", err.error || "保存失败");
-      }
     } catch (e) {
       Alert.alert("错误", "网络异常");
     } finally {
@@ -629,14 +582,10 @@ export default function InventoryScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            const res = await authFetch(`${API_BASE}/api/v1/inventory/${id}`, {
-              method: "DELETE",
-            });
-            if (res.ok) {
+            await inventoryApi.remove(authFetch, id);
               setModalVisible(false);
               setEditingItem(null);
               fetchData();
-            }
           } catch (e) {
             console.error(e);
           }
@@ -679,12 +628,7 @@ export default function InventoryScreen() {
     );
 
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/inventory/${item.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storage_location: storageLocation }),
-      });
-      if (!res.ok) throw new Error("保存失败");
+      await inventoryApi.update(authFetch, item.id, { storage_location: storageLocation });
     } catch {
       setItems((currentItems) =>
         currentItems.map((currentItem) =>
@@ -734,14 +678,7 @@ export default function InventoryScreen() {
 
   const handleMaintainKitchenware = async (item: KitchenwareItem) => {
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/kitchenware/${item.id}/maintain`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        Alert.alert("更新失败", data.error || "请稍后重试");
-        return;
-      }
+      await kitchenwareApi.maintain(authFetch, item.id);
       await fetchData();
       Alert.alert("保养完成", `已更新【${item.name}】的保养记录。`);
     } catch {
@@ -756,11 +693,12 @@ export default function InventoryScreen() {
         text: "移除",
         style: "destructive",
         onPress: async () => {
-          const res = await authFetch(`${API_BASE}/api/v1/kitchenware/${item.id}`, {
-            method: "DELETE",
-          });
-          if (res.ok) await fetchData();
-          else Alert.alert("移除失败", "请稍后重试");
+          try {
+            await kitchenwareApi.remove(authFetch, item.id);
+            await fetchData();
+          } catch {
+            Alert.alert("移除失败", "请稍后重试");
+          }
         },
       },
     ]);
@@ -768,13 +706,11 @@ export default function InventoryScreen() {
 
   // Status helper for inventory items
   const getStatusBadge = (expDate: string) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const exp = new Date(expDate);
-    exp.setHours(0, 0, 0, 0);
-    const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 3600 * 24));
+    const diffDays = daysUntilDateKey(expDate);
 
-    if (diffDays < 0) {
+    if (diffDays === null) {
+      return { text: "日期异常", bg: "bg-gray-500/15", color: "text-gray-600" };
+    } else if (diffDays < 0) {
       return { text: "已过期", bg: "bg-red-500/15", color: "text-red-600" };
     } else if (diffDays <= 3) {
       return { text: `临期 ${diffDays}天`, bg: "bg-amber-500/15", color: "text-amber-700" };
@@ -801,12 +737,8 @@ export default function InventoryScreen() {
   });
 
   const priorityItems = items.filter((item) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const expiration = new Date(item.expiration_date);
-    expiration.setHours(0, 0, 0, 0);
-    const diffDays = Math.ceil((expiration.getTime() - today.getTime()) / (1000 * 3600 * 24));
-    return diffDays <= 3;
+    const status = getInventoryStatus(item).freshness;
+    return status === "expired" || status === "expiring";
   });
   const expiringCount = priorityItems.length;
 
@@ -935,7 +867,7 @@ export default function InventoryScreen() {
                     className="bg-[#E9C46A] px-6 py-3 rounded-2xl shadow-sm active:opacity-90 flex-row items-center gap-1.5"
                   >
                     <FontAwesome6 name="wand-magic-sparkles" size={13} color="#3D3229" />
-                    <Text className="text-sm font-black text-[#3D3229]">Demo 账号体验</Text>
+                    <Text className="text-sm font-black text-[#3D3229]">登录后体验</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1250,11 +1182,7 @@ export default function InventoryScreen() {
                                 }}
                               >
                                 {group.items.map((item) => {
-                                  const today = new Date();
-                                  today.setHours(0, 0, 0, 0);
-                                  const exp = new Date(item.expiration_date);
-                                  exp.setHours(0, 0, 0, 0);
-                                  const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 3600 * 24));
+                                  const diffDays = daysUntilDateKey(item.expiration_date) ?? 0;
 
                                   let badgeBg = "bg-emerald-500/15";
                                   let statusBadgeText = `保鲜${diffDays}天`;
@@ -1589,6 +1517,28 @@ export default function InventoryScreen() {
               </View>
             </View>
 
+            <View className="mb-4 rounded-[22px] border border-[#EBE3D5] bg-white p-3.5">
+              <View className="flex-row items-center justify-between">
+                <View>
+                  <Text className="text-xs font-black text-[#3D3229]">一键配置厨房装备</Text>
+                  <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">从官方标准库选择，之后仍可单独编辑</Text>
+                </View>
+                <FontAwesome6 name="wand-magic-sparkles" size={15} color="#D4A276" />
+              </View>
+              <View className="mt-3">
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <View className="flex-row gap-2 pr-3">
+                  {KITCHENWARE_STARTER_KITS.map((kit) => (
+                    <TouchableOpacity key={kit.name} disabled={Boolean(addingStarterKit)} onPress={() => addStarterKit(kit)} className="rounded-xl border border-[#2D6A4F]/20 bg-[#E7F0EA] px-3 py-2 disabled:opacity-50">
+                      <Text className="text-[11px] font-black text-[#2D6A4F]">{addingStarterKit === kit.name ? "添加中…" : kit.name}</Text>
+                      <Text className="mt-0.5 text-[9px] text-[#6F6254]">{kit.items.join(" · ")}</Text>
+                    </TouchableOpacity>
+                  ))}
+                  </View>
+                </ScrollView>
+              </View>
+            </View>
+
             {/* 厨具分类 Selector + 录入新厨具按键 */}
             <View className="flex-row items-center justify-between mb-3">
               <View className="mr-2 flex-1">
@@ -1731,7 +1681,7 @@ export default function InventoryScreen() {
         )}
 
         {/* Inventory Add/Edit Modal */}
-        <Modal visible={modalVisible} animationType="slide" transparent>
+        <Modal visible={modalVisible && isAuthenticated} animationType="slide" transparent>
           <View className="flex-1 bg-black/40 justify-end">
             <View className="bg-white rounded-t-[32px] px-5 pt-5 pb-6 max-h-[90%]">
               <View className="flex-row items-center justify-between mb-4 border-b border-[#F5EFE6] pb-3">
@@ -1876,7 +1826,7 @@ export default function InventoryScreen() {
                   </View>
                   <View className="flex-row gap-2 mb-3">
                     {[{ label: "3天", days: 3 }, { label: "7天", days: 7 }, { label: "30天", days: 30 }].map(({ label, days }) => {
-                      const date = new Date(Date.now() + days * 86400000).toISOString().split("T")[0];
+                      const date = dateKeyAfterDays(days);
                       const selected = expirationDate === date;
                       return (
                         <TouchableOpacity key={label} onPress={() => setExpirationDate(date)} className={`flex-1 items-center py-1.5 rounded-xl border ${selected ? "bg-[#2D6A4F] border-[#2D6A4F]" : "bg-white border-[#EBE3D5]"}`}>
@@ -2024,6 +1974,27 @@ export default function InventoryScreen() {
           </View>
         </Modal>
 
+        {/* Official kitchenware detail: separate catalog knowledge from a user's owned asset. */}
+        <Modal visible={Boolean(selectedCatalogKitchenware)} animationType="fade" transparent>
+          <View className="flex-1 items-center justify-center bg-black/40 p-5">
+            {selectedCatalogKitchenware ? (
+              <View className="w-full rounded-[28px] bg-white p-5">
+                <View className="flex-row items-start justify-between">
+                  <View className="flex-1 pr-3">
+                    <Text className="text-lg font-black text-[#3D3229]">{selectedCatalogKitchenware.name}</Text>
+                    <Text className="mt-1 text-xs font-bold text-[#2D6A4F]">官方标准库 · {selectedCatalogKitchenware.category}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setSelectedCatalogKitchenware(null)} className="p-1"><FontAwesome6 name="xmark" size={17} color="#8B7D6B" /></TouchableOpacity>
+                </View>
+                {catalogList(selectedCatalogKitchenware.aliases).length ? <View className="mt-4"><Text className="text-[10px] font-bold text-[#8B7D6B]">常用别名</Text><Text className="mt-1 text-xs text-[#3D3229]">{catalogList(selectedCatalogKitchenware.aliases).join("、")}</Text></View> : null}
+                <View className="mt-4"><Text className="text-[10px] font-bold text-[#8B7D6B]">适用方式</Text><Text className="mt-1 text-xs text-[#3D3229]">{catalogList(selectedCatalogKitchenware.cooking_methods).join("、") || "暂未标注"}</Text></View>
+                <View className="mt-4 rounded-2xl bg-[#F5EFE6] p-3"><Text className="text-[10px] font-bold text-[#8B7D6B]">官方保养提示</Text><Text className="mt-1 text-xs leading-5 text-[#3D3229]">{selectedCatalogKitchenware.care_note || "保持清洁干燥，按产品说明书进行保养。"}</Text></View>
+                <TouchableOpacity disabled={savingKitchenware} onPress={() => addCatalogKitchenware(selectedCatalogKitchenware)} className="mt-5 items-center rounded-2xl bg-[#2D6A4F] py-3.5 disabled:opacity-50"><Text className="text-sm font-black text-white">{savingKitchenware ? "添加中…" : kitchenware.some((item) => item.name === selectedCatalogKitchenware.name) ? "已在我的装备库" : "加入我的装备"}</Text></TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+        </Modal>
+
         {/* Kitchenware Add Modal */}
         <Modal visible={kitchenwareModalVisible} animationType="slide" transparent>
           <View className="flex-1 bg-black/40 justify-end">
@@ -2052,7 +2023,7 @@ export default function InventoryScreen() {
                       <View><ScrollView horizontal showsHorizontalScrollIndicator={false}>
                         <View className="flex-row gap-2 pr-4">
                           {kitchenwareCatalog.filter((item) => !kwName.trim() || item.name.includes(kwName.trim())).slice(0, 8).map((item) => (
-                            <TouchableOpacity key={item.id} onPress={() => { setKwName(item.name); setKwCategory(item.category); setKwNote((current) => current || item.care_note || ""); }} className="bg-[#2D6A4F]/10 border border-[#2D6A4F]/15 px-3 py-2 rounded-xl">
+                            <TouchableOpacity key={item.id} onPress={() => setSelectedCatalogKitchenware(item)} className="bg-[#2D6A4F]/10 border border-[#2D6A4F]/15 px-3 py-2 rounded-xl">
                               <Text className="text-xs font-bold text-[#2D6A4F]">{item.name}</Text>
                             </TouchableOpacity>
                           ))}

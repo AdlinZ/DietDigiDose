@@ -4,6 +4,9 @@ import jwt from "jsonwebtoken";
 import { db, logAdminAction } from "../storage/db.js";
 import { JWT_SECRET } from "../config/security.js";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
+import { validateBody } from "../middleware/validate.js";
+import { changePasswordSchema, deleteAccountSchema, loginSchema, profileSchema, registerSchema } from "../validation/schemas.js";
+import { sendError } from "../utils/http.js";
 import {
   clearLoginFailures,
   loginRateLimit,
@@ -23,21 +26,16 @@ function parseLoginIdentifier(value: unknown) {
 }
 
 // POST /api/v1/auth/register
-router.post("/register", async (req, res) => {
+router.post("/register", validateBody(registerSchema), async (req, res) => {
   try {
     const { identifier, password } = req.body;
     const loginIdentifier = parseLoginIdentifier(identifier);
-    if (!loginIdentifier || !password) {
-      return res.status(400).json({ error: "请输入有效的邮箱或手机号，以及密码" });
-    }
-    if (password.length < 6) {
-      return res.status(400).json({ error: "密码长度不能少于6位" });
-    }
+    if (!loginIdentifier) return sendError(res, 400, "请输入有效的邮箱或手机号", "INVALID_IDENTIFIER");
 
     // Check existing
     const existing = db.prepare("SELECT id FROM users WHERE email = ? OR phone = ? OR username = ?").get(loginIdentifier.email, loginIdentifier.phone, identifier.trim().toLowerCase());
     if (existing) {
-      return res.status(400).json({ error: "该邮箱或手机号已注册" });
+      return sendError(res, 409, "该邮箱或手机号已注册", "IDENTIFIER_EXISTS");
     }
 
     // Hash password
@@ -54,15 +52,15 @@ router.post("/register", async (req, res) => {
 
     const token = jwt.sign({ userId }, JWT_SECRET, { expiresIn: "30d" });
 
-    res.json({ token, user });
-  } catch (error: any) {
+    return res.status(201).json({ token, user });
+  } catch (error) {
     console.error("Register error:", error);
-    res.status(500).json({ error: error.message || "注册失败" });
+    return sendError(res, 500, "注册失败", "REGISTER_FAILED");
   }
 });
 
 // POST /api/v1/auth/login
-router.post("/login", loginRateLimit, async (req, res) => {
+router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res) => {
   try {
     const { identifier, username, password } = req.body;
     const rawIdentifier = String(identifier || username || "").trim().toLowerCase();
@@ -70,7 +68,7 @@ router.post("/login", loginRateLimit, async (req, res) => {
     const isAdminUsername = rawIdentifier === "admin";
     if ((!loginIdentifier && !isAdminUsername) || !password) {
       recordLoginFailure(req);
-      return res.status(400).json({ error: "请输入管理员账号，或注册时的邮箱/手机号，以及密码" });
+      return sendError(res, 400, "请输入管理员账号，或注册时的邮箱/手机号", "INVALID_IDENTIFIER");
     }
 
     const user: any = isAdminUsername
@@ -81,13 +79,16 @@ router.post("/login", loginRateLimit, async (req, res) => {
         );
     if (!user) {
       recordLoginFailure(req);
-      return res.status(400).json({ error: "账号、邮箱、手机号或密码错误" });
+      return sendError(res, 401, "账号、邮箱、手机号或密码错误", "INVALID_CREDENTIALS");
     }
 
     const validPassword = bcrypt.compareSync(password, user.password_hash);
     if (!validPassword) {
       recordLoginFailure(req);
-      return res.status(400).json({ error: "账号、邮箱、手机号或密码错误" });
+      return sendError(res, 401, "账号、邮箱、手机号或密码错误", "INVALID_CREDENTIALS");
+    }
+    if (user.is_disabled === 1) {
+      return sendError(res, 403, "账号已被停用", "ACCOUNT_DISABLED");
     }
 
     clearLoginFailures(rawIdentifier);
@@ -112,43 +113,28 @@ router.post("/login", loginRateLimit, async (req, res) => {
     userInfo.last_login_at = nowIso;
     userInfo.last_login_ip = clientIp;
     res.json({ token, user: userInfo });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Login error:", error);
-    res.status(500).json({ error: error.message || "登录失败" });
+    return sendError(res, 500, "登录失败", "LOGIN_FAILED");
   }
 });
 
 // GET /api/v1/auth/me
-router.get("/me", async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "未登录" });
-    }
-
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: number };
-
-    const user = db.prepare("SELECT id, username, email, phone, avatar_url, bio, daily_calories_target, created_at, role, must_change_password, last_login_at, last_login_ip FROM users WHERE id = ?").get(decoded.userId);
-    if (!user) {
-      return res.status(404).json({ error: "用户不存在" });
-    }
-
-    res.json(user);
-  } catch (error: any) {
-    return res.status(401).json({ error: "无效或过期的token" });
-  }
+router.get("/me", authMiddleware, (req: AuthRequest, res) => {
+  const user = db.prepare("SELECT id, username, email, phone, avatar_url, bio, daily_calories_target, created_at, role, must_change_password, last_login_at, last_login_ip FROM users WHERE id = ?").get(req.userId);
+  if (!user) return sendError(res, 404, "用户不存在", "USER_NOT_FOUND");
+  return res.json(user);
 });
 
 // POST /api/v1/auth/change-password
-router.post("/change-password", authMiddleware, (req: AuthRequest, res) => {
+router.post("/change-password", authMiddleware, validateBody(changePasswordSchema), (req: AuthRequest, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ error: "当前密码和新密码不能为空" });
     }
-    if (typeof newPassword !== "string" || newPassword.length < 12) {
-      return res.status(400).json({ error: "新密码长度不能少于 12 位" });
+    if (typeof newPassword !== "string" || newPassword.length < 6) {
+      return res.status(400).json({ error: "新密码长度不能少于 6 位" });
     }
     if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
       return res.status(400).json({ error: "新密码必须同时包含字母和数字" });
@@ -190,16 +176,8 @@ router.post("/change-password", authMiddleware, (req: AuthRequest, res) => {
 });
 
 // PUT /api/v1/auth/profile
-router.put("/profile", async (req, res) => {
+router.put("/profile", authMiddleware, validateBody(profileSchema), (req: AuthRequest, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "未登录" });
-    }
-
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: number };
-
     const { avatar_url, bio, daily_calories_target } = req.body;
 
     db.prepare(`
@@ -208,12 +186,36 @@ router.put("/profile", async (req, res) => {
           bio = COALESCE(?, bio),
           daily_calories_target = COALESCE(?, daily_calories_target)
       WHERE id = ?
-    `).run(avatar_url, bio, daily_calories_target, decoded.userId);
+    `).run(avatar_url, bio, daily_calories_target, req.userId);
 
-    const user = db.prepare("SELECT id, username, email, phone, avatar_url, bio, daily_calories_target, role FROM users WHERE id = ?").get(decoded.userId);
-    res.json(user);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || "更新资料失败" });
+    const user = db.prepare("SELECT id, username, email, phone, avatar_url, bio, daily_calories_target, role FROM users WHERE id = ?").get(req.userId);
+    return res.json(user);
+  } catch (error) {
+    console.error("Profile update error:", error);
+    return sendError(res, 500, "更新资料失败", "PROFILE_UPDATE_FAILED");
+  }
+});
+
+// DELETE /api/v1/auth/account - permanently delete the signed-in user's data.
+router.delete("/account", authMiddleware, validateBody(deleteAccountSchema), (req: AuthRequest, res) => {
+  try {
+    const user = db.prepare("SELECT role, password_hash FROM users WHERE id = ?").get(req.userId) as
+      | { role: string; password_hash: string }
+      | undefined;
+    if (!user) return sendError(res, 404, "用户不存在", "USER_NOT_FOUND");
+    if (user.role === "admin") {
+      return sendError(res, 403, "管理员账号不能通过客户端注销", "ADMIN_ACCOUNT_DELETE_FORBIDDEN");
+    }
+    if (!bcrypt.compareSync(req.body.password, user.password_hash)) {
+      return sendError(res, 400, "当前密码不正确", "INVALID_PASSWORD");
+    }
+
+    const result = db.prepare("DELETE FROM users WHERE id = ?").run(req.userId);
+    if (!result.changes) return sendError(res, 404, "用户不存在", "USER_NOT_FOUND");
+    return res.json({ success: true, message: "账号及关联数据已永久删除" });
+  } catch (error) {
+    console.error("Delete account error:", error);
+    return sendError(res, 500, "账号删除失败", "ACCOUNT_DELETE_FAILED");
   }
 });
 

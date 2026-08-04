@@ -17,9 +17,9 @@ import { Screen } from '@/components/Screen';
 import { useAuthFetch } from '@/contexts/AuthContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import { useFocusEffect } from 'expo-router';
-import { FontAwesome6 } from '@expo/vector-icons';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
+import { healthApi } from '@/services/api';
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 
 export default function HealthProfileScreen() {
   const router = useSafeRouter();
@@ -37,9 +37,7 @@ export default function HealthProfileScreen() {
   const fetchProfile = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await authFetch(`${API_BASE}/api/v1/health-data/profile`);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await healthApi.profile<Record<string, any>>(authFetch);
         if (data) {
           setGender(data.gender || '保密');
           setAge(data.age ? data.age.toString() : '');
@@ -47,7 +45,6 @@ export default function HealthProfileScreen() {
           setWeight(data.weight ? data.weight.toString() : '');
           setTargetWeight(data.target_weight ? data.target_weight.toString() : '');
         }
-      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -64,26 +61,16 @@ export default function HealthProfileScreen() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/health-data/profile`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await healthApi.saveProfile(authFetch, {
           gender,
           age: age ? parseInt(age, 10) : null,
           height: height ? parseFloat(height) : null,
           weight: weight ? parseFloat(weight) : null,
           target_weight: targetWeight ? parseFloat(targetWeight) : null,
-        }),
       });
-
-      if (res.ok) {
-        Alert.alert('成功', '健康档案已更新', [
-          { text: '确定', onPress: () => router.back() }
-        ]);
-      } else {
-        const data = await res.json();
-        Alert.alert('错误', data.error || '保存失败');
-      }
+      Alert.alert('成功', '健康档案已更新', [
+        { text: '确定', onPress: () => router.back() }
+      ]);
     } catch (e) {
       Alert.alert('错误', '网络错误，保存失败');
     } finally {
@@ -117,7 +104,7 @@ export default function HealthProfileScreen() {
 
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} disabled={Platform.OS === 'web'}>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <KeyboardAvoidingView
           style={styles.container}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}

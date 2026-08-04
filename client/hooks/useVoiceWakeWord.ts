@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Platform } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
+import { useAuthFetch } from "@/contexts/AuthContext";
+import { aiApi } from "@/services/api";
 
 interface UseVoiceWakeWordOptions {
   onWakeWordDetected?: (transcript: string) => void;
@@ -15,6 +14,7 @@ export function useVoiceWakeWord({
   onSpeechRecognized,
   wakeWords = ["食语食语", "小食小食", "食语", "hey shiyu"],
 }: UseVoiceWakeWordOptions = {}) {
+  const authFetch = useAuthFetch();
   const [isWakeEnabled, setIsWakeEnabledState] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isWoken, setIsWoken] = useState(false);
@@ -175,24 +175,13 @@ export function useVoiceWakeWord({
   // 手动模拟录音/语音提交（发送给后端 API /transcribe）
   const transcribeAudioFile = useCallback(async (audioBase64: string, mimeType = "audio/m4a") => {
     try {
-      const token = await AsyncStorage.getItem("@auth_token");
-      const res = await fetch(`${BACKEND_URL}/api/v1/ai/transcribe`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ audioBase64, mimeType }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.text || "";
-      }
+      const data = await aiApi.transcribe<{ text?: string }>(authFetch, audioBase64, mimeType);
+      return data.text || "";
     } catch (e) {
       console.error("[transcribeAudioFile Error]", e);
     }
     return "";
-  }, []);
+  }, [authFetch]);
 
   return {
     isWakeEnabled,

@@ -17,11 +17,12 @@ import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { LineChart } from "react-native-chart-kit";
+import { addLocalDays, toLocalDateKey } from "@/utils/date";
+import { dietApi, healthApi, recipesApi } from "@/services/api";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 
 interface HealthData {
   id: number;
@@ -32,6 +33,14 @@ interface HealthData {
   water_ml?: number | null;
   recorded_date?: string;
   created_at: string;
+}
+
+interface HealthProfile {
+  height: number | null;
+  weight: number | null;
+  target_weight?: number | null;
+  gender?: string | null;
+  age?: number | null;
 }
 
 interface DietRecord {
@@ -50,15 +59,16 @@ export default function ProfileScreen() {
   const authFetch = useAuthFetch();
 
   const [healthData, setHealthData] = useState<HealthData | null>(null);
+  const [healthProfile, setHealthProfile] = useState<HealthProfile | null>(null);
   const [recentRecords, setRecentRecords] = useState<DietRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [dietTrend, setDietTrend] = useState<{ date: string; calories: number }[]>([]);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
-  const [waterMl, setWaterMl] = useState(1450);
+  const [waterMl, setWaterMl] = useState<number | null>(null);
   const [favoriteCount, setFavoriteCount] = useState(0);
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = toLocalDateKey();
 
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener("open-quick-record", () => {
@@ -74,21 +84,22 @@ export default function ProfileScreen() {
     }
     try {
       setLoading(true);
-      const [healthRes, dietRes, favoriteRes] = await Promise.all([
-        authFetch(`${API_BASE}/api/v1/health-data/latest`),
-        authFetch(`${API_BASE}/api/v1/diet-records`),
-        authFetch(`${API_BASE}/api/v1/recipes/favorites/count`),
+      const [healthJson, healthLogs, healthProfileJson, dietJson, favoriteJson] = await Promise.all([
+        healthApi.latest(authFetch),
+        healthApi.list(authFetch),
+        healthApi.profile<HealthProfile>(authFetch),
+        dietApi.list(authFetch),
+        recipesApi.favoriteCount(authFetch),
       ]);
-      const healthJson = await healthRes.json();
-      const dietJson = await dietRes.json();
-      const favoriteJson = await favoriteRes.json();
-      setFavoriteCount(favoriteRes.ok ? Number(favoriteJson?.count || 0) : 0);
+      setFavoriteCount(Number(favoriteJson?.count || 0));
 
       const latestHealth = Array.isArray(healthJson) ? healthJson[0] : healthJson;
       setHealthData(latestHealth);
-      if (latestHealth?.water_ml) {
-        setWaterMl(latestHealth.water_ml);
-      }
+      setHealthProfile(healthProfileJson);
+      const todayHealth = Array.isArray(healthLogs)
+        ? healthLogs.find((entry) => entry.recorded_date === today)
+        : null;
+      setWaterMl(todayHealth?.water_ml ?? null);
 
       const dietList = Array.isArray(dietJson) ? dietJson : [];
       setRecentRecords(dietList.slice(0, 5));
@@ -96,9 +107,8 @@ export default function ProfileScreen() {
       // Compute diet trend for last 7 days
       const last7Days: { date: string; calories: number }[] = [];
       for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const dateStr = d.toISOString().split("T")[0];
+        const d = addLocalDays(-i);
+        const dateStr = toLocalDateKey(d);
         const dayRecords = dietList.filter((r: DietRecord) => r.recorded_at === dateStr);
         const totalCalories = dayRecords.reduce(
           (sum: number, r: DietRecord) => sum + (r.calories || 0),
@@ -112,7 +122,7 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated, authFetch]);
+  }, [isAuthenticated, authFetch, today]);
 
   useFocusEffect(
     useCallback(() => {
@@ -121,23 +131,15 @@ export default function ProfileScreen() {
   );
 
   const handleAddWater = async (addAmount: number) => {
-    const newWater = waterMl + addAmount;
+    const previousWater = waterMl;
+    const newWater = (waterMl ?? 0) + addAmount;
     setWaterMl(newWater);
 
     if (!isAuthenticated) return;
     try {
-      await authFetch(`${API_BASE}/api/v1/health-data`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recorded_date: today,
-          water_ml: newWater,
-          height: healthData?.height || 175,
-          weight: healthData?.weight || 62.5,
-          body_fat: healthData?.body_fat || 18.5,
-        }),
-      });
+      await healthApi.saveLog(authFetch, { recorded_date: today, water_ml: newWater });
     } catch (e) {
+      setWaterMl(previousWater);
       console.error("Update water failed", e);
     }
   };
@@ -187,10 +189,12 @@ export default function ProfileScreen() {
     );
   }
 
-  const heightVal = healthData?.height || 175;
-  const weightVal = healthData?.weight || 62.5;
-  const bodyFatVal = healthData?.body_fat || 18.5;
-  const calculatedBmi = weightVal ? weightVal / Math.pow(heightVal / 100, 2) : null;
+  const heightVal = healthProfile?.height ?? healthData?.height ?? null;
+  const weightVal = healthProfile?.weight ?? healthData?.weight ?? null;
+  const bodyFatVal = healthData?.body_fat ?? null;
+  const calculatedBmi = weightVal != null && heightVal != null
+    ? weightVal / Math.pow(heightVal / 100, 2)
+    : null;
   const bmi = healthData?.bmi ?? calculatedBmi;
 
   const bmiStatus =
@@ -225,7 +229,7 @@ export default function ProfileScreen() {
       : 0;
 
   const miniTopOffset = Platform.OS === "web" ? 12 : Math.max(insets.top + 6, 12);
-  const waterPercent = Math.min(Math.round((waterMl / 2000) * 100), 100);
+  const waterPercent = Math.min(Math.round(((waterMl ?? 0) / 2000) * 100), 100);
 
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
@@ -361,12 +365,12 @@ export default function ProfileScreen() {
 
           {/* 4维健康指标 */}
           <View className="flex-row justify-between bg-[#FDF8F0] p-3.5 rounded-2xl mb-3.5 border border-[#EBE3D5]/50">
-            <HealthStat label="身高" value={`${heightVal}`} unit="cm" color="#2D6A4F" />
-            <HealthStat label="体重" value={`${weightVal}`} unit="kg" color="#D4A276" />
-            <HealthStat label="体脂率" value={`${bodyFatVal}`} unit="%" color="#E07A5F" />
+            <HealthStat label="身高" value={heightVal == null ? "—" : `${heightVal}`} unit={heightVal == null ? "" : "cm"} color="#2D6A4F" />
+            <HealthStat label="体重" value={weightVal == null ? "—" : `${weightVal}`} unit={weightVal == null ? "" : "kg"} color="#D4A276" />
+            <HealthStat label="体脂率" value={bodyFatVal == null ? "—" : `${bodyFatVal}`} unit={bodyFatVal == null ? "" : "%"} color="#E07A5F" />
             <HealthStat
               label="BMI"
-              value={bmi ? bmi.toFixed(1) : "--"}
+              value={bmi == null ? "—" : bmi.toFixed(1)}
               unit={bmiStatus}
               color={bmiColor}
             />
@@ -382,7 +386,7 @@ export default function ProfileScreen() {
                 <View className="flex-row items-center justify-between mb-1.5">
                   <Text className="text-xs font-bold text-[#1E3A8A]">今日饮水目标</Text>
                   <Text className="text-xs font-black text-[#3B82F6]">
-                    {waterMl} / 2000 ml
+                    {waterMl == null ? "尚未记录" : `${waterMl} / 2000 ml`}
                   </Text>
                 </View>
                 <View className="w-full h-2 bg-blue-200/60 rounded-full overflow-hidden">

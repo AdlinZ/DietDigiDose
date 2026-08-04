@@ -1,15 +1,60 @@
 import dotenv from "dotenv";
 import { getSystemSetting, logAIUsage } from "../storage/db.js";
-import { executeAITool } from "./aiTools.js";
+import { executeAIQueryTool, executeAITool, isAIQueryTool } from "./aiTools.js";
+import { createAIWritePreview } from "./aiWriteConfirmations.js";
 dotenv.config();
 
-export function getAIConfig() {
-  const apiKey = getSystemSetting("AI_API_KEY") || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
-  const baseUrl = (getSystemSetting("AI_BASE_URL") || process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
-  const model = getSystemSetting("AI_MODEL") || process.env.AI_MODEL || "gpt-4o-mini";
-  const visionModel = getSystemSetting("AI_VISION_MODEL") || process.env.AI_VISION_MODEL || model;
+export function getChatConfig() {
+  const globalKey = getSystemSetting("AI_API_KEY") || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
+  const globalUrl = (getSystemSetting("AI_BASE_URL") || process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
 
-  return { apiKey, baseUrl, model, visionModel };
+  const apiKey = getSystemSetting("AI_CHAT_API_KEY") || globalKey;
+  const baseUrl = (getSystemSetting("AI_CHAT_BASE_URL") || globalUrl).replace(/\/$/, "");
+  const model = getSystemSetting("AI_CHAT_MODEL") || getSystemSetting("AI_MODEL") || process.env.AI_MODEL || "deepseek-ai/DeepSeek-V3";
+
+  return { apiKey, baseUrl, model };
+}
+
+export function getVisionConfig() {
+  const globalKey = getSystemSetting("AI_API_KEY") || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
+  const globalUrl = (getSystemSetting("AI_BASE_URL") || process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
+
+  const apiKey = getSystemSetting("AI_VISION_API_KEY") || globalKey;
+  const baseUrl = (getSystemSetting("AI_VISION_BASE_URL") || globalUrl).replace(/\/$/, "");
+  const model = getSystemSetting("AI_VISION_MODEL") || process.env.AI_VISION_MODEL || "Qwen/Qwen2.5-VL-72B-Instruct";
+
+  return { apiKey, baseUrl, model };
+}
+
+export function getAsrConfig() {
+  const globalKey = getSystemSetting("AI_API_KEY") || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
+  const globalUrl = (getSystemSetting("AI_BASE_URL") || process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
+
+  const apiKey = getSystemSetting("AI_ASR_API_KEY") || globalKey;
+  const baseUrl = (getSystemSetting("AI_ASR_BASE_URL") || globalUrl).replace(/\/$/, "");
+  const model = getSystemSetting("AI_ASR_MODEL") || process.env.AI_ASR_MODEL || "FunAudioLLM/SenseVoiceSmall";
+
+  return { apiKey, baseUrl, model };
+}
+
+export function getAIConfig() {
+  const chat = getChatConfig();
+  const vision = getVisionConfig();
+  const asr = getAsrConfig();
+
+  const globalKey = getSystemSetting("AI_API_KEY") || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
+  const globalUrl = (getSystemSetting("AI_BASE_URL") || process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
+
+  return {
+    apiKey: globalKey,
+    baseUrl: globalUrl,
+    model: chat.model,
+    visionModel: vision.model,
+    asrModel: asr.model,
+    chat,
+    vision,
+    asr,
+  };
 }
 
 export interface ChatMessage {
@@ -20,6 +65,8 @@ export interface ChatMessage {
 }
 
 export interface ChatCompletionOptions {
+  apiKey?: string;
+  baseUrl?: string;
   model?: string;
   temperature?: number;
   max_tokens?: number;
@@ -27,6 +74,9 @@ export interface ChatCompletionOptions {
   tools?: any[];
   userId?: number;
   endpoint?: string;
+  toolRounds?: number;
+  seenToolCalls?: string[];
+  originalUserText?: string;
 }
 
 export interface SolutionCard {
@@ -59,6 +109,7 @@ export interface ChatCompletionResult {
     options: Array<{ label: string; actionText: string }>;
   };
   solutionCards?: SolutionCard[];
+  writeConfirmation?: { confirmationId: string; action: string; payload: Record<string, unknown>; expiresAt: string };
 }
 
 export function parseDietActionCard(userText: string, aiReplyText: string = ""): ChatCompletionResult["actionCard"] {
@@ -254,6 +305,24 @@ export function parseSolutionCards(userText: string, aiReplyText: string = ""): 
   return cards.length > 0 ? cards : undefined;
 }
 
+function buildRecommendationCard(userText: string, replyText: string): SolutionCard[] | undefined {
+  if (!/(晚餐|午餐|早餐|吃什么|吃啥|搭配|推荐|做什么)/.test(userText)) return undefined;
+  const title = replyText.match(/【([^】]{2,30})】/)?.[1]
+    || replyText.match(/(?:推荐|建议)[：:，,\s]*([^，。！\n]{2,30})/)?.[1]?.replace(/[“”"']/g, "").trim();
+  if (!title) return undefined;
+  const calories = replyText.match(/(?:约|热量)\s*(\d+(?:\.\d+)?)\s*kcal/i)?.[1];
+  const protein = replyText.match(/蛋白质\s*(\d+(?:\.\d+)?)\s*g/i)?.[1];
+  return [{
+    id: `recommendation_${Date.now()}`,
+    schemeTag: "食语推荐",
+    title,
+    ingredients: "基于当前冰箱库存搭配；如需完整用量，可点击查看做法",
+    cookingTip: "优先少油烹饪，按现有厨具调整火候与时间",
+    macros: calories ? `约 ${calories} kcal${protein ? ` · 蛋白质 ${protein}g` : ""}` : "营养数据为估算，建议按实际用量调整",
+    actionText: `请为我提供【${title}】的完整做法、食材用量和烹饪时间。`,
+  }];
+}
+
 /**
  * 封装通用 OpenAIspec 兼容 API 请求 (含 Agentic Tool Calls 与预填卡片)
  */
@@ -261,18 +330,20 @@ export async function chatCompletion(
   messages: ChatMessage[],
   options: ChatCompletionOptions = {}
 ): Promise<ChatCompletionResult> {
-  const config = getAIConfig();
-  const model = options.model || config.model;
+  const chatConfig = getChatConfig();
+  const apiKey = (options.apiKey || chatConfig.apiKey).trim();
+  const baseUrl = (options.baseUrl || chatConfig.baseUrl).replace(/\/$/, "").trim();
+  const model = options.model || chatConfig.model;
   const startedAt = Date.now();
   let usageLogged = false;
   const lastMsg = messages[messages.length - 1];
-  const userText = typeof lastMsg?.content === "string" ? lastMsg.content : "";
+  const userText = options.originalUserText ?? (typeof lastMsg?.content === "string" ? lastMsg.content : "");
 
-  if (!config.apiKey) {
+  if (!apiKey) {
     const replyText = getFallbackResponse(messages);
     const actionCard = parseDietActionCard(userText, replyText);
     const missingCard = parseMissingIngredientsCard(userText, replyText);
-    const solutionCards = parseSolutionCards(userText, replyText);
+    const solutionCards = parseSolutionCards(userText, replyText) || buildRecommendationCard(userText, replyText);
     const optionsCard = solutionCards && solutionCards.length > 0 ? undefined : parseOptionChoicesCard(userText, replyText);
     return {
       reply: actionCard
@@ -299,11 +370,11 @@ export async function chatCompletion(
       payload.tool_choice = "auto";
     }
 
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(payload),
     });
@@ -336,6 +407,25 @@ export async function chatCompletion(
 
     // A. 如果模型决定调用工具 (Tool Calls)
     if (choiceMsg?.tool_calls && choiceMsg.tool_calls.length > 0 && options.userId) {
+      const queryCalls = choiceMsg.tool_calls.filter((call: any) => isAIQueryTool(call?.function?.name));
+      if (queryCalls.length > 0) {
+        const round = options.toolRounds || 0;
+        if (round >= 5) return { reply: "我已完成可用数据查询，但没有得到足够明确的后续结论。请缩小食材或时间范围后再试。" };
+        const seen = new Set(options.seenToolCalls || []);
+        const toolMessages: ChatMessage[] = [];
+        for (const call of queryCalls.slice(0, 4)) {
+          let args: Record<string, unknown> = {}; try { args = JSON.parse(call.function.arguments || "{}"); } catch { /* empty */ }
+          const key = `${call.function.name}:${JSON.stringify(args)}`;
+          const result = seen.has(key) ? { error: "重复查询已被拦截，请基于已有结果作答" } : await executeAIQueryTool(options.userId, call.function.name, args);
+          seen.add(key);
+          toolMessages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+        }
+        return chatCompletion([
+          ...messages,
+          { role: "assistant", content: choiceMsg.content || "", tool_calls: choiceMsg.tool_calls },
+          ...toolMessages,
+        ], { ...options, toolRounds: round + 1, seenToolCalls: [...seen], originalUserText: userText });
+      }
       const toolCall = choiceMsg.tool_calls[0];
       const fnName = toolCall.function.name;
       let fnArgs: any = {};
@@ -358,9 +448,11 @@ export async function chatCompletion(
           carbs: fnArgs.carbs || 45,
           fat: fnArgs.fat || 10,
         };
+        const writeConfirmation = createAIWritePreview({ userId: options.userId, action: "record_diet_meal", payload: card });
         return {
           reply: `🍱 食语已为你识别并整理好【${card.mealType}】打卡数据卡片！请核对信息，点击【确认打卡保存】或【弹出修改】：`,
           actionCard: card,
+          writeConfirmation,
         };
       }
 
@@ -386,16 +478,21 @@ export async function chatCompletion(
           actionText: `我选择【${s.schemeTag || `方案 ${String.fromCharCode(65 + idx)}`}：${s.title || "健康推荐料理"}】，请为我提供详细做法与准备步骤！`,
         }));
 
+        const reply = fnArgs.introMessage || "根据您当前的诉求与库存，为您推荐以下膳食方案：";
+        const normalizedCards = solutionCards.length > 0
+          ? solutionCards
+          : buildRecommendationCard(userText, reply);
+
         return {
-          reply: fnArgs.introMessage || "根据您当前的诉求与库存，为您推荐以下膳食方案：",
-          solutionCards: solutionCards.length > 0 ? solutionCards : undefined,
+          reply,
+          solutionCards: normalizedCards,
         };
       }
 
       // 其它工具执行 SQLite 操作
       const toolResult = await executeAITool(options.userId, fnName, fnArgs);
       if (toolResult.success) {
-        return { reply: `${toolResult.message}\n\n如有其它需求，随时告诉我哦！` };
+        return { reply: `${toolResult.message}\n\n如有其它需求，随时告诉我哦！`, writeConfirmation: toolResult.details?.writeConfirmation };
       } else {
         return { reply: `尝试执行操作时出错：${toolResult.message}` };
       }
@@ -404,7 +501,7 @@ export async function chatCompletion(
     const replyContent = choiceMsg?.content || "";
     const parsedCard = parseDietActionCard(userText, replyContent);
     const missingCard = parseMissingIngredientsCard(userText, replyContent);
-    const solutionCards = parseSolutionCards(userText, replyContent);
+    const solutionCards = parseSolutionCards(userText, replyContent) || buildRecommendationCard(userText, replyContent);
     const optionsCard = solutionCards && solutionCards.length > 0 ? undefined : parseOptionChoicesCard(userText, replyContent);
 
     let cleanedReply = replyContent;
@@ -425,13 +522,15 @@ export async function chatCompletion(
         model,
         latencyMs: Date.now() - startedAt,
         success: false,
+        failureReason: err instanceof Error ? err.message : String(err),
       });
     }
     const replyText = getFallbackResponse(messages);
     const actionCard = parseDietActionCard(userText, replyText);
     const missingCard = parseMissingIngredientsCard(userText, replyText);
-    const optionsCard = parseOptionChoicesCard(userText, replyText);
-    return { reply: replyText, actionCard, missingCard, optionsCard };
+    const solutionCards = parseSolutionCards(userText, replyText) || buildRecommendationCard(userText, replyText);
+    const optionsCard = solutionCards && solutionCards.length > 0 ? undefined : parseOptionChoicesCard(userText, replyText);
+    return { reply: replyText, actionCard, missingCard, optionsCard, solutionCards };
   }
 }
 
@@ -500,8 +599,11 @@ export async function analyzeImage(
   prompt: string,
   options: ChatCompletionOptions = {}
 ): Promise<string> {
-  const config = getAIConfig();
-  const model = options.model || config.visionModel;
+  const visionConfig = getVisionConfig();
+  const model = options.model || visionConfig.model;
+  const apiKey = options.apiKey || visionConfig.apiKey;
+  const baseUrl = options.baseUrl || visionConfig.baseUrl;
+
   const imageUrl = imageBase64OrUrl.startsWith("http") || imageBase64OrUrl.startsWith("data:")
     ? imageBase64OrUrl
     : `data:image/jpeg;base64,${imageBase64OrUrl}`;
@@ -516,7 +618,7 @@ export async function analyzeImage(
     },
   ];
 
-  const res = await chatCompletion(messages, { model, ...options });
+  const res = await chatCompletion(messages, { apiKey, baseUrl, model, ...options });
   return res.reply;
 }
 
@@ -526,6 +628,31 @@ export async function analyzeImage(
 function getFallbackResponse(messages: ChatMessage[]): string {
   const lastMsg = messages[messages.length - 1];
   const userText = typeof lastMsg.content === "string" ? lastMsg.content : "";
+
+  // 卡片的“查看做法”操作会带有“食材用量”字样，必须先于“食材搭配”处理，
+  // 否则会被误判为再次请求冰箱推荐而造成重复回复。
+  if (/完整做法|详细做法|制作步骤|烹饪时间|食材用量/.test(userText)) {
+    const dishName = userText.match(/【([^】]+)】/)?.[1] || "这道菜";
+    return `## ${dishName}做法
+
+### 食材（1 人份）
+- 鸡胸肉 150g
+- 牛油果 1/2 个（约 80g）
+- 菠菜 80g
+- 熟糙米或藜麦 100g（可选）
+- 橄榄油 5ml、黑胡椒和少量盐
+
+### 烹饪步骤
+1. 鸡胸肉擦干，加入黑胡椒和少量盐，静置 5 分钟。
+2. 平底锅中火预热，放入橄榄油，将鸡胸肉每面煎约 4–5 分钟，至中心完全熟透；取出静置 2 分钟后切片。
+3. 菠菜焯水 30 秒，沥干。牛油果切片；如搭配糙米或藜麦，一同装入碗中。
+4. 放上鸡胸肉、菠菜和牛油果，按口味补少量黑胡椒即可。
+
+### 时间与提示
+- 总用时约 18–20 分钟。
+- 鸡胸肉最厚处需熟透；若没有温度计，切开后应无粉色肉汁。
+- 热量会随主食和实际油量变化，建议按食材标签记录。`;
+  }
 
   if (userText.includes("今晚吃") || userText.includes("吃什么") || userText.includes("吃啥") || userText.includes("推荐") || userText.includes("想吃")) {
     return `为您根据现有库房食材推荐以下 3 个平替高蛋白健康餐方案：
@@ -568,7 +695,8 @@ export async function transcribeAudio(
   audioBase64: string,
   options: { userId?: number; mimeType?: string } = {}
 ): Promise<{ text: string }> {
-  const { apiKey, baseUrl } = getAIConfig();
+  const { apiKey, baseUrl, model: asrModel } = getAsrConfig();
+  const startedAt = Date.now();
   if (!audioBase64 || audioBase64.length === 0) {
     return { text: "" };
   }
@@ -583,7 +711,7 @@ export async function transcribeAudio(
       const formData = new FormData();
       const blob = new Blob([audioBuffer], { type: mimeType });
       formData.append("file", blob, `speech.${extension}`);
-      formData.append("model", getSystemSetting("AI_ASR_MODEL") || "FunAudioLLM/SenseVoiceSmall");
+      formData.append("model", asrModel);
 
       const response = await fetch(`${baseUrl}/audio/transcriptions`, {
         method: "POST",
@@ -596,20 +724,46 @@ export async function transcribeAudio(
       if (response.ok) {
         const data = (await response.json()) as { text?: string };
         if (data && typeof data.text === "string" && data.text.trim()) {
-          logAIUsage({
-            userId: options.userId ?? 1,
-            endpoint: "voice-transcribe",
-            model: "SenseVoiceSmall",
-            promptTokens: Math.ceil(audioBuffer.length / 100),
-            completionTokens: data.text.length,
-          });
+          if (options.userId) {
+            logAIUsage({
+              userId: options.userId,
+              endpoint: "voice-transcribe",
+              model: asrModel,
+              promptTokens: Math.ceil(audioBuffer.length / 100),
+              completionTokens: data.text.length,
+              latencyMs: Date.now() - startedAt,
+            });
+          }
           return { text: data.text.trim() };
         }
       }
+      throw new Error(`语音服务响应异常: ${response.status}`);
     } catch (err) {
       console.warn("[transcribeAudio API Error]", err);
+      if (options.userId) {
+        logAIUsage({
+          userId: options.userId,
+          endpoint: "voice-transcribe",
+          model: asrModel,
+          latencyMs: Date.now() - startedAt,
+          success: false,
+          failureReason: err instanceof Error ? err.message : String(err),
+        });
+      }
+      throw err;
     }
   }
 
-  return { text: "今晚吃什么推荐一下" };
+  const error = new Error("语音识别服务尚未配置");
+  if (options.userId) {
+    logAIUsage({
+      userId: options.userId,
+      endpoint: "voice-transcribe",
+      model: asrModel,
+      latencyMs: Date.now() - startedAt,
+      success: false,
+      failureReason: error.message,
+    });
+  }
+  throw error;
 }

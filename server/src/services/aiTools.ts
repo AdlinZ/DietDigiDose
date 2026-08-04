@@ -1,9 +1,31 @@
 import { db } from "../storage/db.js";
+import { currentDateKey, dateKeyAfterDays } from "../utils/date.js";
+import { createAIWritePreview } from "./aiWriteConfirmations.js";
 
 /**
  * OpenAI Function Calling 工具 Schema 定义
  */
 export const aiToolsSchema = [
+  {
+    type: "function",
+    function: {
+      name: "search_recipe_library",
+      description: "从食光烙记已发布菜谱库中查找候选菜谱。仅用于查询，不产生写入。",
+      parameters: { type: "object", properties: {
+        ingredientNames: { type: "array", items: { type: "string" } }, maxTimeMinutes: { type: "number" }, maxCalories: { type: "number" }, minProteinG: { type: "number" }, limit: { type: "number" },
+      } },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "lookup_food_nutrition",
+      description: "查询平台食材营养库；返回匹配类型和可信度，不能把模糊匹配视为精确值。仅用于查询，不产生写入。",
+      parameters: { type: "object", properties: {
+        foodName: { type: "string" }, brand: { type: "string" }, amount: { type: "number" }, unit: { type: "string", enum: ["g", "ml", "piece", "serving"] }, state: { type: "string", enum: ["raw", "cooked", "unknown"] }, preparationMethod: { type: "string" },
+      }, required: ["foodName", "amount", "unit"] },
+    },
+  },
   {
     type: "function",
     function: {
@@ -198,6 +220,33 @@ export const aiToolsSchema = [
   },
 ];
 
+export function isAIQueryTool(name: string) { return name === "search_recipe_library" || name === "lookup_food_nutrition"; }
+
+export async function executeAIQueryTool(userId: number, toolName: string, args: Record<string, unknown>) {
+  if (toolName === "search_recipe_library") {
+    const names = Array.isArray(args.ingredientNames) ? args.ingredientNames.map(String).filter(Boolean).slice(0, 8) : [];
+    const limit = Math.max(1, Math.min(Number(args.limit) || 5, 10));
+    const clauses = ["status = 'approved'", "deleted_at IS NULL"];
+    const params: Array<string | number> = [];
+    for (const name of names) { clauses.push("(title LIKE ? OR ingredients_json LIKE ?)"); params.push(`%${name}%`, `%${name}%`); }
+    if (Number.isFinite(Number(args.maxTimeMinutes))) { clauses.push("cook_time <= ?"); params.push(Math.max(0, Number(args.maxTimeMinutes))); }
+    if (Number.isFinite(Number(args.maxCalories))) { clauses.push("calories <= ?"); params.push(Math.max(0, Number(args.maxCalories))); }
+    if (Number.isFinite(Number(args.minProteinG))) { clauses.push("protein >= ?"); params.push(Math.max(0, Number(args.minProteinG))); }
+    const rows = db.prepare(`SELECT id, title, cook_time, difficulty, calories, protein, carbs, fat, tags, ingredients_json FROM recipes WHERE ${clauses.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params, limit) as any[];
+    return { recipes: rows.map((row) => ({ recipeId: row.id, name: row.title, estimatedTimeMinutes: row.cook_time, difficulty: row.difficulty, caloriesPerServing: row.calories, proteinG: row.protein, carbohydrateG: row.carbs, fatG: row.fat, tags: safeJson(row.tags), ingredients: safeJson(row.ingredients_json) })) };
+  }
+  if (toolName === "lookup_food_nutrition") {
+    const foodName = String(args.foodName || "").trim(); const amount = Math.max(0, Number(args.amount) || 0); const unit = String(args.unit || "g");
+    if (!foodName || !amount) return { matches: [], warnings: ["缺少有效食品名称或数量"] };
+    const rows = db.prepare("SELECT name, brands, calories_100g, protein_100g, carbs_100g, fat_100g, source FROM ingredients_library WHERE deleted_at IS NULL AND name LIKE ? ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END LIMIT 3").all(`%${foodName}%`, foodName) as any[];
+    const multiplier = unit === "g" || unit === "ml" ? amount / 100 : 1;
+    return { matches: rows.map((row) => ({ matchedFoodName: row.name, matchType: row.name === foodName ? "exact_brand" : "fuzzy", confidence: row.name === foodName ? 0.9 : 0.55, amount, unit, nutrition: { caloriesKcal: round(row.calories_100g * multiplier), proteinG: round(row.protein_100g * multiplier), carbohydrateG: round(row.carbs_100g * multiplier), fatG: round(row.fat_100g * multiplier) }, source: row.source, warnings: row.name === foodName ? [] : ["基于模糊食材匹配，品牌和烹饪方式会影响结果"] })) };
+  }
+  return { error: "未知查询工具" };
+}
+function safeJson(value: unknown) { try { return JSON.parse(String(value || "[]")); } catch { return []; } }
+function round(value: unknown) { return Math.round((Number(value) || 0) * 10) / 10; }
+
 /**
  * 执行 AI Function Tool 调用并写入 SQLite 数据库
  */
@@ -207,7 +256,7 @@ export async function executeAITool(
   args: any
 ): Promise<{ success: boolean; message: string; details?: any }> {
   try {
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = currentDateKey();
 
     if (toolName === "record_diet_meal") {
       const mealType = args.mealType || "午餐";
@@ -237,17 +286,14 @@ export async function executeAITool(
       const quantity = args.quantity || "1份";
       const expireDays = args.expireDays ?? 7;
 
-      const expDate = new Date(Date.now() + expireDays * 86400000).toISOString().split("T")[0];
-
-      const result = db.prepare(`
-        INSERT INTO inventory_items (user_id, food_name, category, storage_location, quantity, expiration_date)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(userId, name, category, location, quantity, expDate);
+      const preview = createAIWritePreview({ userId, action: "add_inventory_item", payload: {
+        name, category, location: location === "保鲜库" ? "冷藏" : location === "冷冻库" ? "冷冻" : "常温", quantity, expireDays,
+      } });
 
       return {
         success: true,
-        message: `🧊 已成功帮你把食材【${name}】(${quantity}) 存入冰箱 ${location}！`,
-        details: { id: result.lastInsertRowid, name, location, quantity },
+        message: `已为食材【${name}】生成入库确认，请核对后提交。`,
+        details: { writeConfirmation: preview },
       };
     }
 
@@ -260,15 +306,12 @@ export async function executeAITool(
       const status = allowedStatuses.has(args.status) ? args.status : "良好";
       const note = String(args.note || "").trim().slice(0, 300);
 
-      const result = db.prepare(`
-        INSERT INTO kitchenware_items (user_id, name, category, status, note)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(userId, name, category, status, note || null);
+      const preview = createAIWritePreview({ userId, action: "add_kitchenware_item", payload: { name, category, status, note } });
 
       return {
         success: true,
-        message: `已将厨具【${name}】保存到你的装备库。`,
-        details: { id: result.lastInsertRowid, name, category, status },
+        message: `已为厨具【${name}】生成入库确认，请核对后提交。`,
+        details: { writeConfirmation: preview },
       };
     }
 
@@ -277,37 +320,19 @@ export async function executeAITool(
       const bodyFat = args.bodyFatPercentage ?? null;
       const waterMl = args.waterMl ?? null;
 
-      const existing = db.prepare("SELECT id FROM health_logs WHERE user_id = ? AND recorded_date = ?").get(userId, todayStr) as any;
-
-      if (existing) {
-        db.prepare(`
-          UPDATE health_logs
-          SET weight = COALESCE(?, weight),
-              body_fat = COALESCE(?, body_fat),
-              water_ml = COALESCE(?, water_ml)
-          WHERE id = ?
-        `).run(weight, bodyFat, waterMl, existing.id);
-      } else {
-        db.prepare(`
-          INSERT INTO health_logs (user_id, weight, body_fat, water_ml, recorded_date)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(userId, weight, bodyFat, waterMl, todayStr);
-      }
-
-      const updatesText = [
-        weight ? `体重 ${weight}kg` : null,
-        waterMl ? `饮水 ${waterMl}ml` : null,
-      ].filter(Boolean).join("，");
+      const preview = createAIWritePreview({ userId, action: "record_health_log", payload: { weightKg: weight, bodyFatPercentage: bodyFat, waterMl } });
 
       return {
         success: true,
-        message: `📊 已为你成功记录健康数据：${updatesText || "数据已同步"}！`,
+        message: "已生成健康数据确认，请核对后提交。",
+        details: { writeConfirmation: preview },
       };
     }
 
     return { success: false, message: `未知的工具名称: ${toolName}` };
   } catch (err: any) {
     console.error(`[AI Tool Execution Error] ${toolName}:`, err);
-    return { success: false, message: `执行工具失败: ${err.message}` };
+    console.error("[AI Tool Execution Error]", err instanceof Error ? err.message : err);
+    return { success: false, message: "执行工具失败，请稍后重试" };
   }
 }

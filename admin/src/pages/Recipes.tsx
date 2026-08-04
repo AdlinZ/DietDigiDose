@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   Minus,
   Pencil,
@@ -7,6 +7,9 @@ import {
   Trash2,
   UtensilsCrossed,
   X,
+  FileText,
+  Sparkles,
+  Clock,
 } from 'lucide-react';
 import api from '../services/api';
 import { cn } from '../utils/cn';
@@ -245,22 +248,77 @@ export default function Recipes() {
     setFormData({ ...formData, ingredients: formData.ingredients.filter((_, i) => i !== index) });
   };
 
+  const recipeStats = useMemo(() => {
+    const total = recipes.length;
+    const official = recipes.filter((r) => r.source === 'official' || !r.source).length;
+    const userContributed = recipes.filter((r) => r.source === 'user').length;
+    const pending = recipes.filter((r) => r.status === 'pending').length;
+    return { total, official, userContributed, pending };
+  }, [recipes]);
+
   if (loading) return <div className="text-center py-20 text-text-muted">加载中...</div>;
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-text-main">食谱管理</h2>
-          <p className="text-sm text-text-muted mt-1">管理官方食谱并审核用户投稿</p>
+          <h2 className="text-2xl font-bold text-text-main flex items-center gap-2">
+            <UtensilsCrossed className="w-7 h-7 text-secondary" />
+            食谱库管理
+          </h2>
+          <p className="text-xs text-text-muted mt-1">发布与维护官方精品减脂/健康食谱，并审核社区用户投稿</p>
         </div>
         <button
+          type="button"
           onClick={handleOpenAdd}
-          className="bg-primary text-white px-4 py-2.5 rounded-2xl flex items-center space-x-2 hover:bg-primary/90 transition-colors shadow-sm text-sm font-medium self-start sm:self-auto"
+          className="bg-primary text-white px-4 py-2.5 rounded-2xl flex items-center space-x-2 hover:bg-primary/90 transition-colors shadow-sm text-xs font-medium self-start sm:self-auto"
         >
-          <Plus size={18} />
+          <Plus size={16} />
           <span>发布官方食谱</span>
         </button>
+      </div>
+
+      {/* Top Metric Summary Cards */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
+          <div>
+            <p className="text-xs font-medium text-text-muted">总食谱数量</p>
+            <p className="mt-1.5 text-2xl font-bold text-text-main">{recipeStats.total}</p>
+          </div>
+          <div className="rounded-2xl bg-secondary/10 p-3 text-secondary">
+            <UtensilsCrossed className="h-6 w-6" />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
+          <div>
+            <p className="text-xs font-medium text-text-muted">官方精品食谱</p>
+            <p className="mt-1.5 text-2xl font-bold text-primary">{recipeStats.official}</p>
+          </div>
+          <div className="rounded-2xl bg-primary/10 p-3 text-primary">
+            <Sparkles className="h-6 w-6" />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
+          <div>
+            <p className="text-xs font-medium text-text-muted">社区用户投稿</p>
+            <p className="mt-1.5 text-2xl font-bold text-blue-600">{recipeStats.userContributed}</p>
+          </div>
+          <div className="rounded-2xl bg-blue-50 p-3 text-blue-600">
+            <FileText className="h-6 w-6" />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
+          <div>
+            <p className="text-xs font-medium text-text-muted">待审核投稿</p>
+            <p className="mt-1.5 text-2xl font-bold text-orange-600">{recipeStats.pending}</p>
+          </div>
+          <div className="rounded-2xl bg-orange-50 p-3 text-orange-600">
+            <Clock className="h-6 w-6" />
+          </div>
+        </div>
       </div>
 
       {/* Category Tabs & Search */}

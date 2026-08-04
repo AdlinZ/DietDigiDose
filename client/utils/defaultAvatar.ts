@@ -10,14 +10,8 @@ export const DEFAULT_AVATARS = [
 ] as const;
 
 const PRESET_PREFIX = "preset-avatar:";
-const LEGACY_DEFAULT_AVATARS = new Set([
-  "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80",
-]);
+const isLegacyDefaultAvatar = (avatarUrl: string) =>
+  avatarUrl.includes("images.unsplash.com/photo-");
 
 const stableAvatarIndex = (identity?: string | number | null) => {
   const value = String(identity ?? "shiguang");
@@ -44,7 +38,7 @@ export const getAvatarSource = (
     }
   }
 
-  if (avatarUrl && !LEGACY_DEFAULT_AVATARS.has(avatarUrl)) {
+  if (avatarUrl && !isLegacyDefaultAvatar(avatarUrl)) {
     return { uri: avatarUrl };
   }
 

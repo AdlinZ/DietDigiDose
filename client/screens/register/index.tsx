@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingVi
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
-import { FontAwesome6 } from '@expo/vector-icons';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 
 export default function RegisterScreen() {
   const [identifier, setIdentifier] = useState('');
@@ -26,8 +26,8 @@ export default function RegisterScreen() {
       setError('请输入有效的邮箱或中国大陆手机号');
       return;
     }
-    if (password.length < 6) {
-      setError('密码至少6个字符');
+    if (password.length < 6 || !/[a-z]/i.test(password) || !/\d/.test(password)) {
+      setError('密码至少6位，并同时包含字母和数字');
       return;
     }
     if (password !== confirmPassword) {
@@ -47,7 +47,7 @@ export default function RegisterScreen() {
 
   return (
     <Screen>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} disabled={Platform.OS === 'web'}>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <KeyboardAvoidingView
           style={styles.container}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -79,7 +79,7 @@ export default function RegisterScreen() {
                 <FontAwesome6 name="lock" size={18} color="#52796F" style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
-                  placeholder="密码（至少6个字符）"
+                  placeholder="密码（至少6位，含字母和数字）"
                   placeholderTextColor="#94A3B8"
                   value={password}
                   onChangeText={setPassword}

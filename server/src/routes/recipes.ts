@@ -2,8 +2,12 @@ import { Router } from "express";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { db } from "../storage/db.js";
 import { ensureIngredientGroups, normalizeIngredientGroup, type IngredientGroup } from "../utils/ingredientGroups.js";
+import { validateBody } from "../middleware/validate.js";
+import { recipeSubmissionSchema } from "../validation/schemas.js";
+import { positiveIntegerParam } from "../middleware/validateParam.js";
 
 const router = Router();
+router.param("id", positiveIntegerParam);
 
 type RecipeInput = {
   title: string;
@@ -212,7 +216,7 @@ router.get("/favorites/count", authMiddleware, (req: AuthRequest, res) => {
 });
 
 // POST /api/v1/recipes/submissions
-router.post("/submissions", authMiddleware, (req: AuthRequest, res) => {
+router.post("/submissions", authMiddleware, validateBody(recipeSubmissionSchema), (req: AuthRequest, res) => {
   try {
     const input = normalizeRecipeInput(req.body);
     const validationError = validateRecipe(input);
@@ -256,7 +260,7 @@ router.post("/submissions", authMiddleware, (req: AuthRequest, res) => {
 });
 
 // PUT /api/v1/recipes/submissions/:id
-router.put("/submissions/:id", authMiddleware, (req: AuthRequest, res) => {
+router.put("/submissions/:id", authMiddleware, validateBody(recipeSubmissionSchema), (req: AuthRequest, res) => {
   try {
     const id = Number(req.params.id);
     const existing = db.prepare(`

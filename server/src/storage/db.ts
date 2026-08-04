@@ -3,13 +3,20 @@ import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
+import { runMigrations } from './migrations.js';
+import { dateKeyAfterDays } from '../utils/date.js';
 
-const dbDir = path.resolve(process.cwd(), 'data');
+const configuredDatabasePath = process.env.DATABASE_PATH?.trim();
+const dbDir = configuredDatabasePath
+  ? path.dirname(path.resolve(configuredDatabasePath))
+  : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const dbPath = path.join(dbDir, 'dietdigidose.db');
+export const dbPath = configuredDatabasePath
+  ? path.resolve(configuredDatabasePath)
+  : path.join(dbDir, 'dietdigidose.db');
 export const db = new Database(dbPath);
 
 // Enable WAL for performance
@@ -110,10 +117,25 @@ export function initDatabase() {
       ["蒸锅", "烹饪锅具", ["蒸笼"], ["蒸"], "使用后擦干蒸屉和锅底"],
       ["砂锅", "烹饪锅具", ["陶锅"], ["炖", "煲"], "避免骤冷骤热，清洗后自然晾干"],
       ["压力锅", "烹饪锅具", ["高压锅"], ["压煮", "炖"], "定期检查密封圈和排气阀"],
+      ["多功能锅", "小家电", ["电火锅", "料理锅"], ["煎", "炒", "煮", "蒸"], "使用后及时清洁内胆，避免长时间浸泡底座"],
+      ["慢炖锅", "小家电", ["电炖锅"], ["慢炖", "煲汤"], "清洁前先断电，陶瓷内胆避免骤冷骤热"],
+      ["蒸烤一体机", "小家电", ["蒸烤箱"], ["蒸", "烘烤", "复热"], "每次蒸制后排净积水并擦干腔体"],
+      ["电磁炉", "小家电", ["电陶炉"], ["煎", "炒", "煮"], "保持面板干燥，使用兼容的平底锅具"],
+      ["洗碗机", "小家电", ["自动洗碗机"], ["清洗", "烘干"], "定期清理滤网并补充专用盐和漂洗剂"],
+      ["榨汁机", "小家电", ["原汁机"], ["榨汁"], "使用后立即清洗滤网，避免果渣干结"],
+      ["手持搅拌器", "小家电", ["手持料理棒"], ["搅拌", "打发", "打泥"], "机身避免进水，刀头用后及时清洁"],
+      ["真空封口机", "小家电", ["抽真空机"], ["密封", "保鲜"], "清理封口条残渣，避免液体进入抽气口"],
+      ["奶锅", "烹饪锅具", ["小汤锅", "雪平锅"], ["煮", "热奶", "煮面"], "避免干烧，使用后擦干锅底"],
+      ["焖烧锅", "烹饪锅具", ["保温焖烧锅"], ["焖", "保温"], "内胆和密封圈清洗后彻底晾干"],
       ["厨师刀", "刀具餐具", ["主厨刀"], ["切配"], "手洗擦干，定期磨刀"],
       ["菜刀", "刀具餐具", ["中式菜刀"], ["切配"], "使用木质或塑料砧板保护刀刃"],
       ["砧板", "刀具餐具", ["切菜板"], ["切配"], "生熟分开，使用后清洁晾干"],
       ["电子秤", "刀具餐具", ["厨房秤"], ["称量"], "避免进水，定期更换电池"],
+      ["厨房温度计", "刀具餐具", ["食物温度计", "探针温度计"], ["测温"], "探针用后清洁消毒，避免浸泡显示屏"],
+      ["厨房计时器", "刀具餐具", ["烹饪计时器"], ["计时"], "避免进水，长期不用时取出电池"],
+      ["压蒜器", "刀具餐具", ["蒜蓉器"], ["切配"], "及时清理压孔残渣，避免食物残留干结"],
+      ["磨刀器", "刀具餐具", ["磨刀石"], ["磨刀"], "按说明使用并远离儿童，使用后擦净金属碎屑"],
+      ["隔热手套", "刀具餐具", ["烤箱手套"], ["防烫"], "保持干燥，磨损或沾油严重时及时更换"],
       ["量杯量勺", "刀具餐具", ["量杯", "量勺"], ["称量"], "用后清洗晾干并集中收纳"],
       ["烤盘", "烘焙工具", ["烘焙盘"], ["烘焙"], "避免尖锐器具刮伤涂层"],
       ["蛋糕模具", "烘焙工具", ["烤模"], ["烘焙"], "彻底晾干后收纳，避免叠压变形"],
@@ -169,6 +191,13 @@ export function initDatabase() {
       weight REAL,
       body_fat REAL,
       water_ml INTEGER DEFAULT 0,
+      height_cm REAL,
+      waist_cm REAL,
+      hip_cm REAL,
+      resting_heart_rate INTEGER,
+      blood_pressure_systolic INTEGER,
+      blood_pressure_diastolic INTEGER,
+      sleep_hours REAL,
       recorded_date TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -382,12 +411,6 @@ export function initDatabase() {
     );
   `);
 
-  // Keep databases created before the goal field compatible with the latest profile schema.
-  const healthProfileColumns = db.prepare("PRAGMA table_info(user_health_profiles)").all() as { name: string }[];
-  if (!healthProfileColumns.some((column) => column.name === "health_goal")) db.exec("ALTER TABLE user_health_profiles ADD COLUMN health_goal TEXT DEFAULT 'healthy'");
-  if (!healthProfileColumns.some((column) => column.name === "activity_level")) db.exec("ALTER TABLE user_health_profiles ADD COLUMN activity_level TEXT DEFAULT 'moderate'");
-  if (!healthProfileColumns.some((column) => column.name === "dietary_preference")) db.exec("ALTER TABLE user_health_profiles ADD COLUMN dietary_preference TEXT DEFAULT '无特别偏好'");
-
   // 11. AI Usage Logs (用量统计)
   db.exec(`
     CREATE TABLE IF NOT EXISTS ai_usage_logs (
@@ -400,6 +423,8 @@ export function initDatabase() {
       total_tokens INTEGER DEFAULT 0,
       latency_ms INTEGER DEFAULT 0,
       success INTEGER DEFAULT 1,
+      estimated_cost_usd REAL DEFAULT 0,
+      failure_reason TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -453,75 +478,13 @@ export function initDatabase() {
     ON ai_usage_logs(user_id, created_at);
   `);
 
-  try {
-    db.exec(`ALTER TABLE community_posts ADD COLUMN category TEXT DEFAULT '寻味';`);
-  } catch (e) {
-    // Column may already exist
-  }
-
-  for (const migration of [
-    `ALTER TABLE users ADD COLUMN email TEXT`,
-    `ALTER TABLE users ADD COLUMN phone TEXT`,
-    `ALTER TABLE community_posts ADD COLUMN views_count INTEGER DEFAULT 0`,
-    `ALTER TABLE community_posts ADD COLUMN comment_count INTEGER DEFAULT 0`,
-    `ALTER TABLE community_posts ADD COLUMN image_urls TEXT`,
-    `ALTER TABLE community_posts ADD COLUMN event_start_at DATETIME`,
-    `ALTER TABLE community_posts ADD COLUMN event_end_at DATETIME`,
-    `ALTER TABLE community_posts ADD COLUMN question_status TEXT DEFAULT 'open'`,
-    `ALTER TABLE community_posts ADD COLUMN accepted_comment_id INTEGER`,
-    `ALTER TABLE community_comments ADD COLUMN image_url TEXT`,
-    `ALTER TABLE users ADD COLUMN is_verified_expert INTEGER DEFAULT 0`,
-  ]) {
-    try { db.exec(migration); } catch { /* Column already exists. */ }
-  }
+  runMigrations(db);
 
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique ON users(phone) WHERE phone IS NOT NULL;
   `);
 
-  try {
-    db.exec(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user';`);
-  } catch (e) {
-    // Column may already exist
-  }
-
-  const softDeleteMigrations = [
-    `ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0`,
-    `ALTER TABLE users ADD COLUMN last_login_at DATETIME`,
-    `ALTER TABLE users ADD COLUMN last_login_ip TEXT`,
-    `ALTER TABLE community_posts ADD COLUMN deleted_at DATETIME`,
-    `ALTER TABLE community_posts ADD COLUMN deleted_by INTEGER`,
-    `ALTER TABLE recipes ADD COLUMN deleted_at DATETIME`,
-    `ALTER TABLE recipes ADD COLUMN deleted_by INTEGER`,
-    `ALTER TABLE recipes ADD COLUMN author_user_id INTEGER`,
-    `ALTER TABLE recipes ADD COLUMN source TEXT DEFAULT 'official'`,
-    `ALTER TABLE recipes ADD COLUMN status TEXT DEFAULT 'approved'`,
-    `ALTER TABLE recipes ADD COLUMN reviewed_by INTEGER`,
-    `ALTER TABLE recipes ADD COLUMN reviewed_at DATETIME`,
-    `ALTER TABLE recipes ADD COLUMN reject_reason TEXT`,
-    `ALTER TABLE recipes ADD COLUMN external_id TEXT`,
-    `ALTER TABLE recipes ADD COLUMN source_url TEXT`,
-    `ALTER TABLE recipes ADD COLUMN data_license TEXT`,
-    `ALTER TABLE recipes ADD COLUMN source_revision TEXT`,
-    `ALTER TABLE recipes ADD COLUMN source_attribution TEXT`,
-    `ALTER TABLE recipes ADD COLUMN nutrition_json TEXT`,
-    `ALTER TABLE recipes ADD COLUMN updated_at DATETIME`,
-    `ALTER TABLE ingredients_library ADD COLUMN deleted_at DATETIME`,
-    `ALTER TABLE ingredients_library ADD COLUMN deleted_by INTEGER`,
-    `ALTER TABLE ingredients_library ADD COLUMN barcode TEXT`,
-    `ALTER TABLE ingredients_library ADD COLUMN brands TEXT`,
-    `ALTER TABLE ingredients_library ADD COLUMN micronutrients_json TEXT`,
-    `ALTER TABLE ingredients_library ADD COLUMN data_license TEXT`,
-    `ALTER TABLE ingredients_library ADD COLUMN original_name TEXT`,
-  ];
-  for (const migration of softDeleteMigrations) {
-    try {
-      db.exec(migration);
-    } catch {
-      // Column already exists.
-    }
-  }
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_community_posts_deleted_at ON community_posts(deleted_at);
@@ -646,11 +609,21 @@ export function logAIUsage(params: {
   totalTokens?: number;
   latencyMs?: number;
   success?: boolean;
+  estimatedCostUsd?: number;
+  failureReason?: string;
 }): void {
   try {
+    const inputRate = Number(process.env.AI_INPUT_COST_PER_MILLION_USD) || 0;
+    const outputRate = Number(process.env.AI_OUTPUT_COST_PER_MILLION_USD) || 0;
+    const estimatedCostUsd = params.estimatedCostUsd ?? (
+      ((params.promptTokens || 0) * inputRate + (params.completionTokens || 0) * outputRate) / 1_000_000
+    );
     db.prepare(`
-      INSERT INTO ai_usage_logs (user_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens, latency_ms, success)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO ai_usage_logs (
+        user_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens,
+        latency_ms, success, estimated_cost_usd, failure_reason
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       params.userId,
       params.endpoint,
@@ -659,7 +632,9 @@ export function logAIUsage(params: {
       params.completionTokens || 0,
       params.totalTokens || 0,
       params.latencyMs || 0,
-      params.success !== false ? 1 : 0
+      params.success !== false ? 1 : 0,
+      Math.max(0, estimatedCostUsd),
+      params.failureReason?.slice(0, 500) || null,
     );
   } catch (e) {
     console.error('[logAIUsage Error]', e);
@@ -964,11 +939,7 @@ function seedDefaultData() {
   }
 
   // Helper date function (YYYY-MM-DD)
-  const getDateStr = (offsetDays: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() + offsetDays);
-    return d.toISOString().split('T')[0];
-  };
+  const getDateStr = (offsetDays: number) => dateKeyAfterDays(offsetDays);
 
   // 1. Seed Inventory Items if empty or sparse (< 8)
   const invCount = db.prepare('SELECT COUNT(*) as count FROM inventory_items WHERE user_id = ?').get(userId) as { count: number };

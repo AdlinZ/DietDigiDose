@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { KeyRound } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import api from '../services/api';
 import logoUrl from '../../../client/assets/logo.png';
 
@@ -48,7 +48,7 @@ export default function ChangePassword() {
           <PasswordField label="当前密码" value={currentPassword} onChange={setCurrentPassword} />
           <PasswordField label="新密码" value={newPassword} onChange={setNewPassword} />
           <PasswordField label="确认新密码" value={confirmPassword} onChange={setConfirmPassword} />
-          <p className="text-xs text-text-muted">新密码至少 12 位，并同时包含字母和数字。</p>
+          <p className="text-xs text-text-muted">新密码至少 6 位，并同时包含字母和数字。</p>
           <button
             type="submit"
             disabled={loading}

@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Image } from "react-native";
 import { Screen } from "@/components/Screen";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
+import { foodsApi } from "@/services/api";
 
-const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || "http://localhost:9091";
 
 export default function SearchScreen() {
   const router = useSafeRouter();
@@ -30,11 +30,8 @@ export default function SearchScreen() {
     setLoading(true);
     setHasSearched(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/foods/search?query=${encodeURIComponent(q)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setResults(data);
-      }
+      const data = await foodsApi.search<any>(q);
+      setResults(data);
     } catch (e) {
       console.error(e);
     } finally {

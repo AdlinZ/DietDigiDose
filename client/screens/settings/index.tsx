@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -14,16 +14,58 @@ import {
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth } from "@/contexts/AuthContext";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import { authApi } from "@/services/api";
+import { getExpoPushToken, syncLocalNotificationSchedules, type NotificationPreferences } from "@/utils/notifications";
 
 export default function SettingsScreen() {
   const router = useSafeRouter();
-  const { user, isAuthenticated, logout, updateProfile } = useAuth();
+  const { user, token, isAuthenticated, logout, updateProfile, deleteAccount } = useAuth();
 
   // Notification Toggles
   const [expiringAlert, setExpiringAlert] = useState(true);
   const [mealReminder, setMealReminder] = useState(true);
   const [waterReminder, setWaterReminder] = useState(true);
+
+  useEffect(() => {
+    if (!token) return;
+    void authApi.notificationPreferences<NotificationPreferences>(token).then((preferences) => {
+      setExpiringAlert(preferences.expiring_alert);
+      setMealReminder(preferences.meal_reminder);
+      setWaterReminder(preferences.water_reminder);
+    }).catch(() => undefined);
+  }, [token]);
+
+  const updateNotificationPreference = async (key: keyof NotificationPreferences, value: boolean) => {
+    if (!token) {
+      Alert.alert("登录后开启提醒", "登录后可保存提醒偏好，并接收食材临期推送。");
+      return;
+    }
+    const previous = { expiring_alert: expiringAlert, meal_reminder: mealReminder, water_reminder: waterReminder };
+    const next = { ...previous, [key]: value };
+    setExpiringAlert(next.expiring_alert);
+    setMealReminder(next.meal_reminder);
+    setWaterReminder(next.water_reminder);
+    try {
+      const pushToken = value ? await getExpoPushToken() : null;
+      await authApi.updateNotificationPreferences<NotificationPreferences>(token, next);
+      if (pushToken && Platform.OS !== "web") {
+        const platform = Platform.OS === "android" ? "android" : "ios";
+        await authApi.registerPushDevice(token, { expo_push_token: pushToken, platform });
+      }
+      if (Platform.OS !== "web") {
+        await syncLocalNotificationSchedules(next);
+      }
+      if (value && Platform.OS !== "web" && !pushToken) {
+        Alert.alert("未获得通知权限", "系统通知未授权；你仍可稍后在系统设置中允许通知后再次开启提醒。");
+      }
+    } catch (error) {
+      setExpiringAlert(previous.expiring_alert);
+      setMealReminder(previous.meal_reminder);
+      setWaterReminder(previous.water_reminder);
+      Alert.alert("保存失败", error instanceof Error ? error.message : "提醒设置暂未保存，请稍后重试");
+    }
+  };
 
   // Modal State
   const [calorieModalOpen, setCalorieModalOpen] = useState(false);
@@ -35,6 +77,9 @@ export default function SettingsScreen() {
   // Logout confirmation modal
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [clearingCache, setClearingCache] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   const handleSaveCalorie = async () => {
     const val = parseInt(calorieTarget);
@@ -57,13 +102,30 @@ export default function SettingsScreen() {
     setClearingCache(true);
     setTimeout(() => {
       setClearingCache(false);
-      Alert.alert("成功", "已成功清理 14.8 MB 本地临时缓存");
+      Alert.alert("成功", "本地临时缓存已清理");
     }, 600);
   };
 
   const confirmLogout = () => {
     setLogoutModalOpen(false);
     logout();
+    router.replace("/login");
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (!deletePassword) {
+      Alert.alert("请输入密码", "需要验证当前密码后才能永久删除账号。");
+      return;
+    }
+    setDeletingAccount(true);
+    const result = await deleteAccount(deletePassword);
+    setDeletingAccount(false);
+    if (!result.success) {
+      Alert.alert("删除失败", result.error || "请稍后重试");
+      return;
+    }
+    setDeleteModalOpen(false);
+    setDeletePassword("");
     router.replace("/login");
   };
 
@@ -144,7 +206,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={expiringAlert}
-                onValueChange={setExpiringAlert}
+                onValueChange={(value) => void updateNotificationPreference("expiring_alert", value)}
                 trackColor={{ false: "#EBE3D5", true: "#2D6A4F" }}
               />
             </View>
@@ -161,7 +223,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={mealReminder}
-                onValueChange={setMealReminder}
+                onValueChange={(value) => void updateNotificationPreference("meal_reminder", value)}
                 trackColor={{ false: "#EBE3D5", true: "#2D6A4F" }}
               />
             </View>
@@ -178,7 +240,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={waterReminder}
-                onValueChange={setWaterReminder}
+                onValueChange={(value) => void updateNotificationPreference("water_reminder", value)}
                 trackColor={{ false: "#EBE3D5", true: "#2D6A4F" }}
               />
             </View>
@@ -203,8 +265,24 @@ export default function SettingsScreen() {
               {clearingCache ? (
                 <ActivityIndicator size="small" color="#2D6A4F" />
               ) : (
-                <Text className="text-xs text-[#8B7D6B]">14.8 MB</Text>
+                <Text className="text-xs text-[#8B7D6B]">立即清理</Text>
               )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => router.push({ pathname: "/legal", params: { type: "privacy" } })}
+              className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6] active:bg-[#FDF8F0]"
+            >
+              <Text className="text-sm font-bold text-[#3D3229]">隐私政策</Text>
+              <FontAwesome6 name="chevron-right" size={12} color="#B0A495" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => router.push({ pathname: "/legal", params: { type: "terms" } })}
+              className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6] active:bg-[#FDF8F0]"
+            >
+              <Text className="text-sm font-bold text-[#3D3229]">用户协议</Text>
+              <FontAwesome6 name="chevron-right" size={12} color="#B0A495" />
             </TouchableOpacity>
 
             <View className="p-4 flex-row items-center justify-between">
@@ -221,13 +299,18 @@ export default function SettingsScreen() {
 
         {/* Section 4: 退出登录 */}
         {isAuthenticated && (
-          <TouchableOpacity
-            onPress={() => setLogoutModalOpen(true)}
-            className="bg-white border border-[#E76F51]/30 py-4 rounded-2xl items-center flex-row justify-center gap-2 shadow-xs active:bg-red-50 mt-2"
-          >
-            <FontAwesome6 name="arrow-right-from-bracket" size={15} color="#E76F51" />
-            <Text className="text-sm font-bold text-[#E76F51]">退出当前账号登录</Text>
-          </TouchableOpacity>
+          <View className="gap-3 mt-2">
+            <TouchableOpacity
+              onPress={() => setLogoutModalOpen(true)}
+              className="bg-white border border-[#E76F51]/30 py-4 rounded-2xl items-center flex-row justify-center gap-2 shadow-xs active:bg-red-50"
+            >
+              <FontAwesome6 name="arrow-right-from-bracket" size={15} color="#E76F51" />
+              <Text className="text-sm font-bold text-[#E76F51]">退出当前账号登录</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setDeleteModalOpen(true)} className="py-3 items-center">
+              <Text className="text-xs font-bold text-[#A33A2B] underline">永久删除账号与数据</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </ScrollView>
 
@@ -297,6 +380,41 @@ export default function SettingsScreen() {
                 className="flex-1 bg-[#E76F51] py-3 rounded-2xl items-center shadow-xs active:opacity-90"
               >
                 <Text className="text-xs font-bold text-white">确认退出</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={deleteModalOpen} animationType="fade" transparent>
+        <View className="flex-1 bg-black/50 items-center justify-center p-6">
+          <View className="bg-white rounded-[28px] p-6 w-full max-w-sm shadow-lg">
+            <Text className="text-lg font-black text-[#A33A2B] text-center">永久删除账号</Text>
+            <Text className="text-xs text-[#66594D] mt-2 mb-4 leading-5 text-center">
+              库存、饮食、健康、社区内容及本机个人缓存会被删除，且无法恢复。请输入当前密码确认。
+            </Text>
+            <TextInput
+              value={deletePassword}
+              onChangeText={setDeletePassword}
+              secureTextEntry
+              autoCapitalize="none"
+              placeholder="当前密码"
+              className="bg-[#FDF8F0] border border-[#EBE3D5] rounded-2xl px-4 py-3 text-sm text-[#3D3229] mb-4"
+            />
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                disabled={deletingAccount}
+                onPress={() => { setDeleteModalOpen(false); setDeletePassword(""); }}
+                className="flex-1 bg-[#F5EFE6] py-3 rounded-2xl items-center"
+              >
+                <Text className="text-xs font-bold text-[#66594D]">取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={deletingAccount}
+                onPress={confirmDeleteAccount}
+                className="flex-1 bg-[#A33A2B] py-3 rounded-2xl items-center"
+              >
+                {deletingAccount ? <ActivityIndicator color="#FFF" /> : <Text className="text-xs font-bold text-white">永久删除</Text>}
               </TouchableOpacity>
             </View>
           </View>

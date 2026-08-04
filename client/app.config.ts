@@ -10,7 +10,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     "name": appName,
     "slug": appSlug,
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/images/adaptive-icon-safe.png",
     "scheme": "dietdigidose",
@@ -44,7 +44,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "backgroundColor": "#ffffff"
       },
       "package": androidPackage,
-      "versionCode": 3
+      "versionCode": 4
     },
     "web": {
       "bundler": "metro",

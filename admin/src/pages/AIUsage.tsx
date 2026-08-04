@@ -93,10 +93,22 @@ function formatDateTime(value: string | null) {
   });
 }
 
+function formatCompactNumber(value: number) {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}M`;
+  }
+  if (value >= 10_000) {
+    return `${(value / 1_000).toFixed(0)}k`;
+  }
+  return formatNumber(value);
+}
+
 export default function AIUsage() {
   const [range, setRange] = useState<RangeKey>('30d');
   const [selectedUserId, setSelectedUserId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [hoveredTrendDate, setHoveredTrendDate] = useState<string | null>(null);
+  const [pinnedTrendDate, setPinnedTrendDate] = useState<string | null>(null);
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -138,6 +150,41 @@ export default function AIUsage() {
   const maxTrendTokens = Math.max(...displayedTrend.map((item) => item.totalTokens), 1);
   const maxModelTokens = Math.max(...(data?.models ?? []).map((item) => item.totalTokens), 1);
   const maxEndpointTokens = Math.max(...(data?.endpoints ?? []).map((item) => item.totalTokens), 1);
+
+  const activeTrendDate = hoveredTrendDate || pinnedTrendDate;
+  const activeTrendItem = useMemo(() => {
+    if (!activeTrendDate) return null;
+    return displayedTrend.find((item) => item.date === activeTrendDate) || null;
+  }, [displayedTrend, activeTrendDate]);
+
+  const trendSummaryStats = useMemo(() => {
+    if (!displayedTrend.length) return null;
+    const totalTokens = displayedTrend.reduce((sum, item) => sum + item.totalTokens, 0);
+    const totalRequests = displayedTrend.reduce((sum, item) => sum + item.requests, 0);
+    const totalPrompt = displayedTrend.reduce((sum, item) => sum + item.promptTokens, 0);
+    const totalCompletion = displayedTrend.reduce((sum, item) => sum + item.completionTokens, 0);
+    const peakItem = displayedTrend.reduce(
+      (max, item) => (item.totalTokens > (max?.totalTokens ?? 0) ? item : max),
+      displayedTrend[0]
+    );
+    const avgDailyTokens = Math.round(totalTokens / displayedTrend.length);
+    return {
+      totalTokens,
+      totalRequests,
+      totalPrompt,
+      totalCompletion,
+      peakItem,
+      avgDailyTokens,
+    };
+  }, [displayedTrend]);
+
+  const yAxisTicks = useMemo(() => {
+    if (maxTrendTokens <= 0) return [];
+    return [1, 0.75, 0.5, 0.25].map((ratio) => ({
+      ratio,
+      label: formatCompactNumber(Math.round(maxTrendTokens * ratio)),
+    }));
+  }, [maxTrendTokens]);
 
   const selectedUser = data?.users.find((user) => String(user.id) === selectedUserId);
   const scopeLabel = selectedUser
@@ -213,19 +260,131 @@ export default function AIUsage() {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <section className="rounded-[24px] bg-white p-6 shadow-sm xl:col-span-2">
-          <div className="mb-6 flex items-start justify-between gap-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h2 className="font-bold text-text-main">每日 Token 趋势</h2>
               <p className="mt-1 text-xs text-text-muted">
-                输入与输出 Token 合计
+                输入与输出 Token 统计
                 {(data?.trend.length ?? 0) > 30 ? ' · 展示最近 30 个有调用的日期' : ''}
               </p>
             </div>
-            <div className="flex items-center gap-3 text-xs text-text-muted">
-              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-primary" />输入</span>
-              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-secondary" />输出</span>
+            <div className="flex items-center gap-4 text-xs text-text-muted">
+              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-primary" />输入 (Prompt)</span>
+              <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-secondary" />输出 (Completion)</span>
             </div>
           </div>
+
+          {/* Interactive Info Banner - utilizes top blank space */}
+          {activeTrendItem ? (
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/20 bg-primary/5 p-3.5 transition-all">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-white text-xs font-bold shadow-sm">
+                  {new Date(`${activeTrendItem.date}T00:00:00`).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-text-main text-sm">
+                      {activeTrendItem.date}
+                    </span>
+                    {pinnedTrendDate === activeTrendItem.date && (
+                      <span className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                        已锁定
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-text-muted">
+                    悬停或点击柱状图查看具体日期使用量
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-5 text-xs">
+                <div>
+                  <span className="text-text-muted block text-[10px]">Token 总量</span>
+                  <span className="font-bold text-text-main text-sm">{formatNumber(activeTrendItem.totalTokens)}</span>
+                </div>
+                <div>
+                  <span className="text-text-muted block text-[10px]">输入 (Prompt)</span>
+                  <span className="font-semibold text-primary">
+                    {formatNumber(activeTrendItem.promptTokens)}
+                    <span className="ml-1 text-[10px] text-text-muted font-normal">
+                      ({activeTrendItem.totalTokens ? ((activeTrendItem.promptTokens / activeTrendItem.totalTokens) * 100).toFixed(1) : 0}%)
+                    </span>
+                  </span>
+                </div>
+                <div>
+                  <span className="text-text-muted block text-[10px]">输出 (Completion)</span>
+                  <span className="font-semibold text-secondary">
+                    {formatNumber(activeTrendItem.completionTokens)}
+                    <span className="ml-1 text-[10px] text-text-muted font-normal">
+                      ({activeTrendItem.totalTokens ? ((activeTrendItem.completionTokens / activeTrendItem.totalTokens) * 100).toFixed(1) : 0}%)
+                    </span>
+                  </span>
+                </div>
+                <div>
+                  <span className="text-text-muted block text-[10px]">调用次数 / 均值</span>
+                  <span className="font-bold text-text-main">
+                    {formatNumber(activeTrendItem.requests)} 次
+                    <span className="ml-1 text-text-muted font-normal">
+                      (均 {activeTrendItem.requests ? formatNumber(Math.round(activeTrendItem.totalTokens / activeTrendItem.requests)) : 0}/次)
+                    </span>
+                  </span>
+                </div>
+
+                {pinnedTrendDate && (
+                  <button
+                    type="button"
+                    onClick={() => setPinnedTrendDate(null)}
+                    className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-text-muted hover:bg-gray-100 hover:text-text-main"
+                  >
+                    解锁
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : trendSummaryStats ? (
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-100 bg-background-alt/50 p-3.5 transition-all">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600 text-xs font-bold">
+                  30D
+                </div>
+                <div>
+                  <span className="font-bold text-text-main text-xs">趋势数据概览</span>
+                  <p className="text-[11px] text-text-muted">点击或悬停下方柱状图可固定并显示单日具体明细</p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-5 text-xs">
+                <div>
+                  <span className="text-text-muted block text-[10px]">最高单日 Token</span>
+                  <span className="font-bold text-text-main">
+                    {formatNumber(trendSummaryStats.peakItem.totalTokens)}
+                    <span className="ml-1 text-[10px] font-normal text-text-muted">
+                      ({new Date(`${trendSummaryStats.peakItem.date}T00:00:00`).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })})
+                    </span>
+                  </span>
+                </div>
+                <div>
+                  <span className="text-text-muted block text-[10px]">日均 Token</span>
+                  <span className="font-bold text-amber-600">
+                    {formatNumber(trendSummaryStats.avgDailyTokens)} / 天
+                  </span>
+                </div>
+                <div>
+                  <span className="text-text-muted block text-[10px]">输入 : 输出 比例</span>
+                  <span className="font-medium text-text-main">
+                    <span className="text-primary font-semibold">
+                      {(trendSummaryStats.totalTokens ? (trendSummaryStats.totalPrompt / trendSummaryStats.totalTokens) * 100 : 0).toFixed(1)}%
+                    </span>
+                    {' : '}
+                    <span className="text-secondary font-semibold">
+                      {(trendSummaryStats.totalTokens ? (trendSummaryStats.totalCompletion / trendSummaryStats.totalTokens) * 100 : 0).toFixed(1)}%
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {loading ? (
             <div className="flex h-64 items-center justify-center text-sm text-text-muted">正在加载趋势...</div>
@@ -236,26 +395,82 @@ export default function AIUsage() {
               <p className="mt-1 text-xs text-text-muted">产生真实模型请求后，用量会自动记录在这里</p>
             </div>
           ) : (
-            <div className="flex h-64 items-end gap-2 overflow-x-auto border-b border-gray-100 px-1 pt-4">
-              {displayedTrend.map((item) => {
-                const inputHeight = Math.max((item.promptTokens / maxTrendTokens) * 190, item.promptTokens ? 3 : 0);
-                const outputHeight = Math.max((item.completionTokens / maxTrendTokens) * 190, item.completionTokens ? 3 : 0);
-                return (
-                  <div
-                    key={item.date}
-                    className="group flex min-w-7 flex-1 flex-col items-center justify-end self-stretch"
-                    title={`${item.date} · ${formatNumber(item.totalTokens)} Token · ${formatNumber(item.requests)} 次`}
-                  >
-                    <div className="flex flex-1 items-end gap-0.5">
-                      <div className="w-2.5 rounded-t bg-primary" style={{ height: `${inputHeight}px` }} />
-                      <div className="w-2.5 rounded-t bg-secondary" style={{ height: `${outputHeight}px` }} />
-                    </div>
-                    <span className="mt-2 h-7 whitespace-nowrap text-[10px] text-text-muted">
-                      {new Date(`${item.date}T00:00:00`).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
+            <div className="relative pt-6">
+              {/* Background grid lines */}
+              <div className="absolute inset-x-0 top-6 bottom-10 flex flex-col justify-between pointer-events-none">
+                {yAxisTicks.map((tick) => (
+                  <div key={tick.ratio} className="flex items-center gap-2 border-b border-gray-100/90 w-full h-0">
+                    <span className="text-[10px] text-text-muted/50 select-none font-mono">
+                      {tick.label}
                     </span>
                   </div>
-                );
-              })}
+                ))}
+              </div>
+
+              <div className="relative flex h-64 items-end gap-2 overflow-x-auto border-b border-gray-100 px-1 pb-9 pt-6">
+                {displayedTrend.map((item) => {
+                  const isSelected = pinnedTrendDate === item.date;
+                  const isHovered = hoveredTrendDate === item.date;
+                  const isActive = isSelected || isHovered;
+                  const isPeak = trendSummaryStats?.peakItem.date === item.date;
+
+                  const inputHeight = Math.max((item.promptTokens / maxTrendTokens) * 180, item.promptTokens ? 3 : 0);
+                  const outputHeight = Math.max((item.completionTokens / maxTrendTokens) * 180, item.completionTokens ? 3 : 0);
+
+                  return (
+                    <div
+                      key={item.date}
+                      onMouseEnter={() => setHoveredTrendDate(item.date)}
+                      onMouseLeave={() => setHoveredTrendDate(null)}
+                      onClick={() => setPinnedTrendDate(pinnedTrendDate === item.date ? null : item.date)}
+                      className={`group relative flex min-w-7 flex-1 cursor-pointer flex-col items-center justify-end self-stretch rounded-t-lg transition-all ${
+                        isActive ? 'bg-primary/5 ring-2 ring-primary/30' : 'hover:bg-gray-50/80'
+                      }`}
+                    >
+                      {/* Floating Tooltip Pill */}
+                      {isActive && (
+                        <div className="absolute -top-11 z-20 flex whitespace-nowrap flex-col items-center rounded-lg bg-gray-900 px-2 py-1 text-white shadow-xl pointer-events-none">
+                          <span className="text-[10px] font-bold">
+                            {formatNumber(item.totalTokens)} Token
+                          </span>
+                          <span className="text-[9px] text-gray-300">
+                            输入 {formatCompactNumber(item.promptTokens)} · 输出 {formatCompactNumber(item.completionTokens)}
+                          </span>
+                          <div className="absolute -bottom-1 h-2 w-2 rotate-45 bg-gray-900" />
+                        </div>
+                      )}
+
+                      {/* Peak Tag */}
+                      {!isActive && isPeak && (
+                        <span className="absolute -top-5 text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-200/80 rounded px-1">
+                          峰值
+                        </span>
+                      )}
+
+                      <div className="flex flex-1 items-end gap-0.5 px-0.5">
+                        <div
+                          className={`w-2.5 rounded-t transition-all ${
+                            isActive ? 'bg-primary ring-1 ring-primary' : 'bg-primary/85 group-hover:bg-primary'
+                          }`}
+                          style={{ height: `${inputHeight}px` }}
+                        />
+                        <div
+                          className={`w-2.5 rounded-t transition-all ${
+                            isActive ? 'bg-secondary ring-1 ring-secondary' : 'bg-secondary/85 group-hover:bg-secondary'
+                          }`}
+                          style={{ height: `${outputHeight}px` }}
+                        />
+                      </div>
+
+                      <span className={`absolute -bottom-7 whitespace-nowrap text-[10px] font-medium transition-colors ${
+                        isActive ? 'font-bold text-primary' : 'text-text-muted group-hover:text-text-main'
+                      }`}>
+                        {new Date(`${item.date}T00:00:00`).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </section>

@@ -15,6 +15,7 @@ const AIConversations = lazy(() => import('./pages/AIConversations'));
 const ChangePassword = lazy(() => import('./pages/ChangePassword'));
 const SecurityAudit = lazy(() => import('./pages/SecurityAudit'));
 const Kitchenware = lazy(() => import('./pages/Kitchenware'));
+const Notifications = lazy(() => import('./pages/Notifications'));
 
 // Auth Guard
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -62,6 +63,7 @@ function App() {
         <Route path="ai-usage" element={<AIUsage />} />
         <Route path="ai-conversations" element={<AIConversations />} />
         <Route path="security" element={<SecurityAudit />} />
+        <Route path="notifications" element={<Notifications />} />
       </Route>
       </Routes>
     </Suspense>

@@ -35,6 +35,14 @@ interface HealthData {
   created_at: string;
 }
 
+interface HealthProfile {
+  height: number | null;
+  weight: number | null;
+  target_weight?: number | null;
+  gender?: string | null;
+  age?: number | null;
+}
+
 interface DietRecord {
   id: number;
   meal_type: string;
@@ -51,12 +59,13 @@ export default function ProfileScreen() {
   const authFetch = useAuthFetch();
 
   const [healthData, setHealthData] = useState<HealthData | null>(null);
+  const [healthProfile, setHealthProfile] = useState<HealthProfile | null>(null);
   const [recentRecords, setRecentRecords] = useState<DietRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [dietTrend, setDietTrend] = useState<{ date: string; calories: number }[]>([]);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
-  const [waterMl, setWaterMl] = useState(1450);
+  const [waterMl, setWaterMl] = useState<number | null>(null);
   const [favoriteCount, setFavoriteCount] = useState(0);
 
   const today = toLocalDateKey();
@@ -75,8 +84,10 @@ export default function ProfileScreen() {
     }
     try {
       setLoading(true);
-      const [healthJson, dietJson, favoriteJson] = await Promise.all([
+      const [healthJson, healthLogs, healthProfileJson, dietJson, favoriteJson] = await Promise.all([
         healthApi.latest(authFetch),
+        healthApi.list(authFetch),
+        healthApi.profile<HealthProfile>(authFetch),
         dietApi.list(authFetch),
         recipesApi.favoriteCount(authFetch),
       ]);
@@ -84,9 +95,11 @@ export default function ProfileScreen() {
 
       const latestHealth = Array.isArray(healthJson) ? healthJson[0] : healthJson;
       setHealthData(latestHealth);
-      if (latestHealth?.water_ml) {
-        setWaterMl(latestHealth.water_ml);
-      }
+      setHealthProfile(healthProfileJson);
+      const todayHealth = Array.isArray(healthLogs)
+        ? healthLogs.find((entry) => entry.recorded_date === today)
+        : null;
+      setWaterMl(todayHealth?.water_ml ?? null);
 
       const dietList = Array.isArray(dietJson) ? dietJson : [];
       setRecentRecords(dietList.slice(0, 5));
@@ -109,7 +122,7 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated, authFetch]);
+  }, [isAuthenticated, authFetch, today]);
 
   useFocusEffect(
     useCallback(() => {
@@ -118,13 +131,15 @@ export default function ProfileScreen() {
   );
 
   const handleAddWater = async (addAmount: number) => {
-    const newWater = waterMl + addAmount;
+    const previousWater = waterMl;
+    const newWater = (waterMl ?? 0) + addAmount;
     setWaterMl(newWater);
 
     if (!isAuthenticated) return;
     try {
       await healthApi.saveLog(authFetch, { recorded_date: today, water_ml: newWater });
     } catch (e) {
+      setWaterMl(previousWater);
       console.error("Update water failed", e);
     }
   };
@@ -174,8 +189,8 @@ export default function ProfileScreen() {
     );
   }
 
-  const heightVal = healthData?.height ?? null;
-  const weightVal = healthData?.weight ?? null;
+  const heightVal = healthProfile?.height ?? healthData?.height ?? null;
+  const weightVal = healthProfile?.weight ?? healthData?.weight ?? null;
   const bodyFatVal = healthData?.body_fat ?? null;
   const calculatedBmi = weightVal != null && heightVal != null
     ? weightVal / Math.pow(heightVal / 100, 2)
@@ -214,7 +229,7 @@ export default function ProfileScreen() {
       : 0;
 
   const miniTopOffset = Platform.OS === "web" ? 12 : Math.max(insets.top + 6, 12);
-  const waterPercent = Math.min(Math.round((waterMl / 2000) * 100), 100);
+  const waterPercent = Math.min(Math.round(((waterMl ?? 0) / 2000) * 100), 100);
 
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
@@ -371,7 +386,7 @@ export default function ProfileScreen() {
                 <View className="flex-row items-center justify-between mb-1.5">
                   <Text className="text-xs font-bold text-[#1E3A8A]">今日饮水目标</Text>
                   <Text className="text-xs font-black text-[#3B82F6]">
-                    {waterMl} / 2000 ml
+                    {waterMl == null ? "尚未记录" : `${waterMl} / 2000 ml`}
                   </Text>
                 </View>
                 <View className="w-full h-2 bg-blue-200/60 rounded-full overflow-hidden">

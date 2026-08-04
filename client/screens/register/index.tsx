@@ -26,8 +26,8 @@ export default function RegisterScreen() {
       setError('请输入有效的邮箱或中国大陆手机号');
       return;
     }
-    if (password.length < 12 || !/[a-z]/i.test(password) || !/\d/.test(password)) {
-      setError('密码至少12位，并同时包含字母和数字');
+    if (password.length < 6 || !/[a-z]/i.test(password) || !/\d/.test(password)) {
+      setError('密码至少6位，并同时包含字母和数字');
       return;
     }
     if (password !== confirmPassword) {
@@ -79,7 +79,7 @@ export default function RegisterScreen() {
                 <FontAwesome6 name="lock" size={18} color="#52796F" style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
-                  placeholder="密码（至少12位，含字母和数字）"
+                  placeholder="密码（至少6位，含字母和数字）"
                   placeholderTextColor="#94A3B8"
                   value={password}
                   onChangeText={setPassword}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -21,6 +21,7 @@ import { getAvatarSource } from "@/utils/defaultAvatar";
 import { communityApi } from "@/services/api";
 import type { ActivityStatus, Post } from "./types";
 import { formatActivityDate, getActivityStatus, parseCommunityDate } from "./activity";
+import { buildRefreshedFeed } from "./feed";
 
 
 export default function CommunityScreen() {
@@ -36,6 +37,7 @@ export default function CommunityScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activityFilter, setActivityFilter] = useState<"进行中" | "即将开始" | "往期活动">("进行中");
   const [questionFilter, setQuestionFilter] = useState<"热门问题" | "待回答" | "已解决">("热门问题");
+  const refreshSequence = useRef(0);
 
   // 帖子详情 Modal 控制
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
@@ -49,19 +51,29 @@ export default function CommunityScreen() {
 
   const tabs = ["寻味", "榜单", "活动", "问答"];
 
-  const fetchPosts = useCallback(async () => {
+  const fetchPosts = useCallback(async (forceRefresh = false) => {
     try {
       setLoading(true);
       setFetchError(null);
-      const data = await communityApi.posts<Post>("", authFetch);
-      setPosts(Array.isArray(data) ? data : []);
+      if (forceRefresh) {
+        refreshSequence.current += 1;
+        const cacheBuster = Date.now();
+        const [recommended, latest] = await Promise.all([
+          communityApi.posts<Post>(`?sort=recommended&_=${cacheBuster}`, authFetch),
+          communityApi.posts<Post>(`?_=${cacheBuster}`, authFetch),
+        ]);
+        setPosts(buildRefreshedFeed(recommended, latest, refreshSequence.current));
+      } else {
+        const data = await communityApi.posts<Post>("?sort=recommended", authFetch);
+        setPosts(Array.isArray(data) ? data : []);
+      }
     } catch (e) {
       setPosts([]);
       setFetchError(e instanceof Error ? e.message : "社区内容加载失败");
     } finally {
       setLoading(false);
     }
-  }, [activeTab, authFetch]);
+  }, [authFetch]);
 
   useFocusEffect(
     useCallback(() => {
@@ -284,13 +296,13 @@ export default function CommunityScreen() {
 
           <View className="flex-row items-center justify-between mt-2.5 pt-2 border-t border-[#F8F5F0]">
             {/* 作者头像与昵称 */}
-            <View className="flex-row items-center gap-1.5 flex-1 pr-1">
+            <View className="min-w-0 flex-1 flex-row items-center gap-1.5 pr-2">
               <Image
                 source={getAvatarSource(post.avatar_url, post.user_id ?? post.username)}
                 className="w-5 h-5 rounded-full"
               />
-              <Text className="text-[10px] text-[#777777] font-medium" numberOfLines={1}>
-                {post.username}
+              <Text className="flex-1 text-[10px] font-medium text-[#777777]" numberOfLines={1}>
+                {post.nickname || post.username}
               </Text>
             </View>
 
@@ -300,7 +312,7 @@ export default function CommunityScreen() {
                 e.stopPropagation();
                 handleLike(post.id);
               }}
-              className="flex-row items-center gap-1 py-0.5 px-1"
+              className="ml-auto shrink-0 flex-row items-center gap-1 px-1 py-0.5"
             >
               <FontAwesome6
                 name="heart"
@@ -312,10 +324,6 @@ export default function CommunityScreen() {
                 {formatLikes(post.likes_count)}
               </Text>
             </TouchableOpacity>
-            <View className="ml-1 flex-row items-center gap-1 px-1">
-              <FontAwesome6 name="comment" size={10} color="#888888" />
-              <Text className="text-[10px] font-medium text-[#777777]">{post.comment_count || 0}</Text>
-            </View>
           </View>
         </View>
       </TouchableOpacity>
@@ -607,7 +615,7 @@ export default function CommunityScreen() {
         refreshControl={
           <RefreshControl
             refreshing={loading}
-            onRefresh={fetchPosts}
+            onRefresh={() => void fetchPosts(true)}
             tintColor="#2D6A4F"
             colors={["#2D6A4F"]}
           />

@@ -9,6 +9,14 @@ export interface DietRecordActionCard {
   saved?: boolean;
 }
 
+export interface AIWriteConfirmation {
+  confirmationId: string;
+  action: "record_diet_meal" | "add_inventory_item" | "add_kitchenware_item" | "record_health_log";
+  payload: Record<string, unknown>;
+  expiresAt: string;
+  committed?: boolean;
+}
+
 export interface DietRecordMissingCard {
   dishName: string;
   missingIngredients: Array<{ name: string; amount: string }>;
@@ -52,6 +60,7 @@ export interface Message {
   text: string;
   imageUri?: string;
   actionCard?: DietRecordActionCard;
+  writeConfirmation?: AIWriteConfirmation;
   missingCard?: DietRecordMissingCard;
   optionsCard?: DietRecordOptionsCard;
   solutionCards?: SolutionCard[];

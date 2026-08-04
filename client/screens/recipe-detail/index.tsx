@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, type ComponentProps } from "react";
+import { useState, useCallback, useEffect, useRef, type ComponentProps } from "react";
 import {
   View,
   Text,
@@ -62,7 +62,22 @@ export default function RecipeDetailScreen() {
   const [preparedIngredients, setPreparedIngredients] = useState<Set<string>>(() => new Set());
   const [isFavorited, setIsFavorited] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [favoriteNotice, setFavoriteNotice] = useState<string | null>(null);
+  const favoriteNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+
+  const showFavoriteNotice = useCallback((message: string) => {
+    if (favoriteNoticeTimer.current) clearTimeout(favoriteNoticeTimer.current);
+    setFavoriteNotice(message);
+    favoriteNoticeTimer.current = setTimeout(() => {
+      setFavoriteNotice(null);
+      favoriteNoticeTimer.current = null;
+    }, 2200);
+  }, []);
+
+  useEffect(() => () => {
+    if (favoriteNoticeTimer.current) clearTimeout(favoriteNoticeTimer.current);
+  }, []);
 
   const fetchRecipe = useCallback(async () => {
     if (!id) {
@@ -182,8 +197,10 @@ export default function RecipeDetailScreen() {
     try {
       if (nextFavorited) await recipesApi.favorite(authFetch, recipe.id);
       else await recipesApi.unfavorite(authFetch, recipe.id);
+      showFavoriteNotice(nextFavorited ? "收藏成功" : "已取消收藏");
     } catch {
       setIsFavorited(!nextFavorited);
+      showFavoriteNotice("操作失败，请稍后重试");
     } finally {
       setFavoriteLoading(false);
     }
@@ -221,6 +238,14 @@ export default function RecipeDetailScreen() {
                 solid={isFavorited}
               />
             </TouchableOpacity>
+            {favoriteNotice ? (
+              <View
+                accessibilityLiveRegion="polite"
+                className="absolute right-4 top-[68px] rounded-full bg-[#20362A]/90 px-3 py-2 shadow-sm"
+              >
+                <Text className="text-xs font-bold text-white">{favoriteNotice}</Text>
+              </View>
+            ) : null}
             <View className="absolute bottom-4 left-4 flex-row gap-2">
               <View className="rounded-full bg-[#1F5038]/90 px-3 py-1.5">
                 <Text className="text-xs font-bold text-white">{recipe.category}</Text>
@@ -381,6 +406,18 @@ export default function RecipeDetailScreen() {
                   </View>
                 ))}
               </View>
+            </View>
+
+            <View className="rounded-[24px] border border-[#D9E6DD] bg-[#F3F8F4] p-5 md:flex-1 md:p-6">
+              <SectionTitle icon="kitchen-set" eyebrow="装备适配" title="用现有厨具完成这道菜" />
+              <Text className="mt-3 text-xs leading-5 text-[#58705D]">AI 会优先匹配你装备库中状态可用的厨具；缺少时会给出替代做法与建议添置的官方厨具。</Text>
+              <TouchableOpacity
+                onPress={() => router.push({ pathname: "/ai-assistant", params: { prompt: `我要做【${recipe.title}】。请优先使用我已录入且可用的厨具；若缺少关键设备，请给出可替代的烹饪方法，并说明推荐从官方厨具库添加什么。` } })}
+                className="mt-4 flex-row items-center justify-center rounded-2xl bg-[#2D6A4F] py-3 active:opacity-85"
+              >
+                <FontAwesome6 name="wand-magic-sparkles" size={13} color="white" />
+                <Text className="ml-2 text-xs font-black text-white">按我的厨具适配</Text>
+              </TouchableOpacity>
             </View>
           </View>
 

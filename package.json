@@ -6,7 +6,7 @@
     "dev:client": "pnpm --dir ./client start",
     "dev:server": "pnpm --dir ./server dev",
     "dev:admin": "pnpm --dir ./admin dev",
-    "dev": "pnpm dlx concurrently --names client,server \"pnpm dev:client\" \"pnpm dev:server\"",
+    "dev": "pnpm dlx concurrently --names client,server,admin \"pnpm dev:client\" \"pnpm dev:server\" \"pnpm dev:admin\"",
     "build:client": "pnpm --dir ./client build",
     "build:server": "pnpm --dir ./server build",
     "build:admin": "pnpm --dir ./admin build",

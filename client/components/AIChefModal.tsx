@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -16,13 +16,17 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { aiApi } from "@/services/api";
+import { aiApi, ApiError } from "@/services/api";
+import { AIMarkdown } from "@/components/AIMarkdown";
 import {
   CHAT_SESSIONS_STORAGE_KEY,
   getUserStorageKey,
   storageBelongsToCurrentUser,
 } from "@/utils/userStorage";
 
+
+import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import { RealtimeVoiceMVPModal } from "@/components/RealtimeVoiceMVPModal";
 
 interface DietActionCard {
   mealType: string;
@@ -56,12 +60,21 @@ interface SolutionCard {
   actionText: string;
 }
 
+interface WriteConfirmationCard {
+  confirmationId: string;
+  action: "record_diet_meal" | "add_inventory_item" | "add_kitchenware_item" | "record_health_log";
+  payload: Record<string, unknown>;
+  expiresAt: string;
+  committed?: boolean;
+}
+
 interface Message {
   id: string;
   sender: "ai" | "user";
   text: string;
   imageUri?: string;
   actionCard?: DietActionCard;
+  writeConfirmation?: WriteConfirmationCard;
   missingCard?: MissingIngredientsCard;
   optionsCard?: DietRecordOptionsCard;
   solutionCards?: SolutionCard[];
@@ -88,11 +101,31 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
   const [loadedChatStorageKey, setLoadedChatStorageKey] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showToolsGrid, setShowToolsGrid] = useState(false);
+  const [isDeepThink, setIsDeepThink] = useState(false);
+  const [isWebSearch, setIsWebSearch] = useState(false);
+  const baseInputTextRef = useRef("");
+
+  const { isRecording, isTranscribing, statusText: voiceStatusText, toggleRecording } = useVoiceRecorder({
+    onSpeechResult: (recognizedText) => {
+      const base = baseInputTextRef.current.trim();
+      setInputText(base ? `${base} ${recognizedText}` : recognizedText);
+    },
+  });
+
+  const handleToggleVoiceRecording = () => {
+    if (!isRecording) {
+      baseInputTextRef.current = inputText;
+    }
+    toggleRecording();
+  };
   const [isMuted, setIsMuted] = useState(false);
+  const [showRealtimeVoiceMVP, setShowRealtimeVoiceMVP] = useState(false);
   const [storedMessages, setMessages] = useState<Message[]>([]);
   const [storedSessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => String(Date.now()));
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
+  const historyLimitNoticeShown = useRef(false);
   const historyBelongsToCurrentUser = storageBelongsToCurrentUser(
     chatStorageKey,
     loadedChatStorageKey,
@@ -168,6 +201,7 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
   }, [messages, currentSessionId, chatStorageKey, loadedChatStorageKey]);
 
   const handleStartNewChat = () => {
+    historyLimitNoticeShown.current = false;
     const newId = String(Date.now());
     setCurrentSessionId(newId);
     setMessages([]);
@@ -245,13 +279,35 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
         return;
       }
 
-      const historyPayload = messages.map((m) => ({
-        role: m.sender === "user" ? "user" : "assistant",
-        content: m.text,
-      }));
+      // 服务端最多接收 50 条消息；预留本次提问，并忽略旧缓存中的无效消息。
+      const validHistory = messages.filter((m) => typeof m.text === "string" && m.text.trim().length > 0);
+      if (validHistory.length > 49 && !historyLimitNoticeShown.current) {
+        Alert.alert("对话提示", "为保证回复速度，本次 AI 将参考最近 50 条对话。更早内容仍保留在本机历史中。");
+        historyLimitNoticeShown.current = true;
+      }
+      const historyPayload = validHistory
+        .slice(-49)
+        .map((m) => ({
+          role: m.sender === "user" ? "user" : "assistant",
+          content: m.text.trim().slice(0, 12_000),
+        }));
       historyPayload.push({ role: "user", content: text.trim() });
 
-      const data = await aiApi.chat<Record<string, any>>(authFetch, { messages: historyPayload });
+      let data: Record<string, any>;
+      try {
+        data = await aiApi.chat<Record<string, any>>(authFetch, { messages: historyPayload });
+      } catch (error) {
+        // 旧版本地缓存可能含有不再符合接口约束的历史消息。
+        // 历史仅作上下文，不能阻塞用户当前这一次提问。
+        // Expo Web 热更新可能产生多个 ApiError 模块实例，按错误码判断更可靠。
+        const isValidationError = error instanceof ApiError
+          ? error.code === "VALIDATION_ERROR"
+          : typeof error === "object"
+            && error !== null
+            && (error as { code?: unknown }).code === "VALIDATION_ERROR";
+        if (!isValidationError) throw error;
+        data = await aiApi.chat<Record<string, any>>(authFetch, { prompt: text.trim() });
+      }
       const responseText = data.reply || "智能大厨正在整理您的食谱建议...";
 
       const aiMsg: Message = {
@@ -259,6 +315,7 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
         sender: "ai",
         text: responseText,
         actionCard: data.actionCard,
+        writeConfirmation: data.writeConfirmation,
         missingCard: data.missingCard,
         optionsCard: data.optionsCard,
         solutionCards: data.solutionCards,
@@ -271,7 +328,7 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
       const fallbackMsg: Message = {
         id: (Date.now() + 1).toString(),
         sender: "ai",
-        text: `已收到您的需求：“${text.trim()}”！\n建议保持每餐 50% 绿叶蔬菜 + 25% 优质蛋白 + 25% 低 GI 复合碳水，保持健康活力！`,
+        text: `食语暂时无法回复：${err instanceof Error ? err.message : "请检查网络或重新登录后重试"}。你的消息仍保留在本次对话中，可以稍后再次发送。`,
         time: "刚刚",
       };
       setMessages((prev) => [...prev, fallbackMsg]);
@@ -279,6 +336,18 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
       setLoading(false);
     }
   }, [authFetch, inputText, loading, messages, onClose, router, user]);
+
+  const handleCommitWriteConfirmation = async (messageId: string, confirmation: WriteConfirmationCard) => {
+    try {
+      await aiApi.commitWriteConfirmation(authFetch, confirmation.confirmationId, `ai-confirm-${confirmation.confirmationId}`);
+      setMessages((previous) => previous.map((message) => message.id === messageId && message.writeConfirmation
+        ? { ...message, writeConfirmation: { ...message.writeConfirmation, committed: true }, actionCard: message.actionCard ? { ...message.actionCard, saved: true } : undefined }
+        : message));
+      Alert.alert("保存成功", "已确认并保存本次操作。");
+    } catch (error) {
+      Alert.alert("保存失败", error instanceof Error ? error.message : "请稍后重试");
+    }
+  };
 
   // 底部 4 大快捷动作处理器
   const handleActionVisionFood = async () => {
@@ -352,6 +421,14 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
               </TouchableOpacity>
 
               <TouchableOpacity
+                onPress={() => setShowRealtimeVoiceMVP(true)}
+                className="h-8 px-2.5 rounded-full bg-emerald-600 items-center justify-center shadow-xs active:opacity-80 flex-row gap-1"
+              >
+                <FontAwesome6 name="microphone-lines" size={11} color="#FFF" />
+                <Text className="text-[11px] font-bold text-white">实时语音 MVP</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
                 onPress={handleStartNewChat}
                 className="w-8 h-8 rounded-full bg-[#2D6A4F] items-center justify-center shadow-xs active:opacity-80"
               >
@@ -400,9 +477,7 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
                 <View className="relative mb-3 items-center justify-center">
                   <View className="w-24 h-24 rounded-full bg-[#2D6A4F]/15 items-center justify-center shadow-lg border-2 border-white">
                     <Image
-                      source={{
-                        uri: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80",
-                      }}
+                      source={require("@/assets/shiyu-avatar.jpg")}
                       className="w-20 h-20 rounded-full"
                     />
                   </View>
@@ -466,13 +541,13 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
                           : "bg-white border border-[#EBE3D5] rounded-tl-none"
                       }`}
                     >
-                      <Text
-                        className={`text-xs leading-5 font-medium ${
-                          msg.sender === "user" ? "text-white font-bold" : "text-[#3D3229]"
-                        }`}
-                      >
-                        {msg.text}
-                      </Text>
+                      {msg.sender === "ai" ? (
+                        <AIMarkdown content={msg.text} />
+                      ) : (
+                        <Text className="text-xs leading-5 font-bold text-white">
+                          {msg.text}
+                        </Text>
+                      )}
 
                       {/* Action Card */}
                       {msg.actionCard && (
@@ -492,6 +567,19 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
                           <Text className="text-[10px] text-[#8B7D6B] mb-2">
                             预估: {msg.actionCard.calories} kcal | 蛋白: {msg.actionCard.protein}g
                           </Text>
+                        </View>
+                      )}
+
+                      {msg.writeConfirmation && (
+                        <View className="mt-3 rounded-2xl border border-[#2D6A4F]/25 bg-[#F7FAF8] p-3">
+                          <Text className="text-[11px] font-black text-[#3D3229]">
+                            {msg.writeConfirmation.committed ? "已确认保存" : "请确认本次操作"}
+                          </Text>
+                          {!msg.writeConfirmation.committed && (
+                            <TouchableOpacity onPress={() => handleCommitWriteConfirmation(msg.id, msg.writeConfirmation!)} className="mt-2 rounded-xl bg-[#2D6A4F] py-2 items-center">
+                              <Text className="text-xs font-bold text-white">确认保存</Text>
+                            </TouchableOpacity>
+                          )}
                         </View>
                       )}
 
@@ -594,78 +682,162 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
             )}
           </ScrollView>
 
-          {/* Bottom Bar Section (Alipay AI Style) */}
-          <View className="bg-white px-4 pt-3 pb-6 border-t border-[#EBE3D5]/60 shadow-lg">
-            {/* Search Pill Input */}
-            <View className="bg-[#F6F4F0] px-3.5 py-2 rounded-full border border-[#EBE3D5] flex-row items-center justify-between mb-3.5">
-              <TouchableOpacity onPress={handleActionVisionFood} className="p-1.5">
-                <FontAwesome6 name="camera" size={16} color="#3D3229" />
-              </TouchableOpacity>
+          {/* Bottom Bar Section (Warm Theme Matched, No Harsh White Box) */}
+          <View className="bg-[#F6F4F0] px-4 pt-3 pb-6 border-t border-[#EBE3D5] shadow-lg">
+            {voiceStatusText ? (
+              <View className="mb-2 px-3 py-1.5 rounded-xl bg-[#2D6A4F]/10 border border-[#2D6A4F]/20 flex-row items-center justify-between">
+                <Text className="text-xs font-medium text-[#2D6A4F]">{voiceStatusText}</Text>
+                {isRecording && <View className="w-2.5 h-2.5 rounded-full bg-red-500" />}
+                {isTranscribing && <ActivityIndicator size="small" color="#2D6A4F" />}
+              </View>
+            ) : null}
 
+            {/* Integrated Card Container */}
+            <View className={`bg-white p-3 rounded-[24px] border transition-all shadow-xs ${isRecording ? 'border-red-500 bg-red-50/50' : 'border-[#EBE3D5]'}`}>
+              {/* Input Area */}
               <TextInput
                 value={inputText}
                 onChangeText={setInputText}
-                placeholder="发消息或按住说话..."
+                placeholder={isRecording ? "正在录音识别中..." : "发消息或按住说话..."}
                 placeholderTextColor="#A3A398"
-                className="flex-1 text-xs text-[#3D3229] px-2"
+                multiline
+                className="text-xs text-[#3D3229] min-h-[36px] max-h-[90px] px-1 py-1 align-top"
                 onSubmitEditing={() => handleSendMessage()}
               />
 
-              <TouchableOpacity
-                onPress={() => handleSendMessage()}
-                disabled={!inputText.trim() && !loading}
-                className="p-1.5"
-              >
-                <FontAwesome6
-                  name={inputText.trim() ? "paper-plane" : "microphone"}
-                  size={16}
-                  color={inputText.trim() ? "#2D6A4F" : "#3D3229"}
-                />
-              </TouchableOpacity>
+              {/* Bottom Control Bar */}
+              <View className="flex-row items-center justify-between pt-2 border-t border-[#EBE3D5]/40 mt-1">
+                {/* Left Side: Practical Food AI Chips (Hide when + tools grid expanded for perfect adaptation) */}
+                {!showToolsGrid ? (
+                  <View className="flex-row items-center gap-1.5 flex-wrap">
+                    <TouchableOpacity
+                      onPress={() => setInputText("根据现有冰箱食材推荐一份健康减脂晚餐")}
+                      className="px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200/80 flex-row items-center gap-1 active:bg-emerald-100"
+                    >
+                      <FontAwesome6 name="utensils" size={11} color="#059669" />
+                      <Text className="text-[11px] font-bold text-emerald-800">推荐晚餐</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      onPress={() => setInputText("帮我计算今日膳食需要的蛋白质与营养配比")}
+                      className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200/80 flex-row items-center gap-1 active:bg-amber-100"
+                    >
+                      <FontAwesome6 name="chart-pie" size={11} color="#D97706" />
+                      <Text className="text-[11px] font-bold text-amber-800">营养分析</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <Text className="text-[11px] font-bold text-[#8B7D6B]">食光工具箱</Text>
+                )}
+
+                {/* Right Side: Action Buttons */}
+                <View className="flex-row items-center gap-1.5 ml-2">
+                  <TouchableOpacity
+                    onPress={() => setShowToolsGrid((prev) => !prev)}
+                    className={`w-7.5 h-7.5 rounded-full border items-center justify-center transition-all ${
+                      showToolsGrid ? 'bg-[#2D6A4F] border-[#2D6A4F]' : 'bg-[#F6F4F0] border-[#EBE3D5] active:bg-[#EBE3D5]/50'
+                    }`}
+                  >
+                    <FontAwesome6 name={showToolsGrid ? "xmark" : "plus"} size={13} color={showToolsGrid ? "#FFFFFF" : "#3D3229"} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={handleToggleVoiceRecording}
+                    disabled={loading || isTranscribing}
+                    className={`w-7.5 h-7.5 rounded-full items-center justify-center transition-all ${
+                      isRecording ? 'bg-red-500' : 'bg-[#F6F4F0] border border-[#EBE3D5]'
+                    }`}
+                  >
+                    <FontAwesome6
+                      name="microphone"
+                      size={13}
+                      color={isRecording ? "#FFFFFF" : "#3D3229"}
+                    />
+                  </TouchableOpacity>
+
+                  {inputText.trim() ? (
+                    <TouchableOpacity
+                      onPress={() => handleSendMessage()}
+                      disabled={loading}
+                      className="w-7.5 h-7.5 rounded-full bg-[#2D6A4F] items-center justify-center shadow-xs active:scale-95"
+                    >
+                      <FontAwesome6 name="arrow-up" size={13} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              </View>
             </View>
 
-            {/* Bottom 4 Core AI Quick Action Grid */}
-            <View className="flex-row items-center justify-around">
-              <TouchableOpacity
-                onPress={handleActionVisionFood}
-                className="items-center gap-1 active:opacity-80"
-              >
-                <View className="w-11 h-11 rounded-2xl bg-[#F6F4F0] items-center justify-center border border-[#EBE3D5]">
-                  <FontAwesome6 name="camera" size={18} color="#2D6A4F" />
-                </View>
-                <Text className="text-[11px] font-bold text-[#3D3229]">识菜算热量</Text>
-              </TouchableOpacity>
+            {/* Bottom 5 Core AI Quick Action Grid (按 + 号展开多彩轻奢图标面板) */}
+            {showToolsGrid && (
+              <View className="bg-white rounded-2xl p-3.5 border border-[#EBE3D5] mt-2.5 flex-row items-center justify-around shadow-sm">
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowToolsGrid(false);
+                    handleActionVisionFood();
+                  }}
+                  className="items-center gap-1.5 active:opacity-80"
+                >
+                  <View className="w-11 h-11 rounded-2xl bg-emerald-50 items-center justify-center border border-emerald-200/80 shadow-xs">
+                    <FontAwesome6 name="camera" size={18} color="#059669" />
+                  </View>
+                  <Text className="text-[11px] font-bold text-[#3D3229]">识菜热量</Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={handleActionScanReceipt}
-                className="items-center gap-1 active:opacity-80"
-              >
-                <View className="w-11 h-11 rounded-2xl bg-[#F6F4F0] items-center justify-center border border-[#EBE3D5]">
-                  <FontAwesome6 name="receipt" size={18} color="#E9C46A" />
-                </View>
-                <Text className="text-[11px] font-bold text-[#3D3229]">扫小票入库</Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowToolsGrid(false);
+                    handleActionScanReceipt();
+                  }}
+                  className="items-center gap-1.5 active:opacity-80"
+                >
+                  <View className="w-11 h-11 rounded-2xl bg-amber-50 items-center justify-center border border-amber-200/80 shadow-xs">
+                    <FontAwesome6 name="receipt" size={18} color="#D97706" />
+                  </View>
+                  <Text className="text-[11px] font-bold text-[#3D3229]">扫码入库</Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={handleActionFridgeClean}
-                className="items-center gap-1 active:opacity-80"
-              >
-                <View className="w-11 h-11 rounded-2xl bg-[#F6F4F0] items-center justify-center border border-[#EBE3D5]">
-                  <FontAwesome6 name="boxes-packing" size={18} color="#D4A276" />
-                </View>
-                <Text className="text-[11px] font-bold text-[#3D3229]">冰箱清库</Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowToolsGrid(false);
+                    handleActionFridgeClean();
+                  }}
+                  className="items-center gap-1.5 active:opacity-80"
+                >
+                  <View className="w-11 h-11 rounded-2xl bg-sky-50 items-center justify-center border border-sky-200/80 shadow-xs">
+                    <FontAwesome6 name="snowflake" size={18} color="#0284C7" />
+                  </View>
+                  <Text className="text-[11px] font-bold text-[#3D3229]">冰箱清库</Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={handleActionCookingVoice}
-                className="items-center gap-1 active:opacity-80"
-              >
-                <View className="w-11 h-11 rounded-2xl bg-[#F6F4F0] items-center justify-center border border-[#EBE3D5]">
-                  <FontAwesome6 name="kitchen-set" size={18} color="#E07A5F" />
-                </View>
-                <Text className="text-[11px] font-bold text-[#3D3229]">做饭语音包</Text>
-              </TouchableOpacity>
-            </View>
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowToolsGrid(false);
+                    onClose();
+                    router.push("/ai-assistant", { open_shopping_list: "true" });
+                  }}
+                  className="items-center gap-1.5 active:opacity-80"
+                >
+                  <View className="w-11 h-11 rounded-2xl bg-purple-50 items-center justify-center border border-purple-200/80 shadow-xs">
+                    <FontAwesome6 name="cart-shopping" size={18} color="#9333EA" />
+                  </View>
+                  <Text className="text-[11px] font-bold text-[#3D3229]">采购清单</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowToolsGrid(false);
+                    handleActionCookingVoice();
+                  }}
+                  className="items-center gap-1.5 active:opacity-80"
+                >
+                  <View className="w-11 h-11 rounded-2xl bg-orange-50 items-center justify-center border border-orange-200/80 shadow-xs">
+                    <FontAwesome6 name="fire-burner" size={18} color="#EA580C" />
+                  </View>
+                  <Text className="text-[11px] font-bold text-[#3D3229]">做饭语音包</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </KeyboardAvoidingView>
       </View>
@@ -741,6 +913,12 @@ export function AIChefModal({ visible, onClose }: AIChefModalProps) {
           </View>
         </View>
       </Modal>
+
+      {/* 🎙️ 实时语音对话 (TeleSpeechASR + LLM MVP Modal) */}
+      <RealtimeVoiceMVPModal
+        visible={showRealtimeVoiceMVP}
+        onClose={() => setShowRealtimeVoiceMVP(false)}
+      />
     </Modal>
   );
 }

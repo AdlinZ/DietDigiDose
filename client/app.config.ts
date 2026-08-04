@@ -10,12 +10,19 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     "name": appName,
     "slug": appSlug,
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/adaptive-icon-safe.png",
     "scheme": "dietdigidose",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "extra": {
+      ...config.extra,
+      "eas": {
+        ...config.extra?.eas,
+        "projectId": "c89b45c8-5a27-4f6f-af05-4b656f534994"
+      }
+    },
     "ios": {
       ...config.ios,
       "supportsTablet": true,
@@ -31,11 +38,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     "android": {
       ...config.android,
+      "icon": "./assets/images/adaptive-icon-safe.png",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/adaptive-icon-foreground.png",
         "backgroundColor": "#ffffff"
       },
-      "package": androidPackage
+      "package": androidPackage,
+      "versionCode": 3
     },
     "web": {
       "bundler": "metro",
@@ -52,7 +61,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/splash-icon-safe.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
@@ -78,6 +87,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           "cameraPermission": `新项目需要访问相机以拍摄照片和视频。`,
           "microphonePermission": `新项目需要访问麦克风以录制视频声音。`,
           "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/adaptive-icon-safe.png",
+          "color": "#2D6A4F"
         }
       ],
       [

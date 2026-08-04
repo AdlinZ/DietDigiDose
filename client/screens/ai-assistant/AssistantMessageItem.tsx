@@ -4,6 +4,7 @@ import { AIMarkdown } from "@/components/AIMarkdown";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import type {
   DietRecordActionCard,
+  AIWriteConfirmation,
   DietRecordMissingCard,
   InventoryScanCard,
   InventoryScanFood,
@@ -14,7 +15,8 @@ type AssistantMessageItemProps = {
   message: Message;
   userAvatarUrl?: string | null;
   userAvatarSeed?: number | string;
-  handleConfirmRecordCard: (messageId: string, card: DietRecordActionCard, isTomorrow?: boolean) => void | Promise<void>;
+  handleConfirmRecordCard: (messageId: string, card: DietRecordActionCard, isTomorrow?: boolean, confirmation?: AIWriteConfirmation) => void | Promise<void>;
+  handleCommitWriteConfirmation: (messageId: string, confirmation: AIWriteConfirmation) => void | Promise<void>;
   handleOpenEditModal: (messageId: string, card: DietRecordActionCard) => void;
   toggleInventoryScanItem: (messageId: string, itemId: string) => void;
   openInventoryScanEditor: (messageId: string, item: InventoryScanFood) => void;
@@ -30,6 +32,7 @@ export function AssistantMessageItem({
   userAvatarUrl,
   userAvatarSeed,
   handleConfirmRecordCard,
+  handleCommitWriteConfirmation,
   handleOpenEditModal,
   toggleInventoryScanItem,
   openInventoryScanEditor,
@@ -105,7 +108,7 @@ export function AssistantMessageItem({
                           <View className="gap-2">
                             <View className="flex-row items-center gap-2">
                               <TouchableOpacity
-                                onPress={() => handleConfirmRecordCard(msg.id, msg.actionCard!, false)}
+                                onPress={() => handleConfirmRecordCard(msg.id, msg.actionCard!, false, msg.writeConfirmation)}
                                 className="flex-1 bg-[#2D6A4F] py-2 rounded-xl items-center shadow-xs active:opacity-90 flex-row justify-center gap-1"
                               >
                                 <FontAwesome6 name="check" size={11} color="#FFF" />
@@ -113,7 +116,7 @@ export function AssistantMessageItem({
                               </TouchableOpacity>
 
                               <TouchableOpacity
-                                onPress={() => handleConfirmRecordCard(msg.id, msg.actionCard!, true)}
+                                onPress={() => handleConfirmRecordCard(msg.id, msg.actionCard!, true, msg.writeConfirmation)}
                                 className="bg-[#D4A276] px-3 py-2 rounded-xl items-center active:opacity-90 flex-row justify-center gap-1 shadow-2xs"
                               >
                                 <FontAwesome6 name="calendar-plus" size={11} color="#FFF" />
@@ -130,6 +133,20 @@ export function AssistantMessageItem({
                             </TouchableOpacity>
                           </View>
                         )}
+                      </View>
+                    )}
+
+                    {msg.writeConfirmation && !msg.writeConfirmation.committed && !msg.actionCard && (
+                      <View className="mt-3 rounded-2xl border border-[#2D6A4F]/25 bg-[#F7FAF8] p-3">
+                        <Text className="text-xs font-black text-[#3D3229]">请确认本次操作</Text>
+                        <Text className="mt-1 text-[11px] leading-4 text-[#8B7D6B]">
+                          {msg.writeConfirmation.action === "add_inventory_item" ? `加入库存：${String(msg.writeConfirmation.payload.name || "")}`
+                            : msg.writeConfirmation.action === "add_kitchenware_item" ? `加入厨具：${String(msg.writeConfirmation.payload.name || "")}`
+                              : "更新健康数据"}
+                        </Text>
+                        <TouchableOpacity onPress={() => handleCommitWriteConfirmation(msg.id, msg.writeConfirmation!)} className="mt-3 items-center rounded-xl bg-[#2D6A4F] py-2.5">
+                          <Text className="text-xs font-bold text-white">确认保存</Text>
+                        </TouchableOpacity>
                       </View>
                     )}
 
@@ -382,4 +399,3 @@ export function AssistantMessageItem({
                 </View>
   );
 }
-

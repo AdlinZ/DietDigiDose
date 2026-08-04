@@ -2,12 +2,78 @@ import { Router } from "express";
 import { db } from "../../storage/db.js";
 import type { AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
-import { adminIngredientSchema, adminKitchenwareStatusSchema } from "../../validation/schemas.js";
+import { adminIngredientSchema, adminKitchenwareCatalogSchema, adminKitchenwareStatusSchema } from "../../validation/schemas.js";
 import { positiveIntegerParam } from "../../middleware/validateParam.js";
 import { auditAdminAction as audit, deletedFilter } from "./shared.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
+
+// 官方厨具目录：供客户端录入时选择，不等同于用户已拥有的厨具资产。
+router.get("/kitchenware/catalog", (req, res) => {
+  try {
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const category = typeof req.query.category === "string" ? req.query.category.trim() : "";
+    const filters: string[] = [];
+    const params: string[] = [];
+    if (search) {
+      filters.push("(name LIKE ? OR aliases LIKE ? OR cooking_methods LIKE ? OR care_note LIKE ?)");
+      const term = `%${search}%`;
+      params.push(term, term, term, term);
+    }
+    if (category && category !== "全部") {
+      filters.push("category = ?");
+      params.push(category);
+    }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    return res.json(db.prepare(`SELECT * FROM kitchenware_catalog ${where} ORDER BY category, name`).all(...params));
+  } catch (error) {
+    console.error("[Admin Kitchenware Catalog List Error]", error);
+    return res.status(500).json({ error: "获取官方厨具目录失败" });
+  }
+});
+
+router.post("/kitchenware/catalog", validateBody(adminKitchenwareCatalogSchema), (req: AuthRequest, res) => {
+  try {
+    const input = req.body;
+    const result = db.prepare(`
+      INSERT INTO kitchenware_catalog (name, category, aliases, cooking_methods, care_note)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(input.name, input.category, JSON.stringify(input.aliases), JSON.stringify(input.cooking_methods), input.care_note || null);
+    audit(req, { action: "kitchenware_catalog.create", resourceType: "kitchenware_catalog", resourceId: Number(result.lastInsertRowid), summary: `新增官方厨具：${input.name}` });
+    return res.status(201).json(db.prepare("SELECT * FROM kitchenware_catalog WHERE id = ?").get(result.lastInsertRowid));
+  } catch (error: any) {
+    if (String(error?.message || "").includes("UNIQUE")) return res.status(409).json({ error: "该官方厨具已存在" });
+    console.error("[Admin Kitchenware Catalog Create Error]", error);
+    return res.status(500).json({ error: "新增官方厨具失败" });
+  }
+});
+
+router.put("/kitchenware/catalog/:id", validateBody(adminKitchenwareCatalogSchema), (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const input = req.body;
+  const existing = db.prepare("SELECT name FROM kitchenware_catalog WHERE id = ?").get(id) as { name: string } | undefined;
+  if (!existing) return res.status(404).json({ error: "官方厨具不存在" });
+  try {
+    db.prepare(`UPDATE kitchenware_catalog SET name = ?, category = ?, aliases = ?, cooking_methods = ?, care_note = ? WHERE id = ?`)
+      .run(input.name, input.category, JSON.stringify(input.aliases), JSON.stringify(input.cooking_methods), input.care_note || null, id);
+    audit(req, { action: "kitchenware_catalog.update", resourceType: "kitchenware_catalog", resourceId: id, summary: `更新官方厨具：${existing.name} → ${input.name}` });
+    return res.json(db.prepare("SELECT * FROM kitchenware_catalog WHERE id = ?").get(id));
+  } catch (error: any) {
+    if (String(error?.message || "").includes("UNIQUE")) return res.status(409).json({ error: "该官方厨具已存在" });
+    console.error("[Admin Kitchenware Catalog Update Error]", error);
+    return res.status(500).json({ error: "更新官方厨具失败" });
+  }
+});
+
+router.delete("/kitchenware/catalog/:id", (req: AuthRequest, res) => {
+  const id = Number(req.params.id);
+  const item = db.prepare("SELECT name FROM kitchenware_catalog WHERE id = ?").get(id) as { name: string } | undefined;
+  if (!item) return res.status(404).json({ error: "官方厨具不存在" });
+  db.prepare("DELETE FROM kitchenware_catalog WHERE id = ?").run(id);
+  audit(req, { action: "kitchenware_catalog.delete", resourceType: "kitchenware_catalog", resourceId: id, summary: `删除官方厨具：${item.name}` });
+  return res.json({ success: true, message: "官方厨具已删除" });
+});
 
 // 厨具资产管理
 router.get("/kitchenware", (req, res) => {
@@ -294,4 +360,3 @@ router.post("/custom-foods/:id/reject", (req: AuthRequest, res) => {
 export function createAdminAssetsRouter() {
   return router;
 }
-

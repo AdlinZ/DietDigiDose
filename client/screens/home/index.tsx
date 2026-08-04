@@ -23,6 +23,8 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
 import { toLocalDateKey } from "@/utils/date";
+import { getUserStorageKey } from "@/utils/userStorage";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { daysUntilDateKey } from "@/utils/inventory";
 import { ingredientNamesMatch, normalizeIngredientName } from "@/utils/ingredients";
 import { aiApi } from "@/services/api";
@@ -65,12 +67,25 @@ export default function HomeScreen() {
   const { recipes, inventoryItems, expiringItems, todayRecords, posts, healthLogs, loading, error, refresh } =
     useHomeData(authFetch, isAuthenticated, today);
 
+  const shoppingStorageKey = getUserStorageKey("shopping_list", user?.id);
+  const [shoppingItems, setShoppingItems] = useState<{ id: string; name: string; amount: string; checked: boolean }[]>([]);
+
   useFocusEffect(
     useCallback(() => {
       setVisibleRecipeCount(RECIPE_BATCH_SIZE);
       lastRecipeBatchLoadAt.current = 0;
       void refresh();
-    }, [refresh])
+
+      if (shoppingStorageKey) {
+        AsyncStorage.getItem(shoppingStorageKey).then((saved) => {
+          if (saved) {
+            try {
+              setShoppingItems(JSON.parse(saved));
+            } catch {}
+          }
+        });
+      }
+    }, [refresh, shoppingStorageKey])
   );
 
   // 计算今日三大营养素
@@ -171,6 +186,17 @@ export default function HomeScreen() {
 
     return () => clearInterval(intervalId);
   }, [smartFeedCardCount, smartFeedOffset, smartFeedOpacity]);
+
+  // Manual card navigation handler
+  const handleManualCardChange = useCallback((direction: 'prev' | 'next') => {
+    setActiveRecommendationCard((prev) => {
+      const len = smartFeedCardCount;
+      if (direction === 'prev') {
+        return (prev - 1 + len) % len;
+      }
+      return (prev + 1) % len;
+    });
+  }, [smartFeedCardCount]);
 
   useEffect(() => {
     Animated.timing(calorieProgress, {
@@ -374,7 +400,11 @@ export default function HomeScreen() {
             <View className="flex-row items-center gap-2">
               <TouchableOpacity onPress={() => router.push(isAuthenticated ? "/profile" : "/login")}>
                 {isAuthenticated ? (
-                  <Image source={getAvatarSource(user?.avatar_url, user?.id ?? user?.username)} className="w-7 h-7 rounded-full border border-[#2D6A4F]" />
+                  <Image
+                    source={getAvatarSource(user?.avatar_url, user?.id ?? user?.username)}
+                    className="w-7 h-7 rounded-full border border-[#2D6A4F]"
+                    style={{ width: 28, height: 28, borderRadius: 14 }}
+                  />
                 ) : (
                   <View className="w-7 h-7 rounded-full bg-[#2D6A4F]/15 items-center justify-center">
                     <FontAwesome6 name="user" size={10} color="#2D6A4F" />
@@ -423,6 +453,7 @@ export default function HomeScreen() {
                 <Image
                   source={getAvatarSource(user?.avatar_url, user?.id ?? user?.username)}
                   className="w-6 h-6 rounded-full border border-[#E9C46A]"
+                  style={{ width: 24, height: 24, borderRadius: 12 }}
                 />
               ) : (
                 <View className="w-6 h-6 rounded-full bg-white/20 items-center justify-center">
@@ -437,7 +468,7 @@ export default function HomeScreen() {
             </TouchableOpacity>
 
             <View className="flex-row items-center gap-2">
-              <TouchableOpacity className="w-8 h-8 rounded-full bg-white/15 border border-white/20 items-center justify-center relative shadow-xs active:bg-white/30 backdrop-blur-md">
+              <TouchableOpacity onPress={() => router.push("/notifications")} className="w-8 h-8 rounded-full bg-white/15 border border-white/20 items-center justify-center relative shadow-xs active:bg-white/30 backdrop-blur-md">
                 <FontAwesome6 name="bell" size={12} color="#FFF" />
                 {expiringItems.length > 0 && (
                   <View className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-400" />
@@ -682,7 +713,14 @@ export default function HomeScreen() {
                 )}
                 </View>
               </Animated.View>
-              <View className="mt-2">
+                {/* Manual navigation buttons */}
+                <TouchableOpacity onPress={() => handleManualCardChange('prev')} style={{ position: 'absolute', left: 12, top: '50%', marginTop: -12 }}>
+                  <FontAwesome6 name="chevron-left" size={24} color="#2D6A4F" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => handleManualCardChange('next')} style={{ position: 'absolute', right: 12, top: '50%', marginTop: -12 }}>
+                  <FontAwesome6 name="chevron-right" size={24} color="#2D6A4F" />
+                </TouchableOpacity>
+                <View className="mt-2">
                 <MedicalDisclaimer compact />
               </View>
             </View>
@@ -804,6 +842,63 @@ export default function HomeScreen() {
           </View>
         </View>
 
+        {/* 板块零：智能采购清单 (首页专属缺料提醒与入口卡片) */}
+        <View className="px-5 mb-5">
+          <TouchableOpacity
+            onPress={() => router.push("/shopping-list")}
+            activeOpacity={0.9}
+            className="bg-white rounded-[24px] p-5 border border-[#EBE3D5] shadow-xs overflow-hidden"
+          >
+            <View className="flex-row items-center justify-between pb-3 border-b border-[#F4EFE6] mb-3">
+              <View className="flex-row items-center gap-2">
+                <View className="w-8 h-8 rounded-xl bg-amber-500/10 items-center justify-center border border-amber-500/20">
+                  <FontAwesome6 name="cart-shopping" size={14} color="#D97706" />
+                </View>
+                <View>
+                  <Text className="text-sm font-black text-[#3D3229]">
+                    智能采购清单 {shoppingItems.filter(i => !i.checked).length > 0 ? `(${shoppingItems.filter(i => !i.checked).length} 项待买)` : ""}
+                  </Text>
+                  <Text className="text-[10px] text-[#8B7D6B] mt-0.5">离线补料买菜 · AI 自动按需存入</Text>
+                </View>
+              </View>
+
+              <View className="flex-row items-center gap-1 bg-[#2D6A4F]/10 px-3 py-1.5 rounded-full">
+                <Text className="text-xs font-bold text-[#2D6A4F]">去买菜</Text>
+                <FontAwesome6 name="chevron-right" size={10} color="#2D6A4F" />
+              </View>
+            </View>
+
+            {/* 待买项预览 Chips / Empty Hint */}
+            {shoppingItems.filter(i => !i.checked).length > 0 ? (
+              <View className="bg-[#FAF8F5] p-3 rounded-2xl border border-[#EBE3D5] flex-row items-center justify-between">
+                <View className="flex-row items-center gap-1.5 flex-1 flex-wrap mr-2">
+                  {shoppingItems.filter(i => !i.checked).slice(0, 3).map((item) => (
+                    <View key={item.id} className="bg-white px-2.5 py-1 rounded-full border border-[#EBE3D5] flex-row items-center gap-1">
+                      <FontAwesome6 name="carrot" size={10} color="#D4A276" />
+                      <Text className="text-[11px] font-bold text-[#3D3229]">{item.name}</Text>
+                      {item.amount ? <Text className="text-[9px] text-[#8B7D6B]">{item.amount}</Text> : null}
+                    </View>
+                  ))}
+                  {shoppingItems.filter(i => !i.checked).length > 3 && (
+                    <Text className="text-[10px] font-bold text-[#8B7D6B] ml-1">
+                      等共 {shoppingItems.filter(i => !i.checked).length} 项...
+                    </Text>
+                  )}
+                </View>
+
+                <View className="w-7 h-7 rounded-full bg-[#2D6A4F] items-center justify-center">
+                  <FontAwesome6 name="arrow-right" size={11} color="#FFF" />
+                </View>
+              </View>
+            ) : (
+              <View className="bg-[#FAF8F5] p-3 rounded-2xl border border-dashed border-[#EBE3D5] flex-row items-center justify-between">
+                <Text className="text-xs text-[#8B7D6B] font-medium">当前采购清单空空如也，随时点此录入待买食材</Text>
+                <FontAwesome6 name="plus" size={12} color="#D97706" />
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
         {/* 板块一：食材库概览 (大卡片统合容器) */}
         <View className="px-5 mb-5">
           <View className="bg-white rounded-[24px] p-5 pb-6 border border-[#EBE3D5] shadow-xs">
@@ -914,7 +1009,11 @@ export default function HomeScreen() {
                 >
                   <View className="flex-1 min-h-[84px]">
                     <View className="flex-row items-center gap-2 mb-2">
-                      <Image source={getAvatarSource(featuredCommunityPost.avatar_url, featuredCommunityPost.user_id ?? featuredCommunityPost.username)} className="w-6 h-6 rounded-full" />
+                      <Image
+                        source={getAvatarSource(featuredCommunityPost.avatar_url, featuredCommunityPost.user_id ?? featuredCommunityPost.username)}
+                        className="w-6 h-6 rounded-full"
+                        style={{ width: 24, height: 24, borderRadius: 12 }}
+                      />
                       <Text className="text-xs font-bold text-[#3D3229]" numberOfLines={1}>{featuredCommunityPost.username}</Text>
                       <View className="bg-[#2D6A4F]/10 px-1.5 py-0.5 rounded-md">
                         <Text className="text-[9px] font-bold text-[#2D6A4F]">精选</Text>

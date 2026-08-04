@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getSystemSetting, logAdminAction, setSystemSetting } from "../../storage/db.js";
 import { getAIConfig, testAIConnection } from "../../services/aiService.js";
+import { DEFAULT_AI_PERSONA_PROMPT } from "../../services/contextBuilder.js";
 import { validateBody } from "../../middleware/validate.js";
 import { adminAIConfigSchema, adminAIConfigTestSchema } from "../../validation/schemas.js";
 import type { AuthRequest } from "../../middleware/auth.js";
@@ -11,17 +12,44 @@ export function createAdminAIConfigRouter() {
   router.get("/ai-config", (_req, res) => {
     try {
       const config = getAIConfig();
-      const maskedKey = config.apiKey
-        ? config.apiKey.length > 8
-          ? `${config.apiKey.slice(0, 4)}****${config.apiKey.slice(-4)}`
-          : "********"
-        : "";
+      const formatMasked = (key?: string) =>
+        key ? (key.length > 8 ? `${key.slice(0, 4)}****${key.slice(-4)}` : "********") : "";
+
       res.json({
-        maskedKey,
+        maskedKey: formatMasked(config.apiKey),
         hasApiKey: !!config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model,
         visionModel: config.visionModel,
+        asrModel: config.asrModel,
+
+        chat: {
+          maskedKey: formatMasked(config.chat.apiKey),
+          hasApiKey: !!config.chat.apiKey,
+          baseUrl: config.chat.baseUrl,
+          model: config.chat.model,
+          isCustomKey: !!getSystemSetting("AI_CHAT_API_KEY"),
+          isCustomUrl: !!getSystemSetting("AI_CHAT_BASE_URL"),
+        },
+        vision: {
+          maskedKey: formatMasked(config.vision.apiKey),
+          hasApiKey: !!config.vision.apiKey,
+          baseUrl: config.vision.baseUrl,
+          model: config.vision.model,
+          isCustomKey: !!getSystemSetting("AI_VISION_API_KEY"),
+          isCustomUrl: !!getSystemSetting("AI_VISION_BASE_URL"),
+        },
+        asr: {
+          maskedKey: formatMasked(config.asr.apiKey),
+          hasApiKey: !!config.asr.apiKey,
+          baseUrl: config.asr.baseUrl,
+          model: config.asr.model,
+          isCustomKey: !!getSystemSetting("AI_ASR_API_KEY"),
+          isCustomUrl: !!getSystemSetting("AI_ASR_BASE_URL"),
+        },
+
+        systemPrompt: getSystemSetting("AI_SYSTEM_PROMPT").trim() || DEFAULT_AI_PERSONA_PROMPT,
+        isSystemPromptCustomized: !!getSystemSetting("AI_SYSTEM_PROMPT").trim(),
         isConfiguredFromDB: !!getSystemSetting("AI_API_KEY"),
       });
     } catch {
@@ -31,11 +59,35 @@ export function createAdminAIConfigRouter() {
 
   router.put("/ai-config", validateBody(adminAIConfigSchema), (req: AuthRequest, res) => {
     try {
-      const { apiKey, baseUrl, model, visionModel } = req.body;
+      const {
+        apiKey, baseUrl, model, visionModel, asrModel,
+        chatApiKey, chatBaseUrl, chatModel,
+        visionApiKey, visionBaseUrl,
+        asrApiKey, asrBaseUrl,
+        systemPrompt,
+      } = req.body;
+
       if (typeof apiKey === "string" && apiKey.trim()) setSystemSetting("AI_API_KEY", apiKey.trim());
       if (baseUrl !== undefined) setSystemSetting("AI_BASE_URL", baseUrl.trim());
       if (model !== undefined) setSystemSetting("AI_MODEL", model.trim());
       if (visionModel !== undefined) setSystemSetting("AI_VISION_MODEL", visionModel.trim());
+      if (asrModel !== undefined) setSystemSetting("AI_ASR_MODEL", asrModel.trim());
+
+      if (typeof chatApiKey === "string") setSystemSetting("AI_CHAT_API_KEY", chatApiKey.trim());
+      if (chatBaseUrl !== undefined) setSystemSetting("AI_CHAT_BASE_URL", chatBaseUrl.trim());
+      if (chatModel !== undefined) {
+        setSystemSetting("AI_CHAT_MODEL", chatModel.trim());
+        setSystemSetting("AI_MODEL", chatModel.trim());
+      }
+
+      if (typeof visionApiKey === "string") setSystemSetting("AI_VISION_API_KEY", visionApiKey.trim());
+      if (visionBaseUrl !== undefined) setSystemSetting("AI_VISION_BASE_URL", visionBaseUrl.trim());
+
+      if (typeof asrApiKey === "string") setSystemSetting("AI_ASR_API_KEY", asrApiKey.trim());
+      if (asrBaseUrl !== undefined) setSystemSetting("AI_ASR_BASE_URL", asrBaseUrl.trim());
+
+      if (systemPrompt !== undefined) setSystemSetting("AI_SYSTEM_PROMPT", systemPrompt.trim());
+
       if (req.userId) {
         logAdminAction({
           adminUserId: req.userId,
@@ -48,6 +100,8 @@ export function createAdminAIConfigRouter() {
             baseUrlChanged: baseUrl !== undefined,
             modelChanged: model !== undefined,
             visionModelChanged: visionModel !== undefined,
+            asrModelChanged: asrModel !== undefined,
+            systemPromptChanged: systemPrompt !== undefined,
           },
           ipAddress: req.ip,
           userAgent: req.get("user-agent"),

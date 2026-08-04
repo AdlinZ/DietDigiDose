@@ -14,7 +14,7 @@ const nutrition = z.number().finite().min(0).max(100_000).nullable().optional();
 export const registerSchema = z.object({
   identifier: trimmedString(1, 254, "邮箱或手机号"),
   password: z.string()
-    .min(12, "密码长度不能少于 12 位")
+    .min(6, "密码长度不能少于 6 位")
     .max(128, "密码不能超过 128 位")
     .regex(/[A-Za-z]/, "密码必须包含字母")
     .regex(/\d/, "密码必须包含数字"),
@@ -32,7 +32,7 @@ export const loginSchema = z.object({
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
   newPassword: z.string()
-    .min(12, "新密码长度不能少于 12 位")
+    .min(6, "新密码长度不能少于 6 位")
     .max(128, "新密码不能超过 128 位")
     .regex(/[A-Za-z]/, "新密码必须包含字母")
     .regex(/\d/, "新密码必须包含数字"),
@@ -48,6 +48,22 @@ export const profileSchema = z.object({
   bio: z.string().trim().max(500, "个人简介不能超过 500 个字符").nullable().optional(),
   daily_calories_target: z.number().int().min(500).max(10_000).nullable().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个需要更新的字段");
+
+export const notificationPreferencesSchema = z.object({
+  expiring_alert: z.boolean(),
+  meal_reminder: z.boolean(),
+  water_reminder: z.boolean(),
+}).strict();
+
+export const pushDeviceSchema = z.object({
+  expo_push_token: z.string().trim().regex(/^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/, "无效的 Expo Push Token"),
+  platform: z.enum(["ios", "android"]),
+}).strict();
+
+export const notificationCampaignSchema = z.object({
+  title: trimmedString(1, 80, "通知标题"),
+  body: trimmedString(1, 500, "通知内容"),
+}).strict();
 
 export const inventoryCreateSchema = z.object({
   food_name: trimmedString(1, 100, "食材名称"),
@@ -165,14 +181,43 @@ const imagePayload = z.string().trim().min(1, "缺少图片数据").max(7_500_00
   (value) => !value.startsWith("data:") || /^data:image\/(jpeg|png|webp|heic|heif);base64,/i.test(value),
   "只支持 JPEG、PNG、WebP 或 HEIC 图片",
 );
-export const aiChatSchema = z.object({
-  messages: z.array(z.object({
-    role: z.enum(["user", "assistant"]),
-    content: z.string().min(1).max(12_000),
-  }).strict()).max(50).optional(),
-  prompt: z.string().trim().min(1).max(12_000).optional(),
-  sessionId: z.string().trim().max(120).optional(),
-}).strict().refine((value) => value.prompt || value.messages?.length, "必须提供 prompt 或 messages");
+const aiChatMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().min(1).max(12_000),
+}).strict();
+
+// 对话历史保存在客户端，旧版本或损坏的缓存不应阻止一条新的有效提问。
+// 此处只清洗 AI 上下文，不降低其他业务接口的严格校验。
+const normalizeAIChatPayload = (input: unknown) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const raw = input as Record<string, unknown>;
+  const messages = Array.isArray(raw.messages)
+    ? raw.messages.flatMap((message) => {
+      if (!message || typeof message !== "object" || Array.isArray(message)) return [];
+      const item = message as Record<string, unknown>;
+      if ((item.role !== "user" && item.role !== "assistant") || typeof item.content !== "string") return [];
+      const content = item.content.trim().slice(0, 12_000);
+      return content ? [{ role: item.role, content }] : [];
+    }).slice(-50)
+    : [];
+  const prompt = typeof raw.prompt === "string" ? raw.prompt.trim().slice(0, 12_000) : undefined;
+  const sessionId = typeof raw.sessionId === "string" ? raw.sessionId.trim().slice(0, 120) : undefined;
+  return {
+    ...(messages.length ? { messages } : {}),
+    ...(prompt ? { prompt } : {}),
+    ...(sessionId ? { sessionId } : {}),
+  };
+};
+
+export const aiChatSchema = z.preprocess(normalizeAIChatPayload, z.object({
+  messages: z.array(aiChatMessageSchema).max(50).optional(),
+  prompt: z.string().min(1).max(12_000).optional(),
+  sessionId: z.string().max(120).optional(),
+}).strict().refine((value) => value.prompt || value.messages?.length, "必须提供 prompt 或 messages"));
+
+export const aiWriteConfirmationCommitSchema = z.object({
+  idempotencyKey: z.string().trim().min(16, "幂等键格式无效").max(200, "幂等键过长"),
+}).strict();
 
 export const aiHomeRecommendationsSchema = z.object({
   period: z.string().trim().max(40).optional(),
@@ -209,8 +254,25 @@ export const kitchenwareSchema = z.object({
 
 export const adminRoleSchema = z.object({ role: z.enum(["user", "admin"]) }).strict();
 export const adminExpertSchema = z.object({ is_verified_expert: z.boolean() }).strict();
+export const adminUserStatusSchema = z.object({ is_disabled: z.boolean() }).strict();
+export const adminUserCredentialsSchema = z.object({
+  identifier: z.string().trim().min(1, "邮箱或手机号不能为空").max(254, "邮箱或手机号不能超过 254 个字符").optional(),
+  newPassword: z.string()
+    .min(6, "新密码长度不能少于 6 位")
+    .max(128, "新密码不能超过 128 位")
+    .regex(/[A-Za-z]/, "新密码必须包含字母")
+    .regex(/\d/, "新密码必须包含数字")
+    .optional(),
+}).strict().refine((value) => value.identifier !== undefined || value.newPassword !== undefined, "至少提供一个需要更新的字段");
 export const adminKitchenwareStatusSchema = z.object({
   status: z.enum(["常用", "良好", "需保养", "维修中", "闲置"]),
+}).strict();
+export const adminKitchenwareCatalogSchema = z.object({
+  name: trimmedString(1, 80, "厨具名称"),
+  category: z.enum(["小家电", "烹饪锅具", "刀具餐具", "烘焙工具", "其他"]),
+  aliases: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+  cooking_methods: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  care_note: z.string().trim().max(300).default(""),
 }).strict();
 export const adminRecipeRejectSchema = z.object({ reason: trimmedString(2, 300, "驳回原因") }).strict();
 export const adminEventSchema = z.object({
@@ -229,14 +291,32 @@ export const adminIngredientSchema = customFoodSchema.extend({
   category: z.string().trim().max(80).nullable().optional(),
   source: z.string().trim().min(1).max(80).default("official"),
 }).strict();
+const optionalUrlSchema = z.string().trim().max(2000).optional().refine(
+  (val) => !val || /^https?:\/\/\S+/i.test(val),
+  "请输入包含 http:// 或 https:// 的有效接口地址 (Base URL)"
+);
+
 export const adminAIConfigSchema = z.object({
   apiKey: z.string().trim().max(1000).optional(),
-  baseUrl: z.string().trim().url().max(2000).optional(),
+  baseUrl: optionalUrlSchema,
   model: z.string().trim().min(1).max(200).optional(),
   visionModel: z.string().trim().min(1).max(200).optional(),
+  asrModel: z.string().trim().min(1).max(200).optional(),
+
+  chatApiKey: z.string().trim().max(1000).optional(),
+  chatBaseUrl: optionalUrlSchema,
+  chatModel: z.string().trim().min(1).max(200).optional(),
+
+  visionApiKey: z.string().trim().max(1000).optional(),
+  visionBaseUrl: optionalUrlSchema,
+
+  asrApiKey: z.string().trim().max(1000).optional(),
+  asrBaseUrl: optionalUrlSchema,
+
+  systemPrompt: z.string().trim().min(20, "人设提示词至少需要 20 个字符").max(12_000, "人设提示词不能超过 12000 个字符").optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个配置字段");
 export const adminAIConfigTestSchema = z.object({
   apiKey: z.string().trim().max(1000).optional(),
-  baseUrl: z.string().trim().url().max(2000).optional(),
+  baseUrl: optionalUrlSchema,
   model: z.string().trim().min(1).max(200).optional(),
 }).strict();

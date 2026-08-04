@@ -117,6 +117,22 @@ describe("API security baseline", () => {
     assert.ok((result.body as JsonObject).token);
   });
 
+  test("disabled accounts cannot log in or use an existing token", async () => {
+    const account = await register("disabled-account@example.com");
+    db.prepare("UPDATE users SET is_disabled = 1 WHERE id = ?").run(account.user.id);
+
+    const existingSession = await api("/api/v1/auth/me", { token: account.token });
+    assert.equal(existingSession.response.status, 403);
+    assert.equal((existingSession.body as JsonObject).code, "ACCOUNT_DISABLED");
+
+    const login = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "disabled-account@example.com", password: "Password1234" }),
+    });
+    assert.equal(login.response.status, 403);
+    assert.equal((login.body as JsonObject).code, "ACCOUNT_DISABLED");
+  });
+
   test("login failures are rate limited", async () => {
     const body = JSON.stringify({ identifier: "rate-limit@example.com", password: "WrongPassword123" });
     for (let index = 0; index < 5; index += 1) {
@@ -195,6 +211,34 @@ describe("new user MVP journey", () => {
     assert.equal(progress.response.status, 200);
     assert.equal((progress.body as JsonObject[]).length, 1);
     assert.equal((progress.body as JsonObject[])[0].food_name, selectedRecipe.title);
+  });
+});
+
+describe("notification preferences", () => {
+  test("persists preferences and registers an Expo device for the signed-in user", async () => {
+    const account = await register("notifications@example.com");
+    const token = account.token as string;
+    const initial = await api("/api/v1/notifications/preferences", { token });
+    assert.equal(initial.response.status, 200);
+    assert.deepEqual(initial.body, { expiring_alert: true, meal_reminder: true, water_reminder: true });
+
+    const updated = await api("/api/v1/notifications/preferences", {
+      method: "PUT",
+      token,
+      body: JSON.stringify({ expiring_alert: true, meal_reminder: false, water_reminder: false }),
+    });
+    assert.equal(updated.response.status, 200);
+
+    const device = await api("/api/v1/notifications/device", {
+      method: "PUT",
+      token,
+      body: JSON.stringify({ expo_push_token: "ExpoPushToken[notification-test-token]", platform: "ios" }),
+    });
+    assert.equal(device.response.status, 204);
+    const stored = db.prepare("SELECT user_id, is_active FROM push_devices WHERE expo_push_token = ?")
+      .get("ExpoPushToken[notification-test-token]") as { user_id: number; is_active: number };
+    assert.equal(stored.user_id, account.user.id);
+    assert.equal(stored.is_active, 1);
   });
 });
 
@@ -439,6 +483,43 @@ describe("core business authorization", () => {
 
     const visible = await api(`/api/v1/recipes/${recipeId}`);
     assert.equal(visible.response.status, 200);
+  });
+
+  test("admins can update a regular user's login identifier and reset their password", async () => {
+    const account = await register("credentials-before@example.com");
+    db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+    const adminLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+    });
+    assert.equal(adminLogin.response.status, 200);
+    const adminToken = (adminLogin.body as JsonObject).token;
+
+    const updated = await api(`/api/v1/admin/users/${account.user.id}/credentials`, {
+      method: "PUT",
+      token: adminToken,
+      body: JSON.stringify({ identifier: "credentials-after@example.com", newPassword: "ResetPassword1234" }),
+    });
+    assert.equal(updated.response.status, 200);
+
+    const oldLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "credentials-before@example.com", password: "Password1234" }),
+    });
+    assert.equal(oldLogin.response.status, 401);
+    const newLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "credentials-after@example.com", password: "ResetPassword1234" }),
+    });
+    assert.equal(newLogin.response.status, 200);
+
+    const adminUser = db.prepare("SELECT id FROM users WHERE username = 'admin'").get() as { id: number };
+    const adminUpdate = await api(`/api/v1/admin/users/${adminUser.id}/credentials`, {
+      method: "PUT",
+      token: adminToken,
+      body: JSON.stringify({ newPassword: "OtherAdminPassword123" }),
+    });
+    assert.equal(adminUpdate.response.status, 403);
   });
 
   test("AI transcription requires authentication and validates MIME type before external calls", async () => {

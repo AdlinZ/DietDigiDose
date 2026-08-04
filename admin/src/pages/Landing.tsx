@@ -1,448 +1,140 @@
-import { useState } from 'react';
 import { Link } from 'react-router';
 import logoUrl from '../../../client/assets/logo.png';
 import {
-  Sparkles,
-  Camera,
-  Bot,
-  Box,
-  BookOpen,
   ArrowRight,
-  Apple,
-  Flame,
-  Lock,
+  Bot,
+  Boxes,
+  Camera,
+  Check,
+  ChevronRight,
+  CirclePlay,
+  CookingPot,
+  LockKeyhole,
+  Menu,
+  ScanLine,
+  ShieldCheck,
+  Sparkles,
+  Utensils,
 } from 'lucide-react';
 
+const Github = ({ size = 15 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
+    <path d="M9 18c-4.51 2-5-2-7-2" />
+  </svg>
+);
+
+const features = [
+  { icon: ScanLine, title: '看见一餐的营养', description: '拍下餐盘，识别食物并整理热量与三大营养素。' },
+  { icon: Bot, title: '让 AI 知道你的厨房', description: '结合库存、目标与可用厨具，给出真正做得出来的建议。' },
+  { icon: Boxes, title: '让食材不再被遗忘', description: '把食材、保质期与日常饮食放进一个清晰的工作流。' },
+];
+
+const steps = [
+  ['01', '记录你的食材与习惯', '快速录入库存、健康目标与常用厨具。'],
+  ['02', '获取可执行的建议', 'AI 优先匹配现有食材和设备，不止给一张漂亮食谱。'],
+  ['03', '把每一天变成反馈', '从一餐到一周，看见自己的营养节奏与变化。'],
+];
+
 export default function Landing() {
-  // AI Interactive Demo state
-  const [demoMode, setDemoMode] = useState<'vision' | 'chef'>('vision');
-  const [selectedFood, setSelectedFood] = useState('香煎三文鱼牛油果沙拉');
-  const [chefQuery, setChefQuery] = useState('我今晚想吃高蛋白低碳水晚餐，推荐一个做法？');
-
-  const foodDemos = [
-    {
-      name: '香煎三文鱼牛油果沙拉',
-      calories: 420,
-      carbs: 12,
-      protein: 34,
-      fat: 26,
-      tags: ['减脂推荐', '优质脂肪', '高蛋白'],
-      img: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80',
-    },
-    {
-      name: '蒜香黑椒嫩牛肉粒',
-      calories: 380,
-      carbs: 8,
-      protein: 42,
-      fat: 18,
-      tags: ['增肌必备', '低碳水'],
-      img: 'https://images.unsplash.com/photo-1600891964599-f61ba0e24092?auto=format&fit=crop&w=600&q=80',
-    },
-    {
-      name: '彩椒藜麦鸡胸肉便当',
-      calories: 310,
-      carbs: 35,
-      protein: 32,
-      fat: 6,
-      tags: ['膳食纤维', '慢碳低GI'],
-      img: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=600&q=80',
-    },
-  ];
-
-  const currentFoodObj = foodDemos.find((f) => f.name === selectedFood) || foodDemos[0];
-
   return (
-    <div className="min-h-screen bg-[#FDF8F0] text-[#3D3229] selection:bg-[#2D6A4F] selection:text-white font-sans">
-      {/* 顶部导航栏 */}
-      <header className="sticky top-0 z-40 bg-[#FDF8F0]/80 backdrop-blur-md border-b border-[#2D6A4F]/10">
-        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <img src={logoUrl} alt="食光烙记" className="h-11 w-11 object-contain" />
+    <main className="min-h-screen overflow-hidden bg-[#FCFBF7] text-[#21332A] selection:bg-[#2D6A4F] selection:text-white">
+      <header className="sticky top-0 z-40 border-b border-[#DDE8DF]/80 bg-[#FCFBF7]/85 backdrop-blur-xl">
+        <div className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-5 lg:px-8">
+          <Link to="/" className="flex items-center gap-3">
+            <img src={logoUrl} alt="食光烙记" className="h-10 w-10 object-contain" />
             <div>
-              <span className="font-extrabold text-xl tracking-tight text-[#2D6A4F]">食光烙记</span>
-              <span className="text-xs text-[#8B7D6B] block -mt-1 font-medium">Dietdigidose AI</span>
+              <p className="text-base font-extrabold tracking-tight text-[#215E43]">食光烙记</p>
+              <p className="text-[10px] font-semibold tracking-[0.12em] text-[#7D8D82]">DIETDIGIDOSE</p>
             </div>
-          </div>
+          </Link>
 
-          <nav className="hidden md:flex items-center space-x-8 text-sm font-semibold text-[#3D3229]/80">
-            <a href="#features" className="hover:text-[#2D6A4F] transition-colors">
-              核心功能
-            </a>
-            <a href="#ai-demo" className="hover:text-[#2D6A4F] transition-colors">
-              AI 体验演示
-            </a>
-            <a href="#metrics" className="hover:text-[#2D6A4F] transition-colors">
-              产品特色
-            </a>
-            <a href="#download" className="hover:text-[#2D6A4F] transition-colors">
-              立即体验
-            </a>
+          <nav className="hidden items-center gap-7 text-sm font-medium text-[#617267] md:flex">
+            <a href="#product" className="transition-colors hover:text-[#215E43]">产品能力</a>
+            <a href="#how-it-works" className="transition-colors hover:text-[#215E43]">使用方式</a>
+            <a href="#beta" className="transition-colors hover:text-[#215E43]">内测计划</a>
+            <a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 transition-colors hover:text-[#215E43]"><Github size={15} /> GitHub</a>
           </nav>
 
-          <div className="flex items-center space-x-3">
-            <Link
-              to="/login"
-              className="px-5 py-2.5 rounded-2xl bg-white border border-[#2D6A4F]/20 text-[#2D6A4F] hover:bg-[#2D6A4F]/5 text-sm font-bold transition-all shadow-sm flex items-center gap-1.5"
-            >
-              <Lock size={15} />
-              <span>管理后台</span>
-            </Link>
+          <div className="flex items-center gap-2">
+            <Link to="/login" className="hidden rounded-xl px-4 py-2 text-sm font-semibold text-[#446154] transition-colors hover:bg-[#EEF4EE] sm:block">管理后台</Link>
+            <a href="#beta" className="inline-flex items-center gap-2 rounded-xl bg-[#215E43] px-4 py-2.5 text-sm font-bold text-white shadow-[0_8px_20px_rgba(33,94,67,0.18)] transition hover:-translate-y-0.5 hover:bg-[#184D36]">进入内测 <ArrowRight size={15} /></a>
+            <Menu className="ml-1 h-5 w-5 text-[#476053] md:hidden" />
           </div>
         </div>
       </header>
 
-      {/* Hero 视效区 */}
-      <section className="relative pt-12 pb-24 overflow-hidden">
-        {/* 背景光辉渐变 */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-tr from-[#2D6A4F]/20 via-[#D4A276]/30 to-transparent rounded-full blur-3xl pointer-events-none -z-10" />
-
-        <div className="max-w-7xl mx-auto px-6 text-center">
-          <div className="inline-flex items-center space-x-2 px-4 py-2 rounded-full bg-[#2D6A4F]/10 border border-[#2D6A4F]/20 text-[#2D6A4F] text-xs font-bold mb-6 animate-pulse">
-            <Sparkles size={14} />
-            <span>AI 驱动的下一代智能膳食与健康管家</span>
-          </div>
-
-          <h1 className="text-4xl md:text-6xl font-extrabold text-[#3D3229] leading-tight max-w-4xl mx-auto tracking-tight">
-            用 AI 烙记你的食光 <br />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#2D6A4F] via-[#40916C] to-[#D4A276]">
-              精细管理每一卡路里
-            </span>
-          </h1>
-
-          <p className="mt-6 text-lg md:text-xl text-[#8B7D6B] max-w-2xl mx-auto font-medium leading-relaxed">
-            融合多模态 Vision 识别与营养大模型，拍照自动估热量、智能管理冰箱食材保质期，打造属于你的专属 AI 营养烹饪导师。
-          </p>
-
-          <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-            <a
-              href="#ai-demo"
-              className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-[#2D6A4F] text-white hover:bg-[#1b4332] text-base font-bold transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 flex items-center justify-center space-x-2"
-            >
-              <span>在线体验 AI 演示</span>
-              <ArrowRight size={18} />
-            </a>
-            <Link
-              to="/login"
-              className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-white border border-[#2D6A4F]/20 text-[#3D3229] hover:bg-gray-50 text-base font-bold transition-all shadow-sm flex items-center justify-center space-x-2"
-            >
-              <Lock size={18} className="text-[#2D6A4F]" />
-              <span>进入管理控制台</span>
-            </Link>
-          </div>
-
-          {/* 核心体验预告卡片组 */}
-          <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto text-left">
-            <div className="p-6 rounded-[28px] bg-white/80 backdrop-blur-sm border border-[#2D6A4F]/10 shadow-sm hover:shadow-md transition-all">
-              <div className="w-12 h-12 rounded-2xl bg-[#2D6A4F]/10 text-[#2D6A4F] flex items-center justify-center mb-4">
-                <Camera size={24} />
-              </div>
-              <h3 className="font-bold text-lg text-[#3D3229]">拍照识菜估卡</h3>
-              <p className="text-sm text-[#8B7D6B] mt-2 leading-relaxed">
-                无需手动搜算，对着餐盘拍一张照片，视觉大模型瞬间识别食材种类并精准估算三大营养素。
-              </p>
+      <section className="relative">
+        <div className="pointer-events-none absolute left-1/2 top-0 h-[560px] w-[900px] -translate-x-1/2 rounded-full bg-[radial-gradient(ellipse_at_center,rgba(190,220,196,0.54),rgba(252,251,247,0)_68%)]" />
+        <div className="relative mx-auto grid max-w-7xl items-center gap-14 px-5 pb-20 pt-20 lg:grid-cols-[1.02fr_.98fr] lg:px-8 lg:pb-28 lg:pt-28">
+          <div className="max-w-2xl">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#BED8C4] bg-[#F1F8F1] px-3 py-1.5 text-xs font-bold text-[#215E43]">
+              <Sparkles size={13} /> 现已开放小范围内测
             </div>
-
-            <div className="p-6 rounded-[28px] bg-white/80 backdrop-blur-sm border border-[#2D6A4F]/10 shadow-sm hover:shadow-md transition-all">
-              <div className="w-12 h-12 rounded-2xl bg-[#D4A276]/20 text-[#D4A276] flex items-center justify-center mb-4">
-                <Bot size={24} />
-              </div>
-              <h3 className="font-bold text-lg text-[#3D3229]">AI 营养大厨助手</h3>
-              <p className="text-sm text-[#8B7D6B] mt-2 leading-relaxed">
-                输入现有食材，AI 大厨即刻为你量身定制减脂/增肌美味菜谱，语音步骤指导轻松下厨。
-              </p>
-            </div>
-
-            <div className="p-6 rounded-[28px] bg-white/80 backdrop-blur-sm border border-[#2D6A4F]/10 shadow-sm hover:shadow-md transition-all">
-              <div className="w-12 h-12 rounded-2xl bg-purple-100 text-purple-600 flex items-center justify-center mb-4">
-                <Box size={24} />
-              </div>
-              <h3 className="font-bold text-lg text-[#3D3229]">冰箱智能保质期</h3>
-              <p className="text-sm text-[#8B7D6B] mt-2 leading-relaxed">
-                购买小票自动拍照入库，系统智能跟踪食材保质期限，在临期前温馨提醒，零食物浪费。
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* AI 交互演示区域 (Interactive AI Demo Widget) */}
-      <section id="ai-demo" className="py-20 bg-white border-y border-[#2D6A4F]/10">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="text-center max-w-3xl mx-auto mb-12">
-            <span className="text-xs font-bold uppercase tracking-widest text-[#2D6A4F] bg-[#2D6A4F]/10 px-3 py-1 rounded-full">
-              INTERACTIVE DEMO
-            </span>
-            <h2 className="text-3xl md:text-4xl font-extrabold text-[#3D3229] mt-3">
-              体验食光烙记 AI 强大算力
-            </h2>
-            <p className="text-[#8B7D6B] mt-2 font-medium">
-              现场交互演示：切换演示模式，亲感受多模态识图与 AI 大厨的实时分析效果。
+            <h1 className="mt-7 text-[42px] font-extrabold leading-[1.11] tracking-[-0.055em] text-[#1F3127] sm:text-6xl lg:text-[66px]">
+              好好吃饭，<br />
+              <span className="text-[#2B7A58]">不必靠意志力。</span>
+            </h1>
+            <p className="mt-7 max-w-xl text-base leading-8 text-[#65766A] sm:text-lg">
+              食光烙记将食材库存、厨具、饮食记录和 AI 建议连接成一个轻量的日常系统，帮你在每一餐做出更适合自己的选择。
             </p>
-
-            {/* 模式切换器 */}
-            <div className="inline-flex p-1.5 rounded-2xl bg-[#FDF8F0] border border-[#2D6A4F]/10 mt-6 space-x-2">
-              <button
-                onClick={() => setDemoMode('vision')}
-                className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${
-                  demoMode === 'vision'
-                    ? 'bg-[#2D6A4F] text-white shadow-md'
-                    : 'text-[#8B7D6B] hover:text-[#3D3229]'
-                }`}
-              >
-                <Camera size={16} />
-                <span>拍照识图估热量</span>
-              </button>
-              <button
-                onClick={() => setDemoMode('chef')}
-                className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${
-                  demoMode === 'chef'
-                    ? 'bg-[#2D6A4F] text-white shadow-md'
-                    : 'text-[#8B7D6B] hover:text-[#3D3229]'
-                }`}
-              >
-                <Bot size={16} />
-                <span>AI 营养厨师问答</span>
-              </button>
+            <div className="mt-9 flex flex-col gap-3 sm:flex-row">
+              <a href="#beta" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#215E43] px-6 py-3.5 text-sm font-bold text-white shadow-[0_12px_28px_rgba(33,94,67,0.22)] transition hover:-translate-y-0.5 hover:bg-[#184D36]">申请加入内测 <ArrowRight size={17} /></a>
+              <a href="#product" className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#D7E4D9] bg-white px-6 py-3.5 text-sm font-bold text-[#365344] transition hover:border-[#97BCA1] hover:bg-[#F8FBF8]"><CirclePlay size={17} className="text-[#2B7A58]" /> 先看看如何工作</a>
+            </div>
+            <div className="mt-9 flex flex-wrap gap-x-5 gap-y-2 text-xs font-medium text-[#738177]">
+              {['饮食记录', '食材管理', 'AI 烹饪助手'].map((item) => <span key={item} className="flex items-center gap-1.5"><Check size={14} className="text-[#2B7A58]" />{item}</span>)}
             </div>
           </div>
 
-          {/* 演示交互卡片 */}
-          <div className="max-w-4xl mx-auto bg-[#FDF8F0] rounded-[32px] p-6 md:p-8 border border-[#2D6A4F]/15 shadow-xl">
-            {demoMode === 'vision' ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
-                {/* 模拟图片展示 */}
-                <div className="relative group rounded-2xl overflow-hidden shadow-lg border-2 border-white">
-                  <img
-                    src={currentFoodObj.img}
-                    alt={currentFoodObj.name}
-                    className="w-full h-64 object-cover group-hover:scale-105 transition-transform duration-500"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent flex items-end p-4">
-                    <div className="text-white">
-                      <div className="text-xs bg-[#2D6A4F] inline-block px-2.5 py-0.5 rounded-full font-bold mb-1">
-                        Vision AI 识别成功
-                      </div>
-                      <div className="font-bold text-lg">{currentFoodObj.name}</div>
-                    </div>
+          <div className="relative mx-auto w-full max-w-[590px]">
+            <div className="absolute -inset-6 rounded-[42px] bg-[#D8EBDD]/55 blur-2xl" />
+            <div className="relative overflow-hidden rounded-[28px] border border-[#D6E4D8] bg-[#FEFEFC] p-3 shadow-[0_30px_80px_rgba(43,79,57,0.16)] sm:p-4">
+              <div className="flex items-center gap-1.5 border-b border-[#E7EEE8] px-2 pb-3">
+                <span className="h-2 w-2 rounded-full bg-[#ED9E90]" /><span className="h-2 w-2 rounded-full bg-[#EBCB83]" /><span className="h-2 w-2 rounded-full bg-[#8CC6A0]" />
+                <div className="ml-3 rounded-md bg-[#F1F5F1] px-2.5 py-1 text-[9px] font-semibold text-[#809086]">今天的食光</div>
+              </div>
+              <div className="grid gap-3 p-2 pt-4 sm:grid-cols-[.82fr_1.18fr]">
+                <div className="rounded-2xl bg-[#F0F7F1] p-4">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#6B9177]">今日目标</p>
+                  <p className="mt-3 text-2xl font-extrabold tracking-tight text-[#214635]">1,280 <span className="text-xs font-semibold text-[#688174]">/ 1,800 kcal</span></p>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#D9E9DB]"><div className="h-full w-[71%] rounded-full bg-[#2B7A58]" /></div>
+                  <div className="mt-5 space-y-2.5">
+                    {[['蛋白质', '68g', 'bg-[#6CA6DC]'], ['碳水', '134g', 'bg-[#E6B76A]'], ['脂肪', '42g', 'bg-[#D98978]']].map(([label, value, color]) => <div className="flex items-center justify-between text-[10px]" key={label}><span className="flex items-center gap-1.5 text-[#6E7E73]"><i className={`h-1.5 w-1.5 rounded-full ${color}`} />{label}</span><b className="text-[#395342]">{value}</b></div>)}
                   </div>
                 </div>
-
-                {/* 识别分析输出 */}
-                <div className="space-y-5">
-                  <div className="text-xs font-bold text-[#8B7D6B]">示例对比（点击切换样本）：</div>
-                  <div className="flex flex-wrap gap-2">
-                    {foodDemos.map((f) => (
-                      <button
-                        key={f.name}
-                        onClick={() => setSelectedFood(f.name)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                          selectedFood === f.name
-                            ? 'bg-[#2D6A4F] text-white shadow-sm'
-                            : 'bg-white text-[#3D3229] border border-gray-200 hover:border-[#2D6A4F]'
-                        }`}
-                      >
-                        {f.name}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="bg-white p-5 rounded-2xl border border-[#2D6A4F]/10 space-y-4">
-                    <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                      <span className="text-sm font-bold text-[#3D3229] flex items-center gap-1.5">
-                        <Flame size={18} className="text-orange-500" />
-                        估计总热量
-                      </span>
-                      <span className="text-2xl font-extrabold text-[#2D6A4F]">
-                        {currentFoodObj.calories} <span className="text-xs text-[#8B7D6B]">kcal</span>
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="p-2.5 bg-green-50 rounded-xl">
-                        <div className="text-[11px] text-gray-500">碳水</div>
-                        <div className="text-sm font-bold text-green-700">{currentFoodObj.carbs}g</div>
-                      </div>
-                      <div className="p-2.5 bg-[#2D6A4F]/10 rounded-xl">
-                        <div className="text-[11px] text-[#2D6A4F]">蛋白质</div>
-                        <div className="text-sm font-bold text-[#2D6A4F]">{currentFoodObj.protein}g</div>
-                      </div>
-                      <div className="p-2.5 bg-orange-50 rounded-xl">
-                        <div className="text-[11px] text-orange-600">脂肪</div>
-                        <div className="text-sm font-bold text-orange-700">{currentFoodObj.fat}g</div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {currentFoodObj.tags.map((t) => (
-                        <span key={t} className="text-[11px] font-bold bg-[#D4A276]/20 text-[#8B7D6B] px-2.5 py-0.5 rounded-full">
-                          #{t}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+                <div className="rounded-2xl border border-[#E6EDE7] bg-white p-4">
+                  <div className="flex items-center justify-between"><div className="flex items-center gap-2"><div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#E9F4EC]"><Bot size={14} className="text-[#2B7A58]" /></div><div><p className="text-[11px] font-extrabold text-[#294535]">今日晚餐建议</p><p className="text-[9px] text-[#809086]">基于你的库存与装备</p></div></div><span className="rounded-full bg-[#FFF3D9] px-2 py-1 text-[9px] font-bold text-[#B68230]">18 min</span></div>
+                  <div className="mt-4 rounded-xl bg-[#FAF7EF] p-3"><div className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#DFEFE3]"><Utensils size={17} className="text-[#2B7A58]" /></div><div><p className="text-xs font-extrabold text-[#334C3B]">菌菇鸡胸暖沙拉</p><p className="mt-1 text-[9px] text-[#77877C]">462 kcal · 蛋白质 38g</p></div></div></div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">{['鸡胸肉 ✓', '口蘑 ✓', '平底锅 ✓'].map((item) => <span key={item} className="rounded-md bg-[#F2F7F3] px-2 py-1 text-[9px] font-semibold text-[#4B7657]">{item}</span>)}</div>
+                  <button className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#215E43] py-2.5 text-[10px] font-bold text-white">查看做法 <ChevronRight size={13} /></button>
                 </div>
               </div>
-            ) : (
-              <div className="space-y-6">
-                <div className="bg-white p-4 rounded-2xl border border-gray-200 flex items-center gap-3">
-                  <Bot className="text-[#2D6A4F]" size={24} />
-                  <input
-                    type="text"
-                    value={chefQuery}
-                    onChange={(e) => setChefQuery(e.target.value)}
-                    className="flex-1 bg-transparent text-sm text-[#3D3229] font-medium outline-none"
-                    placeholder="输入你想咨询的做菜或饮食疑问..."
-                  />
-                  <button className="px-4 py-2 bg-[#2D6A4F] text-white text-xs font-bold rounded-xl hover:bg-[#1b4332]">
-                    询问大厨
-                  </button>
-                </div>
-
-                <div className="bg-white p-6 rounded-2xl border border-[#2D6A4F]/10 space-y-4">
-                  <div className="flex items-center space-x-2 text-xs font-bold text-[#2D6A4F]">
-                    <Sparkles size={16} />
-                    <span>AI 营养大厨建议：</span>
-                  </div>
-                  <p className="text-sm text-[#3D3229] leading-relaxed font-medium">
-                    推荐制作 **“香煎香草鸡胸肉配烤甜椒”**！鸡胸肉提供高达 38g 优质蛋白，搭配甜椒补充维生素 C。
-                    <br />
-                    **烹饪技巧**：先将鸡胸肉用少许橄榄油、黑胡椒、海盐腌制 10 分钟，热锅中火每面煎 4 分钟锁住肉汁，好吃不柴！
-                  </p>
-                  <div className="flex items-center justify-between text-xs text-[#8B7D6B] border-t border-gray-100 pt-3">
-                    <span>预测准备时间: 15分钟</span>
-                    <span>难度: 简单 ⭐⭐</span>
-                  </div>
-                </div>
-              </div>
-            )}
+              <div className="mx-2 mt-1 flex items-center justify-between rounded-xl border border-[#E8EFE9] px-3 py-2.5 text-[10px] text-[#67786C]"><span className="flex items-center gap-1.5"><Camera size={12} className="text-[#2B7A58]" />拍照记录这顿饭</span><span className="font-bold text-[#2B7A58]">开始识别</span></div>
+            </div>
+            <div className="absolute -bottom-5 -left-5 hidden rounded-2xl border border-[#E1ECE3] bg-white p-3.5 shadow-lg sm:block"><div className="flex items-center gap-2.5"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#FFF3DD]"><CookingPot size={16} className="text-[#B98031]" /></div><div><p className="text-[10px] font-bold text-[#334C3B]">装备匹配完成</p><p className="mt-0.5 text-[9px] text-[#7D8C82]">已有 3 件可用厨具</p></div></div></div>
           </div>
         </div>
       </section>
 
-      {/* 核心卖点网格 (Core Features) */}
-      <section id="features" className="py-24">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="text-center max-w-2xl mx-auto mb-16">
-            <h2 className="text-3xl md:text-4xl font-extrabold text-[#3D3229]">为什么选择食光烙记？</h2>
-            <p className="text-[#8B7D6B] mt-3 font-medium">
-              打造极致的用户体验，将复杂的营养学算法融入简单直观的生活习惯中。
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-            <div className="bg-white p-8 rounded-[32px] border border-[#2D6A4F]/10 shadow-sm hover:shadow-md transition-all space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-green-50 text-[#2D6A4F] flex items-center justify-center">
-                <Camera size={28} />
-              </div>
-              <h3 className="font-bold text-xl text-[#3D3229]">拍照秒识估算</h3>
-              <p className="text-sm text-[#8B7D6B] leading-relaxed font-medium">
-                业内领先的多模态 Vision 大模型，快速识别中西餐菜品与食物分量。
-              </p>
-            </div>
-
-            <div className="bg-white p-8 rounded-[32px] border border-[#2D6A4F]/10 shadow-sm hover:shadow-md transition-all space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
-                <Apple size={28} />
-              </div>
-              <h3 className="font-bold text-xl text-[#3D3229]">十万级营养库</h3>
-              <p className="text-sm text-[#8B7D6B] leading-relaxed font-medium">
-                整合中国食物成分表与 USDA 权威数据，涵盖热量、碳水、蛋白质及微量元素。
-              </p>
-            </div>
-
-            <div className="bg-white p-8 rounded-[32px] border border-[#2D6A4F]/10 shadow-sm hover:shadow-md transition-all space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center">
-                <Box size={28} />
-              </div>
-              <h3 className="font-bold text-xl text-[#3D3229]">智能小票入库</h3>
-              <p className="text-sm text-[#8B7D6B] leading-relaxed font-medium">
-                超市小票拍一张即可识别食材买入列表，保质期到期智能提醒，拒绝浪费。
-              </p>
-            </div>
-
-            <div className="bg-white p-8 rounded-[32px] border border-[#2D6A4F]/10 shadow-sm hover:shadow-md transition-all space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                <BookOpen size={28} />
-              </div>
-              <h3 className="font-bold text-xl text-[#3D3229]">社区食谱分享</h3>
-              <p className="text-sm text-[#8B7D6B] leading-relaxed font-medium">
-                发现同频健康食友，分享美味低卡食谱，互相打卡鼓励健康饮食。
-              </p>
-            </div>
+      <section id="product" className="border-y border-[#E5ECE5] bg-white py-20 sm:py-28">
+        <div className="mx-auto max-w-7xl px-5 lg:px-8">
+          <div className="max-w-2xl"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#2B7A58]">A calmer health workflow</p><h2 className="mt-4 text-3xl font-extrabold tracking-[-0.035em] text-[#21332A] sm:text-4xl">不是另一个打卡工具，<br />而是你的饮食操作系统。</h2></div>
+          <div className="mt-12 grid gap-4 md:grid-cols-3">
+            {features.map(({ icon: Icon, title, description }, index) => <article key={title} className={`group rounded-[24px] border p-6 transition duration-300 hover:-translate-y-1 hover:shadow-xl ${index === 1 ? 'border-[#2B7A58] bg-[#215E43] text-white shadow-[0_16px_35px_rgba(33,94,67,0.18)]' : 'border-[#E2EBE3] bg-[#FCFDFB] text-[#21332A]'}`}><div className={`flex h-11 w-11 items-center justify-center rounded-xl ${index === 1 ? 'bg-white/15 text-white' : 'bg-[#EAF4EC] text-[#2B7A58]'}`}><Icon size={20} /></div><h3 className="mt-8 text-lg font-extrabold">{title}</h3><p className={`mt-3 text-sm leading-6 ${index === 1 ? 'text-[#D3E6D7]' : 'text-[#6E7E73]'}`}>{description}</p><div className={`mt-8 flex items-center gap-1 text-xs font-bold ${index === 1 ? 'text-white' : 'text-[#2B7A58]'}`}>了解更多 <ArrowRight size={14} className="transition-transform group-hover:translate-x-1" /></div></article>)}
           </div>
         </div>
       </section>
 
-      {/* 数据与指标 (Metrics) */}
-      <section id="metrics" className="py-16 bg-[#2D6A4F] text-white">
-        <div className="max-w-7xl mx-auto px-6 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
-          <div>
-            <div className="text-4xl md:text-5xl font-black">100,000+</div>
-            <div className="text-xs md:text-sm font-medium opacity-80 mt-2">权威标准食材库数据</div>
-          </div>
-          <div>
-            <div className="text-4xl md:text-5xl font-black">99.2%</div>
-            <div className="text-xs md:text-sm font-medium opacity-80 mt-2">Vision 识菜高准确率</div>
-          </div>
-          <div>
-            <div className="text-4xl md:text-5xl font-black">&lt; 1 秒</div>
-            <div className="text-xs md:text-sm font-medium opacity-80 mt-2">AI 智能响应推理</div>
-          </div>
-          <div>
-            <div className="text-4xl md:text-5xl font-black">100%</div>
-            <div className="text-xs md:text-sm font-medium opacity-80 mt-2">支持自定义服务提供商</div>
-          </div>
-        </div>
+      <section id="how-it-works" className="bg-[#F4F8F3] py-20 sm:py-28">
+        <div className="mx-auto grid max-w-7xl gap-12 px-5 lg:grid-cols-[.82fr_1.18fr] lg:px-8"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#2B7A58]">How it works</p><h2 className="mt-4 text-3xl font-extrabold tracking-[-0.035em] text-[#21332A] sm:text-4xl">从“今天吃什么”，到可持续的日常。</h2><p className="mt-5 max-w-md text-sm leading-7 text-[#68796D]">少一些记录压力，多一点可用的反馈。每个模块都服务于下一顿更轻松的选择。</p></div><div className="divide-y divide-[#DCE7DE] border-y border-[#DCE7DE]">{steps.map(([number, title, description]) => <div key={number} className="grid grid-cols-[56px_1fr_auto] gap-3 py-6 sm:grid-cols-[72px_1fr_auto] sm:py-7"><span className="text-sm font-extrabold text-[#78A587]">{number}</span><div><h3 className="font-extrabold text-[#294535]">{title}</h3><p className="mt-2 text-sm leading-6 text-[#718175]">{description}</p></div><ChevronRight className="mt-1 h-5 w-5 text-[#97AA9B]" /></div>)}</div></div>
       </section>
 
-      {/* CTA 体验导流 */}
-      <section id="download" className="py-24 max-w-7xl mx-auto px-6">
-        <div className="bg-gradient-to-r from-[#2D6A4F] to-[#1b4332] rounded-[40px] p-10 md:p-16 text-white text-center relative overflow-hidden shadow-2xl">
-          <div className="max-w-3xl mx-auto space-y-6 relative z-10">
-            <h2 className="text-3xl md:text-5xl font-extrabold tracking-tight">
-              开启属于你的智能健康饮食之旅
-            </h2>
-            <p className="text-white/80 text-base md:text-lg max-w-xl mx-auto font-medium">
-              不管是想要控制卡路里、精准增肌减脂，还是管理冰箱食材，食光烙记都是你的最佳助手。
-            </p>
-            <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
-              <Link
-                to="/login"
-                className="px-8 py-4 rounded-2xl bg-white text-[#2D6A4F] hover:bg-gray-100 text-base font-bold transition-all shadow-lg flex items-center space-x-2"
-              >
-                <Lock size={18} />
-                <span>进入管理控制台</span>
-              </Link>
-            </div>
-          </div>
-        </div>
+      <section id="beta" className="px-5 py-20 sm:py-28">
+        <div className="mx-auto max-w-7xl overflow-hidden rounded-[32px] bg-[#215E43] px-6 py-12 text-center text-white shadow-[0_25px_60px_rgba(33,94,67,0.2)] sm:px-12 sm:py-16"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/12"><Sparkles size={21} /></div><h2 className="mt-6 text-3xl font-extrabold tracking-[-0.04em] sm:text-4xl">加入食光烙记内测</h2><p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-[#D5E7D8]">我们正在与第一批重视饮食、健康和生活效率的用户一起打磨产品。欢迎体验、提出问题，帮助它变得更好。</p><div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row"><a href="mailto:adlinzhang@gmail.com?subject=%E9%A3%9F%E5%85%89%E7%83%99%E8%AE%B0%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7" className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-extrabold text-[#215E43] transition hover:bg-[#EFF7F0]">申请内测名额 <ArrowRight size={16} /></a><Link to="/login" className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/10"><LockKeyhole size={15} /> 管理员登录</Link></div></div>
       </section>
 
-      {/* 页脚 */}
-      <footer className="bg-white border-t border-gray-100 py-12 text-[#8B7D6B] text-sm">
-        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-xl bg-[#2D6A4F] text-white flex items-center justify-center font-bold text-sm">
-              食
-            </div>
-            <span className="font-bold text-[#3D3229]">食光烙记 Dietdigidose</span>
-          </div>
-          <div className="flex items-center space-x-6 text-xs font-semibold">
-            <a href="#features" className="hover:text-[#2D6A4F]">
-              功能特色
-            </a>
-            <a href="#ai-demo" className="hover:text-[#2D6A4F]">
-              AI 演示
-            </a>
-            <Link to="/login" className="hover:text-[#2D6A4F]">
-              管理员登录
-            </Link>
-          </div>
-          <div className="text-xs">
-            © {new Date().getFullYear()} 食光烙记 (Dietdigidose). All rights reserved.
-          </div>
-        </div>
-      </footer>
-    </div>
+      <footer className="border-t border-[#E2EAE3] px-5 py-7"><div className="mx-auto flex max-w-7xl flex-col gap-3 text-xs text-[#7A897E] sm:flex-row sm:items-center sm:justify-between"><span>© 2026 食光烙记 · Dietdigidose</span><div className="flex items-center gap-5"><a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 font-semibold text-[#4F6D59] transition hover:text-[#215E43]"><Github size={13} /> GitHub 开源仓库</a><span className="flex items-center gap-1.5"><ShieldCheck size={13} className="text-[#2B7A58]" /> 内测环境 · 数据安全优先</span></div></div></footer>
+    </main>
   );
 }

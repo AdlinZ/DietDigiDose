@@ -34,6 +34,21 @@ import { aiApi, inventoryApi, kitchenwareApi, recipesApi } from "@/services/api"
 import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, Recipe, StorageLocation } from "./types";
 import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, normalizeDetectedFoods } from "./scan";
 
+const KITCHENWARE_STARTER_KITS = [
+  { name: "轻食减脂", items: ["空气炸锅", "平底锅", "电子秤", "玻璃保鲜盒"] },
+  { name: "中式家常", items: ["炒锅", "汤锅", "蒸锅", "菜刀", "砧板"] },
+  { name: "烘焙入门", items: ["烤箱", "烤盘", "蛋糕模具", "打蛋器", "硅胶刮刀"] },
+] as const;
+
+function catalogList(value: string) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function InventoryScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const noticeCardWidth = Math.max(windowWidth - 40, 280);
@@ -67,6 +82,8 @@ export default function InventoryScreen() {
   const [kwImageUrl, setKwImageUrl] = useState("");
   const [kwPurchaseDate, setKwPurchaseDate] = useState("");
   const [savingKitchenware, setSavingKitchenware] = useState(false);
+  const [selectedCatalogKitchenware, setSelectedCatalogKitchenware] = useState<KitchenwareCatalogItem | null>(null);
+  const [addingStarterKit, setAddingStarterKit] = useState<string | null>(null);
 
   const openKitchenwareModal = (item?: KitchenwareItem) => {
     setEditingKitchenware(item || null);
@@ -106,6 +123,46 @@ export default function InventoryScreen() {
     }
   };
 
+  const addCatalogKitchenware = async (item: KitchenwareCatalogItem) => {
+    if (kitchenware.some((owned) => owned.name === item.name)) {
+      Alert.alert("已在装备库", `你已录入【${item.name}】。`);
+      return;
+    }
+    try {
+      setSavingKitchenware(true);
+      await kitchenwareApi.create(authFetch, {
+        name: item.name, category: item.category, status: "良好", note: item.care_note || "", image_url: null, purchase_date: null,
+      });
+      setSelectedCatalogKitchenware(null);
+      await fetchData();
+      Alert.alert("已加入装备库", `已添加【${item.name}】，现在可用于食谱匹配和保养提醒。`);
+    } catch {
+      Alert.alert("添加失败", "网络异常，请稍后重试");
+    } finally {
+      setSavingKitchenware(false);
+    }
+  };
+
+  const addStarterKit = async (kit: typeof KITCHENWARE_STARTER_KITS[number]) => {
+    const targets = kitchenwareCatalog.filter((item) => kit.items.some((name) => name === item.name) && !kitchenware.some((owned) => owned.name === item.name));
+    if (!targets.length) {
+      Alert.alert("已配置完成", `「${kit.name}」套装中的厨具已都在你的装备库。`);
+      return;
+    }
+    try {
+      setAddingStarterKit(kit.name);
+      await Promise.all(targets.map((item) => kitchenwareApi.create(authFetch, {
+        name: item.name, category: item.category, status: "良好", note: item.care_note || "", image_url: null, purchase_date: null,
+      })));
+      await fetchData();
+      Alert.alert("套装已加入", `已将 ${targets.length} 件「${kit.name}」装备加入你的资产库。`);
+    } catch {
+      Alert.alert("添加失败", "部分厨具可能未保存，请刷新后重试。");
+    } finally {
+      setAddingStarterKit(null);
+    }
+  };
+
   // Inventory State
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
@@ -135,6 +192,14 @@ export default function InventoryScreen() {
   const [detectedFoods, setDetectedFoods] = useState<DetectedFood[]>([]);
   const [savingDetectedFoods, setSavingDetectedFoods] = useState(false);
   const [pendingScanJobId, setPendingScanJobId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isAuthenticated) return;
+    setModalVisible(false);
+    setBatchReviewVisible(false);
+    setKitchenwareModalVisible(false);
+    setSelectedCatalogKitchenware(null);
+  }, [isAuthenticated]);
 
   const suggestedDate = (days: number) => dateKeyAfterDays(days);
 
@@ -423,6 +488,13 @@ export default function InventoryScreen() {
   );
 
   const openAddModal = useCallback(() => {
+    if (!isAuthenticated) {
+      Alert.alert("登录后录入食材", "登录后才能保存和管理你的食材。", [
+        { text: "取消", style: "cancel" },
+        { text: "去登录", onPress: () => router.push("/login") },
+      ]);
+      return;
+    }
     setEditingItem(null);
     setFoodName("");
     setCategory("蔬菜");
@@ -432,7 +504,7 @@ export default function InventoryScreen() {
     setImageUrl("");
     setEntryMode("choose");
     setModalVisible(true);
-  }, []);
+  }, [isAuthenticated, router]);
 
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener("open-add-food", () => {
@@ -462,6 +534,14 @@ export default function InventoryScreen() {
   };
 
   const handleSaveItem = async () => {
+    if (!isAuthenticated) {
+      setModalVisible(false);
+      Alert.alert("请先登录", "登录后才能将食材保存到食材库。", [
+        { text: "取消", style: "cancel" },
+        { text: "去登录", onPress: () => router.push("/login") },
+      ]);
+      return;
+    }
     if (!foodName.trim()) {
       Alert.alert("提示", "请输入食材名称");
       return;
@@ -787,7 +867,7 @@ export default function InventoryScreen() {
                     className="bg-[#E9C46A] px-6 py-3 rounded-2xl shadow-sm active:opacity-90 flex-row items-center gap-1.5"
                   >
                     <FontAwesome6 name="wand-magic-sparkles" size={13} color="#3D3229" />
-                    <Text className="text-sm font-black text-[#3D3229]">Demo 账号体验</Text>
+                    <Text className="text-sm font-black text-[#3D3229]">登录后体验</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1437,6 +1517,28 @@ export default function InventoryScreen() {
               </View>
             </View>
 
+            <View className="mb-4 rounded-[22px] border border-[#EBE3D5] bg-white p-3.5">
+              <View className="flex-row items-center justify-between">
+                <View>
+                  <Text className="text-xs font-black text-[#3D3229]">一键配置厨房装备</Text>
+                  <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">从官方标准库选择，之后仍可单独编辑</Text>
+                </View>
+                <FontAwesome6 name="wand-magic-sparkles" size={15} color="#D4A276" />
+              </View>
+              <View className="mt-3">
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <View className="flex-row gap-2 pr-3">
+                  {KITCHENWARE_STARTER_KITS.map((kit) => (
+                    <TouchableOpacity key={kit.name} disabled={Boolean(addingStarterKit)} onPress={() => addStarterKit(kit)} className="rounded-xl border border-[#2D6A4F]/20 bg-[#E7F0EA] px-3 py-2 disabled:opacity-50">
+                      <Text className="text-[11px] font-black text-[#2D6A4F]">{addingStarterKit === kit.name ? "添加中…" : kit.name}</Text>
+                      <Text className="mt-0.5 text-[9px] text-[#6F6254]">{kit.items.join(" · ")}</Text>
+                    </TouchableOpacity>
+                  ))}
+                  </View>
+                </ScrollView>
+              </View>
+            </View>
+
             {/* 厨具分类 Selector + 录入新厨具按键 */}
             <View className="flex-row items-center justify-between mb-3">
               <View className="mr-2 flex-1">
@@ -1579,7 +1681,7 @@ export default function InventoryScreen() {
         )}
 
         {/* Inventory Add/Edit Modal */}
-        <Modal visible={modalVisible} animationType="slide" transparent>
+        <Modal visible={modalVisible && isAuthenticated} animationType="slide" transparent>
           <View className="flex-1 bg-black/40 justify-end">
             <View className="bg-white rounded-t-[32px] px-5 pt-5 pb-6 max-h-[90%]">
               <View className="flex-row items-center justify-between mb-4 border-b border-[#F5EFE6] pb-3">
@@ -1872,6 +1974,27 @@ export default function InventoryScreen() {
           </View>
         </Modal>
 
+        {/* Official kitchenware detail: separate catalog knowledge from a user's owned asset. */}
+        <Modal visible={Boolean(selectedCatalogKitchenware)} animationType="fade" transparent>
+          <View className="flex-1 items-center justify-center bg-black/40 p-5">
+            {selectedCatalogKitchenware ? (
+              <View className="w-full rounded-[28px] bg-white p-5">
+                <View className="flex-row items-start justify-between">
+                  <View className="flex-1 pr-3">
+                    <Text className="text-lg font-black text-[#3D3229]">{selectedCatalogKitchenware.name}</Text>
+                    <Text className="mt-1 text-xs font-bold text-[#2D6A4F]">官方标准库 · {selectedCatalogKitchenware.category}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setSelectedCatalogKitchenware(null)} className="p-1"><FontAwesome6 name="xmark" size={17} color="#8B7D6B" /></TouchableOpacity>
+                </View>
+                {catalogList(selectedCatalogKitchenware.aliases).length ? <View className="mt-4"><Text className="text-[10px] font-bold text-[#8B7D6B]">常用别名</Text><Text className="mt-1 text-xs text-[#3D3229]">{catalogList(selectedCatalogKitchenware.aliases).join("、")}</Text></View> : null}
+                <View className="mt-4"><Text className="text-[10px] font-bold text-[#8B7D6B]">适用方式</Text><Text className="mt-1 text-xs text-[#3D3229]">{catalogList(selectedCatalogKitchenware.cooking_methods).join("、") || "暂未标注"}</Text></View>
+                <View className="mt-4 rounded-2xl bg-[#F5EFE6] p-3"><Text className="text-[10px] font-bold text-[#8B7D6B]">官方保养提示</Text><Text className="mt-1 text-xs leading-5 text-[#3D3229]">{selectedCatalogKitchenware.care_note || "保持清洁干燥，按产品说明书进行保养。"}</Text></View>
+                <TouchableOpacity disabled={savingKitchenware} onPress={() => addCatalogKitchenware(selectedCatalogKitchenware)} className="mt-5 items-center rounded-2xl bg-[#2D6A4F] py-3.5 disabled:opacity-50"><Text className="text-sm font-black text-white">{savingKitchenware ? "添加中…" : kitchenware.some((item) => item.name === selectedCatalogKitchenware.name) ? "已在我的装备库" : "加入我的装备"}</Text></TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+        </Modal>
+
         {/* Kitchenware Add Modal */}
         <Modal visible={kitchenwareModalVisible} animationType="slide" transparent>
           <View className="flex-1 bg-black/40 justify-end">
@@ -1900,7 +2023,7 @@ export default function InventoryScreen() {
                       <View><ScrollView horizontal showsHorizontalScrollIndicator={false}>
                         <View className="flex-row gap-2 pr-4">
                           {kitchenwareCatalog.filter((item) => !kwName.trim() || item.name.includes(kwName.trim())).slice(0, 8).map((item) => (
-                            <TouchableOpacity key={item.id} onPress={() => { setKwName(item.name); setKwCategory(item.category); setKwNote((current) => current || item.care_note || ""); }} className="bg-[#2D6A4F]/10 border border-[#2D6A4F]/15 px-3 py-2 rounded-xl">
+                            <TouchableOpacity key={item.id} onPress={() => setSelectedCatalogKitchenware(item)} className="bg-[#2D6A4F]/10 border border-[#2D6A4F]/15 px-3 py-2 rounded-xl">
                               <Text className="text-xs font-bold text-[#2D6A4F]">{item.name}</Text>
                             </TouchableOpacity>
                           ))}

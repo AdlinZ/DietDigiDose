@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -15,15 +15,57 @@ import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth } from "@/contexts/AuthContext";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import { authApi } from "@/services/api";
+import { getExpoPushToken, syncLocalNotificationSchedules, type NotificationPreferences } from "@/utils/notifications";
 
 export default function SettingsScreen() {
   const router = useSafeRouter();
-  const { user, isAuthenticated, logout, updateProfile, deleteAccount } = useAuth();
+  const { user, token, isAuthenticated, logout, updateProfile, deleteAccount } = useAuth();
 
   // Notification Toggles
   const [expiringAlert, setExpiringAlert] = useState(true);
   const [mealReminder, setMealReminder] = useState(true);
   const [waterReminder, setWaterReminder] = useState(true);
+
+  useEffect(() => {
+    if (!token) return;
+    void authApi.notificationPreferences<NotificationPreferences>(token).then((preferences) => {
+      setExpiringAlert(preferences.expiring_alert);
+      setMealReminder(preferences.meal_reminder);
+      setWaterReminder(preferences.water_reminder);
+    }).catch(() => undefined);
+  }, [token]);
+
+  const updateNotificationPreference = async (key: keyof NotificationPreferences, value: boolean) => {
+    if (!token) {
+      Alert.alert("登录后开启提醒", "登录后可保存提醒偏好，并接收食材临期推送。");
+      return;
+    }
+    const previous = { expiring_alert: expiringAlert, meal_reminder: mealReminder, water_reminder: waterReminder };
+    const next = { ...previous, [key]: value };
+    setExpiringAlert(next.expiring_alert);
+    setMealReminder(next.meal_reminder);
+    setWaterReminder(next.water_reminder);
+    try {
+      const pushToken = value ? await getExpoPushToken() : null;
+      await authApi.updateNotificationPreferences<NotificationPreferences>(token, next);
+      if (pushToken && Platform.OS !== "web") {
+        const platform = Platform.OS === "android" ? "android" : "ios";
+        await authApi.registerPushDevice(token, { expo_push_token: pushToken, platform });
+      }
+      if (Platform.OS !== "web") {
+        await syncLocalNotificationSchedules(next);
+      }
+      if (value && Platform.OS !== "web" && !pushToken) {
+        Alert.alert("未获得通知权限", "系统通知未授权；你仍可稍后在系统设置中允许通知后再次开启提醒。");
+      }
+    } catch (error) {
+      setExpiringAlert(previous.expiring_alert);
+      setMealReminder(previous.meal_reminder);
+      setWaterReminder(previous.water_reminder);
+      Alert.alert("保存失败", error instanceof Error ? error.message : "提醒设置暂未保存，请稍后重试");
+    }
+  };
 
   // Modal State
   const [calorieModalOpen, setCalorieModalOpen] = useState(false);
@@ -164,7 +206,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={expiringAlert}
-                onValueChange={setExpiringAlert}
+                onValueChange={(value) => void updateNotificationPreference("expiring_alert", value)}
                 trackColor={{ false: "#EBE3D5", true: "#2D6A4F" }}
               />
             </View>
@@ -181,7 +223,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={mealReminder}
-                onValueChange={setMealReminder}
+                onValueChange={(value) => void updateNotificationPreference("meal_reminder", value)}
                 trackColor={{ false: "#EBE3D5", true: "#2D6A4F" }}
               />
             </View>
@@ -198,7 +240,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={waterReminder}
-                onValueChange={setWaterReminder}
+                onValueChange={(value) => void updateNotificationPreference("water_reminder", value)}
                 trackColor={{ false: "#EBE3D5", true: "#2D6A4F" }}
               />
             </View>

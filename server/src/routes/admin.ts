@@ -8,6 +8,7 @@ import { createAdminUsersRouter } from "./admin/users.js";
 import { createAdminCommunityRouter } from "./admin/community.js";
 import { createAdminRecipesRouter } from "./admin/recipes.js";
 import { createAdminAssetsRouter } from "./admin/assets.js";
+import { createAdminNotificationsRouter } from "./admin/notifications.js";
 import { auditAdminAction as audit } from "./admin/shared.js";
 
 const router = Router();
@@ -21,6 +22,7 @@ router.use(createAdminUsersRouter());
 router.use(createAdminCommunityRouter());
 router.use(createAdminRecipesRouter());
 router.use(createAdminAssetsRouter());
+router.use(createAdminNotificationsRouter());
 
 // 1. 获取统计数据
 router.get("/stats", (req, res) => {
@@ -29,14 +31,18 @@ router.get("/stats", (req, res) => {
     const postsCount = (db.prepare('SELECT COUNT(*) as count FROM community_posts WHERE deleted_at IS NULL').get() as any).count;
     const recipesCount = (db.prepare('SELECT COUNT(*) as count FROM recipes WHERE deleted_at IS NULL').get() as any).count;
     const inventoryCount = (db.prepare('SELECT COUNT(*) as count FROM inventory_items').get() as any).count;
+    const ingredientsCount = (db.prepare('SELECT COUNT(*) as count FROM ingredients_library').get() as any).count;
     const kitchenwareCount = (db.prepare('SELECT COUNT(*) as count FROM kitchenware_items WHERE deleted_at IS NULL').get() as any).count;
+    const kitchenwareCatalogCount = (db.prepare('SELECT COUNT(*) as count FROM kitchenware_catalog').get() as any).count;
 
     res.json({
       users: usersCount,
       posts: postsCount,
       recipes: recipesCount,
       inventory: inventoryCount,
+      ingredients: ingredientsCount,
       kitchenware: kitchenwareCount,
+      kitchenwareCatalog: kitchenwareCatalogCount,
     });
   } catch (error) {
     res.status(500).json({ error: "获取统计失败" });

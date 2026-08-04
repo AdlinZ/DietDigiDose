@@ -1,25 +1,33 @@
-import { useState } from "react";
-import { View, Text, TouchableOpacity, Image, Platform, DeviceEventEmitter } from "react-native";
+import { View, Text, TouchableOpacity, Pressable, Image, Platform, DeviceEventEmitter, Alert } from "react-native";
 import { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
-import { AIChefModal } from "./AIChefModal";
 
 import { useSafeRouter } from "@/hooks/useSafeRouter";
+import { useAuth } from "@/contexts/AuthContext";
 
 export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const router = useSafeRouter();
-  const [aiModalVisible, setAiModalVisible] = useState(false);
+  const { isAuthenticated } = useAuth();
 
   // 获取当前激活的路由
   const currentRouteName = state.routes[state.index]?.name || "index";
+  const isHomeRoute = currentRouteName === "index";
 
   // 左侧动态按键点击响应
   const handleLeftButtonPress = () => {
+    if (currentRouteName === "inventory" && !isAuthenticated) {
+      Alert.alert("登录后录入食材", "登录后才能保存和管理你的食材。", [
+        { text: "取消", style: "cancel" },
+        { text: "去登录", onPress: () => router.push("/login") },
+      ]);
+      return;
+    }
     switch (currentRouteName) {
       case "index":
-        setAiModalVisible(true);
+        // 与首页卡片、库存等入口统一使用完整的食语页面，避免两套对话体验分叉。
+        router.push("/ai-assistant");
         break;
       case "inventory":
         DeviceEventEmitter.emit("open-add-food");
@@ -73,34 +81,36 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
         className="flex-row items-center justify-between pointer-events-box-none"
       >
         {/* 左侧动态多功能浮动按钮 (首页: AI助手 | 膳食资产: 存食材 | 社区: 发动态 | 我的: 记一餐) */}
-        <TouchableOpacity
+        <Pressable
           onPress={handleLeftButtonPress}
-          activeOpacity={0.85}
-          className="w-[52px] h-[52px] items-center justify-center bg-white/95 rounded-full p-1 shadow-md border border-[#EBE3D5] relative active:scale-95"
+          className={`w-[60px] h-[60px] items-center justify-center relative active:scale-95 ${isHomeRoute ? "" : "bg-white/95 rounded-full p-1 border border-[#EBE3D5]"}`}
           style={{
+            backgroundColor: isHomeRoute ? "transparent" : "rgba(255, 255, 255, 0.95)",
+            borderWidth: isHomeRoute ? 0 : 1,
+            padding: isHomeRoute ? 0 : 4,
             shadowColor: "#3D3229",
-            shadowOffset: { width: 0, height: 3 },
+            shadowOffset: { width: 0, height: 0 },
             shadowOpacity: 0.1,
-            shadowRadius: 8,
-            elevation: 6,
+            shadowRadius: 0,
+            elevation: 0,
           }}
         >
           {currentRouteName === "index" && (
-            <View className="w-[42px] h-[42px] rounded-full bg-gradient-to-tr from-[#2D6A4F] via-[#E9C46A] to-[#2D6A4F] p-0.5 items-center justify-center relative overflow-hidden">
+            <View className="items-center justify-center relative" style={{ width: 56, height: 56 }}>
               <Image
-                source={require("@/assets/shiyu-avatar.jpg")}
-                className="w-full h-full rounded-full"
-                resizeMode="cover"
+                source={require("@/assets/logo.png")}
+                style={{ width: 56, height: 56 }}
+                resizeMode="contain"
               />
-              <View className="absolute -bottom-1 bg-[#2D6A4F] px-1.5 py-0.2 rounded-full border border-white">
-                <Text className="text-[8px] font-black text-white">食语</Text>
+              <View className="absolute bottom-0 bg-[#104020] px-1.5 py-0.5 rounded-full border border-white">
+                <Text className="text-[8.5px] font-black text-white">食语 AI</Text>
               </View>
             </View>
           )}
 
           {currentRouteName === "inventory" && (
-            <View className="w-[42px] h-[42px] rounded-full bg-[#2D6A4F] items-center justify-center relative shadow-xs">
-              <FontAwesome6 name="plus" size={16} color="#FFF" />
+            <View className="w-[50px] h-[50px] rounded-full bg-[#2D6A4F] items-center justify-center relative shadow-xs">
+              <FontAwesome6 name="plus" size={18} color="#FFF" />
               <View className="absolute -bottom-1 bg-[#E9C46A] px-1.5 py-0.2 rounded-full border border-white">
                 <Text className="text-[8px] font-black text-[#3D3229]">存食材</Text>
               </View>
@@ -108,8 +118,8 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
           )}
 
           {currentRouteName === "community" && (
-            <View className="w-[42px] h-[42px] rounded-full bg-[#E9C46A] items-center justify-center relative shadow-xs">
-              <FontAwesome6 name="pen-to-square" size={15} color="#3D3229" />
+            <View className="w-[50px] h-[50px] rounded-full bg-[#E9C46A] items-center justify-center relative shadow-xs">
+              <FontAwesome6 name="pen-to-square" size={17} color="#3D3229" />
               <View className="absolute -bottom-1 bg-[#2D6A4F] px-1.5 py-0.2 rounded-full border border-white">
                 <Text className="text-[8px] font-black text-white">发动态</Text>
               </View>
@@ -117,18 +127,18 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
           )}
 
           {currentRouteName === "profile" && (
-            <View className="w-[42px] h-[42px] rounded-full bg-[#E76F51] items-center justify-center relative shadow-xs">
-              <FontAwesome6 name="fire-flame-curved" size={15} color="#FFF" />
+            <View className="w-[50px] h-[50px] rounded-full bg-[#E76F51] items-center justify-center relative shadow-xs">
+              <FontAwesome6 name="fire-flame-curved" size={17} color="#FFF" />
               <View className="absolute -bottom-1 bg-[#3D3229] px-1.5 py-0.2 rounded-full border border-white">
                 <Text className="text-[8px] font-black text-white">记一餐</Text>
               </View>
             </View>
           )}
-        </TouchableOpacity>
+        </Pressable>
 
-        {/* 右侧 支付宝同款 胶囊导航栏 (高度 52px 1:1 对齐) */}
+        {/* 右侧主导航栏：较大的触控区与左侧快捷键保持同一视觉量级。 */}
         <View
-          className="flex-1 h-[52px] ml-2.5 bg-white/95 backdrop-blur-md rounded-full px-2 flex-row items-center justify-between border border-[#EBE3D5] shadow-md"
+          className="flex-1 h-[60px] ml-3 bg-white/95 backdrop-blur-md rounded-full px-2.5 flex-row items-center justify-between border border-[#EBE3D5] shadow-md"
           style={{
             shadowColor: "#3D3229",
             shadowOffset: { width: 0, height: 3 },
@@ -158,22 +168,22 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
                 key={route.key}
                 onPress={onPress}
                 activeOpacity={0.8}
-                className="flex-1 items-center justify-center relative py-0.5"
+                className="flex-1 items-center justify-center relative py-1"
               >
                 {/* 选中高亮 Pill 胶囊背景 */}
                 {isFocused ? (
                   <View className="items-center justify-center">
-                    <View className="w-7 h-7 rounded-full bg-[#2D6A4F] items-center justify-center shadow-xs">
-                      <FontAwesome6 name={config.icon as any} size={13} color="#FFF" />
+                    <View className="w-8 h-8 rounded-full bg-[#2D6A4F] items-center justify-center shadow-xs">
+                      <FontAwesome6 name={config.icon as any} size={15} color="#FFF" />
                     </View>
-                    <Text className="text-[9.5px] font-black text-[#2D6A4F] mt-0.5">
+                    <Text className="text-[10.5px] font-black text-[#2D6A4F] mt-1">
                       {config.label}
                     </Text>
                   </View>
                 ) : (
                   <View className="items-center justify-center">
-                    <View className="w-6.5 h-6.5 items-center justify-center relative">
-                      <FontAwesome6 name={config.icon as any} size={14} color="#8B7D6B" />
+                    <View className="w-7 h-7 items-center justify-center relative">
+                      <FontAwesome6 name={config.icon as any} size={16} color="#8B7D6B" />
                       {/* 未读数字/圆点 Badge (如社区消息) */}
                       {config.badge ? (
                         <View className="absolute -top-1 -right-1.5 bg-[#E76F51] px-1 py-0.2 rounded-full min-w-3.5 items-center justify-center border border-white">
@@ -183,7 +193,7 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
                         </View>
                       ) : null}
                     </View>
-                    <Text className="text-[9.5px] font-bold text-[#8B7D6B] mt-0.5">
+                    <Text className="text-[10.5px] font-bold text-[#8B7D6B] mt-1">
                       {config.label}
                     </Text>
                   </View>
@@ -193,12 +203,6 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
           })}
         </View>
       </View>
-
-      {/* AI 营养大厨助手 Modal */}
-      <AIChefModal
-        visible={aiModalVisible}
-        onClose={() => setAiModalVisible(false)}
-      />
     </>
   );
 }

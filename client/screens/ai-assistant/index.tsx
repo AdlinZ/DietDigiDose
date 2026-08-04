@@ -14,6 +14,7 @@ import {
   FlatList,
 } from "react-native";
 import { Screen } from "@/components/Screen";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
@@ -26,25 +27,30 @@ import {
   getUserStorageKey,
   storageBelongsToCurrentUser,
 } from "@/utils/userStorage";
-import { aiApi, dietApi, inventoryApi } from "@/services/api";
+import { aiApi, ApiError, dietApi, inventoryApi } from "@/services/api";
 import { dateKeyAfterDays, toLocalDateKey } from "@/utils/date";
 import { MedicalDisclaimer } from "@/components/MedicalDisclaimer";
-import type { ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message } from "./types";
+import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import { RealtimeVoiceMVPModal } from "@/components/RealtimeVoiceMVPModal";
+import type { AIWriteConfirmation, ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message } from "./types";
 import { inferInventoryCategory, normalizeInventoryScanFoods } from "./inventoryScan";
 import { AssistantMessageItem } from "./AssistantMessageItem";
 
 export default function AIAssistantScreen() {
   const router = useSafeRouter();
+  const insets = useSafeAreaInsets();
   const {
     prompt,
     prefill_food: prefillFood,
     inventory_scan_job_id: inventoryScanJobId,
     inventory_scan_image_uri: inventoryScanImageUri,
+    open_shopping_list: openShoppingList,
   } = useSafeSearchParams<{
     prompt?: string | string[];
     prefill_food?: string | string[];
     inventory_scan_job_id?: string | string[];
     inventory_scan_image_uri?: string | string[];
+    open_shopping_list?: string | string[];
   }>();
   const { user } = useAuth();
   const authFetch = useAuthFetch();
@@ -53,11 +59,31 @@ export default function AIAssistantScreen() {
   const [loadedChatStorageKey, setLoadedChatStorageKey] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showToolsGrid, setShowToolsGrid] = useState(false);
+  const [showRealtimeVoiceMVP, setShowRealtimeVoiceMVP] = useState(false);
+  const [isDeepThink, setIsDeepThink] = useState(false);
+  const [isWebSearch, setIsWebSearch] = useState(false);
+  const baseInputTextRef = useRef("");
+
+  const { isRecording, isTranscribing, statusText: voiceStatusText, toggleRecording } = useVoiceRecorder({
+    onSpeechResult: (recognizedText) => {
+      const base = baseInputTextRef.current.trim();
+      setInputText(base ? `${base} ${recognizedText}` : recognizedText);
+    },
+  });
+
+  const handleToggleVoiceRecording = () => {
+    if (!isRecording) {
+      baseInputTextRef.current = inputText;
+    }
+    toggleRecording();
+  };
   const [isMuted, setIsMuted] = useState(false);
   const [storedMessages, setMessages] = useState<Message[]>([]);
   const [selectedImage, setSelectedImage] = useState<{ uri: string; base64: string } | null>(null);
   const autoSentPromptKey = useRef<string | null>(null);
   const handledInventoryScanJob = useRef<string | null>(null);
+  const historyLimitNoticeShown = useRef(false);
   const [inventoryEditTarget, setInventoryEditTarget] = useState<{
     msgId: string;
     itemId: string;
@@ -71,6 +97,7 @@ export default function AIAssistantScreen() {
   const [storedSessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => String(Date.now()));
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
+  const [headerMoreVisible, setHeaderMoreVisible] = useState(false);
   const historyBelongsToCurrentUser = storageBelongsToCurrentUser(
     chatStorageKey,
     loadedChatStorageKey,
@@ -176,8 +203,15 @@ export default function AIAssistantScreen() {
     });
   }, [messages, currentSessionId, chatStorageKey, loadedChatStorageKey]);
 
+  useEffect(() => {
+    if (openShoppingList === "true" || (Array.isArray(openShoppingList) && openShoppingList[0] === "true")) {
+      handleOpenShoppingList();
+    }
+  }, [openShoppingList]);
+
   // 新建新对话
   const handleStartNewChat = () => {
+    historyLimitNoticeShown.current = false;
     const newId = String(Date.now());
     setCurrentSessionId(newId);
     setMessages([]);
@@ -349,16 +383,45 @@ export default function AIAssistantScreen() {
     setLoading(true);
 
     try {
-      const historyPayload = messages.map((m) => ({
-        role: m.sender === "user" ? "user" : "assistant",
-        content: m.text,
-      }));
+      // 服务端最多接收 50 条消息；预留本次提问，并忽略旧缓存中的无效消息。
+      const validHistory = messages.filter((m) => typeof m.text === "string" && m.text.trim().length > 0);
+      if (validHistory.length > 49 && !historyLimitNoticeShown.current) {
+        Alert.alert("对话提示", "为保证回复速度，本次 AI 将参考最近 50 条对话。更早内容仍保留在本机历史中。");
+        historyLimitNoticeShown.current = true;
+      }
+      const historyPayload = validHistory
+        .slice(-49)
+        .map((m) => ({
+          role: m.sender === "user" ? "user" : "assistant",
+          content: m.text.trim().slice(0, 12_000),
+        }));
       historyPayload.push({ role: "user", content: text.trim() });
+      // AsyncStorage 中的会话来自旧版本或异常缓存时，不能让它破坏本次请求。
+      const sessionId = typeof currentSessionId === "string" && currentSessionId.trim().length <= 120
+        ? currentSessionId.trim()
+        : undefined;
 
-      const data = await aiApi.chat<Record<string, any>>(authFetch, {
-        messages: historyPayload,
-        sessionId: currentSessionId,
-      });
+      let data: Record<string, any>;
+      try {
+        data = await aiApi.chat<Record<string, any>>(authFetch, {
+          messages: historyPayload,
+          ...(sessionId ? { sessionId } : {}),
+        });
+      } catch (error) {
+        // 历史消息只用于补充上下文；缓存损坏或旧版本格式不兼容时，
+        // 退化为当前问题继续完成对话，而不是把校验错误展示给用户。
+        // Expo Web 在热更新后可能存在重复模块实例，不能只依赖 instanceof。
+        // 同时不要携带旧 sessionId，避免损坏缓存继续触发服务端校验。
+        const isValidationError = error instanceof ApiError
+          ? error.code === "VALIDATION_ERROR"
+          : typeof error === "object"
+            && error !== null
+            && (error as { code?: unknown }).code === "VALIDATION_ERROR";
+        if (!isValidationError) throw error;
+        data = await aiApi.chat<Record<string, any>>(authFetch, {
+          prompt: text.trim(),
+        });
+      }
       const responseText = data.reply || "智能大厨正在整理您的食谱建议...";
 
       const aiMsg: Message = {
@@ -366,6 +429,7 @@ export default function AIAssistantScreen() {
         sender: "ai",
         text: responseText,
         actionCard: data.actionCard,
+        writeConfirmation: data.writeConfirmation,
         missingCard: data.missingCard,
         optionsCard: data.optionsCard,
         solutionCards: data.solutionCards,
@@ -689,9 +753,18 @@ export default function AIAssistantScreen() {
   const handleConfirmRecordCard = async (
     msgId: string,
     card: DietRecordActionCard,
-    isTomorrow = false
+    isTomorrow = false,
+    confirmation?: AIWriteConfirmation,
   ) => {
     try {
+      if (confirmation) {
+        if (isTomorrow) {
+          Alert.alert("请修改后保存", "明日计划请使用“弹出修改”确认日期后保存。");
+          return;
+        }
+        await handleCommitWriteConfirmation(msgId, confirmation);
+        return;
+      }
       const targetDateStr = dateKeyAfterDays(isTomorrow ? 1 : 0);
 
       await dietApi.create(authFetch, {
@@ -720,6 +793,18 @@ export default function AIAssistantScreen() {
         );
     } catch (e) {
       Alert.alert("提示", "网络异常");
+    }
+  };
+
+  const handleCommitWriteConfirmation = async (msgId: string, confirmation: AIWriteConfirmation) => {
+    try {
+      await aiApi.commitWriteConfirmation(authFetch, confirmation.confirmationId, `ai-confirm-${confirmation.confirmationId}`);
+      setMessages((prev) => prev.map((message) => message.id === msgId && message.writeConfirmation
+        ? { ...message, writeConfirmation: { ...message.writeConfirmation, committed: true }, actionCard: message.actionCard ? { ...message.actionCard, saved: true } : undefined }
+        : message));
+      Alert.alert("保存成功", "已确认并保存本次操作。");
+    } catch (error) {
+      Alert.alert("保存失败", error instanceof Error ? error.message : "请稍后重试");
     }
   };
 
@@ -879,6 +964,7 @@ export default function AIAssistantScreen() {
       userAvatarUrl={user?.avatar_url}
       userAvatarSeed={user?.id ?? user?.username}
       handleConfirmRecordCard={handleConfirmRecordCard}
+      handleCommitWriteConfirmation={handleCommitWriteConfirmation}
       handleOpenEditModal={handleOpenEditModal}
       toggleInventoryScanItem={toggleInventoryScanItem}
       openInventoryScanEditor={openInventoryScanEditor}
@@ -909,44 +995,41 @@ export default function AIAssistantScreen() {
             </View>
           </View>
 
-          <View className="flex-row items-center gap-2">
+          <View className="flex-row items-center gap-1.5">
+            {/* Direct Header Button: 🛒 采购清单 */}
             <TouchableOpacity
               onPress={handleOpenShoppingList}
-              className="w-9 h-9 rounded-full bg-[#D4A276]/20 items-center justify-center border border-[#D4A276]/40 active:opacity-80 relative"
+              className="h-8 px-2.5 rounded-full bg-amber-500/10 border border-amber-500/30 flex-row items-center gap-1.5 active:opacity-80 relative"
             >
-              <FontAwesome6 name="cart-shopping" size={13} color="#D4A276" />
+              <FontAwesome6 name="cart-shopping" size={12} color="#D97706" />
+              <Text className="text-xs font-bold text-amber-800">采购清单</Text>
+              {shoppingItems.length > 0 ? (
+                <View className="bg-[#E76F51] px-1.5 py-0.2 rounded-full">
+                  <Text className="text-[9px] font-black text-white">{shoppingItems.length}</Text>
+                </View>
+              ) : null}
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => setHistoryDrawerVisible(true)}
-              className="w-9 h-9 rounded-full bg-white items-center justify-center border border-[#EBE3D5] active:opacity-80"
+              onPress={() => setShowRealtimeVoiceMVP(true)}
+              className="h-8 px-2.5 rounded-full bg-emerald-600 items-center justify-center shadow-xs active:opacity-80 flex-row gap-1"
             >
-              <FontAwesome6 name="clock-rotate-left" size={13} color="#2D6A4F" />
+              <FontAwesome6 name="microphone-lines" size={11} color="#FFF" />
+              <Text className="text-xs font-bold text-white">实时语音 MVP</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={handleStartNewChat}
-              className="w-9 h-9 rounded-full bg-[#2D6A4F] items-center justify-center shadow-xs active:opacity-80"
+              className="w-8 h-8 rounded-full bg-[#2D6A4F] items-center justify-center shadow-xs active:opacity-80"
             >
               <FontAwesome6 name="plus" size={13} color="#FFF" />
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => setIsMuted(!isMuted)}
-              className="w-9 h-9 rounded-full bg-white items-center justify-center border border-[#EBE3D5]"
+              onPress={() => setHeaderMoreVisible(true)}
+              className="w-8 h-8 rounded-full bg-white items-center justify-center border border-[#EBE3D5]"
             >
-              <FontAwesome6
-                name={isMuted ? "volume-xmark" : "volume-high"}
-                size={14}
-                color="#3D3229"
-              />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={handleSafeGoBack}
-              className="w-9 h-9 rounded-full bg-white items-center justify-center border border-[#EBE3D5]"
-            >
-              <FontAwesome6 name="xmark" size={15} color="#3D3229" />
+              <FontAwesome6 name="ellipsis" size={14} color="#3D3229" />
             </TouchableOpacity>
           </View>
         </View>
@@ -1024,14 +1107,14 @@ export default function AIAssistantScreen() {
 
 
 
-        {/* Fixed Full Screen Bottom Bar Section */}
-        <View className="bg-white px-5 pt-3.5 pb-6 border-t border-[#EBE3D5] shadow-2xl">
+        {/* Fixed Full Screen Bottom Bar Section (Warm Theme Matched, No Harsh White Box) */}
+        <View className="bg-[#F6F4F0] px-5 pt-3.5 pb-6 border-t border-[#EBE3D5] shadow-2xl">
           <View className="mb-2">
             <MedicalDisclaimer compact />
           </View>
           {/* Selected Image Attachment Badge */}
           {selectedImage && (
-            <View className="mb-2.5 flex-row items-center self-start bg-[#F6F4F0] p-1.5 pr-3 rounded-2xl border border-[#EBE3D5] relative shadow-xs">
+            <View className="mb-2.5 flex-row items-center self-start bg-white p-1.5 pr-3 rounded-2xl border border-[#EBE3D5] relative shadow-xs">
               <Image source={{ uri: selectedImage.uri }} className="w-14 h-14 rounded-xl mr-2.5" resizeMode="cover" />
               <View>
                 <Text className="text-xs font-bold text-[#3D3229]">已添加待识别照片</Text>
@@ -1046,76 +1129,159 @@ export default function AIAssistantScreen() {
             </View>
           )}
 
-          {/* Search Pill Bar */}
-          <View className="bg-[#F6F4F0] px-4 py-2.5 rounded-full border border-[#EBE3D5] flex-row items-center justify-between mb-4">
-            <TouchableOpacity onPress={handlePickImageAttachment} className="p-1 active:opacity-70">
-              <FontAwesome6 name="camera" size={17} color={selectedImage ? "#2D6A4F" : "#3D3229"} />
-            </TouchableOpacity>
+          {voiceStatusText ? (
+            <View className="mb-2 px-3.5 py-2 rounded-xl bg-[#2D6A4F]/10 border border-[#2D6A4F]/20 flex-row items-center justify-between">
+              <Text className="text-xs font-medium text-[#2D6A4F]">{voiceStatusText}</Text>
+              {isRecording && <View className="w-2.5 h-2.5 rounded-full bg-red-500" />}
+              {isTranscribing && <ActivityIndicator size="small" color="#2D6A4F" />}
+            </View>
+          ) : null}
 
+          {/* Integrated Card Container */}
+          <View className={`bg-white p-3 rounded-[24px] border transition-all shadow-xs ${isRecording ? 'border-red-500 bg-red-50/50' : 'border-[#EBE3D5]'}`}>
+            {/* Input Area */}
             <TextInput
               value={inputText}
               onChangeText={setInputText}
-              placeholder={selectedImage ? "针对照片提问（如：热量高吗？卡路里多少？）..." : "发消息或按住说话..."}
+              placeholder={isRecording ? "正在录音识别中..." : selectedImage ? "针对照片提问..." : "发消息或按住说话..."}
               placeholderTextColor="#A3A398"
-              className="flex-1 text-xs text-[#3D3229] px-3"
+              multiline
+              className="text-xs text-[#3D3229] min-h-[36px] max-h-[90px] px-1 py-1 align-top"
               onSubmitEditing={() => handleSendMessage()}
             />
 
-            <TouchableOpacity
-              onPress={() => handleSendMessage()}
-              disabled={(!inputText.trim() && !selectedImage) || loading}
-              className="p-1 active:opacity-70"
-            >
-              <FontAwesome6
-                name={inputText.trim() || selectedImage ? "paper-plane" : "microphone"}
-                size={17}
-                color={inputText.trim() || selectedImage ? "#2D6A4F" : "#3D3229"}
-              />
-            </TouchableOpacity>
+            {/* Bottom Control Bar */}
+            <View className="flex-row items-center justify-between pt-2 border-t border-[#EBE3D5]/40 mt-1">
+              {/* Left Side: Practical Food AI Chips (Hide when + tools grid expanded for perfect adaptation) */}
+              {!showToolsGrid ? (
+                <View className="flex-row items-center gap-1.5 flex-wrap">
+                  <TouchableOpacity
+                    onPress={() => setInputText("根据现有冰箱食材推荐一份健康减脂晚餐")}
+                    className="px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200/80 flex-row items-center gap-1 active:bg-emerald-100"
+                  >
+                    <FontAwesome6 name="utensils" size={11} color="#059669" />
+                    <Text className="text-[11px] font-bold text-emerald-800">推荐晚餐</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={() => setInputText("帮我计算今日膳食需要的蛋白质与营养配比")}
+                    className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200/80 flex-row items-center gap-1 active:bg-amber-100"
+                  >
+                    <FontAwesome6 name="chart-pie" size={11} color="#D97706" />
+                    <Text className="text-[11px] font-bold text-amber-800">营养分析</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <Text className="text-[11px] font-bold text-[#8B7D6B]">食光工具箱</Text>
+              )}
+
+              {/* Right Side: Action Buttons */}
+              <View className="flex-row items-center gap-1.5 ml-2">
+                <TouchableOpacity
+                  onPress={() => setShowToolsGrid((prev) => !prev)}
+                  className={`w-7.5 h-7.5 rounded-full border items-center justify-center transition-all ${
+                    showToolsGrid ? 'bg-[#2D6A4F] border-[#2D6A4F]' : 'bg-[#F6F4F0] border-[#EBE3D5] active:bg-[#EBE3D5]/50'
+                  }`}
+                >
+                  <FontAwesome6 name={showToolsGrid ? "xmark" : "plus"} size={13} color={showToolsGrid ? "#FFFFFF" : "#3D3229"} />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleToggleVoiceRecording}
+                  disabled={loading || isTranscribing}
+                  className={`w-7.5 h-7.5 rounded-full items-center justify-center transition-all ${
+                    isRecording ? 'bg-red-500' : 'bg-[#F6F4F0] border border-[#EBE3D5]'
+                  }`}
+                >
+                  <FontAwesome6
+                    name="microphone"
+                    size={13}
+                    color={isRecording ? "#FFFFFF" : "#3D3229"}
+                  />
+                </TouchableOpacity>
+
+                {inputText.trim() || selectedImage ? (
+                  <TouchableOpacity
+                    onPress={() => handleSendMessage()}
+                    disabled={loading}
+                    className="w-7.5 h-7.5 rounded-full bg-[#2D6A4F] items-center justify-center shadow-xs active:scale-95"
+                  >
+                    <FontAwesome6 name="arrow-up" size={13} color="#FFFFFF" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
           </View>
 
-          {/* Bottom 4 Core AI Action Grid */}
-          <View className="flex-row items-center justify-between px-2">
-            <TouchableOpacity
-              onPress={handleActionVisionFood}
-              className="items-center gap-1.5 active:opacity-80 flex-1"
-            >
-              <View className="w-12 h-12 rounded-2xl bg-[#F6F4F0] items-center justify-center border border-[#EBE3D5] shadow-xs">
-                <FontAwesome6 name="camera" size={20} color="#2D6A4F" />
-              </View>
-              <Text className="text-xs font-bold text-[#3D3229]">识菜算热量</Text>
-            </TouchableOpacity>
+          {/* Bottom 5 Core AI Action Grid (按 + 号展开多彩轻奢图标面板) */}
+          {showToolsGrid && (
+            <View className="bg-white rounded-2xl p-3.5 border border-[#EBE3D5] mt-2.5 flex-row items-center justify-between shadow-sm">
+              <TouchableOpacity
+                onPress={() => {
+                  setShowToolsGrid(false);
+                  handleActionVisionFood();
+                }}
+                className="items-center gap-1.5 active:opacity-80 flex-1"
+              >
+                <View className="w-11 h-11 rounded-2xl bg-emerald-50 items-center justify-center border border-emerald-200/80 shadow-xs">
+                  <FontAwesome6 name="camera" size={18} color="#059669" />
+                </View>
+                <Text className="text-[11px] font-bold text-[#3D3229]">识菜热量</Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={handleActionScanReceipt}
-              className="items-center gap-1.5 active:opacity-80 flex-1"
-            >
-              <View className="w-12 h-12 rounded-2xl bg-[#F6F4F0] items-center justify-center border border-[#EBE3D5] shadow-xs">
-                <FontAwesome6 name="receipt" size={20} color="#E9C46A" />
-              </View>
-              <Text className="text-xs font-bold text-[#3D3229]">扫小票入库</Text>
-            </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowToolsGrid(false);
+                  handleActionScanReceipt();
+                }}
+                className="items-center gap-1.5 active:opacity-80 flex-1"
+              >
+                <View className="w-11 h-11 rounded-2xl bg-amber-50 items-center justify-center border border-amber-200/80 shadow-xs">
+                  <FontAwesome6 name="receipt" size={18} color="#D97706" />
+                </View>
+                <Text className="text-[11px] font-bold text-[#3D3229]">扫码入库</Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={handleActionFridgeClean}
-              className="items-center gap-1.5 active:opacity-80 flex-1"
-            >
-              <View className="w-12 h-12 rounded-2xl bg-[#F6F4F0] items-center justify-center border border-[#EBE3D5] shadow-xs">
-                <FontAwesome6 name="boxes-packing" size={20} color="#D4A276" />
-              </View>
-              <Text className="text-xs font-bold text-[#3D3229]">冰箱清库</Text>
-            </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowToolsGrid(false);
+                  handleActionFridgeClean();
+                }}
+                className="items-center gap-1.5 active:opacity-80 flex-1"
+              >
+                <View className="w-11 h-11 rounded-2xl bg-sky-50 items-center justify-center border border-sky-200/80 shadow-xs">
+                  <FontAwesome6 name="snowflake" size={18} color="#0284C7" />
+                </View>
+                <Text className="text-[11px] font-bold text-[#3D3229]">冰箱清库</Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={handleActionCookingVoice}
-              className="items-center gap-1.5 active:opacity-80 flex-1"
-            >
-              <View className="w-12 h-12 rounded-2xl bg-[#F6F4F0] items-center justify-center border border-[#EBE3D5] shadow-xs">
-                <FontAwesome6 name="kitchen-set" size={20} color="#E07A5F" />
-              </View>
-              <Text className="text-xs font-bold text-[#3D3229]">做饭语音包</Text>
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowToolsGrid(false);
+                  handleOpenShoppingList();
+                }}
+                className="items-center gap-1.5 active:opacity-80 flex-1"
+              >
+                <View className="w-11 h-11 rounded-2xl bg-purple-50 items-center justify-center border border-purple-200/80 shadow-xs">
+                  <FontAwesome6 name="cart-shopping" size={18} color="#9333EA" />
+                </View>
+                <Text className="text-[11px] font-bold text-[#3D3229]">采购清单</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setShowToolsGrid(false);
+                  handleActionCookingVoice();
+                }}
+                className="items-center gap-1.5 active:opacity-80 flex-1"
+              >
+                <View className="w-11 h-11 rounded-2xl bg-orange-50 items-center justify-center border border-orange-200/80 shadow-xs">
+                  <FontAwesome6 name="fire-burner" size={18} color="#EA580C" />
+                </View>
+                <Text className="text-[11px] font-bold text-[#3D3229]">做饭语音包</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </KeyboardAvoidingView>
 
@@ -1317,6 +1483,68 @@ export default function AIAssistantScreen() {
         </View>
       </Modal>
 
+      {/* 顶栏次要操作：避免在窄屏、刘海和 Android 状态栏下挤压标题。 */}
+      <Modal
+        visible={headerMoreVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setHeaderMoreVisible(false)}
+      >
+        <View className="flex-1">
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => setHeaderMoreVisible(false)}
+            className="absolute inset-0 bg-black/10"
+          />
+          <View
+            style={{ position: "absolute", top: insets.top + 58, right: 16 }}
+            className="w-44 rounded-2xl border border-[#EBE3D5] bg-white p-1.5 shadow-xl"
+          >
+            <TouchableOpacity
+              onPress={() => {
+                setHeaderMoreVisible(false);
+                handleOpenShoppingList();
+              }}
+              className="flex-row items-center gap-3 rounded-xl px-3 py-3 active:bg-[#F5EFE6]"
+            >
+              <FontAwesome6 name="cart-shopping" size={14} color="#D4A276" />
+              <Text className="text-sm font-bold text-[#3D3229]">采购清单</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setHeaderMoreVisible(false);
+                setHistoryDrawerVisible(true);
+              }}
+              className="flex-row items-center gap-3 rounded-xl px-3 py-3 active:bg-[#F5EFE6]"
+            >
+              <FontAwesome6 name="clock-rotate-left" size={14} color="#2D6A4F" />
+              <Text className="text-sm font-bold text-[#3D3229]">历史对话</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setHeaderMoreVisible(false);
+                setIsMuted((value) => !value);
+              }}
+              className="flex-row items-center gap-3 rounded-xl px-3 py-3 active:bg-[#F5EFE6]"
+            >
+              <FontAwesome6 name={isMuted ? "volume-xmark" : "volume-high"} size={14} color="#3D3229" />
+              <Text className="text-sm font-bold text-[#3D3229]">{isMuted ? "开启语音" : "关闭语音"}</Text>
+            </TouchableOpacity>
+            <View className="mx-2 border-t border-[#EBE3D5]" />
+            <TouchableOpacity
+              onPress={() => {
+                setHeaderMoreVisible(false);
+                handleSafeGoBack();
+              }}
+              className="flex-row items-center gap-3 rounded-xl px-3 py-3 active:bg-[#F5EFE6]"
+            >
+              <FontAwesome6 name="xmark" size={14} color="#8B7D6B" />
+              <Text className="text-sm font-bold text-[#8B7D6B]">关闭食语</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* 📚 历史对话会话列表抽屉 Modal */}
       <Modal
         visible={historyDrawerVisible}
@@ -1448,6 +1676,12 @@ export default function AIAssistantScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* 🎙️ TeleSpeechASR + LLM Realtime Voice Interaction MVP */}
+      <RealtimeVoiceMVPModal
+        visible={showRealtimeVoiceMVP}
+        onClose={() => setShowRealtimeVoiceMVP(false)}
+      />
     </Screen>
   );
 }

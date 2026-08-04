@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, ActivityIndicator, Image } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
@@ -15,6 +15,7 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const identifierWasEdited = useRef(false);
   const { login } = useAuth();
   const router = useSafeRouter();
 
@@ -22,7 +23,7 @@ export default function LoginScreen() {
     (async () => {
       try {
         const savedIdentifier = await AsyncStorage.getItem(REMEMBERED_IDENTIFIER_KEY);
-        if (savedIdentifier) {
+        if (savedIdentifier && !identifierWasEdited.current) {
           setIdentifier(savedIdentifier);
           setRememberIdentifier(true);
         }
@@ -32,10 +33,38 @@ export default function LoginScreen() {
     })();
   }, []);
 
+  const handleIdentifierChange = (value: string) => {
+    identifierWasEdited.current = true;
+    setIdentifier(value);
+    if (!rememberIdentifier) return;
+    const normalizedValue = value.trim();
+    void (normalizedValue
+      ? AsyncStorage.setItem(REMEMBERED_IDENTIFIER_KEY, normalizedValue)
+      : AsyncStorage.removeItem(REMEMBERED_IDENTIFIER_KEY)
+    ).catch(() => undefined);
+  };
+
+  const handleRememberIdentifierChange = () => {
+    const nextValue = !rememberIdentifier;
+    setRememberIdentifier(nextValue);
+    const normalizedIdentifier = identifier.trim();
+    void (nextValue && normalizedIdentifier
+      ? AsyncStorage.setItem(REMEMBERED_IDENTIFIER_KEY, normalizedIdentifier)
+      : AsyncStorage.removeItem(REMEMBERED_IDENTIFIER_KEY)
+    ).catch(() => undefined);
+  };
+
   const handleLogin = async () => {
     const trimmedIdentifier = identifier.trim();
     if (!trimmedIdentifier || !password.trim()) {
       setError('请输入邮箱或手机号和密码');
+      return;
+    }
+    const atIndex = trimmedIdentifier.indexOf('@');
+    const isEmail = atIndex > 0 && trimmedIdentifier.slice(atIndex + 1).includes('.');
+    const isPhone = /^1[3-9]\d{9}$/.test(trimmedIdentifier);
+    if (!isEmail && !isPhone) {
+      setError('请输入注册时使用的邮箱或手机号');
       return;
     }
     setError('');
@@ -61,11 +90,10 @@ export default function LoginScreen() {
 
   return (
     <Screen>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <KeyboardAvoidingView
-          style={styles.container}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
           <View style={styles.content}>
             {/* Logo & Title */}
             <View style={styles.header}>
@@ -89,7 +117,7 @@ export default function LoginScreen() {
                   placeholder="请输入注册时的邮箱或手机号"
                   placeholderTextColor="#94A3B8"
                   value={identifier}
-                  onChangeText={setIdentifier}
+                  onChangeText={handleIdentifierChange}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
@@ -114,7 +142,7 @@ export default function LoginScreen() {
               <View style={styles.optionsRow}>
                 <TouchableOpacity
                   style={styles.rememberOption}
-                  onPress={() => setRememberIdentifier(!rememberIdentifier)}
+                  onPress={handleRememberIdentifierChange}
                   activeOpacity={0.7}
                 >
                   <FontAwesome6
@@ -158,8 +186,7 @@ export default function LoginScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </KeyboardAvoidingView>
-      </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

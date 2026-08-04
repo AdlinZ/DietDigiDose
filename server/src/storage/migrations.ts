@@ -85,6 +85,160 @@ const migrations: Migration[] = [
       ] as const) addColumn(database, "health_logs", column, definition);
     },
   },
+  {
+    version: 6,
+    name: "ai_write_confirmations",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS ai_write_confirmations (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          conversation_id TEXT,
+          source_message_id TEXT,
+          action TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'preview' CHECK(status IN ('preview', 'committed', 'expired', 'cancelled')),
+          idempotency_key TEXT,
+          committed_result_json TEXT,
+          expires_at DATETIME NOT NULL,
+          committed_at DATETIME,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_write_confirmations_user_idempotency
+          ON ai_write_confirmations(user_id, idempotency_key)
+          WHERE idempotency_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_ai_write_confirmations_user_status
+          ON ai_write_confirmations(user_id, status, expires_at);
+
+        CREATE TABLE IF NOT EXISTS ai_write_audit_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          confirmation_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          action TEXT NOT NULL,
+          event TEXT NOT NULL,
+          details_json TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (confirmation_id) REFERENCES ai_write_confirmations(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+      `);
+    },
+  },
+  {
+    version: 7,
+    name: "user_disable_status",
+    up(database) {
+      addColumn(database, "users", "is_disabled", "INTEGER DEFAULT 0");
+    },
+  },
+  {
+    version: 8,
+    name: "push_notifications",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS user_notification_preferences (
+          user_id INTEGER PRIMARY KEY,
+          expiring_alert INTEGER NOT NULL DEFAULT 1,
+          meal_reminder INTEGER NOT NULL DEFAULT 1,
+          water_reminder INTEGER NOT NULL DEFAULT 1,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS push_devices (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          expo_push_token TEXT NOT NULL UNIQUE,
+          platform TEXT NOT NULL,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_push_devices_user_active
+          ON push_devices(user_id, is_active);
+        CREATE TABLE IF NOT EXISTS notification_deliveries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          inventory_item_id INTEGER,
+          notification_type TEXT NOT NULL,
+          delivery_date TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued',
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, inventory_item_id, notification_type, delivery_date),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE
+        );
+      `);
+    },
+  },
+  {
+    version: 9,
+    name: "notification_campaigns",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS notification_campaigns (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          admin_user_id INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'sending',
+          recipient_count INTEGER NOT NULL DEFAULT 0,
+          success_count INTEGER NOT NULL DEFAULT 0,
+          failure_count INTEGER NOT NULL DEFAULT 0,
+          sent_at DATETIME,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (admin_user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS notification_campaign_deliveries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          push_device_id INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          error_code TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (campaign_id) REFERENCES notification_campaigns(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (push_device_id) REFERENCES push_devices(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_notification_campaigns_created
+          ON notification_campaigns(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_notification_deliveries_campaign
+          ON notification_campaign_deliveries(campaign_id, status);
+      `);
+    },
+  },
+  {
+    version: 10,
+    name: "in_app_notification_inbox",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS user_notification_inbox (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          campaign_id INTEGER,
+          inventory_item_id INTEGER,
+          is_read INTEGER NOT NULL DEFAULT 0,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (campaign_id) REFERENCES notification_campaigns(id) ON DELETE CASCADE,
+          FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+          UNIQUE(user_id, campaign_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_notification_inbox_user_created
+          ON user_notification_inbox(user_id, created_at DESC);
+        INSERT OR IGNORE INTO user_notification_inbox (user_id, type, title, body, campaign_id, created_at)
+        SELECT u.id, 'admin_campaign', c.title, c.body, c.id, c.created_at
+        FROM notification_campaigns c
+        JOIN users u ON u.role != 'admin' AND COALESCE(u.is_disabled, 0) = 0;
+      `);
+    },
+  },
 ];
 
 export function runMigrations(database: Database.Database) {

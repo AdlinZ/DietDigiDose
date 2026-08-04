@@ -87,6 +87,9 @@ router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res
       recordLoginFailure(req);
       return sendError(res, 401, "账号、邮箱、手机号或密码错误", "INVALID_CREDENTIALS");
     }
+    if (user.is_disabled === 1) {
+      return sendError(res, 403, "账号已被停用", "ACCOUNT_DISABLED");
+    }
 
     clearLoginFailures(rawIdentifier);
     const clientIp = (req.headers["x-forwarded-for"] as string || req.ip || req.socket.remoteAddress || "").split(",")[0].trim();
@@ -130,8 +133,8 @@ router.post("/change-password", authMiddleware, validateBody(changePasswordSchem
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ error: "当前密码和新密码不能为空" });
     }
-    if (typeof newPassword !== "string" || newPassword.length < 12) {
-      return res.status(400).json({ error: "新密码长度不能少于 12 位" });
+    if (typeof newPassword !== "string" || newPassword.length < 6) {
+      return res.status(400).json({ error: "新密码长度不能少于 6 位" });
     }
     if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
       return res.status(400).json({ error: "新密码必须同时包含字母和数字" });

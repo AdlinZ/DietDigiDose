@@ -3,11 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { db } from "../storage/db.js";
 import { chatCompletion, analyzeImage, transcribeAudio, type ChatMessage } from "../services/aiService.js";
-import { buildUserContext, generateSystemPrompt } from "../services/contextBuilder.js";
+import { buildAIPromptMessages, buildUserContext } from "../services/contextBuilder.js";
 import { aiToolsSchema } from "../services/aiTools.js";
+import { commitAIWritePreview } from "../services/aiWriteConfirmations.js";
 import { validateBody } from "../middleware/validate.js";
 import {
   aiChatSchema,
+  aiWriteConfirmationCommitSchema,
   aiHomeRecommendationsSchema,
   aiImageSchema,
   aiTranscribeSchema,
@@ -18,6 +20,7 @@ import { uuidParam } from "../middleware/validateParam.js";
 
 const router = Router();
 router.param("jobId", uuidParam);
+router.param("confirmationId", uuidParam);
 
 type InventoryScanItem = {
   foodName: string;
@@ -118,11 +121,7 @@ router.post("/chat", authMiddleware, validateBody(aiChatSchema), async (req: Aut
 
     // 构建用户数据库 Context
     const userCtx = buildUserContext(userId);
-    const systemPrompt = generateSystemPrompt(userCtx);
-
-    const fullMessages: ChatMessage[] = [
-      { role: "system", content: systemPrompt },
-    ];
+    const fullMessages: ChatMessage[] = buildAIPromptMessages(userCtx);
 
     if (Array.isArray(messages) && messages.length > 0) {
       messages.forEach((msg: any) => {
@@ -152,6 +151,7 @@ router.post("/chat", authMiddleware, validateBody(aiChatSchema), async (req: Aut
       missingCard: result.missingCard,
       optionsCard: result.optionsCard,
       solutionCards: result.solutionCards,
+      writeConfirmation: result.writeConfirmation,
       contextSummary: {
         inventoryCount: userCtx.inventory.length,
         kitchenwareCount: userCtx.kitchenware.length,
@@ -160,6 +160,22 @@ router.post("/chat", authMiddleware, validateBody(aiChatSchema), async (req: Aut
   } catch (error: any) {
     console.error("[AI Router Chat Error]", error);
     return res.status(500).json({ error: "AI 对话请求失败" });
+  }
+});
+
+// 用户确认后的唯一写入入口。模型不能直接提交，确认记录与幂等键均按当前用户校验。
+router.post("/write-confirmations/:confirmationId/commit", authMiddleware, validateBody(aiWriteConfirmationCommitSchema), (req: AuthRequest, res) => {
+  try {
+    const result = commitAIWritePreview({
+      userId: req.userId!,
+      confirmationId: String(req.params.confirmationId),
+      idempotencyKey: req.body.idempotencyKey,
+    });
+    return res.json({ success: true, result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "确认操作失败";
+    const status = /不存在|无权/.test(message) ? 404 : /过期|失效/.test(message) ? 409 : 400;
+    return res.status(status).json({ error: message });
   }
 });
 
@@ -187,7 +203,7 @@ router.post("/home-recommendations", authMiddleware, validateBody(aiHomeRecommen
   ]
 }`;
     const result = await chatCompletion([
-      { role: "system", content: generateSystemPrompt(userCtx) },
+      ...buildAIPromptMessages(userCtx),
       { role: "user", content: prompt },
     ], {
       temperature: 0.45,

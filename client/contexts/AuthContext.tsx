@@ -190,11 +190,11 @@ export function useAuthFetch() {
   const { token, logout } = useAuth();
 
   return useCallback(async (url: string, options: RequestInit = {}) => {
-    const headers: Record<string, string> = {
-      ...(options.headers as Record<string, string> || {}),
-    };
+    // requestJson 传入的是 Headers 实例。对象展开会丢失其中的
+    // Content-Type，导致 Express 不解析 POST 的 JSON 正文。
+    const headers = new Headers(options.headers);
     if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+      headers.set('Authorization', `Bearer ${token}`);
     }
     const response = await fetch(url, { ...options, headers });
     if (response.status === 401) {

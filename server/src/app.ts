@@ -12,6 +12,7 @@ import communityRoutes from "./routes/community.js";
 import adminRoutes from "./routes/admin.js";
 import aiRoutes from "./routes/ai.js";
 import kitchenwareRoutes from "./routes/kitchenware.js";
+import notificationsRoutes from "./routes/notifications.js";
 import { initDatabase } from "./storage/db.js";
 import { errorHandler, notFoundHandler, sendError } from "./utils/http.js";
 import { requestContext } from "./middleware/requestContext.js";
@@ -23,7 +24,7 @@ const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export function createApp() {
   initDatabase();
   const app = express();
-  const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8081,http://localhost:19006,http://localhost:5173")
+  const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080,http://localhost:5173")
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
@@ -60,6 +61,7 @@ export function createApp() {
   app.use("/api/v1/admin", adminRoutes);
   app.use("/api/v1/ai", aiRoutes);
   app.use("/api/v1/kitchenware", kitchenwareRoutes);
+  app.use("/api/v1/notifications", notificationsRoutes);
 
   app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (error instanceof SyntaxError && "body" in error) {

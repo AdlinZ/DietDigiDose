@@ -462,6 +462,11 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_inventory_scan_jobs_user_status
     ON inventory_scan_jobs(user_id, status, updated_at DESC);
   `);
+  db.prepare(`
+    UPDATE inventory_scan_jobs
+    SET status = 'failed', error_message = '识别任务超时，请重新上传图片', updated_at = CURRENT_TIMESTAMP
+    WHERE status IN ('queued', 'processing') AND updated_at < datetime('now', '-15 minutes')
+  `).run();
 
   // Per-turn chat audit, scoped to an authenticated user and visible only to admins.
   db.exec(`
@@ -488,8 +493,12 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_ai_usage_logs_user_created_at
     ON ai_usage_logs(user_id, created_at);
   `);
+  const aiRetentionDays = Math.max(1, Number(process.env.AI_CONVERSATION_RETENTION_DAYS) || 90);
+  db.prepare("DELETE FROM ai_chat_messages WHERE created_at < datetime('now', ?)")
+    .run(`-${aiRetentionDays} days`);
 
   runMigrations(db);
+  db.prepare("DELETE FROM rate_limit_buckets WHERE updated_at < datetime('now', '-2 days')").run();
 
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL;
@@ -541,10 +550,13 @@ export function initDatabase() {
       AND image_url <> ?
   `).run('http://localhost:9090/media/community/tofu-seaweed-soup.png', 'http://localhost:9090/media/community/tofu-seaweed-soup.png');
 
-  seedDefaultData();
-  seedExpandedCommunityPosts();
-  seedIngredientsData();
-  seedExpandedRecipesData();
+  ensureAdminUser();
+  if (process.env.ENABLE_DEMO_SEED === '1') {
+    seedDefaultData();
+    seedExpandedCommunityPosts();
+    seedIngredientsData();
+    seedExpandedRecipesData();
+  }
 }
 
 export function getSystemSetting(key: string, defaultValue = ""): string {
@@ -561,8 +573,8 @@ function seedExpandedCommunityPosts() {
   // fuller, more varied feed once.  The timestamp offsets make the ranking feed
   // feel alive instead of presenting every seed item as published simultaneously.
   const userIds = new Map(
-    (db.prepare("SELECT id, username FROM users WHERE username IN ('demo', 'chef_david', 'family_kitchen', 'nutritionist_lisa', 'fitness_jack', 'diet_helper')").all() as Array<{ id: number; username: string }>)
-      .map((user) => [user.username, user.id])
+    (db.prepare("SELECT id, nickname AS seed_key FROM users WHERE nickname IN ('demo', 'chef_david', 'family_kitchen', 'nutritionist_lisa', 'fitness_jack', 'diet_helper')").all() as Array<{ id: number; seed_key: string }>)
+      .map((user) => [user.seed_key, user.id])
   );
   const userId = userIds.get('demo')!;
   const u2 = userIds.get('chef_david')!;
@@ -842,18 +854,55 @@ function seedExpandedRecipesData() {
   transaction();
 }
 
+function ensureAdminUser() {
+  const adminUser = db.prepare(`
+    SELECT id, password_hash
+    FROM users
+    WHERE username = 'admin'
+  `).get() as { id: number; password_hash: string } | undefined;
+  if (!adminUser) {
+    const configuredInitialPassword = process.env.ADMIN_INITIAL_PASSWORD?.trim();
+    if (process.env.NODE_ENV === 'production' && (!configuredInitialPassword || configuredInitialPassword.length < 12)) {
+      throw new Error('首次部署必须设置长度至少为 12 位的 ADMIN_INITIAL_PASSWORD');
+    }
+    const bootstrapPassword = configuredInitialPassword || crypto.randomBytes(18).toString('base64url');
+    const hash = bcrypt.hashSync(bootstrapPassword, bcrypt.genSaltSync(10));
+    db.prepare(`
+      INSERT INTO users (username, password_hash, avatar_url, bio, role, must_change_password)
+      VALUES ('admin', ?, '', '系统管理员账号', 'admin', 1)
+    `).run(hash);
+    if (!configuredInitialPassword) console.warn(`[Security] 开发环境管理员一次性初始密码：${bootstrapPassword}`);
+    return;
+  }
+  db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(adminUser.id);
+  if (bcrypt.compareSync('123456', adminUser.password_hash)) {
+    db.prepare("UPDATE users SET must_change_password = 1 WHERE id = ?").run(adminUser.id);
+    console.warn('[Security] 检测到旧版默认管理员密码，已要求下次登录强制修改。');
+  }
+}
+
 function seedDefaultData() {
-  const seedPassword = crypto.randomBytes(24).toString('base64url');
-  const ensureUser = (username: string, nickname: string, avatar: string | null, bio: string) => {
-    let u = db.prepare('SELECT id FROM users WHERE username = ?').get(username) as { id: number } | undefined;
+  const configuredDemoPassword = process.env.DEMO_USER_PASSWORD?.trim();
+  if (configuredDemoPassword && configuredDemoPassword.length < 12) {
+    throw new Error('DEMO_USER_PASSWORD 长度至少为 12 位');
+  }
+  const seedPassword = configuredDemoPassword || crypto.randomBytes(24).toString('base64url');
+  const ensureUser = (seedKey: string, username: string, avatar: string | null, bio: string) => {
+    let u = db.prepare('SELECT id FROM users WHERE username = ? OR nickname = ?').get(username, seedKey) as { id: number } | undefined;
     if (!u) {
       const salt = bcrypt.genSaltSync(10);
       const hash = bcrypt.hashSync(seedPassword, salt);
       const res = db.prepare(`
         INSERT INTO users (username, password_hash, nickname, avatar_url, bio, daily_calories_target)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).run(username, hash, nickname, avatar, bio, 2100);
+      `).run(username, hash, seedKey, avatar, bio, 2100);
       return Number(res.lastInsertRowid);
+    }
+    // 本地测试可选择统一演示账号密码；未配置时不会改动已有凭据。
+    if (configuredDemoPassword) {
+      const salt = bcrypt.genSaltSync(10);
+      const hash = bcrypt.hashSync(configuredDemoPassword, salt);
+      db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(hash, u.id);
     }
     return u.id;
   };
@@ -899,6 +948,8 @@ function seedDefaultData() {
     null,
     '每日推荐高性价比低卡美食与好物。'
   );
+
+  seedDemoHealthProfiles({ userId, u2, u3, u4, u5, u6 });
 
   db.prepare(`
     UPDATE users
@@ -1464,4 +1515,148 @@ function seedDefaultData() {
       'https://images.unsplash.com/photo-1532550907401-a500c9a57435?w=800&auto=format&fit=crop&q=80', 9400
     );
   }
+}
+
+type DemoHealthProfile = {
+  userId: number;
+  loginEmail: string;
+  dailyCaloriesTarget: number;
+  gender: string;
+  age: number;
+  height: number;
+  weight: number;
+  targetWeight: number;
+  healthGoal: string;
+  activityLevel: string;
+  dietaryPreference: string;
+  allergies: Array<{ name: string; type: 'allergy' | 'intolerance'; severity: 'mild' | 'moderate' | 'severe' }>;
+  medications: string;
+  medicalConditions: string[];
+  medicalNotes: string;
+  dietaryRestrictions: string[];
+  dislikedFoods: string;
+  kitchenConstraints: Record<string, string | number>;
+  nutritionTargets: Record<string, string | number>;
+  latestHealth: {
+    bodyFat?: number;
+    waterMl: number;
+    restingHeartRate: number;
+    bloodPressureSystolic?: number;
+    bloodPressureDiastolic?: number;
+    bloodGlucoseMmol?: number;
+    cycleStatus?: string;
+    sleepHours: number;
+  };
+};
+
+/**
+ * 每个演示账号对应一类可重复的 AI / 推荐算法测试场景。
+ * 只在 ENABLE_DEMO_SEED=1 时执行，以 seed key 锁定演示用户，不会扫描或更新真实账号。
+ */
+function seedDemoHealthProfiles(ids: { userId: number; u2: number; u3: number; u4: number; u5: number; u6: number }) {
+  const profiles: DemoHealthProfile[] = [
+    {
+      userId: ids.userId, loginEmail: 'demo@dietdigidose.test', dailyCaloriesTarget: 1650, gender: '女', age: 29, height: 165, weight: 62.5, targetWeight: 58,
+      healthGoal: 'lose_weight', activityLevel: 'moderate', dietaryPreference: '高蛋白、家常中餐',
+      allergies: [{ name: '坚果', type: 'allergy', severity: 'severe' }, { name: '乳糖', type: 'intolerance', severity: 'moderate' }],
+      medications: '', medicalConditions: [], medicalNotes: '重度坚果过敏，需要同时考虑交叉污染风险。',
+      dietaryRestrictions: ['无坚果', '低乳糖'], dislikedFoods: '香菜、芹菜',
+      kitchenConstraints: { meal_time_minutes: 20, budget_per_meal: 35, cooking_level: 'beginner', servings: 1, eating_out_frequency: 'sometimes' },
+      nutritionTargets: { calories_kcal: 1650, protein_g: 95, sugar_g: 30, water_ml: 2000, professional_advice: '严格回避坚果及可能的交叉污染。' },
+      latestHealth: { bodyFat: 27.2, waterMl: 1650, restingHeartRate: 68, sleepHours: 6.5 },
+    },
+    {
+      userId: ids.u2, loginEmail: 'chef-david@dietdigidose.test', dailyCaloriesTarget: 1900, gender: '男', age: 46, height: 175, weight: 82, targetWeight: 76,
+      healthGoal: 'reduce_fat', activityLevel: 'light', dietaryPreference: '地中海式、少油', allergies: [],
+      medications: '二甲双胍、氯沙坦（请按医嘱，测试数据）', medicalConditions: ['2 型糖尿病', '高血压'],
+      medicalNotes: '需保守处理控糖、控钠与用药相互作用提醒，不应调整药物。', dietaryRestrictions: ['低盐', '限添加糖'],
+      dislikedFoods: '肥肉、甜饮料', kitchenConstraints: { meal_time_minutes: 45, budget_per_meal: 60, cooking_level: 'advanced', servings: 2, eating_out_frequency: 'often' },
+      nutritionTargets: { calories_kcal: 1900, protein_g: 100, salt_g: 5, sugar_g: 25, water_ml: 2000, professional_advice: '遵循医生和注册营养师制定的控糖、限钠方案。' },
+      latestHealth: { bodyFat: 28.1, waterMl: 1800, restingHeartRate: 76, bloodPressureSystolic: 142, bloodPressureDiastolic: 91, bloodGlucoseMmol: 8.2, sleepHours: 6 },
+    },
+    {
+      userId: ids.u3, loginEmail: 'family-kitchen@dietdigidose.test', dailyCaloriesTarget: 2200, gender: '女', age: 32, height: 163, weight: 59, targetWeight: 61,
+      healthGoal: 'healthy', activityLevel: 'light', dietaryPreference: '蛋奶素食、家庭共餐',
+      allergies: [{ name: '花生', type: 'allergy', severity: 'severe' }], medications: '孕期复合维生素（测试数据）',
+      medicalConditions: ['孕期'], medicalNotes: '孕 24 周，仅用于测试孕期食品安全、能量与交叉污染提醒。',
+      dietaryRestrictions: ['无花生', '不食生食', '避免未巴氏杀菌乳制品'], dislikedFoods: '生鱼片、动物内脏',
+      kitchenConstraints: { meal_time_minutes: 40, budget_per_meal: 50, cooking_level: 'intermediate', servings: 3, eating_out_frequency: 'rarely' },
+      nutritionTargets: { calories_kcal: 2200, protein_g: 80, water_ml: 2300, professional_advice: '按产检医生建议安排饮食，确保食物彻底熟制。' },
+      latestHealth: { waterMl: 2100, restingHeartRate: 82, cycleStatus: '孕期', sleepHours: 7 },
+    },
+    {
+      userId: ids.u4, loginEmail: 'nutritionist-lisa@dietdigidose.test', dailyCaloriesTarget: 1800, gender: '女', age: 38, height: 168, weight: 60, targetWeight: 60,
+      healthGoal: 'maintain', activityLevel: 'active', dietaryPreference: '严格素食、高纤维',
+      allergies: [{ name: '大豆', type: 'intolerance', severity: 'moderate' }], medications: '', medicalConditions: ['缺铁性贫血'],
+      medicalNotes: '素食且大豆不耐受，用于测试蛋白质替代、铁摄入与冲突约束。', dietaryRestrictions: ['不食肉蛋奶', '无大豆'],
+      dislikedFoods: '苦瓜', kitchenConstraints: { meal_time_minutes: 30, budget_per_meal: 45, cooking_level: 'advanced', servings: 1, eating_out_frequency: 'sometimes' },
+      nutritionTargets: { calories_kcal: 1800, protein_g: 75, water_ml: 2000, professional_advice: '定期复查铁指标，蛋白质优先从非大豆素食来源组合。' },
+      latestHealth: { bodyFat: 23.5, waterMl: 1900, restingHeartRate: 61, sleepHours: 7.5 },
+    },
+    {
+      userId: ids.u5, loginEmail: 'fitness-jack@dietdigidose.test', dailyCaloriesTarget: 2850, gender: '男', age: 27, height: 183, weight: 78, targetWeight: 84,
+      healthGoal: 'gain_muscle', activityLevel: 'very_active', dietaryPreference: '高蛋白、高碳水训练餐',
+      allergies: [{ name: '乳糖', type: 'intolerance', severity: 'moderate' }], medications: '', medicalConditions: ['高尿酸血症'],
+      medicalNotes: '增肌与高尿酸约束并存，不应为追求蛋白质而忽略风险。', dietaryRestrictions: ['低乳糖', '限高嘌呤食物'],
+      dislikedFoods: '鸡胸肉', kitchenConstraints: { meal_time_minutes: 25, budget_per_meal: 55, cooking_level: 'intermediate', servings: 1, eating_out_frequency: 'sometimes' },
+      nutritionTargets: { calories_kcal: 2850, protein_g: 150, sugar_g: 45, water_ml: 3000, professional_advice: '增肌期仍需按医生建议管理尿酸，不使用高嘌呤食物堆高蛋白质。' },
+      latestHealth: { bodyFat: 14.8, waterMl: 2800, restingHeartRate: 55, sleepHours: 7.8 },
+    },
+    {
+      userId: ids.u6, loginEmail: 'diet-helper@dietdigidose.test', dailyCaloriesTarget: 1550, gender: '女', age: 68, height: 158, weight: 66, targetWeight: 63,
+      healthGoal: 'healthy', activityLevel: 'sedentary', dietaryPreference: '软烂家常菜、少量多餐',
+      allergies: [{ name: '海鲜', type: 'allergy', severity: 'severe' }], medications: '华法林（测试数据，不得给出调药建议）',
+      medicalConditions: ['慢性肾脏病', '房颤'], medicalNotes: '需同时检查海鲜过敏、肾脏病食事约束与药食相互作用，任何具体限制以专业意见为准。',
+      dietaryRestrictions: ['低盐', '无海鲜', '软食'], dislikedFoods: '辣椒、坚硬食物',
+      kitchenConstraints: { meal_time_minutes: 30, budget_per_meal: 30, cooking_level: 'beginner', servings: 1, eating_out_frequency: 'rarely' },
+      nutritionTargets: { calories_kcal: 1550, protein_g: 55, salt_g: 4, water_ml: 1500, professional_advice: '蛋白质、钾、磷和饮水量均以肾科医生或营养师的个体化意见为准。' },
+      latestHealth: { waterMl: 1350, restingHeartRate: 79, bloodPressureSystolic: 136, bloodPressureDiastolic: 84, sleepHours: 6.8 },
+    },
+  ];
+
+  const upsertProfile = db.prepare(`
+    INSERT INTO user_health_profiles (
+      user_id, gender, age, height, weight, target_weight, health_goal, activity_level, dietary_preference,
+      allergies_json, medications, medical_conditions_json, medical_notes, dietary_restrictions_json,
+      disliked_foods, kitchen_constraints_json, nutrition_targets_json, tracking_enabled, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id) DO UPDATE SET
+      gender = excluded.gender, age = excluded.age, height = excluded.height, weight = excluded.weight,
+      target_weight = excluded.target_weight, health_goal = excluded.health_goal, activity_level = excluded.activity_level,
+      dietary_preference = excluded.dietary_preference, allergies_json = excluded.allergies_json,
+      medications = excluded.medications, medical_conditions_json = excluded.medical_conditions_json,
+      medical_notes = excluded.medical_notes, dietary_restrictions_json = excluded.dietary_restrictions_json,
+      disliked_foods = excluded.disliked_foods, kitchen_constraints_json = excluded.kitchen_constraints_json,
+      nutrition_targets_json = excluded.nutrition_targets_json, tracking_enabled = 1, updated_at = CURRENT_TIMESTAMP
+  `);
+  const deleteTodayHealth = db.prepare('DELETE FROM health_logs WHERE user_id = ? AND recorded_date = ?');
+  const insertLatestHealth = db.prepare(`
+    INSERT INTO health_logs (
+      user_id, weight, body_fat, water_ml, height_cm, resting_heart_rate,
+      blood_pressure_systolic, blood_pressure_diastolic, blood_glucose_mmol,
+      cycle_status, sleep_hours, recorded_date
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const updateDemoUser = db.prepare('UPDATE users SET email = ?, phone = NULL, daily_calories_target = ? WHERE id = ?');
+  const today = dateKeyAfterDays(0);
+
+  db.transaction(() => {
+    for (const profile of profiles) {
+      upsertProfile.run(
+        profile.userId, profile.gender, profile.age, profile.height, profile.weight, profile.targetWeight,
+        profile.healthGoal, profile.activityLevel, profile.dietaryPreference, JSON.stringify(profile.allergies),
+        profile.medications, JSON.stringify(profile.medicalConditions), profile.medicalNotes,
+        JSON.stringify(profile.dietaryRestrictions), profile.dislikedFoods, JSON.stringify(profile.kitchenConstraints),
+        JSON.stringify(profile.nutritionTargets),
+      );
+      updateDemoUser.run(profile.loginEmail, profile.dailyCaloriesTarget, profile.userId);
+      deleteTodayHealth.run(profile.userId, today);
+      insertLatestHealth.run(
+        profile.userId, profile.weight, profile.latestHealth.bodyFat ?? null, profile.latestHealth.waterMl,
+        profile.height, profile.latestHealth.restingHeartRate, profile.latestHealth.bloodPressureSystolic ?? null,
+        profile.latestHealth.bloodPressureDiastolic ?? null, profile.latestHealth.bloodGlucoseMmol ?? null,
+        profile.latestHealth.cycleStatus ?? null, profile.latestHealth.sleepHours, today,
+      );
+    }
+  })();
 }

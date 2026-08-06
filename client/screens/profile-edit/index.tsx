@@ -10,6 +10,7 @@ import { DEFAULT_AVATARS, getAvatarSource, getPresetAvatarValue } from '@/utils/
 export default function ProfileEditScreen() {
   const { user, updateProfile } = useAuth();
   const router = useSafeRouter();
+  const [username, setUsername] = useState(user?.username || '');
   const [bio, setBio] = useState(user?.bio || '');
   const [avatarUrl, setAvatarUrl] = useState(
     user?.avatar_url || getPresetAvatarValue((user?.id || 0) % DEFAULT_AVATARS.length),
@@ -40,6 +41,7 @@ export default function ProfileEditScreen() {
     setLoading(true);
     const target = parseInt(dailyCaloriesTarget, 10);
     const result = await updateProfile({ 
+      username: username.trim(),
       bio: bio.trim(),
       avatar_url: avatarUrl,
       daily_calories_target: isNaN(target) ? 2000 : target,
@@ -86,7 +88,7 @@ export default function ProfileEditScreen() {
                   <FontAwesome6 name="camera" size={12} color="#FFF" />
                 </View>
               </TouchableOpacity>
-              <Text style={styles.username}>@{user?.username}</Text>
+              <Text style={styles.username}>{user?.username || `食友${user?.id || ''}`}</Text>
               <Text style={styles.avatarHint}>选择食光头像，或点击上方上传照片</Text>
               <View style={styles.presetAvatarRow}>
                 {DEFAULT_AVATARS.map((source, index) => {
@@ -113,6 +115,19 @@ export default function ProfileEditScreen() {
 
             {/* Form */}
             <View style={styles.form}>
+              <View style={styles.field}>
+                <Text style={styles.label}>用户名</Text>
+                <View style={styles.inputGroup}>
+                  <TextInput
+                    style={styles.input}
+                    value={username}
+                    onChangeText={setUsername}
+                    placeholder="社区和菜谱中公开显示的名称"
+                    placeholderTextColor="#94A3B8"
+                    maxLength={30}
+                  />
+                </View>
+              </View>
               <View style={styles.field}>
                 <Text style={styles.label}>个人简介</Text>
                 <View style={[styles.inputGroup, styles.textAreaGroup]}>

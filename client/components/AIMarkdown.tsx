@@ -77,14 +77,14 @@ export const AIMarkdown: React.FC<AIMarkdownProps> = ({ content }) => {
   }
 
   // 渲染单行文本中的粗体语法 **粗体**
-  const renderInlineFormattedText = (text: string, baseStyle: string = "text-xs text-[#3D3229]") => {
+  const renderInlineFormattedText = (text: string, baseStyle: string = "text-xs text-ink") => {
     const parts = text.split(/(\*\*.*?\*\*)/g);
     return (
       <Text className={baseStyle}>
         {parts.map((part, idx) => {
           if (part.startsWith("**") && part.endsWith("**")) {
             return (
-              <Text key={idx} className="font-black text-[#2D6A4F]">
+              <Text key={idx} className="font-black text-brand">
                 {part.slice(2, -2)}
               </Text>
             );
@@ -100,29 +100,29 @@ export const AIMarkdown: React.FC<AIMarkdownProps> = ({ content }) => {
       {blocks.map((block, i) => {
         if (block.type === "header") {
           return (
-            <View key={i} className="mt-2 mb-1 pb-1 border-b border-[#EBE3D5]">
-              <Text className="text-sm font-black text-[#3D3229]">{block.data}</Text>
+            <View key={i} className="mt-2 mb-1 pb-1 border-b border-line">
+              <Text className="text-sm font-black text-ink">{block.data}</Text>
             </View>
           );
         }
 
         if (block.type === "subheader") {
           return (
-            <Text key={i} className="text-xs font-black text-[#2D6A4F] mt-1 mb-0.5">
+            <Text key={i} className="text-xs font-black text-brand mt-1 mb-0.5">
               {block.data}
             </Text>
           );
         }
 
         if (block.type === "divider") {
-          return <View key={i} className="h-[1px] bg-[#EBE3D5] my-2" />;
+          return <View key={i} className="h-[1px] bg-line my-2" />;
         }
 
         if (block.type === "list") {
           return (
             <View key={i} className="flex-row items-start gap-1.5 ml-1">
-              <Text className="text-xs font-black text-[#2D6A4F] mt-0.5">•</Text>
-              <View className="flex-1">{renderInlineFormattedText(block.data, "text-xs leading-5 text-[#3D3229]")}</View>
+              <Text className="text-xs font-black text-brand mt-0.5">•</Text>
+              <View className="flex-1">{renderInlineFormattedText(block.data, "text-xs leading-5 text-ink")}</View>
             </View>
           );
         }
@@ -132,9 +132,9 @@ export const AIMarkdown: React.FC<AIMarkdownProps> = ({ content }) => {
           const bodyRows = block.data.slice(1);
 
           return (
-            <View key={i} className="my-2 rounded-2xl overflow-hidden border border-[#EBE3D5] shadow-xs bg-white">
+            <View key={i} className="my-2 rounded-2xl overflow-hidden border border-line shadow-xs bg-white">
               {/* 表头 */}
-              <View className="flex-row bg-[#2D6A4F] px-3 py-2">
+              <View className="flex-row bg-brand px-3 py-2">
                 {headerRow.map((col: string, colIdx: number) => (
                   <View key={colIdx} className="flex-1 items-center justify-center px-1">
                     <Text className="text-[11px] font-black text-white text-center">{col}</Text>
@@ -146,13 +146,13 @@ export const AIMarkdown: React.FC<AIMarkdownProps> = ({ content }) => {
               {bodyRows.map((row: string[], rowIdx: number) => (
                 <View
                   key={rowIdx}
-                  className={`flex-row px-3 py-2 border-t border-[#EBE3D5]/60 ${
-                    rowIdx % 2 === 1 ? "bg-[#FDF8F0]" : "bg-white"
+                  className={`flex-row px-3 py-2 border-t border-line/60 ${
+                    rowIdx % 2 === 1 ? "bg-canvas" : "bg-white"
                   }`}
                 >
                   {row.map((colText: string, colIdx: number) => (
                     <View key={colIdx} className="flex-1 items-center justify-center px-1">
-                      {renderInlineFormattedText(colText, "text-[11px] font-bold text-[#3D3229] text-center")}
+                      {renderInlineFormattedText(colText, "text-[11px] font-bold text-ink text-center")}
                     </View>
                   ))}
                 </View>
@@ -163,7 +163,7 @@ export const AIMarkdown: React.FC<AIMarkdownProps> = ({ content }) => {
 
         return (
           <View key={i} className="leading-6">
-            {renderInlineFormattedText(block.data, "text-xs leading-6 text-[#3D3229]")}
+            {renderInlineFormattedText(block.data, "text-xs leading-6 text-ink")}
           </View>
         );
       })}

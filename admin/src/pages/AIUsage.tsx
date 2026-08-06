@@ -42,7 +42,6 @@ interface UsageBreakdown {
 interface UserUsage {
   id: number;
   username: string;
-  nickname: string | null;
   avatarUrl: string | null;
   requests: number;
   promptTokens: number;
@@ -141,7 +140,6 @@ export default function AIUsage() {
     if (!query) return data?.users ?? [];
     return (data?.users ?? []).filter((user) =>
       user.username.toLowerCase().includes(query)
-      || user.nickname?.toLowerCase().includes(query)
       || String(user.id).includes(query)
     );
   }, [data?.users, searchQuery]);
@@ -188,7 +186,7 @@ export default function AIUsage() {
 
   const selectedUser = data?.users.find((user) => String(user.id) === selectedUserId);
   const scopeLabel = selectedUser
-    ? `${selectedUser.nickname || selectedUser.username} 的用量`
+    ? `${selectedUser.username} 的用量`
     : '全部用户用量';
 
   const summaryCards = [
@@ -509,7 +507,7 @@ export default function AIUsage() {
               <input
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="搜索用户、昵称或 ID"
+                placeholder="搜索用户名或 ID"
                 className="w-full rounded-xl bg-background-alt py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
@@ -522,7 +520,7 @@ export default function AIUsage() {
               <option value="">全部用户</option>
               {(data?.users ?? []).map((user) => (
                 <option key={user.id} value={user.id}>
-                  {user.nickname || user.username} (@{user.username})
+                  {user.username}
                 </option>
               ))}
             </select>
@@ -579,11 +577,11 @@ export default function AIUsage() {
                     >
                       <img
                         src={getAvatarUrl(user.avatarUrl, user.id)}
-                        alt={user.nickname || user.username}
+                        alt={user.username}
                         className="h-9 w-9 rounded-full object-cover"
                       />
                       <span>
-                        <span className="block font-medium text-text-main">{user.nickname || user.username}</span>
+                        <span className="block font-medium text-text-main">{user.username}</span>
                         <span className="block text-xs text-text-muted">@{user.username} · ID {user.id}</span>
                       </span>
                     </button>

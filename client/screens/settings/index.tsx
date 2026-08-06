@@ -10,6 +10,7 @@ import {
   Modal,
   TextInput,
   ActivityIndicator,
+  Share,
 } from "react-native";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
@@ -18,6 +19,7 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { authApi } from "@/services/api";
 import { getExpoPushToken, syncLocalNotificationSchedules, type NotificationPreferences } from "@/utils/notifications";
 import { APP_VERSION } from "@/utils/appVersion";
+import { purgeUserPrivateStorage } from "@/utils/userStorage";
 
 export default function SettingsScreen() {
   const router = useSafeRouter();
@@ -81,6 +83,7 @@ export default function SettingsScreen() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletePassword, setDeletePassword] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
+  const [aiDataBusy, setAIDataBusy] = useState(false);
 
   const handleSaveCalorie = async () => {
     const val = parseInt(calorieTarget);
@@ -99,12 +102,48 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleClearCache = () => {
+  const handleClearCache = async () => {
     setClearingCache(true);
-    setTimeout(() => {
+    try {
+      await purgeUserPrivateStorage(user?.id);
+      Alert.alert("成功", "AI 对话、采购清单和未完成识别等本地缓存已清理");
+    } catch {
+      Alert.alert("清理失败", "暂时无法清理本地缓存，请稍后重试");
+    } finally {
       setClearingCache(false);
-      Alert.alert("成功", "本地临时缓存已清理");
-    }, 600);
+    }
+  };
+
+  const handleExportAIData = async () => {
+    if (!token) return;
+    setAIDataBusy(true);
+    try {
+      const data = await authApi.exportAIData<Record<string, unknown>>(token);
+      await Share.share({ title: "食光烙记 AI 数据导出", message: JSON.stringify(data, null, 2) });
+    } catch (error) {
+      Alert.alert("导出失败", error instanceof Error ? error.message : "请稍后重试");
+    } finally {
+      setAIDataBusy(false);
+    }
+  };
+
+  const handleDeleteAIData = () => {
+    if (!token) return;
+    Alert.alert("删除 AI 数据", "将永久删除服务端 AI 对话、识别任务和相关用量记录，并清理本地 AI 缓存。此操作不可恢复。", [
+      { text: "取消", style: "cancel" },
+      {
+        text: "永久删除",
+        style: "destructive",
+        onPress: () => {
+          setAIDataBusy(true);
+          void authApi.deleteAIData(token)
+            .then(() => purgeUserPrivateStorage(user?.id))
+            .then(() => Alert.alert("已删除", "你的 AI 对话与识别数据已删除。"))
+            .catch((error) => Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试"))
+            .finally(() => setAIDataBusy(false));
+        },
+      },
+    ]);
   };
 
   const confirmLogout = () => {
@@ -133,18 +172,18 @@ export default function SettingsScreen() {
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
       {/* Top Header */}
-      <View className="px-5 pt-4 pb-3 flex-row items-center justify-between border-b border-[#EBE3D5]/80 bg-[#FDF8F0]/90">
+      <View className="px-5 pt-4 pb-3 flex-row items-center justify-between border-b border-line/80 bg-canvas/90">
         <TouchableOpacity
           onPress={() => router.back()}
-          className="w-10 h-10 rounded-2xl bg-white border border-[#EBE3D5] items-center justify-center shadow-xs active:scale-95 transition-transform"
+          className="w-10 h-10 rounded-2xl bg-white border border-line items-center justify-center shadow-xs active:scale-95 transition-transform"
           accessibilityRole="button"
           accessibilityLabel="返回"
         >
           <FontAwesome6 name="chevron-left" size={14} color="#3D3229" />
         </TouchableOpacity>
         <View className="items-center">
-          <Text className="text-lg font-black text-[#3D3229]">设置与偏好</Text>
-          <Text className="text-[10px] text-[#8B7D6B] mt-0.5">个性化配置与应用管理</Text>
+          <Text className="text-lg font-black text-ink">设置与偏好</Text>
+          <Text className="text-[10px] text-copy-muted mt-0.5">个性化配置与应用管理</Text>
         </View>
         <View className="w-10" />
       </View>
@@ -155,25 +194,25 @@ export default function SettingsScreen() {
       >
         {/* Section 1: 账号与目标 */}
         <View className="mb-6">
-          <Text className="text-xs font-bold text-[#8B7D6B] uppercase tracking-wider mb-2.5 px-1">
+          <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">
             账号与目标设置
           </Text>
-          <View className="bg-white rounded-3xl border border-[#EBE3D5] overflow-hidden shadow-xs">
+          <View className="bg-white rounded-3xl border border-line overflow-hidden shadow-xs">
             <TouchableOpacity
               onPress={() => router.push("/profile-edit")}
-              className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6] active:bg-[#FDF8F0]/60 transition-colors"
+              className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60 transition-colors"
             >
               <View className="flex-row items-center gap-3.5">
-                <View className="w-9 h-9 rounded-2xl bg-[#2D6A4F]/10 items-center justify-center">
+                <View className="w-9 h-9 rounded-2xl bg-brand/10 items-center justify-center">
                   <FontAwesome6 name="user-gear" size={15} color="#2D6A4F" />
                 </View>
                 <View>
-                  <Text className="text-sm font-bold text-[#3D3229]">修改个人资料</Text>
-                  <Text className="text-[11px] text-[#8B7D6B] mt-0.5">修改昵称、头像与联系方式</Text>
+                  <Text className="text-sm font-bold text-ink">修改个人资料</Text>
+                  <Text className="text-[11px] text-copy-muted mt-0.5">修改用户名、头像与联系方式</Text>
                 </View>
               </View>
               <View className="flex-row items-center gap-2">
-                <Text className="text-xs font-semibold text-[#8B7D6B] bg-[#F5EFE6] px-2.5 py-1 rounded-full">
+                <Text className="text-xs font-semibold text-copy-muted bg-background-secondary px-2.5 py-1 rounded-full">
                   {user?.username || "未登录"}
                 </Text>
                 <FontAwesome6 name="chevron-right" size={12} color="#B0A495" />
@@ -185,21 +224,21 @@ export default function SettingsScreen() {
                 setCalorieTarget(user?.daily_calories_target?.toString() || "2100");
                 setCalorieModalOpen(true);
               }}
-              className="p-4 flex-row items-center justify-between active:bg-[#FDF8F0]/60 transition-colors"
+              className="p-4 flex-row items-center justify-between active:bg-canvas/60 transition-colors"
             >
               <View className="flex-row items-center gap-3.5">
-                <View className="w-9 h-9 rounded-2xl bg-[#E9C46A]/20 items-center justify-center">
+                <View className="w-9 h-9 rounded-2xl bg-highlight/20 items-center justify-center">
                   <FontAwesome6 name="fire" size={15} color="#D4A276" />
                 </View>
                 <View>
-                  <Text className="text-sm font-bold text-[#3D3229]">每日目标摄入热量</Text>
-                  <Text className="text-[11px] text-[#8B7D6B] mt-0.5">定制专属每日卡路里控制线</Text>
+                  <Text className="text-sm font-bold text-ink">每日目标摄入热量</Text>
+                  <Text className="text-[11px] text-copy-muted mt-0.5">定制专属每日卡路里控制线</Text>
                 </View>
               </View>
               <View className="flex-row items-center gap-2">
-                <View className="bg-[#2D6A4F]/10 px-2.5 py-1 rounded-full flex-row items-center gap-1">
+                <View className="bg-brand/10 px-2.5 py-1 rounded-full flex-row items-center gap-1">
                   <FontAwesome6 name="bolt" size={10} color="#2D6A4F" />
-                  <Text className="text-xs font-extrabold text-[#2D6A4F]">
+                  <Text className="text-xs font-extrabold text-brand">
                     {user?.daily_calories_target || 2100} kcal
                   </Text>
                 </View>
@@ -211,18 +250,18 @@ export default function SettingsScreen() {
 
         {/* Section 2: 智能预警与推送 */}
         <View className="mb-6">
-          <Text className="text-xs font-bold text-[#8B7D6B] uppercase tracking-wider mb-2.5 px-1">
+          <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">
             智能预警与提醒
           </Text>
-          <View className="bg-white rounded-3xl border border-[#EBE3D5] overflow-hidden shadow-xs">
-            <View className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6]">
+          <View className="bg-white rounded-3xl border border-line overflow-hidden shadow-xs">
+            <View className="p-4 flex-row items-center justify-between border-b border-background-secondary">
               <View className="flex-row items-center gap-3.5 flex-1 pr-2">
                 <View className="w-9 h-9 rounded-2xl bg-[#D4A276]/15 items-center justify-center">
                   <FontAwesome6 name="bell" size={15} color="#D4A276" />
                 </View>
                 <View className="flex-1">
-                  <Text className="text-sm font-bold text-[#3D3229]">食材临期自动预警</Text>
-                  <Text className="text-[11px] text-[#8B7D6B] mt-0.5 leading-4">
+                  <Text className="text-sm font-bold text-ink">食材临期自动预警</Text>
+                  <Text className="text-[11px] text-copy-muted mt-0.5 leading-4">
                     提前 3 天推送冰箱即将过期食材，减少浪费
                   </Text>
                 </View>
@@ -235,14 +274,14 @@ export default function SettingsScreen() {
               />
             </View>
 
-            <View className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6]">
+            <View className="p-4 flex-row items-center justify-between border-b border-background-secondary">
               <View className="flex-row items-center gap-3.5 flex-1 pr-2">
-                <View className="w-9 h-9 rounded-2xl bg-[#2D6A4F]/10 items-center justify-center">
+                <View className="w-9 h-9 rounded-2xl bg-brand/10 items-center justify-center">
                   <FontAwesome6 name="utensils" size={15} color="#2D6A4F" />
                 </View>
                 <View className="flex-1">
-                  <Text className="text-sm font-bold text-[#3D3229]">每日三餐打卡提醒</Text>
-                  <Text className="text-[11px] text-[#8B7D6B] mt-0.5 leading-4">
+                  <Text className="text-sm font-bold text-ink">每日三餐打卡提醒</Text>
+                  <Text className="text-[11px] text-copy-muted mt-0.5 leading-4">
                     按时提醒记录早、午、晚餐，建立健康饮食习惯
                   </Text>
                 </View>
@@ -261,8 +300,8 @@ export default function SettingsScreen() {
                   <FontAwesome6 name="droplet" size={15} color="#0EA5E9" />
                 </View>
                 <View className="flex-1">
-                  <Text className="text-sm font-bold text-[#3D3229]">水份补给健康提醒</Text>
-                  <Text className="text-[11px] text-[#8B7D6B] mt-0.5 leading-4">
+                  <Text className="text-sm font-bold text-ink">水份补给健康提醒</Text>
+                  <Text className="text-[11px] text-copy-muted mt-0.5 leading-4">
                     间隔 2 小时定时提醒补充 250ml 饮水量
                   </Text>
                 </View>
@@ -279,28 +318,28 @@ export default function SettingsScreen() {
 
         {/* Section 3: 存储与通用偏好 */}
         <View className="mb-6">
-          <Text className="text-xs font-bold text-[#8B7D6B] uppercase tracking-wider mb-2.5 px-1">
+          <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">
             通用与数据管理
           </Text>
-          <View className="bg-white rounded-3xl border border-[#EBE3D5] overflow-hidden shadow-xs">
+          <View className="bg-white rounded-3xl border border-line overflow-hidden shadow-xs">
             <TouchableOpacity
-              onPress={handleClearCache}
+              onPress={() => void handleClearCache()}
               disabled={clearingCache}
-              className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6] active:bg-[#FDF8F0]/60 transition-colors"
+              className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60 transition-colors"
             >
               <View className="flex-row items-center gap-3.5">
-                <View className="w-9 h-9 rounded-2xl bg-[#8B7D6B]/15 items-center justify-center">
+                <View className="w-9 h-9 rounded-2xl bg-copy-muted/15 items-center justify-center">
                   <FontAwesome6 name="broom" size={15} color="#8B7D6B" />
                 </View>
                 <View>
-                  <Text className="text-sm font-bold text-[#3D3229]">清理本地缓存</Text>
-                  <Text className="text-[11px] text-[#8B7D6B] mt-0.5">释放临时数据与离线缓存资源</Text>
+                  <Text className="text-sm font-bold text-ink">清理本地缓存</Text>
+                  <Text className="text-[11px] text-copy-muted mt-0.5">释放临时数据与离线缓存资源</Text>
                 </View>
               </View>
               {clearingCache ? (
                 <ActivityIndicator size="small" color="#2D6A4F" />
               ) : (
-                <Text className="text-xs font-bold text-[#2D6A4F] bg-[#2D6A4F]/10 px-2.5 py-1 rounded-full">
+                <Text className="text-xs font-bold text-brand bg-brand/10 px-2.5 py-1 rounded-full">
                   清理
                 </Text>
               )}
@@ -308,41 +347,62 @@ export default function SettingsScreen() {
 
             <TouchableOpacity
               onPress={() => router.push({ pathname: "/legal", params: { type: "privacy" } })}
-              className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6] active:bg-[#FDF8F0]/60 transition-colors"
+              className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60 transition-colors"
             >
               <View className="flex-row items-center gap-3.5">
                 <View className="w-9 h-9 rounded-2xl bg-amber-500/10 items-center justify-center">
                   <FontAwesome6 name="shield-halved" size={15} color="#D97706" />
                 </View>
-                <Text className="text-sm font-bold text-[#3D3229]">隐私政策</Text>
+                <Text className="text-sm font-bold text-ink">隐私政策</Text>
               </View>
               <FontAwesome6 name="chevron-right" size={12} color="#B0A495" />
             </TouchableOpacity>
 
+            {isAuthenticated ? (
+              <View className="border-b border-background-secondary">
+                <TouchableOpacity
+                  onPress={() => void handleExportAIData()}
+                  disabled={aiDataBusy}
+                  className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60"
+                >
+                  <Text className="text-sm font-bold text-ink">导出我的 AI 数据</Text>
+                  <FontAwesome6 name="file-export" size={13} color="#2D6A4F" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleDeleteAIData}
+                  disabled={aiDataBusy}
+                  className="p-4 flex-row items-center justify-between active:bg-red-50"
+                >
+                  <Text className="text-sm font-bold text-red-600">删除我的 AI 数据</Text>
+                  {aiDataBusy ? <ActivityIndicator size="small" color="#DC2626" /> : <FontAwesome6 name="trash-can" size={13} color="#DC2626" />}
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
             <TouchableOpacity
               onPress={() => router.push({ pathname: "/legal", params: { type: "terms" } })}
-              className="p-4 flex-row items-center justify-between border-b border-[#F5EFE6] active:bg-[#FDF8F0]/60 transition-colors"
+              className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60 transition-colors"
             >
               <View className="flex-row items-center gap-3.5">
                 <View className="w-9 h-9 rounded-2xl bg-indigo-500/10 items-center justify-center">
                   <FontAwesome6 name="file-contract" size={15} color="#6366F1" />
                 </View>
-                <Text className="text-sm font-bold text-[#3D3229]">服务与用户协议</Text>
+                <Text className="text-sm font-bold text-ink">服务与用户协议</Text>
               </View>
               <FontAwesome6 name="chevron-right" size={12} color="#B0A495" />
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => router.push("/about")}
-              className="p-4 flex-row items-center justify-between active:bg-[#FDF8F0]/60 transition-colors"
+              className="p-4 flex-row items-center justify-between active:bg-canvas/60 transition-colors"
             >
               <View className="flex-row items-center gap-3.5">
-                <View className="w-9 h-9 rounded-2xl bg-[#2D6A4F]/10 items-center justify-center">
+                <View className="w-9 h-9 rounded-2xl bg-brand/10 items-center justify-center">
                   <FontAwesome6 name="circle-info" size={15} color="#2D6A4F" />
                 </View>
                 <View>
-                  <Text className="text-sm font-bold text-[#3D3229]">关于食光烙记</Text>
-                  <Text className="text-[11px] text-[#8B7D6B] mt-0.5">版本 {APP_VERSION} • DietDigiDose</Text>
+                  <Text className="text-sm font-bold text-ink">关于食光烙记</Text>
+                  <Text className="text-[11px] text-copy-muted mt-0.5">版本 {APP_VERSION} • DietDigiDose</Text>
                 </View>
               </View>
               <FontAwesome6 name="chevron-right" size={12} color="#B0A495" />
@@ -355,10 +415,10 @@ export default function SettingsScreen() {
           <View className="gap-3 mt-2">
             <TouchableOpacity
               onPress={() => setLogoutModalOpen(true)}
-              className="bg-white border border-[#E76F51]/30 py-4 rounded-3xl items-center flex-row justify-center gap-2 shadow-xs active:bg-red-50 active:scale-[0.99] transition-all"
+              className="bg-white border border-critical/30 py-4 rounded-3xl items-center flex-row justify-center gap-2 shadow-xs active:bg-red-50 active:scale-[0.99] transition-all"
             >
               <FontAwesome6 name="arrow-right-from-bracket" size={15} color="#E76F51" />
-              <Text className="text-sm font-bold text-[#E76F51]">退出当前账号登录</Text>
+              <Text className="text-sm font-bold text-critical">退出当前账号登录</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setDeleteModalOpen(true)}
@@ -373,28 +433,28 @@ export default function SettingsScreen() {
       {/* 修改目标热量 Modal */}
       <Modal visible={calorieModalOpen} animationType="slide" transparent>
         <View className="flex-1 bg-black/40 justify-end">
-          <View className="bg-white rounded-t-[36px] p-6 shadow-2xl border-t border-[#EBE3D5]">
-            <View className="flex-row items-center justify-between mb-3 border-b border-[#F5EFE6] pb-3">
+          <View className="bg-white rounded-t-[36px] p-6 shadow-2xl border-t border-line">
+            <View className="flex-row items-center justify-between mb-3 border-b border-background-secondary pb-3">
               <View className="flex-row items-center gap-2.5">
-                <View className="w-8 h-8 rounded-xl bg-[#E9C46A]/20 items-center justify-center">
+                <View className="w-8 h-8 rounded-xl bg-highlight/20 items-center justify-center">
                   <FontAwesome6 name="fire" size={14} color="#D4A276" />
                 </View>
-                <Text className="text-lg font-black text-[#3D3229]">设置每日目标热量</Text>
+                <Text className="text-lg font-black text-ink">设置每日目标热量</Text>
               </View>
               <TouchableOpacity
                 onPress={() => setCalorieModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-[#F5EFE6] items-center justify-center"
+                className="w-8 h-8 rounded-full bg-background-secondary items-center justify-center"
               >
                 <FontAwesome6 name="xmark" size={14} color="#8B7D6B" />
               </TouchableOpacity>
             </View>
 
-            <Text className="text-xs text-[#8B7D6B] mb-4 leading-5">
+            <Text className="text-xs text-copy-muted mb-4 leading-5">
               根据您的基础代谢率与日常运动量，建议将每日摄入目标设定在 1800 ~ 2600 kcal 之间。
             </Text>
 
             {/* Quick preset selector pills */}
-            <Text className="text-xs font-bold text-[#3D3229] mb-2 px-1">快速选择目标热量：</Text>
+            <Text className="text-xs font-bold text-ink mb-2 px-1">快速选择目标热量：</Text>
             <View className="flex-row gap-2 mb-4 flex-wrap">
               {["1800", "2000", "2200", "2500"].map((preset) => {
                 const isSelected = calorieTarget === preset;
@@ -404,13 +464,13 @@ export default function SettingsScreen() {
                     onPress={() => setCalorieTarget(preset)}
                     className={`px-4 py-2 rounded-2xl border ${
                       isSelected
-                        ? "bg-[#2D6A4F] border-[#2D6A4F]"
-                        : "bg-[#FDF8F0] border-[#EBE3D5]"
+                        ? "bg-brand border-brand"
+                        : "bg-canvas border-line"
                     }`}
                   >
                     <Text
                       className={`text-xs font-bold ${
-                        isSelected ? "text-white" : "text-[#3D3229]"
+                        isSelected ? "text-white" : "text-ink"
                       }`}
                     >
                       {preset} kcal
@@ -421,13 +481,13 @@ export default function SettingsScreen() {
             </View>
 
             {/* Input with step buttons */}
-            <View className="bg-[#FDF8F0] px-4 py-3 rounded-2xl border border-[#EBE3D5] flex-row items-center mb-5 shadow-inner">
+            <View className="bg-canvas px-4 py-3 rounded-2xl border border-line flex-row items-center mb-5 shadow-inner">
               <TouchableOpacity
                 onPress={() => {
                   const curr = parseInt(calorieTarget) || 2000;
                   setCalorieTarget(Math.max(1000, curr - 50).toString());
                 }}
-                className="w-9 h-9 rounded-xl bg-white border border-[#EBE3D5] items-center justify-center"
+                className="w-9 h-9 rounded-xl bg-white border border-line items-center justify-center"
               >
                 <FontAwesome6 name="minus" size={12} color="#3D3229" />
               </TouchableOpacity>
@@ -436,15 +496,15 @@ export default function SettingsScreen() {
                 onChangeText={setCalorieTarget}
                 keyboardType="numeric"
                 placeholder="2100"
-                className="flex-1 text-center text-xl font-black text-[#3D3229]"
+                className="flex-1 text-center text-xl font-black text-ink"
               />
-              <Text className="text-xs font-bold text-[#8B7D6B] mr-3">kcal</Text>
+              <Text className="text-xs font-bold text-copy-muted mr-3">kcal</Text>
               <TouchableOpacity
                 onPress={() => {
                   const curr = parseInt(calorieTarget) || 2000;
                   setCalorieTarget(Math.min(5000, curr + 50).toString());
                 }}
-                className="w-9 h-9 rounded-xl bg-white border border-[#EBE3D5] items-center justify-center"
+                className="w-9 h-9 rounded-xl bg-white border border-line items-center justify-center"
               >
                 <FontAwesome6 name="plus" size={12} color="#3D3229" />
               </TouchableOpacity>
@@ -453,7 +513,7 @@ export default function SettingsScreen() {
             <TouchableOpacity
               onPress={handleSaveCalorie}
               disabled={updatingCal}
-              className="bg-[#2D6A4F] py-4 rounded-2xl items-center shadow-md active:opacity-90"
+              className="bg-brand py-4 rounded-2xl items-center shadow-md active:opacity-90"
             >
               {updatingCal ? (
                 <ActivityIndicator color="#FFF" />
@@ -468,26 +528,26 @@ export default function SettingsScreen() {
       {/* 退出登录确认 Modal */}
       <Modal visible={logoutModalOpen} animationType="fade" transparent>
         <View className="flex-1 bg-black/50 items-center justify-center p-6">
-          <View className="bg-white rounded-[32px] p-6 w-full max-w-sm items-center shadow-2xl border border-[#EBE3D5]">
+          <View className="bg-white rounded-[32px] p-6 w-full max-w-sm items-center shadow-2xl border border-line">
             <View className="w-16 h-16 rounded-full bg-red-50 border border-red-100 items-center justify-center mb-4">
               <FontAwesome6 name="arrow-right-from-bracket" size={24} color="#E76F51" />
             </View>
-            <Text className="text-lg font-black text-[#3D3229]">确认退出登录</Text>
-            <Text className="text-xs text-[#8B7D6B] text-center mt-2 mb-6 leading-5">
+            <Text className="text-lg font-black text-ink">确认退出登录</Text>
+            <Text className="text-xs text-copy-muted text-center mt-2 mb-6 leading-5">
               退出后需要重新登录才能继续管理您的食材与饮食打卡记录。确定要退出吗？
             </Text>
 
             <View className="flex-row gap-3 w-full">
               <TouchableOpacity
                 onPress={() => setLogoutModalOpen(false)}
-                className="flex-1 bg-[#F5EFE6] py-3.5 rounded-2xl items-center border border-[#EBE3D5]"
+                className="flex-1 bg-background-secondary py-3.5 rounded-2xl items-center border border-line"
               >
-                <Text className="text-xs font-bold text-[#8B7D6B]">取消</Text>
+                <Text className="text-xs font-bold text-copy-muted">取消</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={confirmLogout}
-                className="flex-1 bg-[#E76F51] py-3.5 rounded-2xl items-center shadow-xs active:opacity-90"
+                className="flex-1 bg-critical py-3.5 rounded-2xl items-center shadow-xs active:opacity-90"
               >
                 <Text className="text-xs font-bold text-white">确认退出</Text>
               </TouchableOpacity>
@@ -499,7 +559,7 @@ export default function SettingsScreen() {
       {/* 永久删除账号 Modal */}
       <Modal visible={deleteModalOpen} animationType="fade" transparent>
         <View className="flex-1 bg-black/50 items-center justify-center p-6">
-          <View className="bg-white rounded-[32px] p-6 w-full max-w-sm shadow-2xl border border-[#EBE3D5]">
+          <View className="bg-white rounded-[32px] p-6 w-full max-w-sm shadow-2xl border border-line">
             <View className="w-14 h-14 rounded-full bg-red-50 border border-red-200 items-center justify-center mb-3 self-center">
               <FontAwesome6 name="triangle-exclamation" size={22} color="#A33A2B" />
             </View>
@@ -513,13 +573,13 @@ export default function SettingsScreen() {
               secureTextEntry
               autoCapitalize="none"
               placeholder="请输入当前登录密码"
-              className="bg-[#FDF8F0] border border-[#EBE3D5] rounded-2xl px-4 py-3.5 text-sm text-[#3D3229] mb-4"
+              className="bg-canvas border border-line rounded-2xl px-4 py-3.5 text-sm text-ink mb-4"
             />
             <View className="flex-row gap-3">
               <TouchableOpacity
                 disabled={deletingAccount}
                 onPress={() => { setDeleteModalOpen(false); setDeletePassword(""); }}
-                className="flex-1 bg-[#F5EFE6] py-3.5 rounded-2xl items-center border border-[#EBE3D5]"
+                className="flex-1 bg-background-secondary py-3.5 rounded-2xl items-center border border-line"
               >
                 <Text className="text-xs font-bold text-[#66594D]">取消</Text>
               </TouchableOpacity>

@@ -12,6 +12,10 @@ process.env.NODE_ENV = "test";
 process.env.DATABASE_PATH = path.join(testDirectory, "integration.db");
 process.env.JWT_SECRET = "integration-test-jwt-secret-at-least-32-characters-long";
 process.env.ADMIN_INITIAL_PASSWORD = "AdminPassword1234";
+process.env.ENABLE_DEMO_SEED = "1";
+process.env.DEMO_USER_PASSWORD = "DemoPassword1234";
+process.env.AI_RATE_LIMIT = "3";
+process.env.FOOD_SEARCH_RATE_LIMIT = "2";
 
 type JsonObject = Record<string, any>;
 
@@ -36,7 +40,7 @@ async function api(
 async function register(identifier: string) {
   const result = await api("/api/v1/auth/register", {
     method: "POST",
-    body: JSON.stringify({ identifier, password: "Password1234" }),
+    body: JSON.stringify({ identifier, username: `测试用户${identifier.split("@")[0]}`, password: "Password1234" }),
   });
   assert.equal(result.response.status, 201);
   assert.ok(result.body && !Array.isArray(result.body));
@@ -73,6 +77,53 @@ describe("API security baseline", () => {
     assert.ok(response.headers.get("x-request-id"));
   });
 
+  test("fresh databases include required schema migrations", () => {
+    const columns = db.prepare("PRAGMA table_info(user_custom_foods)").all() as Array<{ name: string }>;
+    assert.ok(columns.some((column) => column.name === "status"));
+    const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 16").get() as { name: string };
+    assert.equal(migration.name, "custom_food_review_status");
+    const rateLimitMigration = db.prepare("SELECT name FROM schema_migrations WHERE version = 20").get() as { name: string };
+    assert.equal(rateLimitMigration.name, "shared_rate_limit_buckets");
+    const funnelMigration = db.prepare("SELECT name FROM schema_migrations WHERE version = 21").get() as { name: string };
+    assert.equal(funnelMigration.name, "privacy_safe_funnel_events");
+    const usernameMigration = db.prepare("SELECT name FROM schema_migrations WHERE version = 22").get() as { name: string };
+    assert.equal(usernameMigration.name, "username_is_public_identity");
+  });
+
+  test("demo users cover distinct health and dietary recommendation scenarios", async () => {
+    const profiles = db.prepare(`
+      SELECT u.nickname AS seed_key, u.daily_calories_target, hp.*
+      FROM users u
+      JOIN user_health_profiles hp ON hp.user_id = u.id
+      WHERE u.nickname IN ('demo', 'chef_david', 'family_kitchen', 'nutritionist_lisa', 'fitness_jack', 'diet_helper')
+    `).all() as JsonObject[];
+    assert.equal(profiles.length, 6);
+
+    const bySeedKey = new Map(profiles.map((profile) => [profile.seed_key, profile]));
+    assert.equal(bySeedKey.get("demo")?.health_goal, "lose_weight");
+    assert.deepEqual(JSON.parse(bySeedKey.get("demo")?.allergies_json), [
+      { name: "坚果", type: "allergy", severity: "severe" },
+      { name: "乳糖", type: "intolerance", severity: "moderate" },
+    ]);
+    assert.deepEqual(JSON.parse(bySeedKey.get("family_kitchen")?.medical_conditions_json), ["孕期"]);
+    assert.equal(bySeedKey.get("fitness_jack")?.health_goal, "gain_muscle");
+    assert.match(bySeedKey.get("diet_helper")?.medications, /华法林/);
+    assert.equal(bySeedKey.get("diet_helper")?.tracking_enabled, 1);
+
+    const { buildUserContext, generateSystemPrompt } = await import("../src/services/contextBuilder.js");
+    const highRiskPrompt = generateSystemPrompt(buildUserContext(bySeedKey.get("diet_helper")?.user_id));
+    assert.match(highRiskPrompt, /海鲜/);
+    assert.match(highRiskPrompt, /慢性肾脏病/);
+    assert.match(highRiskPrompt, /华法林/);
+    assert.match(highRiskPrompt, /"budget_per_meal":30/);
+
+    const demoLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "fitness-jack@dietdigidose.test", password: "DemoPassword1234" }),
+    });
+    assert.equal(demoLogin.response.status, 200);
+  });
+
   test("version endpoint identifies the server and the calling client build", async () => {
     const { response, body } = await api("/api/v1/version", {
       headers: {
@@ -85,6 +136,55 @@ describe("API security baseline", () => {
     assert.ok((body as JsonObject).serverBuildTime);
     assert.equal((body as JsonObject).clientVersion, "1.0.3");
     assert.equal((body as JsonObject).clientBuildTime, "2026-08-05T08:00:00.000Z");
+  });
+
+  test("community and recipe collections expose opaque cursor pages", async () => {
+    const communityFirst = await api("/api/v1/community/posts?sort=latest&pageSize=2");
+    assert.equal(communityFirst.response.status, 200);
+    const firstCommunityPage = communityFirst.body as JsonObject;
+    assert.equal(firstCommunityPage.items.length, 2);
+    assert.equal(typeof firstCommunityPage.nextCursor, "string");
+    db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+    const adminLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+    });
+    const adminToken = (adminLogin.body as JsonObject).token;
+    const insertedDuringPaging = await api("/api/v1/community/posts", {
+      method: "POST",
+      token: adminToken,
+      body: JSON.stringify({ content: "分页期间新增的动态", category: "寻味", image_urls: [] }),
+    });
+    assert.equal(insertedDuringPaging.response.status, 201);
+    const communitySecond = await api(`/api/v1/community/posts?sort=latest&pageSize=2&cursor=${encodeURIComponent(firstCommunityPage.nextCursor)}`);
+    assert.equal(communitySecond.response.status, 200);
+    const secondCommunityPage = communitySecond.body as JsonObject;
+    assert.equal(secondCommunityPage.items.length, 2);
+    assert.ok(!secondCommunityPage.items.some((item: JsonObject) => firstCommunityPage.items.some((firstItem: JsonObject) => firstItem.id === item.id)));
+
+    const recipeFirst = await api("/api/v1/recipes?pageSize=2");
+    assert.equal(recipeFirst.response.status, 200);
+    const firstRecipePage = recipeFirst.body as JsonObject;
+    assert.equal(firstRecipePage.items.length, 2);
+    assert.equal(typeof firstRecipePage.nextCursor, "string");
+    const recipeSecond = await api(`/api/v1/recipes?pageSize=2&cursor=${encodeURIComponent(firstRecipePage.nextCursor)}`);
+    assert.equal(recipeSecond.response.status, 200);
+    const secondRecipePage = recipeSecond.body as JsonObject;
+    assert.ok(secondRecipePage.items.every((item: JsonObject) => item.id < firstRecipePage.items.at(-1).id));
+
+    for (const pathname of ["/api/v1/admin/users", "/api/v1/admin/recipes", "/api/v1/admin/community"]) {
+      const page = await api(`${pathname}?pageSize=2`, { token: adminToken });
+      assert.equal(page.response.status, 200);
+      assert.equal((page.body as JsonObject).items.length, 2);
+      assert.equal(typeof (page.body as JsonObject).nextCursor, "string");
+    }
+  });
+
+  test("AI data policy exposes the configured retention and processor disclosure", async () => {
+    const { response, body } = await api("/api/v1/ai-data-policy");
+    assert.equal(response.status, 200);
+    assert.equal((body as JsonObject).conversationRetentionDays, 90);
+    assert.ok((body as JsonObject).providerName);
   });
 
   test("registration rejects weak passwords and unknown fields", async () => {
@@ -131,6 +231,32 @@ describe("API security baseline", () => {
     assert.ok((result.body as JsonObject).token);
   });
 
+  test("public community identity never exposes the login identifier", async () => {
+    const registered = await api("/api/v1/auth/register", {
+      method: "POST",
+      body: JSON.stringify({
+        identifier: "private-login@example.com",
+        username: "番茄食友",
+        password: "Password1234",
+      }),
+    });
+    assert.equal(registered.response.status, 201);
+    const account = registered.body as JsonObject;
+    const created = await api("/api/v1/community/posts", {
+      method: "POST",
+      token: account.token,
+      body: JSON.stringify({ content: "公开昵称测试", category: "寻味", image_urls: [] }),
+    });
+    assert.equal(created.response.status, 201);
+    const detail = await api(`/api/v1/community/posts/${(created.body as JsonObject).id}`);
+    assert.equal((detail.body as JsonObject).username, "番茄食友");
+    assert.equal(JSON.stringify(detail.body).includes("private-login@example.com"), false);
+    assert.equal("nickname" in (detail.body as JsonObject), false);
+    const currentUser = await api("/api/v1/auth/me", { token: account.token });
+    assert.equal((currentUser.body as JsonObject).username, "番茄食友");
+    assert.equal("nickname" in (currentUser.body as JsonObject), false);
+  });
+
   test("disabled accounts cannot log in or use an existing token", async () => {
     const account = await register("disabled-account@example.com");
     db.prepare("UPDATE users SET is_disabled = 1 WHERE id = ?").run(account.user.id);
@@ -158,11 +284,39 @@ describe("API security baseline", () => {
     assert.equal((blocked.body as JsonObject).code, "LOGIN_RATE_LIMITED");
     assert.ok(blocked.response.headers.get("retry-after"));
   });
+
+  test("anonymous external food queries use the shared limiter", async () => {
+    const firstAttempt = await api("/api/v1/foods/search");
+    const secondAttempt = await api("/api/v1/foods/search");
+    const blocked = await api("/api/v1/foods/search");
+    assert.equal(firstAttempt.response.status, 400);
+    assert.equal(secondAttempt.response.status, 400);
+    assert.equal(blocked.response.status, 429);
+    assert.equal((blocked.body as JsonObject).code, "FOOD_SEARCH_RATE_LIMITED");
+  });
+
+  test("high-cost AI routes share a per-user quota", async () => {
+    const account = await register("ai-rate-limit@example.com");
+    const invalidAudio = JSON.stringify({ audio: "data:text/plain;base64,SGVsbG8=", mimeType: "text/plain" });
+    for (let index = 0; index < 3; index += 1) {
+      const attempt = await api("/api/v1/ai/transcribe", { method: "POST", token: account.token, body: invalidAudio });
+      assert.equal(attempt.response.status, 400);
+    }
+    const blocked = await api("/api/v1/ai/transcribe", { method: "POST", token: account.token, body: invalidAudio });
+    assert.equal(blocked.response.status, 429);
+    assert.equal((blocked.body as JsonObject).code, "AI_RATE_LIMITED");
+  });
 });
 
 describe("new user MVP journey", () => {
-  test("connects registration, health goals, expiring inventory, recipes and diet progress", async () => {
-    const account = await register("mvp-journey@example.com");
+  test("smokes registration, login, inventory, recipe selection and cooking completion end to end", async () => {
+    await register("mvp-journey@example.com");
+    const login = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "mvp-journey@example.com", password: "Password1234" }),
+    });
+    assert.equal(login.response.status, 200);
+    const account = login.body as JsonObject;
 
     const profile = await api("/api/v1/health-data/profile", {
       method: "PUT",
@@ -205,26 +359,39 @@ describe("new user MVP journey", () => {
     assert.ok(recipes.body.length > 0);
     const selectedRecipe = recipes.body[0] as JsonObject;
 
-    const dietRecord = await api("/api/v1/diet-records", {
+    const cookingCompletion = await api("/api/v1/diet-records/cooking-completions", {
       method: "POST",
       token: account.token,
       body: JSON.stringify({
-        meal_type: "午餐",
-        food_name: selectedRecipe.title,
-        amount: "1份",
-        calories: selectedRecipe.calories,
-        protein: selectedRecipe.protein,
-        carbs: selectedRecipe.carbs,
-        fat: selectedRecipe.fat,
-        recorded_at: "2026-08-03",
+        idempotency_key: "mvp-journey-cooking-0001",
+        recipe_id: selectedRecipe.id,
+        inventory_item_ids: [(inventory.body as JsonObject).id],
+        diet_record: {
+          meal_type: "午餐",
+          food_name: selectedRecipe.title,
+          amount: "1份",
+          calories: selectedRecipe.calories,
+          protein: selectedRecipe.protein,
+          carbs: selectedRecipe.carbs,
+          fat: selectedRecipe.fat,
+          recorded_at: "2026-08-03",
+        },
       }),
     });
-    assert.equal(dietRecord.response.status, 201);
+    assert.equal(cookingCompletion.response.status, 201);
+    assert.deepEqual((cookingCompletion.body as JsonObject).consumed_inventory_item_ids, [(inventory.body as JsonObject).id]);
 
     const progress = await api("/api/v1/diet-records?date=2026-08-03", { token: account.token });
     assert.equal(progress.response.status, 200);
     assert.equal((progress.body as JsonObject[]).length, 1);
     assert.equal((progress.body as JsonObject[])[0].food_name, selectedRecipe.title);
+    const consumedInventory = await api("/api/v1/inventory", { token: account.token });
+    assert.equal((consumedInventory.body as JsonObject[])[0].is_available, false);
+    const funnel = db.prepare("SELECT event_name, actor_hash FROM funnel_events WHERE actor_hash = (SELECT actor_hash FROM funnel_events WHERE event_name = 'account_registered' ORDER BY id DESC LIMIT 1)").all() as Array<{ event_name: string; actor_hash: string }>;
+    assert.ok(funnel.some((event) => event.event_name === "login_succeeded"));
+    assert.ok(funnel.some((event) => event.event_name === "inventory_added"));
+    assert.ok(funnel.some((event) => event.event_name === "cooking_completed"));
+    assert.equal(funnel.some((event) => event.actor_hash.includes("mvp-journey@example.com")), false);
   });
 });
 
@@ -340,6 +507,89 @@ describe("user data isolation", () => {
       token: second.token,
     });
     assert.equal(forbiddenDelete.response.status, 404);
+  });
+
+  test("shopping-list inventory import is atomic, owner-scoped and idempotent", async () => {
+    const payload = {
+      idempotency_key: "shopping-import-test-0001",
+      items: [
+        { food_name: "采购鸡蛋", category: "肉蛋", quantity: "6个", expiration_date: "2026-08-16", storage_location: "冷藏" },
+        { food_name: "采购燕麦", category: "粮油干货", quantity: "1袋", expiration_date: "2027-01-01", storage_location: "常温" },
+      ],
+    };
+    const imported = await api("/api/v1/inventory/import-shopping-list", {
+      method: "POST",
+      token: first.token,
+      body: JSON.stringify(payload),
+    });
+    assert.equal(imported.response.status, 201);
+    assert.equal((imported.body as JsonObject).items.length, 2);
+
+    const retried = await api("/api/v1/inventory/import-shopping-list", {
+      method: "POST",
+      token: first.token,
+      body: JSON.stringify(payload),
+    });
+    assert.equal(retried.response.status, 200);
+    assert.equal((retried.body as JsonObject).repeated, true);
+    const firstCount = db.prepare("SELECT COUNT(*) AS count FROM inventory_items WHERE user_id = ? AND food_name LIKE '采购%'").get(first.user.id) as { count: number };
+    const secondCount = db.prepare("SELECT COUNT(*) AS count FROM inventory_items WHERE user_id = ? AND food_name LIKE '采购%'").get(second.user.id) as { count: number };
+    assert.equal(firstCount.count, 2);
+    assert.equal(secondCount.count, 0);
+  });
+
+  test("cooking completion atomically consumes inventory, records the meal and safely retries", async () => {
+    const inventory = await api("/api/v1/inventory", {
+      method: "POST",
+      token: first.token,
+      body: JSON.stringify({
+        food_name: "事务测试番茄",
+        category: "蔬菜",
+        quantity: "2个",
+        expiration_date: "2026-08-08",
+        storage_location: "冷藏",
+      }),
+    });
+    const inventoryId = (inventory.body as JsonObject).id;
+    const payload = {
+      idempotency_key: "cooking-completion-test-0001",
+      recipe_id: null,
+      inventory_item_ids: [inventoryId],
+      diet_record: {
+        meal_type: "晚餐",
+        food_name: "番茄料理",
+        amount: "1份",
+        calories: 260,
+        recorded_at: "2026-08-06",
+      },
+    };
+    const completed = await api("/api/v1/diet-records/cooking-completions", {
+      method: "POST",
+      token: first.token,
+      body: JSON.stringify(payload),
+    });
+    assert.equal(completed.response.status, 201);
+    assert.deepEqual((completed.body as JsonObject).consumed_inventory_item_ids, [inventoryId]);
+
+    const repeated = await api("/api/v1/diet-records/cooking-completions", {
+      method: "POST",
+      token: first.token,
+      body: JSON.stringify(payload),
+    });
+    assert.equal(repeated.response.status, 200);
+    assert.equal((repeated.body as JsonObject).repeated, true);
+
+    const storedInventory = db.prepare("SELECT is_available FROM inventory_items WHERE id = ?").get(inventoryId) as { is_available: number };
+    const mealCount = db.prepare("SELECT COUNT(*) AS count FROM diet_records WHERE user_id = ? AND food_name = ?").get(first.user.id, "番茄料理") as { count: number };
+    assert.equal(storedInventory.is_available, 0);
+    assert.equal(mealCount.count, 1);
+
+    const forbidden = await api("/api/v1/diet-records/cooking-completions", {
+      method: "POST",
+      token: second.token,
+      body: JSON.stringify({ ...payload, idempotency_key: "cooking-completion-test-0002" }),
+    });
+    assert.equal(forbidden.response.status, 409);
   });
 
   test("health logs and profiles are isolated and range-validated", async () => {
@@ -664,6 +914,19 @@ describe("core business authorization", () => {
     });
     assert.equal(invalidMime.response.status, 400);
     assert.equal((invalidMime.body as JsonObject).code, "VALIDATION_ERROR");
+  });
+
+  test("users can export and delete their server-side AI data", async () => {
+    db.prepare("INSERT INTO ai_chat_messages (user_id, session_id, role, content) VALUES (?, ?, 'user', ?)")
+      .run(first.user.id, "export-test", "需要导出的内容");
+    const exported = await api("/api/v1/auth/ai-data", { token: first.token });
+    assert.equal(exported.response.status, 200);
+    assert.equal((exported.body as JsonObject).messages.some((message: JsonObject) => message.content === "需要导出的内容"), true);
+
+    const removed = await api("/api/v1/auth/ai-data", { method: "DELETE", token: first.token });
+    assert.equal(removed.response.status, 200);
+    const remaining = db.prepare("SELECT COUNT(*) AS count FROM ai_chat_messages WHERE user_id = ?").get(first.user.id) as { count: number };
+    assert.equal(remaining.count, 0);
   });
 
   test("account deletion requires the password and cascades private data", async () => {

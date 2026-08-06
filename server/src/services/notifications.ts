@@ -1,5 +1,6 @@
 import { db } from "../storage/db.js";
 import { currentDateKey, dateKeyAfterDays } from "../utils/date.js";
+import { fetchWithTimeout } from "../utils/fetchWithTimeout.js";
 
 type PushDevice = { expo_push_token: string };
 
@@ -14,7 +15,7 @@ export async function sendExpoPush(messages: Array<{ to: string; title: string; 
   const tickets: Array<{ status?: string; details?: { error?: string } }> = [];
   for (let start = 0; start < messages.length; start += 100) {
     const batch = messages.slice(start, start + 100);
-    const response = await fetch(EXPO_PUSH_URL, {
+    const response = await fetchWithTimeout(EXPO_PUSH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(batch.map((message) => ({ ...message, sound: "default", priority: "high" }))),

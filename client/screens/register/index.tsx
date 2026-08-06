@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, ActivityIndicator } from 'react-native';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
+import { useCSSVariable } from 'uniwind';
 
 export default function RegisterScreen() {
   const [identifier, setIdentifier] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -14,10 +16,18 @@ export default function RegisterScreen() {
   const [error, setError] = useState('');
   const { register } = useAuth();
   const router = useSafeRouter();
+  const [brand, muted] = useCSSVariable([
+    '--color-brand',
+    '--color-copy-muted',
+  ]) as string[];
 
   const handleRegister = async () => {
-    if (!identifier.trim() || !password.trim()) {
-      setError('请输入邮箱或手机号和密码');
+    if (!identifier.trim() || !username.trim() || !password.trim()) {
+      setError('请输入用户名、邮箱或手机号和密码');
+      return;
+    }
+    if (username.trim().length < 2 || username.trim().length > 30) {
+      setError('用户名需为 2～30 个字符');
       return;
     }
     const isEmail = identifier.includes('@') && identifier.includes('.');
@@ -36,7 +46,7 @@ export default function RegisterScreen() {
     }
     setError('');
     setLoading(true);
-    const result = await register(identifier.trim(), password);
+    const result = await register(identifier.trim(), username.trim(), password);
     setLoading(false);
     if (result.success) {
       router.replace('/onboarding');
@@ -49,79 +59,120 @@ export default function RegisterScreen() {
     <Screen>
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <KeyboardAvoidingView
-          style={styles.container}
+          className="flex-1"
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          <View style={styles.content}>
+          <View className="flex-1 justify-center px-8">
             {/* Header */}
-            <View style={styles.header}>
-              <Text style={styles.title}>创建账号</Text>
-              <Text style={styles.subtitle}>加入食光烙记，开启健康饮食之旅</Text>
+            <View className="items-center mb-10">
+              <Text className="text-display font-bold text-brand-strong mb-2" accessibilityRole="header">创建账号</Text>
+              <Text className="text-body text-copy-muted">加入食光烙记，开启健康饮食之旅</Text>
             </View>
 
             {/* Form */}
-            <View style={styles.form}>
-              <View style={styles.inputGroup}>
-                <FontAwesome6 name="envelope" size={18} color="#52796F" style={styles.inputIcon} />
+            <View className="gap-3.5">
+              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
+                <FontAwesome6 name="user" size={18} color={brand} className="mr-3" />
                 <TextInput
-                  style={styles.input}
+                  className="flex-1 text-base text-ink py-0"
+                  placeholder="用户名（公开显示）"
+                  placeholderTextColor={muted}
+                  value={username}
+                  onChangeText={setUsername}
+                  maxLength={30}
+                  autoComplete="username-new"
+                  textContentType="username"
+                  accessibilityLabel="用户名"
+                />
+              </View>
+              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
+                <FontAwesome6 name="envelope" size={18} color={brand} className="mr-3" />
+                <TextInput
+                  className="flex-1 text-base text-ink py-0"
                   placeholder="邮箱或手机号"
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor={muted}
                   value={identifier}
                   onChangeText={setIdentifier}
                   autoCapitalize="none"
                   autoCorrect={false}
                   keyboardType="email-address"
+                  autoComplete="username"
+                  textContentType="username"
+                  accessibilityLabel="邮箱或手机号"
                 />
               </View>
 
-              <View style={styles.inputGroup}>
-                <FontAwesome6 name="lock" size={18} color="#52796F" style={styles.inputIcon} />
+              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
+                <FontAwesome6 name="lock" size={18} color={brand} className="mr-3" />
                 <TextInput
-                  style={styles.input}
+                  className="flex-1 text-base text-ink py-0"
                   placeholder="密码（至少6位，含字母和数字）"
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor={muted}
                   value={password}
                   onChangeText={setPassword}
                   secureTextEntry={!showPassword}
+                  autoComplete="new-password"
+                  textContentType="newPassword"
+                  accessibilityLabel="密码"
                 />
-                <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-                  <FontAwesome6 name={showPassword ? 'eye-slash' : 'eye'} size={18} color="#94A3B8" />
+                <TouchableOpacity
+                  onPress={() => setShowPassword(!showPassword)}
+                  className="min-w-touch min-h-touch items-center justify-center"
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? '隐藏密码' : '显示密码'}
+                >
+                  <FontAwesome6 name={showPassword ? 'eye-slash' : 'eye'} size={18} color={muted} />
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.inputGroup}>
-                <FontAwesome6 name="lock" size={18} color="#52796F" style={styles.inputIcon} />
+              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
+                <FontAwesome6 name="lock" size={18} color={brand} className="mr-3" />
                 <TextInput
-                  style={styles.input}
+                  className="flex-1 text-base text-ink py-0"
                   placeholder="确认密码"
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor={muted}
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
                   secureTextEntry={!showPassword}
+                  autoComplete="new-password"
+                  textContentType="newPassword"
+                  accessibilityLabel="确认密码"
                 />
               </View>
 
-              {error ? <Text style={styles.errorText}>{error}</Text> : null}
+              {error ? (
+                <Text
+                  className="text-critical text-body text-center"
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                >
+                  {error}
+                </Text>
+              ) : null}
 
               <TouchableOpacity
-                style={[styles.registerButton, loading && styles.disabledButton]}
+                className={`bg-brand rounded-control h-14 items-center justify-center active:bg-accent-hover ${loading ? 'opacity-disabled' : ''}`}
                 onPress={handleRegister}
                 disabled={loading}
+                accessibilityRole="button"
+                accessibilityLabel="注册"
+                accessibilityState={{ disabled: loading, busy: loading }}
               >
                 {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.registerButtonText}>注册</Text>
+                  <Text className="text-white text-lg font-semibold">注册</Text>
                 )}
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.loginLink}
+                className="flex-row justify-center items-center mt-1 min-h-touch"
                 onPress={() => router.back()}
+                accessibilityRole="link"
+                accessibilityLabel="已有账号？返回登录"
               >
-                <Text style={styles.loginText}>已有账号？</Text>
-                <Text style={styles.loginLinkText}>返回登录</Text>
+                <Text className="text-copy-muted text-body">已有账号？</Text>
+                <Text className="text-brand text-body font-semibold ml-1">返回登录</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -130,35 +181,3 @@ export default function RegisterScreen() {
     </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  content: { flex: 1, justifyContent: 'center', paddingHorizontal: 32 },
-  header: { alignItems: 'center', marginBottom: 40 },
-  title: { fontSize: 28, fontWeight: '700', color: '#1B4332', marginBottom: 8 },
-  subtitle: { fontSize: 14, color: '#52796F' },
-  form: { gap: 14 },
-  inputGroup: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F0F0F3', borderRadius: 16,
-    paddingHorizontal: 16, height: 52,
-  },
-  inputIcon: { marginRight: 12 },
-  input: { flex: 1, fontSize: 16, color: '#1B4332', paddingVertical: 0 },
-  eyeIcon: { padding: 8 },
-  errorText: { color: '#D64545', fontSize: 14, textAlign: 'center' },
-  registerButton: {
-    backgroundColor: '#2D6A4F', borderRadius: 16, height: 52,
-    alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#2D6A4F', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
-  },
-  registerButtonText: { color: '#fff', fontSize: 17, fontWeight: '600' },
-  disabledButton: { opacity: 0.6 },
-  loginLink: {
-    flexDirection: 'row', justifyContent: 'center',
-    alignItems: 'center', marginTop: 4,
-  },
-  loginText: { color: '#52796F', fontSize: 14 },
-  loginLinkText: { color: '#2D6A4F', fontSize: 14, fontWeight: '600', marginLeft: 4 },
-});

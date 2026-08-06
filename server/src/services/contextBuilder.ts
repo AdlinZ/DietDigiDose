@@ -3,7 +3,7 @@ import dayjs from "dayjs";
 
 export interface UserContext {
   userId: number;
-  nickname?: string;
+  username?: string;
   dailyCaloriesTarget: number;
   inventory: Array<{ food_name: string; quantity: string; expiration_date: string; storage_location: string }>;
   kitchenware: Array<{ name: string; category: string; status: string }>;
@@ -58,8 +58,8 @@ const OUTPUT_DEVELOPER_PROMPT = `【固定规则：输出】
  */
 export function buildUserContext(userId: number): UserContext {
   // 1. 用户信息
-  const user = db.prepare("SELECT nickname, daily_calories_target FROM users WHERE id = ?").get(userId) as any;
-  const nickname = user?.nickname || "用户";
+  const user = db.prepare("SELECT username, daily_calories_target FROM users WHERE id = ?").get(userId) as any;
+  const username = user?.username || "用户";
   const dailyCaloriesTarget = user?.daily_calories_target || 2000;
 
   // 2. 冰箱现有可用食材 (前 15 条)
@@ -115,7 +115,7 @@ export function buildUserContext(userId: number): UserContext {
 
   return {
     userId,
-    nickname,
+    username,
     dailyCaloriesTarget,
     inventory: inventory || [],
     kitchenware: kitchenware || [],
@@ -142,7 +142,7 @@ export function buildAIPromptMessages(ctx: UserContext): Array<{ role: "system";
     current_time: dayjs().format(),
     user_profile: {
       user_id: ctx.userId,
-      nickname: ctx.nickname || null,
+      username: ctx.username || null,
       weight_kg: ctx.latestHealth?.weight ?? null,
       body_fat_percent: ctx.latestHealth?.body_fat ?? null,
       age: ctx.healthProfile?.age ?? null,

@@ -8,6 +8,14 @@ export type VersionInfo = {
   clientBuildTime: string | null;
 };
 
+export type AIDataPolicy = {
+  providerName: string;
+  providerPrivacyUrl: string | null;
+  processingRegion: string;
+  conversationRetentionDays: number;
+  supportContact: string;
+};
+
 export const systemApi = {
   version: () => requestJson<VersionInfo>(publicFetch, "/api/v1/version", {
     headers: {
@@ -15,4 +23,5 @@ export const systemApi = {
       "x-client-build-time": APP_BUILD_TIME,
     },
   }),
+  aiDataPolicy: () => requestJson<AIDataPolicy>(publicFetch, "/api/v1/ai-data-policy"),
 };

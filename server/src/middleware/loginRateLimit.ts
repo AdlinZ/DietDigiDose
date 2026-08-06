@@ -1,12 +1,7 @@
+import { createHash } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import { db } from "../storage/db.js";
 
-interface AttemptBucket {
-  count: number;
-  firstAttemptAt: number;
-  blockedUntil: number;
-}
-
-const attempts = new Map<string, AttemptBucket>();
 const WINDOW_MS = 15 * 60 * 1000;
 const BLOCK_MS = 15 * 60 * 1000;
 const ACCOUNT_LIMIT = 5;
@@ -17,7 +12,7 @@ function normalizeIp(req: Request) {
 }
 
 function accountKey(username: unknown) {
-  return `account:${String(username || "").trim().toLowerCase()}`;
+  return hashKey("login-account", String(username || "").trim().toLowerCase());
 }
 
 function requestIdentifier(req: Request) {
@@ -25,15 +20,23 @@ function requestIdentifier(req: Request) {
 }
 
 function ipKey(req: Request) {
-  return `ip:${normalizeIp(req)}`;
+  return hashKey("login-ip", normalizeIp(req));
 }
 
+function hashKey(namespace: string, value: string) {
+  return `${namespace}:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+type AttemptBucket = { request_count: number; window_started_at: number; blocked_until: number };
+
 function getActiveBucket(key: string, now: number) {
-  const bucket = attempts.get(key);
+  const bucket = db.prepare(`
+    SELECT request_count, window_started_at, blocked_until FROM rate_limit_buckets WHERE bucket_key = ?
+  `).get(key) as AttemptBucket | undefined;
   if (!bucket) return null;
-  if (bucket.blockedUntil > now) return bucket;
-  if (now - bucket.firstAttemptAt >= WINDOW_MS) {
-    attempts.delete(key);
+  if (bucket.blocked_until > now) return bucket;
+  if (now - bucket.window_started_at >= WINDOW_MS) {
+    db.prepare("DELETE FROM rate_limit_buckets WHERE bucket_key = ?").run(key);
     return null;
   }
   return bucket;
@@ -45,11 +48,11 @@ export function loginRateLimit(req: Request, res: Response, next: NextFunction) 
     getActiveBucket(accountKey(requestIdentifier(req)), now),
     getActiveBucket(ipKey(req), now),
   ].filter(Boolean) as AttemptBucket[];
-  const blocked = buckets.find((bucket) => bucket.blockedUntil > now);
+  const blocked = buckets.find((bucket) => bucket.blocked_until > now);
 
   if (!blocked) return next();
 
-  const retryAfterSeconds = Math.max(1, Math.ceil((blocked.blockedUntil - now) / 1000));
+  const retryAfterSeconds = Math.max(1, Math.ceil((blocked.blocked_until - now) / 1000));
   res.setHeader("Retry-After", retryAfterSeconds);
   return res.status(429).json({
     error: "登录尝试过于频繁，请稍后再试",
@@ -60,15 +63,23 @@ export function loginRateLimit(req: Request, res: Response, next: NextFunction) 
 
 function recordAttempt(key: string, limit: number, now: number) {
   const current = getActiveBucket(key, now) || {
-    count: 0,
-    firstAttemptAt: now,
-    blockedUntil: 0,
+    request_count: 0,
+    window_started_at: now,
+    blocked_until: 0,
   };
-  current.count += 1;
-  if (current.count >= limit) {
-    current.blockedUntil = now + BLOCK_MS;
+  current.request_count += 1;
+  if (current.request_count >= limit) {
+    current.blocked_until = now + BLOCK_MS;
   }
-  attempts.set(key, current);
+  db.prepare(`
+    INSERT INTO rate_limit_buckets (bucket_key, request_count, window_started_at, blocked_until, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(bucket_key) DO UPDATE SET
+      request_count = excluded.request_count,
+      window_started_at = excluded.window_started_at,
+      blocked_until = excluded.blocked_until,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(key, current.request_count, current.window_started_at, current.blocked_until);
 }
 
 export function recordLoginFailure(req: Request) {
@@ -78,5 +89,5 @@ export function recordLoginFailure(req: Request) {
 }
 
 export function clearLoginFailures(username: unknown) {
-  attempts.delete(accountKey(username));
+  db.prepare("DELETE FROM rate_limit_buckets WHERE bucket_key = ?").run(accountKey(username));
 }

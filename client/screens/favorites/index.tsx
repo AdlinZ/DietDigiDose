@@ -63,11 +63,11 @@ export default function FavoritesScreen() {
         </TouchableOpacity>
         <View className="ml-3 flex-1">
           <Text className="text-lg font-black text-[#273A2E]">我的收藏菜谱</Text>
-          <Text className="mt-0.5 text-[11px] text-[#8B7D6B]">保存灵感，想做的时候随时回来</Text>
+          <Text className="mt-0.5 text-[11px] text-copy-muted">保存灵感，想做的时候随时回来</Text>
         </View>
         {recipes.length > 0 ? (
           <View className="rounded-full bg-[#E7F1E9] px-3 py-1.5">
-            <Text className="text-xs font-black text-[#2D6A4F]">{recipes.length} 道</Text>
+            <Text className="text-xs font-black text-brand">{recipes.length} 道</Text>
           </View>
         ) : null}
       </View>
@@ -75,8 +75,8 @@ export default function FavoritesScreen() {
       {!isAuthenticated ? (
         <View className="flex-1 items-center justify-center px-8">
           <FontAwesome6 name="bookmark" size={30} color="#D49A2A" />
-          <Text className="mt-4 text-base font-black text-[#3D3229]">登录后使用收藏</Text>
-          <TouchableOpacity onPress={() => router.push("/login")} className="mt-5 rounded-2xl bg-[#2D6A4F] px-7 py-3">
+          <Text className="mt-4 text-base font-black text-ink">登录后使用收藏</Text>
+          <TouchableOpacity onPress={() => router.push("/login")} className="mt-5 rounded-2xl bg-brand px-7 py-3">
             <Text className="font-bold text-white">前往登录</Text>
           </TouchableOpacity>
         </View>
@@ -89,9 +89,9 @@ export default function FavoritesScreen() {
           <View className="h-16 w-16 items-center justify-center rounded-[24px] bg-[#F4EACF]">
             <FontAwesome6 name="bookmark" size={25} color="#C28B24" />
           </View>
-          <Text className="mt-5 text-lg font-black text-[#3D3229]">还没有收藏菜谱</Text>
-          <Text className="mt-2 text-center text-sm leading-6 text-[#8B7D6B]">在菜谱详情页点击右上角书签，就会保存在这里。</Text>
-          <TouchableOpacity onPress={() => router.back()} className="mt-5 rounded-2xl bg-[#2D6A4F] px-6 py-3">
+          <Text className="mt-5 text-lg font-black text-ink">还没有收藏菜谱</Text>
+          <Text className="mt-2 text-center text-sm leading-6 text-copy-muted">在菜谱详情页点击右上角书签，就会保存在这里。</Text>
+          <TouchableOpacity onPress={() => router.back()} className="mt-5 rounded-2xl bg-brand px-6 py-3">
             <Text className="font-bold text-white">去发现菜谱</Text>
           </TouchableOpacity>
         </View>

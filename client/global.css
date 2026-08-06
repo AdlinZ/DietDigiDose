@@ -19,14 +19,39 @@
 
   /* Opacity */
   --opacity-disabled: 0.5;
+
+  /* Product typography, spacing and component geometry */
+  --text-caption: 0.75rem;
+  --text-body: 0.875rem;
+  --text-title: 1.25rem;
+  --text-display: 1.75rem;
+  --spacing-page: 1.25rem;
+  --spacing-section: 1rem;
+  --spacing-control: 0.75rem;
+  --size-touch: 2.75rem;
+  --spacing-touch: var(--size-touch);
+  --radius-control: 0.875rem;
+  --radius-card: 1.25rem;
+  --radius-pill: 9999px;
 }
 
 @layer theme {
   :root {
     @variant light {
+      /* 食光烙记 semantic product palette */
+      --brand: #2D6A4F;
+      --brand-strong: #1B4332;
+      --brand-soft: #E8F2EA;
+      --canvas: #FDF8F0;
+      --ink: #3D3229;
+      --copy-muted: #8B7D6B;
+      --line: #EBE3D5;
+      --highlight: #E9C46A;
+      --critical: #E76F51;
+
       /* Base Colors */
-      --background: #fafafa;
-      --foreground: var(--eclipse);
+      --background: var(--canvas);
+      --foreground: var(--ink);
 
       /* Surface: Used for non-overlay components (cards, accordions, disclosure groups) */
       --surface: var(--white);
@@ -36,12 +61,12 @@
       --overlay: var(--white);
       --overlay-foreground: var(--foreground);
 
-      --muted: oklch(0.5517 0.0138 285.94);
+      --muted: var(--copy-muted);
 
       --default: oklch(94% 0.001 286.375);
       --default-foreground: var(--eclipse);
 
-      --accent: oklch(0.6204 0.195 253.83);
+      --accent: var(--brand);
       --accent-foreground: var(--snow);
 
       /* Form Fields */
@@ -65,7 +90,7 @@
       --segment-foreground: var(--eclipse);
 
       /* Misc Colors */
-      --border: oklch(90% 0.004 286.32);
+      --border: var(--line);
       --separator: oklch(74% 0.004 286.32);
       --focus: var(--accent);
       --link: var(--foreground);
@@ -83,9 +108,19 @@
     }
 
     @variant dark {
+      --brand: #74C69D;
+      --brand-strong: #B7E4C7;
+      --brand-soft: #173D2C;
+      --canvas: #111713;
+      --ink: #F8F3EA;
+      --copy-muted: #C7BBAA;
+      --line: #3C463F;
+      --highlight: #F2CC73;
+      --critical: #FF8A70;
+
       /* Base Colors */
-      --background: #09090b;
-      --foreground: var(--snow);
+      --background: var(--canvas);
+      --foreground: var(--ink);
 
       /* Surface: Used for non-overlay components (cards, accordions, disclosure groups) */
       --surface: oklch(0.2103 0.0059 285.89);
@@ -95,12 +130,12 @@
       --overlay: oklch(0.2103 0.0059 285.89);
       --overlay-foreground: var(--foreground);
 
-      --muted: oklch(70.5% 0.015 286.067);
+      --muted: var(--copy-muted);
 
       --default: oklch(27.4% 0.006 286.033);
       --default-foreground: var(--snow);
 
-      --accent: oklch(0.6204 0.195 253.83);
+      --accent: var(--brand);
       --accent-foreground: var(--snow);
 
       /* Form Field Defaults - Colors (only the ones that are different from light theme) */
@@ -124,7 +159,7 @@
       --segment-foreground: var(--foreground);
 
       /* Misc Colors */
-      --border: oklch(28% 0.006 286.033);
+      --border: var(--line);
       --separator: oklch(40% 0.006 286.033);
       --focus: var(--accent);
       --link: var(--foreground);
@@ -138,6 +173,17 @@
 }
 
 @theme inline static {
+  /* Product semantic colors. Use these in app screens instead of raw hex values. */
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-soft: var(--brand-soft);
+  --color-canvas: var(--canvas);
+  --color-ink: var(--ink);
+  --color-copy-muted: var(--copy-muted);
+  --color-line: var(--line);
+  --color-highlight: var(--highlight);
+  --color-critical: var(--critical);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
 
@@ -301,5 +347,3 @@
 @utility shadow-amber-glow {
   box-shadow: 0 12px 28px -6px rgba(233, 196, 106, 0.35);
 }
-
-

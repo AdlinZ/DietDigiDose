@@ -49,6 +49,19 @@ router.get("/stats", (req, res) => {
   }
 });
 
+// 只返回聚合后的核心漏斗，不暴露用户 ID、登录标识或业务内容。
+router.get("/funnel", (req, res) => {
+  const requestedDays = Math.max(1, Math.min(90, Number(req.query.days) || 30));
+  const rows = db.prepare(`
+    SELECT event_name AS eventName, COUNT(*) AS events, COUNT(DISTINCT actor_hash) AS users
+    FROM funnel_events
+    WHERE created_at >= datetime('now', ?)
+    GROUP BY event_name
+    ORDER BY event_name
+  `).all(`-${requestedDays} days`);
+  return res.json({ days: requestedDays, items: rows });
+});
+
 
 // 管理员操作审计日志
 router.get("/audit-logs", (req, res) => {
@@ -78,7 +91,7 @@ router.get("/audit-logs", (req, res) => {
       SELECT
         l.id,
         l.admin_user_id AS adminUserId,
-        COALESCE(u.nickname, u.username, '已删除管理员') AS adminName,
+        COALESCE(u.username, '已删除管理员') AS adminName,
         l.action,
         l.resource_type AS resourceType,
         l.resource_id AS resourceId,
@@ -113,15 +126,15 @@ router.get("/inventory-scan-jobs", (req, res) => {
       params.push(status);
     }
     if (userQuery) {
-      conditions.push("(u.username LIKE ? OR COALESCE(u.nickname, '') LIKE ? OR CAST(u.id AS TEXT) LIKE ?)");
+      conditions.push("(u.username LIKE ? OR CAST(u.id AS TEXT) LIKE ?)");
       const pattern = `%${userQuery}%`;
-      params.push(pattern, pattern, pattern);
+      params.push(pattern, pattern);
     }
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const rows = db.prepare(`
       SELECT j.id, j.status, j.result_json AS resultJson, j.error_message AS errorMessage,
              j.created_at AS createdAt, j.updated_at AS updatedAt,
-             u.id AS userId, u.username, u.nickname
+             u.id AS userId, u.username
       FROM inventory_scan_jobs j
       JOIN users u ON u.id = j.user_id
       ${where}
@@ -146,7 +159,7 @@ router.get("/inventory-scan-jobs/:jobId", (req, res) => {
     const job = db.prepare(`
       SELECT j.id, j.status, j.result_json AS resultJson, j.error_message AS errorMessage,
              j.created_at AS createdAt, j.updated_at AS updatedAt,
-             u.id AS userId, u.username, u.nickname
+             u.id AS userId, u.username
       FROM inventory_scan_jobs j
       JOIN users u ON u.id = j.user_id
       WHERE j.id = ?
@@ -166,11 +179,11 @@ router.get("/inventory-scan-jobs/:jobId", (req, res) => {
 router.get("/chat-conversations", (req, res) => {
   try {
     const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
-    const where = query ? "WHERE u.username LIKE ? OR COALESCE(u.nickname, '') LIKE ? OR CAST(u.id AS TEXT) LIKE ?" : "";
-    const params = query ? [`%${query}%`, `%${query}%`, `%${query}%`] : [];
+    const where = query ? "WHERE u.username LIKE ? OR CAST(u.id AS TEXT) LIKE ?" : "";
+    const params = query ? [`%${query}%`, `%${query}%`] : [];
     const items = db.prepare(`
       SELECT m.user_id AS userId, m.session_id AS sessionId,
-             u.username, u.nickname,
+             u.username,
              SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) AS turnCount,
              COUNT(*) AS messageCount,
              MAX(m.created_at) AS updatedAt,
@@ -197,7 +210,7 @@ router.get("/chat-conversations/:userId/:sessionId", (req, res) => {
   try {
     const userId = Number(req.params.userId);
     if (!Number.isInteger(userId) || !req.params.sessionId) return res.status(400).json({ error: "会话参数无效" });
-    const user = db.prepare("SELECT id, username, nickname FROM users WHERE id = ?").get(userId) as { id: number; username: string; nickname: string | null } | undefined;
+    const user = db.prepare("SELECT id, username FROM users WHERE id = ?").get(userId) as { id: number; username: string } | undefined;
     if (!user) return res.status(404).json({ error: "用户不存在" });
     const messages = db.prepare(`
       SELECT id, role, content, created_at AS createdAt
@@ -386,7 +399,6 @@ router.get("/ai-usage", (req, res) => {
       SELECT
         u.id,
         u.username,
-        u.nickname,
         u.avatar_url AS avatarUrl,
         COUNT(l.id) AS requests,
         COALESCE(SUM(l.prompt_tokens), 0) AS promptTokens,
@@ -465,15 +477,15 @@ router.get("/stats/trends", (req, res) => {
 router.get("/stats/recent", (req, res) => {
   try {
     const recentUsers = db.prepare(
-      'SELECT id, username, nickname, avatar_url, created_at FROM users ORDER BY created_at DESC LIMIT 5'
+      'SELECT id, username, avatar_url, created_at FROM users ORDER BY created_at DESC LIMIT 5'
     ).all();
 
     const recentPosts = db.prepare(
-      'SELECT id, username, nickname, content, image_url, category, created_at FROM community_posts WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 5'
+      'SELECT id, username, content, image_url, category, created_at FROM community_posts WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 5'
     ).all();
 
     const pendingFoods = db.prepare(`
-      SELECT ucf.id, ucf.name, ucf.calories_100g, ucf.created_at, u.nickname as author_name
+      SELECT ucf.id, ucf.name, ucf.calories_100g, ucf.created_at, u.username as author_name
       FROM user_custom_foods ucf
       LEFT JOIN users u ON ucf.user_id = u.id
       WHERE ucf.status = 'pending'

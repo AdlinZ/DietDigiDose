@@ -49,11 +49,11 @@ export default function CustomFoodScreen() {
 
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "bottom"]}>
-      <View className="px-5 pt-2 pb-4 flex-row items-center justify-between border-b border-[#EBE3D5] bg-white">
+      <View className="px-5 pt-2 pb-4 flex-row items-center justify-between border-b border-line bg-white">
         <TouchableOpacity onPress={() => router.back()} className="p-2 -ml-2">
           <FontAwesome6 name="arrow-left" size={20} color="#3D3229" />
         </TouchableOpacity>
-        <Text className="text-lg font-bold text-[#3D3229]">添加新食材</Text>
+        <Text className="text-lg font-bold text-ink">添加新食材</Text>
         <View className="w-9" />
       </View>
 
@@ -62,62 +62,62 @@ export default function CustomFoodScreen() {
         className="flex-1"
       >
         <ScrollView className="flex-1" contentContainerStyle={{ padding: 20 }}>
-          <View className="bg-white p-6 rounded-3xl border border-[#EBE3D5] shadow-sm">
-            <View className="w-16 h-16 bg-[#2D6A4F]/10 rounded-full items-center justify-center mb-6 self-center">
+          <View className="bg-white p-6 rounded-3xl border border-line shadow-sm">
+            <View className="w-16 h-16 bg-brand/10 rounded-full items-center justify-center mb-6 self-center">
               <FontAwesome6 name="camera" size={24} color="#2D6A4F" />
             </View>
 
             <View className="space-y-4">
               <View>
-                <Text className="text-sm font-bold text-[#3D3229] mb-2">食材名称 <Text className="text-red-500">*</Text></Text>
+                <Text className="text-sm font-bold text-ink mb-2">食材名称 <Text className="text-red-500">*</Text></Text>
                 <TextInput
                   value={name}
                   onChangeText={setName}
                   placeholder="例如：脱脂牛奶、全麦面包"
-                  className="bg-[#F5EFE6] px-4 py-3.5 rounded-2xl text-sm text-[#3D3229]"
+                  className="bg-background-secondary px-4 py-3.5 rounded-2xl text-sm text-ink"
                 />
               </View>
 
               <View>
-                <Text className="text-sm font-bold text-[#3D3229] mb-2">卡路里 (kcal/100g) <Text className="text-red-500">*</Text></Text>
+                <Text className="text-sm font-bold text-ink mb-2">卡路里 (kcal/100g) <Text className="text-red-500">*</Text></Text>
                 <TextInput
                   value={calories}
                   onChangeText={setCalories}
                   placeholder="例如：120"
                   keyboardType="numeric"
-                  className="bg-[#F5EFE6] px-4 py-3.5 rounded-2xl text-sm text-[#3D3229]"
+                  className="bg-background-secondary px-4 py-3.5 rounded-2xl text-sm text-ink"
                 />
               </View>
 
               <View className="flex-row gap-3">
                 <View className="flex-1">
-                  <Text className="text-sm font-bold text-[#3D3229] mb-2">碳水 (g)</Text>
+                  <Text className="text-sm font-bold text-ink mb-2">碳水 (g)</Text>
                   <TextInput
                     value={carbs}
                     onChangeText={setCarbs}
                     placeholder="选填"
                     keyboardType="numeric"
-                    className="bg-[#F5EFE6] px-4 py-3.5 rounded-2xl text-sm text-[#3D3229]"
+                    className="bg-background-secondary px-4 py-3.5 rounded-2xl text-sm text-ink"
                   />
                 </View>
                 <View className="flex-1">
-                  <Text className="text-sm font-bold text-[#3D3229] mb-2">蛋白质 (g)</Text>
+                  <Text className="text-sm font-bold text-ink mb-2">蛋白质 (g)</Text>
                   <TextInput
                     value={protein}
                     onChangeText={setProtein}
                     placeholder="选填"
                     keyboardType="numeric"
-                    className="bg-[#F5EFE6] px-4 py-3.5 rounded-2xl text-sm text-[#3D3229]"
+                    className="bg-background-secondary px-4 py-3.5 rounded-2xl text-sm text-ink"
                   />
                 </View>
                 <View className="flex-1">
-                  <Text className="text-sm font-bold text-[#3D3229] mb-2">脂肪 (g)</Text>
+                  <Text className="text-sm font-bold text-ink mb-2">脂肪 (g)</Text>
                   <TextInput
                     value={fat}
                     onChangeText={setFat}
                     placeholder="选填"
                     keyboardType="numeric"
-                    className="bg-[#F5EFE6] px-4 py-3.5 rounded-2xl text-sm text-[#3D3229]"
+                    className="bg-background-secondary px-4 py-3.5 rounded-2xl text-sm text-ink"
                   />
                 </View>
               </View>
@@ -126,7 +126,7 @@ export default function CustomFoodScreen() {
             <TouchableOpacity
               onPress={handleSubmit}
               disabled={loading}
-              className={`mt-8 py-4 rounded-2xl items-center ${loading ? 'bg-[#2D6A4F]/50' : 'bg-[#2D6A4F] active:bg-[#2D6A4F]/90'}`}
+              className={`mt-8 py-4 rounded-2xl items-center ${loading ? 'bg-brand/50' : 'bg-brand active:bg-brand/90'}`}
             >
               <Text className="text-white font-bold text-base">
                 {loading ? '提交中...' : '提交审核'}

@@ -22,14 +22,13 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import { getAvatarSource } from "@/utils/defaultAvatar";
-import { communityApi } from "@/services/api";
+import { communityApi, mediaApi } from "@/services/api";
 
 
 interface Post {
   id: number;
   user_id: number;
   username: string;
-  nickname: string;
   avatar_url: string;
   category?: string;
   content: string;
@@ -53,7 +52,6 @@ interface Post {
 interface CommentItem {
   id: number;
   username: string;
-  nickname: string;
   avatar_url: string;
   content: string;
   image_url?: string | null;
@@ -116,6 +114,7 @@ export default function PostDetailScreen() {
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [commentText, setCommentText] = useState("");
   const [commentImageUrl, setCommentImageUrl] = useState<string | null>(null);
+  const [submittingComment, setSubmittingComment] = useState(false);
   const [isCommentComposerVisible, setIsCommentComposerVisible] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [failedImageUrls, setFailedImageUrls] = useState<string[]>([]);
@@ -256,7 +255,11 @@ export default function PostDetailScreen() {
       return;
     }
     try {
-      const comment = await communityApi.createComment<CommentItem>(authFetch, post.id, { content: commentText.trim(), image_url: commentImageUrl });
+      setSubmittingComment(true);
+      const storedImageUrl = commentImageUrl?.startsWith("data:")
+        ? (await mediaApi.uploadImage(authFetch, commentImageUrl)).url
+        : commentImageUrl;
+      const comment = await communityApi.createComment<CommentItem>(authFetch, post.id, { content: commentText.trim(), image_url: storedImageUrl });
       setComments((current) => [comment, ...current]);
       setPost((current) => current ? { ...current, comment_count: (current.comment_count || 0) + 1 } : current);
       setCommentText("");
@@ -267,6 +270,8 @@ export default function PostDetailScreen() {
       Keyboard.dismiss();
     } catch (error) {
       Alert.alert("评论失败", error instanceof Error ? error.message : "请稍后重试");
+    } finally {
+      setSubmittingComment(false);
     }
   };
 
@@ -374,10 +379,10 @@ export default function PostDetailScreen() {
       <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top"]}>
         <View className="flex-1 justify-center items-center p-6">
           <FontAwesome6 name="triangle-exclamation" size={40} color="#8B7D6B" />
-          <Text className="text-base text-[#3D3229] font-bold mt-4">帖子未找到或已被删除</Text>
+          <Text className="text-base text-ink font-bold mt-4">帖子未找到或已被删除</Text>
           <TouchableOpacity
             onPress={() => router.back()}
-            className="mt-6 bg-[#2D6A4F] px-6 py-2.5 rounded-full"
+            className="mt-6 bg-brand px-6 py-2.5 rounded-full"
           >
             <Text className="text-white font-bold">返回社区</Text>
           </TouchableOpacity>
@@ -401,7 +406,7 @@ export default function PostDetailScreen() {
         <View className="flex-row items-center justify-between px-4 py-3 border-b border-[#F0EAE1] bg-white z-20">
           <TouchableOpacity
             onPress={() => router.back()}
-            className="w-9 h-9 rounded-full bg-[#F5EFE6] items-center justify-center active:bg-[#EBE3D5]"
+            className="w-9 h-9 rounded-full bg-background-secondary items-center justify-center active:bg-line"
           >
             <FontAwesome6 name="chevron-left" size={16} color="#2D6A4F" />
           </TouchableOpacity>
@@ -411,13 +416,13 @@ export default function PostDetailScreen() {
             <TouchableOpacity onPress={() => router.push("/user-profile", { userId: post.user_id })} className="flex-1 flex-row items-center gap-2.5">
               <Image
                 source={getAvatarSource(post.avatar_url, post.user_id ?? post.username)}
-                className="w-8 h-8 rounded-full border border-[#2D6A4F]/20"
+                className="w-8 h-8 rounded-full border border-brand/20"
               />
               <View className="flex-1">
               <Text className="text-xs font-bold text-[#222222]" numberOfLines={1}>
                 {post.username}
               </Text>
-              <Text className="text-[10px] text-[#8B7D6B]">
+              <Text className="text-[10px] text-copy-muted">
                 {post.created_at || "刚刚"}
               </Text>
               </View>
@@ -429,13 +434,13 @@ export default function PostDetailScreen() {
               onPress={() => void handleFollow()}
               className={`px-3 py-1 rounded-full border ${followPending ? "opacity-60" : ""} ${
                 isFollowing
-                  ? "bg-[#F5EFE6] border-[#EBE3D5]"
-                  : "bg-[#2D6A4F] border-[#2D6A4F]"
+                  ? "bg-background-secondary border-line"
+                  : "bg-brand border-brand"
               }`}
             >
               <Text
                 className={`text-[11px] font-bold ${
-                  isFollowing ? "text-[#8B7D6B]" : "text-white"
+                  isFollowing ? "text-copy-muted" : "text-white"
                 }`}
               >
                   {followPending ? "处理中" : isFollowing ? "已关注" : "+ 关注"}
@@ -445,7 +450,7 @@ export default function PostDetailScreen() {
 
           <TouchableOpacity
             onPress={handleShare}
-            className="w-9 h-9 rounded-full bg-[#F5EFE6] items-center justify-center"
+            className="w-9 h-9 rounded-full bg-background-secondary items-center justify-center"
           >
             <FontAwesome6 name="arrow-turn-up" size={14} color="#2D6A4F" />
           </TouchableOpacity>
@@ -493,13 +498,13 @@ export default function PostDetailScreen() {
             </View>
           ) : (
             <View className="w-full min-h-64 bg-[#F4ECDD] p-6 justify-between overflow-hidden">
-              <View className="absolute -right-10 -top-10 w-36 h-36 rounded-full bg-[#E9C46A]/25" />
-              <View className="absolute -left-12 -bottom-16 w-40 h-40 rounded-full bg-[#2D6A4F]/10" />
+              <View className="absolute -right-10 -top-10 w-36 h-36 rounded-full bg-highlight/25" />
+              <View className="absolute -left-12 -bottom-16 w-40 h-40 rounded-full bg-brand/10" />
               <View className="self-start flex-row items-center gap-2 bg-white/65 px-3 py-1.5 rounded-full">
                 <FontAwesome6 name="pen-nib" size={12} color="#2D6A4F" />
-                <Text className="text-[11px] text-[#2D6A4F] font-bold">#{post.category || "寻味"} · 文字笔记</Text>
+                <Text className="text-[11px] text-brand font-bold">#{post.category || "寻味"} · 文字笔记</Text>
               </View>
-              <Text className="text-xl text-[#3D3229] font-bold leading-8 tracking-wide">
+              <Text className="text-xl text-ink font-bold leading-8 tracking-wide">
                 {post.content}
               </Text>
               <Text className="text-xs text-[#52796F] font-semibold">
@@ -515,7 +520,7 @@ export default function PostDetailScreen() {
                 <View className="flex-row items-center justify-between">
                   <View className="flex-row items-center gap-2">
                     <FontAwesome6 name="calendar-check" size={14} color="#2D6A4F" />
-                    <Text className="text-sm font-black text-[#2D6A4F]">活动信息</Text>
+                    <Text className="text-sm font-black text-brand">活动信息</Text>
                   </View>
                   <View className={`rounded-full px-2.5 py-1 ${activityEnded ? "bg-[#E8E5E0]" : "bg-[#DDF3E5]"}`}>
                     <Text className={`text-[9px] font-black ${activityEnded ? "text-[#7D746A]" : "text-[#1F7048]"}`}>
@@ -531,9 +536,9 @@ export default function PostDetailScreen() {
                   <TouchableOpacity
                     onPress={handleJoinEvent}
                     disabled={activityEnded}
-                    className={`rounded-full px-4 py-2 ${activityEnded ? "bg-[#E5E2DD]" : post.is_joined ? "bg-[#DCECDF]" : "bg-[#2D6A4F]"}`}
+                    className={`rounded-full px-4 py-2 ${activityEnded ? "bg-[#E5E2DD]" : post.is_joined ? "bg-[#DCECDF]" : "bg-brand"}`}
                   >
-                    <Text className={`text-[10px] font-black ${activityEnded ? "text-[#8B837A]" : post.is_joined ? "text-[#2D6A4F]" : "text-white"}`}>
+                    <Text className={`text-[10px] font-black ${activityEnded ? "text-[#8B837A]" : post.is_joined ? "text-brand" : "text-white"}`}>
                       {activityEnded ? "活动已结束" : post.is_joined ? "已参加 · 退出" : "立即参加"}
                     </Text>
                   </TouchableOpacity>
@@ -544,13 +549,13 @@ export default function PostDetailScreen() {
                 <View className="flex-row items-center gap-2">
                   <FontAwesome6 name={post.question_status === "resolved" ? "circle-check" : "circle-question"} size={15} color={post.question_status === "resolved" ? "#2D6A4F" : "#A76513"} />
                   <View>
-                    <Text className={`text-xs font-black ${post.question_status === "resolved" ? "text-[#2D6A4F]" : "text-[#8B5A18]"}`}>
+                    <Text className={`text-xs font-black ${post.question_status === "resolved" ? "text-brand" : "text-[#8B5A18]"}`}>
                       {post.question_status === "resolved" ? "问题已解决" : "等待优质回答"}
                     </Text>
-                    <Text className="mt-0.5 text-[9px] text-[#8B7D6B]">已有 {post.comment_count || 0} 个回答 · {post.views_count || 0} 次浏览</Text>
+                    <Text className="mt-0.5 text-[9px] text-copy-muted">已有 {post.comment_count || 0} 个回答 · {post.views_count || 0} 次浏览</Text>
                   </View>
                 </View>
-                {post.author_is_expert ? <Text className="text-[9px] font-black text-[#2D6A4F]">专业用户提问</Text> : null}
+                {post.author_is_expert ? <Text className="text-[9px] font-black text-brand">专业用户提问</Text> : null}
               </View>
             ) : null}
             <Text className="text-base text-[#222222] font-semibold leading-7 tracking-wide">
@@ -560,18 +565,18 @@ export default function PostDetailScreen() {
             {/* 只展示发布时真实选择的分类，不由前端生成额外标签。 */}
             {post.category ? (
               <View className="flex-row mt-4">
-                <View className="bg-[#2D6A4F]/10 px-2.5 py-1 rounded-lg">
-                  <Text className="text-[11px] font-bold text-[#2D6A4F]">#{post.category}</Text>
+                <View className="bg-brand/10 px-2.5 py-1 rounded-lg">
+                  <Text className="text-[11px] font-bold text-brand">#{post.category}</Text>
                 </View>
               </View>
             ) : null}
 
             {/* 发布时间与浏览量 */}
-            <View className="flex-row items-center justify-between mt-5 pt-4 border-t border-[#F5EFE6]">
+            <View className="flex-row items-center justify-between mt-5 pt-4 border-t border-background-secondary">
               <Text className="text-[11px] text-[#A09383]">
                 发布于 {post.created_at || "今天"} · {post.views_count || 0} 次浏览
               </Text>
-              <Text className="text-[11px] text-[#2D6A4F] font-bold">
+              <Text className="text-[11px] text-brand font-bold">
                 IP: 极简生活馆
               </Text>
             </View>
@@ -581,12 +586,12 @@ export default function PostDetailScreen() {
           <View className="h-2 bg-[#F8F5F0]" />
 
           {/* 评论区标题 */}
-          <View className="p-5 border-b border-[#F5EFE6]">
+          <View className="p-5 border-b border-background-secondary">
             <View className="flex-row items-center justify-between">
-              <Text className="text-sm font-bold text-[#3D3229]">
+              <Text className="text-sm font-bold text-ink">
                 {post.category === "问答" ? "全部回答" : "精彩评论"} ({post.comment_count ?? comments.length})
               </Text>
-              <Text className="text-xs text-[#8B7D6B]">按热度排序</Text>
+              <Text className="text-xs text-copy-muted">按热度排序</Text>
             </View>
           </View>
 
@@ -595,7 +600,7 @@ export default function PostDetailScreen() {
             {comments.map((comment) => (
               <View
                 key={comment.id}
-                className={`flex-row gap-3 border-b py-3.5 ${comment.is_accepted ? "border-[#CFE6D6] bg-[#F3FAF5] -mx-2 px-2" : "border-[#F5EFE6]"}`}
+                className={`flex-row gap-3 border-b py-3.5 ${comment.is_accepted ? "border-[#CFE6D6] bg-[#F3FAF5] -mx-2 px-2" : "border-background-secondary"}`}
               >
                 <Image
                   source={getAvatarSource(comment.avatar_url, comment.username)}
@@ -604,14 +609,14 @@ export default function PostDetailScreen() {
                 <View className="flex-1">
                   <View className="flex-row items-center justify-between">
                     <View className="flex-row items-center gap-1.5">
-                      <Text className="text-xs font-bold text-[#3D3229]">{comment.username}</Text>
+                      <Text className="text-xs font-bold text-ink">{comment.username}</Text>
                       {comment.is_expert_answer ? (
                         <View className="rounded bg-[#E3F1E6] px-1.5 py-0.5">
-                          <Text className="text-[8px] font-black text-[#2D6A4F]">专业回答</Text>
+                          <Text className="text-[8px] font-black text-brand">专业回答</Text>
                         </View>
                       ) : null}
                       {comment.is_accepted ? (
-                        <View className="flex-row items-center gap-1 rounded bg-[#2D6A4F] px-1.5 py-0.5">
+                        <View className="flex-row items-center gap-1 rounded bg-brand px-1.5 py-0.5">
                           <FontAwesome6 name="check" size={7} color="#FFFFFF" />
                           <Text className="text-[8px] font-black text-white">已采纳</Text>
                         </View>
@@ -665,7 +670,7 @@ export default function PostDetailScreen() {
                       onPress={() => handleAcceptAnswer(comment.id)}
                       className={`mt-2 self-start rounded-full px-3 py-1.5 ${comment.is_accepted ? "bg-[#DCECDF]" : "bg-[#F3EFE9]"}`}
                     >
-                      <Text className={`text-[9px] font-black ${comment.is_accepted ? "text-[#2D6A4F]" : "text-[#74695D]"}`}>
+                      <Text className={`text-[9px] font-black ${comment.is_accepted ? "text-brand" : "text-[#74695D]"}`}>
                         {comment.is_accepted ? "取消采纳" : "采纳此回答"}
                       </Text>
                     </TouchableOpacity>
@@ -680,7 +685,7 @@ export default function PostDetailScreen() {
         <View className="absolute bottom-0 left-0 right-0 bg-white border-t border-[#F0EAE1] px-4 py-2.5 flex-row items-center gap-3 shadow-lg">
           <TouchableOpacity
             onPress={openCommentComposer}
-            className="flex-1 bg-[#F5EFE6] px-3.5 py-2.5 rounded-full flex-row items-center gap-2"
+            className="flex-1 bg-background-secondary px-3.5 py-2.5 rounded-full flex-row items-center gap-2"
             accessibilityRole="button"
             accessibilityLabel="发布评论"
           >
@@ -750,7 +755,7 @@ export default function PostDetailScreen() {
               <View className="flex-row items-center justify-between mb-3">
                 <Text className="text-base font-bold text-[#2D2924]">{post.category === "问答" ? "写回答" : "写评论"}</Text>
                 <TouchableOpacity onPress={closeCommentComposer} className="p-1.5" accessibilityLabel="取消评论">
-                  <Text className="text-sm text-[#8B7D6B]">取消</Text>
+                  <Text className="text-sm text-copy-muted">取消</Text>
                 </TouchableOpacity>
               </View>
 
@@ -808,12 +813,12 @@ export default function PostDetailScreen() {
                           className="w-7 h-7 rounded-full"
                         />
                         <View>
-                          <Text className="text-xs font-bold text-[#3D3229]">{user.username}</Text>
-                          <Text className="text-[10px] text-[#8B7D6B]">@{user.username}</Text>
+                          <Text className="text-xs font-bold text-ink">{user.username}</Text>
+                          <Text className="text-[10px] text-copy-muted">@{user.username}</Text>
                         </View>
                       </TouchableOpacity>
                     ))}
-                    {!mentionUsers.length ? <Text className="px-3 py-4 text-xs text-[#8B7D6B]">没有找到匹配的用户</Text> : null}
+                    {!mentionUsers.length ? <Text className="px-3 py-4 text-xs text-copy-muted">没有找到匹配的用户</Text> : null}
                   </ScrollView>
                 </View>
               ) : null}
@@ -840,31 +845,32 @@ export default function PostDetailScreen() {
                 <View className="mt-3 flex-row items-center justify-between rounded-xl bg-[#FFF7E8] px-3 py-2.5">
                   <Text className="text-xs text-[#8B6A36]">登录后才能发布评论和 @ 食友</Text>
                   <TouchableOpacity onPress={() => { closeCommentComposer(); router.push("/login"); }}>
-                    <Text className="text-xs font-bold text-[#2D6A4F]">去登录</Text>
+                    <Text className="text-xs font-bold text-brand">去登录</Text>
                   </TouchableOpacity>
                 </View>
               ) : null}
 
               <View className="flex-row items-center justify-between mt-3">
                 <View className="flex-row items-center gap-1">
-                  <TouchableOpacity onPress={pickCommentImage} className="w-10 h-10 items-center justify-center rounded-full active:bg-[#F5EFE6]" accessibilityLabel="添加图片">
+                  <TouchableOpacity onPress={pickCommentImage} className="w-10 h-10 items-center justify-center rounded-full active:bg-background-secondary" accessibilityLabel="添加图片">
                     <FontAwesome6 name="image" size={19} color="#6E6256" />
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={openMentionPicker} className="w-10 h-10 items-center justify-center rounded-full active:bg-[#F5EFE6]" accessibilityLabel="提及用户">
+                  <TouchableOpacity onPress={openMentionPicker} className="w-10 h-10 items-center justify-center rounded-full active:bg-background-secondary" accessibilityLabel="提及用户">
                     <FontAwesome6 name="at" size={19} color="#6E6256" />
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => { setIsEmojiPickerVisible((visible) => !visible); setIsMentionPickerVisible(false); }} className="w-10 h-10 items-center justify-center rounded-full active:bg-[#F5EFE6]" accessibilityLabel="选择表情">
+                  <TouchableOpacity onPress={() => { setIsEmojiPickerVisible((visible) => !visible); setIsMentionPickerVisible(false); }} className="w-10 h-10 items-center justify-center rounded-full active:bg-background-secondary" accessibilityLabel="选择表情">
                     <FontAwesome6 name="face-smile" size={20} color="#6E6256" />
                   </TouchableOpacity>
                 </View>
                 <TouchableOpacity
                   onPress={handleAddComment}
-                  disabled={!isAuthenticated || (!commentText.trim() && !commentImageUrl)}
-                  className={`px-5 py-2.5 rounded-full ${isAuthenticated && (commentText.trim() || commentImageUrl) ? "bg-[#2D6A4F]" : "bg-[#D9D4CD]"}`}
+                  disabled={submittingComment || !isAuthenticated || (!commentText.trim() && !commentImageUrl)}
+                  className={`min-w-touch min-h-touch px-5 rounded-full items-center justify-center ${isAuthenticated && (commentText.trim() || commentImageUrl) ? "bg-brand" : "bg-[#D9D4CD]"}`}
                   accessibilityRole="button"
                   accessibilityLabel="发送评论"
+                  accessibilityState={{ disabled: submittingComment || !isAuthenticated || (!commentText.trim() && !commentImageUrl), busy: submittingComment }}
                 >
-                  <Text className="text-sm font-bold text-white">发送</Text>
+                  {submittingComment ? <ActivityIndicator size="small" color="#FFF" /> : <Text className="text-sm font-bold text-white">发送</Text>}
                 </TouchableOpacity>
               </View>
             </View>

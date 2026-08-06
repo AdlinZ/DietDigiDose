@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
+import { useCSSVariable } from 'uniwind';
 
 const REMEMBERED_IDENTIFIER_KEY = '@remembered_login_identifier';
 
@@ -18,6 +19,11 @@ export default function LoginScreen() {
   const identifierWasEdited = useRef(false);
   const { login } = useAuth();
   const router = useSafeRouter();
+  const [brand, muted, critical] = useCSSVariable([
+    '--color-brand',
+    '--color-copy-muted',
+    '--color-critical',
+  ]) as string[];
 
   useEffect(() => {
     (async () => {
@@ -91,98 +97,122 @@ export default function LoginScreen() {
   return (
     <Screen>
       <KeyboardAvoidingView
-        style={styles.container}
+        className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-          <View style={styles.content}>
+          <View className="flex-1 justify-center px-8">
             {/* Logo & Title */}
-            <View style={styles.header}>
-              <View style={styles.logoContainer}>
+            <View className="items-center mb-12">
+              <View className="w-20 h-20 rounded-full bg-brand-soft items-center justify-center mb-4">
                 <Image
                   source={require("@/assets/logo.png")}
                   style={{ width: 68, height: 68 }}
                   resizeMode="contain"
+                  accessible={false}
                 />
               </View>
-              <Text style={styles.title}>食光烙记</Text>
-              <Text style={styles.subtitle}>智能食材管理，健康饮食推荐</Text>
+              <Text className="text-display font-bold text-brand-strong mb-2" accessibilityRole="header">食光烙记</Text>
+              <Text className="text-body text-copy-muted">智能食材管理，健康饮食推荐</Text>
             </View>
 
             {/* Form */}
-            <View style={styles.form}>
-              <View style={styles.inputGroup}>
-                <FontAwesome6 name="envelope" size={18} color="#52796F" style={styles.inputIcon} />
+            <View className="gap-4">
+              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
+                <FontAwesome6 name="envelope" size={18} color={brand} className="mr-3" />
                 <TextInput
-                  style={styles.input}
+                  className="flex-1 text-base text-ink py-0"
                   placeholder="请输入注册时的邮箱或手机号"
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor={muted}
                   value={identifier}
                   onChangeText={handleIdentifierChange}
                   autoCapitalize="none"
                   autoCorrect={false}
+                  autoComplete="username"
+                  textContentType="username"
+                  accessibilityLabel="邮箱或手机号"
                 />
               </View>
 
-              <View style={styles.inputGroup}>
-                <FontAwesome6 name="lock" size={18} color="#52796F" style={styles.inputIcon} />
+              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
+                <FontAwesome6 name="lock" size={18} color={brand} className="mr-3" />
                 <TextInput
-                  style={styles.input}
+                  className="flex-1 text-base text-ink py-0"
                   placeholder="请输入密码"
-                  placeholderTextColor="#94A3B8"
+                  placeholderTextColor={muted}
                   value={password}
                   onChangeText={setPassword}
                   secureTextEntry={!showPassword}
+                  autoComplete="current-password"
+                  textContentType="password"
+                  accessibilityLabel="密码"
                 />
-                <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-                  <FontAwesome6 name={showPassword ? 'eye-slash' : 'eye'} size={18} color="#94A3B8" />
+                <TouchableOpacity
+                  onPress={() => setShowPassword(!showPassword)}
+                  className="min-w-touch min-h-touch items-center justify-center"
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? '隐藏密码' : '显示密码'}
+                >
+                  <FontAwesome6 name={showPassword ? 'eye-slash' : 'eye'} size={18} color={muted} />
                 </TouchableOpacity>
               </View>
 
               {/* 记住用户名与安全提示 */}
-              <View style={styles.optionsRow}>
+              <View className="flex-row justify-between items-center px-1 mt-0.5">
                 <TouchableOpacity
-                  style={styles.rememberOption}
+                  className="flex-row items-center gap-1.5 min-h-touch"
                   onPress={handleRememberIdentifierChange}
                   activeOpacity={0.7}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: rememberIdentifier }}
+                  accessibilityLabel="记住登录方式"
                 >
                   <FontAwesome6
                     name={rememberIdentifier ? "square-check" : "square"}
                     size={18}
-                    color={rememberIdentifier ? "#2D6A4F" : "#94A3B8"}
+                    color={rememberIdentifier ? brand : muted}
                   />
-                  <Text style={styles.rememberText}>记住登录方式</Text>
+                  <Text className="text-body text-copy-muted">记住登录方式</Text>
                 </TouchableOpacity>
-                <View style={styles.securityBadge}>
-                  <FontAwesome6 name="shield-halved" size={13} color="#52796F" />
-                  <Text style={styles.securityText}>加密保护</Text>
+                <View className="flex-row items-center gap-1">
+                  <FontAwesome6 name="shield-halved" size={13} color={brand} />
+                  <Text className="text-caption text-copy-muted">加密保护</Text>
                 </View>
               </View>
 
               {error ? (
-                <View style={styles.errorContainer}>
-                  <FontAwesome6 name="circle-exclamation" size={14} color="#D64545" style={{ marginRight: 6 }} />
-                  <Text style={styles.errorText}>{error}</Text>
+                <View
+                  className="flex-row items-center justify-center bg-danger-soft rounded-control py-2 px-3"
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                >
+                  <FontAwesome6 name="circle-exclamation" size={14} color={critical} style={{ marginRight: 6 }} />
+                  <Text className="text-critical text-body font-medium">{error}</Text>
                 </View>
               ) : null}
 
               <TouchableOpacity
-                style={[styles.loginButton, isSubmitDisabled && styles.disabledButton]}
+                className={`bg-brand rounded-control h-14 items-center justify-center mt-2 active:bg-accent-hover ${isSubmitDisabled ? 'opacity-disabled' : ''}`}
                 onPress={handleLogin}
                 disabled={isSubmitDisabled}
+                accessibilityRole="button"
+                accessibilityLabel="登录"
+                accessibilityState={{ disabled: isSubmitDisabled, busy: loading }}
               >
                 {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.loginButtonText}>登录</Text>
+                  <Text className="text-white text-lg font-semibold">登录</Text>
                 )}
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.registerLink}
+                className="flex-row justify-center items-center mt-3 min-h-touch"
                 onPress={() => router.push('/register')}
+                accessibilityRole="link"
+                accessibilityLabel="还没有账号？立即注册"
               >
-                <Text style={styles.registerText}>还没有账号？</Text>
-                <Text style={styles.registerLinkText}>立即注册</Text>
+                <Text className="text-copy-muted text-body">还没有账号？</Text>
+                <Text className="text-brand text-body font-semibold ml-1">立即注册</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -190,57 +220,3 @@ export default function LoginScreen() {
     </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  content: { flex: 1, justifyContent: 'center', paddingHorizontal: 32 },
-  header: { alignItems: 'center', marginBottom: 48 },
-  logoContainer: {
-    width: 80, height: 80, borderRadius: 40,
-    backgroundColor: '#D8F3DC', alignItems: 'center', justifyContent: 'center',
-    marginBottom: 16,
-  },
-  title: { fontSize: 28, fontWeight: '700', color: '#1B4332', marginBottom: 8 },
-  subtitle: { fontSize: 14, color: '#52796F' },
-  form: { gap: 16 },
-  inputGroup: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F0F0F3', borderRadius: 16,
-    paddingHorizontal: 16, height: 56,
-  },
-  inputIcon: { marginRight: 12 },
-  input: { flex: 1, fontSize: 16, color: '#1B4332', paddingVertical: 0 },
-  eyeIcon: { padding: 8 },
-  optionsRow: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 4, marginTop: 2,
-  },
-  rememberOption: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-  },
-  rememberText: { fontSize: 14, color: '#52796F' },
-  securityBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-  },
-  securityText: { fontSize: 12, color: '#52796F' },
-  errorContainer: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#FEE2E2', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 12,
-  },
-  errorText: { color: '#D64545', fontSize: 14, fontWeight: '500' },
-  loginButton: {
-    backgroundColor: '#2D6A4F', borderRadius: 16, height: 56,
-    alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#2D6A4F', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
-    marginTop: 8,
-  },
-  loginButtonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
-  disabledButton: { opacity: 0.5 },
-  registerLink: {
-    flexDirection: 'row', justifyContent: 'center',
-    alignItems: 'center', marginTop: 12,
-  },
-  registerText: { color: '#52796F', fontSize: 14 },
-  registerLinkText: { color: '#2D6A4F', fontSize: 14, fontWeight: '600', marginLeft: 4 },
-});

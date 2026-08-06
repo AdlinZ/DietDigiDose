@@ -3,17 +3,23 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json');
+const rootPkg = require('../package.json');
 const dependencies = pkg.dependencies || {};
 const externalList = Object.keys(dependencies).filter(dep => dep !== 'dayjs');
 try {
   await esbuild.build({
-    entryPoints: ['src/index.ts'],
+    entryPoints: {
+      index: 'src/index.ts',
+      'database-backup': 'scripts/database-backup.ts',
+      'migrate-community-media': 'scripts/migrate-community-media.ts',
+    },
     bundle: true,
     platform: 'node',
     format: 'esm',
     outdir: 'dist',
     external: externalList,
     define: {
+      'process.env.SERVER_VERSION': JSON.stringify(process.env.SERVER_VERSION || rootPkg.version),
       'process.env.SERVER_BUILD_TIME': JSON.stringify(process.env.SERVER_BUILD_TIME || new Date().toISOString()),
     },
   });

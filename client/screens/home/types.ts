@@ -46,7 +46,6 @@ export interface Post {
   id: number;
   user_id: number;
   username: string;
-  nickname: string;
   avatar_url: string;
   content: string;
   image_url: string | null;

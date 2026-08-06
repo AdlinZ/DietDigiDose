@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { getSystemSetting, logAIUsage } from "../storage/db.js";
 import { executeAIQueryTool, executeAITool, isAIQueryTool } from "./aiTools.js";
 import { createAIWritePreview } from "./aiWriteConfirmations.js";
+import { fetchWithTimeout } from "../utils/fetchWithTimeout.js";
 dotenv.config();
 
 export function getChatConfig() {
@@ -370,7 +371,7 @@ export async function chatCompletion(
       payload.tool_choice = "auto";
     }
 
-    const response = await fetch(`${baseUrl}/chat/completions`, {
+    const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -558,7 +559,7 @@ export async function testAIConnection(overrideConfig?: {
   }
 
   const startTime = Date.now();
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -713,7 +714,7 @@ export async function transcribeAudio(
       formData.append("file", blob, `speech.${extension}`);
       formData.append("model", asrModel);
 
-      const response = await fetch(`${baseUrl}/audio/transcriptions`, {
+      const response = await fetchWithTimeout(`${baseUrl}/audio/transcriptions`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,

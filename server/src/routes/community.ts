@@ -5,6 +5,8 @@ import { validateBody } from "../middleware/validate.js";
 import { communityCommentSchema, communityPostSchema } from "../validation/schemas.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
 import { getUserLevel } from "../services/userLevel.js";
+import { decodeCursor, encodeCursor } from "../utils/cursor.js";
+import { isStoredMediaUrlForUser } from "../services/mediaStorage.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -23,6 +25,7 @@ function postSelect(userId: number | null) {
   return `
     SELECT
       p.*,
+      COALESCE(u.username, '食友' || p.user_id) AS username,
       COALESCE(u.is_verified_expert, 0) AS author_is_expert,
       (SELECT COUNT(*) FROM community_comments cc WHERE cc.post_id = p.id) AS actual_comment_count,
       EXISTS(SELECT 1 FROM community_post_likes l WHERE l.post_id = p.id AND l.user_id = ${userId ?? -1}) AS is_liked,
@@ -36,7 +39,7 @@ function postSelect(userId: number | null) {
 
 function serializePost(post: any) {
   if (!post) return post;
-  const { actual_comment_count: actualCommentCount, ...serializedPost } = post;
+  const { actual_comment_count: actualCommentCount, nickname: _legacyNickname, ...serializedPost } = post;
   let imageUrls: string[] = [];
   try {
     const parsed = typeof post.image_urls === "string" ? JSON.parse(post.image_urls) : post.image_urls;
@@ -61,7 +64,7 @@ function serializePost(post: any) {
  * A deliberately small, explainable ranker.  It gives a new community member a
  * useful feed without needing a separate recommendation service or opaque model.
  */
-function recommendPosts(posts: any[], userId: number | null) {
+function recommendPosts(posts: any[], userId: number | null, now = Date.now()) {
   const likedCategories = new Map<string, number>();
   let healthGoal = "healthy";
   let dietaryPreference = "";
@@ -89,8 +92,6 @@ function recommendPosts(posts: any[], userId: number | null) {
   };
   const keywords = goalKeywords[healthGoal] || goalKeywords.healthy;
   const preferences = dietaryPreference.split(/[、,，/\s]+/).filter((value: string) => value.length > 1 && value !== "无特别偏好");
-  const now = Date.now();
-
   const ranked = posts.map((post) => {
     const text = `${post.content || ""} ${post.category || ""}`.toLowerCase();
     const reasons: string[] = [];
@@ -202,6 +203,8 @@ router.get("/users/:userId/profile", (req: AuthRequest, res) => {
 // GET /api/v1/community/posts
 router.get("/posts", (req: AuthRequest, res) => {
   const { category, sort } = req.query;
+  const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
+  const pageSize = Math.min(30, Math.max(1, Number(req.query.pageSize) || 12));
   const rawLimit = Number(req.query.limit);
   const rawOffset = Number(req.query.offset);
   const limit = Number.isInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), 30) : null;
@@ -211,17 +214,59 @@ router.get("/posts", (req: AuthRequest, res) => {
   if (category) {
     posts = db.prepare(`
       ${postSelect(userId)} WHERE p.category = ? AND p.deleted_at IS NULL
-      ORDER BY p.created_at DESC
+      ORDER BY p.created_at DESC, p.id DESC
     `).all(category);
   } else {
     posts = db.prepare(`
       ${postSelect(userId)} WHERE p.deleted_at IS NULL
-      ORDER BY p.created_at DESC
+      ORDER BY p.created_at DESC, p.id DESC
     `).all();
   }
 
+  const requestedMode = sort === "recommended" ? "recommended" : "latest";
+  if (cursorMode) {
+    const cursor = req.query.cursor ? decodeCursor(req.query.cursor) : null;
+    const cursorId = cursor ? Number(cursor.id) : null;
+    const cursorCategory = typeof cursor?.category === "string" ? cursor.category : "";
+    if (cursor && (
+      cursor.v !== 2
+      || cursor.mode !== requestedMode
+      || cursorCategory !== (typeof category === "string" ? category : "")
+      || !Number.isInteger(cursorId)
+      || cursorId! <= 0
+    )) {
+      return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+    }
+    const snapshotNow = requestedMode === "recommended" && cursor ? Number(cursor.at) : Date.now();
+    const serialized = posts.map(serializePost);
+    let ordered = requestedMode === "recommended"
+      ? recommendPosts(serialized, userId, Number.isFinite(snapshotNow) ? snapshotNow : Date.now())
+      : serialized;
+    if (cursor) {
+      if (requestedMode === "latest") {
+        const cursorCreatedAt = typeof cursor.createdAt === "string" ? cursor.createdAt : "";
+        if (!cursorCreatedAt) return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+        ordered = ordered.filter((post) => post.created_at < cursorCreatedAt || (post.created_at === cursorCreatedAt && post.id < cursorId!));
+      } else {
+        const cursorScore = Number(cursor.score);
+        if (!Number.isFinite(cursorScore)) return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+        ordered = ordered.filter((post) => post.recommendation_score < cursorScore || (post.recommendation_score === cursorScore && post.id < cursorId!));
+      }
+    }
+    const items = ordered.slice(0, pageSize);
+    const last = items.at(-1);
+    const nextCursor = items.length === pageSize && last && ordered.length > pageSize
+      ? encodeCursor(requestedMode === "latest"
+        ? { v: 2, mode: requestedMode, category: typeof category === "string" ? category : "", createdAt: last.created_at, id: last.id }
+        : { v: 2, mode: requestedMode, category: typeof category === "string" ? category : "", at: snapshotNow, score: last.recommendation_score, id: last.id })
+      : null;
+    return res.json({
+      items,
+      nextCursor,
+    });
+  }
   const serialized = posts.map(serializePost);
-  const ordered = sort === "recommended" ? recommendPosts(serialized, userId) : serialized;
+  const ordered = requestedMode === "recommended" ? recommendPosts(serialized, userId) : serialized;
   res.json(limit === null ? ordered : ordered.slice(offset, offset + limit));
 });
 
@@ -252,6 +297,9 @@ router.post("/posts", authMiddleware, validateBody(communityPostSchema), (req: A
   if (!normalizedContent && !imageUrls.length) {
     return res.status(400).json({ error: "动态内容或图片不能为空" });
   }
+  if (imageUrls.some((url) => !isStoredMediaUrlForUser(url, auth.userId))) {
+    return res.status(400).json({ error: "图片必须先通过当前账号上传" });
+  }
   const normalizedCategory = ["寻味", "榜单", "活动", "问答"].includes(category) ? category : "寻味";
   let eventStartAt: string | null = null;
   let eventEndAt: string | null = null;
@@ -267,13 +315,13 @@ router.post("/posts", authMiddleware, validateBody(communityPostSchema), (req: A
   }
   const result = db.prepare(`
     INSERT INTO community_posts (
-      user_id, username, nickname, avatar_url, category, content, image_url, image_urls,
+      user_id, username, avatar_url, category, content, image_url, image_urls,
       event_start_at, event_end_at, question_status, likes_count
     )
-    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
   `).run(
     auth.userId,
-    auth.user.username,
+    auth.user.username || `食友${auth.userId}`,
     auth.user.avatar_url,
     normalizedCategory,
     normalizedContent,
@@ -361,12 +409,15 @@ router.get("/posts/:id/comments", (req: AuthRequest, res) => {
     WHERE c.post_id = ?
     ORDER BY is_accepted DESC, c.likes_count DESC, c.created_at DESC
   `).all(userId, req.params.id);
-  res.json(comments.map((comment: any) => ({
-    ...comment,
-    is_liked: Boolean(comment.is_liked),
-    is_expert_answer: Boolean(comment.is_expert_answer),
-    is_accepted: Boolean(comment.is_accepted),
-  })));
+  res.json(comments.map((comment: any) => {
+    const { nickname: _legacyNickname, ...publicComment } = comment;
+    return {
+      ...publicComment,
+      is_liked: Boolean(comment.is_liked),
+      is_expert_answer: Boolean(comment.is_expert_answer),
+      is_accepted: Boolean(comment.is_accepted),
+    };
+  }));
 });
 
 router.post("/posts/:id/comments", authMiddleware, validateBody(communityCommentSchema), (req: AuthRequest, res) => {
@@ -375,10 +426,14 @@ router.post("/posts/:id/comments", authMiddleware, validateBody(communityComment
   const content = String(req.body.content || "").trim();
   const imageUrl = typeof req.body.image_url === "string" ? req.body.image_url : null;
   if (!content && !imageUrl) return res.status(400).json({ error: "评论内容或图片不能为空" });
+  if (imageUrl && !isStoredMediaUrlForUser(imageUrl, auth.userId)) {
+    return res.status(400).json({ error: "图片必须先通过当前账号上传" });
+  }
   const post = db.prepare("SELECT id FROM community_posts WHERE id = ? AND deleted_at IS NULL").get(req.params.id);
   if (!post) return res.status(404).json({ error: "帖子不存在" });
-  const result = db.prepare(`INSERT INTO community_comments (post_id, user_id, username, nickname, avatar_url, content, image_url) VALUES (?, ?, ?, NULL, ?, ?, ?)`)
-    .run(req.params.id, auth.userId, auth.user.username, auth.user.avatar_url, content, imageUrl);
+  const publicName = auth.user.username || `食友${auth.userId}`;
+  const result = db.prepare(`INSERT INTO community_comments (post_id, user_id, username, avatar_url, content, image_url) VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(req.params.id, auth.userId, publicName, auth.user.avatar_url, content, imageUrl);
   db.prepare("UPDATE community_posts SET comment_count = comment_count + 1 WHERE id = ?").run(req.params.id);
   const comment = db.prepare("SELECT * FROM community_comments WHERE id = ?").get(result.lastInsertRowid);
   res.status(201).json({

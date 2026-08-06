@@ -41,7 +41,7 @@ export default function CommunityScreen() {
   const [hasMore, setHasMore] = useState(false);
   const refreshSequence = useRef(0);
   const fetchRequestSequence = useRef(0);
-  const postsRef = useRef<Post[]>([]);
+  const nextCursorRef = useRef<string | null>(null);
 
   // 帖子详情 Modal 控制
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
@@ -53,10 +53,6 @@ export default function CommunityScreen() {
     return () => sub.remove();
   }, [router]);
 
-  useEffect(() => {
-    postsRef.current = posts;
-  }, [posts]);
-
   const tabs = ["寻味", "榜单", "活动", "问答"];
 
   const fetchPosts = useCallback(async (forceRefresh = false, append = false) => {
@@ -64,29 +60,35 @@ export default function CommunityScreen() {
     try {
       setLoading(true);
       setFetchError(null);
-      const offset = append ? postsRef.current.length : 0;
-      const query = `?category=${encodeURIComponent(activeTab)}&sort=recommended&limit=${PAGE_SIZE}&offset=${offset}`;
+      if (append && !nextCursorRef.current) return;
+      const cursorQuery = append && nextCursorRef.current ? `&cursor=${encodeURIComponent(nextCursorRef.current)}` : "";
+      const query = `?category=${encodeURIComponent(activeTab)}&sort=recommended&pageSize=${PAGE_SIZE}${cursorQuery}`;
       if (forceRefresh) {
         refreshSequence.current += 1;
         const cacheBuster = Date.now();
         const [recommended, latest] = await Promise.all([
-          communityApi.posts<Post>(`${query}&_=${cacheBuster}`, authFetch),
-          communityApi.posts<Post>(`?category=${encodeURIComponent(activeTab)}&limit=${PAGE_SIZE}&_=${cacheBuster}`, authFetch),
+          communityApi.postPage<Post>(`${query}&_=${cacheBuster}`, authFetch),
+          communityApi.postPage<Post>(`?category=${encodeURIComponent(activeTab)}&sort=latest&pageSize=${PAGE_SIZE}&_=${cacheBuster}`, authFetch),
         ]);
         if (requestSequence !== fetchRequestSequence.current) return;
-        const refreshed = buildRefreshedFeed(recommended, latest, refreshSequence.current);
+        const refreshed = buildRefreshedFeed(recommended.items, latest.items, refreshSequence.current);
         setPosts(refreshed);
-        setHasMore(recommended.length === PAGE_SIZE);
+        nextCursorRef.current = recommended.nextCursor;
+        setHasMore(Boolean(recommended.nextCursor));
       } else {
-        const data = await communityApi.posts<Post>(query, authFetch);
+        const data = await communityApi.postPage<Post>(query, authFetch);
         if (requestSequence !== fetchRequestSequence.current) return;
-        const nextPosts = Array.isArray(data) ? data : [];
+        const nextPosts = Array.isArray(data.items) ? data.items : [];
         setPosts((current) => append ? [...current, ...nextPosts.filter((item) => !current.some((post) => post.id === item.id))] : nextPosts);
-        setHasMore(nextPosts.length === PAGE_SIZE);
+        nextCursorRef.current = data.nextCursor;
+        setHasMore(Boolean(data.nextCursor));
       }
     } catch (e) {
       if (requestSequence !== fetchRequestSequence.current) return;
-      if (!append) setPosts([]);
+      if (!append) {
+        setPosts([]);
+        nextCursorRef.current = null;
+      }
       setFetchError(e instanceof Error ? e.message : "社区内容加载失败");
     } finally {
       if (requestSequence === fetchRequestSequence.current) setLoading(false);
@@ -298,13 +300,13 @@ export default function CommunityScreen() {
           />
         ) : (
           <View className={`w-full ${imageHeight} bg-[#F4ECDD] justify-between p-4`}>
-            <View className="w-9 h-9 rounded-full bg-[#2D6A4F]/10 items-center justify-center self-end">
+            <View className="w-9 h-9 rounded-full bg-brand/10 items-center justify-center self-end">
               <FontAwesome6 name="pen-nib" size={15} color="#2D6A4F" />
             </View>
-            <Text className="text-sm font-bold text-[#3D3229] leading-6" numberOfLines={5}>
+            <Text className="text-sm font-bold text-ink leading-6" numberOfLines={5}>
               {post.content}
             </Text>
-            <Text className="text-[10px] font-bold text-[#2D6A4F]">食光文字笔记</Text>
+            <Text className="text-[10px] font-bold text-brand">食光文字笔记</Text>
           </View>
         )}
 
@@ -313,14 +315,14 @@ export default function CommunityScreen() {
           {post.image_url ? <Text className="text-xs font-bold text-[#222222] leading-5" numberOfLines={3}>{post.content}</Text> : null}
 
           <View className="flex-row items-center justify-between mt-2.5 pt-2 border-t border-[#F8F5F0]">
-            {/* 作者头像与昵称 */}
+            {/* 作者头像与用户名 */}
             <TouchableOpacity onPress={(event) => { event.stopPropagation(); router.push("/user-profile", { userId: post.user_id }); }} className="min-w-0 flex-1 flex-row items-center gap-1.5 pr-2">
               <Image
                 source={getAvatarSource(post.avatar_url, post.user_id ?? post.username)}
                 className="w-5 h-5 rounded-full"
               />
               <Text className="flex-1 text-[10px] font-medium text-[#777777]" numberOfLines={1}>
-                {post.nickname || post.username}
+                {post.username}
               </Text>
             </TouchableOpacity>
 
@@ -357,7 +359,7 @@ export default function CommunityScreen() {
           ? { background: "bg-[#DDE3E8]", text: "text-[#46525C]", border: "border-[#C9D0D6]" }
           : rank === 3
             ? { background: "bg-[#DDA77B]", text: "text-[#5D321F]", border: "border-[#CF9365]" }
-            : { background: "bg-[#EFF4F0]", text: "text-[#2D6A4F]", border: "border-[#DCE9DF]" };
+            : { background: "bg-[#EFF4F0]", text: "text-brand", border: "border-[#DCE9DF]" };
 
     if (rank === 1) {
       return (
@@ -404,7 +406,7 @@ export default function CommunityScreen() {
                   className="h-6 w-6 rounded-full"
                 />
                 <Text className="flex-1 text-[11px] font-semibold text-[#74685B]" numberOfLines={1}>
-                  {post.nickname || post.username}
+                  {post.username}
                 </Text>
               </View>
               <TouchableOpacity
@@ -454,7 +456,7 @@ export default function CommunityScreen() {
           </Text>
           <View className="mt-2 flex-row items-center justify-between">
             <Text className="max-w-[55%] text-[9px] font-medium text-[#918576]" numberOfLines={1}>
-              {post.nickname || post.username}
+              {post.username}
             </Text>
             <View className="flex-row items-center gap-1">
               <FontAwesome6 name="fire" size={9} color={rank <= 3 ? "#C17B27" : "#73917D"} />
@@ -517,7 +519,7 @@ export default function CommunityScreen() {
               </View>
               <View className="flex-row items-center gap-1.5">
                 <FontAwesome6 name="user-group" size={10} color="#8B7D6B" />
-                <Text className="text-[10px] font-bold text-[#8B7D6B]">{post.participant_count || 0} 人参加</Text>
+                <Text className="text-[10px] font-bold text-copy-muted">{post.participant_count || 0} 人参加</Text>
               </View>
             </View>
             {status !== "upcoming" ? (
@@ -531,9 +533,9 @@ export default function CommunityScreen() {
                 event.stopPropagation();
                 void handleJoinEvent(post);
               }}
-              className={`mt-4 items-center rounded-xl py-2.5 ${status === "ended" ? "bg-[#E7E3DD]" : post.is_joined ? "bg-[#E8F2EA]" : "bg-[#2D6A4F]"}`}
+              className={`mt-4 items-center rounded-xl py-2.5 ${status === "ended" ? "bg-[#E7E3DD]" : post.is_joined ? "bg-[#E8F2EA]" : "bg-brand"}`}
             >
-              <Text className={`text-xs font-black ${status === "ended" ? "text-[#8D857B]" : post.is_joined ? "text-[#2D6A4F]" : "text-white"}`}>
+              <Text className={`text-xs font-black ${status === "ended" ? "text-[#8D857B]" : post.is_joined ? "text-brand" : "text-white"}`}>
                 {status === "ended" ? "活动已结束" : post.is_joined ? "已参加 · 点击退出" : status === "upcoming" ? "提前报名" : "立即参加"}
               </Text>
             </TouchableOpacity>
@@ -572,9 +574,9 @@ export default function CommunityScreen() {
                 event.stopPropagation();
                 void handleJoinEvent(post);
               }}
-              className={`rounded-full px-3 py-1.5 ${status === "ended" ? "bg-[#EEECE8]" : post.is_joined ? "bg-[#E4F1E7]" : "bg-[#2D6A4F]"}`}
+              className={`rounded-full px-3 py-1.5 ${status === "ended" ? "bg-[#EEECE8]" : post.is_joined ? "bg-[#E4F1E7]" : "bg-brand"}`}
             >
-              <Text className={`text-[9px] font-black ${status === "ended" ? "text-[#8D857B]" : post.is_joined ? "text-[#2D6A4F]" : "text-white"}`}>
+              <Text className={`text-[9px] font-black ${status === "ended" ? "text-[#8D857B]" : post.is_joined ? "text-brand" : "text-white"}`}>
                 {status === "ended" ? "已结束" : post.is_joined ? "已参加" : "参加"}
               </Text>
             </TouchableOpacity>
@@ -596,7 +598,7 @@ export default function CommunityScreen() {
       >
         <View className={`h-[62px] w-[54px] items-center justify-center rounded-xl ${isResolved ? "bg-[#E2F2E7]" : answerCount > 0 ? "bg-[#FFF0D9]" : "bg-[#F1EFEB]"}`}>
           <Text className={`text-lg font-black ${isResolved ? "text-[#28724B]" : answerCount > 0 ? "text-[#A96819]" : "text-[#756D64]"}`}>{answerCount}</Text>
-          <Text className={`text-[8px] font-bold ${isResolved ? "text-[#4F8967]" : "text-[#8B7D6B]"}`}>个回答</Text>
+          <Text className={`text-[8px] font-bold ${isResolved ? "text-[#4F8967]" : "text-copy-muted"}`}>个回答</Text>
         </View>
         <View className="min-w-0 flex-1">
           <View className="flex-row items-start gap-2">
@@ -605,10 +607,10 @@ export default function CommunityScreen() {
           </View>
           <View className="mt-2.5 flex-row items-center justify-between">
             <View className="flex-1 flex-row items-center gap-1.5 pr-2">
-              <Text className="max-w-[55%] text-[9px] font-medium text-[#8B7D6B]" numberOfLines={1}>{post.nickname || post.username}</Text>
+              <Text className="max-w-[55%] text-[9px] font-medium text-copy-muted" numberOfLines={1}>{post.username}</Text>
               {post.author_is_expert ? (
                 <View className="rounded bg-[#E8F2EA] px-1.5 py-0.5">
-                  <Text className="text-[8px] font-black text-[#2D6A4F]">专业用户</Text>
+                  <Text className="text-[8px] font-black text-brand">专业用户</Text>
                 </View>
               ) : null}
             </View>
@@ -644,10 +646,10 @@ export default function CommunityScreen() {
         {/* 工具导航：发布操作由底部全局按钮承担 */}
         <View className="bg-[#FAFAFA] px-5 pt-4 pb-2">
           <View className="flex-row items-center gap-2">
-            <TouchableOpacity onPress={() => setSearchOpen(!searchOpen)} className="h-10 w-10 items-center justify-center rounded-full border border-[#EBE3D5] bg-white active:opacity-80">
+            <TouchableOpacity onPress={() => setSearchOpen(!searchOpen)} className="h-10 w-10 items-center justify-center rounded-full border border-line bg-white active:opacity-80">
               <FontAwesome6 name="magnifying-glass" size={14} color="#2D6A4F" />
             </TouchableOpacity>
-            <View className="flex-1 bg-white p-1.5 rounded-2xl border border-[#EBE3D5] shadow-2xs flex-row">
+            <View className="flex-1 bg-white p-1.5 rounded-2xl border border-line shadow-2xs flex-row">
               {tabs.map((tab) => {
                 const isActive = activeTab === tab;
                 return (
@@ -655,12 +657,12 @@ export default function CommunityScreen() {
                     key={tab}
                     onPress={() => setActiveTab(tab)}
                     className={`flex-1 py-2.5 rounded-xl items-center justify-center ${
-                      isActive ? "bg-[#2D6A4F] shadow-xs" : ""
+                      isActive ? "bg-brand shadow-xs" : ""
                     }`}
                   >
                     <Text
                       className={`text-xs font-bold ${
-                        isActive ? "text-white font-black" : "text-[#8B7D6B]"
+                        isActive ? "text-white font-black" : "text-copy-muted"
                       }`}
                     >
                       {tab}
@@ -674,14 +676,14 @@ export default function CommunityScreen() {
 
         {/* 搜索展开框 */}
         {searchOpen && (
-          <View className="mx-5 mt-2 mb-2 bg-white px-3.5 py-2.5 rounded-2xl border border-[#EBE3D5] flex-row items-center gap-2 shadow-xs">
+          <View className="mx-5 mt-2 mb-2 bg-white px-3.5 py-2.5 rounded-2xl border border-line flex-row items-center gap-2 shadow-xs">
             <FontAwesome6 name="magnifying-glass" size={13} color="#8B7D6B" />
             <TextInput
               value={searchQuery}
               onChangeText={setSearchQuery}
               placeholder="搜索社区动态、食材搭配或食友..."
               placeholderTextColor="#B0A495"
-              className="flex-1 text-xs text-[#3D3229] py-0"
+              className="flex-1 text-xs text-ink py-0"
               autoFocus
             />
             {searchQuery ? (
@@ -704,7 +706,7 @@ export default function CommunityScreen() {
             <ActivityIndicator size="large" color="#2D6A4F" />
           </View>
         ) : filteredPosts.length === 0 ? (
-          <View className="mx-5 mt-8 items-center rounded-3xl border border-[#EBE3D5] bg-white px-5 py-12">
+          <View className="mx-5 mt-8 items-center rounded-3xl border border-line bg-white px-5 py-12">
             <View className="h-12 w-12 items-center justify-center rounded-2xl bg-[#EFF4F0]">
               <FontAwesome6
                 name={activeTab === "榜单" ? "ranking-star" : "note-sticky"}
@@ -712,7 +714,7 @@ export default function CommunityScreen() {
                 color="#2D6A4F"
               />
             </View>
-            <Text className="mt-3 text-sm font-black text-[#3D3229]">暂时没有相关内容</Text>
+            <Text className="mt-3 text-sm font-black text-ink">暂时没有相关内容</Text>
             <Text className="mt-1 text-xs text-[#918576]">换个关键词，或者发布第一条动态</Text>
           </View>
         ) : activeTab === "榜单" ? (
@@ -753,7 +755,7 @@ export default function CommunityScreen() {
               <View className="flex-row items-center justify-between">
                 <View>
                   <View className="flex-row items-center gap-2">
-                    <View className="h-8 w-8 items-center justify-center rounded-xl bg-[#2D6A4F]">
+                    <View className="h-8 w-8 items-center justify-center rounded-xl bg-brand">
                       <FontAwesome6 name="calendar-check" size={14} color="#FFFFFF" />
                     </View>
                     <Text className="text-base font-black text-[#2E3A31]">社区活动中心</Text>
@@ -761,7 +763,7 @@ export default function CommunityScreen() {
                   <Text className="mt-2 text-[10px] text-[#708075]">参与真实打卡，与食友一起完成健康目标</Text>
                 </View>
                 <TouchableOpacity onPress={() => router.push("/post-create", { category: "活动" })} className="rounded-full bg-white px-3 py-2 shadow-2xs">
-                  <Text className="text-[10px] font-black text-[#2D6A4F]">发起活动</Text>
+                  <Text className="text-[10px] font-black text-brand">发起活动</Text>
                 </TouchableOpacity>
               </View>
               <View className="mt-4 flex-row rounded-xl bg-white p-1">
@@ -769,7 +771,7 @@ export default function CommunityScreen() {
                   <TouchableOpacity
                     key={filter}
                     onPress={() => setActivityFilter(filter)}
-                    className={`flex-1 items-center rounded-lg py-2 ${activityFilter === filter ? "bg-[#2D6A4F]" : ""}`}
+                    className={`flex-1 items-center rounded-lg py-2 ${activityFilter === filter ? "bg-brand" : ""}`}
                   >
                     <Text className={`text-[10px] font-black ${activityFilter === filter ? "text-white" : "text-[#7C7368]"}`}>{filter}</Text>
                   </TouchableOpacity>
@@ -794,11 +796,11 @@ export default function CommunityScreen() {
                     <View className="h-8 w-8 items-center justify-center rounded-xl bg-[#E9B95E]">
                       <FontAwesome6 name="circle-question" size={15} color="#5F410C" />
                     </View>
-                    <Text className="text-base font-black text-[#3D3229]">营养问答广场</Text>
+                    <Text className="text-base font-black text-ink">营养问答广场</Text>
                   </View>
                   <Text className="mt-2 text-[10px] text-[#887B6B]">真实回答数、解决状态和专业身份清晰可见</Text>
                 </View>
-                <TouchableOpacity onPress={() => router.push("/post-create", { category: "问答" })} className="rounded-full bg-[#3D3229] px-3 py-2">
+                <TouchableOpacity onPress={() => router.push("/post-create", { category: "问答" })} className="rounded-full bg-ink px-3 py-2">
                   <Text className="text-[10px] font-black text-white">我要提问</Text>
                 </TouchableOpacity>
               </View>
@@ -807,7 +809,7 @@ export default function CommunityScreen() {
                   <TouchableOpacity
                     key={filter}
                     onPress={() => setQuestionFilter(filter)}
-                    className={`rounded-full border px-3 py-1.5 ${questionFilter === filter ? "border-[#3D3229] bg-[#3D3229]" : "border-[#E4DACE] bg-white"}`}
+                    className={`rounded-full border px-3 py-1.5 ${questionFilter === filter ? "border-ink bg-ink" : "border-[#E4DACE] bg-white"}`}
                   >
                     <Text className={`text-[9px] font-black ${questionFilter === filter ? "text-white" : "text-[#7E7163]"}`}>{filter}</Text>
                   </TouchableOpacity>
@@ -840,7 +842,7 @@ export default function CommunityScreen() {
         {hasMore && !loading ? (
           <View className="items-center px-4 py-4">
             <TouchableOpacity onPress={() => void fetchPosts(false, true)} className="rounded-full border border-[#D8E6DB] bg-white px-5 py-2.5 active:opacity-80">
-              <Text className="text-xs font-bold text-[#2D6A4F]">加载更多内容</Text>
+              <Text className="text-xs font-bold text-brand">加载更多内容</Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -852,17 +854,17 @@ export default function CommunityScreen() {
         <View className="flex-1 bg-black/60 justify-end">
           <View className="bg-white rounded-t-[32px] overflow-hidden max-h-[90%]">
             {/* 顶栏关闭与作者 */}
-            <View className="flex-row items-center justify-between px-5 py-4 border-b border-[#F5EFE6] bg-white">
+            <View className="flex-row items-center justify-between px-5 py-4 border-b border-background-secondary bg-white">
               <View className="flex-row items-center gap-3">
                 <Image
                   source={getAvatarSource(selectedPost?.avatar_url, selectedPost?.user_id ?? selectedPost?.username)}
-                  className="w-10 h-10 rounded-full border border-[#2D6A4F]/20"
+                  className="w-10 h-10 rounded-full border border-brand/20"
                 />
                 <View>
-                  <Text className="text-sm font-bold text-[#3D3229]">
+                  <Text className="text-sm font-bold text-ink">
                     {selectedPost?.username}
                   </Text>
-                  <Text className="text-[10px] text-[#8B7D6B] mt-0.5">
+                  <Text className="text-[10px] text-copy-muted mt-0.5">
                     {selectedPost?.created_at || "刚刚"} · 发布于【{selectedPost?.category || "寻味"}】
                   </Text>
                 </View>
@@ -870,7 +872,7 @@ export default function CommunityScreen() {
 
               <TouchableOpacity
                 onPress={() => setSelectedPost(null)}
-                className="w-8 h-8 rounded-full bg-[#F5EFE6] items-center justify-center"
+                className="w-8 h-8 rounded-full bg-background-secondary items-center justify-center"
               >
                 <FontAwesome6 name="xmark" size={16} color="#8B7D6B" />
               </TouchableOpacity>
@@ -886,12 +888,12 @@ export default function CommunityScreen() {
                 />
               )}
 
-              <Text className="text-base font-bold text-[#3D3229] leading-6 mb-3">
+              <Text className="text-base font-bold text-ink leading-6 mb-3">
                 {selectedPost?.content}
               </Text>
 
               {/* 互动数据栏 */}
-              <View className="flex-row items-center justify-between py-3 border-t border-b border-[#F5EFE6] my-4">
+              <View className="flex-row items-center justify-between py-3 border-t border-b border-background-secondary my-4">
                 <TouchableOpacity
                   onPress={() => selectedPost && handleLike(selectedPost.id)}
                   className="flex-row items-center gap-2 bg-[#FF3B30]/10 px-4 py-2 rounded-full"
@@ -912,13 +914,13 @@ export default function CommunityScreen() {
                 </TouchableOpacity>
 
                 <View className="flex-row gap-3">
-                  <View className="bg-[#F5EFE6] px-3 py-2 rounded-full flex-row items-center gap-1.5">
+                  <View className="bg-background-secondary px-3 py-2 rounded-full flex-row items-center gap-1.5">
                     <FontAwesome6 name="comment" size={13} color="#8B7D6B" />
-                    <Text className="text-xs text-[#8B7D6B] font-semibold">评论</Text>
+                    <Text className="text-xs text-copy-muted font-semibold">评论</Text>
                   </View>
-                  <View className="bg-[#F5EFE6] px-3 py-2 rounded-full flex-row items-center gap-1.5">
+                  <View className="bg-background-secondary px-3 py-2 rounded-full flex-row items-center gap-1.5">
                     <FontAwesome6 name="share" size={13} color="#8B7D6B" />
-                    <Text className="text-xs text-[#8B7D6B] font-semibold">分享</Text>
+                    <Text className="text-xs text-copy-muted font-semibold">分享</Text>
                   </View>
                 </View>
               </View>

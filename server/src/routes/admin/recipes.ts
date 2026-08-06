@@ -5,6 +5,7 @@ import { validateBody } from "../../middleware/validate.js";
 import { adminRecipeRejectSchema, recipeSubmissionSchema } from "../../validation/schemas.js";
 import { positiveIntegerParam } from "../../middleware/validateParam.js";
 import { auditAdminAction as audit, deletedFilter } from "./shared.js";
+import { decodeCursor, encodeCursor } from "../../utils/cursor.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -13,7 +14,14 @@ router.param("id", positiveIntegerParam);
 router.get("/recipes", (req, res) => {
   try {
     const filters = [deletedFilter(req.query.deleted, "r")];
-    const params: string[] = [];
+    const params: Array<string | number> = [];
+    const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 50));
+    const cursor = req.query.cursor ? decodeCursor(req.query.cursor) : null;
+    const cursorId = cursor ? Number(cursor.id) : null;
+    if (req.query.cursor && (!cursor || cursor.v !== 1 || !Number.isInteger(cursorId) || cursorId! <= 0)) {
+      return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+    }
     if (req.query.source === "official" || req.query.source === "user") {
       filters.push("r.source = ?");
       params.push(req.query.source);
@@ -22,21 +30,25 @@ router.get("/recipes", (req, res) => {
       filters.push("r.status = ?");
       params.push(String(req.query.reviewStatus));
     }
+    if (cursorId) {
+      filters.push("r.id < ?");
+      params.push(cursorId);
+    }
     const recipes = db.prepare(`
       SELECT
         r.*,
         u.username AS author_username,
-        u.nickname AS author_nickname,
         u.avatar_url AS author_avatar_url
       FROM recipes r
       LEFT JOIN users u ON u.id = r.author_user_id
       WHERE ${filters.join(" AND ")}
-      ORDER BY
-        CASE r.status WHEN 'pending' THEN 0 WHEN 'rejected' THEN 1 ELSE 2 END,
-        r.updated_at DESC,
-        r.created_at DESC
-    `).all(...params);
-    res.json(recipes);
+      ORDER BY r.id DESC
+      ${cursorMode ? "LIMIT ?" : ""}
+    `).all(...params, ...(cursorMode ? [pageSize + 1] : [])) as Array<{ id: number }>;
+    const hasMore = cursorMode && recipes.length > pageSize;
+    const items = cursorMode ? recipes.slice(0, pageSize) : recipes;
+    if (!cursorMode) return res.json(items);
+    return res.json({ items, nextCursor: hasMore ? encodeCursor({ v: 1, id: items.at(-1)!.id }) : null });
   } catch (error) {
     res.status(500).json({ error: "获取食谱列表失败" });
   }
@@ -215,4 +227,3 @@ router.delete("/recipes/:id", (req: AuthRequest, res) => {
 export function createAdminRecipesRouter() {
   return router;
 }
-

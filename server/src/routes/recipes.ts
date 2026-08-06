@@ -5,6 +5,7 @@ import { ensureIngredientGroups, normalizeIngredientGroup, type IngredientGroup 
 import { validateBody } from "../middleware/validate.js";
 import { recipeSubmissionSchema } from "../validation/schemas.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
+import { decodeCursor, encodeCursor } from "../utils/cursor.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -148,17 +149,23 @@ function formatRecipe(recipe: any, req?: { protocol: string; get(name: string): 
 // GET /api/v1/recipes - 仅返回审核通过的公开食谱
 router.get("/", (req, res) => {
   const { category, search } = req.query;
+  const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 24));
+  const cursor = req.query.cursor ? decodeCursor(req.query.cursor) : null;
+  const cursorId = cursor ? Number(cursor.id) : null;
+  if (req.query.cursor && (!cursor || cursor.v !== 1 || !Number.isInteger(cursorId) || cursorId! <= 0)) {
+    return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+  }
   let query = `
     SELECT
       r.*,
-      u.username AS author_username,
-      u.nickname AS author_nickname,
+      COALESCE(u.username, '食友' || u.id) AS author_username,
       u.avatar_url AS author_avatar_url
     FROM recipes r
     LEFT JOIN users u ON u.id = r.author_user_id
     WHERE r.deleted_at IS NULL AND r.status = 'approved'
   `;
-  const params: Array<string> = [];
+  const params: Array<string | number> = [];
 
   if (typeof category === "string" && category !== "全部") {
     query += " AND r.category = ?";
@@ -169,9 +176,21 @@ router.get("/", (req, res) => {
     const term = `%${search.trim()}%`;
     params.push(term, term, term);
   }
+  if (cursorMode && cursorId) {
+    query += " AND r.id < ?";
+    params.push(cursorId);
+  }
   query += " ORDER BY r.id DESC";
-
-  res.json(db.prepare(query).all(...params).map((recipe) => formatRecipe(recipe, req)));
+  if (cursorMode) query += " LIMIT ?";
+  const rows = cursorMode
+    ? db.prepare(query).all(...params, pageSize + 1)
+    : db.prepare(query).all(...params);
+  const hasMore = cursorMode && rows.length > pageSize;
+  const pageRows = cursorMode ? rows.slice(0, pageSize) : rows;
+  const items = pageRows.map((recipe) => formatRecipe(recipe, req));
+  if (!cursorMode) return res.json(items);
+  const last = pageRows.at(-1) as { id?: number } | undefined;
+  return res.json({ items, nextCursor: hasMore && last?.id ? encodeCursor({ v: 1, id: last.id }) : null });
 });
 
 // GET /api/v1/recipes/mine - 当前用户的全部投稿
@@ -191,8 +210,7 @@ router.get("/favorites", authMiddleware, (req: AuthRequest, res) => {
     SELECT
       r.*,
       f.created_at AS favorited_at,
-      u.username AS author_username,
-      u.nickname AS author_nickname,
+      COALESCE(u.username, '食友' || u.id) AS author_username,
       u.avatar_url AS author_avatar_url
     FROM recipe_favorites f
     JOIN recipes r ON r.id = f.recipe_id
@@ -350,8 +368,7 @@ router.get("/:id", (req, res) => {
   const recipe = db.prepare(`
     SELECT
       r.*,
-      u.username AS author_username,
-      u.nickname AS author_nickname,
+      COALESCE(u.username, '食友' || u.id) AS author_username,
       u.avatar_url AS author_avatar_url
     FROM recipes r
     LEFT JOIN users u ON u.id = r.author_user_id

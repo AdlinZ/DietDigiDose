@@ -13,6 +13,7 @@ import adminRoutes from "./routes/admin.js";
 import aiRoutes from "./routes/ai.js";
 import kitchenwareRoutes from "./routes/kitchenware.js";
 import notificationsRoutes from "./routes/notifications.js";
+import mediaRoutes from "./routes/media.js";
 import { initDatabase } from "./storage/db.js";
 import { errorHandler, notFoundHandler, sendError } from "./utils/http.js";
 import { requestContext } from "./middleware/requestContext.js";
@@ -58,6 +59,13 @@ export function createApp() {
     clientVersion: req.get("x-client-version") || null,
     clientBuildTime: req.get("x-client-build-time") || null,
   }));
+  app.get("/api/v1/ai-data-policy", (_req, res) => res.json({
+    providerName: process.env.AI_PROVIDER_NAME?.trim() || "由部署运营方配置的 AI 模型服务商",
+    providerPrivacyUrl: process.env.AI_PROVIDER_PRIVACY_URL?.trim() || null,
+    processingRegion: process.env.AI_PROCESSING_REGION?.trim() || "以部署运营方正式披露为准",
+    conversationRetentionDays: Math.max(1, Number(process.env.AI_CONVERSATION_RETENTION_DAYS) || 90),
+    supportContact: process.env.PRIVACY_SUPPORT_CONTACT?.trim() || "应用商店开发者联系方式",
+  }));
   app.use("/api/v1/auth", authRoutes);
   app.use("/api/v1/inventory", inventoryRoutes);
   app.use("/api/v1/diet-records", dietRecordsRoutes);
@@ -69,6 +77,7 @@ export function createApp() {
   app.use("/api/v1/ai", aiRoutes);
   app.use("/api/v1/kitchenware", kitchenwareRoutes);
   app.use("/api/v1/notifications", notificationsRoutes);
+  app.use("/api/v1/media", mediaRoutes);
 
   app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (error instanceof SyntaxError && "body" in error) {

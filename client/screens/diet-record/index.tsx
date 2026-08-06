@@ -79,7 +79,7 @@ export default function DietRecordScreen() {
 
   // 监听路由预填参数
   useEffect(() => {
-      if (params.prefill_food) {
+    if (params.prefill_food) {
       setFoodName(String(params.prefill_food));
       if (params.prefill_calories !== undefined) setCalories(String(params.prefill_calories));
       if (params.prefill_protein !== undefined) setProtein(String(params.prefill_protein));
@@ -89,8 +89,10 @@ export default function DietRecordScreen() {
       if (params.prefill_meal_type) setMealType(String(params.prefill_meal_type));
       if (params.recorded_at) setSelectedDate(String(params.recorded_at));
       setModalVisible(true);
+      // 预填数据已经进入本地表单状态，立即消费掉一次性路由参数。
+      router.setParams({});
     }
-  }, [params]);
+  }, [params, router]);
 
   const mealCategories = [
     { name: "早餐", icon: "sun", color: "#E9C46A", recommended: "建议 400-550 kcal" },
@@ -267,16 +269,16 @@ export default function DietRecordScreen() {
     return (
       <Screen backgroundColor="#FDF8F0">
         <View className="flex-1 items-center justify-center p-6">
-          <View className="w-16 h-16 rounded-full bg-[#2D6A4F]/10 items-center justify-center mb-4">
+          <View className="w-16 h-16 rounded-full bg-brand/10 items-center justify-center mb-4">
             <FontAwesome6 name="utensils" size={28} color="#2D6A4F" />
           </View>
-          <Text className="text-xl font-bold text-[#3D3229]">饮食打卡日志</Text>
-          <Text className="text-sm text-[#8B7D6B] text-center mt-2 mb-6 px-4 leading-5">
+          <Text className="text-xl font-bold text-ink">饮食打卡日志</Text>
+          <Text className="text-sm text-copy-muted text-center mt-2 mb-6 px-4 leading-5">
             登录后精准管理每日卡路里、记录三餐摄入与三大营养素分配。
           </Text>
           <TouchableOpacity
             onPress={() => router.push("/login")}
-            className="bg-[#2D6A4F] px-8 py-3.5 rounded-2xl active:opacity-90 shadow-sm"
+            className="bg-brand px-8 py-3.5 rounded-2xl active:opacity-90 shadow-sm"
           >
             <Text className="text-sm font-bold text-white">立即登录</Text>
           </TouchableOpacity>
@@ -291,8 +293,8 @@ export default function DietRecordScreen() {
         {/* 顶部 Header */}
         <View className="px-5 pt-4 pb-2 flex-row items-center justify-between">
           <View>
-            <Text className="text-2xl font-black text-[#3D3229]">饮食日志</Text>
-            <Text className="text-xs text-[#8B7D6B] mt-0.5 font-medium">
+            <Text className="text-2xl font-black text-ink">饮食日志</Text>
+            <Text className="text-xs text-copy-muted mt-0.5 font-medium">
               {formattedSelectedDateText()}
             </Text>
           </View>
@@ -301,14 +303,14 @@ export default function DietRecordScreen() {
             {selectedDate !== todayStr && (
               <TouchableOpacity
                 onPress={() => setSelectedDate(todayStr)}
-                className="bg-[#F5EFE6] px-3 py-2 rounded-xl active:opacity-80 border border-[#EBE3D5]"
+                className="bg-background-secondary px-3 py-2 rounded-xl active:opacity-80 border border-line"
               >
-                <Text className="text-xs font-bold text-[#3D3229]">回到今天</Text>
+                <Text className="text-xs font-bold text-ink">回到今天</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
               onPress={() => openAddModal("加餐")}
-              className="bg-[#2D6A4F] px-4 py-2 rounded-xl flex-row items-center gap-1.5 active:opacity-90 shadow-xs"
+              className="bg-brand px-4 py-2 rounded-xl flex-row items-center gap-1.5 active:opacity-90 shadow-xs"
             >
               <FontAwesome6 name="plus" size={12} color="#FFF" />
               <Text className="text-xs font-bold text-white">手动记录</Text>
@@ -318,10 +320,10 @@ export default function DietRecordScreen() {
 
         {/* 每日卡路里与三大营养素 Dashboard 看板 */}
         <View className="px-5 py-3">
-          <View className="bg-[#2D6A4F] rounded-[24px] p-5 shadow-sm relative overflow-hidden">
+          <View className="bg-brand rounded-[24px] p-5 shadow-sm relative overflow-hidden">
             {/* 背景修饰气泡 */}
             <View className="absolute -right-8 -top-8 w-32 h-32 rounded-full bg-white/5" />
-            <View className="absolute left-1/2 -bottom-10 w-28 h-28 rounded-full bg-[#E9C46A]/10" />
+            <View className="absolute left-1/2 -bottom-10 w-28 h-28 rounded-full bg-highlight/10" />
 
             <View className="flex-row items-center justify-between mb-2">
               <View>
@@ -339,7 +341,7 @@ export default function DietRecordScreen() {
               <View className="items-end bg-black/20 px-3 py-1.5 rounded-full border border-white/10">
                 <View className="flex-row items-center gap-1">
                   <FontAwesome6 name="fire" size={11} color="#E9C46A" />
-                  <Text className="text-xs font-bold text-[#E9C46A]">
+                  <Text className="text-xs font-bold text-highlight">
                     {remainingCal > 0 ? `剩 ${remainingCal} kcal` : "目标已达成"}
                   </Text>
                 </View>
@@ -349,7 +351,7 @@ export default function DietRecordScreen() {
             {/* 卡路里进度条 */}
             <View className="w-full bg-black/20 h-2 rounded-full my-3 overflow-hidden">
               <View
-                className="bg-[#E9C46A] h-full rounded-full"
+                className="bg-highlight h-full rounded-full"
                 style={{ width: `${progressPercent}%` }}
               />
             </View>
@@ -394,10 +396,10 @@ export default function DietRecordScreen() {
                   onPress={() => setSelectedDate(item.dateStr)}
                   className={`w-12 h-14 rounded-2xl items-center justify-center border mr-2.5 transition-all ${
                     isSelected
-                      ? "bg-[#2D6A4F] border-[#2D6A4F] shadow-xs"
+                      ? "bg-brand border-brand shadow-xs"
                       : item.isToday
-                      ? "bg-emerald-50 border-[#2D6A4F]/40"
-                      : "bg-white border-[#EBE3D5]"
+                      ? "bg-emerald-50 border-brand/40"
+                      : "bg-white border-line"
                   }`}
                 >
                   <Text
@@ -405,8 +407,8 @@ export default function DietRecordScreen() {
                       isSelected
                         ? "text-white/80 font-medium"
                         : item.isToday
-                        ? "text-[#2D6A4F] font-bold"
-                        : "text-[#8B7D6B]"
+                        ? "text-brand font-bold"
+                        : "text-copy-muted"
                     }`}
                   >
                     {item.isToday ? "今天" : `周${item.dayName}`}
@@ -416,8 +418,8 @@ export default function DietRecordScreen() {
                       isSelected
                         ? "text-white"
                         : item.isToday
-                        ? "text-[#2D6A4F]"
-                        : "text-[#3D3229]"
+                        ? "text-brand"
+                        : "text-ink"
                     }`}
                   >
                     {item.dayNum}
@@ -437,7 +439,7 @@ export default function DietRecordScreen() {
           {loading ? (
             <View className="py-12 items-center justify-center">
               <ActivityIndicator size="large" color="#2D6A4F" />
-              <Text className="text-xs text-[#8B7D6B] mt-2">读取饮食记录中...</Text>
+              <Text className="text-xs text-copy-muted mt-2">读取饮食记录中...</Text>
             </View>
           ) : (
             <View className="space-y-3.5">
@@ -451,10 +453,10 @@ export default function DietRecordScreen() {
                 return (
                   <View
                     key={cat.name}
-                    className="bg-white p-4 rounded-3xl border border-[#EBE3D5] shadow-2xs"
+                    className="bg-white p-4 rounded-3xl border border-line shadow-2xs"
                   >
                     {/* Meal Header */}
-                    <View className="flex-row items-center justify-between mb-3 border-b border-[#F5EFE6] pb-2.5">
+                    <View className="flex-row items-center justify-between mb-3 border-b border-background-secondary pb-2.5">
                       <View className="flex-row items-center gap-2.5">
                         <View
                           className="w-9 h-9 rounded-2xl items-center justify-center"
@@ -464,18 +466,18 @@ export default function DietRecordScreen() {
                         </View>
                         <View>
                           <View className="flex-row items-center gap-2">
-                            <Text className="text-base font-black text-[#3D3229]">
+                            <Text className="text-base font-black text-ink">
                               {cat.name}
                             </Text>
                             {categoryCalories > 0 && (
-                              <View className="bg-[#2D6A4F]/10 px-2 py-0.5 rounded-full">
-                                <Text className="text-[10px] font-bold text-[#2D6A4F]">
+                              <View className="bg-brand/10 px-2 py-0.5 rounded-full">
+                                <Text className="text-[10px] font-bold text-brand">
                                   {categoryCalories} kcal
                                 </Text>
                               </View>
                             )}
                           </View>
-                          <Text className="text-[10px] text-[#8B7D6B] mt-0.5">
+                          <Text className="text-[10px] text-copy-muted mt-0.5">
                             {cat.recommended}
                           </Text>
                         </View>
@@ -483,10 +485,10 @@ export default function DietRecordScreen() {
 
                       <TouchableOpacity
                         onPress={() => openAddModal(cat.name)}
-                        className="bg-[#F5EFE6] px-3.5 py-1.5 rounded-xl flex-row items-center gap-1.5 active:opacity-80"
+                        className="bg-background-secondary px-3.5 py-1.5 rounded-xl flex-row items-center gap-1.5 active:opacity-80"
                       >
                         <FontAwesome6 name="plus" size={10} color="#3D3229" />
-                        <Text className="text-xs font-bold text-[#3D3229]">记录</Text>
+                        <Text className="text-xs font-bold text-ink">记录</Text>
                       </TouchableOpacity>
                     </View>
 
@@ -494,9 +496,9 @@ export default function DietRecordScreen() {
                     {mealRecords.length === 0 ? (
                       <TouchableOpacity
                         onPress={() => openAddModal(cat.name)}
-                        className="py-3 px-2 rounded-2xl border border-dashed border-[#EBE3D5] items-center justify-center bg-[#FDF8F0]/50"
+                        className="py-3 px-2 rounded-2xl border border-dashed border-line items-center justify-center bg-canvas/50"
                       >
-                        <Text className="text-xs text-[#8B7D6B] font-medium">
+                        <Text className="text-xs text-copy-muted font-medium">
                           尚未记录{cat.name} · 点击【+记录】开启健康饮食
                         </Text>
                       </TouchableOpacity>
@@ -505,7 +507,7 @@ export default function DietRecordScreen() {
                         {mealRecords.map((r) => (
                           <View
                             key={r.id}
-                            className="bg-[#FFFDF9] p-3 rounded-2xl flex-row items-center justify-between border border-[#EBE3D5]"
+                            className="bg-[#FFFDF9] p-3 rounded-2xl flex-row items-center justify-between border border-line"
                           >
                             <View className="flex-row items-center gap-3 flex-1">
                               {r.image_url ? (
@@ -514,16 +516,16 @@ export default function DietRecordScreen() {
                                   className="w-11 h-11 rounded-xl"
                                 />
                               ) : (
-                                <View className="w-11 h-11 rounded-xl bg-[#2D6A4F]/10 items-center justify-center">
+                                <View className="w-11 h-11 rounded-xl bg-brand/10 items-center justify-center">
                                   <FontAwesome6 name="utensils" size={15} color="#2D6A4F" />
                                 </View>
                               )}
                               <View className="flex-1">
                                 <View className="flex-row items-center gap-1.5">
-                                  <Text className="text-sm font-bold text-[#3D3229]" numberOfLines={1}>
+                                  <Text className="text-sm font-bold text-ink" numberOfLines={1}>
                                     {r.food_name}
                                   </Text>
-                                  <Text className="text-xs text-[#8B7D6B]">({r.amount})</Text>
+                                  <Text className="text-xs text-copy-muted">({r.amount})</Text>
                                 </View>
                                 <View className="flex-row items-center gap-2 mt-1">
                                   <View className="flex-row items-center gap-1 bg-[#E07A5F]/10 px-1.5 py-0.5 rounded-md">
@@ -532,7 +534,7 @@ export default function DietRecordScreen() {
                                       {r.calories == null ? "—" : `${r.calories} kcal`}
                                     </Text>
                                   </View>
-                                  <Text className="text-[10px] text-[#8B7D6B]">
+                                  <Text className="text-[10px] text-copy-muted">
                                     P: {r.protein == null ? "—" : `${r.protein}g`} · C: {r.carbs == null ? "—" : `${r.carbs}g`} · F: {r.fat == null ? "—" : `${r.fat}g`}
                                   </Text>
                                 </View>
@@ -541,7 +543,7 @@ export default function DietRecordScreen() {
 
                             <TouchableOpacity
                               onPress={() => handleDelete(r.id)}
-                              className="w-8 h-8 items-center justify-center rounded-full active:bg-[#F5EFE6]"
+                              className="w-8 h-8 items-center justify-center rounded-full active:bg-background-secondary"
                             >
                               <FontAwesome6 name="trash-can" size={13} color="#B0A495" />
                             </TouchableOpacity>
@@ -561,18 +563,18 @@ export default function DietRecordScreen() {
           <View className="flex-1 bg-black/40 justify-end">
             <View className="bg-white rounded-t-[32px] p-6 max-h-[90%] shadow-xl">
               {/* Modal Header */}
-              <View className="flex-row items-center justify-between mb-4 border-b border-[#F5EFE6] pb-3">
+              <View className="flex-row items-center justify-between mb-4 border-b border-background-secondary pb-3">
                 <View className="flex-row items-center gap-2">
-                  <View className="w-8 h-8 rounded-full bg-[#2D6A4F]/10 items-center justify-center">
+                  <View className="w-8 h-8 rounded-full bg-brand/10 items-center justify-center">
                     <FontAwesome6 name="pen-to-square" size={14} color="#2D6A4F" />
                   </View>
-                  <Text className="text-lg font-black text-[#3D3229]">
+                  <Text className="text-lg font-black text-ink">
                     记录 {mealType}
                   </Text>
                 </View>
                 <TouchableOpacity
                   onPress={handleCloseModal}
-                  className="w-8 h-8 rounded-full bg-[#F5EFE6] items-center justify-center"
+                  className="w-8 h-8 rounded-full bg-background-secondary items-center justify-center"
                 >
                   <FontAwesome6 name="xmark" size={16} color="#8B7D6B" />
                 </TouchableOpacity>
@@ -583,20 +585,20 @@ export default function DietRecordScreen() {
                 <TouchableOpacity
                   onPress={handlePickImageAndRecognize}
                   disabled={aiAnalyzing}
-                  className="bg-[#2D6A4F]/10 border border-[#2D6A4F]/30 p-3.5 rounded-2xl flex-row items-center justify-between active:bg-[#2D6A4F]/20"
+                  className="bg-brand/10 border border-brand/30 p-3.5 rounded-2xl flex-row items-center justify-between active:bg-brand/20"
                 >
                   <View className="flex-row items-center gap-3">
-                    <View className="w-9 h-9 rounded-xl bg-[#2D6A4F] items-center justify-center shadow-xs">
+                    <View className="w-9 h-9 rounded-xl bg-brand items-center justify-center shadow-xs">
                       <FontAwesome6 name="camera" size={15} color="#FFF" />
                     </View>
                     <View>
                       <View className="flex-row items-center gap-1.5">
-                        <Text className="text-xs font-black text-[#2D6A4F]">AI 智能拍照识菜</Text>
-                        <View className="bg-[#E9C46A] px-1.5 py-0.2 rounded-md">
-                          <Text className="text-[9px] font-black text-[#3D3229]">推荐</Text>
+                        <Text className="text-xs font-black text-brand">AI 智能拍照识菜</Text>
+                        <View className="bg-highlight px-1.5 py-0.2 rounded-md">
+                          <Text className="text-[9px] font-black text-ink">推荐</Text>
                         </View>
                       </View>
-                      <Text className="text-[10px] text-[#8B7D6B] mt-0.5">
+                      <Text className="text-[10px] text-copy-muted mt-0.5">
                         拍照或选图，智能评估菜名与三大营养成分
                       </Text>
                     </View>
@@ -610,7 +612,7 @@ export default function DietRecordScreen() {
 
                 {/* 常用食物快捷 Preset Chips */}
                 <View className="space-y-1.5">
-                  <Text className="text-xs font-bold text-[#8B7D6B]">常用健康食物快捷填表</Text>
+                  <Text className="text-xs font-bold text-copy-muted">常用健康食物快捷填表</Text>
                   <View>
                   <ScrollView
                     horizontal
@@ -622,12 +624,12 @@ export default function DietRecordScreen() {
                       <TouchableOpacity
                         key={preset.name}
                         onPress={() => applyPreset(preset)}
-                        className="bg-[#FDF8F0] px-3 py-1.5 rounded-xl border border-[#EBE3D5] mr-2.5 active:bg-[#2D6A4F]/10 active:border-[#2D6A4F]"
+                        className="bg-canvas px-3 py-1.5 rounded-xl border border-line mr-2.5 active:bg-brand/10 active:border-brand"
                       >
-                        <Text className="text-xs font-bold text-[#3D3229]">
+                        <Text className="text-xs font-bold text-ink">
                           {preset.name}
                         </Text>
-                        <Text className="text-[9px] text-[#8B7D6B] mt-0.5">
+                        <Text className="text-[9px] text-copy-muted mt-0.5">
                           {preset.calories} kcal
                         </Text>
                       </TouchableOpacity>
@@ -638,33 +640,33 @@ export default function DietRecordScreen() {
 
                 {/* 食物名称 */}
                 <View>
-                  <Text className="text-xs font-bold text-[#8B7D6B] mb-1">食物名称</Text>
+                  <Text className="text-xs font-bold text-copy-muted mb-1">食物名称</Text>
                   <TextInput
                     value={foodName}
                     onChangeText={setFoodName}
                     placeholder="如: 煎鸡胸肉沙拉 / 燕麦水煮蛋"
-                    className="bg-[#FDF8F0] px-4 py-3 rounded-2xl border border-[#EBE3D5] text-sm text-[#3D3229]"
+                    className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink"
                   />
                 </View>
 
                 {/* 分量与卡路里 */}
                 <View className="flex-row gap-3">
                   <View className="flex-1">
-                    <Text className="text-xs font-bold text-[#8B7D6B] mb-1">分量</Text>
+                    <Text className="text-xs font-bold text-copy-muted mb-1">分量</Text>
                     <TextInput
                       value={amount}
                       onChangeText={setAmount}
                       placeholder="1份 / 200g"
-                      className="bg-[#FDF8F0] px-4 py-3 rounded-2xl border border-[#EBE3D5] text-sm text-[#3D3229]"
+                      className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink"
                     />
                   </View>
                   <View className="flex-1">
-                    <Text className="text-xs font-bold text-[#8B7D6B] mb-1">卡路里 (kcal)</Text>
+                    <Text className="text-xs font-bold text-copy-muted mb-1">卡路里 (kcal)</Text>
                     <TextInput
                       value={calories}
                       onChangeText={setCalories}
                       keyboardType="numeric"
-                      className="bg-[#FDF8F0] px-4 py-3 rounded-2xl border border-[#EBE3D5] text-sm text-[#3D3229]"
+                      className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink"
                     />
                   </View>
                 </View>
@@ -672,30 +674,30 @@ export default function DietRecordScreen() {
                 {/* 三大营养素 */}
                 <View className="flex-row gap-2">
                   <View className="flex-1">
-                    <Text className="text-[11px] font-bold text-[#8B7D6B] mb-1">蛋白质 (g)</Text>
+                    <Text className="text-[11px] font-bold text-copy-muted mb-1">蛋白质 (g)</Text>
                     <TextInput
                       value={protein}
                       onChangeText={setProtein}
                       keyboardType="numeric"
-                      className="bg-[#FDF8F0] px-3 py-2.5 rounded-xl border border-[#EBE3D5] text-xs text-[#3D3229]"
+                      className="bg-canvas px-3 py-2.5 rounded-xl border border-line text-xs text-ink"
                     />
                   </View>
                   <View className="flex-1">
-                    <Text className="text-[11px] font-bold text-[#8B7D6B] mb-1">碳水化合物 (g)</Text>
+                    <Text className="text-[11px] font-bold text-copy-muted mb-1">碳水化合物 (g)</Text>
                     <TextInput
                       value={carbs}
                       onChangeText={setCarbs}
                       keyboardType="numeric"
-                      className="bg-[#FDF8F0] px-3 py-2.5 rounded-xl border border-[#EBE3D5] text-xs text-[#3D3229]"
+                      className="bg-canvas px-3 py-2.5 rounded-xl border border-line text-xs text-ink"
                     />
                   </View>
                   <View className="flex-1">
-                    <Text className="text-[11px] font-bold text-[#8B7D6B] mb-1">脂肪 (g)</Text>
+                    <Text className="text-[11px] font-bold text-copy-muted mb-1">脂肪 (g)</Text>
                     <TextInput
                       value={fat}
                       onChangeText={setFat}
                       keyboardType="numeric"
-                      className="bg-[#FDF8F0] px-3 py-2.5 rounded-xl border border-[#EBE3D5] text-xs text-[#3D3229]"
+                      className="bg-canvas px-3 py-2.5 rounded-xl border border-line text-xs text-ink"
                     />
                   </View>
                 </View>
@@ -704,7 +706,7 @@ export default function DietRecordScreen() {
                 <TouchableOpacity
                   onPress={handleSave}
                   disabled={saving}
-                  className="bg-[#2D6A4F] py-3.5 rounded-2xl items-center mt-3 shadow-xs active:opacity-90"
+                  className="bg-brand py-3.5 rounded-2xl items-center mt-3 shadow-xs active:opacity-90"
                 >
                   {saving ? (
                     <ActivityIndicator color="#FFF" />

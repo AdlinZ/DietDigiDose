@@ -3,6 +3,7 @@ import type { CommunityPost } from "./types";
 
 export const communityApi = {
   posts: <T = CommunityPost>(query = "", apiFetch: ApiFetch = publicFetch) => requestJson<T[]>(apiFetch, `/api/v1/community/posts${query}`),
+  postPage: <T = CommunityPost>(query = "", apiFetch: ApiFetch = publicFetch) => requestJson<{ items: T[]; nextCursor: string | null }>(apiFetch, `/api/v1/community/posts${query}`),
   users: <T>(apiFetch: ApiFetch, query: string) => requestJson<T[]>(apiFetch, `/api/v1/community/users?query=${encodeURIComponent(query)}`),
   following: <T>(apiFetch: ApiFetch) => requestJson<T[]>(apiFetch, "/api/v1/community/following"),
   level: <T>(apiFetch: ApiFetch) => requestJson<T>(apiFetch, "/api/v1/community/level"),

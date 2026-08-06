@@ -1,1 +1,1 @@
-export const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || 'http://localhost:9090';
+export const API_BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL?.trim() || 'http://localhost:9090';

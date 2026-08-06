@@ -14,7 +14,6 @@ interface KitchenwareItem {
   last_maintained_at: string | null;
   created_at: string;
   owner_username: string;
-  owner_nickname: string | null;
 }
 
 interface KitchenwareCatalogItem {
@@ -286,7 +285,7 @@ export default function Kitchenware() {
                     <td className="py-4">
                       <div className="flex items-center gap-2 text-text-main">
                         <UserRound className="h-4 w-4 text-text-muted" />
-                        {item.owner_nickname || item.owner_username}
+                        {item.owner_username}
                       </div>
                       <p className="mt-1 text-xs text-text-muted">@{item.owner_username}</p>
                     </td>

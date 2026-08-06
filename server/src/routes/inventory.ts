@@ -2,13 +2,43 @@ import { Router } from "express";
 import { db } from "../storage/db.js";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
-import { inventoryCreateSchema, inventoryUpdateSchema } from "../validation/schemas.js";
+import { inventoryCreateSchema, inventoryUpdateSchema, shoppingInventoryImportSchema } from "../validation/schemas.js";
 import { sendError } from "../utils/http.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
+import { recordFunnelEvent } from "../services/funnelEvents.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
 router.use(authMiddleware);
+
+router.post("/import-shopping-list", validateBody(shoppingInventoryImportSchema), (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const { idempotency_key: idempotencyKey, items } = req.body;
+  const existing = db.prepare(`
+    SELECT result_json FROM shopping_inventory_imports WHERE user_id = ? AND idempotency_key = ?
+  `).get(userId, idempotencyKey) as { result_json: string } | undefined;
+  if (existing) return res.json({ items: JSON.parse(existing.result_json), repeated: true });
+
+  const imported = db.transaction(() => {
+    const insert = db.prepare(`
+      INSERT INTO inventory_items (user_id, food_name, category, quantity, expiration_date, storage_location, image_url, is_available)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+    `);
+    const result = items.map((item: any) => {
+      const row = insert.run(
+        userId, item.food_name, item.category, item.quantity || "1份", item.expiration_date,
+        item.storage_location || "冷藏", item.image_url || null,
+      );
+      return db.prepare("SELECT * FROM inventory_items WHERE id = ?").get(row.lastInsertRowid);
+    });
+    db.prepare(`
+      INSERT INTO shopping_inventory_imports (user_id, idempotency_key, result_json) VALUES (?, ?, ?)
+    `).run(userId, idempotencyKey, JSON.stringify(result));
+    return result;
+  })();
+  if (imported.length > 0) recordFunnelEvent(userId, "inventory_added");
+  return res.status(201).json({ items: imported, repeated: false });
+});
 
 // GET /api/v1/inventory
 router.get("/", (req: AuthRequest, res) => {
@@ -44,6 +74,7 @@ router.post("/", validateBody(inventoryCreateSchema), (req: AuthRequest, res) =>
   );
 
   const newItem = db.prepare("SELECT * FROM inventory_items WHERE id = ?").get(result.lastInsertRowid) as Record<string, any>;
+  recordFunnelEvent(req.userId!, "inventory_added");
   res.status(201).json({
     ...newItem,
     is_available: true

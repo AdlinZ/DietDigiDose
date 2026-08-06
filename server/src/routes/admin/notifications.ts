@@ -24,7 +24,7 @@ export function createAdminNotificationsRouter() {
       SELECT c.id, c.title, c.body, c.status, c.recipient_count AS recipientCount,
              c.success_count AS successCount, c.failure_count AS failureCount,
              c.created_at AS createdAt, c.sent_at AS sentAt,
-             COALESCE(u.nickname, u.username) AS adminName
+             u.username AS adminName
       FROM notification_campaigns c JOIN users u ON u.id = c.admin_user_id
       ORDER BY c.id DESC LIMIT 30
     `).all();

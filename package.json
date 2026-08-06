@@ -1,7 +1,7 @@
 {
   "name": "dietdigidose",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.3",
   "scripts": {
     "dev:client": "pnpm --dir ./client start",
     "dev:server": "pnpm --dir ./server dev",
@@ -11,6 +11,7 @@
     "dev": "pnpm dev:app",
     "build:client": "pnpm --dir ./client build",
     "build:server": "pnpm --dir ./server build",
+    "staging:smoke": "node deploy/staging-smoke.mjs",
     "build:admin": "pnpm --dir ./admin build",
     "preinstall": "npx only-allow pnpm",
     "lint:client": "pnpm --dir ./client lint",

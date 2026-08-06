@@ -170,16 +170,15 @@ export function useSafeRouter() {
   };
 
   const setParams = (params: Record<string, unknown>) => {
+    const shouldClearAll = Object.keys(params).length === 0;
     const currentParams = getCurrentParams(rawParams);
-    const mergedParams = { ...currentParams, ...params };
+    const mergedParams = shouldClearAll ? {} : { ...currentParams, ...params };
     const cleanedMergedParams = sanitizeParams(mergedParams as Record<string, unknown>);
     const encodedPayload = serializeParams(cleanedMergedParams);
     if (!encodedPayload) {
-      router.setParams({});
-      return;
-    }
-    if (Object.keys(cleanedMergedParams).length === 0) {
-      router.setParams({});
+      // Expo Router merges params. An empty object leaves the previous payload in
+      // place, so explicitly remove our single encoded query parameter.
+      router.setParams({ [PAYLOAD_KEY]: undefined });
       return;
     }
     router.setParams({ [PAYLOAD_KEY]: encodedPayload });

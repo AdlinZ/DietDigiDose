@@ -117,7 +117,7 @@ function validateRecipe(input: RecipeInput): string | null {
 
 function formatRecipe(recipe: any, req?: { protocol: string; get(name: string): string | undefined }) {
   const imageUrl = typeof recipe.image_url === "string" && recipe.image_url.startsWith("/media/")
-    ? `${req?.protocol || "http"}://${req?.get("host") || "localhost:9091"}${recipe.image_url}`
+    ? `${req?.protocol || "http"}://${req?.get("host") || "localhost:9090"}${recipe.image_url}`
     : recipe.image_url;
   const legacyNutrition: NutritionItem[] = [
     { key: "protein", label: "蛋白质", value: Math.max(0, Number(recipe.protein) || 0), unit: "g" },

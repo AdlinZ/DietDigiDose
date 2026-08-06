@@ -239,6 +239,97 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 11,
+    name: "community_user_follows",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS user_follows (
+          follower_id INTEGER NOT NULL,
+          following_id INTEGER NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (follower_id, following_id),
+          CHECK (follower_id != following_id),
+          FOREIGN KEY (follower_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (following_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_follows_follower_created
+          ON user_follows(follower_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    version: 12,
+    name: "health_profile_safety_and_constraints",
+    up(database) {
+      for (const [column, definition] of [
+        ["allergies_json", "TEXT DEFAULT '[]'"],
+        ["medications", "TEXT DEFAULT ''"],
+        ["medical_conditions_json", "TEXT DEFAULT '[]'"],
+        ["medical_notes", "TEXT DEFAULT ''"],
+        ["dietary_restrictions_json", "TEXT DEFAULT '[]'"],
+        ["disliked_foods", "TEXT DEFAULT ''"],
+        ["kitchen_constraints_json", "TEXT DEFAULT '{}'"],
+        ["nutrition_targets_json", "TEXT DEFAULT '{}'"],
+        ["tracking_enabled", "INTEGER DEFAULT 0"],
+      ] as const) addColumn(database, "user_health_profiles", column, definition);
+    },
+  },
+  {
+    version: 13,
+    name: "optional_glucose_and_cycle_tracking",
+    up(database) {
+      addColumn(database, "health_logs", "blood_glucose_mmol", "REAL");
+      addColumn(database, "health_logs", "cycle_status", "TEXT");
+    },
+  },
+  {
+    version: 14,
+    name: "user_level_adjustments",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS user_level_adjustments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          admin_user_id INTEGER,
+          xp_delta INTEGER NOT NULL CHECK (xp_delta != 0),
+          reason TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (admin_user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_level_adjustments_user_created
+          ON user_level_adjustments(user_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    version: 15,
+    name: "user_level_adjustment_admin_retention",
+    up(database) {
+      // 开发期间可能已经应用过 v14。重建表，既保留经验修正记录，
+      // 又允许被降级的原管理员按普通用户流程注销账号。
+      database.exec(`
+        CREATE TABLE user_level_adjustments_next (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          admin_user_id INTEGER,
+          xp_delta INTEGER NOT NULL CHECK (xp_delta != 0),
+          reason TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (admin_user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT INTO user_level_adjustments_next (id, user_id, admin_user_id, xp_delta, reason, created_at)
+        SELECT id, user_id, admin_user_id, xp_delta, reason, created_at
+        FROM user_level_adjustments;
+        DROP TABLE user_level_adjustments;
+        ALTER TABLE user_level_adjustments_next RENAME TO user_level_adjustments;
+        CREATE INDEX idx_user_level_adjustments_user_created
+          ON user_level_adjustments(user_id, created_at DESC);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(database: Database.Database) {

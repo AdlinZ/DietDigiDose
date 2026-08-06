@@ -14,7 +14,7 @@
     "db:backup": "tsx scripts/database-backup.ts backup",
     "db:restore": "tsx scripts/database-backup.ts restore",
     "preinstall": "npx only-allow pnpm",
-    "start": "NODE_ENV=production PORT=${PORT:-9091} node dist/index.js",
+    "start": "NODE_ENV=production PORT=${PORT:-9090} node dist/index.js",
     "lint": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 test/**/*.test.ts"
   },

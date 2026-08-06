@@ -27,8 +27,9 @@ import {
   getUserStorageKey,
   storageBelongsToCurrentUser,
 } from "@/utils/userStorage";
-import { aiApi, ApiError, dietApi, inventoryApi } from "@/services/api";
+import { aiApi, ApiError, dietApi, healthApi, inventoryApi } from "@/services/api";
 import { dateKeyAfterDays, toLocalDateKey } from "@/utils/date";
+import { hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/healthProfile";
 import { MedicalDisclaimer } from "@/components/MedicalDisclaimer";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { RealtimeVoiceMVPModal } from "@/components/RealtimeVoiceMVPModal";
@@ -54,6 +55,7 @@ export default function AIAssistantScreen() {
   }>();
   const { user } = useAuth();
   const authFetch = useAuthFetch();
+  const [healthProfile, setHealthProfile] = useState<HealthProfile | null>(null);
   const chatStorageKey = getUserStorageKey(CHAT_SESSIONS_STORAGE_KEY, user?.id);
   const shoppingListStorageKey = getUserStorageKey(SHOPPING_LIST_STORAGE_KEY, user?.id);
   const [loadedChatStorageKey, setLoadedChatStorageKey] = useState<string | null>(null);
@@ -64,6 +66,18 @@ export default function AIAssistantScreen() {
   const [isDeepThink, setIsDeepThink] = useState(false);
   const [isWebSearch, setIsWebSearch] = useState(false);
   const baseInputTextRef = useRef("");
+
+  useEffect(() => {
+    if (!user?.id) {
+      setHealthProfile(null);
+      return;
+    }
+    let active = true;
+    void healthApi.profile<HealthProfile>(authFetch)
+      .then((profile) => { if (active) setHealthProfile(profile); })
+      .catch(() => { if (active) setHealthProfile(null); });
+    return () => { active = false; };
+  }, [authFetch, user?.id]);
 
   const { isRecording, isTranscribing, statusText: voiceStatusText, toggleRecording } = useVoiceRecorder({
     onSpeechResult: (recognizedText) => {
@@ -1109,6 +1123,22 @@ export default function AIAssistantScreen() {
 
         {/* Fixed Full Screen Bottom Bar Section (Warm Theme Matched, No Harsh White Box) */}
         <View className="bg-[#F6F4F0] px-5 pt-3.5 pb-6 border-t border-[#EBE3D5] shadow-2xl">
+          {hasSafetyProfile(healthProfile) ? (
+            <TouchableOpacity
+              onPress={() => router.push("/health-profile")}
+              accessibilityLabel="查看当前安全与饮食限制"
+              className="mb-2.5 flex-row items-start rounded-2xl border border-[#E7A594] bg-[#FFF0EC] px-3 py-2.5"
+            >
+              <View className="mt-0.5 h-7 w-7 items-center justify-center rounded-xl bg-[#F8D4CB]">
+                <FontAwesome6 name="shield-halved" size={12} color="#A63D2B" />
+              </View>
+              <View className="ml-2.5 flex-1">
+                <Text className="text-xs font-black text-[#8E2F20]">安全档案已启用 · 推荐与食材替换将优先核对</Text>
+                <Text className="mt-0.5 text-[10px] leading-4 text-[#985242]" numberOfLines={2}>{safetySummary(healthProfile).slice(0, 2).join("；")}</Text>
+              </View>
+              <FontAwesome6 name="chevron-right" size={10} color="#A63D2B" style={{ marginTop: 8 }} />
+            </TouchableOpacity>
+          ) : null}
           <View className="mb-2">
             <MedicalDisclaimer compact />
           </View>

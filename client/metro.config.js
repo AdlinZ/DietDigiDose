@@ -32,7 +32,7 @@ config.resolver.blockList = [
   /.*node_modules\/\.pnpm\/.*_tmp_\d+.*/,
 ];
 
-const BACKEND_TARGET = 'http://localhost:9091';
+const BACKEND_TARGET = 'http://localhost:9090';
 
 const apiProxy = createProxyMiddleware({
   target: BACKEND_TARGET,

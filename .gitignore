@@ -99,6 +99,7 @@ logs/
 node_modules/
 dist/
 build/
+*.apk
 .expo/
 .expo-shared/
 .eslintcache

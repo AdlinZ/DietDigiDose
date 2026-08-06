@@ -4,11 +4,13 @@ import { authMiddleware, optionalAuthMiddleware, type AuthRequest } from "../mid
 import { validateBody } from "../middleware/validate.js";
 import { communityCommentSchema, communityPostSchema } from "../validation/schemas.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
+import { getUserLevel } from "../services/userLevel.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
 router.param("postId", positiveIntegerParam);
 router.param("commentId", positiveIntegerParam);
+router.param("userId", positiveIntegerParam);
 router.use(optionalAuthMiddleware);
 
 function getAuthenticatedUser(req: AuthRequest): { userId: number; user: any } | null {
@@ -26,6 +28,7 @@ function postSelect(userId: number | null) {
       EXISTS(SELECT 1 FROM community_post_likes l WHERE l.post_id = p.id AND l.user_id = ${userId ?? -1}) AS is_liked,
       (SELECT COUNT(*) FROM community_event_participants ep WHERE ep.post_id = p.id) AS participant_count,
       EXISTS(SELECT 1 FROM community_event_participants ep WHERE ep.post_id = p.id AND ep.user_id = ${userId ?? -1}) AS is_joined
+      , EXISTS(SELECT 1 FROM user_follows uf WHERE uf.follower_id = ${userId ?? -1} AND uf.following_id = p.user_id) AS author_is_followed
     FROM community_posts p
     LEFT JOIN users u ON u.id = p.user_id
   `;
@@ -48,6 +51,7 @@ function serializePost(post: any) {
     image_urls: imageUrls,
     is_liked: Boolean(post.is_liked),
     is_joined: Boolean(post.is_joined),
+    author_is_followed: Boolean(post.author_is_followed),
     author_is_expert: Boolean(post.author_is_expert),
     comment_count: Number(actualCommentCount ?? post.comment_count) || 0,
   };
@@ -139,9 +143,69 @@ router.get("/users", authMiddleware, (req: AuthRequest, res) => {
   res.json(users);
 });
 
+router.get("/following", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
+  if (!auth) return res.status(401).json({ error: "未登录" });
+  const users = db.prepare(`
+    SELECT u.id, u.username, u.avatar_url, uf.created_at
+    FROM user_follows uf JOIN users u ON u.id = uf.following_id
+    WHERE uf.follower_id = ? ORDER BY uf.created_at DESC
+  `).all(auth.userId);
+  res.json(users);
+});
+
+router.get("/level", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
+  if (!auth) return res.status(401).json({ error: "未登录" });
+  res.json(getUserLevel(auth.userId));
+});
+
+router.post("/users/:userId/follow", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
+  if (!auth) return res.status(401).json({ error: "未登录" });
+  const followingId = Number(req.params.userId);
+  if (followingId === auth.userId) return res.status(400).json({ error: "不能关注自己" });
+  const target = db.prepare("SELECT id FROM users WHERE id = ?").get(followingId);
+  if (!target) return res.status(404).json({ error: "用户不存在" });
+  const exists = db.prepare("SELECT 1 FROM user_follows WHERE follower_id = ? AND following_id = ?").get(auth.userId, followingId);
+  if (exists) db.prepare("DELETE FROM user_follows WHERE follower_id = ? AND following_id = ?").run(auth.userId, followingId);
+  else db.prepare("INSERT INTO user_follows (follower_id, following_id) VALUES (?, ?)").run(auth.userId, followingId);
+  const followingCount = (db.prepare("SELECT COUNT(*) AS count FROM user_follows WHERE follower_id = ?").get(auth.userId) as { count: number }).count;
+  res.json({ is_following: !exists, following_count: followingCount });
+});
+
+router.get("/users/:userId/profile", (req: AuthRequest, res) => {
+  const viewerId = req.userId ?? -1;
+  const profileUserId = Number(req.params.userId);
+  const user = db.prepare(`
+    SELECT u.id, u.username, u.avatar_url, u.bio,
+      (SELECT COUNT(*) FROM user_follows WHERE following_id = u.id) AS followers_count,
+      (SELECT COUNT(*) FROM user_follows WHERE follower_id = u.id) AS following_count,
+      (SELECT COUNT(*) FROM community_posts WHERE user_id = u.id AND deleted_at IS NULL) AS posts_count,
+      EXISTS(SELECT 1 FROM user_follows WHERE follower_id = ? AND following_id = u.id) AS is_following
+    FROM users u WHERE u.id = ?
+  `).get(viewerId, profileUserId) as any;
+  if (!user) return res.status(404).json({ error: "用户不存在" });
+  // 个人主页只需要动态摘要；绝不能把编辑器存储的 data URI 或多图原文
+  // 一并塞进 profile JSON，否则单张图片就可能让页面响应膨胀到数 MB。
+  const posts = db.prepare(`
+    SELECT p.id, p.category, p.content,
+      CASE WHEN p.image_url LIKE 'data:%' THEN NULL ELSE p.image_url END AS image_url,
+      p.likes_count, p.created_at
+    FROM community_posts p
+    WHERE p.user_id = ? AND p.deleted_at IS NULL
+    ORDER BY p.created_at DESC LIMIT 20
+  `).all(profileUserId);
+  res.json({ ...user, is_following: Boolean(user.is_following), level: getUserLevel(profileUserId), posts });
+});
+
 // GET /api/v1/community/posts
 router.get("/posts", (req: AuthRequest, res) => {
   const { category, sort } = req.query;
+  const rawLimit = Number(req.query.limit);
+  const rawOffset = Number(req.query.offset);
+  const limit = Number.isInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), 30) : null;
+  const offset = Number.isInteger(rawOffset) ? Math.max(rawOffset, 0) : 0;
   const userId = req.userId ?? null;
   let posts;
   if (category) {
@@ -157,7 +221,8 @@ router.get("/posts", (req: AuthRequest, res) => {
   }
 
   const serialized = posts.map(serializePost);
-  res.json(sort === "recommended" ? recommendPosts(serialized, userId) : serialized);
+  const ordered = sort === "recommended" ? recommendPosts(serialized, userId) : serialized;
+  res.json(limit === null ? ordered : ordered.slice(offset, offset + limit));
 });
 
 // GET /api/v1/community/posts/:id

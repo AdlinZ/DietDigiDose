@@ -100,6 +100,8 @@ export const healthLogSchema = z.object({
   resting_heart_rate: z.number().int().min(20).max(250).nullable().optional(),
   blood_pressure_systolic: z.number().int().min(50).max(300).nullable().optional(),
   blood_pressure_diastolic: z.number().int().min(30).max(200).nullable().optional(),
+  blood_glucose_mmol: z.number().finite().min(1).max(50).nullable().optional(),
+  cycle_status: z.enum(["经期", "备孕", "孕期", "产后", "哺乳期"]).nullable().optional(),
   sleep_hours: z.number().finite().min(0).max(24).nullable().optional(),
   recorded_date: isoDate.optional(),
 }).strict().refine(
@@ -116,6 +118,32 @@ export const healthProfileSchema = z.object({
   health_goal: z.enum(["lose_weight", "reduce_fat", "gain_muscle", "maintain", "healthy"]).optional(),
   activity_level: z.enum(["sedentary", "light", "moderate", "active", "very_active"]).optional(),
   dietary_preference: z.string().trim().max(200).optional(),
+  allergies: z.array(z.object({
+    name: trimmedString(1, 80, "过敏或不耐受名称"),
+    type: z.enum(["allergy", "intolerance"]),
+    severity: z.enum(["mild", "moderate", "severe"]),
+  }).strict()).max(30).optional(),
+  medications: z.string().trim().max(1000).optional(),
+  medical_conditions: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
+  medical_notes: z.string().trim().max(1000).optional(),
+  dietary_restrictions: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
+  disliked_foods: z.string().trim().max(1000).optional(),
+  kitchen_constraints: z.object({
+    meal_time_minutes: z.number().int().min(5).max(300).nullable().optional(),
+    budget_per_meal: z.number().finite().min(0).max(100_000).nullable().optional(),
+    cooking_level: z.enum(["beginner", "intermediate", "advanced"]).nullable().optional(),
+    servings: z.number().int().min(1).max(30).nullable().optional(),
+    eating_out_frequency: z.enum(["rarely", "sometimes", "often"]).nullable().optional(),
+  }).strict().optional(),
+  nutrition_targets: z.object({
+    calories_kcal: z.number().finite().min(500).max(10_000).nullable().optional(),
+    protein_g: z.number().finite().min(0).max(1000).nullable().optional(),
+    salt_g: z.number().finite().min(0).max(100).nullable().optional(),
+    sugar_g: z.number().finite().min(0).max(1000).nullable().optional(),
+    water_ml: z.number().finite().min(0).max(20_000).nullable().optional(),
+    professional_advice: z.string().trim().max(1000).optional(),
+  }).strict().optional(),
+  tracking_enabled: z.boolean().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个需要更新的字段");
 
 export const customFoodSchema = z.object({
@@ -255,6 +283,10 @@ export const kitchenwareSchema = z.object({
 export const adminRoleSchema = z.object({ role: z.enum(["user", "admin"]) }).strict();
 export const adminExpertSchema = z.object({ is_verified_expert: z.boolean() }).strict();
 export const adminUserStatusSchema = z.object({ is_disabled: z.boolean() }).strict();
+export const adminLevelAdjustmentSchema = z.object({
+  xp_delta: z.number().int().min(-10_000).max(10_000).refine((value) => value !== 0, "经验调整不能为 0"),
+  reason: trimmedString(2, 200, "调整原因"),
+}).strict();
 export const adminUserCredentialsSchema = z.object({
   identifier: z.string().trim().min(1, "邮箱或手机号不能为空").max(254, "邮箱或手机号不能超过 254 个字符").optional(),
   newPassword: z.string()

@@ -23,6 +23,7 @@ import type { ActivityStatus, Post } from "./types";
 import { formatActivityDate, getActivityStatus, parseCommunityDate } from "./activity";
 import { buildRefreshedFeed } from "./feed";
 
+const PAGE_SIZE = 12;
 
 export default function CommunityScreen() {
   const router = useSafeRouter();
@@ -37,7 +38,10 @@ export default function CommunityScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activityFilter, setActivityFilter] = useState<"进行中" | "即将开始" | "往期活动">("进行中");
   const [questionFilter, setQuestionFilter] = useState<"热门问题" | "待回答" | "已解决">("热门问题");
+  const [hasMore, setHasMore] = useState(false);
   const refreshSequence = useRef(0);
+  const fetchRequestSequence = useRef(0);
+  const postsRef = useRef<Post[]>([]);
 
   // 帖子详情 Modal 控制
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
@@ -49,31 +53,45 @@ export default function CommunityScreen() {
     return () => sub.remove();
   }, [router]);
 
+  useEffect(() => {
+    postsRef.current = posts;
+  }, [posts]);
+
   const tabs = ["寻味", "榜单", "活动", "问答"];
 
-  const fetchPosts = useCallback(async (forceRefresh = false) => {
+  const fetchPosts = useCallback(async (forceRefresh = false, append = false) => {
+    const requestSequence = ++fetchRequestSequence.current;
     try {
       setLoading(true);
       setFetchError(null);
+      const offset = append ? postsRef.current.length : 0;
+      const query = `?category=${encodeURIComponent(activeTab)}&sort=recommended&limit=${PAGE_SIZE}&offset=${offset}`;
       if (forceRefresh) {
         refreshSequence.current += 1;
         const cacheBuster = Date.now();
         const [recommended, latest] = await Promise.all([
-          communityApi.posts<Post>(`?sort=recommended&_=${cacheBuster}`, authFetch),
-          communityApi.posts<Post>(`?_=${cacheBuster}`, authFetch),
+          communityApi.posts<Post>(`${query}&_=${cacheBuster}`, authFetch),
+          communityApi.posts<Post>(`?category=${encodeURIComponent(activeTab)}&limit=${PAGE_SIZE}&_=${cacheBuster}`, authFetch),
         ]);
-        setPosts(buildRefreshedFeed(recommended, latest, refreshSequence.current));
+        if (requestSequence !== fetchRequestSequence.current) return;
+        const refreshed = buildRefreshedFeed(recommended, latest, refreshSequence.current);
+        setPosts(refreshed);
+        setHasMore(recommended.length === PAGE_SIZE);
       } else {
-        const data = await communityApi.posts<Post>("?sort=recommended", authFetch);
-        setPosts(Array.isArray(data) ? data : []);
+        const data = await communityApi.posts<Post>(query, authFetch);
+        if (requestSequence !== fetchRequestSequence.current) return;
+        const nextPosts = Array.isArray(data) ? data : [];
+        setPosts((current) => append ? [...current, ...nextPosts.filter((item) => !current.some((post) => post.id === item.id))] : nextPosts);
+        setHasMore(nextPosts.length === PAGE_SIZE);
       }
     } catch (e) {
-      setPosts([]);
+      if (requestSequence !== fetchRequestSequence.current) return;
+      if (!append) setPosts([]);
       setFetchError(e instanceof Error ? e.message : "社区内容加载失败");
     } finally {
-      setLoading(false);
+      if (requestSequence === fetchRequestSequence.current) setLoading(false);
     }
-  }, [authFetch]);
+  }, [activeTab, authFetch]);
 
   useFocusEffect(
     useCallback(() => {
@@ -296,7 +314,7 @@ export default function CommunityScreen() {
 
           <View className="flex-row items-center justify-between mt-2.5 pt-2 border-t border-[#F8F5F0]">
             {/* 作者头像与昵称 */}
-            <View className="min-w-0 flex-1 flex-row items-center gap-1.5 pr-2">
+            <TouchableOpacity onPress={(event) => { event.stopPropagation(); router.push("/user-profile", { userId: post.user_id }); }} className="min-w-0 flex-1 flex-row items-center gap-1.5 pr-2">
               <Image
                 source={getAvatarSource(post.avatar_url, post.user_id ?? post.username)}
                 className="w-5 h-5 rounded-full"
@@ -304,7 +322,7 @@ export default function CommunityScreen() {
               <Text className="flex-1 text-[10px] font-medium text-[#777777]" numberOfLines={1}>
                 {post.nickname || post.username}
               </Text>
-            </View>
+            </TouchableOpacity>
 
             {/* 点赞 */}
             <TouchableOpacity
@@ -818,6 +836,14 @@ export default function CommunityScreen() {
             </View>
           </View>
         )}
+
+        {hasMore && !loading ? (
+          <View className="items-center px-4 py-4">
+            <TouchableOpacity onPress={() => void fetchPosts(false, true)} className="rounded-full border border-[#D8E6DB] bg-white px-5 py-2.5 active:opacity-80">
+              <Text className="text-xs font-bold text-[#2D6A4F]">加载更多内容</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
 
 

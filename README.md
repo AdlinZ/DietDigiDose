@@ -70,7 +70,7 @@ cp server/.env.example server/.env
 客户端最少需要配置后端地址：
 
 ```dotenv
-EXPO_PUBLIC_BACKEND_BASE_URL=http://localhost:9091
+EXPO_PUBLIC_BACKEND_BASE_URL=http://localhost:9090
 ```
 
 服务端开发模式可以自动生成本地 JWT 密钥；生产环境必须设置至少 32 个字符的 `JWT_SECRET`，并设置强度足够的 `ADMIN_INITIAL_PASSWORD`。AI、USDA 和 Supabase 配置都是可选项，完整字段见 [server/.env.example](server/.env.example)。
@@ -91,11 +91,17 @@ pnpm dev
 pnpm dev:admin
 ```
 
+管理端是独立的开发进程：即使它因 Vite 配置、端口或热更新问题退出，`pnpm dev` 启动的客户端和 API 仍会继续运行。若确实需要在同一个终端查看三者日志，可使用：
+
+```bash
+pnpm dev:all
+```
+
 默认地址：
 
 - Expo Web：`http://localhost:8080`
-- API：`http://localhost:9091`
-- API 健康检查：`http://localhost:9091/api/v1/health`
+- API：`http://localhost:9090`
+- API 健康检查：`http://localhost:9090/api/v1/health`
 - 管理后台：`http://localhost:5173`
 
 SQLite 数据库会在 `server/data/dietdigidose.db` 中自动创建，该目录只用于本地运行并已被 Git 忽略。
@@ -106,6 +112,7 @@ SQLite 数据库会在 `server/data/dietdigidose.db` 中自动创建，该目录
 | --- | --- |
 | `pnpm dev` | 启动客户端和 API |
 | `pnpm dev:admin` | 启动管理后台 |
+| `pnpm dev:all` | 同时启动客户端、API 和管理后台（仅用于需要统一查看日志时） |
 | `pnpm lint:all` | 检查 client、server 和 admin |
 | `pnpm test:client` | 运行客户端 Jest 测试 |
 | `pnpm build:client` | 导出 Expo Web 构建 |

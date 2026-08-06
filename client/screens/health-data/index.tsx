@@ -9,6 +9,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from "react-native";
 import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
@@ -32,11 +33,13 @@ interface HealthLog {
   resting_heart_rate?: number | null;
   blood_pressure_systolic?: number | null;
   blood_pressure_diastolic?: number | null;
+  blood_glucose_mmol?: number | null;
+  cycle_status?: string | null;
   sleep_hours?: number | null;
   bmi?: number | null;
 }
 
-type HealthMetricKey = keyof Omit<HealthLog, "id" | "recorded_date">;
+type HealthMetricKey = keyof Omit<HealthLog, "id" | "recorded_date" | "cycle_status">;
 type HealthMetricConfig = {
   key: HealthMetricKey;
   label: string;
@@ -54,7 +57,10 @@ const DETAIL_METRICS: HealthMetricConfig[] = [
   { key: "sleep_hours", label: "睡眠", unit: "h" },
   { key: "blood_pressure_systolic", label: "收缩压", unit: "mmHg" },
   { key: "blood_pressure_diastolic", label: "舒张压", unit: "mmHg" },
+  { key: "blood_glucose_mmol", label: "血糖", unit: "mmol/L" },
 ];
+
+const CYCLE_OPTIONS = ["经期", "备孕", "孕期", "产后", "哺乳期"] as const;
 
 export default function HealthDataScreen() {
   const router = useSafeRouter();
@@ -76,6 +82,8 @@ export default function HealthDataScreen() {
   const [heartRate, setHeartRate] = useState("");
   const [sysBP, setSysBP] = useState("");
   const [diaBP, setDiaBP] = useState("");
+  const [bloodGlucose, setBloodGlucose] = useState("");
+  const [cycleStatus, setCycleStatus] = useState<string | null>(null);
   const [sleepHours, setSleepHours] = useState("");
 
   const today = toLocalDateKey();
@@ -148,6 +156,8 @@ export default function HealthDataScreen() {
         (raw as { diastolic?: unknown }).diastolic ??
         (raw as { diastolic_bp?: unknown }).diastolic_bp,
     );
+    const bloodGlucoseMmol = pick((raw as { blood_glucose_mmol?: unknown; bloodGlucose?: unknown }).blood_glucose_mmol ?? (raw as { bloodGlucose?: unknown }).bloodGlucose);
+    const cycleStatus = typeof raw.cycle_status === "string" ? raw.cycle_status : null;
     const sleepHours = pick((raw as { sleep_hours?: unknown; sleep?: unknown }).sleep_hours ?? (raw as { sleep?: unknown }).sleep);
     const bmi = pick(
       (raw as { bmi?: unknown; body_mass_index?: unknown }).bmi ??
@@ -170,6 +180,8 @@ export default function HealthDataScreen() {
       resting_heart_rate: restingHeartRate,
       blood_pressure_systolic: bloodPressureSystolic,
       blood_pressure_diastolic: bloodPressureDiastolic,
+      blood_glucose_mmol: bloodGlucoseMmol,
+      cycle_status: cycleStatus,
       sleep_hours: sleepHours,
       bmi: computedBmi,
     };
@@ -223,6 +235,8 @@ export default function HealthDataScreen() {
   const todayHeart = todayLog.resting_heart_rate;
   const todaySys = todayLog.blood_pressure_systolic;
   const todayDia = todayLog.blood_pressure_diastolic;
+  const todayBloodGlucose = todayLog.blood_glucose_mmol;
+  const todayCycleStatus = todayLog.cycle_status;
   const todaySleep = todayLog.sleep_hours;
   const todayBmi = todayLog.bmi ?? (todayWeight && todayHeight ? Number((todayWeight / Math.pow(todayHeight / 100, 2)).toFixed(1)) : null);
 
@@ -243,6 +257,8 @@ export default function HealthDataScreen() {
     setHeartRate(todayHeart != null ? String(todayHeart) : "");
     setSysBP(todaySys != null ? String(todaySys) : "");
     setDiaBP(todayDia != null ? String(todayDia) : "");
+    setBloodGlucose(todayBloodGlucose != null ? String(todayBloodGlucose) : "");
+    setCycleStatus(todayCycleStatus || null);
     setSleepHours(todaySleep != null ? String(todaySleep) : "");
     setModalVisible(true);
   };
@@ -283,8 +299,10 @@ export default function HealthDataScreen() {
         resting_heart_rate: toNum(heartRate),
         blood_pressure_systolic: toNum(sysBP),
         blood_pressure_diastolic: toNum(diaBP),
+        blood_glucose_mmol: toNum(bloodGlucose),
         sleep_hours: toNum(sleepHours),
       });
+      payload.cycle_status = cycleStatus;
 
       const ok = await postHealthPayload(payload);
       if (ok) {
@@ -300,6 +318,24 @@ export default function HealthDataScreen() {
     }
   };
 
+  const handleDeleteLog = (log: HealthLog) => {
+    Alert.alert("删除这条追踪记录？", `${log.recorded_date} 的体征数据将被永久删除。`, [
+      { text: "取消", style: "cancel" },
+      {
+        text: "删除",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await healthApi.deleteLog(authFetch, log.id);
+            setLogs((current) => current.filter((item) => item.id !== log.id));
+          } catch (error) {
+            Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试");
+          }
+        },
+      },
+    ]);
+  };
+
   const renderMetricGrid = () => (
     <>
       <View className="flex-row gap-3 mb-4">
@@ -313,6 +349,10 @@ export default function HealthDataScreen() {
       <View className="flex-row gap-3 mb-4">
         <MetricCard icon="chart-line" iconColor="#2D6A4F" label="腰围 / 臀围" value={`${formatNumber(todayWaist)} / ${formatNumber(todayHip)} cm`} />
         <MetricCard icon="moon" iconColor="#D4A276" label="睡眠 / 血压" value={`${formatNumber(todaySleep)} h • ${formatNumber(todaySys)}/${formatNumber(todayDia)}`} />
+      </View>
+      <View className="flex-row gap-3 mb-4">
+        <MetricCard icon="droplet" iconColor="#B64D36" label="血糖" value={formatMetric(todayBloodGlucose, "mmol/L")} />
+        <MetricCard icon="calendar-day" iconColor="#8B5E83" label="经期 / 孕哺状态" value={todayCycleStatus || EMTPY_VALUE_PLACEHOLDER} />
       </View>
     </>
   );
@@ -362,6 +402,11 @@ export default function HealthDataScreen() {
             <Text className="text-xs text-red-700">{requestError}</Text>
           </View>
         ) : null}
+
+        <View className="mb-4 flex-row items-start rounded-2xl border border-[#D8E5DC] bg-[#F1F7F2] p-3">
+          <FontAwesome6 name="circle-info" size={13} color="#2D6A4F" />
+          <Text className="ml-2 flex-1 text-[11px] leading-4 text-[#52705D]">这些可选数据只用于展示个人趋势与辅助饮食建议，不作为疾病诊断。你可以在下方随时逐条删除。</Text>
+        </View>
 
         <View className="bg-white p-5 rounded-[28px] border border-[#EBE3D5] shadow-sm mb-4">
           <View className="flex-row items-center justify-between mb-3">
@@ -456,7 +501,9 @@ export default function HealthDataScreen() {
                   >
                     <View className="flex-row justify-between items-center mb-2">
                       <Text className="font-black text-[#3D3229]">{log.recorded_date}</Text>
-                      <Text className="text-xs text-[#8B7D6B]">记录 ID：{log.id}</Text>
+                      <TouchableOpacity onPress={() => handleDeleteLog(log)} accessibilityLabel={`删除 ${log.recorded_date} 的追踪数据`} className="h-8 w-8 items-center justify-center rounded-full bg-[#FFF0EC]">
+                        <FontAwesome6 name="trash-can" size={11} color="#B64D36" />
+                      </TouchableOpacity>
                     </View>
                     <View className="flex-row flex-wrap gap-2">
                       {DETAIL_METRICS.map((metric) => {
@@ -473,6 +520,7 @@ export default function HealthDataScreen() {
                           </View>
                         );
                       })}
+                      {log.cycle_status ? <View className="min-w-[120px] flex-1 rounded-xl border border-[#E9DDC7] bg-white px-2.5 py-1.5"><Text className="text-[10px] text-[#8B7D6B]">经期 / 孕哺状态</Text><Text className="text-sm font-bold text-[#3D3229]">{log.cycle_status}</Text></View> : null}
                     </View>
                   </View>
                 ))}
@@ -526,6 +574,13 @@ export default function HealthDataScreen() {
               </View>
 
               <TextInputBlock label="睡眠 (小时)" value={sleepHours} onChangeText={setSleepHours} />
+              <TextInputBlock label="血糖 (mmol/L，可选)" value={bloodGlucose} onChangeText={setBloodGlucose} />
+              <View>
+                <Text className="mb-2 text-xs font-bold text-[#8B7D6B]">经期 / 孕哺状态（可选）</Text>
+                <View className="flex-row flex-wrap gap-2">
+                  {CYCLE_OPTIONS.map((item) => <TouchableOpacity key={item} onPress={() => setCycleStatus((current) => current === item ? null : item)} className={`rounded-full border px-3 py-2 ${cycleStatus === item ? "border-[#8B5E83] bg-[#F4EAF2]" : "border-[#EBE3D5] bg-[#FDF8F0]"}`}><Text className={`text-xs font-bold ${cycleStatus === item ? "text-[#75486F]" : "text-[#8B7D6B]"}`}>{item}</Text></TouchableOpacity>)}
+                </View>
+              </View>
 
               <TouchableOpacity
                 onPress={handleSaveLog}

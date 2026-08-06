@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Search, User, ShieldAlert, X, AlertCircle, BadgeCheck, Users as UsersIcon, Mail, Phone, Lock, Sparkles, UserX, UserCheck } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { Search, User, ShieldAlert, X, AlertCircle, BadgeCheck, Users as UsersIcon, Mail, Phone, Lock, Sparkles, UserX, UserCheck, HeartPulse, ShieldCheck, Pill, CookingPot, Target, Activity, RefreshCw } from 'lucide-react';
 import api from '../services/api';
 import { cn } from '../utils/cn';
 import { getAvatarUrl } from '../utils/avatar';
@@ -15,6 +15,58 @@ interface UserData {
   is_verified_expert: number | boolean;
   is_disabled?: number | boolean;
   created_at: string;
+  has_health_profile?: number | boolean;
+  level?: { level: number; title: string; xp: number; baseXp: number; adjustmentXp: number; progress: number };
+}
+
+type AllergySeverity = 'mild' | 'moderate' | 'severe';
+interface AdminHealthProfile {
+  gender?: string | null;
+  age?: number | null;
+  height?: number | null;
+  weight?: number | null;
+  target_weight?: number | null;
+  dietary_preference?: string;
+  allergies?: Array<{ name: string; type: 'allergy' | 'intolerance'; severity: AllergySeverity }>;
+  medications?: string;
+  medical_conditions?: string[];
+  medical_notes?: string;
+  dietary_restrictions?: string[];
+  disliked_foods?: string;
+  kitchen_constraints?: {
+    meal_time_minutes?: number | null;
+    budget_per_meal?: number | null;
+    cooking_level?: string | null;
+    servings?: number | null;
+    eating_out_frequency?: string | null;
+  };
+  nutrition_targets?: {
+    calories_kcal?: number | null;
+    protein_g?: number | null;
+    salt_g?: number | null;
+    sugar_g?: number | null;
+    water_ml?: number | null;
+    professional_advice?: string;
+  };
+  tracking_enabled?: boolean;
+  updated_at?: string;
+}
+
+interface AdminHealthProfileResponse {
+  user_id: number;
+  profile: AdminHealthProfile | null;
+  latest_tracking: {
+    recorded_date: string;
+    weight?: number | null;
+    body_fat?: number | null;
+    waist_cm?: number | null;
+    blood_pressure_systolic?: number | null;
+    blood_pressure_diastolic?: number | null;
+    blood_glucose_mmol?: number | null;
+    sleep_hours?: number | null;
+    cycle_status?: string | null;
+  } | null;
+  tracking_count: number;
 }
 
 export default function Users() {
@@ -28,6 +80,14 @@ export default function Users() {
   const [resetPassword, setResetPassword] = useState('');
   const [credentialsSaving, setCredentialsSaving] = useState(false);
   const [credentialsMessage, setCredentialsMessage] = useState('');
+  const [xpDelta, setXpDelta] = useState('');
+  const [xpReason, setXpReason] = useState('');
+  const [xpMessage, setXpMessage] = useState('');
+  const [xpSaving, setXpSaving] = useState(false);
+  const [healthProfileDetail, setHealthProfileDetail] = useState<AdminHealthProfileResponse | null>(null);
+  const [healthProfileLoading, setHealthProfileLoading] = useState(false);
+  const [healthProfileError, setHealthProfileError] = useState('');
+  const healthProfileRequestSequence = useRef(0);
   
   const [confirmRoleModal, setConfirmRoleModal] = useState<{
     isOpen: boolean;
@@ -99,11 +159,52 @@ export default function Users() {
     }
   };
 
+  const fetchHealthProfileDetail = async (userId: number) => {
+    const requestSequence = ++healthProfileRequestSequence.current;
+    try {
+      setHealthProfileLoading(true);
+      setHealthProfileError('');
+      const response = await api.get(`/admin/users/${userId}/health-profile`);
+      if (requestSequence !== healthProfileRequestSequence.current) return;
+      const detail = response.data as AdminHealthProfileResponse;
+      if (detail.user_id !== userId) return;
+      setHealthProfileDetail(detail);
+    } catch (error) {
+      if (requestSequence !== healthProfileRequestSequence.current) return;
+      const message = (error as { response?: { data?: { error?: string } } }).response?.data?.error;
+      setHealthProfileDetail(null);
+      setHealthProfileError(message || '健康与饮食档案加载失败');
+    } finally {
+      if (requestSequence === healthProfileRequestSequence.current) setHealthProfileLoading(false);
+    }
+  };
+
   const openUserDetail = (user: UserData) => {
     setSelectedUser(user);
+    setHealthProfileDetail(null);
+    setHealthProfileError('');
+    void fetchHealthProfileDetail(user.id);
     setCredentialIdentifier(user.email || user.phone || user.username);
     setResetPassword('');
     setCredentialsMessage('');
+    setXpDelta('');
+    setXpReason('');
+    setXpMessage('');
+  };
+
+  const handleAdjustXp = async () => {
+    if (!selectedUser) return;
+    const delta = Number(xpDelta);
+    if (!Number.isInteger(delta) || delta === 0 || !xpReason.trim()) { setXpMessage('请填写非 0 的整数经验值及调整原因'); return; }
+    try {
+      setXpSaving(true); setXpMessage('');
+      const res = await api.post(`/admin/users/${selectedUser.id}/level-adjustments`, { xp_delta: delta, reason: xpReason.trim() });
+      const level = res.data.level;
+      setUsers(current => current.map(item => item.id === selectedUser.id ? { ...item, level } : item));
+      setSelectedUser(current => current ? { ...current, level } : current);
+      setXpDelta(''); setXpReason(''); setXpMessage('经验已调整，操作已写入审计日志');
+    } catch (error: any) { setXpMessage(error.response?.data?.error || '调整失败'); }
+    finally { setXpSaving(false); }
   };
 
   const handleSaveCredentials = async () => {
@@ -283,7 +384,7 @@ export default function Users() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[800px]">
+            <table className="w-full text-left border-collapse min-w-[920px]">
               <thead>
                 <tr className="text-text-muted text-xs border-b border-background-alt">
                   <th className="pb-4 font-medium w-16 text-center">ID</th>
@@ -291,7 +392,9 @@ export default function Users() {
                   <th className="pb-4 font-medium px-4">联系方式</th>
                   <th className="pb-4 font-medium px-4">角色</th>
                   <th className="pb-4 font-medium px-4">状态</th>
+                  <th className="pb-4 font-medium px-4">健康档案</th>
                   <th className="pb-4 font-medium px-4">专业认证</th>
+                  <th className="pb-4 font-medium px-4">成长等级</th>
                   <th className="pb-4 font-medium px-4">注册时间</th>
                   <th className="pb-4 font-medium text-right pl-4">操作</th>
                 </tr>
@@ -359,6 +462,13 @@ export default function Users() {
                         )}
                       </td>
                       <td className="py-4 px-4">
+                        {user.has_health_profile ? (
+                          <span className="inline-flex items-center gap-1 rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700"><ShieldCheck className="h-3 w-3" />已填写</span>
+                        ) : (
+                          <span className="inline-flex rounded-lg bg-background-alt px-2.5 py-1 text-xs text-text-muted">未填写</span>
+                        )}
+                      </td>
+                      <td className="py-4 px-4">
                         <button
                           type="button"
                           onClick={(event) => {
@@ -376,6 +486,7 @@ export default function Users() {
                           {user.is_verified_expert ? '已认证' : '未认证'}
                         </button>
                       </td>
+                      <td className="py-4 px-4"><span className="inline-flex rounded-lg bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">V{user.level?.level ?? 1} · {user.level?.xp ?? 0} XP</span></td>
                       <td className="py-4 px-4 text-xs text-text-muted">
                         {new Date(user.created_at).toLocaleDateString()}
                       </td>
@@ -464,6 +575,20 @@ export default function Users() {
                   </p>
                 </div>
                 <Sparkles className="w-5 h-5 text-primary/40" />
+              </div>
+
+              <AdminHealthProfileCard
+                data={healthProfileDetail}
+                loading={healthProfileLoading}
+                error={healthProfileError}
+                onRetry={() => void fetchHealthProfileDetail(selectedUser.id)}
+              />
+
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/50 p-4">
+                <h3 className="text-sm font-semibold text-text-main">成长等级</h3>
+                <div className="mt-3 flex items-end justify-between"><div><p className="text-lg font-bold text-amber-700">V{selectedUser.level?.level ?? 1} · {selectedUser.level?.title ?? '健康新芽'}</p><p className="mt-1 text-xs text-text-muted">{selectedUser.level?.xp ?? 0} XP（行为 {selectedUser.level?.baseXp ?? 0} / 修正 {selectedUser.level?.adjustmentXp ?? 0}）</p></div><span className="text-xs font-medium text-amber-700">{selectedUser.level?.progress ?? 0}%</span></div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-amber-100"><div className="h-full rounded-full bg-amber-500" style={{ width: `${selectedUser.level?.progress ?? 0}%` }} /></div>
+                <div className="mt-4 border-t border-amber-100 pt-4"><p className="text-xs font-medium text-text-muted">经验修正（活动奖励、申诉补偿或违规扣减）</p><div className="mt-2 grid grid-cols-3 gap-2"><input value={xpDelta} onChange={(event) => setXpDelta(event.target.value)} placeholder="+100 / -50" className="rounded-xl border border-amber-100 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200" /><input value={xpReason} onChange={(event) => setXpReason(event.target.value)} placeholder="必须填写原因" className="col-span-2 rounded-xl border border-amber-100 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200" /></div>{xpMessage ? <p className="mt-2 text-xs text-text-muted">{xpMessage}</p> : null}<button type="button" onClick={() => void handleAdjustXp()} disabled={xpSaving} className="mt-3 w-full rounded-xl bg-amber-500 py-2.5 text-sm font-medium text-white disabled:opacity-60">{xpSaving ? '保存中…' : '提交经验修正'}</button></div>
               </div>
 
               {selectedUser.role !== 'admin' ? (
@@ -638,4 +763,124 @@ export default function Users() {
       )}
     </div>
   );
+}
+
+const severityLabels: Record<AllergySeverity, string> = { mild: '轻度', moderate: '中度', severe: '重度' };
+const cookingLevelLabels: Record<string, string> = { beginner: '新手', intermediate: '熟练', advanced: '进阶' };
+const eatingOutLabels: Record<string, string> = { rarely: '很少外食', sometimes: '偶尔外食', often: '经常外食' };
+
+function AdminHealthProfileCard({
+  data,
+  loading,
+  error,
+  onRetry,
+}: {
+  data: AdminHealthProfileResponse | null;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+}) {
+  const profile = data?.profile;
+  const kitchen = profile?.kitchen_constraints || {};
+  const targets = profile?.nutrition_targets || {};
+  const latest = data?.latest_tracking;
+  const basicFacts = profile ? [
+    profile.gender ? `性别 ${profile.gender}` : null,
+    profile.age ? `${profile.age} 岁` : null,
+    profile.height ? `身高 ${profile.height} cm` : null,
+    profile.weight ? `体重 ${profile.weight} kg` : null,
+    profile.target_weight ? `目标 ${profile.target_weight} kg` : null,
+  ].filter(Boolean) as string[] : [];
+  const kitchenFacts = [
+    kitchen.meal_time_minutes ? `每餐 ${kitchen.meal_time_minutes} 分钟` : null,
+    kitchen.budget_per_meal ? `预算 ¥${kitchen.budget_per_meal}` : null,
+    kitchen.servings ? `${kitchen.servings} 人用餐` : null,
+    kitchen.cooking_level ? cookingLevelLabels[kitchen.cooking_level] : null,
+    kitchen.eating_out_frequency ? eatingOutLabels[kitchen.eating_out_frequency] : null,
+  ].filter(Boolean) as string[];
+  const targetFacts = [
+    targets.calories_kcal ? `热量 ${targets.calories_kcal} kcal` : null,
+    targets.protein_g ? `蛋白质 ${targets.protein_g} g` : null,
+    targets.salt_g ? `盐 ${targets.salt_g} g` : null,
+    targets.sugar_g ? `糖 ${targets.sugar_g} g` : null,
+    targets.water_ml ? `饮水 ${targets.water_ml} ml` : null,
+  ].filter(Boolean) as string[];
+  const latestFacts = latest ? [
+    latest.weight != null ? `体重 ${latest.weight} kg` : null,
+    latest.body_fat != null ? `体脂 ${latest.body_fat}%` : null,
+    latest.waist_cm != null ? `腰围 ${latest.waist_cm} cm` : null,
+    latest.blood_pressure_systolic != null && latest.blood_pressure_diastolic != null ? `血压 ${latest.blood_pressure_systolic}/${latest.blood_pressure_diastolic}` : null,
+    latest.blood_glucose_mmol != null ? `血糖 ${latest.blood_glucose_mmol} mmol/L` : null,
+    latest.sleep_hours != null ? `睡眠 ${latest.sleep_hours} h` : null,
+    latest.cycle_status ? latest.cycle_status : null,
+  ].filter(Boolean) as string[] : [];
+
+  return (
+    <div className="rounded-2xl border border-rose-100 bg-rose-50/30 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <div className="rounded-xl bg-rose-100 p-2 text-rose-700"><ShieldCheck className="h-4 w-4" /></div>
+          <div>
+            <h3 className="text-sm font-semibold text-text-main">健康与饮食档案</h3>
+            <p className="mt-0.5 text-[10px] text-rose-700">敏感资料 · 只读查看 · 访问已审计</p>
+          </div>
+        </div>
+        {profile?.updated_at ? <span className="text-[10px] text-text-muted">更新于 {new Date(profile.updated_at).toLocaleDateString()}</span> : null}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center gap-2 py-8 text-xs text-text-muted"><RefreshCw className="h-4 w-4 animate-spin" />正在读取已保存档案…</div>
+      ) : error ? (
+        <div className="mt-4 rounded-xl border border-red-100 bg-white p-3 text-xs text-red-600">
+          <p>{error}</p><button type="button" onClick={onRetry} className="mt-2 font-semibold text-primary">重新加载</button>
+        </div>
+      ) : !profile && !latest ? (
+        <div className="mt-4 rounded-xl border border-dashed border-rose-200 bg-white/70 p-4 text-center">
+          <p className="text-sm font-semibold text-text-main">该用户尚未建档</p>
+          <p className="mt-1 text-xs text-text-muted">客户端保存后会在此处显示。</p>
+        </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {basicFacts.length ? <FactChips items={basicFacts} /> : null}
+
+          {profile?.allergies?.length ? (
+            <div className="rounded-xl border border-red-100 bg-white p-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-red-700"><ShieldAlert className="h-3.5 w-3.5" />过敏与不耐受</div>
+              <div className="mt-2 flex flex-wrap gap-1.5">{profile.allergies.map((item) => <span key={`${item.name}-${item.type}`} className={cn('rounded-lg border px-2 py-1 text-[11px] font-semibold', item.severity === 'severe' ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-700')}>{item.name} · {severityLabels[item.severity]} · {item.type === 'allergy' ? '过敏' : '不耐受'}</span>)}</div>
+            </div>
+          ) : <EmptyHealthLine label="未记录过敏或不耐受" />}
+
+          {profile?.medications ? <HealthDetailLine icon={<Pill className="h-3.5 w-3.5" />} label="用药与补充剂" value={profile.medications} sensitive /> : null}
+          {profile?.medical_conditions?.length ? <HealthDetailLine icon={<HeartPulse className="h-3.5 w-3.5" />} label="疾病与特殊状态" value={profile.medical_conditions.join('、')} sensitive /> : null}
+          {profile?.medical_notes ? <HealthDetailLine icon={<HeartPulse className="h-3.5 w-3.5" />} label="健康备注" value={profile.medical_notes} sensitive /> : null}
+          {profile?.dietary_restrictions?.length ? <HealthDetailLine icon={<ShieldCheck className="h-3.5 w-3.5" />} label="饮食限制" value={profile.dietary_restrictions.join('、')} /> : null}
+          {profile?.disliked_foods ? <HealthDetailLine icon={<CookingPot className="h-3.5 w-3.5" />} label="不喜欢的食物" value={profile.disliked_foods} /> : null}
+
+          {kitchenFacts.length ? <HealthFactSection icon={<CookingPot className="h-3.5 w-3.5" />} label="厨房与生活约束" items={kitchenFacts} /> : null}
+          {targetFacts.length || targets.professional_advice ? <div className="rounded-xl border border-background-alt bg-white p-3"><div className="flex items-center gap-1.5 text-xs font-semibold text-text-main"><Target className="h-3.5 w-3.5 text-primary" />营养目标与专业建议</div>{targetFacts.length ? <div className="mt-2"><FactChips items={targetFacts} /></div> : null}{targets.professional_advice ? <p className="mt-2 text-xs leading-5 text-text-muted">{targets.professional_advice}</p> : null}</div> : null}
+
+          <div className="rounded-xl border border-background-alt bg-white p-3">
+            <div className="flex items-center justify-between"><div className="flex items-center gap-1.5 text-xs font-semibold text-text-main"><Activity className="h-3.5 w-3.5 text-primary" />体征追踪</div><span className="text-[10px] text-text-muted">共 {data?.tracking_count || 0} 条</span></div>
+            {latest ? <><p className="mt-1 text-[10px] text-text-muted">最近记录：{latest.recorded_date}</p>{latestFacts.length ? <div className="mt-2"><FactChips items={latestFacts} /></div> : null}</> : <p className="mt-2 text-xs text-text-muted">尚无追踪记录</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FactChips({ items }: { items: string[] }) {
+  return <div className="flex flex-wrap gap-1.5">{items.map((item) => <span key={item} className="rounded-lg bg-background-alt px-2 py-1 text-[10px] font-medium text-text-muted">{item}</span>)}</div>;
+}
+
+function HealthDetailLine({ icon, label, value, sensitive = false }: { icon: ReactNode; label: string; value: string; sensitive?: boolean }) {
+  return <div className={cn('rounded-xl border bg-white p-3', sensitive ? 'border-rose-100' : 'border-background-alt')}><div className={cn('flex items-center gap-1.5 text-[11px] font-semibold', sensitive ? 'text-rose-700' : 'text-text-muted')}>{icon}{label}</div><p className="mt-1 text-xs leading-5 text-text-main break-words">{value}</p></div>;
+}
+
+function HealthFactSection({ icon, label, items }: { icon: ReactNode; label: string; items: string[] }) {
+  return <div className="rounded-xl border border-background-alt bg-white p-3"><div className="flex items-center gap-1.5 text-xs font-semibold text-text-main">{icon}{label}</div><div className="mt-2"><FactChips items={items} /></div></div>;
+}
+
+function EmptyHealthLine({ label }: { label: string }) {
+  return <div className="rounded-xl border border-dashed border-background-alt bg-white/70 px-3 py-2 text-xs text-text-muted">{label}</div>;
 }

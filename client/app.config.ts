@@ -1,16 +1,19 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
 
-const appName = process.env.EXPO_PUBLIC_APP_NAME || 'DietDigiDose';
+const appName = process.env.EXPO_PUBLIC_APP_NAME || '食光烙记';
 const appSlug = process.env.EXPO_PUBLIC_APP_SLUG || 'dietdigidose';
 const androidPackage = process.env.EXPO_PUBLIC_ANDROID_PACKAGE || 'com.dietdigidose.app';
 const allowInsecureHttp = process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP === '1';
+const appVersion = process.env.EXPO_PUBLIC_APP_VERSION || '1.0.3';
+// Expo 会在打包时解析 app.config；未显式指定时，这里就是本次构建的时间。
+const buildTime = process.env.EXPO_PUBLIC_BUILD_TIME || new Date().toISOString();
 
 export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
     "name": appName,
     "slug": appSlug,
-    "version": "1.0.3",
+    "version": appVersion,
     "orientation": "portrait",
     "icon": "./assets/images/adaptive-icon-safe.png",
     "scheme": "dietdigidose",
@@ -18,6 +21,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     "newArchEnabled": true,
     "extra": {
       ...config.extra,
+      "appVersion": appVersion,
+      "buildTime": buildTime,
       "eas": {
         ...config.extra?.eas,
         "projectId": "c89b45c8-5a27-4f6f-af05-4b656f534994"

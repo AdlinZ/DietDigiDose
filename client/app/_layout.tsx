@@ -17,8 +17,11 @@ export default function RootLayout() {
             <Stack.Screen name="recipe-detail" />
             <Stack.Screen name="recipe-submit" />
             <Stack.Screen name="favorites" />
+            <Stack.Screen name="following" />
+            <Stack.Screen name="user-profile" />
             <Stack.Screen name="diet-record" />
             <Stack.Screen name="health-data" />
+            <Stack.Screen name="health-profile" />
             <Stack.Screen name="cooking-mode" />
             <Stack.Screen name="post-detail" />
             <Stack.Screen name="post-create" />
@@ -34,6 +37,7 @@ export default function RootLayout() {
             <Stack.Screen name="notifications" />
             <Stack.Screen name="shopping-list" />
             <Stack.Screen name="legal" />
+            <Stack.Screen name="about" />
           </Stack>
       </Provider>
     </>

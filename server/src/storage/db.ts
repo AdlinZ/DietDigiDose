@@ -197,6 +197,8 @@ export function initDatabase() {
       resting_heart_rate INTEGER,
       blood_pressure_systolic INTEGER,
       blood_pressure_diastolic INTEGER,
+      blood_glucose_mmol REAL,
+      cycle_status TEXT,
       sleep_hours REAL,
       recorded_date TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -406,6 +408,15 @@ export function initDatabase() {
       health_goal TEXT DEFAULT 'healthy',
       activity_level TEXT DEFAULT 'moderate',
       dietary_preference TEXT DEFAULT '无特别偏好',
+      allergies_json TEXT DEFAULT '[]',
+      medications TEXT DEFAULT '',
+      medical_conditions_json TEXT DEFAULT '[]',
+      medical_notes TEXT DEFAULT '',
+      dietary_restrictions_json TEXT DEFAULT '[]',
+      disliked_foods TEXT DEFAULT '',
+      kitchen_constraints_json TEXT DEFAULT '{}',
+      nutrition_targets_json TEXT DEFAULT '{}',
+      tracking_enabled INTEGER DEFAULT 0,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -528,7 +539,7 @@ export function initDatabase() {
     WHERE username = 'diet_helper'
       AND content LIKE '夏天的低卡宵夜：海苔豆腐汤%'
       AND image_url <> ?
-  `).run('http://localhost:9091/media/community/tofu-seaweed-soup.png', 'http://localhost:9091/media/community/tofu-seaweed-soup.png');
+  `).run('http://localhost:9090/media/community/tofu-seaweed-soup.png', 'http://localhost:9090/media/community/tofu-seaweed-soup.png');
 
   seedDefaultData();
   seedExpandedCommunityPosts();
@@ -576,7 +587,7 @@ function seedExpandedCommunityPosts() {
       [u2, 'chef_david', '主厨David', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80', '榜单', '空气炸锅高分食材 TOP 5：鸡翅、豆腐、南瓜、虾仁和口蘑的时间温度一次整理。', 'https://images.unsplash.com/photo-1544025162-d76694265947?w=800&auto=format&fit=crop&q=80', 921, 127, 4020, '-12 hours'],
       [u3, 'family_kitchen', '元气烘焙日记', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80', '活动', '#冰箱清库存挑战# 用西兰花、鸡蛋和玉米做了一盘彩色焗饭，评论区晒出你的版本！', 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800&auto=format&fit=crop&q=80', 354, 63, 1490, '-14 hours'],
       [u5, 'fitness_jack', '健身达人Jack', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80', '问答', '增肌期蛋白质怎么分配到三餐？不必每餐都吃鸡胸，给你一套更好坚持的组合。', 'https://images.unsplash.com/photo-1532550907401-a500c9a57435?w=800&auto=format&fit=crop&q=80', 603, 88, 2570, '-16 hours'],
-      [u6, 'diet_helper', '减脂小助手', 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80', '寻味', '夏天的低卡宵夜：海苔豆腐汤加一小份毛豆，温暖、低脂也有咀嚼感。', 'http://localhost:9091/media/community/tofu-seaweed-soup.png', 148, 19, 690, '-18 hours'],
+      [u6, 'diet_helper', '减脂小助手', 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80', '寻味', '夏天的低卡宵夜：海苔豆腐汤加一小份毛豆，温暖、低脂也有咀嚼感。', 'http://localhost:9090/media/community/tofu-seaweed-soup.png', 148, 19, 690, '-18 hours'],
       [userId, 'demo', '绿色食物分享家', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80', '榜单', '家庭常备冷冻蔬菜红榜：西兰花、菠菜、玉米粒怎么选，营养和便利性兼顾。', 'https://images.unsplash.com/photo-1540420773420-3366772f4999?w=800&auto=format&fit=crop&q=80', 489, 74, 2010, '-20 hours'],
       [u2, 'chef_david', '主厨David', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80', '活动', '#10分钟晚餐接力# 今天做了黑椒口蘑鸡腿肉，谁来接下一道快手菜？', 'https://images.unsplash.com/photo-1604503468506-a8da13d82791?w=800&auto=format&fit=crop&q=80', 231, 33, 990, '-22 hours'],
       [u4, 'nutritionist_lisa', '注册营养师Lisa', 'https://images.unsplash.com/photo-1500648767791-00dcc9944761-15a19d654956?w=200&auto=format&fit=crop&q=80', '问答', '减脂遇到平台期，先别急着继续少吃：睡眠、步数和蛋白质都可能是答案。', 'https://images.unsplash.com/photo-1490645935967-10de6ba17061?w=800&auto=format&fit=crop&q=80', 882, 143, 3850, '-1 day'],

@@ -33,6 +33,8 @@ export type HealthLog = {
   resting_heart_rate?: number | null;
   blood_pressure_systolic?: number | null;
   blood_pressure_diastolic?: number | null;
+  blood_glucose_mmol?: number | null;
+  cycle_status?: string | null;
   sleep_hours?: number | null;
   recorded_date: string;
 };

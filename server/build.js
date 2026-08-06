@@ -13,6 +13,9 @@ try {
     format: 'esm',
     outdir: 'dist',
     external: externalList,
+    define: {
+      'process.env.SERVER_BUILD_TIME': JSON.stringify(process.env.SERVER_BUILD_TIME || new Date().toISOString()),
+    },
   });
   console.log('⚡ Build complete!');
 } catch (e) {

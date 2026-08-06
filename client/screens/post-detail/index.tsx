@@ -46,6 +46,7 @@ interface Post {
   question_status?: "open" | "resolved" | null;
   accepted_comment_id?: number | null;
   author_is_expert?: boolean;
+  author_is_followed?: boolean;
   created_at: string;
 }
 
@@ -108,6 +109,7 @@ export default function PostDetailScreen() {
   const [post, setPost] = useState<Post | null>(null);
   const [loading, setLoading] = useState(true);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [followPending, setFollowPending] = useState(false);
   const [isCollected, setIsCollected] = useState(false);
 
   // 评论列表
@@ -136,6 +138,7 @@ export default function PostDetailScreen() {
         communityApi.comments<CommentItem>(Number(params.id), authFetch),
       ]);
       setPost(data);
+      setIsFollowing(Boolean(data.author_is_followed));
       setComments(commentsData);
     } catch (e) {
       console.error(e);
@@ -173,6 +176,24 @@ export default function PostDetailScreen() {
     } catch (e) {
       fetchPostDetail();
     }
+  };
+
+  const handleFollow = async () => {
+    if (!post || followPending) return;
+    if (!isAuthenticated) {
+      Alert.alert("登录后关注", "登录后即可关注这位创作者。", [{ text: "取消", style: "cancel" }, { text: "去登录", onPress: () => router.push("/login") }]);
+      return;
+    }
+    if (post.user_id === user?.id) return;
+    const previous = isFollowing;
+    setFollowPending(true);
+    setIsFollowing(!previous);
+    try {
+      const result = await communityApi.toggleFollow(authFetch, post.user_id);
+      setIsFollowing(result.is_following);
+    }
+    catch { setIsFollowing(previous); }
+    finally { setFollowPending(false); }
   };
 
   const handleJoinEvent = async () => {
@@ -387,23 +408,26 @@ export default function PostDetailScreen() {
 
           {/* 作者信息简况 */}
           <View className="flex-row items-center gap-2.5 flex-1 mx-3">
-            <Image
-              source={getAvatarSource(post.avatar_url, post.user_id ?? post.username)}
-              className="w-8 h-8 rounded-full border border-[#2D6A4F]/20"
-            />
-            <View className="flex-1">
+            <TouchableOpacity onPress={() => router.push("/user-profile", { userId: post.user_id })} className="flex-1 flex-row items-center gap-2.5">
+              <Image
+                source={getAvatarSource(post.avatar_url, post.user_id ?? post.username)}
+                className="w-8 h-8 rounded-full border border-[#2D6A4F]/20"
+              />
+              <View className="flex-1">
               <Text className="text-xs font-bold text-[#222222]" numberOfLines={1}>
                 {post.username}
               </Text>
               <Text className="text-[10px] text-[#8B7D6B]">
                 {post.created_at || "刚刚"}
               </Text>
-            </View>
+              </View>
+            </TouchableOpacity>
 
             {/* 关注按钮 */}
             <TouchableOpacity
-              onPress={() => setIsFollowing(!isFollowing)}
-              className={`px-3 py-1 rounded-full border ${
+              disabled={followPending}
+              onPress={() => void handleFollow()}
+              className={`px-3 py-1 rounded-full border ${followPending ? "opacity-60" : ""} ${
                 isFollowing
                   ? "bg-[#F5EFE6] border-[#EBE3D5]"
                   : "bg-[#2D6A4F] border-[#2D6A4F]"
@@ -414,7 +438,7 @@ export default function PostDetailScreen() {
                   isFollowing ? "text-[#8B7D6B]" : "text-white"
                 }`}
               >
-                {isFollowing ? "已关注" : "+ 关注"}
+                  {followPending ? "处理中" : isFollowing ? "已关注" : "+ 关注"}
               </Text>
             </TouchableOpacity>
           </View>

@@ -18,6 +18,7 @@ import { errorHandler, notFoundHandler, sendError } from "./utils/http.js";
 import { requestContext } from "./middleware/requestContext.js";
 import { errorEnvelope } from "./middleware/errorEnvelope.js";
 import { requestLogger } from "./middleware/requestLogger.js";
+import { SERVER_BUILD_TIME, SERVER_VERSION } from "./version.js";
 
 const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -51,6 +52,12 @@ export function createApp() {
   app.use("/media", express.static(staticAssetsDir, { maxAge: "7d" }));
 
   app.get("/api/v1/health", (_req, res) => res.status(200).json({ status: "ok" }));
+  app.get("/api/v1/version", (req, res) => res.status(200).json({
+    serverVersion: SERVER_VERSION,
+    serverBuildTime: SERVER_BUILD_TIME,
+    clientVersion: req.get("x-client-version") || null,
+    clientBuildTime: req.get("x-client-build-time") || null,
+  }));
   app.use("/api/v1/auth", authRoutes);
   app.use("/api/v1/inventory", inventoryRoutes);
   app.use("/api/v1/diet-records", dietRecordsRoutes);

@@ -73,6 +73,20 @@ describe("API security baseline", () => {
     assert.ok(response.headers.get("x-request-id"));
   });
 
+  test("version endpoint identifies the server and the calling client build", async () => {
+    const { response, body } = await api("/api/v1/version", {
+      headers: {
+        "x-client-version": "1.0.3",
+        "x-client-build-time": "2026-08-05T08:00:00.000Z",
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.equal((body as JsonObject).serverVersion, "1.0.3");
+    assert.ok((body as JsonObject).serverBuildTime);
+    assert.equal((body as JsonObject).clientVersion, "1.0.3");
+    assert.equal((body as JsonObject).clientBuildTime, "2026-08-05T08:00:00.000Z");
+  });
+
   test("registration rejects weak passwords and unknown fields", async () => {
     const weak = await api("/api/v1/auth/register", {
       method: "POST",
@@ -339,9 +353,30 @@ describe("user data isolation", () => {
     const profile = await api("/api/v1/health-data/profile", {
       method: "PUT",
       token: first.token,
-      body: JSON.stringify({ age: 28, height: 172, weight: 65, health_goal: "healthy" }),
+      body: JSON.stringify({
+        age: 28,
+        height: 172,
+        weight: 65,
+        health_goal: "healthy",
+        allergies: [{ name: "坚果", type: "allergy", severity: "severe" }],
+        medications: "维生素 D，早餐后",
+        medical_conditions: ["高血压"],
+        dietary_restrictions: ["低盐"],
+        kitchen_constraints: { meal_time_minutes: 20, cooking_level: "beginner", servings: 2 },
+        nutrition_targets: { salt_g: 5, professional_advice: "遵医嘱控制钠摄入" },
+        tracking_enabled: true,
+      }),
     });
     assert.equal(profile.response.status, 200);
+    assert.deepEqual((profile.body as JsonObject).allergies, [{ name: "坚果", type: "allergy", severity: "severe" }]);
+    assert.deepEqual((profile.body as JsonObject).medical_conditions, ["高血压"]);
+    assert.equal((profile.body as JsonObject).tracking_enabled, true);
+    assert.equal((profile.body as JsonObject).allergies_json, undefined);
+    const { buildUserContext, generateSystemPrompt } = await import("../src/services/contextBuilder.js");
+    const aiPrompt = generateSystemPrompt(buildUserContext(first.user.id));
+    assert.match(aiPrompt, /坚果/);
+    assert.match(aiPrompt, /高血压/);
+    assert.match(aiPrompt, /不得建议调整服药频率/);
 
     const log = await api("/api/v1/health-data/log", {
       method: "POST",
@@ -353,18 +388,36 @@ describe("user data isolation", () => {
         resting_heart_rate: 68,
         blood_pressure_systolic: 118,
         blood_pressure_diastolic: 76,
+        blood_glucose_mmol: 5.4,
+        cycle_status: "经期",
         sleep_hours: 7.5,
         recorded_date: "2026-08-03",
       }),
     });
     assert.equal(log.response.status, 201);
     assert.equal((log.body as JsonObject).resting_heart_rate, 68);
+    assert.equal((log.body as JsonObject).blood_glucose_mmol, 5.4);
+    assert.equal((log.body as JsonObject).cycle_status, "经期");
     assert.equal((log.body as JsonObject).sleep_hours, 7.5);
 
     const secondProfile = await api("/api/v1/health-data/profile", { token: second.token });
     assert.equal(secondProfile.body, null);
     const secondLogs = await api("/api/v1/health-data", { token: second.token });
     assert.deepEqual(secondLogs.body, []);
+
+    const forbiddenDelete = await api(`/api/v1/health-data/log/${(log.body as JsonObject).id}`, {
+      method: "DELETE",
+      token: second.token,
+    });
+    assert.equal(forbiddenDelete.response.status, 404);
+
+    const deleted = await api(`/api/v1/health-data/log/${(log.body as JsonObject).id}`, {
+      method: "DELETE",
+      token: first.token,
+    });
+    assert.equal(deleted.response.status, 204);
+    const firstLogsAfterDelete = await api("/api/v1/health-data", { token: first.token });
+    assert.deepEqual(firstLogsAfterDelete.body, []);
   });
 
   test("ordinary users cannot access admin routes", async () => {
@@ -380,6 +433,81 @@ describe("user data isolation", () => {
 });
 
 describe("core business authorization", () => {
+  test("admins can inspect a user's saved health profile and the access is audited", async () => {
+    const account = await register("admin-health-profile@example.com");
+    const saved = await api("/api/v1/health-data/profile", {
+      method: "PUT",
+      token: account.token,
+      body: JSON.stringify({
+        allergies: [{ name: "海鲜", type: "allergy", severity: "severe" }],
+        medications: "钙片，睡前",
+        medical_conditions: ["高血压"],
+        dietary_restrictions: ["低盐"],
+      }),
+    });
+    assert.equal(saved.response.status, 200);
+
+    db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+    const adminLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+    });
+    const adminToken = (adminLogin.body as JsonObject).token;
+    const detail = await api(`/api/v1/admin/users/${account.user.id}/health-profile`, { token: adminToken });
+    assert.equal(detail.response.status, 200);
+    assert.deepEqual((detail.body as JsonObject).profile.allergies, [{ name: "海鲜", type: "allergy", severity: "severe" }]);
+    assert.deepEqual((detail.body as JsonObject).profile.medical_conditions, ["高血压"]);
+    assert.equal((detail.body as JsonObject).tracking_count, 0);
+    const auditLog = db.prepare("SELECT action, resource_id FROM admin_audit_logs WHERE action = ? ORDER BY id DESC LIMIT 1")
+      .get("user.health_profile.view") as { action: string; resource_id: string };
+    assert.equal(auditLog.resource_id, String(account.user.id));
+  });
+
+  test("a demoted admin can delete their account without losing level adjustment history", async () => {
+    const formerAdmin = await register("former-admin@example.com");
+    db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+    const adminLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+    });
+    const adminToken = (adminLogin.body as JsonObject).token;
+
+    const promoted = await api(`/api/v1/admin/users/${formerAdmin.user.id}/role`, {
+      method: "PUT",
+      token: adminToken,
+      body: JSON.stringify({ role: "admin" }),
+    });
+    assert.equal(promoted.response.status, 200);
+
+    const adjustment = await api(`/api/v1/admin/users/${first.user.id}/level-adjustments`, {
+      method: "POST",
+      token: formerAdmin.token,
+      body: JSON.stringify({ xp_delta: 25, reason: "回归测试奖励" }),
+    });
+    assert.equal(adjustment.response.status, 201);
+
+    const demoted = await api(`/api/v1/admin/users/${formerAdmin.user.id}/role`, {
+      method: "PUT",
+      token: adminToken,
+      body: JSON.stringify({ role: "user" }),
+    });
+    assert.equal(demoted.response.status, 200);
+
+    const deleted = await api("/api/v1/auth/account", {
+      method: "DELETE",
+      token: formerAdmin.token,
+      body: JSON.stringify({ password: "Password1234", confirmation: "DELETE" }),
+    });
+    assert.equal(deleted.response.status, 200);
+    const retained = db.prepare(`
+      SELECT admin_user_id, xp_delta
+      FROM user_level_adjustments
+      WHERE user_id = ? AND reason = ?
+    `).get(first.user.id, "回归测试奖励") as { admin_user_id: number | null; xp_delta: number };
+    assert.equal(retained.admin_user_id, null);
+    assert.equal(retained.xp_delta, 25);
+  });
+
   test("kitchenware writes are owner-scoped", async () => {
     const created = await api("/api/v1/kitchenware", {
       method: "POST",

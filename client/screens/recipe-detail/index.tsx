@@ -13,9 +13,10 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { inventoryApi, recipesApi, type InventoryItem } from "@/services/api";
+import { healthApi, inventoryApi, recipesApi, type InventoryItem } from "@/services/api";
 import { ingredientNamesMatch } from "@/utils/ingredients";
 import { getInventoryStatus } from "@/utils/inventory";
+import { ALLERGY_LABELS, findRecipeAllergyRisks, hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/healthProfile";
 
 type IconName = ComponentProps<typeof FontAwesome6>["name"];
 
@@ -65,6 +66,7 @@ export default function RecipeDetailScreen() {
   const [favoriteNotice, setFavoriteNotice] = useState<string | null>(null);
   const favoriteNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [healthProfile, setHealthProfile] = useState<HealthProfile | null>(null);
 
   const showFavoriteNotice = useCallback((message: string) => {
     if (favoriteNoticeTimer.current) clearTimeout(favoriteNoticeTimer.current);
@@ -112,11 +114,16 @@ export default function RecipeDetailScreen() {
   useEffect(() => {
     if (!isAuthenticated) {
       setInventory([]);
+      setHealthProfile(null);
       return;
     }
-    void inventoryApi.list(authFetch)
-      .then(setInventory)
-      .catch(() => setInventory([]));
+    void Promise.all([
+      inventoryApi.list(authFetch).catch(() => []),
+      healthApi.profile<HealthProfile>(authFetch).catch(() => null),
+    ]).then(([items, profile]) => {
+      setInventory(items);
+      setHealthProfile(profile);
+    });
   }, [authFetch, isAuthenticated]);
 
   if (loading) {
@@ -177,6 +184,16 @@ export default function RecipeDetailScreen() {
   const matchedIngredients = ingredientAvailability.filter((item) => item.matchingItem);
   const missingIngredients = ingredientAvailability.filter((item) => !item.matchingItem);
   const expiringIngredients = ingredientAvailability.filter((item) => item.isExpiring);
+  const allergyRisks = findRecipeAllergyRisks((recipe.ingredients || []).map((item) => item.name), healthProfile?.allergies);
+  const safetyNotes = safetySummary(healthProfile);
+  const hasAllergyRisk = allergyRisks.length > 0;
+  const hasSevereRisk = allergyRisks.some((item) => item.severity === "severe");
+  const requestSafeReplacement = () => router.push({
+    pathname: "/ai-assistant",
+    params: {
+      prompt: `我想做【${recipe.title}】，但我的安全档案中有${allergyRisks.map((item) => `${item.name}（${ALLERGY_LABELS[item.severity]}）`).join("、") || "饮食或健康限制"}。请先核对全部限制，再提供不含风险成分、避免交叉污染的食材替换和完整做法；不要给出用药调整建议。`,
+    },
+  });
   const togglePrepared = (key: string) => {
     setPreparedIngredients((current) => {
       const next = new Set(current);
@@ -309,6 +326,30 @@ export default function RecipeDetailScreen() {
             </View>
           </View>
 
+          {hasSafetyProfile(healthProfile) ? (
+            <View className={`mx-4 mt-4 rounded-[24px] border p-5 md:mx-8 ${hasAllergyRisk ? "border-[#E7A594] bg-[#FFF0EC]" : "border-[#E8D49B] bg-[#FFF9E8]"}`}>
+              <View className="flex-row items-start">
+                <View className={`h-10 w-10 items-center justify-center rounded-2xl ${hasAllergyRisk ? "bg-[#F8D4CB]" : "bg-[#F5E8B9]"}`}>
+                  <FontAwesome6 name={hasAllergyRisk ? "triangle-exclamation" : "shield-halved"} size={16} color={hasAllergyRisk ? "#B42318" : "#8A6818"} />
+                </View>
+                <View className="ml-3 flex-1">
+                  <Text className={`text-base font-black ${hasAllergyRisk ? "text-[#8E2F20]" : "text-[#735817]"}`}>
+                    {hasSevereRisk ? "已拦截：包含重度风险食材" : hasAllergyRisk ? "检测到已标记的饮食风险" : "安全档案已应用"}
+                  </Text>
+                  <Text className={`mt-1 text-xs leading-5 ${hasAllergyRisk ? "text-[#984838]" : "text-[#806C37]"}`}>
+                    {hasAllergyRisk
+                      ? `菜谱食材可能涉及：${allergyRisks.map((item) => `${item.name}（${ALLERGY_LABELS[item.severity]}）`).join("、")}。配方与交叉污染信息仍需以包装和餐厅说明为准。`
+                      : safetyNotes.slice(0, 2).join("；")}
+                  </Text>
+                </View>
+              </View>
+              <View className="mt-4 flex-row gap-2">
+                <TouchableOpacity onPress={() => router.push("/health-profile")} className="flex-1 items-center rounded-2xl border border-[#CBAE78] bg-white/70 py-3"><Text className="text-xs font-black text-[#6E5623]">核对安全档案</Text></TouchableOpacity>
+                <TouchableOpacity onPress={requestSafeReplacement} className={`flex-1 items-center rounded-2xl py-3 ${hasAllergyRisk ? "bg-[#A63D2B]" : "bg-[#8A6C22]"}`}><Text className="text-xs font-black text-white">获取安全替换</Text></TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+
           <View className="mx-4 mt-4 rounded-[24px] border border-[#E8DFD2] bg-[#FFFDF9] p-5 md:mx-8 md:p-6">
             <SectionTitle icon="chart-pie" eyebrow="每份参考" title="营养成分" />
             <View testID="nutrition-grid" className="mt-4 gap-2.5">
@@ -432,7 +473,11 @@ export default function RecipeDetailScreen() {
             <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">分步指导 · 计时提醒 · AI 助手</Text>
           </View>
           <TouchableOpacity
-            onPress={() =>
+            onPress={() => {
+              if (hasAllergyRisk) {
+                requestSafeReplacement();
+                return;
+              }
               router.push("/cooking-mode", {
                 recipeId: recipe.id,
                 title: recipe.title,
@@ -443,12 +488,12 @@ export default function RecipeDetailScreen() {
                 protein: recipe.protein,
                 carbs: recipe.carbs,
                 fat: recipe.fat,
-              })
-            }
-            className="flex-row items-center justify-center rounded-2xl bg-[#2D6A4F] px-5 py-3.5 shadow-sm active:opacity-85 md:px-8"
+              });
+            }}
+            className={`flex-row items-center justify-center rounded-2xl px-5 py-3.5 shadow-sm active:opacity-85 md:px-8 ${hasAllergyRisk ? "bg-[#A63D2B]" : "bg-[#2D6A4F]"}`}
           >
-            <FontAwesome6 name="kitchen-set" size={17} color="white" />
-            <Text className="ml-2 text-sm font-bold text-white">开始烹饪</Text>
+            <FontAwesome6 name={hasAllergyRisk ? "shield-halved" : "kitchen-set"} size={17} color="white" />
+            <Text className="ml-2 text-sm font-bold text-white">{hasAllergyRisk ? "先获取安全替换" : "开始烹饪"}</Text>
           </TouchableOpacity>
         </View>
       </View>

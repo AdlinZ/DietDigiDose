@@ -3,9 +3,10 @@ import bcrypt from "bcryptjs";
 import { db } from "../../storage/db.js";
 import type { AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
-import { adminExpertSchema, adminRoleSchema, adminUserCredentialsSchema, adminUserStatusSchema } from "../../validation/schemas.js";
+import { adminExpertSchema, adminLevelAdjustmentSchema, adminRoleSchema, adminUserCredentialsSchema, adminUserStatusSchema } from "../../validation/schemas.js";
 import { positiveIntegerParam } from "../../middleware/validateParam.js";
 import { auditAdminAction as audit } from "./shared.js";
+import { getUserLevel } from "../../services/userLevel.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -13,14 +14,103 @@ router.param("id", positiveIntegerParam);
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phonePattern = /^1[3-9]\d{9}$/;
 
+function parseJson(value: unknown, fallback: unknown) {
+  if (typeof value !== "string") return fallback;
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+
 // 2. 获取用户列表
 router.get("/users", (req, res) => {
   try {
-    const users = db.prepare('SELECT id, username, email, phone, nickname, avatar_url, role, is_verified_expert, COALESCE(is_disabled, 0) as is_disabled, created_at FROM users ORDER BY created_at DESC').all();
-    res.json(users);
+    const users = db.prepare(`
+      SELECT u.id, u.username, u.email, u.phone, u.nickname, u.avatar_url, u.role,
+        u.is_verified_expert, COALESCE(u.is_disabled, 0) AS is_disabled, u.created_at,
+        CASE WHEN hp.user_id IS NULL THEN 0 ELSE 1 END AS has_health_profile
+      FROM users u
+      LEFT JOIN user_health_profiles hp ON hp.user_id = u.id
+      ORDER BY u.created_at DESC
+    `).all() as Array<{ id: number }>;
+    res.json(users.map((user) => ({ ...user, level: getUserLevel(user.id) })));
   } catch (error) {
     res.status(500).json({ error: "获取用户列表失败" });
   }
+});
+
+// 管理员只读查看用户主动维护的健康与饮食档案。访问动作写入审计日志，日志不记录健康内容。
+router.get("/users/:id/health-profile", (req: AuthRequest, res) => {
+  try {
+    const userId = Number(req.params.id);
+    const target = db.prepare("SELECT id, username FROM users WHERE id = ?").get(userId) as
+      | { id: number; username: string }
+      | undefined;
+    if (!target) return res.status(404).json({ error: "未找到该用户" });
+
+    const profile = db.prepare(`
+      SELECT gender, age, height, weight, target_weight, health_goal, activity_level,
+        dietary_preference, allergies_json, medications, medical_conditions_json,
+        medical_notes, dietary_restrictions_json, disliked_foods, kitchen_constraints_json,
+        nutrition_targets_json, tracking_enabled, updated_at
+      FROM user_health_profiles
+      WHERE user_id = ?
+    `).get(userId) as any;
+    const latestTracking = db.prepare(`
+      SELECT id, recorded_date, weight, body_fat, water_ml, height_cm, waist_cm, hip_cm,
+        resting_heart_rate, blood_pressure_systolic, blood_pressure_diastolic,
+        blood_glucose_mmol, cycle_status, sleep_hours
+      FROM health_logs
+      WHERE user_id = ?
+      ORDER BY recorded_date DESC, id DESC
+      LIMIT 1
+    `).get(userId) as any;
+    const trackingCount = (db.prepare("SELECT COUNT(*) AS count FROM health_logs WHERE user_id = ?").get(userId) as { count: number }).count;
+
+    audit(req, {
+      action: "user.health_profile.view",
+      resourceType: "user",
+      resourceId: userId,
+      summary: `查看用户 ${target.username} 的健康与饮食档案`,
+      details: { profileExists: Boolean(profile), trackingCount },
+    });
+
+    return res.json({
+      user_id: userId,
+      profile: profile ? {
+        gender: profile.gender,
+        age: profile.age,
+        height: profile.height,
+        weight: profile.weight,
+        target_weight: profile.target_weight,
+        health_goal: profile.health_goal,
+        activity_level: profile.activity_level,
+        dietary_preference: profile.dietary_preference,
+        allergies: parseJson(profile.allergies_json, []),
+        medications: profile.medications || "",
+        medical_conditions: parseJson(profile.medical_conditions_json, []),
+        medical_notes: profile.medical_notes || "",
+        dietary_restrictions: parseJson(profile.dietary_restrictions_json, []),
+        disliked_foods: profile.disliked_foods || "",
+        kitchen_constraints: parseJson(profile.kitchen_constraints_json, {}),
+        nutrition_targets: parseJson(profile.nutrition_targets_json, {}),
+        tracking_enabled: Boolean(profile.tracking_enabled),
+        updated_at: profile.updated_at,
+      } : null,
+      latest_tracking: latestTracking || null,
+      tracking_count: trackingCount,
+    });
+  } catch (error) {
+    console.error("[Admin User Health Profile Error]", error);
+    return res.status(500).json({ error: "获取用户健康与饮食档案失败" });
+  }
+});
+
+router.post("/users/:id/level-adjustments", validateBody(adminLevelAdjustmentSchema), (req: AuthRequest, res) => {
+  const userId = Number(req.params.id);
+  const target = db.prepare("SELECT username FROM users WHERE id = ?").get(userId) as { username: string } | undefined;
+  if (!target || !req.userId) return res.status(404).json({ error: "未找到该用户" });
+  const { xp_delta, reason } = req.body as { xp_delta: number; reason: string };
+  db.prepare("INSERT INTO user_level_adjustments (user_id, admin_user_id, xp_delta, reason) VALUES (?, ?, ?, ?)").run(userId, req.userId, xp_delta, reason);
+  audit(req, { action: "user.level.adjust", resourceType: "user", resourceId: userId, summary: `调整用户 ${target.username} 经验 ${xp_delta > 0 ? "+" : ""}${xp_delta}`, details: { xpDelta: xp_delta, reason } });
+  res.status(201).json({ success: true, level: getUserLevel(userId) });
 });
 
 // 修改普通用户的登录账号，或由管理员重置其密码。密码明文永不返回或写入审计日志。

@@ -330,6 +330,150 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 16,
+    name: "custom_food_review_status",
+    up(database) {
+      addColumn(database, "user_custom_foods", "status", "TEXT NOT NULL DEFAULT 'pending'");
+      database.exec(`
+        UPDATE user_custom_foods SET status = 'pending' WHERE status IS NULL OR status = '';
+        CREATE INDEX IF NOT EXISTS idx_user_custom_foods_status_created
+          ON user_custom_foods(status, created_at DESC);
+      `);
+    },
+  },
+  {
+    version: 17,
+    name: "privacy_safe_public_names",
+    up(database) {
+      database.exec(`
+        UPDATE users
+        SET nickname = '食友' || id
+        WHERE role != 'admin' AND (nickname IS NULL OR TRIM(nickname) = '');
+
+        UPDATE community_posts
+        SET nickname = COALESCE((SELECT nickname FROM users WHERE users.id = community_posts.user_id), '食友' || user_id),
+            username = COALESCE((SELECT nickname FROM users WHERE users.id = community_posts.user_id), '食友' || user_id);
+
+        UPDATE community_comments
+        SET nickname = COALESCE((SELECT nickname FROM users WHERE users.id = community_comments.user_id), '食友' || user_id),
+            username = COALESCE((SELECT nickname FROM users WHERE users.id = community_comments.user_id), '食友' || user_id);
+      `);
+    },
+  },
+  {
+    version: 18,
+    name: "idempotent_cooking_completions",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS cooking_completions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          recipe_id INTEGER,
+          diet_record_id INTEGER NOT NULL,
+          consumed_inventory_ids_json TEXT NOT NULL DEFAULT '[]',
+          result_json TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, idempotency_key),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (diet_record_id) REFERENCES diet_records(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_cooking_completions_user_created
+          ON cooking_completions(user_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    version: 19,
+    name: "idempotent_shopping_inventory_imports",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS shopping_inventory_imports (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, idempotency_key),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+      `);
+    },
+  },
+  {
+    version: 20,
+    name: "shared_rate_limit_buckets",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+          bucket_key TEXT PRIMARY KEY,
+          request_count INTEGER NOT NULL DEFAULT 0,
+          window_started_at INTEGER NOT NULL,
+          blocked_until INTEGER NOT NULL DEFAULT 0,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_updated
+          ON rate_limit_buckets(updated_at);
+      `);
+    },
+  },
+  {
+    version: 21,
+    name: "privacy_safe_funnel_events",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS funnel_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_name TEXT NOT NULL,
+          actor_hash TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_funnel_events_name_created
+          ON funnel_events(event_name, created_at DESC);
+      `);
+    },
+  },
+  {
+    version: 22,
+    name: "username_is_public_identity",
+    up(database) {
+      const users = database.prepare(
+        "SELECT id, username, nickname, role FROM users ORDER BY id"
+      ).all() as Array<{ id: number; username: string; nickname: string | null; role: string }>;
+      const regularUsers = users.filter((user) => user.role !== "admin");
+      const reservedNames = new Set(
+        users.filter((user) => user.role === "admin").map((user) => user.username.toLocaleLowerCase())
+      );
+
+      const parkUsername = database.prepare("UPDATE users SET username = ? WHERE id = ?");
+      for (const user of regularUsers) parkUsername.run(`__user_${user.id}__`, user.id);
+
+      const updateUser = database.prepare("UPDATE users SET username = ?, nickname = ? WHERE id = ?");
+      for (const user of regularUsers) {
+        const preferred = String(user.nickname || "").trim() || `食友${user.id}`;
+        let username = preferred.slice(0, 30);
+        let suffixNumber = 0;
+        while (reservedNames.has(username.toLocaleLowerCase())) {
+          suffixNumber += 1;
+          const suffix = `-${user.id}${suffixNumber > 1 ? `-${suffixNumber}` : ""}`;
+          username = `${preferred.slice(0, Math.max(1, 30 - suffix.length))}${suffix}`;
+        }
+        reservedNames.add(username.toLocaleLowerCase());
+        // nickname 仅保留旧 username 作为种子数据兼容键；业务接口不再读写或返回它。
+        updateUser.run(username, user.username, user.id);
+      }
+
+      database.exec(`
+        UPDATE community_posts
+        SET username = COALESCE((SELECT username FROM users WHERE users.id = community_posts.user_id), '食友' || user_id),
+            nickname = NULL;
+        UPDATE community_comments
+        SET username = COALESCE((SELECT username FROM users WHERE users.id = community_comments.user_id), '食友' || user_id),
+            nickname = NULL;
+      `);
+    },
+  },
 ];
 
 export function runMigrations(database: Database.Database) {

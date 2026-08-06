@@ -11,8 +11,14 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式必须为 Y
 const optionalImage = z.string().trim().max(4_000_000, "图片过大").nullable().optional();
 const nutrition = z.number().finite().min(0).max(100_000).nullable().optional();
 
+export const mediaImageUploadSchema = z.object({
+  data_url: z.string().max(5_600_000, "图片过大"),
+  scope: z.literal("community"),
+}).strict();
+
 export const registerSchema = z.object({
   identifier: trimmedString(1, 254, "邮箱或手机号"),
+  username: trimmedString(2, 30, "用户名"),
   password: z.string()
     .min(6, "密码长度不能少于 6 位")
     .max(128, "密码不能超过 128 位")
@@ -22,9 +28,8 @@ export const registerSchema = z.object({
 
 export const loginSchema = z.object({
   identifier: z.string().trim().max(254).optional(),
-  username: z.string().trim().max(254).optional(),
   password: z.string().min(1).max(128),
-}).strict().refine((value) => value.identifier || value.username, {
+}).strict().refine((value) => value.identifier, {
   message: "请输入登录账号",
   path: ["identifier"],
 });
@@ -44,6 +49,7 @@ export const deleteAccountSchema = z.object({
 }).strict();
 
 export const profileSchema = z.object({
+  username: trimmedString(2, 30, "用户名").optional(),
   avatar_url: z.string().trim().max(4_000_000, "头像图片过大").nullable().optional(),
   bio: z.string().trim().max(500, "个人简介不能超过 500 个字符").nullable().optional(),
   daily_calories_target: z.number().int().min(500).max(10_000).nullable().optional(),
@@ -78,6 +84,11 @@ export const inventoryUpdateSchema = inventoryCreateSchema.partial().extend({
   is_available: z.boolean().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个需要更新的字段");
 
+export const shoppingInventoryImportSchema = z.object({
+  idempotency_key: z.string().trim().min(16, "幂等键格式无效").max(200, "幂等键过长"),
+  items: z.array(inventoryCreateSchema).min(1, "至少选择一项食材").max(100),
+}).strict();
+
 export const dietRecordCreateSchema = z.object({
   meal_type: z.enum(["早餐", "午餐", "晚餐", "加餐"]),
   food_name: trimmedString(1, 120, "食物名称"),
@@ -88,6 +99,13 @@ export const dietRecordCreateSchema = z.object({
   fat: nutrition,
   recorded_at: isoDate.optional(),
   image_url: optionalImage,
+}).strict();
+
+export const cookingCompletionSchema = z.object({
+  idempotency_key: z.string().trim().min(16, "幂等键格式无效").max(200, "幂等键过长"),
+  recipe_id: z.number().int().positive().nullable().optional(),
+  inventory_item_ids: z.array(z.number().int().positive()).max(100).default([]),
+  diet_record: dietRecordCreateSchema,
 }).strict();
 
 export const healthLogSchema = z.object({
@@ -154,7 +172,7 @@ export const customFoodSchema = z.object({
   fat_100g: z.number().finite().min(0).max(1000).default(0),
 }).strict();
 
-const communityImage = z.string().trim().min(1).max(4_000_000, "图片过大");
+const communityImage = z.string().trim().url("图片必须来自受控对象存储").max(2048, "图片 URL 过长");
 export const communityPostSchema = z.object({
   content: z.string().trim().max(5000, "动态内容不能超过 5000 个字符").default(""),
   image_url: communityImage.nullable().optional(),

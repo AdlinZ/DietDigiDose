@@ -6,8 +6,8 @@ export const authApi = {
   login: <T>(identifier: string, password: string) => requestJson<T>(publicFetch, "/api/v1/auth/login", {
     method: "POST", body: JSON.stringify({ identifier, password }),
   }),
-  register: <T>(identifier: string, password: string) => requestJson<T>(publicFetch, "/api/v1/auth/register", {
-    method: "POST", body: JSON.stringify({ identifier, password }),
+  register: <T>(identifier: string, username: string, password: string) => requestJson<T>(publicFetch, "/api/v1/auth/register", {
+    method: "POST", body: JSON.stringify({ identifier, username, password }),
   }),
   me: <T>(token: string) => requestJson<T>(publicFetch, "/api/v1/auth/me", { headers: authHeaders(token) }),
   updateProfile: <T>(token: string, input: unknown) => requestJson<T>(publicFetch, "/api/v1/auth/profile", {
@@ -23,5 +23,9 @@ export const authApi = {
   }),
   deleteAccount: (token: string, password: string) => requestJson<{ success: boolean; message: string }>(publicFetch, "/api/v1/auth/account", {
     method: "DELETE", headers: authHeaders(token), body: JSON.stringify({ password, confirmation: "DELETE" }),
+  }),
+  exportAIData: <T>(token: string) => requestJson<T>(publicFetch, "/api/v1/auth/ai-data", { headers: authHeaders(token) }),
+  deleteAIData: (token: string) => requestJson<{ success: boolean; deleted: Record<string, number> }>(publicFetch, "/api/v1/auth/ai-data", {
+    method: "DELETE", headers: authHeaders(token),
   }),
 };

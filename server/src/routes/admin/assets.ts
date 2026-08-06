@@ -84,9 +84,9 @@ router.get("/kitchenware", (req, res) => {
     const filters = ["k.deleted_at IS NULL"];
     const params: string[] = [];
     if (search) {
-      filters.push("(k.name LIKE ? OR k.note LIKE ? OR u.username LIKE ? OR u.nickname LIKE ?)");
+      filters.push("(k.name LIKE ? OR k.note LIKE ? OR u.username LIKE ?)");
       const term = `%${search}%`;
-      params.push(term, term, term, term);
+      params.push(term, term, term);
     }
     if (category && category !== "全部") {
       filters.push("k.category = ?");
@@ -99,8 +99,7 @@ router.get("/kitchenware", (req, res) => {
     const items = db.prepare(`
       SELECT
         k.*,
-        u.username AS owner_username,
-        u.nickname AS owner_nickname
+        u.username AS owner_username
       FROM kitchenware_items k
       JOIN users u ON u.id = k.user_id
       WHERE ${filters.join(" AND ")}
@@ -293,7 +292,7 @@ router.put("/ingredients/:id", validateBody(adminIngredientSchema), (req: AuthRe
 router.get("/custom-foods/pending", (req, res) => {
   try {
     const pending = db.prepare(`
-      SELECT ucf.*, u.nickname as author_name 
+      SELECT ucf.*, u.username as author_name
       FROM user_custom_foods ucf
       LEFT JOIN users u ON ucf.user_id = u.id
       WHERE ucf.status = 'pending'

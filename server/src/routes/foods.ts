@@ -4,11 +4,20 @@ import { authMiddleware } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validate.js';
 import { customFoodSchema } from '../validation/schemas.js';
 import { searchFoodUSDA } from '../services/foodApiAdapter.js';
+import { sharedRateLimit } from '../middleware/sharedRateLimit.js';
 
 const router = Router();
+const anonymousSearchRateLimit = sharedRateLimit({
+  namespace: 'food-search',
+  limit: Math.max(1, Number(process.env.FOOD_SEARCH_RATE_LIMIT) || 60),
+  windowMs: 15 * 60 * 1000,
+  key: (req) => req.ip || req.socket.remoteAddress || 'unknown',
+  message: '食品查询过于频繁，请稍后重试',
+  code: 'FOOD_SEARCH_RATE_LIMITED',
+});
 
 // GET /api/v1/foods/search?query=xxx
-router.get('/search', async (req, res) => {
+router.get('/search', anonymousSearchRateLimit, async (req, res) => {
   try {
     const { query } = req.query;
     if (!query || typeof query !== 'string') {

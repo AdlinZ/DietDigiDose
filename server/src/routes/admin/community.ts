@@ -5,6 +5,7 @@ import { validateBody } from "../../middleware/validate.js";
 import { adminEventSchema, adminQuestionSchema } from "../../validation/schemas.js";
 import { positiveIntegerParam } from "../../middleware/validateParam.js";
 import { auditAdminAction as audit, deletedFilter } from "./shared.js";
+import { decodeCursor, encodeCursor } from "../../utils/cursor.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -12,6 +13,13 @@ router.param("id", positiveIntegerParam);
 // 4. 获取社区内容列表
 router.get("/community", (req, res) => {
   try {
+    const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 50));
+    const cursor = req.query.cursor ? decodeCursor(req.query.cursor) : null;
+    const cursorId = cursor ? Number(cursor.id) : null;
+    if (req.query.cursor && (!cursor || cursor.v !== 1 || !Number.isInteger(cursorId) || cursorId! <= 0)) {
+      return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+    }
     const posts = db.prepare(`
       SELECT
         p.*,
@@ -20,10 +28,14 @@ router.get("/community", (req, res) => {
         (SELECT COUNT(*) FROM community_event_participants ep WHERE ep.post_id = p.id) AS participant_count
       FROM community_posts p
       LEFT JOIN users u ON u.id = p.user_id
-      WHERE ${deletedFilter(req.query.status, "p")}
-      ORDER BY p.created_at DESC
-    `).all();
-    res.json(posts);
+      WHERE ${deletedFilter(req.query.status, "p")} ${cursorId ? "AND p.id < ?" : ""}
+      ORDER BY p.id DESC
+      ${cursorMode ? "LIMIT ?" : ""}
+    `).all(...(cursorId ? [cursorId] : []), ...(cursorMode ? [pageSize + 1] : [])) as Array<{ id: number }>;
+    const hasMore = cursorMode && posts.length > pageSize;
+    const items = cursorMode ? posts.slice(0, pageSize) : posts;
+    if (!cursorMode) return res.json(items);
+    return res.json({ items, nextCursor: hasMore ? encodeCursor({ v: 1, id: items.at(-1)!.id }) : null });
   } catch (error) {
     res.status(500).json({ error: "获取社区帖子失败" });
   }
@@ -62,7 +74,7 @@ router.get("/community/:id/comments", (req, res) => {
   try {
     const comments = db.prepare(`
       SELECT
-        c.id, c.post_id, c.username, c.nickname, c.avatar_url, c.content, c.likes_count, c.created_at,
+        c.id, c.post_id, COALESCE(u.username, c.username) AS username, c.avatar_url, c.content, c.likes_count, c.created_at,
         COALESCE(u.is_verified_expert, 0) AS is_expert_answer,
         CASE WHEN p.accepted_comment_id = c.id THEN 1 ELSE 0 END AS is_accepted
       FROM community_comments c
@@ -160,4 +172,3 @@ router.put("/community/:id/question", validateBody(adminQuestionSchema), (req: A
 export function createAdminCommunityRouter() {
   return router;
 }
-

@@ -2,7 +2,6 @@ export interface Post {
   id: number;
   user_id: number;
   username: string;
-  nickname: string;
   avatar_url: string;
   category?: string;
   content: string;

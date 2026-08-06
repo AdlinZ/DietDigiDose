@@ -32,7 +32,6 @@ type Recipe = {
   source?: 'official' | 'user';
   status?: 'pending' | 'approved' | 'rejected';
   author_username?: string;
-  author_nickname?: string;
   reject_reason?: string;
 };
 
@@ -81,6 +80,7 @@ export default function Recipes() {
   const [activeCategory, setActiveCategory] = useState('全部');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'official' | 'user'>('all');
   const [reviewStatus, setReviewStatus] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
 
   // Modal State
   const [showModal, setShowModal] = useState(false);
@@ -88,15 +88,19 @@ export default function Recipes() {
   const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState<RecipeFormState>(INITIAL_FORM_STATE);
 
-  const fetchRecipes = useCallback(async () => {
+  const fetchRecipes = useCallback(async (cursor?: string) => {
     try {
+      setLoading(true);
       const { data } = await api.get('/admin/recipes', {
         params: {
           source: sourceFilter === 'all' ? undefined : sourceFilter,
           reviewStatus: reviewStatus === 'all' ? undefined : reviewStatus,
+          pageSize: 50,
+          cursor,
         },
       });
-      setRecipes(data);
+      setRecipes(current => cursor ? [...current, ...data.items.filter((item: Recipe) => !current.some(existing => existing.id === item.id))] : data.items);
+      setNextCursor(data.nextCursor);
     } catch (error) {
       console.error('Error fetching recipes:', error);
     } finally {
@@ -408,7 +412,7 @@ export default function Recipes() {
               <tbody className="divide-y divide-background-alt">
                 {filteredRecipes.map((recipe) => <tr key={recipe.id} className="hover:bg-[#FCFDFB]">
                   <td className="px-5 py-3"><div className="flex items-center gap-3"><img src={recipe.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c'} alt="" className="h-12 w-12 rounded-xl object-cover" /><div className="max-w-56"><div className="truncate text-sm font-semibold text-text-main">{recipe.title}</div><div className="mt-1 line-clamp-1 text-xs text-text-muted">{recipe.description || '暂无简介'}</div></div></div></td>
-                  <td className="px-4 py-3"><div className={cn('inline-flex rounded-full px-2 py-1 text-xs font-medium', recipe.source === 'user' ? 'bg-blue-50 text-blue-600' : 'bg-background-alt text-text-muted')}>{recipe.source === 'user' ? '用户投稿' : '官方食谱'}</div><div className="mt-1 text-xs text-text-muted">{recipe.source === 'user' ? recipe.author_nickname || recipe.author_username || '未知用户' : '食光编辑部'}</div></td>
+                  <td className="px-4 py-3"><div className={cn('inline-flex rounded-full px-2 py-1 text-xs font-medium', recipe.source === 'user' ? 'bg-blue-50 text-blue-600' : 'bg-background-alt text-text-muted')}>{recipe.source === 'user' ? '用户投稿' : '官方食谱'}</div><div className="mt-1 text-xs text-text-muted">{recipe.source === 'user' ? recipe.author_username || '未知用户' : '食光编辑部'}</div></td>
                   <td className="px-4 py-3"><div className="text-sm text-text-main">{recipe.category || '综合推荐'}</div><div className="mt-1 text-xs text-text-muted">{recipe.difficulty || '简单'}</div></td>
                   <td className="px-4 py-3"><div className="text-sm font-medium text-text-main">{recipe.cook_time || '-'} </div><div className="mt-1 text-xs text-text-muted">{recipe.calories ?? 0} kcal</div></td>
                   <td className="px-4 py-3 text-xs text-text-muted"><span>碳 {recipe.carbs ?? 0}g</span><span className="mx-2">蛋 {recipe.protein ?? 0}g</span><span>脂 {recipe.fat ?? 0}g</span></td>
@@ -418,6 +422,7 @@ export default function Recipes() {
               </tbody>
             </table>
           </div>
+          {nextCursor ? <div className="border-t border-background-alt p-4 text-center"><button type="button" onClick={() => void fetchRecipes(nextCursor)} disabled={loading} className="rounded-xl border border-background-alt px-4 py-2 text-xs font-semibold text-primary disabled:opacity-50">加载更多食谱</button></div> : null}
         </div>
       )}
 

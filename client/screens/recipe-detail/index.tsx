@@ -47,7 +47,6 @@ interface Recipe {
   category: string;
   tags: string[];
   source?: string;
-  author_nickname?: string;
   author_username?: string;
   author_avatar_url?: string;
 }
@@ -145,7 +144,7 @@ export default function RecipeDetailScreen() {
             <FontAwesome6 name="utensils" size={22} color="#2D6A4F" />
           </View>
           <Text className="mt-4 text-base font-bold text-[#27352D]">菜谱暂时找不到</Text>
-          <TouchableOpacity onPress={() => router.back()} className="mt-5 rounded-full bg-[#2D6A4F] px-6 py-3">
+          <TouchableOpacity onPress={() => router.back()} className="mt-5 rounded-full bg-brand px-6 py-3">
             <Text className="font-bold text-white">返回上一页</Text>
           </TouchableOpacity>
         </View>
@@ -268,7 +267,7 @@ export default function RecipeDetailScreen() {
                 <Text className="text-xs font-bold text-white">{recipe.category}</Text>
               </View>
               <View className="rounded-full bg-white/90 px-3 py-1.5">
-                <Text className="text-xs font-bold text-[#3D3229]">{recipe.difficulty}难度</Text>
+                <Text className="text-xs font-bold text-ink">{recipe.difficulty}难度</Text>
               </View>
             </View>
           </View>
@@ -307,9 +306,9 @@ export default function RecipeDetailScreen() {
                   className="h-9 w-9 rounded-full"
                 />
                 <View className="ml-3">
-                  <Text className="text-[10px] text-[#8B7D6B]">食友原创投稿</Text>
-                  <Text className="text-sm font-bold text-[#3D3229]">
-                    {recipe.author_nickname || recipe.author_username || "匿名食友"}
+                  <Text className="text-[10px] text-copy-muted">食友原创投稿</Text>
+                  <Text className="text-sm font-bold text-ink">
+                    {recipe.author_username || "匿名食友"}
                   </Text>
                 </View>
               </View>
@@ -389,7 +388,7 @@ export default function RecipeDetailScreen() {
               <SectionTitle icon="basket-shopping" eyebrow="准备工作" title="备料清单" />
               {isAuthenticated ? (
                 <View className="mt-4 rounded-2xl border border-[#DDE8DF] bg-[#F4F8F5] p-3">
-                  <Text className="text-xs font-black text-[#2D6A4F]">
+                  <Text className="text-xs font-black text-brand">
                     库存匹配 {matchedIngredients.length} 种 · 缺少 {missingIngredients.length} 种
                   </Text>
                   {expiringIngredients.length ? (
@@ -410,7 +409,7 @@ export default function RecipeDetailScreen() {
               )}
               <View className="mt-4 flex-row items-center justify-between rounded-2xl bg-[#F5F1E9] px-3 py-2.5">
                 <Text className="text-[11px] text-[#7A6F63]">点击食材，标记已经备好</Text>
-                <Text className="text-sm font-black text-[#2D6A4F]">
+                <Text className="text-sm font-black text-brand">
                   {preparedIngredients.size}/{recipe.ingredients?.length || 0}
                 </Text>
               </View>
@@ -433,7 +432,7 @@ export default function RecipeDetailScreen() {
                 {(recipe.steps || []).map((step, index) => (
                   <View key={`${index}-${step.slice(0, 12)}`} className="flex-row">
                     <View className="w-10 items-center">
-                      <View className="h-9 w-9 items-center justify-center rounded-full bg-[#2D6A4F] shadow-sm">
+                      <View className="h-9 w-9 items-center justify-center rounded-full bg-brand shadow-sm">
                         <Text className="text-xs font-bold text-white">{index + 1}</Text>
                       </View>
                       {index < recipe.steps.length - 1 ? <View className="my-1 w-px flex-1 bg-[#D9E6DD]" /> : null}
@@ -454,7 +453,7 @@ export default function RecipeDetailScreen() {
               <Text className="mt-3 text-xs leading-5 text-[#58705D]">AI 会优先匹配你装备库中状态可用的厨具；缺少时会给出替代做法与建议添置的官方厨具。</Text>
               <TouchableOpacity
                 onPress={() => router.push({ pathname: "/ai-assistant", params: { prompt: `我要做【${recipe.title}】。请优先使用我已录入且可用的厨具；若缺少关键设备，请给出可替代的烹饪方法，并说明推荐从官方厨具库添加什么。` } })}
-                className="mt-4 flex-row items-center justify-center rounded-2xl bg-[#2D6A4F] py-3 active:opacity-85"
+                className="mt-4 flex-row items-center justify-center rounded-2xl bg-brand py-3 active:opacity-85"
               >
                 <FontAwesome6 name="wand-magic-sparkles" size={13} color="white" />
                 <Text className="ml-2 text-xs font-black text-white">按我的厨具适配</Text>
@@ -470,7 +469,7 @@ export default function RecipeDetailScreen() {
         <View className="w-full max-w-[896px] self-center flex-row items-center">
           <View className="mr-4 flex-1">
             <Text className="text-sm font-bold text-[#273A2E]">准备好开始了吗？</Text>
-            <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">分步指导 · 计时提醒 · AI 助手</Text>
+            <Text className="mt-0.5 text-[10px] text-copy-muted">分步指导 · 计时提醒 · AI 助手</Text>
           </View>
           <TouchableOpacity
             onPress={() => {
@@ -490,7 +489,7 @@ export default function RecipeDetailScreen() {
                 fat: recipe.fat,
               });
             }}
-            className={`flex-row items-center justify-center rounded-2xl px-5 py-3.5 shadow-sm active:opacity-85 md:px-8 ${hasAllergyRisk ? "bg-[#A63D2B]" : "bg-[#2D6A4F]"}`}
+            className={`flex-row items-center justify-center rounded-2xl px-5 py-3.5 shadow-sm active:opacity-85 md:px-8 ${hasAllergyRisk ? "bg-[#A63D2B]" : "bg-brand"}`}
           >
             <FontAwesome6 name={hasAllergyRisk ? "shield-halved" : "kitchen-set"} size={17} color="white" />
             <Text className="ml-2 text-sm font-bold text-white">{hasAllergyRisk ? "先获取安全替换" : "开始烹饪"}</Text>

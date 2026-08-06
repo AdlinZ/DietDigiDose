@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { purgeLegacyUnscopedPrivateStorage, purgeUserPrivateStorage } from '@/utils/userStorage';
 import { ApiError, authApi } from '@/services/api';
+import { AUTH_USER_KEY, getStoredToken, removeStoredToken, setStoredToken } from '@/utils/authStorage';
 
 interface User {
   id: number;
@@ -19,7 +20,7 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (identifier: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  register: (identifier: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  register: (identifier: string, username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   updateProfile: (data: Partial<User>) => Promise<{ success: boolean; error?: string }>;
   deleteAccount: (password: string) => Promise<{ success: boolean; error?: string }>;
@@ -28,16 +29,13 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const TOKEN_KEY = '@auth_token';
-const USER_KEY = '@auth_user';
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const clearAuthState = useCallback(async () => {
-    await Promise.all([AsyncStorage.removeItem(TOKEN_KEY), AsyncStorage.removeItem(USER_KEY)]);
+    await Promise.all([removeStoredToken(), AsyncStorage.removeItem(AUTH_USER_KEY)]);
     setToken(null);
     setUser(null);
   }, []);
@@ -47,20 +45,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         await purgeLegacyUnscopedPrivateStorage();
-        const savedToken = await AsyncStorage.getItem(TOKEN_KEY);
-        const savedUser = await AsyncStorage.getItem(USER_KEY);
+        const savedToken = await getStoredToken();
+        const savedUser = await AsyncStorage.getItem(AUTH_USER_KEY);
         if (savedToken && savedUser) {
           setToken(savedToken);
           try {
             setUser(JSON.parse(savedUser));
           } catch {
-            await AsyncStorage.removeItem(USER_KEY);
+            await AsyncStorage.removeItem(AUTH_USER_KEY);
           }
 
           // Verify token asynchronously with backend
           try {
             const freshUser = await authApi.me<User>(savedToken);
-            await AsyncStorage.setItem(USER_KEY, JSON.stringify(freshUser));
+            await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(freshUser));
             setUser(freshUser);
           } catch (error) {
             if (error instanceof ApiError && error.status === 401) await clearAuthState();
@@ -82,8 +80,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!data?.token || !data?.user) {
         return { success: false, error: '返回数据不完整' };
       }
-      await AsyncStorage.setItem(TOKEN_KEY, data.token);
-      await AsyncStorage.setItem(USER_KEY, JSON.stringify(data.user));
+      await setStoredToken(data.token);
+      await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
       setToken(data.token);
       setUser(data.user);
       return { success: true };
@@ -92,15 +90,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const register = useCallback(async (identifier: string, password: string) => {
+  const register = useCallback(async (identifier: string, username: string, password: string) => {
     try {
       await purgeLegacyUnscopedPrivateStorage();
-      const data = await authApi.register<{ token: string; user: User }>(identifier, password);
+      const data = await authApi.register<{ token: string; user: User }>(identifier, username, password);
       if (!data?.token || !data?.user) {
         return { success: false, error: '返回数据不完整' };
       }
-      await AsyncStorage.setItem(TOKEN_KEY, data.token);
-      await AsyncStorage.setItem(USER_KEY, JSON.stringify(data.user));
+      await setStoredToken(data.token);
+      await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
       setToken(data.token);
       setUser(data.user);
       return { success: true };
@@ -121,7 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: '返回数据异常' };
       }
       const updatedUser = { ...user, ...data } as User;
-      await AsyncStorage.setItem(USER_KEY, JSON.stringify(updatedUser));
+      await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(updatedUser));
       setUser(updatedUser);
       return { success: true };
     } catch (e) {
@@ -137,7 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!token) return;
     try {
       const data = await authApi.me<User>(token);
-      await AsyncStorage.setItem(USER_KEY, JSON.stringify(data));
+      await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data));
       setUser(data);
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) await clearAuthState();

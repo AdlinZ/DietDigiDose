@@ -1,12 +1,19 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
+import rootPackage from '../package.json';
 
 const appName = process.env.EXPO_PUBLIC_APP_NAME || '食光烙记';
 const appSlug = process.env.EXPO_PUBLIC_APP_SLUG || 'dietdigidose';
 const androidPackage = process.env.EXPO_PUBLIC_ANDROID_PACKAGE || 'com.dietdigidose.app';
-const allowInsecureHttp = process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP === '1';
-const appVersion = process.env.EXPO_PUBLIC_APP_VERSION || '1.0.3';
+const iosBundleIdentifier = process.env.EXPO_PUBLIC_IOS_BUNDLE_IDENTIFIER || 'com.dietdigidose.app';
+const easBuildProfile = process.env.EAS_BUILD_PROFILE;
+const allowInsecureHttp = !easBuildProfile && process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP === '1';
+const appVersion = process.env.EXPO_PUBLIC_APP_VERSION || rootPackage.version;
 // Expo 会在打包时解析 app.config；未显式指定时，这里就是本次构建的时间。
 const buildTime = process.env.EXPO_PUBLIC_BUILD_TIME || new Date().toISOString();
+
+if (easBuildProfile && !process.env.EXPO_PUBLIC_BACKEND_BASE_URL?.startsWith('https://')) {
+  throw new Error(`${easBuildProfile} builds require an HTTPS EXPO_PUBLIC_BACKEND_BASE_URL`);
+}
 
 export default ({ config }: ConfigContext): ExpoConfig => {
   return {
@@ -30,6 +37,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     "ios": {
       ...config.ios,
+      "bundleIdentifier": iosBundleIdentifier,
+      "buildNumber": "5",
       "supportsTablet": true,
       ...(allowInsecureHttp ? {
         "infoPlist": {
@@ -75,22 +84,22 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       [
         "expo-image-picker",
         {
-          "photosPermission": `允许新项目访问您的相册，以便您上传或保存图片。`,
-          "cameraPermission": `允许新项目使用您的相机，以便您直接拍摄照片上传。`,
-          "microphonePermission": `允许新项目访问您的麦克风，以便您拍摄带有声音的视频。`
+          "photosPermission": `允许${appName}访问您的相册，以便您上传食材或餐食图片。`,
+          "cameraPermission": `允许${appName}使用您的相机，以便您拍摄食材或餐食图片。`,
+          "microphonePermission": `允许${appName}访问您的麦克风，以便您使用语音录入功能。`
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": `新项目需要访问您的位置以提供周边服务及导航功能。`
+          "locationWhenInUsePermission": `允许${appName}在使用期间访问您的位置，以提供经您主动开启的本地化服务。`
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": `新项目需要访问相机以拍摄照片和视频。`,
-          "microphonePermission": `新项目需要访问麦克风以录制视频声音。`,
+          "cameraPermission": `允许${appName}使用相机拍摄食材或餐食图片。`,
+          "microphonePermission": `允许${appName}使用麦克风进行语音录入。`,
           "recordAudioAndroid": true
         }
       ],

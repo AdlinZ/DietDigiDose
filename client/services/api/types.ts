@@ -61,7 +61,6 @@ export type CommunityPost = {
   id: number;
   user_id: number;
   username: string;
-  nickname?: string | null;
   avatar_url?: string | null;
   content: string;
   image_url: string | null;

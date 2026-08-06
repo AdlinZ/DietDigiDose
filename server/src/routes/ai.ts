@@ -17,10 +17,25 @@ import {
   aiVoiceCommandSchema,
 } from "../validation/schemas.js";
 import { uuidParam } from "../middleware/validateParam.js";
+import { sharedRateLimit } from "../middleware/sharedRateLimit.js";
 
 const router = Router();
 router.param("jobId", uuidParam);
 router.param("confirmationId", uuidParam);
+const aiRateLimit = sharedRateLimit({
+  namespace: "ai-user",
+  limit: Math.max(1, Number(process.env.AI_RATE_LIMIT) || 30),
+  windowMs: 15 * 60 * 1000,
+  key: (req) => String((req as AuthRequest).userId || "unknown"),
+  message: "AI 请求过于频繁，请稍后重试",
+  code: "AI_RATE_LIMITED",
+});
+
+router.use(authMiddleware);
+router.use((req, res, next) => {
+  if (req.method !== "POST" || req.path.includes("/write-confirmations/")) return next();
+  return aiRateLimit(req, res, next);
+});
 
 type InventoryScanItem = {
   foodName: string;
@@ -111,7 +126,7 @@ const recordChatTurn = (userId: number, sessionId: string, userContent: string, 
 /**
  * 1. AI 对话 / 营养大厨答疑 (含 Function Calling 自动写库)
  */
-router.post("/chat", authMiddleware, validateBody(aiChatSchema), async (req: AuthRequest, res) => {
+router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) => {
   try {
     const { messages = [], prompt, sessionId: requestedSessionId } = req.body;
     const userId = req.userId!;
@@ -164,7 +179,7 @@ router.post("/chat", authMiddleware, validateBody(aiChatSchema), async (req: Aut
 });
 
 // 用户确认后的唯一写入入口。模型不能直接提交，确认记录与幂等键均按当前用户校验。
-router.post("/write-confirmations/:confirmationId/commit", authMiddleware, validateBody(aiWriteConfirmationCommitSchema), (req: AuthRequest, res) => {
+router.post("/write-confirmations/:confirmationId/commit", validateBody(aiWriteConfirmationCommitSchema), (req: AuthRequest, res) => {
   try {
     const result = commitAIWritePreview({
       userId: req.userId!,
@@ -182,7 +197,7 @@ router.post("/write-confirmations/:confirmationId/commit", authMiddleware, valid
 /**
  * 首页时段推荐：模型读取用户库存、当天饮食及热量目标，返回可直接渲染的多张卡片。
  */
-router.post("/home-recommendations", authMiddleware, validateBody(aiHomeRecommendationsSchema), async (req: AuthRequest, res) => {
+router.post("/home-recommendations", validateBody(aiHomeRecommendationsSchema), async (req: AuthRequest, res) => {
   try {
     const userId = req.userId!;
     const period = typeof req.body?.period === "string" ? req.body.period.slice(0, 40) : "当前时段";
@@ -225,7 +240,7 @@ router.post("/home-recommendations", authMiddleware, validateBody(aiHomeRecommen
 /**
  * 2. 拍照识别菜品与热量评估
  */
-router.post("/vision-food", authMiddleware, validateBody(aiVisionSchema), async (req: AuthRequest, res) => {
+router.post("/vision-food", validateBody(aiVisionSchema), async (req: AuthRequest, res) => {
   try {
     const { image, userPrompt } = req.body;
     if (!image) {
@@ -266,7 +281,7 @@ router.post("/vision-food", authMiddleware, validateBody(aiVisionSchema), async 
  * 3. 创建可恢复的食材图片识别任务。
  * 上传成功后立刻返回任务 ID；后续识别在服务端继续，即使客户端关闭也不会丢失。
  */
-router.post("/inventory-scan-jobs", authMiddleware, validateBody(aiImageSchema), (req: AuthRequest, res) => {
+router.post("/inventory-scan-jobs", validateBody(aiImageSchema), (req: AuthRequest, res) => {
   const { image } = req.body;
   if (typeof image !== "string" || !image.trim()) {
     return res.status(400).json({ error: "缺少图片数据" });
@@ -314,7 +329,7 @@ router.post("/inventory-scan-jobs", authMiddleware, validateBody(aiImageSchema),
 });
 
 /** Get a durable recognition job. */
-router.get("/inventory-scan-jobs/:jobId", authMiddleware, (req: AuthRequest, res) => {
+router.get("/inventory-scan-jobs/:jobId", (req: AuthRequest, res) => {
   const job = db.prepare(`
     SELECT id, status, result_json, error_message, created_at, updated_at
     FROM inventory_scan_jobs WHERE id = ? AND user_id = ?
@@ -333,7 +348,7 @@ router.get("/inventory-scan-jobs/:jobId", authMiddleware, (req: AuthRequest, res
 /**
  * 4. 兼容旧客户端的同步扫描接口。
  */
-router.post("/scan-receipt", authMiddleware, validateBody(aiImageSchema), async (req: AuthRequest, res) => {
+router.post("/scan-receipt", validateBody(aiImageSchema), async (req: AuthRequest, res) => {
   try {
     const { image } = req.body;
     if (!image) {
@@ -361,7 +376,7 @@ router.post("/scan-receipt", authMiddleware, validateBody(aiImageSchema), async 
 /**
  * 4. 做饭模式语音指令与疑问识别 (Voice Command Router)
  */
-router.post("/voice-command", authMiddleware, validateBody(aiVoiceCommandSchema), async (req: AuthRequest, res) => {
+router.post("/voice-command", validateBody(aiVoiceCommandSchema), async (req: AuthRequest, res) => {
   try {
     const { speechText, currentStep = 0, recipeTitle = "" } = req.body;
     if (!speechText) {
@@ -403,7 +418,7 @@ router.post("/voice-command", authMiddleware, validateBody(aiVoiceCommandSchema)
 /**
  * 4. 语音识别转文本 (ASR Transcribe) 接口
  */
-router.post("/transcribe", authMiddleware, validateBody(aiTranscribeSchema), async (req: AuthRequest, res) => {
+router.post("/transcribe", validateBody(aiTranscribeSchema), async (req: AuthRequest, res) => {
   try {
     const { audioBase64, mimeType } = req.body || {};
     const result = await transcribeAudio(audioBase64 || "", {

@@ -8,7 +8,6 @@ interface Post {
   id: number;
   user_id: number;
   username: string;
-  nickname: string;
   avatar_url: string;
   category: string;
   content: string;
@@ -27,7 +26,6 @@ interface Post {
 
 interface CommentItem {
   id: number;
-  nickname: string;
   username: string;
   avatar_url: string;
   content: string;
@@ -55,16 +53,18 @@ export default function Community() {
     isOpen: boolean;
     postId: number;
   } | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
 
   useEffect(() => {
     fetchPosts();
   }, []);
 
-  const fetchPosts = async () => {
+  const fetchPosts = async (cursor?: string) => {
     try {
       setLoading(true);
-      const res = await api.get('/admin/community');
-      setPosts(res.data);
+      const res = await api.get('/admin/community', { params: { pageSize: 50, cursor } });
+      setPosts(current => cursor ? [...current, ...res.data.items.filter((item: Post) => !current.some(existing => existing.id === item.id))] : res.data.items);
+      setNextCursor(res.data.nextCursor);
     } catch (err) {
       console.error('Error fetching posts:', err);
     } finally {
@@ -185,7 +185,7 @@ export default function Community() {
     const matchesSearch = 
       post.content?.toLowerCase().includes(searchQuery.toLowerCase()) || 
       post.username?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      post.nickname?.toLowerCase().includes(searchQuery.toLowerCase());
+      post.username.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = 
       categoryFilter === '全部' ? true : post.category === categoryFilter;
     return matchesSearch && matchesCategory;
@@ -205,7 +205,7 @@ export default function Community() {
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted w-4 h-4" />
           <input 
             type="text" 
-            placeholder="搜索帖子内容、用户名、昵称..."
+            placeholder="搜索帖子内容或用户名..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 bg-white rounded-xl text-sm border border-gray-100 focus:ring-2 focus:ring-primary/20 outline-none shadow-sm"
@@ -297,12 +297,12 @@ export default function Community() {
                 <div className="flex items-center gap-3">
                   <img
                     src={getAvatarUrl(post.avatar_url, post.user_id)}
-                    alt={post.nickname || post.username}
+                    alt={post.username}
                     className="w-10 h-10 rounded-full object-cover"
                   />
                   <div>
                     <div className="font-medium text-sm text-text-main truncate max-w-[120px]">
-                      {post.nickname || post.username}
+                      {post.username}
                     </div>
                     <div className="text-xs text-text-muted">
                       {new Date(post.created_at).toLocaleDateString()}
@@ -381,9 +381,9 @@ export default function Community() {
                   <tr key={post.id} className="hover:bg-[#FCFDFB] transition-colors">
                     <td className="px-5 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-3">
-                        <img src={getAvatarUrl(post.avatar_url, post.user_id)} alt={post.nickname || post.username} className="h-9 w-9 rounded-full object-cover shrink-0" />
+                        <img src={getAvatarUrl(post.avatar_url, post.user_id)} alt={post.username} className="h-9 w-9 rounded-full object-cover shrink-0" />
                         <div className="min-w-0">
-                          <span className="block max-w-28 truncate text-sm font-medium text-text-main">{post.nickname || post.username}</span>
+                          <span className="block max-w-28 truncate text-sm font-medium text-text-main">{post.username}</span>
                           {post.author_is_expert ? <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-medium text-green-700 whitespace-nowrap"><BadgeCheck className="h-3 w-3" />专业用户</span> : null}
                         </div>
                       </div>
@@ -435,6 +435,7 @@ export default function Community() {
               </tbody>
             </table>
           </div>
+          {nextCursor ? <div className="border-t border-background-alt p-4 text-center"><button type="button" onClick={() => void fetchPosts(nextCursor)} disabled={loading} className="rounded-xl border border-background-alt px-4 py-2 text-xs font-semibold text-primary disabled:opacity-50">加载更多帖子</button></div> : null}
         </div></>
       )}
 
@@ -442,7 +443,7 @@ export default function Community() {
         <div className="fixed inset-0 z-50 flex justify-end bg-black/35 backdrop-blur-sm" onClick={() => setSelectedPost(null)}>
           <aside className="h-full w-full max-w-2xl overflow-y-auto bg-white p-7 shadow-2xl" onClick={event => event.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-background-alt pb-5">
-              <div><h2 className="text-xl font-bold text-text-main">帖子管理</h2><p className="mt-1 text-sm text-text-muted">#{selectedPost.id} · {selectedPost.nickname || selectedPost.username}</p></div>
+              <div><h2 className="text-xl font-bold text-text-main">帖子管理</h2><p className="mt-1 text-sm text-text-muted">#{selectedPost.id} · {selectedPost.username}</p></div>
               <button onClick={() => setSelectedPost(null)} className="rounded-xl p-2 text-text-muted hover:bg-background-alt"><X className="h-5 w-5" /></button>
             </div>
             <div className="mt-5 grid grid-cols-3 gap-3">
@@ -467,7 +468,7 @@ export default function Community() {
             ) : null}
             <div className="mt-6 rounded-2xl border border-background-alt p-4"><div className="mb-2 text-xs font-medium text-text-muted">帖子内容</div><p className="whitespace-pre-wrap text-sm leading-7 text-text-main">{selectedPost.content}</p>{selectedPost.image_url && <img src={selectedPost.image_url} alt="" className="mt-4 max-h-72 w-full rounded-xl object-cover" />}</div>
             <div className="mt-7 flex items-center justify-between"><h3 className="text-base font-bold text-text-main">{selectedPost.category === '问答' ? '回答管理' : '评论管理'}</h3><span className="text-sm text-text-muted">{comments.length} 条</span></div>
-            {commentsLoading ? <div className="py-10 text-center text-sm text-text-muted">加载评论中...</div> : comments.length === 0 ? <div className="py-10 text-center text-sm text-text-muted">暂无评论</div> : <div className="mt-3 divide-y divide-background-alt">{comments.map(comment => <div key={comment.id} className={cn('flex gap-3 py-4', comment.is_accepted && 'rounded-xl bg-green-50 px-3')}><img src={getAvatarUrl(comment.avatar_url, comment.username)} alt={comment.nickname || comment.username} className="h-8 w-8 shrink-0 rounded-full object-cover" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><span className="text-sm font-medium text-text-main">{comment.nickname || comment.username}</span>{comment.is_expert_answer ? <span className="inline-flex items-center gap-1 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700"><BadgeCheck className="h-3 w-3" />专业回答</span> : null}{comment.is_accepted ? <span className="rounded bg-primary px-1.5 py-0.5 text-[10px] font-medium text-white">已采纳</span> : null}</div><p className="mt-1 break-words text-sm leading-6 text-text-muted">{comment.content}</p><div className="mt-1 text-xs text-text-muted">{comment.likes_count || 0} 赞 · {new Date(comment.created_at).toLocaleString()}</div>{selectedPost.category === '问答' ? <button onClick={() => void updateQuestionState(comment.id)} disabled={savingBusinessState} className={cn('mt-2 rounded-lg px-2.5 py-1.5 text-xs font-medium disabled:opacity-50', comment.is_accepted ? 'bg-green-100 text-green-700' : 'bg-background-alt text-primary')}>{comment.is_accepted ? '取消采纳' : '设为采纳回答'}</button> : null}</div><button onClick={() => deleteComment(comment.id)} className="h-8 w-8 shrink-0 rounded-lg text-text-muted hover:bg-red-50 hover:text-red-500" title="删除评论"><Trash2 className="mx-auto h-4 w-4" /></button></div>)}</div>}
+            {commentsLoading ? <div className="py-10 text-center text-sm text-text-muted">加载评论中...</div> : comments.length === 0 ? <div className="py-10 text-center text-sm text-text-muted">暂无评论</div> : <div className="mt-3 divide-y divide-background-alt">{comments.map(comment => <div key={comment.id} className={cn('flex gap-3 py-4', comment.is_accepted && 'rounded-xl bg-green-50 px-3')}><img src={getAvatarUrl(comment.avatar_url, comment.username)} alt={comment.username} className="h-8 w-8 shrink-0 rounded-full object-cover" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><span className="text-sm font-medium text-text-main">{comment.username}</span>{comment.is_expert_answer ? <span className="inline-flex items-center gap-1 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700"><BadgeCheck className="h-3 w-3" />专业回答</span> : null}{comment.is_accepted ? <span className="rounded bg-primary px-1.5 py-0.5 text-[10px] font-medium text-white">已采纳</span> : null}</div><p className="mt-1 break-words text-sm leading-6 text-text-muted">{comment.content}</p><div className="mt-1 text-xs text-text-muted">{comment.likes_count || 0} 赞 · {new Date(comment.created_at).toLocaleString()}</div>{selectedPost.category === '问答' ? <button onClick={() => void updateQuestionState(comment.id)} disabled={savingBusinessState} className={cn('mt-2 rounded-lg px-2.5 py-1.5 text-xs font-medium disabled:opacity-50', comment.is_accepted ? 'bg-green-100 text-green-700' : 'bg-background-alt text-primary')}>{comment.is_accepted ? '取消采纳' : '设为采纳回答'}</button> : null}</div><button onClick={() => deleteComment(comment.id)} className="h-8 w-8 shrink-0 rounded-lg text-text-muted hover:bg-red-50 hover:text-red-500" title="删除评论"><Trash2 className="mx-auto h-4 w-4" /></button></div>)}</div>}
           </aside>
         </div>
       )}

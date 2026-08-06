@@ -6,6 +6,21 @@
 
 > 当前项目仍在开发阶段，不应被视为医疗诊断或治疗工具。营养估算和 AI 输出仅供日常参考。
 
+## 当前状态（2026-08-06）
+
+项目处于 **Beta 收口期**：主要页面和服务端业务已经实现，工程基线可以支持候选包验收，但尚未达到可公开发布或承载真实敏感健康数据的标准。
+
+已验证的基线：
+
+- client、server、admin 的 TypeScript/Lint 校验通过。
+- 自动化测试共 13 个测试文件、58 条测试通过，其中包括服务端核心业务、公开身份保护、AI 数据权利、共享限流、迁移、事务幂等、用户隔离、游标分页、媒体格式校验，以及客户端库存筛选与排序测试。
+- CI 会安装冻结依赖、执行三端校验与测试、构建 client/server/admin，并审计生产依赖。
+- 仓库已包含 Android 内部预览构建配置；iOS 候选包、正式发布配置和双端真机验收仍未完成。
+
+代码内的公开身份隔离、采购与烹饪闭环、版本化迁移、安全会话存储和演示数据隔离已完成；对外内测前仍须部署 HTTPS staging、补齐 AI 第三方与具体保留期限说明，并完成双端候选包及备份恢复验收。
+
+当前执行计划见 [开发 TODO](TODO.md)，产品阶段目标见 [产品路线图](docs/product-roadmap.md)，发布候选验收见 [真机验收与小范围内测清单](docs/device-beta-checklist.md)，部署与恢复见 [运维手册](docs/operations.md)。
+
 ## 项目沿革与重启说明
 
 “食光烙记”的早期产品构想形成于 2025 年高校软件创新竞赛期间，围绕智能食材管理、减少家庭食材浪费、饮食记录和健康饮食建议完成过产品规划与原型验证。该构想曾在第十八届全国大学生软件创新大赛·软件设计创新赛中获得西南赛区一等奖和全国赛三等奖。
@@ -31,7 +46,7 @@
 | 模块 | 技术 |
 | --- | --- |
 | `client` | Expo 54、React Native、Expo Router、Uniwind |
-| `server` | Express、TypeScript、SQLite、Drizzle ORM，可选 Supabase |
+| `server` | Express、TypeScript、better-sqlite3；SQLite 是当前实际运行时数据源 |
 | `admin` | React、Vite、Tailwind CSS |
 | 工作区 | pnpm workspace |
 
@@ -52,7 +67,7 @@ Dietdigidose/
 ### 1. 准备环境
 
 - Node.js 20 或更新版本
-- pnpm 9（项目在 `package.json` 中固定为 `pnpm@9.0.0`）
+- pnpm 10.18.0（项目在根目录 `package.json` 中固定版本）
 
 只使用 pnpm 安装工作区依赖：
 
@@ -73,9 +88,9 @@ cp server/.env.example server/.env
 EXPO_PUBLIC_BACKEND_BASE_URL=http://localhost:9090
 ```
 
-服务端开发模式可以自动生成本地 JWT 密钥；生产环境必须设置至少 32 个字符的 `JWT_SECRET`，并设置强度足够的 `ADMIN_INITIAL_PASSWORD`。AI、USDA 和 Supabase 配置都是可选项，完整字段见 [server/.env.example](server/.env.example)。
+服务端开发模式可以自动生成本地 JWT 密钥；生产环境必须设置至少 32 个字符的 `JWT_SECRET`，并设置强度足够的 `ADMIN_INITIAL_PASSWORD`。AI 和 USDA 配置是可选项；Supabase 字段目前只是预留，当前运行时仍使用 SQLite。完整字段见 [server/.env.example](server/.env.example)。
 
-不要把 `.env`、`server/data` 或真实密钥提交到版本库。
+不要把 `.env`、`server/data`、`server/backups`、数据库备份或真实密钥提交到版本库。生产与 staging 应显式设置 `DATABASE_PATH` 到持久化磁盘。
 
 ### 3. 启动应用
 
@@ -114,11 +129,16 @@ SQLite 数据库会在 `server/data/dietdigidose.db` 中自动创建，该目录
 | `pnpm dev:admin` | 启动管理后台 |
 | `pnpm dev:all` | 同时启动客户端、API 和管理后台（仅用于需要统一查看日志时） |
 | `pnpm lint:all` | 检查 client、server 和 admin |
-| `pnpm test:client` | 运行客户端 Jest 测试 |
+| `pnpm test:all` | 运行 client、server 和 admin 的全部测试 |
+| `pnpm test:client` | 仅运行客户端 Jest 测试 |
 | `pnpm build:client` | 导出 Expo Web 构建 |
 | `pnpm build:server` | 构建 Express 服务端 |
 | `pnpm build:admin` | 构建管理后台 |
 | `pnpm audit:prod` | 使用 npm 官方安全数据库审计生产依赖 |
+
+## 候选包说明
+
+`client/eas.json` 已包含双端内部预览和 production profile，不再内置后端地址或不安全网络开关；EAS 构建必须从受控环境提供 HTTPS `EXPO_PUBLIC_BACKEND_BASE_URL`。尚未完成同一提交的双端候选包生成与真机验收，因此仍不得用于外部用户或真实健康数据内测。
 
 ## 数据和第三方内容
 
@@ -131,7 +151,8 @@ SQLite 数据库会在 `server/data/dietdigidose.db` 中自动创建，该目录
 - 生产环境显式设置 `NODE_ENV=production`、`JWT_SECRET` 和 `CORS_ORIGINS`。
 - 管理员首次登录后立即修改初始密码。
 - AI 密钥只保存在服务端环境变量或管理端系统设置中，不要使用 `EXPO_PUBLIC_` 暴露密钥。
-- 部署前运行 `pnpm lint:all`、`pnpm test:client` 和 `pnpm audit:prod`。
+- 外部内测和生产环境只能通过 HTTPS 传输登录凭据、Token、健康资料和 AI 上下文。
+- 部署前运行 `pnpm lint:all`、`pnpm test:all`、三端构建和 `pnpm audit:prod`，并完成真机与备份恢复验收。
 
 ## 许可证
 

@@ -31,24 +31,18 @@ import {
 } from "@/utils/userStorage";
 import { dateKeyAfterDays } from "@/utils/date";
 import { daysUntilDateKey, getInventoryStatus } from "@/utils/inventory";
-import { aiApi, inventoryApi, kitchenwareApi, recipesApi } from "@/services/api";
-import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, Recipe, StorageLocation } from "./types";
+import { aiApi, inventoryApi, kitchenwareApi } from "@/services/api";
+import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, StorageLocation } from "./types";
 import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, normalizeDetectedFoods } from "./scan";
+import { useInventoryData } from "./useInventoryData";
+import { filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
+import { BatchReviewModal, CatalogDetailModal } from "./InventoryModals";
 
 const KITCHENWARE_STARTER_KITS = [
   { name: "轻食减脂", items: ["空气炸锅", "平底锅", "电子秤", "玻璃保鲜盒"] },
   { name: "中式家常", items: ["炒锅", "汤锅", "蒸锅", "菜刀", "砧板"] },
   { name: "烘焙入门", items: ["烤箱", "烤盘", "蛋糕模具", "打蛋器", "硅胶刮刀"] },
 ] as const;
-
-function catalogList(value: string) {
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-  } catch {
-    return [];
-  }
-}
 
 export default function InventoryScreen() {
   const { width: windowWidth } = useWindowDimensions();
@@ -65,14 +59,23 @@ export default function InventoryScreen() {
     user?.id,
   );
   const authFetch = useAuthFetch();
+  const {
+    items,
+    setItems,
+    recipes,
+    kitchenware,
+    kitchenwareCatalog,
+    loadingItems,
+    loadingRecipes,
+    loadingKitchenware,
+    sectionErrors,
+    refresh: fetchData,
+  } = useInventoryData(authFetch, isAuthenticated);
 
   // Top Level Segment State
   const [activeSegment, setActiveSegment] = useState<"inventory" | "recipes" | "kitchenware">("inventory");
 
   // Kitchenware State
-  const [kitchenware, setKitchenware] = useState<KitchenwareItem[]>([]);
-  const [kitchenwareCatalog, setKitchenwareCatalog] = useState<KitchenwareCatalogItem[]>([]);
-  const [loadingKitchenware, setLoadingKitchenware] = useState(true);
   const [activeKitchenwareCategory, setActiveKitchenwareCategory] = useState("全部");
   const [kitchenwareModalVisible, setKitchenwareModalVisible] = useState(false);
   const [editingKitchenware, setEditingKitchenware] = useState<KitchenwareItem | null>(null);
@@ -165,8 +168,6 @@ export default function InventoryScreen() {
   };
 
   // Inventory State
-  const [items, setItems] = useState<InventoryItem[]>([]);
-  const [loadingItems, setLoadingItems] = useState(true);
   const [draggedItemId, setDraggedItemId] = useState<number | null>(null);
   const dragPan = useRef(new Animated.ValueXY()).current;
   const longPressedItemId = useRef<number | null>(null);
@@ -436,8 +437,6 @@ export default function InventoryScreen() {
   };
 
   // Recipe State
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [loadingRecipes, setLoadingRecipes] = useState(false);
   const [activeRecipeCategory, setActiveRecipeCategory] = useState("全部");
   const [recipeSearchQuery, setRecipeSearchQuery] = useState("");
   const [visibleRecipeCount, setVisibleRecipeCount] = useState(12);
@@ -448,44 +447,6 @@ export default function InventoryScreen() {
 
   const inventoryCategories = ["全部", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"];
   const recipeCategories = ["全部", "减脂", "增肌", "营养餐单", "快手菜"];
-
-  const fetchData = useCallback(async () => {
-    // Fetch recipes regardless of auth state
-    try {
-      setLoadingRecipes(true);
-      const data = await recipesApi.list<Recipe>();
-      setRecipes(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("Fetch recipes error:", e);
-    } finally {
-      setLoadingRecipes(false);
-    }
-
-    // Fetch inventory if logged in
-    if (!isAuthenticated) {
-      setLoadingItems(false);
-      setLoadingKitchenware(false);
-      setKitchenware([]);
-      return;
-    }
-    try {
-      setLoadingItems(true);
-      setLoadingKitchenware(true);
-      const [inventoryData, kitchenwareData, catalogData] = await Promise.all([
-        inventoryApi.list(authFetch),
-        kitchenwareApi.list<KitchenwareItem>(authFetch),
-        kitchenwareApi.catalog<KitchenwareCatalogItem>(authFetch),
-      ]);
-      setItems(Array.isArray(inventoryData) ? inventoryData : []);
-      setKitchenware(Array.isArray(kitchenwareData) ? kitchenwareData : []);
-      setKitchenwareCatalog(Array.isArray(catalogData) ? catalogData : []);
-    } catch (e) {
-      console.error("Fetch inventory or kitchenware error:", e);
-    } finally {
-      setLoadingItems(false);
-      setLoadingKitchenware(false);
-    }
-  }, [isAuthenticated, authFetch]);
 
   useFocusEffect(
     useCallback(() => {
@@ -721,26 +682,11 @@ export default function InventoryScreen() {
     } else if (diffDays <= 3) {
       return { text: `临期 ${diffDays}天`, bg: "bg-amber-500/15", color: "text-amber-700" };
     } else {
-      return { text: `新鲜 ${diffDays}天`, bg: "bg-[#2D6A4F]/15", color: "text-[#2D6A4F]" };
+      return { text: `新鲜 ${diffDays}天`, bg: "bg-brand/15", color: "text-brand" };
     }
   };
 
-  const filteredItems = items.filter((item) => {
-    if (activeInventoryCategory === "全部") return true;
-    const storageFilterMap: Record<string, StorageLocation> = {
-      冷藏库: "冷藏",
-      冷冻库: "冷冻",
-      常温库: "常温",
-    };
-    const storageFilter = storageFilterMap[activeInventoryCategory];
-    if (storageFilter) {
-      const itemStorage = (["冷藏", "冷冻", "常温"].includes(item.storage_location)
-        ? item.storage_location
-        : "常温") as StorageLocation;
-      return itemStorage === storageFilter;
-    }
-    return item.category === activeInventoryCategory;
-  });
+  const filteredItems = filterInventoryItems(items, activeInventoryCategory);
 
   const priorityItems = items.filter((item) => {
     const status = getInventoryStatus(item).freshness;
@@ -766,42 +712,8 @@ export default function InventoryScreen() {
     },
   }[activeSegment];
 
-  const inventoryFoodNames = items.map((item) => item.food_name.trim()).filter(Boolean);
-  const recipeMatchesInventory = (recipe: Recipe) =>
-    inventoryFoodNames.some(
-      (name) => recipe.title.includes(name) || recipe.description?.includes(name),
-    );
-
-  const filteredRecipes = recipes
-    .filter((r) => {
-      const matchCategory =
-        activeRecipeCategory === "全部" ||
-        (activeRecipeCategory === "冰箱可做" && recipeMatchesInventory(r)) ||
-        r.category === activeRecipeCategory;
-      const matchSearch =
-        !recipeSearchQuery ||
-        r.title.includes(recipeSearchQuery) ||
-        r.description?.includes(recipeSearchQuery);
-      return matchCategory && matchSearch;
-    })
-    .sort((a, b) => {
-      const scoreA = inventoryFoodNames.reduce((acc, name) => {
-        return a.title.includes(name) || a.description?.includes(name) ? acc + 10 : acc;
-      }, 0);
-
-      const scoreB = inventoryFoodNames.reduce((acc, name) => {
-        return b.title.includes(name) || b.description?.includes(name) ? acc + 10 : acc;
-      }, 0);
-
-      // 冰箱中匹配食材种类越多的菜谱，自动置顶优先推荐！
-      return scoreB - scoreA;
-    });
-
-  const filteredKitchenware = kitchenware.filter(
-    (item) =>
-      activeKitchenwareCategory === "全部" ||
-      item.category === activeKitchenwareCategory,
-  );
+  const filteredRecipes = filterAndRankRecipes(recipes, items, activeRecipeCategory, recipeSearchQuery);
+  const filteredKitchenware = filterKitchenware(kitchenware, activeKitchenwareCategory);
   const visibleRecipes = filteredRecipes.slice(0, visibleRecipeCount);
   const hasMoreRecipes = visibleRecipeCount < filteredRecipes.length;
 
@@ -810,12 +722,12 @@ export default function InventoryScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 132 }}
-        className="bg-[#FDF8F0]"
+        className="bg-canvas"
       >
         {/* 统一品牌头部：标题、状态和三类资产在首屏内形成清晰层级。 */}
-        <View className="relative overflow-hidden rounded-b-[30px] bg-[#2D6A4F] px-5 pt-4 pb-5 shadow-sm">
+        <View className="relative overflow-hidden rounded-b-[30px] bg-brand px-5 pt-4 pb-5 shadow-sm">
           <View className="absolute -right-12 -top-12 h-44 w-44 rounded-full bg-white/5" />
-          <View className="absolute left-1/3 -bottom-12 h-32 w-32 rounded-full bg-[#E9C46A]/10" />
+          <View className="absolute left-1/3 -bottom-12 h-32 w-32 rounded-full bg-highlight/10" />
 
           <View className="flex-row items-start justify-between">
             <View className="flex-1 pr-4">
@@ -824,7 +736,7 @@ export default function InventoryScreen() {
               <Text className="mt-0.5 text-[11px] font-medium text-emerald-50/75">{activeSegmentMeta.subtitle}</Text>
             </View>
             <View className="mt-1 flex-row items-center gap-1.5 rounded-full border border-white/15 bg-black/15 px-3 py-2">
-              <View className={`h-1.5 w-1.5 rounded-full ${activeSegment === "inventory" && expiringCount > 0 ? "bg-[#E9C46A]" : "bg-emerald-200"}`} />
+              <View className={`h-1.5 w-1.5 rounded-full ${activeSegment === "inventory" && expiringCount > 0 ? "bg-highlight" : "bg-emerald-200"}`} />
               <Text className="text-[10px] font-bold text-white">{activeSegmentMeta.status}</Text>
             </View>
           </View>
@@ -851,11 +763,11 @@ export default function InventoryScreen() {
                     size={12}
                     color={isActive ? "#2D6A4F" : "#9B8E7D"}
                   />
-                  <Text className={`text-xs ${isActive ? "font-black text-[#2D6A4F]" : "font-bold text-[#8B7D6B]"}`}>
+                  <Text className={`text-xs ${isActive ? "font-black text-brand" : "font-bold text-copy-muted"}`}>
                     {segment.label}
                   </Text>
                   <View className={`min-w-5 items-center rounded-full px-1.5 py-0.5 ${isActive ? "bg-white/80" : "bg-[#F3EEE7]"}`}>
-                    <Text className={`text-[9px] font-black ${isActive ? "text-[#2D6A4F]" : "text-[#9B8E7D]"}`}>
+                    <Text className={`text-[9px] font-black ${isActive ? "text-brand" : "text-[#9B8E7D]"}`}>
                       {segment.count}
                     </Text>
                   </View>
@@ -865,40 +777,49 @@ export default function InventoryScreen() {
           </View>
         </View>
 
+        {sectionErrors[activeSegment] ? (
+          <TouchableOpacity
+            onPress={() => void fetchData()}
+            className="mx-5 mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-3"
+          >
+            <Text className="text-xs font-bold text-amber-800">{sectionErrors[activeSegment]} · 点击重试</Text>
+          </TouchableOpacity>
+        ) : null}
+
         {/* CONTENT SEGMENT 1: INVENTORY */}
         {activeSegment === "inventory" && (
           <View className="flex-1">
             {!isAuthenticated ? (
               <View className="flex-1 items-center justify-center p-6">
-                <View className="w-20 h-20 bg-[#2D6A4F]/10 rounded-full items-center justify-center mb-4">
+                <View className="w-20 h-20 bg-brand/10 rounded-full items-center justify-center mb-4">
                   <FontAwesome6 name="basket-shopping" size={32} color="#2D6A4F" />
                 </View>
-                <Text className="text-xl font-bold text-[#3D3229]">解锁智能食材保鲜库</Text>
-                <Text className="text-sm text-[#8B7D6B] text-center mt-2 mb-6">
+                <Text className="text-xl font-bold text-ink">解锁智能食材保鲜库</Text>
+                <Text className="text-sm text-copy-muted text-center mt-2 mb-6">
                   登录后可随时记录冰箱食材、自动临期提醒并智能生成美味菜单。
                 </Text>
                 <View className="flex-row gap-3">
                   <TouchableOpacity
                     onPress={() => router.push("/login")}
-                    className="bg-[#2D6A4F] px-6 py-3 rounded-2xl shadow-sm active:opacity-90"
+                    className="bg-brand px-6 py-3 rounded-2xl shadow-sm active:opacity-90"
                   >
                     <Text className="text-sm font-bold text-white">立即登录</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() => router.push("/login")}
-                    className="bg-[#E9C46A] px-6 py-3 rounded-2xl shadow-sm active:opacity-90 flex-row items-center gap-1.5"
+                    className="bg-highlight px-6 py-3 rounded-2xl shadow-sm active:opacity-90 flex-row items-center gap-1.5"
                   >
                     <FontAwesome6 name="wand-magic-sparkles" size={13} color="#3D3229" />
-                    <Text className="text-sm font-black text-[#3D3229]">登录后体验</Text>
+                    <Text className="text-sm font-black text-ink">登录后体验</Text>
                   </TouchableOpacity>
                 </View>
               </View>
             ) : (
               <>
                 {/* Category Slider & Smart Storage Filter */}
-                <View className="bg-[#FDF8F0] pt-4 pb-3">
+                <View className="bg-canvas pt-4 pb-3">
                   <View className="mb-2 flex-row items-center justify-between px-5">
-                    <Text className="text-[11px] font-black text-[#3D3229]">按位置或品类查看</Text>
+                    <Text className="text-[11px] font-black text-ink">按位置或品类查看</Text>
                     <Text className="text-[10px] font-medium text-[#9B8E7D]">长按食材可移动分区</Text>
                   </View>
                   <View>
@@ -918,7 +839,7 @@ export default function InventoryScreen() {
                           accessibilityState={{ selected: isActive }}
                           className={`rounded-full border px-3.5 py-2 ${
                             isActive
-                              ? "border-[#2D6A4F] bg-[#2D6A4F]"
+                              ? "border-brand bg-brand"
                               : "border-[#E7DED1] bg-white"
                           }`}
                         >
@@ -937,7 +858,7 @@ export default function InventoryScreen() {
                 </View>
 
                 {/* 🎠 单行极简横向轮播通知卡片集 (Single Swipeable Smart Notice Carousel) */}
-                <View className="bg-[#FDF8F0] px-5 pb-1">
+                <View className="bg-canvas px-5 pb-1">
                   {(() => {
                     const urgentExpiringItems = priorityItems;
                     const firstUrgentItem = urgentExpiringItems[0];
@@ -984,7 +905,7 @@ export default function InventoryScreen() {
                                     <FontAwesome6 name="bell" size={12} color="#A8641D" />
                                   </View>
                                   <View className="flex-1">
-                                    <Text className="mb-0.5 text-[13px] font-black text-[#3D3229]">
+                                    <Text className="mb-0.5 text-[13px] font-black text-ink">
                                       {urgentExpiringItems.length} 件需要优先处理
                                     </Text>
                                     <Text numberOfLines={1} className="text-[11px] font-medium text-[#756858]">
@@ -1014,14 +935,14 @@ export default function InventoryScreen() {
                                     <FontAwesome6 name="heart-pulse" size={14} color="#2D6A4F" />
                                   </View>
                                   <View className="flex-1">
-                                    <Text className="text-xs font-black text-[#3D3229] mb-0.5">智能保鲜周报</Text>
-                                    <Text className="text-[11px] text-[#8B7D6B] font-medium">
+                                    <Text className="text-xs font-black text-ink mb-0.5">智能保鲜周报</Text>
+                                    <Text className="text-[11px] text-copy-muted font-medium">
                                       全库 {items.length} 件食材均在最佳赏味期
                                     </Text>
                                   </View>
                                 </View>
                                 <View className="flex-row items-center gap-1">
-                                  <Text className="text-[11px] font-black text-[#2D6A4F]">去配餐</Text>
+                                  <Text className="text-[11px] font-black text-brand">去配餐</Text>
                                   <FontAwesome6 name="chevron-right" size={9} color="#2D6A4F" />
                                 </View>
                               </TouchableOpacity>
@@ -1040,20 +961,20 @@ export default function InventoryScreen() {
                                   <FontAwesome6 name="receipt" size={14} color="#2D6A4F" />
                                 </View>
                                 <View className="flex-1">
-                                  <Text className="text-xs font-black text-[#3D3229] mb-0.5">{pendingScanJobId ? "上次识别结果待确认" : "AI 拍照小票/食材一键入库"}</Text>
-                                  <Text className="text-[10px] text-[#8B7D6B]">{pendingScanJobId ? "点此继续查看并确认入库" : "自动识别食材名分量与建议保质期"}</Text>
+                                  <Text className="text-xs font-black text-ink mb-0.5">{pendingScanJobId ? "上次识别结果待确认" : "AI 拍照小票/食材一键入库"}</Text>
+                                  <Text className="text-[10px] text-copy-muted">{pendingScanJobId ? "点此继续查看并确认入库" : "自动识别食材名分量与建议保质期"}</Text>
                                 </View>
                               </View>
                               {scanningReceipt ? (
                                 <ActivityIndicator size="small" color="#3D3229" />
                               ) : pendingScanJobId ? (
                                 <View className="flex-row items-center gap-1">
-                                  <Text className="text-[11px] font-black text-[#2D6A4F]">查看</Text>
+                                  <Text className="text-[11px] font-black text-brand">查看</Text>
                                   <FontAwesome6 name="chevron-right" size={9} color="#2D6A4F" />
                                 </View>
                               ) : (
                                 <View className="flex-row items-center gap-1">
-                                  <Text className="text-[11px] font-black text-[#2D6A4F]">拍照</Text>
+                                  <Text className="text-[11px] font-black text-brand">拍照</Text>
                                   <FontAwesome6 name="chevron-right" size={9} color="#2D6A4F" />
                                 </View>
                               )}
@@ -1077,12 +998,12 @@ export default function InventoryScreen() {
                                     <FontAwesome6 name="wand-magic-sparkles" size={14} color="#2D6A4F" />
                                   </View>
                                   <View className="flex-1">
-                                    <Text className="text-xs font-black text-[#3D3229] mb-0.5">现有食材极速烹饪匹配</Text>
-                                    <Text className="text-[10px] text-[#8B7D6B]">用现有 {items.length} 种食材极速匹配食谱</Text>
+                                    <Text className="text-xs font-black text-ink mb-0.5">现有食材极速烹饪匹配</Text>
+                                    <Text className="text-[10px] text-copy-muted">用现有 {items.length} 种食材极速匹配食谱</Text>
                                   </View>
                                 </View>
                                 <View className="flex-row items-center gap-1">
-                                  <Text className="text-[11px] font-black text-[#2D6A4F]">去匹配</Text>
+                                  <Text className="text-[11px] font-black text-brand">去匹配</Text>
                                   <FontAwesome6 name="chevron-right" size={9} color="#2D6A4F" />
                                 </View>
                               </TouchableOpacity>
@@ -1114,10 +1035,10 @@ export default function InventoryScreen() {
                       <ActivityIndicator size="large" color="#2D6A4F" />
                     </View>
                   ) : filteredItems.length === 0 ? (
-                    <View className="py-16 items-center bg-white/60 rounded-[28px] border border-[#EBE3D5] p-6">
+                    <View className="py-16 items-center bg-white/60 rounded-[28px] border border-line p-6">
                       <FontAwesome6 name="snowflake" size={36} color="#D4A276" />
-                      <Text className="text-base font-bold text-[#3D3229] mt-3">保鲜仓暂无此类食材</Text>
-                      <Text className="text-xs text-[#8B7D6B] mt-1">点击右上角“录入食材”添加食材到冰箱吧！</Text>
+                      <Text className="text-base font-bold text-ink mt-3">保鲜仓暂无此类食材</Text>
+                      <Text className="text-xs text-copy-muted mt-1">点击右上角“录入食材”添加食材到冰箱吧！</Text>
                     </View>
                   ) : (
                     <View>
@@ -1173,8 +1094,8 @@ export default function InventoryScreen() {
                                   <FontAwesome6 name={group.icon as any} size={14} color={group.iconColor} />
                                 </View>
                                 <View>
-                                  <Text className="text-[15px] font-black text-[#3D3229]">{group.title}</Text>
-                                  <Text className="text-[11px] text-[#8B7D6B] font-medium mt-0.5">{group.subtitle}</Text>
+                                  <Text className="text-[15px] font-black text-ink">{group.title}</Text>
+                                  <Text className="text-[11px] text-copy-muted font-medium mt-0.5">{group.subtitle}</Text>
                                 </View>
                               </View>
 
@@ -1190,7 +1111,7 @@ export default function InventoryScreen() {
                                     openAddModal();
                                   }}
                                   accessibilityLabel={`存入${group.key}食材`}
-                                  className="h-9 w-9 items-center justify-center rounded-full bg-[#2D6A4F] active:opacity-80"
+                                  className="h-9 w-9 items-center justify-center rounded-full bg-brand active:opacity-80"
                                 >
                                   <FontAwesome6 name="plus" size={11} color="#FFFFFF" />
                                 </TouchableOpacity>
@@ -1199,8 +1120,8 @@ export default function InventoryScreen() {
 
                             {/* 手机系统大文件夹核心：App 图标式多列网格 (Grid Layout) */}
                             {group.items.length === 0 ? (
-                              <View className="py-6 items-center bg-white/60 rounded-[22px] border border-dashed border-[#EBE3D5]">
-                                <Text className="text-xs text-[#8B7D6B]">文件夹空空如也，点击右上角 + 入库</Text>
+                              <View className="py-6 items-center bg-white/60 rounded-[22px] border border-dashed border-line">
+                                <Text className="text-xs text-copy-muted">文件夹空空如也，点击右上角 + 入库</Text>
                               </View>
                             ) : (
                               <View
@@ -1280,7 +1201,7 @@ export default function InventoryScreen() {
 
                                         <Text
                                           numberOfLines={2}
-                                          className="mt-2.5 min-h-[34px] text-[13px] font-black leading-[17px] text-[#3D3229]"
+                                          className="mt-2.5 min-h-[34px] text-[13px] font-black leading-[17px] text-ink"
                                         >
                                           {item.food_name}
                                         </Text>
@@ -1302,7 +1223,7 @@ export default function InventoryScreen() {
                                   style={{ width: inventoryCardWidth || "48%" }}
                                   className="min-h-[146px] items-center justify-center rounded-[20px] border border-dashed border-[#D8CCBA] bg-[#FFFDF9] p-3 active:bg-white"
                                 >
-                                  <View className="mb-2 h-10 w-10 items-center justify-center rounded-full bg-[#F5EFE6]">
+                                  <View className="mb-2 h-10 w-10 items-center justify-center rounded-full bg-background-secondary">
                                     <FontAwesome6 name="plus" size={14} color="#8B7D6B" />
                                   </View>
                                   <Text className="text-[11px] font-black text-[#756858]">存入{group.key}</Text>
@@ -1324,15 +1245,15 @@ export default function InventoryScreen() {
           <View className="flex-1">
             <View className="mx-5 mb-3 mt-4 flex-row items-center justify-between">
               <View>
-                <Text className="text-[17px] font-black text-[#3D3229]">今天想吃什么？</Text>
-                <Text className="mt-0.5 text-[11px] text-[#8B7D6B]">优先展示与你现有食材更匹配的菜谱</Text>
+                <Text className="text-[17px] font-black text-ink">今天想吃什么？</Text>
+                <Text className="mt-0.5 text-[11px] text-copy-muted">优先展示与你现有食材更匹配的菜谱</Text>
               </View>
               <TouchableOpacity
                 onPress={() => router.push("/recipe-submit")}
                 className="flex-row items-center rounded-full border border-[#D8E7DD] bg-[#E7F0EA] px-3 py-2.5"
               >
                 <FontAwesome6 name="pen" size={10} color="#2D6A4F" />
-                <Text className="ml-1.5 text-[11px] font-black text-[#2D6A4F]">投稿与收藏</Text>
+                <Text className="ml-1.5 text-[11px] font-black text-brand">投稿与收藏</Text>
               </TouchableOpacity>
             </View>
             {/* Search Input & Filter */}
@@ -1344,7 +1265,7 @@ export default function InventoryScreen() {
                   onChangeText={setRecipeSearchQuery}
                   placeholder="搜索菜名、食材或营养目标"
                   placeholderTextColor="#A99D8E"
-                  className="flex-1 text-[13px] text-[#3D3229]"
+                  className="flex-1 text-[13px] text-ink"
                 />
                 {recipeSearchQuery.length > 0 && (
                   <TouchableOpacity onPress={() => setRecipeSearchQuery("")}>
@@ -1380,7 +1301,7 @@ export default function InventoryScreen() {
                       accessibilityState={{ selected: isActive }}
                       className={`rounded-full border px-3.5 py-2 ${
                         isActive
-                          ? "border-[#2D6A4F] bg-[#2D6A4F]"
+                          ? "border-brand bg-brand"
                           : "border-[#E7DED1] bg-white"
                       }`}
                     >
@@ -1405,12 +1326,12 @@ export default function InventoryScreen() {
                   <ActivityIndicator size="large" color="#2D6A4F" />
                 </View>
               ) : filteredRecipes.length === 0 ? (
-                <View className="py-16 items-center bg-white/60 rounded-[28px] border border-[#EBE3D5] p-6">
+                <View className="py-16 items-center bg-white/60 rounded-[28px] border border-line p-6">
                   <FontAwesome6 name="utensils" size={36} color="#D4A276" />
-                  <Text className="mt-3 text-base font-bold text-[#3D3229]">
+                  <Text className="mt-3 text-base font-bold text-ink">
                     {activeRecipeCategory === "冰箱可做" ? "暂时没有库存可做的食谱" : "未找到匹配的食谱"}
                   </Text>
-                  <Text className="mt-1 text-center text-xs text-[#8B7D6B]">
+                  <Text className="mt-1 text-center text-xs text-copy-muted">
                     {activeRecipeCategory === "冰箱可做" ? "先录入食材，或切换到“全部”发现更多灵感" : "尝试搜索其他食材或切换分类"}
                   </Text>
                 </View>
@@ -1418,7 +1339,7 @@ export default function InventoryScreen() {
                 <View className="flex-row flex-wrap justify-between gap-y-3.5">
                   {visibleRecipes.map((recipe) => {
                     // 计算冰箱食材与食谱的匹配度
-                    const isFullyMatched = recipeMatchesInventory(recipe);
+                    const isFullyMatched = recipeMatchesInventory(recipe, items);
 
                     return (
                       <View
@@ -1447,7 +1368,7 @@ export default function InventoryScreen() {
 
                             {/* 冰箱食材匹配角标 */}
                             {isFullyMatched ? (
-                              <View className="absolute top-2 left-2 rounded-full bg-[#2D6A4F] px-2 py-0.5">
+                              <View className="absolute top-2 left-2 rounded-full bg-brand px-2 py-0.5">
                                 <Text className="text-[9px] font-black text-white">库存可做</Text>
                               </View>
                             ) : (
@@ -1458,10 +1379,10 @@ export default function InventoryScreen() {
                           </View>
 
                           <View className="p-3 pb-2.5">
-                            <Text numberOfLines={2} className="min-h-[36px] text-sm font-black leading-[18px] text-[#3D3229]">
+                            <Text numberOfLines={2} className="min-h-[36px] text-sm font-black leading-[18px] text-ink">
                               {recipe.title}
                             </Text>
-                            <Text className="mt-1 min-h-[32px] text-[10px] font-medium leading-4 text-[#8B7D6B]" numberOfLines={2}>
+                            <Text className="mt-1 min-h-[32px] text-[10px] font-medium leading-4 text-copy-muted" numberOfLines={2}>
                               {recipe.description}
                             </Text>
 
@@ -1470,7 +1391,7 @@ export default function InventoryScreen() {
                               <FontAwesome6 name="clock" size={9} color="#8B7D6B" />
                               <Text className="text-[9px] font-bold text-[#6F6254]">{recipe.cook_time} 分钟</Text>
                               <View className="h-1 w-1 rounded-full bg-[#D7CCBE]" />
-                              <Text className="text-[9px] font-bold text-[#2D6A4F]">蛋白 {recipe.protein}g</Text>
+                              <Text className="text-[9px] font-bold text-brand">蛋白 {recipe.protein}g</Text>
                             </View>
                           </View>
                         </TouchableOpacity>
@@ -1489,7 +1410,7 @@ export default function InventoryScreen() {
                             className="flex-row items-center justify-center gap-1.5 rounded-xl bg-[#E7F0EA] py-2 active:opacity-80"
                           >
                             <FontAwesome6 name="wand-magic-sparkles" size={9} color="#2D6A4F" />
-                            <Text className="text-[10px] font-black text-[#2D6A4F]">AI 烹饪指导</Text>
+                            <Text className="text-[10px] font-black text-brand">AI 烹饪指导</Text>
                           </TouchableOpacity>
                         </View>
                       </View>
@@ -1517,17 +1438,17 @@ export default function InventoryScreen() {
 
         {/* CONTENT SEGMENT 3: KITCHENWARE */}
         {activeSegment === "kitchenware" && !isAuthenticated && (
-          <View className="mx-5 mt-8 items-center rounded-[28px] border border-[#EBE3D5] bg-white px-6 py-10">
-            <View className="mb-4 h-14 w-14 items-center justify-center rounded-full bg-[#2D6A4F]/10">
+          <View className="mx-5 mt-8 items-center rounded-[28px] border border-line bg-white px-6 py-10">
+            <View className="mb-4 h-14 w-14 items-center justify-center rounded-full bg-brand/10">
               <FontAwesome6 name="fire-burner" size={22} color="#2D6A4F" />
             </View>
-            <Text className="text-base font-black text-[#3D3229]">登录后管理你的厨具</Text>
-            <Text className="mt-2 text-center text-xs leading-5 text-[#8B7D6B]">
+            <Text className="text-base font-black text-ink">登录后管理你的厨具</Text>
+            <Text className="mt-2 text-center text-xs leading-5 text-copy-muted">
               记录锅具、刀具和小家电，获得更匹配的食谱与保养提醒。
             </Text>
             <TouchableOpacity
               onPress={() => router.push("/login")}
-              className="mt-5 rounded-2xl bg-[#2D6A4F] px-8 py-3"
+              className="mt-5 rounded-2xl bg-brand px-8 py-3"
             >
               <Text className="text-sm font-black text-white">立即登录</Text>
             </TouchableOpacity>
@@ -1538,14 +1459,14 @@ export default function InventoryScreen() {
           <View className="px-4 pt-4">
             {/* 厨具智能保养与闲置唤醒 Banner */}
             <View className="mb-4 flex-row items-center gap-3 rounded-[22px] border border-[#CFE1D5] bg-[#E8F1EA] p-4 shadow-2xs">
-              <View className="h-11 w-11 items-center justify-center rounded-2xl bg-[#2D6A4F] shadow-xs">
+              <View className="h-11 w-11 items-center justify-center rounded-2xl bg-brand shadow-xs">
                 <FontAwesome6 name="plug" size={16} color="#FFF" />
               </View>
               <View className="flex-1">
                 <View className="flex-row items-center justify-between">
-                  <Text className="text-[13px] font-black text-[#2D6A4F]">装备状态管家</Text>
+                  <Text className="text-[13px] font-black text-brand">装备状态管家</Text>
                   <View className="rounded-full bg-white/70 px-2 py-1">
-                    <Text className="text-[9px] font-black text-[#2D6A4F]">自动提醒</Text>
+                    <Text className="text-[9px] font-black text-brand">自动提醒</Text>
                   </View>
                 </View>
                 <Text className="mt-1 text-[11px] text-[#4B4037]" numberOfLines={1}>
@@ -1561,8 +1482,8 @@ export default function InventoryScreen() {
             <View className="mb-4 rounded-[24px] border border-[#E7DED1] bg-white p-4">
               <View className="flex-row items-center justify-between">
                 <View>
-                  <Text className="text-[13px] font-black text-[#3D3229]">按烹饪习惯快速配置</Text>
-                  <Text className="mt-1 text-[10px] text-[#8B7D6B]">选择一套常用装备，之后仍可逐件调整</Text>
+                  <Text className="text-[13px] font-black text-ink">按烹饪习惯快速配置</Text>
+                  <Text className="mt-1 text-[10px] text-copy-muted">选择一套常用装备，之后仍可逐件调整</Text>
                 </View>
                 <FontAwesome6 name="wand-magic-sparkles" size={15} color="#D4A276" />
               </View>
@@ -1572,7 +1493,7 @@ export default function InventoryScreen() {
                   {KITCHENWARE_STARTER_KITS.map((kit) => (
                     <TouchableOpacity key={kit.name} disabled={Boolean(addingStarterKit)} onPress={() => addStarterKit(kit)} className="w-44 rounded-2xl border border-[#D8E7DD] bg-[#F0F6F2] px-3.5 py-3 disabled:opacity-50">
                       <View className="flex-row items-center justify-between">
-                        <Text className="text-[12px] font-black text-[#2D6A4F]">{addingStarterKit === kit.name ? "添加中…" : kit.name}</Text>
+                        <Text className="text-[12px] font-black text-brand">{addingStarterKit === kit.name ? "添加中…" : kit.name}</Text>
                         <FontAwesome6 name="plus" size={9} color="#2D6A4F" />
                       </View>
                       <Text numberOfLines={2} className="mt-1 text-[9px] leading-4 text-[#6F6254]">{kit.items.join(" · ")}</Text>
@@ -1586,12 +1507,12 @@ export default function InventoryScreen() {
             {/* 厨具分类 Selector + 录入新厨具按键 */}
             <View className="mb-3 flex-row items-center justify-between">
               <View>
-                <Text className="text-[15px] font-black text-[#3D3229]">我的厨具</Text>
-                <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">{kitchenware.length} 件装备 · 点卡片可查看与维护</Text>
+                <Text className="text-[15px] font-black text-ink">我的厨具</Text>
+                <Text className="mt-0.5 text-[10px] text-copy-muted">{kitchenware.length} 件装备 · 点卡片可查看与维护</Text>
               </View>
               <TouchableOpacity
                 onPress={() => openKitchenwareModal()}
-                className="flex-row items-center gap-1.5 rounded-full bg-[#2D6A4F] px-4 py-2.5 shadow-2xs active:scale-95"
+                className="flex-row items-center gap-1.5 rounded-full bg-brand px-4 py-2.5 shadow-2xs active:scale-95"
               >
                 <FontAwesome6 name="plus" size={10} color="#FFF" />
                 <Text className="text-xs font-black text-white">录入厨具</Text>
@@ -1608,13 +1529,13 @@ export default function InventoryScreen() {
                       accessibilityState={{ selected: activeKitchenwareCategory === cat }}
                       className={`rounded-full border px-3.5 py-2 ${
                         activeKitchenwareCategory === cat
-                          ? "bg-[#2D6A4F] border-[#2D6A4F]"
+                          ? "bg-brand border-brand"
                           : "border-[#E7DED1] bg-white"
                       }`}
                     >
                       <Text
                         className={`text-xs font-bold ${
-                          activeKitchenwareCategory === cat ? "text-white font-black" : "text-[#8B7D6B]"
+                          activeKitchenwareCategory === cat ? "text-white font-black" : "text-copy-muted"
                         }`}
                       >
                         {cat}
@@ -1628,22 +1549,22 @@ export default function InventoryScreen() {
             {loadingKitchenware ? (
               <View className="items-center py-16">
                 <ActivityIndicator color="#2D6A4F" />
-                <Text className="mt-3 text-xs text-[#8B7D6B]">正在加载厨具装备...</Text>
+                <Text className="mt-3 text-xs text-copy-muted">正在加载厨具装备...</Text>
               </View>
             ) : filteredKitchenware.length === 0 ? (
               <View className="items-center rounded-[26px] border border-dashed border-[#D8CCBA] bg-white px-6 py-10">
-                <View className="h-14 w-14 items-center justify-center rounded-2xl bg-[#F5EFE6]">
+                <View className="h-14 w-14 items-center justify-center rounded-2xl bg-background-secondary">
                   <FontAwesome6 name="kitchen-set" size={24} color="#8B7D6B" />
                 </View>
-                <Text className="mt-4 text-sm font-black text-[#3D3229]">
+                <Text className="mt-4 text-sm font-black text-ink">
                   {kitchenware.length === 0 ? "建立你的厨房装备库" : "这个分类还没有厨具"}
                 </Text>
-                <Text className="mt-1 max-w-64 text-center text-xs leading-5 text-[#8B7D6B]">
+                <Text className="mt-1 max-w-64 text-center text-xs leading-5 text-copy-muted">
                   {kitchenware.length === 0 ? "添加常用锅具或小家电，就能获得更准确的食谱与保养提醒。" : "切换其他分类查看，或录入一件新厨具。"}
                 </Text>
                 <TouchableOpacity
                   onPress={() => openKitchenwareModal()}
-                  className="mt-5 rounded-full bg-[#2D6A4F] px-5 py-2.5"
+                  className="mt-5 rounded-full bg-brand px-5 py-2.5"
                 >
                   <Text className="text-xs font-black text-white">{kitchenware.length === 0 ? "录入第一件厨具" : "录入新厨具"}</Text>
                 </TouchableOpacity>
@@ -1654,18 +1575,18 @@ export default function InventoryScreen() {
                   <View
                     key={kw.id}
                     style={{ width: "48.5%" }}
-                    className="bg-white rounded-[24px] overflow-hidden border border-[#EBE3D5] shadow-xs flex-col justify-between p-3"
+                    className="bg-white rounded-[24px] overflow-hidden border border-line shadow-xs flex-col justify-between p-3"
                   >
                     <View>
                       <View className="relative mb-2">
                         {kw.image_url ? (
                           <Image
                             source={{ uri: kw.image_url }}
-                            className="w-full h-28 rounded-2xl border border-[#EBE3D5]"
+                            className="w-full h-28 rounded-2xl border border-line"
                             resizeMode="cover"
                           />
                         ) : (
-                          <View className="h-28 w-full items-center justify-center rounded-2xl border border-[#EBE3D5] bg-[#F5EFE6]">
+                          <View className="h-28 w-full items-center justify-center rounded-2xl border border-line bg-background-secondary">
                             <FontAwesome6 name="kitchen-set" size={28} color="#8B7D6B" />
                           </View>
                         )}
@@ -1688,16 +1609,16 @@ export default function InventoryScreen() {
                         </View>
                       </View>
 
-                      <Text numberOfLines={1} className="text-sm font-black text-[#3D3229]">
+                      <Text numberOfLines={1} className="text-sm font-black text-ink">
                         {kw.name}
                       </Text>
-                      <Text numberOfLines={2} className="text-[10px] text-[#8B7D6B] mt-0.5 font-medium">
+                      <Text numberOfLines={2} className="text-[10px] text-copy-muted mt-0.5 font-medium">
                         {kw.note}
                       </Text>
                     </View>
 
                     {/* 底部功能栏 */}
-                    <View className="mt-2.5 pt-2 border-t border-[#F5EFE6] flex-row items-center justify-between gap-1">
+                    <View className="mt-2.5 pt-2 border-t border-background-secondary flex-row items-center justify-between gap-1">
                       <TouchableOpacity
                         onPress={() =>
                           router.push({
@@ -1707,18 +1628,18 @@ export default function InventoryScreen() {
                             },
                           })
                         }
-                        className="bg-[#2D6A4F]/10 border border-[#2D6A4F]/20 flex-1 py-1 rounded-xl items-center flex-row justify-center gap-1 active:opacity-80"
+                        className="bg-brand/10 border border-brand/20 flex-1 py-1 rounded-xl items-center flex-row justify-center gap-1 active:opacity-80"
                       >
                         <FontAwesome6 name="wand-magic-sparkles" size={8} color="#2D6A4F" />
-                        <Text className="text-[9px] font-black text-[#2D6A4F]">AI 菜谱</Text>
+                        <Text className="text-[9px] font-black text-brand">AI 菜谱</Text>
                       </TouchableOpacity>
 
                       <TouchableOpacity
                         onPress={() => handleMaintainKitchenware(kw)}
-                        className="bg-[#F5EFE6] px-2 py-1 rounded-xl items-center flex-row justify-center gap-1"
+                        className="bg-background-secondary px-2 py-1 rounded-xl items-center flex-row justify-center gap-1"
                       >
                         <FontAwesome6 name="wrench" size={8} color="#8B7D6B" />
-                        <Text className="text-[9px] font-bold text-[#8B7D6B]">保养</Text>
+                        <Text className="text-[9px] font-bold text-copy-muted">保养</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -1732,17 +1653,17 @@ export default function InventoryScreen() {
         <Modal visible={modalVisible && isAuthenticated} animationType="slide" transparent>
           <View className="flex-1 bg-black/40 justify-end">
             <View className="bg-white rounded-t-[32px] px-5 pt-5 pb-6 max-h-[90%]">
-              <View className="flex-row items-center justify-between mb-4 border-b border-[#F5EFE6] pb-3">
+              <View className="flex-row items-center justify-between mb-4 border-b border-background-secondary pb-3">
                 <View>
-                  <Text className="text-lg font-black text-[#3D3229]">
+                  <Text className="text-lg font-black text-ink">
                     {editingItem ? "编辑食材" : entryMode === "choose" ? "添加食材" : "手动录入"}
                   </Text>
-                  {!editingItem && <Text className="text-[11px] text-[#8B7D6B] mt-0.5">{entryMode === "choose" ? "选一种最适合你的录入方式" : "填好名称、数量和到期日即可入库"}</Text>}
+                  {!editingItem && <Text className="text-[11px] text-copy-muted mt-0.5">{entryMode === "choose" ? "选一种最适合你的录入方式" : "填好名称、数量和到期日即可入库"}</Text>}
                 </View>
                 <TouchableOpacity
                   onPress={() => setModalVisible(false)}
                   accessibilityLabel="关闭录入食材弹窗"
-                  className="w-9 h-9 -mr-2 items-center justify-center rounded-full bg-[#FDF8F0]"
+                  className="w-9 h-9 -mr-2 items-center justify-center rounded-full bg-canvas"
                 >
                   <FontAwesome6 name="xmark" size={18} color="#8B7D6B" />
                 </TouchableOpacity>
@@ -1750,13 +1671,13 @@ export default function InventoryScreen() {
 
               {!editingItem && entryMode === "choose" ? (
                 <View className="pb-2">
-                  <Text className="mt-1 text-xl font-black text-[#3D3229]">这次怎么添加？</Text>
-                  <Text className="mt-1 text-xs leading-5 text-[#8B7D6B]">单个食材、购物清单或订单截图都可以，识别多项后再由你确认。</Text>
+                  <Text className="mt-1 text-xl font-black text-ink">这次怎么添加？</Text>
+                  <Text className="mt-1 text-xs leading-5 text-copy-muted">单个食材、购物清单或订单截图都可以，识别多项后再由你确认。</Text>
 
                   <TouchableOpacity
                     onPress={openAiFoodAssist}
                     disabled={aiAssisting}
-                    className="mt-5 overflow-hidden rounded-[24px] bg-[#2D6A4F] p-5 active:opacity-90 disabled:opacity-60"
+                    className="mt-5 overflow-hidden rounded-[24px] bg-brand p-5 active:opacity-90 disabled:opacity-60"
                   >
                     <View className="absolute -right-5 -top-5 h-28 w-28 rounded-full bg-white/10" />
                     <View className="h-11 w-11 items-center justify-center rounded-2xl bg-white/15">
@@ -1771,38 +1692,38 @@ export default function InventoryScreen() {
                     </View>
                   </TouchableOpacity>
 
-                  <TouchableOpacity onPress={() => setEntryMode("manual")} className="mt-3 flex-row items-center rounded-[22px] border border-[#EBE3D5] bg-[#FDF8F0] p-4 active:opacity-80">
+                  <TouchableOpacity onPress={() => setEntryMode("manual")} className="mt-3 flex-row items-center rounded-[22px] border border-line bg-canvas p-4 active:opacity-80">
                     <View className="h-10 w-10 items-center justify-center rounded-xl bg-white">
                       <FontAwesome6 name="pen" size={14} color="#8B7D6B" />
                     </View>
                     <View className="ml-3 flex-1">
-                      <Text className="text-sm font-black text-[#3D3229]">手动填写</Text>
-                      <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">适合没有照片，或想自己精确填写时</Text>
+                      <Text className="text-sm font-black text-ink">手动填写</Text>
+                      <Text className="mt-0.5 text-[10px] text-copy-muted">适合没有照片，或想自己精确填写时</Text>
                     </View>
                     <FontAwesome6 name="chevron-right" size={12} color="#8B7D6B" />
                   </TouchableOpacity>
 
                   <TouchableOpacity onPress={() => { setModalVisible(false); handleScanReceiptAndBatchAdd(); }} className="mt-4 flex-row items-center justify-center gap-2 py-3">
                     <FontAwesome6 name="receipt" size={13} color="#2D6A4F" />
-                    <Text className="text-xs font-bold text-[#2D6A4F]">有一整张小票或多种食材？批量导入</Text>
+                    <Text className="text-xs font-bold text-brand">有一整张小票或多种食材？批量导入</Text>
                   </TouchableOpacity>
                 </View>
               ) : (
               <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerClassName="pb-2">
                 <View>
-                  <Text className="text-xs font-bold text-[#8B7D6B] mb-1.5">食材名称 <Text className="text-[#C2413A]">*</Text></Text>
+                  <Text className="text-xs font-bold text-copy-muted mb-1.5">食材名称 <Text className="text-[#C2413A]">*</Text></Text>
                   <TextInput
                     value={foodName}
                     onChangeText={setFoodName}
                     placeholder="例如：牛油果、希腊酸奶"
                     autoFocus={!editingItem}
                     returnKeyType="next"
-                    className="bg-[#FDF8F0] px-4 py-3.5 rounded-2xl border border-[#EBE3D5] text-base font-semibold text-[#3D3229]"
+                    className="bg-canvas px-4 py-3.5 rounded-2xl border border-line text-base font-semibold text-ink"
                   />
                 </View>
 
                 <View className="mt-4">
-                  <Text className="text-xs font-bold text-[#8B7D6B] mb-2">分类</Text>
+                  <Text className="text-xs font-bold text-copy-muted mb-2">分类</Text>
                   <View>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row" contentContainerClassName="gap-2 pr-4">
                       {["蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((c) => (
@@ -1810,10 +1731,10 @@ export default function InventoryScreen() {
                           key={c}
                           onPress={() => setCategory(c)}
                           className={`px-3.5 py-2 rounded-xl border ${
-                            category === c ? "bg-[#2D6A4F] border-[#2D6A4F]" : "bg-white border-[#EBE3D5]"
+                            category === c ? "bg-brand border-brand" : "bg-white border-line"
                           }`}
                         >
-                          <Text className={`text-xs ${category === c ? "text-white font-bold" : "text-[#8B7D6B] font-medium"}`}>
+                          <Text className={`text-xs ${category === c ? "text-white font-bold" : "text-copy-muted font-medium"}`}>
                             {c}
                           </Text>
                         </TouchableOpacity>
@@ -1824,33 +1745,33 @@ export default function InventoryScreen() {
 
                 <View className="flex-row gap-3 mt-4">
                   <View className="flex-1">
-                    <Text className="text-xs font-bold text-[#8B7D6B] mb-1.5">数量 <Text className="text-[#C2413A]">*</Text></Text>
+                    <Text className="text-xs font-bold text-copy-muted mb-1.5">数量 <Text className="text-[#C2413A]">*</Text></Text>
                     <TextInput
                       value={quantity}
                       onChangeText={setQuantity}
                       placeholder="如: 500g, 2盒"
-                      className="bg-[#FDF8F0] px-4 py-3 rounded-2xl border border-[#EBE3D5] text-sm font-semibold text-[#3D3229]"
+                      className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm font-semibold text-ink"
                     />
                     <View className="flex-row gap-1.5 mt-2">
                       {["100g", "1份", "2盒"].map((value) => (
-                        <TouchableOpacity key={value} onPress={() => setQuantity(value)} className="px-2 py-1 rounded-lg bg-[#F5EFE6]">
-                          <Text className="text-[10px] font-semibold text-[#8B7D6B]">{value}</Text>
+                        <TouchableOpacity key={value} onPress={() => setQuantity(value)} className="px-2 py-1 rounded-lg bg-background-secondary">
+                          <Text className="text-[10px] font-semibold text-copy-muted">{value}</Text>
                         </TouchableOpacity>
                       ))}
                     </View>
                   </View>
                   <View className="flex-1">
-                    <Text className="text-xs font-bold text-[#8B7D6B] mb-1.5">存放位置</Text>
+                    <Text className="text-xs font-bold text-copy-muted mb-1.5">存放位置</Text>
                     <View className="flex-row gap-1">
                       {["冷藏", "冷冻", "常温"].map((loc) => (
                         <TouchableOpacity
                           key={loc}
                           onPress={() => setStorageLocation(loc)}
                           className={`flex-1 py-2 rounded-xl border items-center ${
-                            storageLocation === loc ? "bg-[#3D3229] border-[#3D3229]" : "bg-[#FDF8F0] border-[#EBE3D5]"
+                            storageLocation === loc ? "bg-ink border-ink" : "bg-canvas border-line"
                           }`}
                         >
-                          <Text className={`text-xs ${storageLocation === loc ? "text-white font-bold" : "text-[#8B7D6B]"}`}>
+                          <Text className={`text-xs ${storageLocation === loc ? "text-white font-bold" : "text-copy-muted"}`}>
                             {loc}
                           </Text>
                         </TouchableOpacity>
@@ -1862,23 +1783,23 @@ export default function InventoryScreen() {
                 <View className="mt-4 rounded-2xl bg-[#F8F3EA] p-3.5">
                   <View className="flex-row items-center justify-between mb-2.5">
                     <View className="flex-row items-center gap-2">
-                      <View className="w-7 h-7 rounded-full bg-[#E9C46A]/30 items-center justify-center">
+                      <View className="w-7 h-7 rounded-full bg-highlight/30 items-center justify-center">
                         <FontAwesome6 name="bell" size={11} color="#9A6B10" />
                       </View>
                       <View>
-                        <Text className="text-xs font-black text-[#3D3229]">到期提醒</Text>
-                        <Text className="text-[10px] text-[#8B7D6B]">我们会在临期时提醒你优先食用</Text>
+                        <Text className="text-xs font-black text-ink">到期提醒</Text>
+                        <Text className="text-[10px] text-copy-muted">我们会在临期时提醒你优先食用</Text>
                       </View>
                     </View>
-                    <Text className="text-[10px] font-bold text-[#2D6A4F]">{storageLocation}</Text>
+                    <Text className="text-[10px] font-bold text-brand">{storageLocation}</Text>
                   </View>
                   <View className="flex-row gap-2 mb-3">
                     {[{ label: "3天", days: 3 }, { label: "7天", days: 7 }, { label: "30天", days: 30 }].map(({ label, days }) => {
                       const date = dateKeyAfterDays(days);
                       const selected = expirationDate === date;
                       return (
-                        <TouchableOpacity key={label} onPress={() => setExpirationDate(date)} className={`flex-1 items-center py-1.5 rounded-xl border ${selected ? "bg-[#2D6A4F] border-[#2D6A4F]" : "bg-white border-[#EBE3D5]"}`}>
-                          <Text className={`text-[11px] font-bold ${selected ? "text-white" : "text-[#8B7D6B]"}`}>{label}</Text>
+                        <TouchableOpacity key={label} onPress={() => setExpirationDate(date)} className={`flex-1 items-center py-1.5 rounded-xl border ${selected ? "bg-brand border-brand" : "bg-white border-line"}`}>
+                          <Text className={`text-[11px] font-bold ${selected ? "text-white" : "text-copy-muted"}`}>{label}</Text>
                         </TouchableOpacity>
                       );
                     })}
@@ -1886,26 +1807,26 @@ export default function InventoryScreen() {
                   <SmartDateInput value={expirationDate} onChange={setExpirationDate} />
                 </View>
 
-                <View className="mt-3 rounded-2xl border border-[#EBE3D5] bg-white p-3">
+                <View className="mt-3 rounded-2xl border border-line bg-white p-3">
                   <View className="flex-row items-center justify-between">
                     <View className="flex-row items-center gap-2">
                       {imageUrl ? (
-                        <Image source={{ uri: imageUrl }} className="h-9 w-9 rounded-xl bg-[#F5EFE6]" />
+                        <Image source={{ uri: imageUrl }} className="h-9 w-9 rounded-xl bg-background-secondary" />
                       ) : (
-                        <View className="h-9 w-9 items-center justify-center rounded-xl bg-[#F5EFE6]">
+                        <View className="h-9 w-9 items-center justify-center rounded-xl bg-background-secondary">
                           <FontAwesome6 name="image" size={14} color="#8B7D6B" />
                         </View>
                       )}
                       <View>
-                        <Text className="text-xs font-bold text-[#3D3229]">食材照片 <Text className="font-medium text-[#8B7D6B]">（可选）</Text></Text>
-                        <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">{imageUrl ? "照片已添加" : "方便以后快速辨认"}</Text>
+                        <Text className="text-xs font-bold text-ink">食材照片 <Text className="font-medium text-copy-muted">（可选）</Text></Text>
+                        <Text className="mt-0.5 text-[10px] text-copy-muted">{imageUrl ? "照片已添加" : "方便以后快速辨认"}</Text>
                       </View>
                     </View>
                     <View className="flex-row gap-2">
-                      <TouchableOpacity onPress={() => selectFoodPhoto("camera")} className="h-9 w-9 items-center justify-center rounded-xl bg-[#2D6A4F]/10">
+                      <TouchableOpacity onPress={() => selectFoodPhoto("camera")} className="h-9 w-9 items-center justify-center rounded-xl bg-brand/10">
                         <FontAwesome6 name="camera" size={13} color="#2D6A4F" />
                       </TouchableOpacity>
-                      <TouchableOpacity onPress={() => selectFoodPhoto("library")} className="h-9 w-9 items-center justify-center rounded-xl bg-[#F5EFE6]">
+                      <TouchableOpacity onPress={() => selectFoodPhoto("library")} className="h-9 w-9 items-center justify-center rounded-xl bg-background-secondary">
                         <FontAwesome6 name="images" size={13} color="#8B7D6B" />
                       </TouchableOpacity>
                       {imageUrl && (
@@ -1933,7 +1854,7 @@ export default function InventoryScreen() {
                       className="flex-1 flex-row items-center justify-center gap-1.5 rounded-2xl bg-[#EAF2EC] py-3"
                     >
                       <FontAwesome6 name="wand-magic-sparkles" size={11} color="#2D6A4F" />
-                      <Text className="text-xs font-black text-[#2D6A4F]">用它配餐</Text>
+                      <Text className="text-xs font-black text-brand">用它配餐</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => handleDeleteItem(editingItem.id)}
@@ -1948,7 +1869,7 @@ export default function InventoryScreen() {
                 <TouchableOpacity
                   onPress={handleSaveItem}
                   disabled={saving}
-                  className="bg-[#2D6A4F] py-4 rounded-2xl items-center mt-4 shadow-sm active:opacity-90"
+                  className="bg-brand py-4 rounded-2xl items-center mt-4 shadow-sm active:opacity-90"
                 >
                   {saving ? (
                     <ActivityIndicator color="#FFF" />
@@ -1958,7 +1879,7 @@ export default function InventoryScreen() {
                 </TouchableOpacity>
                 {!editingItem && (
                   <TouchableOpacity onPress={() => setEntryMode("choose")} className="items-center py-3">
-                    <Text className="text-xs font-bold text-[#8B7D6B]">选择其他录入方式</Text>
+                    <Text className="text-xs font-bold text-copy-muted">选择其他录入方式</Text>
                   </TouchableOpacity>
                 )}
               </ScrollView>
@@ -1967,88 +1888,29 @@ export default function InventoryScreen() {
           </View>
         </Modal>
 
-        {/* AI multi-item review modal */}
-        <Modal visible={batchReviewVisible} animationType="slide" transparent onRequestClose={() => setBatchReviewVisible(false)}>
-          <View className="flex-1 justify-end bg-black/40">
-            <View className="max-h-[88%] rounded-t-[32px] bg-white px-5 pt-5 pb-6">
-              <View className="flex-row items-start justify-between border-b border-[#F5EFE6] pb-4">
-                <View className="flex-1 pr-3">
-                  <Text className="text-lg font-black text-[#3D3229]">确认识别结果</Text>
-                  <Text className="mt-1 text-[11px] leading-4 text-[#8B7D6B]">识别到 {detectedFoods.length} 种食材；取消勾选不需要入库的项目。</Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setBatchReviewVisible(false)}
-                  accessibilityLabel="关闭识别结果"
-                  className="h-9 w-9 items-center justify-center rounded-full bg-[#FDF8F0]"
-                >
-                  <FontAwesome6 name="xmark" size={17} color="#8B7D6B" />
-                </TouchableOpacity>
-              </View>
+        <BatchReviewModal
+          visible={batchReviewVisible}
+          foods={detectedFoods}
+          saving={savingDetectedFoods}
+          onClose={() => setBatchReviewVisible(false)}
+          onChange={setDetectedFoods}
+          onSave={saveDetectedFoods}
+        />
 
-              <ScrollView className="mt-3" showsVerticalScrollIndicator={false} contentContainerClassName="gap-2 pb-3">
-                {detectedFoods.map((item) => (
-                  <TouchableOpacity
-                    key={item.id}
-                    onPress={() => setDetectedFoods((current) => current.map((food) => food.id === item.id ? { ...food, selected: !food.selected } : food))}
-                    className={`flex-row items-center rounded-2xl border p-3.5 ${item.selected ? "border-[#2D6A4F]/30 bg-[#2D6A4F]/5" : "border-[#EBE3D5] bg-[#FDF8F0] opacity-60"}`}
-                  >
-                    <View className={`mr-3 h-6 w-6 items-center justify-center rounded-full ${item.selected ? "bg-[#2D6A4F]" : "border border-[#CFC4B4] bg-white"}`}>
-                      {item.selected && <FontAwesome6 name="check" size={11} color="#FFF" />}
-                    </View>
-                    <View className="flex-1">
-                      <Text className="text-sm font-black text-[#3D3229]">{item.foodName}</Text>
-                      <Text className="mt-1 text-[11px] text-[#8B7D6B]">{item.quantity} · {item.suggestedStorageLocation} · 建议 {item.estimatedExpireDays} 天内食用</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-
-              <View className="mt-3 flex-row gap-3">
-                <TouchableOpacity
-                  onPress={() => setDetectedFoods((current) => current.map((item) => ({ ...item, selected: !current.every((food) => food.selected) })))}
-                  className="items-center justify-center rounded-2xl border border-[#EBE3D5] bg-[#FDF8F0] px-4"
-                >
-                  <Text className="text-xs font-bold text-[#8B7D6B]">全选</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={saveDetectedFoods}
-                  disabled={savingDetectedFoods}
-                  className="flex-1 items-center rounded-2xl bg-[#2D6A4F] py-4 active:opacity-90 disabled:opacity-60"
-                >
-                  {savingDetectedFoods ? <ActivityIndicator color="#FFF" /> : <Text className="text-base font-black text-white">加入 {detectedFoods.filter((item) => item.selected).length} 项食材</Text>}
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-
-        {/* Official kitchenware detail: separate catalog knowledge from a user's owned asset. */}
-        <Modal visible={Boolean(selectedCatalogKitchenware)} animationType="fade" transparent>
-          <View className="flex-1 items-center justify-center bg-black/40 p-5">
-            {selectedCatalogKitchenware ? (
-              <View className="w-full rounded-[28px] bg-white p-5">
-                <View className="flex-row items-start justify-between">
-                  <View className="flex-1 pr-3">
-                    <Text className="text-lg font-black text-[#3D3229]">{selectedCatalogKitchenware.name}</Text>
-                    <Text className="mt-1 text-xs font-bold text-[#2D6A4F]">官方标准库 · {selectedCatalogKitchenware.category}</Text>
-                  </View>
-                  <TouchableOpacity onPress={() => setSelectedCatalogKitchenware(null)} className="p-1"><FontAwesome6 name="xmark" size={17} color="#8B7D6B" /></TouchableOpacity>
-                </View>
-                {catalogList(selectedCatalogKitchenware.aliases).length ? <View className="mt-4"><Text className="text-[10px] font-bold text-[#8B7D6B]">常用别名</Text><Text className="mt-1 text-xs text-[#3D3229]">{catalogList(selectedCatalogKitchenware.aliases).join("、")}</Text></View> : null}
-                <View className="mt-4"><Text className="text-[10px] font-bold text-[#8B7D6B]">适用方式</Text><Text className="mt-1 text-xs text-[#3D3229]">{catalogList(selectedCatalogKitchenware.cooking_methods).join("、") || "暂未标注"}</Text></View>
-                <View className="mt-4 rounded-2xl bg-[#F5EFE6] p-3"><Text className="text-[10px] font-bold text-[#8B7D6B]">官方保养提示</Text><Text className="mt-1 text-xs leading-5 text-[#3D3229]">{selectedCatalogKitchenware.care_note || "保持清洁干燥，按产品说明书进行保养。"}</Text></View>
-                <TouchableOpacity disabled={savingKitchenware} onPress={() => addCatalogKitchenware(selectedCatalogKitchenware)} className="mt-5 items-center rounded-2xl bg-[#2D6A4F] py-3.5 disabled:opacity-50"><Text className="text-sm font-black text-white">{savingKitchenware ? "添加中…" : kitchenware.some((item) => item.name === selectedCatalogKitchenware.name) ? "已在我的装备库" : "加入我的装备"}</Text></TouchableOpacity>
-              </View>
-            ) : null}
-          </View>
-        </Modal>
+        <CatalogDetailModal
+          item={selectedCatalogKitchenware}
+          saving={savingKitchenware}
+          owned={Boolean(selectedCatalogKitchenware && kitchenware.some((item) => item.name === selectedCatalogKitchenware.name))}
+          onClose={() => setSelectedCatalogKitchenware(null)}
+          onAdd={addCatalogKitchenware}
+        />
 
         {/* Kitchenware Add Modal */}
         <Modal visible={kitchenwareModalVisible} animationType="slide" transparent>
           <View className="flex-1 bg-black/40 justify-end">
             <View className="bg-white rounded-t-[32px] p-6 max-h-[85%]">
-              <View className="flex-row items-center justify-between mb-4 border-b border-[#F5EFE6] pb-3">
-                <Text className="text-lg font-black text-[#3D3229]">
+              <View className="flex-row items-center justify-between mb-4 border-b border-background-secondary pb-3">
+                <Text className="text-lg font-black text-ink">
                   {editingKitchenware ? "编辑厨具" : "录入我的新厨具/家电"}
                 </Text>
                 <TouchableOpacity onPress={() => setKitchenwareModalVisible(false)}>
@@ -2058,21 +1920,21 @@ export default function InventoryScreen() {
 
               <ScrollView showsVerticalScrollIndicator={false} className="space-y-4">
                 <View>
-                  <Text className="text-xs font-bold text-[#8B7D6B] mb-1">厨具名称</Text>
+                  <Text className="text-xs font-bold text-copy-muted mb-1">厨具名称</Text>
                   <TextInput
                     value={kwName}
                     onChangeText={setKwName}
                     placeholder="搜索或输入厨具名称，如空气炸锅"
-                    className="bg-[#FDF8F0] px-4 py-3 rounded-2xl border border-[#EBE3D5] text-sm text-[#3D3229]"
+                    className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink"
                   />
                   {!editingKitchenware && (
                     <View className="mt-2">
-                      <Text className="text-[11px] font-bold text-[#8B7D6B] mb-1.5">常用厨具类型</Text>
+                      <Text className="text-[11px] font-bold text-copy-muted mb-1.5">常用厨具类型</Text>
                       <View><ScrollView horizontal showsHorizontalScrollIndicator={false}>
                         <View className="flex-row gap-2 pr-4">
                           {kitchenwareCatalog.filter((item) => !kwName.trim() || item.name.includes(kwName.trim())).slice(0, 8).map((item) => (
-                            <TouchableOpacity key={item.id} onPress={() => setSelectedCatalogKitchenware(item)} className="bg-[#2D6A4F]/10 border border-[#2D6A4F]/15 px-3 py-2 rounded-xl">
-                              <Text className="text-xs font-bold text-[#2D6A4F]">{item.name}</Text>
+                            <TouchableOpacity key={item.id} onPress={() => setSelectedCatalogKitchenware(item)} className="bg-brand/10 border border-brand/15 px-3 py-2 rounded-xl">
+                              <Text className="text-xs font-bold text-brand">{item.name}</Text>
                             </TouchableOpacity>
                           ))}
                         </View>
@@ -2082,7 +1944,7 @@ export default function InventoryScreen() {
                 </View>
 
                 <View>
-                  <Text className="text-xs font-bold text-[#8B7D6B] mb-1">厨具类型</Text>
+                  <Text className="text-xs font-bold text-copy-muted mb-1">厨具类型</Text>
                   <View>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                       <View className="flex-row gap-2">
@@ -2092,13 +1954,13 @@ export default function InventoryScreen() {
                             onPress={() => setKwCategory(cat)}
                             className={`items-center rounded-xl border px-3 py-2.5 ${
                               kwCategory === cat
-                                ? "bg-[#2D6A4F] border-[#2D6A4F]"
-                                : "bg-[#FDF8F0] border-[#EBE3D5]"
+                                ? "bg-brand border-brand"
+                                : "bg-canvas border-line"
                             }`}
                           >
                             <Text
                               className={`text-xs ${
-                                kwCategory === cat ? "text-white font-bold" : "text-[#8B7D6B]"
+                                kwCategory === cat ? "text-white font-bold" : "text-copy-muted"
                               }`}
                             >
                               {cat}
@@ -2111,7 +1973,7 @@ export default function InventoryScreen() {
                 </View>
 
                 <View>
-                  <Text className="text-xs font-bold text-[#8B7D6B] mb-1">当前状态</Text>
+                  <Text className="text-xs font-bold text-copy-muted mb-1">当前状态</Text>
                   <View>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                       <View className="flex-row gap-2">
@@ -2121,11 +1983,11 @@ export default function InventoryScreen() {
                             onPress={() => setKwStatus(status)}
                             className={`rounded-xl border px-3 py-2 ${
                               kwStatus === status
-                                ? "border-[#2D6A4F] bg-[#2D6A4F]"
-                                : "border-[#EBE3D5] bg-[#FDF8F0]"
+                                ? "border-brand bg-brand"
+                                : "border-line bg-canvas"
                             }`}
                           >
-                            <Text className={`text-xs font-bold ${kwStatus === status ? "text-white" : "text-[#8B7D6B]"}`}>
+                            <Text className={`text-xs font-bold ${kwStatus === status ? "text-white" : "text-copy-muted"}`}>
                               {status}
                             </Text>
                           </TouchableOpacity>
@@ -2136,34 +1998,34 @@ export default function InventoryScreen() {
                 </View>
 
                 <View>
-                  <Text className="text-xs font-bold text-[#8B7D6B] mb-1">规格 / 备注</Text>
+                  <Text className="text-xs font-bold text-copy-muted mb-1">规格 / 备注</Text>
                   <TextInput
                     value={kwNote}
                     onChangeText={setKwNote}
                     placeholder="如: 32L 大容量 双温双控"
-                    className="bg-[#FDF8F0] px-4 py-3 rounded-2xl border border-[#EBE3D5] text-sm text-[#3D3229]"
+                    className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink"
                   />
                 </View>
 
                 <View>
-                  <Text className="text-xs font-bold text-[#8B7D6B] mb-1">购买日期（可选）</Text>
+                  <Text className="text-xs font-bold text-copy-muted mb-1">购买日期（可选）</Text>
                   <SmartDateInput value={kwPurchaseDate} onChange={setKwPurchaseDate} />
                 </View>
 
                 <View>
-                  <Text className="text-xs font-bold text-[#8B7D6B] mb-1">图片 URL（可选）</Text>
+                  <Text className="text-xs font-bold text-copy-muted mb-1">图片 URL（可选）</Text>
                   <TextInput
                     value={kwImageUrl}
                     onChangeText={setKwImageUrl}
                     placeholder="https://..."
-                    className="bg-[#FDF8F0] px-4 py-3 rounded-2xl border border-[#EBE3D5] text-sm text-[#3D3229]"
+                    className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink"
                   />
                 </View>
 
                 <TouchableOpacity
                   onPress={handleSaveKitchenware}
                   disabled={savingKitchenware}
-                  className="bg-[#2D6A4F] py-4 rounded-2xl items-center mt-4 shadow-sm active:opacity-90"
+                  className="bg-brand py-4 rounded-2xl items-center mt-4 shadow-sm active:opacity-90"
                 >
                   {savingKitchenware ? (
                     <ActivityIndicator color="#FFF" />

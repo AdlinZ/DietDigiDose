@@ -9,7 +9,6 @@ interface UserData {
   username: string;
   email?: string | null;
   phone?: string | null;
-  nickname: string;
   avatar_url: string;
   role: string;
   is_verified_expert: number | boolean;
@@ -101,16 +100,18 @@ export default function Users() {
     username: string;
     currentDisabled: boolean;
   } | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
 
   useEffect(() => {
     fetchUsers();
   }, []);
 
-  const fetchUsers = async () => {
+  const fetchUsers = async (cursor?: string) => {
     try {
       setLoading(true);
-      const res = await api.get('/admin/users');
-      setUsers(res.data);
+      const res = await api.get('/admin/users', { params: { pageSize: 50, cursor } });
+      setUsers(current => cursor ? [...current, ...res.data.items.filter((item: UserData) => !current.some(existing => existing.id === item.id))] : res.data.items);
+      setNextCursor(res.data.nextCursor);
     } catch (err) {
       console.error('Error fetching users:', err);
     } finally {
@@ -255,7 +256,6 @@ export default function Users() {
       const matchesSearch =
         !query ||
         user.username.toLowerCase().includes(query) ||
-        user.nickname?.toLowerCase().includes(query) ||
         (user.email && user.email.toLowerCase().includes(query)) ||
         (user.phone && user.phone.includes(query)) ||
         String(user.id).includes(query);
@@ -287,7 +287,7 @@ export default function Users() {
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted w-4 h-4" />
             <input 
               type="text" 
-              placeholder="搜索用户名、昵称、邮箱或手机号..."
+              placeholder="搜索用户名、邮箱或手机号..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-100 shadow-sm rounded-xl text-sm focus:ring-2 focus:ring-primary/20 outline-none"
@@ -383,6 +383,7 @@ export default function Users() {
             <p className="text-xs text-text-muted mt-1">请重新输入搜索关键字或切换筛选条件</p>
           </div>
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[920px]">
               <thead>
@@ -415,11 +416,11 @@ export default function Users() {
                         <div className="flex items-center gap-3">
                           <img
                             src={getAvatarUrl(user.avatar_url, user.id)}
-                            alt={user.nickname || user.username}
+                            alt={user.username}
                             className="w-10 h-10 rounded-full object-cover shrink-0"
                           />
                           <div className="min-w-0">
-                            <div className="font-semibold text-text-main truncate">{user.nickname || user.username}</div>
+                            <div className="font-semibold text-text-main truncate">{user.username}</div>
                             <div className="text-xs text-text-muted truncate">@{user.username}</div>
                           </div>
                         </div>
@@ -498,7 +499,7 @@ export default function Users() {
                             setConfirmStatusModal({
                               isOpen: true,
                               userId: user.id,
-                              username: user.nickname || user.username,
+                              username: user.username,
                               currentDisabled: isDisabled,
                             });
                           }}
@@ -518,6 +519,8 @@ export default function Users() {
               </tbody>
             </table>
           </div>
+          {nextCursor ? <div className="border-t border-background-alt p-4 text-center"><button type="button" onClick={() => void fetchUsers(nextCursor)} disabled={loading} className="rounded-xl border border-background-alt px-4 py-2 text-xs font-semibold text-primary disabled:opacity-50">加载更多用户</button></div> : null}
+          </>
         )}
       </div>
 
@@ -539,11 +542,11 @@ export default function Users() {
             <div className="mt-2 flex items-center gap-4 pr-10 text-left">
               <img
                 src={getAvatarUrl(selectedUser.avatar_url, selectedUser.id)}
-                alt={selectedUser.nickname || selectedUser.username}
+                alt={selectedUser.username}
                 className="h-16 w-16 shrink-0 rounded-2xl object-cover shadow-sm"
               />
               <div className="min-w-0 flex-1">
-                <h2 className="truncate text-lg font-bold text-text-main">{selectedUser.nickname || selectedUser.username}</h2>
+                <h2 className="truncate text-lg font-bold text-text-main">{selectedUser.username}</h2>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <span className={cn(
                     "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium",
@@ -638,7 +641,7 @@ export default function Users() {
                   setConfirmStatusModal({
                     isOpen: true,
                     userId: selectedUser.id,
-                    username: selectedUser.nickname || selectedUser.username,
+                    username: selectedUser.username,
                     currentDisabled: Boolean(selectedUser.is_disabled),
                   });
                 }}

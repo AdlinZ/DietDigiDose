@@ -6,7 +6,7 @@ import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import { SmartDateInput } from "@/components/SmartDateInput";
-import { communityApi } from "@/services/api";
+import { communityApi, mediaApi } from "@/services/api";
 
 const CATEGORIES = ["寻味", "榜单", "活动", "问答"];
 
@@ -64,9 +64,14 @@ export default function PostCreateScreen() {
     }
     try {
       setPublishing(true);
+      const storedImageUrls = await Promise.all(imageUrls.map(async (imageUrl) => {
+        if (!imageUrl.startsWith("data:")) return imageUrl;
+        const uploaded = await mediaApi.uploadImage(authFetch, imageUrl);
+        return uploaded.url;
+      }));
       await communityApi.createPost(authFetch, {
           content: [title.trim(), content.trim()].filter(Boolean).join("\n"),
-          image_urls: imageUrls,
+          image_urls: storedImageUrls,
           category,
           event_start_at: category === "活动" ? eventStartAt : null,
           event_end_at: category === "活动" ? eventEndAt : null,
@@ -86,8 +91,8 @@ export default function PostCreateScreen() {
         <TouchableOpacity onPress={() => router.back()} className="h-10 w-10 items-center justify-center rounded-full active:bg-[#F8F8F8]">
           <FontAwesome6 name="arrow-left" size={15} color="#3D3229" />
         </TouchableOpacity>
-        <Text className="absolute left-0 right-0 text-center text-lg font-black text-[#3D3229]">写动态</Text>
-        <TouchableOpacity onPress={publish} disabled={publishing} className="z-10 min-w-16 items-center rounded-full bg-[#2D6A4F] px-4 py-2.5 disabled:opacity-60">
+        <Text className="absolute left-0 right-0 text-center text-lg font-black text-ink">写动态</Text>
+        <TouchableOpacity onPress={publish} disabled={publishing} className="z-10 min-w-16 items-center rounded-full bg-brand px-4 py-2.5 disabled:opacity-60">
           {publishing ? <ActivityIndicator size="small" color="#FFF" /> : <Text className="text-xs font-black text-white">发布</Text>}
         </TouchableOpacity>
       </View>
@@ -99,13 +104,13 @@ export default function PostCreateScreen() {
           placeholder="输入标题（可选）"
           placeholderTextColor="#B0A495"
           autoFocus
-          className="py-2 text-2xl font-black text-[#3D3229]"
+          className="py-2 text-2xl font-black text-ink"
         />
         {category === "活动" ? (
           <View className="mt-3 rounded-2xl border border-[#DDE8DF] bg-[#F3F8F4] p-3">
             <View className="mb-3 flex-row items-center gap-2">
               <FontAwesome6 name="calendar-check" size={13} color="#2D6A4F" />
-              <Text className="text-xs font-black text-[#2D6A4F]">设置活动周期</Text>
+              <Text className="text-xs font-black text-brand">设置活动周期</Text>
             </View>
             <View className="flex-row gap-3">
               <SmartDateInput
@@ -143,7 +148,7 @@ export default function PostCreateScreen() {
           placeholderTextColor="#B0A495"
           multiline
           textAlignVertical="top"
-          className="mt-3 flex-1 py-1 text-lg leading-8 text-[#3D3229]"
+          className="mt-3 flex-1 py-1 text-lg leading-8 text-ink"
         />
         {imageUrls.length ? (
           <View className="mb-4">
@@ -165,10 +170,10 @@ export default function PostCreateScreen() {
       <View className="border-t border-[#F0ECE5] bg-white px-5 py-3">
         <View className="flex-row items-center justify-between">
           <View className="flex-row items-center gap-5">
-            <TouchableOpacity onPress={pickImage} disabled={imageUrls.length >= 9} className="h-10 w-10 items-center justify-center rounded-xl active:bg-[#F5EFE6] disabled:opacity-40">
+            <TouchableOpacity onPress={pickImage} disabled={imageUrls.length >= 9} className="h-10 w-10 items-center justify-center rounded-xl active:bg-background-secondary disabled:opacity-40">
               <FontAwesome6 name="image" size={20} color="#5B5B5B" />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setCategory((current) => CATEGORIES[(CATEGORIES.indexOf(current) + 1) % CATEGORIES.length])} className="flex-row items-center gap-2 rounded-xl px-2 py-2 active:bg-[#F5EFE6]">
+            <TouchableOpacity onPress={() => setCategory((current) => CATEGORIES[(CATEGORIES.indexOf(current) + 1) % CATEGORIES.length])} className="flex-row items-center gap-2 rounded-xl px-2 py-2 active:bg-background-secondary">
               <FontAwesome6 name="hashtag" size={17} color="#5B5B5B" />
               <Text className="text-sm font-bold text-[#5B5B5B]">{category}</Text>
             </TouchableOpacity>

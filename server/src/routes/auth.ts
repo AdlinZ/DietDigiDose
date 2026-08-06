@@ -12,6 +12,8 @@ import {
   loginRateLimit,
   recordLoginFailure,
 } from "../middleware/loginRateLimit.js";
+import { deleteFunnelEvents, recordFunnelEvent } from "../services/funnelEvents.js";
+import { deleteStoredMediaUrls } from "../services/mediaStorage.js";
 
 const router = Router();
 
@@ -28,15 +30,17 @@ function parseLoginIdentifier(value: unknown) {
 // POST /api/v1/auth/register
 router.post("/register", validateBody(registerSchema), async (req, res) => {
   try {
-    const { identifier, password } = req.body;
+    const { identifier, username, password } = req.body;
     const loginIdentifier = parseLoginIdentifier(identifier);
     if (!loginIdentifier) return sendError(res, 400, "请输入有效的邮箱或手机号", "INVALID_IDENTIFIER");
 
     // Check existing
-    const existing = db.prepare("SELECT id FROM users WHERE email = ? OR phone = ? OR username = ?").get(loginIdentifier.email, loginIdentifier.phone, identifier.trim().toLowerCase());
+    const existing = db.prepare("SELECT id FROM users WHERE email = ? OR phone = ?").get(loginIdentifier.email, loginIdentifier.phone);
     if (existing) {
       return sendError(res, 409, "该邮箱或手机号已注册", "IDENTIFIER_EXISTS");
     }
+    const usernameTaken = db.prepare("SELECT id FROM users WHERE LOWER(username) = LOWER(?)").get(username);
+    if (usernameTaken) return sendError(res, 409, "该用户名已被使用", "USERNAME_EXISTS");
 
     // Hash password
     const salt = bcrypt.genSaltSync(10);
@@ -45,12 +49,13 @@ router.post("/register", validateBody(registerSchema), async (req, res) => {
     const result = db.prepare(`
       INSERT INTO users (username, email, phone, password_hash, avatar_url)
       VALUES (?, ?, ?, ?, ?)
-    `).run(identifier.trim().toLowerCase(), loginIdentifier.email, loginIdentifier.phone, passwordHash, null);
+    `).run(username, loginIdentifier.email, loginIdentifier.phone, passwordHash, null);
 
     const userId = Number(result.lastInsertRowid);
     const user = db.prepare("SELECT id, username, email, phone, avatar_url, bio, daily_calories_target FROM users WHERE id = ?").get(userId);
 
     const token = jwt.sign({ userId }, JWT_SECRET, { expiresIn: "30d" });
+    recordFunnelEvent(userId, "account_registered");
 
     return res.status(201).json({ token, user });
   } catch (error) {
@@ -62,8 +67,8 @@ router.post("/register", validateBody(registerSchema), async (req, res) => {
 // POST /api/v1/auth/login
 router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res) => {
   try {
-    const { identifier, username, password } = req.body;
-    const rawIdentifier = String(identifier || username || "").trim().toLowerCase();
+    const { identifier, password } = req.body;
+    const rawIdentifier = String(identifier || "").trim().toLowerCase();
     const loginIdentifier = parseLoginIdentifier(rawIdentifier);
     const isAdminUsername = rawIdentifier === "admin";
     if ((!loginIdentifier && !isAdminUsername) || !password) {
@@ -71,9 +76,15 @@ router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res
       return sendError(res, 400, "请输入管理员账号，或注册时的邮箱/手机号", "INVALID_IDENTIFIER");
     }
 
+    const loginUserSelect = `
+      SELECT id, username, email, phone, password_hash, avatar_url, bio, role,
+        must_change_password, daily_calories_target, created_at, is_disabled,
+        is_verified_expert, last_login_at, last_login_ip
+      FROM users
+    `;
     const user: any = isAdminUsername
-      ? db.prepare("SELECT * FROM users WHERE username = ? AND role = 'admin'").get(rawIdentifier)
-      : db.prepare("SELECT * FROM users WHERE email = ? OR phone = ?").get(
+      ? db.prepare(`${loginUserSelect} WHERE username = ? AND role = 'admin'`).get(rawIdentifier)
+      : db.prepare(`${loginUserSelect} WHERE email = ? OR phone = ?`).get(
           loginIdentifier?.email,
           loginIdentifier?.phone,
         );
@@ -97,6 +108,7 @@ router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res
     db.prepare("UPDATE users SET last_login_at = ?, last_login_ip = ? WHERE id = ?").run(nowIso, clientIp, user.id);
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "30d" });
+    if (user.role !== "admin") recordFunnelEvent(user.id, "login_succeeded");
     if (user.role === "admin") {
       logAdminAction({
         adminUserId: user.id,
@@ -178,15 +190,20 @@ router.post("/change-password", authMiddleware, validateBody(changePasswordSchem
 // PUT /api/v1/auth/profile
 router.put("/profile", authMiddleware, validateBody(profileSchema), (req: AuthRequest, res) => {
   try {
-    const { avatar_url, bio, daily_calories_target } = req.body;
+    const { username, avatar_url, bio, daily_calories_target } = req.body;
+    if (username) {
+      const existing = db.prepare("SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND id != ?").get(username, req.userId);
+      if (existing) return sendError(res, 409, "该用户名已被使用", "USERNAME_EXISTS");
+    }
 
     db.prepare(`
       UPDATE users
-      SET avatar_url = COALESCE(?, avatar_url),
+      SET username = COALESCE(?, username),
+          avatar_url = COALESCE(?, avatar_url),
           bio = COALESCE(?, bio),
           daily_calories_target = COALESCE(?, daily_calories_target)
       WHERE id = ?
-    `).run(avatar_url, bio, daily_calories_target, req.userId);
+    `).run(username, avatar_url, bio, daily_calories_target, req.userId);
 
     const user = db.prepare("SELECT id, username, email, phone, avatar_url, bio, daily_calories_target, role FROM users WHERE id = ?").get(req.userId);
     return res.json(user);
@@ -196,8 +213,30 @@ router.put("/profile", authMiddleware, validateBody(profileSchema), (req: AuthRe
   }
 });
 
+router.get("/ai-data", authMiddleware, (req: AuthRequest, res) => {
+  const messages = db.prepare(`
+    SELECT session_id, role, content, created_at
+    FROM ai_chat_messages WHERE user_id = ? ORDER BY created_at ASC, id ASC
+  `).all(req.userId);
+  const scanJobs = db.prepare(`
+    SELECT id, status, result_json, error_message, created_at, updated_at
+    FROM inventory_scan_jobs WHERE user_id = ? ORDER BY created_at ASC
+  `).all(req.userId);
+  return res.json({ exported_at: new Date().toISOString(), messages, scan_jobs: scanJobs });
+});
+
+router.delete("/ai-data", authMiddleware, (req: AuthRequest, res) => {
+  const deleted = db.transaction(() => ({
+    messages: db.prepare("DELETE FROM ai_chat_messages WHERE user_id = ?").run(req.userId).changes,
+    scan_jobs: db.prepare("DELETE FROM inventory_scan_jobs WHERE user_id = ?").run(req.userId).changes,
+    usage_logs: db.prepare("DELETE FROM ai_usage_logs WHERE user_id = ?").run(req.userId).changes,
+    write_confirmations: db.prepare("DELETE FROM ai_write_confirmations WHERE user_id = ?").run(req.userId).changes,
+  }))();
+  return res.json({ success: true, deleted });
+});
+
 // DELETE /api/v1/auth/account - permanently delete the signed-in user's data.
-router.delete("/account", authMiddleware, validateBody(deleteAccountSchema), (req: AuthRequest, res) => {
+router.delete("/account", authMiddleware, validateBody(deleteAccountSchema), async (req: AuthRequest, res) => {
   try {
     const user = db.prepare("SELECT role, password_hash FROM users WHERE id = ?").get(req.userId) as
       | { role: string; password_hash: string }
@@ -210,7 +249,18 @@ router.delete("/account", authMiddleware, validateBody(deleteAccountSchema), (re
       return sendError(res, 400, "当前密码不正确", "INVALID_PASSWORD");
     }
 
-    const result = db.prepare("DELETE FROM users WHERE id = ?").run(req.userId);
+    const postMedia = db.prepare("SELECT image_url, image_urls FROM community_posts WHERE user_id = ?").all(req.userId) as Array<{ image_url: string | null; image_urls: string | null }>;
+    const commentMedia = db.prepare("SELECT image_url FROM community_comments WHERE user_id = ?").all(req.userId) as Array<{ image_url: string | null }>;
+    const mediaUrls = [
+      ...postMedia.flatMap((post) => [post.image_url, ...parseStoredUrlList(post.image_urls)]),
+      ...commentMedia.map((comment) => comment.image_url),
+    ];
+    await deleteStoredMediaUrls(req.userId!, mediaUrls);
+
+    const result = db.transaction(() => {
+      deleteFunnelEvents(req.userId!);
+      return db.prepare("DELETE FROM users WHERE id = ?").run(req.userId);
+    })();
     if (!result.changes) return sendError(res, 404, "用户不存在", "USER_NOT_FOUND");
     return res.json({ success: true, message: "账号及关联数据已永久删除" });
   } catch (error) {
@@ -218,5 +268,15 @@ router.delete("/account", authMiddleware, validateBody(deleteAccountSchema), (re
     return sendError(res, 500, "账号删除失败", "ACCOUNT_DELETE_FAILED");
   }
 });
+
+function parseStoredUrlList(value: string | null) {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 export default router;

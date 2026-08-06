@@ -35,7 +35,7 @@ export default function AdminLayout() {
 
   useEffect(() => {
     api.get('/auth/me').then(({ data }) => {
-      setAdminName(data.nickname || data.username || '管理员');
+      setAdminName(data.username || '管理员');
     }).catch(() => {});
   }, []);
 

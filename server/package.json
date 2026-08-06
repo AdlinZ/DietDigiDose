@@ -13,6 +13,7 @@
     "localize:ingredient-names": "tsx scripts/localize-ingredient-names.ts",
     "db:backup": "tsx scripts/database-backup.ts backup",
     "db:restore": "tsx scripts/database-backup.ts restore",
+    "media:migrate": "tsx scripts/migrate-community-media.ts",
     "preinstall": "npx only-allow pnpm",
     "start": "NODE_ENV=production PORT=${PORT:-9090} node dist/index.js",
     "lint": "tsc --noEmit",

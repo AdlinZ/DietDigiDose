@@ -8,6 +8,11 @@ export const inventoryApi = {
   create: (apiFetch: ApiFetch, input: InventoryInput) => requestJson<InventoryItem>(apiFetch, "/api/v1/inventory", {
     method: "POST", body: JSON.stringify(input),
   }),
+  importShoppingList: (apiFetch: ApiFetch, idempotencyKey: string, items: InventoryInput[]) =>
+    requestJson<{ items: InventoryItem[]; repeated: boolean }>(apiFetch, "/api/v1/inventory/import-shopping-list", {
+      method: "POST",
+      body: JSON.stringify({ idempotency_key: idempotencyKey, items }),
+    }),
   update: (apiFetch: ApiFetch, id: number, input: Partial<InventoryInput>) => requestJson<InventoryItem>(apiFetch, `/api/v1/inventory/${id}`, {
     method: "PUT", body: JSON.stringify(input),
   }),

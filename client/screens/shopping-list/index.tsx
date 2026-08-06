@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -12,18 +12,12 @@ import {
 import { useRouter } from "expo-router";
 import { Screen } from "@/components/Screen";
 import { FontAwesome6 } from "@expo/vector-icons";
-import { useAuth } from "@/contexts/AuthContext";
-import { getUserStorageKey } from "@/utils/userStorage";
+import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
+import { getUserStorageKey, SHOPPING_LIST_STORAGE_KEY } from "@/utils/userStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-
-interface ShoppingItem {
-  id: string;
-  name: string;
-  amount: string;
-  category?: string;
-  checked: boolean;
-  createdAt: number;
-}
+import { inventoryApi } from "@/services/api";
+import { dateKeyAfterDays } from "@/utils/date";
+import { normalizeShoppingItems, type ShoppingItem } from "@/utils/shoppingList";
 
 const CATEGORY_OPTIONS = [
   { label: "蔬菜", icon: "carrot", color: "#059669", bg: "bg-emerald-50" },
@@ -36,8 +30,8 @@ const CATEGORY_OPTIONS = [
 export default function ShoppingListScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const storageKey = getUserStorageKey("shopping_list", user?.id);
-  const inventoryKey = getUserStorageKey("user_inventory", user?.id);
+  const authFetch = useAuthFetch();
+  const storageKey = getUserStorageKey(SHOPPING_LIST_STORAGE_KEY, user?.id);
 
   const [items, setItems] = useState<ShoppingItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +39,8 @@ export default function ShoppingListScreen() {
   const [amountInput, setAmountInput] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("蔬菜");
   const [activeTab, setActiveTab] = useState<"all" | "pending" | "done">("pending");
+  const [movingToInventory, setMovingToInventory] = useState(false);
+  const importKeys = useRef(new Map<string, string>());
 
   // 加载数据
   const loadShoppingList = useCallback(async () => {
@@ -55,16 +51,9 @@ export default function ShoppingListScreen() {
     try {
       const saved = await AsyncStorage.getItem(storageKey);
       if (saved) {
-        setItems(JSON.parse(saved));
+        setItems(normalizeShoppingItems(JSON.parse(saved)));
       } else {
-        // 初始示例数据
-        const initialList: ShoppingItem[] = [
-          { id: "1", name: "西兰花", amount: "1颗 (约300g)", category: "蔬菜", checked: false, createdAt: Date.now() - 3600000 },
-          { id: "2", name: "鸡胸肉", amount: "500g", category: "肉蛋", checked: false, createdAt: Date.now() - 7200000 },
-          { id: "3", name: "低脂无糖牛奶", amount: "1L", category: "肉蛋", checked: true, createdAt: Date.now() - 86400000 },
-        ];
-        setItems(initialList);
-        await AsyncStorage.setItem(storageKey, JSON.stringify(initialList));
+        setItems([]);
       }
     } catch (err) {
       console.error("Failed to load shopping list:", err);
@@ -144,32 +133,22 @@ export default function ShoppingListScreen() {
       return;
     }
 
+    setMovingToInventory(true);
     try {
-      // 1. 读取现有冰箱库
-      let currentInv = [];
-      if (inventoryKey) {
-        const savedInv = await AsyncStorage.getItem(inventoryKey);
-        if (savedInv) currentInv = JSON.parse(savedInv);
-      }
-
-      // 2. 转换已买项目加入冰箱库
-      const newInvEntries = checkedItems.map((item) => ({
-        id: `inv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      const signature = checkedItems.map((item) => item.id).sort().join("|");
+      const idempotencyKey = importKeys.current.get(signature)
+        || `shopping-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      importKeys.current.set(signature, idempotencyKey);
+      await inventoryApi.importShoppingList(authFetch, idempotencyKey, checkedItems.map((item) => ({
         food_name: item.name,
         category: item.category || "蔬菜",
         quantity: item.amount || "适量",
         storage_location: "冷藏",
-        expire_days: 7,
-        purchase_date: new Date().toISOString().split("T")[0],
-        status: "fresh",
-      }));
+        expiration_date: dateKeyAfterDays(7),
+        image_url: null,
+      })));
+      importKeys.current.delete(signature);
 
-      const updatedInv = [...newInvEntries, ...currentInv];
-      if (inventoryKey) {
-        await AsyncStorage.setItem(inventoryKey, JSON.stringify(updatedInv));
-      }
-
-      // 3. 从采购清单中移除
       const remainingItems = items.filter((i) => !i.checked);
       await saveItems(remainingItems);
 
@@ -183,7 +162,9 @@ export default function ShoppingListScreen() {
       );
     } catch (err) {
       console.error("Failed to move items to inventory:", err);
-      Alert.alert("错误", "存入冰箱库失败，请重试。");
+      Alert.alert("入库未完成", err instanceof Error ? err.message : "存入冰箱库失败，请重试。");
+    } finally {
+      setMovingToInventory(false);
     }
   };
 
@@ -200,14 +181,14 @@ export default function ShoppingListScreen() {
   return (
     <Screen backgroundColor="#F6F4F0" safeAreaEdges={["top", "bottom", "left", "right"]}>
       {/* 顶部 Header */}
-      <View className="px-5 py-3.5 flex-row items-center justify-between border-b border-[#EBE3D5] bg-white/80 shadow-xs">
+      <View className="px-5 py-3.5 flex-row items-center justify-between border-b border-line bg-white/80 shadow-xs">
         <TouchableOpacity onPress={() => router.back()} className="p-2 -ml-2 active:opacity-70">
           <FontAwesome6 name="chevron-left" size={18} color="#3D3229" />
         </TouchableOpacity>
 
         <View className="flex-row items-center gap-2">
           <FontAwesome6 name="cart-shopping" size={16} color="#D97706" />
-          <Text className="text-base font-black text-[#3D3229]">智能采购清单</Text>
+          <Text className="text-base font-black text-ink">智能采购清单</Text>
         </View>
 
         {checkedItems.length > 0 ? (
@@ -221,11 +202,11 @@ export default function ShoppingListScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} className="flex-1 px-5 pt-4">
         {/* 采购进度概览 Banner */}
-        <View className="bg-white rounded-3xl p-4 border border-[#EBE3D5] shadow-xs mb-4">
+        <View className="bg-white rounded-3xl p-4 border border-line shadow-xs mb-4">
           <View className="flex-row items-center justify-between mb-2">
             <View>
-              <Text className="text-xs font-bold text-[#8B7D6B]">采购完成度</Text>
-              <Text className="text-lg font-black text-[#3D3229]">
+              <Text className="text-xs font-bold text-copy-muted">采购完成度</Text>
+              <Text className="text-lg font-black text-ink">
                 已购买 {checkedItems.length} / <Text className="text-emerald-700">{items.length}</Text> 项
               </Text>
             </View>
@@ -234,14 +215,14 @@ export default function ShoppingListScreen() {
             </View>
           </View>
           {/* 进度条 */}
-          <View className="w-full h-2.5 bg-[#F6F4F0] rounded-full overflow-hidden border border-[#EBE3D5]">
+          <View className="w-full h-2.5 bg-canvas rounded-full overflow-hidden border border-line">
             <View className="h-full bg-emerald-600 rounded-full" style={{ width: `${progressPercent}%` }} />
           </View>
         </View>
 
         {/* 快捷录入输入框卡片 */}
-        <View className="bg-white p-4 rounded-3xl border border-[#EBE3D5] shadow-xs mb-4">
-          <Text className="text-xs font-black text-[#3D3229] mb-2">快速添加采购食材</Text>
+        <View className="bg-white p-4 rounded-3xl border border-line shadow-xs mb-4">
+          <Text className="text-xs font-black text-ink mb-2">快速添加采购食材</Text>
 
           <View className="flex-row gap-2 mb-2.5">
             <TextInput
@@ -249,14 +230,14 @@ export default function ShoppingListScreen() {
               onChangeText={setNameInput}
               placeholder="食材名称 (如: 鸡胸肉)"
               placeholderTextColor="#A3A398"
-              className="flex-1 bg-[#F6F4F0] px-3.5 py-2.5 rounded-2xl border border-[#EBE3D5] text-xs text-[#3D3229] font-medium"
+              className="flex-1 bg-canvas px-3.5 py-2.5 rounded-2xl border border-line text-xs text-ink font-medium"
             />
             <TextInput
               value={amountInput}
               onChangeText={setAmountInput}
               placeholder="分量 (如: 500g)"
               placeholderTextColor="#A3A398"
-              className="w-28 bg-[#F6F4F0] px-3.5 py-2.5 rounded-2xl border border-[#EBE3D5] text-xs text-[#3D3229] font-medium"
+              className="w-28 bg-canvas px-3.5 py-2.5 rounded-2xl border border-line text-xs text-ink font-medium"
             />
           </View>
 
@@ -269,8 +250,8 @@ export default function ShoppingListScreen() {
                   onPress={() => setSelectedCategory(cat.label)}
                   className={`px-2.5 py-1 rounded-full border flex-row items-center gap-1 transition-all ${
                     selectedCategory === cat.label
-                      ? "bg-[#2D6A4F] border-[#2D6A4F]"
-                      : "bg-[#F6F4F0] border-[#EBE3D5]"
+                      ? "bg-brand border-brand"
+                      : "bg-canvas border-line"
                   }`}
                 >
                   <FontAwesome6
@@ -280,7 +261,7 @@ export default function ShoppingListScreen() {
                   />
                   <Text
                     className={`text-[11px] font-bold ${
-                      selectedCategory === cat.label ? "text-white" : "text-[#3D3229]"
+                      selectedCategory === cat.label ? "text-white" : "text-ink"
                     }`}
                   >
                     {cat.label}
@@ -291,7 +272,7 @@ export default function ShoppingListScreen() {
 
             <TouchableOpacity
               onPress={handleAddItem}
-              className="bg-[#2D6A4F] px-4 py-2 rounded-2xl flex-row items-center gap-1 active:scale-95 shadow-xs"
+              className="bg-brand px-4 py-2 rounded-2xl flex-row items-center gap-1 active:scale-95 shadow-xs"
             >
               <FontAwesome6 name="plus" size={12} color="#FFF" />
               <Text className="text-xs font-black text-white">添加</Text>
@@ -322,13 +303,13 @@ export default function ShoppingListScreen() {
             onPress={() => setActiveTab("pending")}
             className={`px-3.5 py-1.5 rounded-full border ${
               activeTab === "pending"
-                ? "bg-[#2D6A4F] border-[#2D6A4F]"
-                : "bg-white border-[#EBE3D5]"
+                ? "bg-brand border-brand"
+                : "bg-white border-line"
             }`}
           >
             <Text
               className={`text-xs font-bold ${
-                activeTab === "pending" ? "text-white" : "text-[#8B7D6B]"
+                activeTab === "pending" ? "text-white" : "text-copy-muted"
               }`}
             >
               待采购 ({pendingItems.length})
@@ -339,13 +320,13 @@ export default function ShoppingListScreen() {
             onPress={() => setActiveTab("done")}
             className={`px-3.5 py-1.5 rounded-full border ${
               activeTab === "done"
-                ? "bg-[#2D6A4F] border-[#2D6A4F]"
-                : "bg-white border-[#EBE3D5]"
+                ? "bg-brand border-brand"
+                : "bg-white border-line"
             }`}
           >
             <Text
               className={`text-xs font-bold ${
-                activeTab === "done" ? "text-white" : "text-[#8B7D6B]"
+                activeTab === "done" ? "text-white" : "text-copy-muted"
               }`}
             >
               已买到 ({checkedItems.length})
@@ -356,13 +337,13 @@ export default function ShoppingListScreen() {
             onPress={() => setActiveTab("all")}
             className={`px-3.5 py-1.5 rounded-full border ${
               activeTab === "all"
-                ? "bg-[#2D6A4F] border-[#2D6A4F]"
-                : "bg-white border-[#EBE3D5]"
+                ? "bg-brand border-brand"
+                : "bg-white border-line"
             }`}
           >
             <Text
               className={`text-xs font-bold ${
-                activeTab === "all" ? "text-white" : "text-[#8B7D6B]"
+                activeTab === "all" ? "text-white" : "text-copy-muted"
               }`}
             >
               全部 ({items.length})
@@ -374,12 +355,12 @@ export default function ShoppingListScreen() {
         {loading ? (
           <ActivityIndicator size="small" color="#2D6A4F" className="my-8" />
         ) : filteredItems.length === 0 ? (
-          <View className="items-center py-10 bg-white/70 rounded-3xl border border-dashed border-[#EBE3D5] my-2">
+          <View className="items-center py-10 bg-white/70 rounded-3xl border border-dashed border-line my-2">
             <FontAwesome6 name="basket-shopping" size={32} color="#D4A276" />
-            <Text className="text-xs text-[#8B7D6B] mt-2.5 font-bold">
+            <Text className="text-xs text-copy-muted mt-2.5 font-bold">
               {activeTab === "pending" ? "暂无待采购食材" : "清单空空如也"}
             </Text>
-            <Text className="text-[10px] text-[#8B7D6B] mt-1">在上方输入或在 AI 聊天中一键计算生成</Text>
+            <Text className="text-[10px] text-copy-muted mt-1">在上方输入或在 AI 聊天中一键计算生成</Text>
           </View>
         ) : (
           <View className="gap-2">
@@ -393,7 +374,7 @@ export default function ShoppingListScreen() {
                   className={`p-3.5 rounded-2xl border flex-row items-center justify-between transition-all shadow-2xs ${
                     item.checked
                       ? "bg-gray-50 border-gray-200 opacity-60"
-                      : "bg-white border-[#EBE3D5]"
+                      : "bg-white border-line"
                   }`}
                 >
                   <View className="flex-row items-center gap-3 flex-1 mr-2">
@@ -402,7 +383,7 @@ export default function ShoppingListScreen() {
                       className={`w-6 h-6 rounded-full items-center justify-center border transition-all ${
                         item.checked
                           ? "bg-emerald-600 border-emerald-600"
-                          : "bg-white border-[#EBE3D5]"
+                          : "bg-white border-line"
                       }`}
                     >
                       {item.checked && <FontAwesome6 name="check" size={11} color="#FFF" />}
@@ -417,12 +398,12 @@ export default function ShoppingListScreen() {
                     <View className="flex-1">
                       <Text
                         className={`text-xs font-black ${
-                          item.checked ? "text-gray-400 line-through" : "text-[#3D3229]"
+                          item.checked ? "text-gray-400 line-through" : "text-ink"
                         }`}
                       >
                         {item.name}
                       </Text>
-                      <Text className="text-[10px] text-[#8B7D6B] mt-0.5">
+                      <Text className="text-[10px] text-copy-muted mt-0.5">
                         分量/规格: {item.amount}
                       </Text>
                     </View>
@@ -445,9 +426,10 @@ export default function ShoppingListScreen() {
         {checkedItems.length > 0 && (
           <TouchableOpacity
             onPress={handleMoveCheckedToInventory}
-            className="mt-5 bg-[#2D6A4F] p-4 rounded-2xl flex-row items-center justify-center gap-2 shadow-sm active:scale-95"
+            disabled={movingToInventory}
+            className="mt-5 bg-brand p-4 rounded-2xl flex-row items-center justify-center gap-2 shadow-sm active:scale-95"
           >
-            <FontAwesome6 name="box-archive" size={14} color="#FFF" />
+            {movingToInventory ? <ActivityIndicator size="small" color="#FFF" /> : <FontAwesome6 name="box-archive" size={14} color="#FFF" />}
             <Text className="text-xs font-black text-white">
               将 {checkedItems.length} 件已买食材一键存入【冰箱食材库】
             </Text>

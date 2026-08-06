@@ -44,7 +44,6 @@ interface Trend {
 interface RecentUser {
   id: string;
   username: string;
-  nickname: string;
   avatar_url: string;
   created_at: string;
 }
@@ -52,7 +51,6 @@ interface RecentUser {
 interface RecentPost {
   id: string;
   username: string;
-  nickname: string;
   content: string;
   image_url: string;
   category: string;
@@ -700,13 +698,13 @@ export default function Dashboard() {
                     <div className="flex items-start gap-3 min-w-0 flex-1">
                       <img
                         src={getAvatarUrl(undefined, p.id)}
-                        alt={p.nickname || p.username}
+                        alt={p.username}
                         className="w-9 h-9 rounded-full object-cover shrink-0 bg-background-alt"
                       />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold text-text-main truncate">
-                            {p.nickname || p.username}
+                            {p.username}
                           </span>
                           {p.category && (
                             <span className="text-[10px] px-2 py-0.5 rounded-md bg-primary/10 text-primary font-medium shrink-0">
@@ -819,12 +817,12 @@ export default function Dashboard() {
                     <div className="flex items-center space-x-3 min-w-0">
                       <img
                         src={getAvatarUrl(u.avatar_url, u.id)}
-                        alt={u.nickname || u.username}
+                        alt={u.username}
                         className="w-10 h-10 rounded-full object-cover bg-background-alt shrink-0"
                       />
                       <div className="min-w-0">
                         <p className="text-xs font-bold text-text-main truncate">
-                          {u.nickname || u.username}
+                          {u.username}
                         </p>
                         <p className="text-[11px] text-text-muted truncate">@{u.username}</p>
                       </div>

@@ -1,7 +1,9 @@
-import { ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Linking, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
+import { systemApi, type AIDataPolicy } from "@/services/api";
 
 type LegalSection = {
   title: string;
@@ -50,7 +52,7 @@ const policies: Record<"privacy" | "terms", LegalDocument> = {
           "账号与安全信息：邮箱或手机号、加密后的密码、头像、简介、账号创建时间，以及登录时间、IP 地址、设备或浏览器标识等安全日志。",
           "饮食与厨房信息：食材名称、数量、保质期、存放位置、厨具、购物清单、饮食记录、营养数据、收藏及您提交的菜谱。",
           "健康与偏好信息：年龄、性别、身高、体重、体脂、腰臀围、心率、血压、血糖、睡眠、饮水、周期状态、健康目标、饮食偏好，以及您主动填写的过敏、不耐受、疾病、用药和专业建议。",
-          "社区信息：昵称、头像、简介、动态、图片、评论、点赞、关注、活动参与和问答互动。公开发布的内容可能被其他用户查看、转发或保存。",
+          "社区信息：用户名、头像、简介、动态、图片、评论、点赞、关注、活动参与和问答互动。公开发布的内容可能被其他用户查看、转发或保存。",
           "AI 交互信息：您提交的文字、语音转写、所选图片，以及为生成个性化结果所必需的近期饮食、库存和健康资料。",
           "通知信息：通知偏好、设备平台和推送令牌，用于发送您开启的到期、用餐、饮水或服务通知。",
         ],
@@ -80,7 +82,8 @@ const policies: Record<"privacy" | "terms", LegalDocument> = {
         title: "AI 功能的特别说明",
         paragraphs: [
           "当您使用食语 AI、图片识别或语音识别时，完成请求所需的文字、图片、音频或相关上下文会经我们的服务器发送给当前配置的模型服务商处理。不同功能可能使用不同模型服务。我们不会以改善第三方通用模型为目的主动提供您的信息。",
-          "AI 对话历史主要保存在您的设备本地。为保持对话连贯，一次请求最多会携带最近 50 条有效消息；较早内容仍可能保留在本机，直到您清除缓存、删除会话或账号。服务端可能记录模型名称、用量、延迟和成功状态等运行数据，用于计量、排障和安全审计。",
+          "AI 对话会保存在您的设备本地，同时服务端会按账号和会话保存完整的用户消息与 AI 回复；为保持对话连贯，一次请求最多携带最近 50 条有效消息。服务端还会记录模型名称、用量、延迟、成功状态和失败原因，用于计量、排障和安全审计。授权管理员可能在必要的排障和安全审计范围内查看对话内容。",
+          "本地对话与采购等缓存可在“设置—清理本地缓存”中删除；这不会删除服务端对话。注销账号会删除账号及其服务端 AI 对话。若需在保留账号的情况下导出或删除服务端对话，请通过正式发布渠道展示的支持方式联系我们；在提供自助入口前，我们会按核验后的请求处理。",
           "模型输出基于概率生成，可能不准确、不完整或不适合您的实际情况。涉及严重过敏、慢性病、孕产期、用药调整或紧急症状时，请停止依赖 AI 输出并及时咨询专业人员。",
         ],
         notice: "使用 AI 前，请避免输入与当前请求无关的敏感个人信息或他人信息。",
@@ -90,13 +93,13 @@ const policies: Record<"privacy" | "terms", LegalDocument> = {
         paragraphs: [
           "为实现必要功能，我们可能委托基础设施、消息推送、AI 模型、图片存储或故障处理等服务提供者处理最少范围的信息。相关接收方只能按照我们的指示和约定目的处理，并承担保密与安全义务。具体服务商可能因部署环境而不同，正式上线前我们会通过第三方信息清单披露其名称、联系方式、处理目的、方式和信息种类。",
           "除取得您的单独同意、为履行法定义务或法律另有规定外，我们不会向其他个人信息处理者提供您的个人信息，也不会出售个人信息。发生合并、分立、收购或资产转让时，我们会依法告知接收方，并要求其继续受本政策约束。",
-          "您主动发布到社区的昵称、头像、动态、图片、评论和互动将被公开展示。请勿公开联系方式、住址、病历或他人的个人信息。",
+          "您主动发布到社区的用户名、头像、动态、图片、评论和互动将被公开展示。请勿公开联系方式、住址、病历或他人的个人信息。",
         ],
       },
       {
         title: "信息保存与跨境处理",
         paragraphs: [
-          "我们仅在实现处理目的所需的最短期限内保存信息。账号及关联业务数据通常保存至您删除相应记录或注销账号；本地缓存保存至您清除缓存、卸载应用或删除账号；安全与审计记录按照法律要求和合理的风险防控期限保存。期限届满后，我们会依法删除或匿名化处理。",
+          "账号、业务记录和服务端 AI 对话目前通常保存至您删除相应记录、提出经核验的删除请求或注销账号；本地缓存保存至您清除缓存、卸载应用或删除账号；安全与审计记录按照法律要求和合理的风险防控期限保存。正式上线前运营方应在第三方清单中公布可执行的具体保留期限；期限届满后依法删除或匿名化处理。",
           "原则上，我们将在中华人民共和国境内存储在境内收集的个人信息。如因所选服务商或功能需要向境外提供个人信息，我们会依法完成相应程序，向您告知接收方等事项，并在适用时取得单独同意。在未完成这些要求前，不进行相关跨境提供。",
         ],
       },
@@ -264,7 +267,7 @@ function HighlightCard({ items }: { items: readonly string[] }) {
   return (
     <View className="mb-7 rounded-3xl border border-[#D7E6DB] bg-[#EEF6F0] p-5">
       <View className="mb-3 flex-row items-center gap-2">
-        <View className="h-7 w-7 items-center justify-center rounded-full bg-[#2D6A4F]">
+        <View className="h-7 w-7 items-center justify-center rounded-full bg-brand">
           <FontAwesome6 name="shield-halved" size={12} color="#FFFFFF" />
         </View>
         <Text className="text-sm font-black text-[#254F3C]">请特别关注</Text>
@@ -272,7 +275,7 @@ function HighlightCard({ items }: { items: readonly string[] }) {
       <View className="gap-3">
         {items.map((item) => (
           <View key={item} className="flex-row gap-2.5">
-            <View className="mt-2 h-1.5 w-1.5 rounded-full bg-[#2D6A4F]" />
+            <View className="mt-2 h-1.5 w-1.5 rounded-full bg-brand" />
             <Text className="flex-1 text-sm leading-6 text-[#456353]">{item}</Text>
           </View>
         ))}
@@ -288,7 +291,7 @@ function SectionBlock({ index, section }: { index: number; section: LegalSection
         <View className="h-7 min-w-7 items-center justify-center rounded-lg bg-[#F1E8DA] px-1.5">
           <Text className="text-xs font-black text-[#8A603E]">{index}</Text>
         </View>
-        <Text className="flex-1 pt-0.5 text-base font-black leading-6 text-[#3D3229]">{section.title}</Text>
+        <Text className="flex-1 pt-0.5 text-base font-black leading-6 text-ink">{section.title}</Text>
       </View>
 
       <View className="pl-10">
@@ -325,19 +328,25 @@ export default function LegalScreen() {
   const { type } = useSafeSearchParams<{ type?: string | string[] }>();
   const selectedType = (Array.isArray(type) ? type[0] : type) === "terms" ? "terms" : "privacy";
   const policy = policies[selectedType];
+  const [aiPolicy, setAIPolicy] = useState<AIDataPolicy | null>(null);
+
+  useEffect(() => {
+    if (selectedType !== "privacy") return;
+    void systemApi.aiDataPolicy().then(setAIPolicy).catch(() => setAIPolicy(null));
+  }, [selectedType]);
 
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
-      <View className="flex-row items-center border-b border-[#EBE3D5] bg-[#FDF8F0] px-5 py-3">
+      <View className="flex-row items-center border-b border-line bg-canvas px-5 py-3">
         <TouchableOpacity
           onPress={() => router.back()}
           accessibilityRole="button"
           accessibilityLabel="返回"
-          className="h-10 w-10 items-center justify-center rounded-full border border-[#EBE3D5] bg-white shadow-xs"
+          className="h-10 w-10 items-center justify-center rounded-full border border-line bg-white shadow-xs"
         >
           <FontAwesome6 name="chevron-left" size={14} color="#3D3229" />
         </TouchableOpacity>
-        <Text className="flex-1 text-center text-lg font-black text-[#3D3229]">{policy.title}</Text>
+        <Text className="flex-1 text-center text-lg font-black text-ink">{policy.title}</Text>
         <View className="w-10" />
       </View>
 
@@ -346,34 +355,49 @@ export default function LegalScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View className="mb-5 flex-row flex-wrap gap-2">
-          <View className="rounded-full bg-[#2D6A4F] px-3 py-1.5">
+          <View className="rounded-full bg-brand px-3 py-1.5">
             <Text className="text-[11px] font-black text-white">{policy.version}</Text>
           </View>
-          <View className="rounded-full border border-[#EBE3D5] bg-white px-3 py-1.5">
-            <Text className="text-[11px] font-bold text-[#8B7D6B]">{policy.updated}</Text>
+          <View className="rounded-full border border-line bg-white px-3 py-1.5">
+            <Text className="text-[11px] font-bold text-copy-muted">{policy.updated}</Text>
           </View>
-          <View className="rounded-full border border-[#EBE3D5] bg-white px-3 py-1.5">
-            <Text className="text-[11px] font-bold text-[#8B7D6B]">{policy.effective}</Text>
+          <View className="rounded-full border border-line bg-white px-3 py-1.5">
+            <Text className="text-[11px] font-bold text-copy-muted">{policy.effective}</Text>
           </View>
         </View>
 
         <Text className="mb-6 text-sm leading-7 text-[#66594D]">{policy.introduction}</Text>
         <HighlightCard items={policy.highlights} />
 
+        {selectedType === "privacy" && aiPolicy ? (
+          <View className="mb-7 rounded-3xl border border-[#D8D4EE] bg-[#F5F3FF] p-5">
+            <Text className="text-sm font-black text-[#43386B]">当前 AI 数据处理配置</Text>
+            <Text className="mt-2 text-sm leading-6 text-[#625788]">处理方：{aiPolicy.providerName}</Text>
+            <Text className="text-sm leading-6 text-[#625788]">处理地区：{aiPolicy.processingRegion}</Text>
+            <Text className="text-sm leading-6 text-[#625788]">服务端对话保留：最多 {aiPolicy.conversationRetentionDays} 天</Text>
+            <Text className="text-sm leading-6 text-[#625788]">数据请求联系：{aiPolicy.supportContact}</Text>
+            {aiPolicy.providerPrivacyUrl ? (
+              <TouchableOpacity onPress={() => void Linking.openURL(aiPolicy.providerPrivacyUrl!)} className="mt-2 self-start">
+                <Text className="text-xs font-bold text-[#5B4FB2] underline">查看处理方隐私说明</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
+
         <View className="mb-6 flex-row items-center gap-3">
-          <View className="h-px flex-1 bg-[#EBE3D5]" />
+          <View className="h-px flex-1 bg-line" />
           <Text className="text-xs font-black tracking-widest text-[#9A8B78]">正文</Text>
-          <View className="h-px flex-1 bg-[#EBE3D5]" />
+          <View className="h-px flex-1 bg-line" />
         </View>
 
         {policy.sections.map((section, index) => (
           <SectionBlock key={section.title} index={index + 1} section={section} />
         ))}
 
-        <View className="mt-1 items-center rounded-3xl border border-[#EBE3D5] bg-white px-5 py-6">
+        <View className="mt-1 items-center rounded-3xl border border-line bg-white px-5 py-6">
           <FontAwesome6 name="leaf" size={18} color="#2D6A4F" />
-          <Text className="mt-2 text-sm font-black text-[#3D3229]">食光烙记</Text>
-          <Text className="mt-1 text-center text-xs leading-5 text-[#8B7D6B]">
+          <Text className="mt-2 text-sm font-black text-ink">食光烙记</Text>
+          <Text className="mt-1 text-center text-xs leading-5 text-copy-muted">
             感谢您花时间了解这份{policy.title}\n我们会认真保护每一份信任
           </Text>
         </View>

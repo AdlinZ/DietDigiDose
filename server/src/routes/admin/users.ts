@@ -7,6 +7,7 @@ import { adminExpertSchema, adminLevelAdjustmentSchema, adminRoleSchema, adminUs
 import { positiveIntegerParam } from "../../middleware/validateParam.js";
 import { auditAdminAction as audit } from "./shared.js";
 import { getUserLevel } from "../../services/userLevel.js";
+import { decodeCursor, encodeCursor } from "../../utils/cursor.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -22,15 +23,28 @@ function parseJson(value: unknown, fallback: unknown) {
 // 2. 获取用户列表
 router.get("/users", (req, res) => {
   try {
+    const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 50));
+    const cursor = req.query.cursor ? decodeCursor(req.query.cursor) : null;
+    const cursorId = cursor ? Number(cursor.id) : null;
+    if (req.query.cursor && (!cursor || cursor.v !== 1 || !Number.isInteger(cursorId) || cursorId! <= 0)) {
+      return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+    }
     const users = db.prepare(`
-      SELECT u.id, u.username, u.email, u.phone, u.nickname, u.avatar_url, u.role,
+      SELECT u.id, u.username, u.email, u.phone, u.avatar_url, u.role,
         u.is_verified_expert, COALESCE(u.is_disabled, 0) AS is_disabled, u.created_at,
         CASE WHEN hp.user_id IS NULL THEN 0 ELSE 1 END AS has_health_profile
       FROM users u
       LEFT JOIN user_health_profiles hp ON hp.user_id = u.id
-      ORDER BY u.created_at DESC
-    `).all() as Array<{ id: number }>;
-    res.json(users.map((user) => ({ ...user, level: getUserLevel(user.id) })));
+      ${cursorId ? "WHERE u.id < ?" : ""}
+      ORDER BY u.id DESC
+      ${cursorMode ? "LIMIT ?" : ""}
+    `).all(...(cursorId ? [cursorId] : []), ...(cursorMode ? [pageSize + 1] : [])) as Array<{ id: number }>;
+    const hasMore = cursorMode && users.length > pageSize;
+    const pageUsers = cursorMode ? users.slice(0, pageSize) : users;
+    const items = pageUsers.map((user) => ({ ...user, level: getUserLevel(user.id) }));
+    if (!cursorMode) return res.json(items);
+    return res.json({ items, nextCursor: hasMore ? encodeCursor({ v: 1, id: pageUsers.at(-1)!.id }) : null });
   } catch (error) {
     res.status(500).json({ error: "获取用户列表失败" });
   }

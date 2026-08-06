@@ -1,0 +1,14 @@
+.git
+**/node_modules
+**/dist
+**/.expo
+**/.env
+**/.env.*
+!**/.env.example
+server/data
+server/backups
+client
+admin
+*.apk
+*.log
+

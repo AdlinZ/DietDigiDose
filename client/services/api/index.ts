@@ -9,3 +9,4 @@ export * from "./ai";
 export * from "./foods";
 export * from "./auth";
 export * from "./system";
+export * from "./media";

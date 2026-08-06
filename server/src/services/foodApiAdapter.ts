@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "../utils/fetchWithTimeout.js";
+
 /**
  * Adapter for External Food Data APIs
  * Implements fallback and standard conversion logic.
@@ -18,7 +20,7 @@ export type StandardFoodInfo = {
 export async function searchFoodUSDA(query: string): Promise<StandardFoodInfo[]> {
   try {
     const url = `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(query)}&api_key=${USDA_API_KEY}&pageSize=5`;
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     if (!response.ok) {
       console.error('USDA API Error:', response.statusText);
       return [];

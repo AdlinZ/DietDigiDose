@@ -66,6 +66,7 @@ export default function ProfileScreen() {
   const [streakDays, setStreakDays] = useState(0);
   const [followingCount, setFollowingCount] = useState(0);
   const [userLevel, setUserLevel] = useState<UserLevel | null>(null);
+  const [loadWarning, setLoadWarning] = useState<string | null>(null);
 
   const today = toLocalDateKey();
 
@@ -81,30 +82,42 @@ export default function ProfileScreen() {
       setLoading(false);
       return;
     }
-    try {
-      setLoading(true);
-      const [healthJson, healthLogs, healthProfileJson, dietJson, favoriteJson, followingJson, levelJson] = await Promise.all([
-        healthApi.latest(authFetch),
-        healthApi.list(authFetch),
-        healthApi.profile<SavedHealthProfile>(authFetch),
-        dietApi.list(authFetch),
-        recipesApi.favoriteCount(authFetch),
-        communityApi.following<{ id: number }>(authFetch),
-        communityApi.level<UserLevel>(authFetch),
-      ]);
-      setFavoriteCount(Number(favoriteJson?.count || 0));
-      setFollowingCount(Array.isArray(followingJson) ? followingJson.length : 0);
-      setUserLevel(levelJson);
+    setLoading(true);
+    setLoadWarning(null);
+    const results = await Promise.allSettled([
+      healthApi.latest(authFetch),
+      healthApi.list(authFetch),
+      healthApi.profile<SavedHealthProfile>(authFetch),
+      dietApi.list(authFetch),
+      recipesApi.favoriteCount(authFetch),
+      communityApi.following<{ id: number }>(authFetch),
+      communityApi.level<UserLevel>(authFetch),
+    ]);
+    const [healthResult, healthLogsResult, healthProfileResult, dietResult, favoriteResult, followingResult, levelResult] = results;
+    const failedSections: string[] = [];
 
-      const latestHealth = Array.isArray(healthJson) ? healthJson[0] : healthJson;
+    if (favoriteResult.status === "fulfilled") setFavoriteCount(Number(favoriteResult.value?.count || 0));
+    else failedSections.push("收藏");
+    if (followingResult.status === "fulfilled") setFollowingCount(Array.isArray(followingResult.value) ? followingResult.value.length : 0);
+    else failedSections.push("关注");
+    if (levelResult.status === "fulfilled") setUserLevel(levelResult.value);
+    else failedSections.push("等级");
+
+    if (healthResult.status === "fulfilled") {
+      const latestHealth = Array.isArray(healthResult.value) ? healthResult.value[0] : healthResult.value;
       setHealthData(latestHealth);
-      setHealthProfile(healthProfileJson);
-      const todayHealth = Array.isArray(healthLogs)
-        ? healthLogs.find((entry) => entry.recorded_date === today)
+    } else failedSections.push("健康概览");
+    if (healthProfileResult.status === "fulfilled") setHealthProfile(healthProfileResult.value);
+    else failedSections.push("健康档案");
+    if (healthLogsResult.status === "fulfilled") {
+      const todayHealth = Array.isArray(healthLogsResult.value)
+        ? healthLogsResult.value.find((entry) => entry.recorded_date === today)
         : null;
       setWaterMl(todayHealth?.water_ml ?? null);
+    } else failedSections.push("饮水记录");
 
-      const dietList = Array.isArray(dietJson) ? dietJson : [];
+    if (dietResult.status === "fulfilled") {
+      const dietList = Array.isArray(dietResult.value) ? dietResult.value : [];
       setRecentRecords(dietList.slice(0, 5));
       setDietRecordCount(dietList.length);
       const recordedDays = new Set(dietList.map((record: DietRecord) => record.recorded_at));
@@ -125,11 +138,13 @@ export default function ProfileScreen() {
         last7Days.push({ date: dateStr, calories: totalCalories });
       }
       setDietTrend(last7Days);
-    } catch (error) {
-      console.error("Failed to fetch data:", error);
-    } finally {
-      setLoading(false);
+    } else failedSections.push("饮食趋势");
+
+    if (failedSections.length > 0) {
+      console.warn("Profile partial fetch failure", failedSections);
+      setLoadWarning(`${failedSections.join("、")}暂时无法加载，其他资料仍可使用`);
     }
+    setLoading(false);
   }, [isAuthenticated, authFetch, today]);
 
   useFocusEffect(
@@ -166,17 +181,17 @@ export default function ProfileScreen() {
     return (
       <Screen backgroundColor="#FDF8F0">
         <View className="flex-1 items-center justify-center px-8">
-          <View className="w-20 h-20 rounded-full bg-[#2D6A4F]/10 items-center justify-center mb-6 border border-[#2D6A4F]/20">
+          <View className="w-20 h-20 rounded-full bg-brand/10 items-center justify-center mb-6 border border-brand/20">
             <FontAwesome6 name="user" size={36} color="#2D6A4F" />
           </View>
-          <Text className="text-xl font-black text-[#3D3229] mb-2">
+          <Text className="text-xl font-black text-ink mb-2">
             欢迎来到食光烙记
           </Text>
-          <Text className="text-sm text-[#8B7D6B] text-center mb-8 leading-6 px-4">
+          <Text className="text-sm text-copy-muted text-center mb-8 leading-6 px-4">
             登录后精准记录三餐营养、追踪身体健康指标与食材保鲜。
           </Text>
           <TouchableOpacity
-            className="bg-[#2D6A4F] px-10 py-4 rounded-2xl w-full items-center shadow-md active:opacity-90"
+            className="bg-brand px-10 py-4 rounded-2xl w-full items-center shadow-md active:opacity-90"
             onPress={() => router.push("/login")}
           >
             <Text className="text-white text-base font-bold">登录 / 注册</Text>
@@ -191,7 +206,7 @@ export default function ProfileScreen() {
       <Screen backgroundColor="#FDF8F0">
         <View className="flex-1 items-center justify-center">
           <ActivityIndicator size="large" color="#2D6A4F" />
-          <Text className="text-xs text-[#8B7D6B] mt-2">载入个人档案中...</Text>
+          <Text className="text-xs text-copy-muted mt-2">载入个人档案中...</Text>
         </View>
       </Screen>
     );
@@ -253,32 +268,40 @@ export default function ProfileScreen() {
 
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
+      {loadWarning ? (
+        <TouchableOpacity
+          onPress={() => void fetchData()}
+          className="absolute left-4 right-4 top-4 z-[60] rounded-2xl border border-amber-200 bg-amber-50 p-3"
+        >
+          <Text className="text-xs font-bold text-amber-800">{loadWarning} · 点击重试</Text>
+        </TouchableOpacity>
+      ) : null}
       {/* 悬浮 Mini 胶囊顶栏 */}
       {isScrolled && (
         <View style={{ top: miniTopOffset }} className="absolute left-4 right-4 z-50">
-          <View className="bg-white/95 px-4 py-2 rounded-full flex-row items-center justify-between shadow-lg border border-[#EBE3D5] backdrop-blur-md">
+          <View className="bg-white/95 px-4 py-2 rounded-full flex-row items-center justify-between shadow-lg border border-line backdrop-blur-md">
             <View className="flex-row items-center gap-2">
-              <View className="w-7 h-7 rounded-full bg-[#2D6A4F]/15 items-center justify-center border border-[#2D6A4F]">
+              <View className="w-7 h-7 rounded-full bg-brand/15 items-center justify-center border border-brand">
                 <FontAwesome6 name="user" size={11} color="#2D6A4F" />
               </View>
-              <Text className="text-sm font-black text-[#3D3229]">
+              <Text className="text-sm font-black text-ink">
                 {user?.username || "个人中心"}
               </Text>
-                <View className="bg-[#E9C46A] px-2 py-0.5 rounded-full">
-                  <Text className="text-[10px] font-black text-[#3D3229]">V{userLevel?.level ?? 1}</Text>
+                <View className="bg-highlight px-2 py-0.5 rounded-full">
+                  <Text className="text-[10px] font-black text-ink">V{userLevel?.level ?? 1}</Text>
               </View>
             </View>
 
             <View className="flex-row items-center gap-2">
               <TouchableOpacity
                 onPress={() => router.push("/profile-edit")}
-                className="w-7 h-7 rounded-full bg-[#F5EFE6] items-center justify-center"
+                className="w-7 h-7 rounded-full bg-background-secondary items-center justify-center"
               >
                 <FontAwesome6 name="pen" size={10} color="#3D3229" />
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => router.push("/settings")}
-                className="w-7 h-7 rounded-full bg-[#F5EFE6] items-center justify-center"
+                className="w-7 h-7 rounded-full bg-background-secondary items-center justify-center"
               >
                 <FontAwesome6 name="gear" size={11} color="#3D3229" />
               </TouchableOpacity>
@@ -296,12 +319,12 @@ export default function ProfileScreen() {
         }}
         scrollEventThrottle={16}
         contentContainerStyle={{ paddingBottom: 144 }}
-        className="bg-[#FDF8F0]"
+        className="bg-canvas"
       >
         {/* Emerald Header 顶栏 */}
-        <View className="bg-[#2D6A4F] px-5 pt-5 pb-11 rounded-b-[36px] shadow-sm relative overflow-hidden">
+        <View className="bg-brand px-5 pt-5 pb-11 rounded-b-[36px] shadow-sm relative overflow-hidden">
           <View className="absolute -right-12 -top-12 w-44 h-44 rounded-full bg-white/5" />
-          <View className="absolute left-1/3 -bottom-8 w-32 h-32 rounded-full bg-[#E9C46A]/10" />
+          <View className="absolute left-1/3 -bottom-8 w-32 h-32 rounded-full bg-highlight/10" />
 
           {/* User Info & Actions */}
           <View className="flex-row items-center justify-between mb-4">
@@ -313,7 +336,7 @@ export default function ProfileScreen() {
             >
               <Image
                 source={getAvatarSource(user?.avatar_url, user?.id ?? user?.username)}
-                className="w-12 h-12 rounded-full border-2 border-[#E9C46A] mr-3"
+                className="w-12 h-12 rounded-full border-2 border-highlight mr-3"
                 style={{ width: 48, height: 48, borderRadius: 24 }}
               />
               <View className="flex-1">
@@ -321,8 +344,8 @@ export default function ProfileScreen() {
                   <Text className="text-white text-lg font-black" numberOfLines={1}>
                     {user?.username || "健康体验家"}
                   </Text>
-                  <View className="bg-[#E9C46A] px-2.5 py-0.5 rounded-full shadow-xs">
-                    <Text className="text-[10px] font-black text-[#3D3229]">V{userLevel?.level ?? 1} {userLevel?.title ?? "健康新芽"}</Text>
+                  <View className="bg-highlight px-2.5 py-0.5 rounded-full shadow-xs">
+                    <Text className="text-[10px] font-black text-ink">V{userLevel?.level ?? 1} {userLevel?.title ?? "健康新芽"}</Text>
                   </View>
                 </View>
                 <Text className="text-emerald-100/90 text-xs mt-0.5" numberOfLines={1}>
@@ -353,17 +376,17 @@ export default function ProfileScreen() {
                 <Text className="text-[10px] font-bold text-emerald-50">成长经验 {userLevel.xp} XP</Text>
                 <Text className="text-[10px] text-emerald-100">{userLevel.nextXp ? `距离下一等级 ${userLevel.nextXp - userLevel.xp} XP` : "已达最高等级"}</Text>
               </View>
-              <View className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/15"><View className="h-full rounded-full bg-[#E9C46A]" style={{ width: `${userLevel.progress}%` }} /></View>
+              <View className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/15"><View className="h-full rounded-full bg-highlight" style={{ width: `${userLevel.progress}%` }} /></View>
             </View>
           ) : null}
 
         </View>
 
-        <View className="mx-5 -mt-6 mb-5 rounded-3xl border border-[#EBE3D5] bg-white p-4 shadow-md">
+        <View className="mx-5 -mt-6 mb-5 rounded-3xl border border-line bg-white p-4 shadow-md">
           <View className="mb-3 flex-row items-center justify-between">
-            <Text className="text-xs font-black text-[#3D3229]">我的饮食足迹</Text>
+            <Text className="text-xs font-black text-ink">我的饮食足迹</Text>
             <TouchableOpacity onPress={() => router.push("/diet-record")} className="flex-row items-center gap-1">
-              <Text className="text-[11px] font-bold text-[#2D6A4F]">查看记录</Text>
+              <Text className="text-[11px] font-bold text-brand">查看记录</Text>
               <FontAwesome6 name="chevron-right" size={8} color="#2D6A4F" />
             </TouchableOpacity>
           </View>
@@ -374,8 +397,8 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityLabel="查看连续打卡记录"
             >
-              <Text className="text-base font-black text-[#2D6A4F]">{streakDays}</Text>
-              <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">连续打卡</Text>
+              <Text className="text-base font-black text-brand">{streakDays}</Text>
+              <Text className="mt-0.5 text-[10px] text-copy-muted">连续打卡</Text>
             </TouchableOpacity>
             <View className="h-7 w-px bg-[#DDE8DF]" />
             <TouchableOpacity
@@ -384,13 +407,13 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityLabel="查看饮食记录"
             >
-              <Text className="text-base font-black text-[#2D6A4F]">{dietRecordCount}</Text>
-              <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">记录餐数</Text>
+              <Text className="text-base font-black text-brand">{dietRecordCount}</Text>
+              <Text className="mt-0.5 text-[10px] text-copy-muted">记录餐数</Text>
             </TouchableOpacity>
             <View className="h-7 w-px bg-[#DDE8DF]" />
             <TouchableOpacity onPress={() => router.push("/favorites")} className="items-center">
-              <Text className="text-base font-black text-[#2D6A4F]">{favoriteCount}</Text>
-              <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">收藏菜谱</Text>
+              <Text className="text-base font-black text-brand">{favoriteCount}</Text>
+              <Text className="mt-0.5 text-[10px] text-copy-muted">收藏菜谱</Text>
             </TouchableOpacity>
             <View className="h-7 w-px bg-[#DDE8DF]" />
             <TouchableOpacity
@@ -399,27 +422,27 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityLabel="查看关注好友"
             >
-              <Text className="text-base font-black text-[#2D6A4F]">{followingCount}</Text>
-              <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">关注好友</Text>
+              <Text className="text-base font-black text-brand">{followingCount}</Text>
+              <Text className="mt-0.5 text-[10px] text-copy-muted">关注好友</Text>
             </TouchableOpacity>
           </View>
         </View>
 
         {/* 健康快照：安全、身体数据与饮水集中在一张卡中 */}
-        <View className="mx-5 mb-5 bg-white rounded-3xl p-5 shadow-xs border border-[#EBE3D5]">
+        <View className="mx-5 mb-5 bg-white rounded-3xl p-5 shadow-xs border border-line">
           <View className="flex-row items-center justify-between mb-3.5 pb-2.5 border-b border-[#F4EFE6]">
             <View className="flex-row items-center gap-2">
-              <View className="w-7 h-7 rounded-lg bg-[#2D6A4F]/10 items-center justify-center">
+              <View className="w-7 h-7 rounded-lg bg-brand/10 items-center justify-center">
                 <FontAwesome6 name="heart-pulse" size={13} color="#2D6A4F" />
               </View>
               <View>
-                <Text className="text-base font-black text-[#3D3229]">今日健康快照</Text>
-                <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">健康资料与今日补水</Text>
+                <Text className="text-base font-black text-ink">今日健康快照</Text>
+                <Text className="mt-0.5 text-[10px] text-copy-muted">健康资料与今日补水</Text>
               </View>
             </View>
             <TouchableOpacity
               onPress={() => router.push("/health-profile")}
-              className="flex-row items-center gap-1 rounded-full bg-[#2D6A4F] px-3 py-1.5 active:opacity-80"
+              className="flex-row items-center gap-1 rounded-full bg-brand px-3 py-1.5 active:opacity-80"
               accessibilityRole="button"
               accessibilityLabel="管理健康档案"
             >
@@ -440,10 +463,10 @@ export default function ProfileScreen() {
                   <FontAwesome6 name="shield-halved" size={13} color={safetyProfileSaved ? "#B64D36" : "#2D6A4F"} />
                 </View>
                 <View>
-                  <Text className={`text-xs font-black ${safetyProfileSaved ? "text-[#7D3020]" : "text-[#2D6A4F]"}`}>
+                  <Text className={`text-xs font-black ${safetyProfileSaved ? "text-[#7D3020]" : "text-brand"}`}>
                     {safetyProfileSaved ? "饮食安全提醒" : "完善饮食安全信息"}
                   </Text>
-                  <Text className="mt-0.5 text-[10px] text-[#8B7D6B]">
+                  <Text className="mt-0.5 text-[10px] text-copy-muted">
                     {safetyProfileSaved ? "推荐时将优先避开以下风险" : "补充过敏、疾病或用药信息"}
                   </Text>
                 </View>
@@ -458,7 +481,7 @@ export default function ProfileScreen() {
                   </View>
                 ))}
                 {safetyHighlights.length > visibleSafetyHighlights.length ? (
-                  <View className="rounded-full bg-white px-2.5 py-1"><Text className="text-[10px] font-bold text-[#8B7D6B]">+{safetyHighlights.length - visibleSafetyHighlights.length} 项</Text></View>
+                  <View className="rounded-full bg-white px-2.5 py-1"><Text className="text-[10px] font-bold text-copy-muted">+{safetyHighlights.length - visibleSafetyHighlights.length} 项</Text></View>
                 ) : null}
               </View>
             ) : null}
@@ -467,12 +490,12 @@ export default function ProfileScreen() {
           <View className="mb-2 flex-row items-center justify-between px-1">
             <Text className="text-xs font-black text-[#6E6256]">身体数据</Text>
             <TouchableOpacity onPress={() => router.push("/health-data")} className="flex-row items-center gap-1" accessibilityRole="button" accessibilityLabel="更新身体数据">
-              <Text className="text-[11px] font-bold text-[#2D6A4F]">更新</Text>
+              <Text className="text-[11px] font-bold text-brand">更新</Text>
               <FontAwesome6 name="chevron-right" size={8} color="#2D6A4F" />
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity onPress={() => router.push("/health-data")} className="flex-row justify-between bg-[#FDF8F0] p-3.5 rounded-2xl mb-3.5 border border-[#EBE3D5]/50 active:opacity-80">
+          <TouchableOpacity onPress={() => router.push("/health-data")} className="flex-row justify-between bg-canvas p-3.5 rounded-2xl mb-3.5 border border-line/50 active:opacity-80">
             <HealthStat label="身高" value={heightVal == null ? "待完善" : `${heightVal}`} unit={heightVal == null ? "" : "cm"} color="#2D6A4F" />
             <HealthStat label="体重" value={weightVal == null ? "待完善" : `${weightVal}`} unit={weightVal == null ? "" : "kg"} color="#D4A276" />
             <HealthStat label="体脂率" value={bodyFatVal == null ? "待完善" : `${bodyFatVal}`} unit={bodyFatVal == null ? "" : "%"} color="#E07A5F" />
@@ -487,19 +510,19 @@ export default function ProfileScreen() {
           {/* 动态水分监测栏 */}
           <View className="bg-[#F2F8F3] p-3.5 rounded-2xl flex-row items-center justify-between border border-[#D8E9DC]">
             <View className="flex-row items-center gap-3 flex-1">
-              <View className="w-8 h-8 rounded-full bg-[#2D6A4F]/10 items-center justify-center">
+              <View className="w-8 h-8 rounded-full bg-brand/10 items-center justify-center">
                 <FontAwesome6 name="glass-water" size={15} color="#2D6A4F" />
               </View>
               <View className="flex-1">
                 <View className="flex-row items-center justify-between mb-1.5">
                   <Text className="text-xs font-bold text-[#315A42]">今天喝水了吗？</Text>
-                  <Text className="text-xs font-black text-[#2D6A4F]">
+                  <Text className="text-xs font-black text-brand">
                     {waterMl == null ? "尚未记录" : `${waterMl} / 2000 ml`}
                   </Text>
                 </View>
                 <View className="w-full h-2 bg-[#D8E9DC] rounded-full overflow-hidden">
                   <View
-                    className="h-full bg-[#2D6A4F] rounded-full"
+                    className="h-full bg-brand rounded-full"
                     style={{ width: `${waterPercent}%` }}
                   />
                 </View>
@@ -509,7 +532,7 @@ export default function ProfileScreen() {
             <View className="flex-row items-center gap-1.5 ml-3">
               <TouchableOpacity
                 onPress={() => handleAddWater(250)}
-                className="bg-[#2D6A4F] px-2.5 py-1.5 rounded-xl active:opacity-80 shadow-2xs"
+                className="bg-brand px-2.5 py-1.5 rounded-xl active:opacity-80 shadow-2xs"
               >
                 <Text className="text-[11px] font-bold text-white">+250ml</Text>
               </TouchableOpacity>
@@ -525,17 +548,17 @@ export default function ProfileScreen() {
         </View>
 
         {/* 7日热量趋势 Chart */}
-        <View className="mx-5 mb-5 bg-white rounded-3xl p-5 shadow-xs border border-[#EBE3D5]">
+        <View className="mx-5 mb-5 bg-white rounded-3xl p-5 shadow-xs border border-line">
           <View className="flex-row items-center justify-between mb-3.5 pb-2.5 border-b border-[#F4EFE6]">
             <View className="flex-row items-center gap-2">
-              <View className="w-7 h-7 rounded-lg bg-[#2D6A4F]/10 items-center justify-center">
+              <View className="w-7 h-7 rounded-lg bg-brand/10 items-center justify-center">
                 <FontAwesome6 name="chart-line" size={13} color="#2D6A4F" />
               </View>
-              <Text className="text-base font-black text-[#3D3229]">近7日热量趋势</Text>
+              <Text className="text-base font-black text-ink">近7日热量趋势</Text>
             </View>
             {avgCalories > 0 && (
-              <View className="bg-[#2D6A4F]/10 px-2.5 py-1 rounded-full">
-                <Text className="text-[10px] font-bold text-[#2D6A4F]">
+              <View className="bg-brand/10 px-2.5 py-1 rounded-full">
+                <Text className="text-[10px] font-bold text-brand">
                   日均摄入 {avgCalories} kcal
                 </Text>
               </View>
@@ -571,14 +594,14 @@ export default function ProfileScreen() {
               />
             </View>
           ) : (
-            <View className="py-8 items-center justify-center bg-[#FDF8F0]/50 rounded-2xl border border-dashed border-[#EBE3D5]">
+            <View className="py-8 items-center justify-center bg-canvas/50 rounded-2xl border border-dashed border-line">
               <View className="w-12 h-12 rounded-full bg-[#D4A276]/15 items-center justify-center mb-2">
                 <FontAwesome6 name="chart-line" size={20} color="#D4A276" />
               </View>
-              <Text className="text-xs font-bold text-[#8B7D6B]">暂无 7 日饮食热量数据</Text>
+              <Text className="text-xs font-bold text-copy-muted">暂无 7 日饮食热量数据</Text>
               <TouchableOpacity
                 onPress={() => router.push("/diet-record")}
-                className="mt-3 bg-[#2D6A4F] px-4 py-1.5 rounded-full active:opacity-90 shadow-2xs"
+                className="mt-3 bg-brand px-4 py-1.5 rounded-full active:opacity-90 shadow-2xs"
               >
                 <Text className="text-xs font-bold text-white">+ 记录今日饮食</Text>
               </TouchableOpacity>
@@ -588,7 +611,7 @@ export default function ProfileScreen() {
 
         {/* 2x2 核心功能矩阵 */}
         <View className="mx-5 mb-5">
-          <Text className="text-base font-black text-[#3D3229] mb-3">快捷核心服务</Text>
+          <Text className="text-base font-black text-ink mb-3">快捷核心服务</Text>
           <View className="flex-row flex-wrap justify-between gap-y-3">
             <QuickActionTile
               icon="utensils"
@@ -623,27 +646,27 @@ export default function ProfileScreen() {
 
         {/* 今日饮食小记 */}
         <View className="mx-5 mb-5">
-          <View className="bg-white rounded-3xl p-5 border border-[#EBE3D5] shadow-xs">
+          <View className="bg-white rounded-3xl p-5 border border-line shadow-xs">
             <View className="flex-row items-center justify-between mb-3.5 pb-2.5 border-b border-[#F4EFE6]">
               <View className="flex-row items-center gap-2">
-                <View className="w-7 h-7 rounded-lg bg-[#2D6A4F]/10 items-center justify-center">
+                <View className="w-7 h-7 rounded-lg bg-brand/10 items-center justify-center">
                   <FontAwesome6 name="receipt" size={13} color="#2D6A4F" />
                 </View>
-                <Text className="text-base font-black text-[#3D3229]">今日饮食小记</Text>
+                <Text className="text-base font-black text-ink">今日饮食小记</Text>
               </View>
               <TouchableOpacity onPress={() => router.push("/diet-record")}>
-                <Text className="text-xs font-bold text-[#2D6A4F]">查看全部 →</Text>
+                <Text className="text-xs font-bold text-brand">查看全部 →</Text>
               </TouchableOpacity>
             </View>
 
             {todayRecords.length === 0 ? (
-              <View className="bg-[#FDF8F0] p-4 rounded-2xl items-center border border-dashed border-[#EBE3D5]">
-                <Text className="text-xs text-[#8B7D6B] font-medium">
+              <View className="bg-canvas p-4 rounded-2xl items-center border border-dashed border-line">
+                <Text className="text-xs text-copy-muted font-medium">
                   今天还没有打卡食物哦
                 </Text>
                 <TouchableOpacity
                   onPress={() => router.push("/diet-record")}
-                  className="mt-2.5 bg-[#2D6A4F] px-4 py-1.5 rounded-full active:opacity-90"
+                  className="mt-2.5 bg-brand px-4 py-1.5 rounded-full active:opacity-90"
                 >
                   <Text className="text-xs font-bold text-white">+ 去记录一餐</Text>
                 </TouchableOpacity>
@@ -651,8 +674,8 @@ export default function ProfileScreen() {
             ) : (
               <View className="space-y-2">
                 <View className="flex-row items-center justify-between mb-2 px-1">
-                  <Text className="text-xs font-bold text-[#8B7D6B]">今日已累计摄入</Text>
-                  <Text className="text-sm font-black text-[#2D6A4F]">
+                  <Text className="text-xs font-bold text-copy-muted">今日已累计摄入</Text>
+                  <Text className="text-sm font-black text-brand">
                     {todayCalories} kcal
                   </Text>
                 </View>
@@ -662,14 +685,14 @@ export default function ProfileScreen() {
                     className="flex-row items-center justify-between bg-[#FFFDF9] p-3 rounded-2xl border border-[#F4EBE0]"
                   >
                     <View className="flex-row items-center gap-2.5 flex-1">
-                      <View className="w-8 h-8 rounded-xl bg-[#2D6A4F]/10 items-center justify-center">
+                      <View className="w-8 h-8 rounded-xl bg-brand/10 items-center justify-center">
                         <FontAwesome6 name="utensils" size={12} color="#2D6A4F" />
                       </View>
                       <View className="flex-1">
-                        <Text className="text-xs font-bold text-[#3D3229]" numberOfLines={1}>
+                        <Text className="text-xs font-bold text-ink" numberOfLines={1}>
                           {record.food_name}
                         </Text>
-                        <Text className="text-[10px] text-[#8B7D6B]">
+                        <Text className="text-[10px] text-copy-muted">
                           {record.meal_type} · {record.amount}
                         </Text>
                       </View>
@@ -686,8 +709,8 @@ export default function ProfileScreen() {
 
         {/* 更多服务列表 */}
         <View className="mx-5 mb-5">
-          <Text className="text-base font-black text-[#3D3229] mb-3">更多服务与设置</Text>
-          <View className="bg-white rounded-3xl p-2 border border-[#EBE3D5] shadow-xs">
+          <Text className="text-base font-black text-ink mb-3">更多服务与设置</Text>
+          <View className="bg-white rounded-3xl p-2 border border-line shadow-xs">
             <ServiceRow
               icon="book-bookmark"
               title="我的收藏菜谱"
@@ -696,11 +719,11 @@ export default function ProfileScreen() {
               onPress={() => router.push("/favorites")}
             />
             <ServiceRow
-              icon="rotate"
-              title="数据同步与连接"
-              subtitle="与健康数据实时同步"
+              icon="heart-pulse"
+              title="健康数据记录"
+              subtitle="查看并维护已保存的健康记录"
               color="#2D6A4F"
-              onPress={() => Alert.alert("提示", "同步服务正常运行")}
+              onPress={() => router.push("/health-data")}
             />
             <ServiceRow
               icon="gear"
@@ -730,22 +753,22 @@ export default function ProfileScreen() {
             <View className="w-14 h-14 rounded-full bg-red-100 items-center justify-center mb-3">
               <FontAwesome6 name="arrow-right-from-bracket" size={22} color="#E76F51" />
             </View>
-            <Text className="text-lg font-black text-[#3D3229]">确认退出登录</Text>
-            <Text className="text-xs text-[#8B7D6B] text-center mt-1 mb-6 leading-5">
+            <Text className="text-lg font-black text-ink">确认退出登录</Text>
+            <Text className="text-xs text-copy-muted text-center mt-1 mb-6 leading-5">
               退出后需要重新登录才能继续管理您的食材与饮食记录。确定要退出吗？
             </Text>
 
             <View className="flex-row gap-3 w-full">
               <TouchableOpacity
                 onPress={() => setLogoutModalOpen(false)}
-                className="flex-1 bg-[#F5EFE6] py-3 rounded-2xl items-center"
+                className="flex-1 bg-background-secondary py-3 rounded-2xl items-center"
               >
-                <Text className="text-xs font-bold text-[#8B7D6B]">取消</Text>
+                <Text className="text-xs font-bold text-copy-muted">取消</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={confirmLogout}
-                className="flex-1 bg-[#E76F51] py-3 rounded-2xl items-center shadow-xs active:opacity-90"
+                className="flex-1 bg-critical py-3 rounded-2xl items-center shadow-xs active:opacity-90"
               >
                 <Text className="text-xs font-bold text-white">确认退出</Text>
               </TouchableOpacity>
@@ -770,7 +793,7 @@ function HealthStat({
 }) {
   return (
     <View className="items-center flex-1">
-      <Text className="text-xs text-[#8B7D6B] mb-1 font-medium">{label}</Text>
+      <Text className="text-xs text-copy-muted mb-1 font-medium">{label}</Text>
       <Text className="text-xl font-black" style={{ color }}>
         {value}
       </Text>
@@ -795,7 +818,7 @@ function QuickActionTile({
   return (
     <TouchableOpacity
       onPress={onPress}
-      className="bg-white rounded-3xl p-4 border border-[#EBE3D5] shadow-xs active:scale-95 transition-transform"
+      className="bg-white rounded-3xl p-4 border border-line shadow-xs active:scale-95 transition-transform"
       style={{ width: "48%" }}
     >
       <View
@@ -804,8 +827,8 @@ function QuickActionTile({
       >
         <FontAwesome6 name={icon as any} size={18} color={color} />
       </View>
-      <Text className="text-sm font-black text-[#3D3229]">{label}</Text>
-      <Text className="text-[10px] text-[#8B7D6B] mt-0.5" numberOfLines={1}>
+      <Text className="text-sm font-black text-ink">{label}</Text>
+      <Text className="text-[10px] text-copy-muted mt-0.5" numberOfLines={1}>
         {desc}
       </Text>
     </TouchableOpacity>
@@ -828,7 +851,7 @@ function ServiceRow({
   return (
     <TouchableOpacity
       onPress={onPress}
-      className="flex-row items-center justify-between p-3.5 rounded-2xl active:bg-[#FDF8F0]"
+      className="flex-row items-center justify-between p-3.5 rounded-2xl active:bg-canvas"
     >
       <View className="flex-row items-center gap-3 flex-1">
         <View
@@ -838,8 +861,8 @@ function ServiceRow({
           <FontAwesome6 name={icon as any} size={14} color={color} />
         </View>
         <View className="flex-1">
-          <Text className="text-xs font-bold text-[#3D3229]">{title}</Text>
-          <Text className="text-[10px] text-[#8B7D6B] mt-0.5">{subtitle}</Text>
+          <Text className="text-xs font-bold text-ink">{title}</Text>
+          <Text className="text-[10px] text-copy-muted mt-0.5">{subtitle}</Text>
         </View>
       </View>
       <FontAwesome6 name="chevron-right" size={11} color="#B0A495" />

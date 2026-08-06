@@ -58,7 +58,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "backgroundColor": "#ffffff"
       },
       "package": androidPackage,
-      "versionCode": 4
+      "versionCode": 5
     },
     "web": {
       "bundler": "metro",

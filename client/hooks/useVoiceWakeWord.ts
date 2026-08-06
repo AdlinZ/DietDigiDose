@@ -22,7 +22,7 @@ export function useVoiceWakeWord({
   const [statusText, setStatusText] = useState("做饭免手扶唤醒模式未开启");
 
   const recognitionRef = useRef<any>(null);
-  const wokenTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const wokenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wakeEnabledRef = useRef(false);
 
   // 初始化检查语音识别兼容性 (Web)

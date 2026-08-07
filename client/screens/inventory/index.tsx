@@ -30,13 +30,30 @@ import {
   getUserStorageKey,
 } from "@/utils/userStorage";
 import { dateKeyAfterDays } from "@/utils/date";
-import { daysUntilDateKey, getInventoryStatus } from "@/utils/inventory";
-import { aiApi, inventoryApi, kitchenwareApi } from "@/services/api";
+import { daysUntilDateKey, getExpirationBadgeConfig, getInventoryStatus } from "@/utils/inventory";
+import { aiApi, foodsApi, householdApi, inventoryApi, kitchenwareApi, type Household, type HouseholdActivityLog, type HouseholdInventoryItem } from "@/services/api";
 import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, StorageLocation } from "./types";
 import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, normalizeDetectedFoods } from "./scan";
 import { useInventoryData } from "./useInventoryData";
-import { filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
-import { BatchReviewModal, CatalogDetailModal } from "./InventoryModals";
+import { normalizeShoppingItems } from "@/utils/shoppingList";
+import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
+import { BatchReviewModal, CatalogDetailModal, InventoryHistoryModal, QuickAddPresetChips } from "./InventoryModals";
+import { FamilyShareModal } from "./FamilyShareModal";
+import {
+  addInventoryLog,
+  clearInventoryHistory,
+  getInventoryHistory,
+  type InventoryLogEntry,
+} from "@/utils/inventoryHistory";
+import { scheduleExpiringStockAlerts } from "@/utils/notifications";
+import {
+  COMMON_INGREDIENTS,
+  inferCategoryByName,
+  inferIngredientDefaults,
+  inferShelfLifeDays,
+  searchCommonIngredients,
+  type CommonIngredient,
+} from "@/utils/ingredientRules";
 
 const KITCHENWARE_STARTER_KITS = [
   { name: "轻食减脂", items: ["空气炸锅", "平底锅", "电子秤", "玻璃保鲜盒"] },
@@ -70,7 +87,7 @@ export default function InventoryScreen() {
     loadingKitchenware,
     sectionErrors,
     refresh: fetchData,
-  } = useInventoryData(authFetch, isAuthenticated);
+  } = useInventoryData(authFetch, isAuthenticated, user?.id);
 
   // Top Level Segment State
   const [activeSegment, setActiveSegment] = useState<"inventory" | "recipes" | "kitchenware">("inventory");
@@ -194,6 +211,291 @@ export default function InventoryScreen() {
   const [detectedFoods, setDetectedFoods] = useState<DetectedFood[]>([]);
   const [savingDetectedFoods, setSavingDetectedFoods] = useState(false);
   const [pendingScanJobId, setPendingScanJobId] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<Array<{ name: string; category?: string }>>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+
+  // Recipe Filter State (Phase 2: 今天吃什么)
+  const [cookTimeLimit, setCookTimeLimit] = useState<number>(0);
+  const [matchStatusFilter, setMatchStatusFilter] = useState<string>("全部");
+
+  // Inventory Maintenance State (Phase 3: 扣减、过期清理、操作历史、提醒)
+  const [historyModalVisible, setHistoryModalVisible] = useState(false);
+  const [historyLogs, setHistoryLogs] = useState<InventoryLogEntry[]>([]);
+  const [clearingExpired, setClearingExpired] = useState(false);
+
+  // Household Family Sharing State (Phase 5)
+  const [familyModalVisible, setFamilyModalVisible] = useState(false);
+  const [households, setHouseholds] = useState<Household[]>([]);
+  const [activeHousehold, setActiveHousehold] = useState<Household | null>(null);
+
+  const refreshHouseholds = useCallback(async () => {
+    if (!isAuthenticated) return;
+    try {
+      const list = await householdApi.mine(authFetch);
+      setHouseholds(list);
+    } catch {
+      // ignore
+    }
+  }, [authFetch, isAuthenticated]);
+
+  useEffect(() => {
+    void refreshHouseholds();
+  }, [refreshHouseholds]);
+
+  const loadFamilyInventory = useCallback(async () => {
+    if (!activeHousehold || !isAuthenticated) return;
+    try {
+      const familyItems = await householdApi.inventoryList(authFetch, activeHousehold.id);
+      const mapped: InventoryItem[] = familyItems.map((fi: HouseholdInventoryItem) => ({
+        id: fi.id,
+        user_id: fi.created_by_user_id,
+        food_name: fi.food_name,
+        category: fi.category,
+        quantity: fi.quantity,
+        expiration_date: fi.expiration_date,
+        storage_location: fi.storage_location as StorageLocation,
+        image_url: fi.image_url || null,
+        is_available: fi.is_available,
+        scope: "shared",
+        created_at: fi.created_at,
+        creator_name: fi.creator_name,
+      }));
+      setItems(mapped);
+    } catch {
+      // ignore
+    }
+  }, [activeHousehold, authFetch, isAuthenticated, setItems]);
+
+  useEffect(() => {
+    if (activeHousehold) {
+      void loadFamilyInventory();
+    } else {
+      void fetchData();
+    }
+  }, [activeHousehold, loadFamilyInventory, fetchData]);
+
+  useEffect(() => {
+    if (items.length > 0) {
+      void scheduleExpiringStockAlerts(items);
+    }
+  }, [items]);
+
+  const openHistoryModal = async () => {
+    if (activeHousehold) {
+      try {
+        const familyLogs = await householdApi.historyList(authFetch, activeHousehold.id);
+        const mappedLogs: InventoryLogEntry[] = familyLogs.map((l: HouseholdActivityLog) => ({
+          id: String(l.id),
+          foodName: `${l.food_name} (@${l.operator_name || "成员"})`,
+          action: l.action,
+          quantity: l.quantity,
+          storageLocation: l.storage_location,
+          timestamp: Date.parse(l.created_at) || Date.now(),
+        }));
+        setHistoryLogs(mappedLogs);
+      } catch {
+        setHistoryLogs([]);
+      }
+    } else {
+      const logs = await getInventoryHistory(user?.id);
+      setHistoryLogs(logs);
+    }
+    setHistoryModalVisible(true);
+  };
+
+  const handleClearHistory = async () => {
+    if (!activeHousehold) {
+      await clearInventoryHistory(user?.id);
+    }
+    setHistoryLogs([]);
+  };
+
+  const handleQuickConsumeItem = async (item: InventoryItem) => {
+    Alert.alert("确认用完", `是否将【${item.food_name}】标记为已用完并移出保鲜库？`, [
+      { text: "取消", style: "cancel" },
+      {
+        text: "确认用完",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            if (activeHousehold) {
+              await householdApi.inventoryRemove(authFetch, activeHousehold.id, item.id);
+              await loadFamilyInventory();
+            } else {
+              await inventoryApi.remove(authFetch, item.id);
+              await addInventoryLog(
+                {
+                  foodName: item.food_name,
+                  action: "consume",
+                  quantity: item.quantity,
+                  storageLocation: item.storage_location,
+                },
+                user?.id
+              );
+              await fetchData();
+            }
+          } catch {
+            Alert.alert("错误", "操作失败，请重试。");
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleBatchClearExpired = async () => {
+    const expiredItems = items.filter((item) => {
+      const status = getInventoryStatus(item);
+      return status.freshness === "expired";
+    });
+
+    if (expiredItems.length === 0) return;
+
+    Alert.alert("确认清理", `确定要批量清理 ${expiredItems.length} 种已过期的食材吗？`, [
+      { text: "取消", style: "cancel" },
+      {
+        text: "一键清理",
+        style: "destructive",
+        onPress: async () => {
+          setClearingExpired(true);
+          try {
+            await Promise.allSettled(
+              expiredItems.map(async (item) => {
+                if (activeHousehold) {
+                  await householdApi.inventoryRemove(authFetch, activeHousehold.id, item.id);
+                } else {
+                  await inventoryApi.remove(authFetch, item.id);
+                  await addInventoryLog(
+                    {
+                      foodName: item.food_name,
+                      action: "expire_clear",
+                      quantity: item.quantity,
+                      storageLocation: item.storage_location,
+                    },
+                    user?.id
+                  );
+                }
+              })
+            );
+            if (activeHousehold) {
+              await loadFamilyInventory();
+            } else {
+              await fetchData();
+            }
+            Alert.alert("清理完成", `已将 ${expiredItems.length} 种已过期食材移除保鲜库。`);
+          } catch {
+            Alert.alert("部分清理失败", "请稍后重试。");
+          } finally {
+            setClearingExpired(false);
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleAddMissingFromCard = async (recipeTitle: string, missingItems: Array<{ name: string; amount?: string }>) => {
+    if (!missingItems.length) return;
+    try {
+      const shoppingKey = getUserStorageKey("shopping_list", user?.id);
+      const existingStr = shoppingKey ? await AsyncStorage.getItem(shoppingKey) : null;
+      const existing = existingStr ? JSON.parse(existingStr) : [];
+      const normalized = normalizeShoppingItems(existing);
+      const existingNames = new Set(normalized.map((i) => i.name));
+
+      const newItems = missingItems
+        .filter((item) => !existingNames.has(item.name))
+        .map((item, idx) => ({
+          id: `recipe-missing-${Date.now()}-${idx}`,
+          name: item.name,
+          amount: item.amount || "适量",
+          category: inferCategoryByName(item.name),
+          checked: false,
+          createdAt: Date.now(),
+        }));
+
+      if (newItems.length === 0) {
+        Alert.alert("已在采购清单", "缺失食材已在你的采购清单中。");
+        return;
+      }
+
+      const updated = [...newItems, ...normalized];
+      if (shoppingKey) {
+        await AsyncStorage.setItem(shoppingKey, JSON.stringify(updated));
+      }
+      Alert.alert("已加入采购清单", `已为【${recipeTitle}】将 ${newItems.length} 种缺少食材加入采购清单！`, [
+        { text: "查看清单", onPress: () => router.push("/shopping-list") },
+        { text: "好的", style: "cancel" },
+      ]);
+    } catch {
+      Alert.alert("添加失败", "保存采购清单失败，请重试。");
+    }
+  };
+
+  const applyIngredientDefaults = (name: string, explicitLocation?: StorageLocation) => {
+    const defaults = inferIngredientDefaults(name, explicitLocation || (storageLocation as StorageLocation));
+    setFoodName(name);
+    setCategory(defaults.category);
+    setStorageLocation(defaults.storageLocation);
+    setExpirationDate(defaults.expirationDate);
+    setQuantity(defaults.defaultQuantity);
+    setSuggestions([]);
+  };
+
+  const handleFoodNameChange = (text: string) => {
+    setFoodName(text);
+    if (!text.trim()) {
+      setSuggestions([]);
+      return;
+    }
+    const local = searchCommonIngredients(text).map((item) => ({ name: item.name, category: item.category }));
+    setSuggestions(local);
+  };
+
+  useEffect(() => {
+    if (foodName.trim().length < 2) return;
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        setLoadingSuggestions(true);
+        const remote = await foodsApi.search<{ name: string; category?: string }>(foodName.trim());
+        if (active && Array.isArray(remote) && remote.length > 0) {
+          setSuggestions((prev) => {
+            const names = new Set(prev.map((p) => p.name));
+            const newItems = remote.filter((r) => r.name && !names.has(r.name)).slice(0, 5);
+            return [...prev, ...newItems];
+          });
+        }
+      } catch {
+        // ignore network failure
+      } finally {
+        if (active) setLoadingSuggestions(false);
+      }
+    }, 300);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [foodName]);
+
+  const handleStorageLocationChange = (newLoc: StorageLocation) => {
+    setStorageLocation(newLoc);
+    if (foodName.trim()) {
+      const days = inferShelfLifeDays(foodName.trim(), newLoc);
+      setExpirationDate(dateKeyAfterDays(days));
+    }
+  };
+
+  const handleAddPresetToBatch = (preset: CommonIngredient) => {
+    const defaults = inferIngredientDefaults(preset.name);
+    const newItem: DetectedFood = {
+      id: `batch-${Date.now()}-${Math.random()}`,
+      foodName: preset.name,
+      quantity: preset.defaultQuantity,
+      suggestedStorageLocation: defaults.storageLocation,
+      estimatedExpireDays: defaults.shelfLifeDays,
+      selected: true,
+    };
+    setDetectedFoods((prev) => [newItem, ...prev]);
+  };
 
   useEffect(() => {
     if (isAuthenticated) return;
@@ -345,31 +647,33 @@ export default function InventoryScreen() {
 
     setSavingDetectedFoods(true);
     try {
-      const results = await Promise.allSettled(selectedFoods.map((item) =>
-        inventoryApi.create(authFetch, {
-            food_name: item.foodName,
-            category: inferFoodCategory(item.foodName),
-            quantity: item.quantity,
-            expiration_date: suggestedDate(item.estimatedExpireDays),
-            storage_location: item.suggestedStorageLocation,
-            image_url: null,
-        })
-      ));
-      const addedCount = results.filter((result) => result.status === "fulfilled").length;
-      const failedCount = selectedFoods.length - addedCount;
-      if (addedCount > 0) await fetchData();
-      if (failedCount === 0) {
-        if (inventoryScanJobStorageKey) {
-          await AsyncStorage.removeItem(inventoryScanJobStorageKey);
-        }
-        setPendingScanJobId(null);
-        setBatchReviewVisible(false);
-        Alert.alert("已加入食材库", `已成功入库 ${addedCount} 种食材。`);
-      } else {
-        Alert.alert("部分入库完成", `已入库 ${addedCount} 种，${failedCount} 种未成功，请重试。`);
+      const itemsToImport = selectedFoods.map((item) => {
+        const defaults = inferIngredientDefaults(item.foodName, item.suggestedStorageLocation as StorageLocation);
+        return {
+          food_name: item.foodName,
+          category: defaults.category,
+          quantity: item.quantity || defaults.defaultQuantity,
+          expiration_date: suggestedDate(item.estimatedExpireDays) || defaults.expirationDate,
+          storage_location: item.suggestedStorageLocation || defaults.storageLocation,
+          image_url: null,
+        };
+      });
+
+      const idempotencyKey = `batch-import-${Date.now()}`;
+      await inventoryApi.importShoppingList(authFetch, idempotencyKey, itemsToImport);
+      for (const item of itemsToImport) {
+        await addInventoryLog({ foodName: item.food_name, action: "add", quantity: item.quantity, storageLocation: item.storage_location }, user?.id);
       }
+      await fetchData();
+
+      if (inventoryScanJobStorageKey) {
+        await AsyncStorage.removeItem(inventoryScanJobStorageKey);
+      }
+      setPendingScanJobId(null);
+      setBatchReviewVisible(false);
+      Alert.alert("已一键批量入库", `已成功将 ${itemsToImport.length} 种食材导入你的保鲜库！`);
     } catch {
-      Alert.alert("入库失败", "网络异常，请稍后重试。");
+      Alert.alert("批量入库失败", "网络异常，请稍后重试。");
     } finally {
       setSavingDetectedFoods(false);
     }
@@ -445,7 +749,7 @@ export default function InventoryScreen() {
     setVisibleRecipeCount(12);
   }, [activeRecipeCategory, recipeSearchQuery]);
 
-  const inventoryCategories = ["全部", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"];
+  const inventoryCategories = ["全部", "家庭共享", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"];
   const recipeCategories = ["全部", "减脂", "增肌", "营养餐单", "快手菜"];
 
   useFocusEffect(
@@ -524,16 +828,28 @@ export default function InventoryScreen() {
         image_url: imageUrl.trim() || null,
       };
 
-      if (editingItem) await inventoryApi.update(authFetch, editingItem.id, payload);
-      else await inventoryApi.create(authFetch, payload);
-        if (!editingItem && pendingScanJobId) {
-          if (inventoryScanJobStorageKey) {
-            await AsyncStorage.removeItem(inventoryScanJobStorageKey);
-          }
-          setPendingScanJobId(null);
+      if (activeHousehold && editingItem) {
+        await householdApi.inventoryUpdate(authFetch, activeHousehold.id, editingItem.id, payload);
+        await loadFamilyInventory();
+      } else if (activeHousehold) {
+        await householdApi.inventoryCreate(authFetch, activeHousehold.id, payload);
+        await loadFamilyInventory();
+      } else if (editingItem) {
+        await inventoryApi.update(authFetch, editingItem.id, payload);
+        await addInventoryLog({ foodName: payload.food_name, action: "edit", quantity: payload.quantity, storageLocation: payload.storage_location }, user?.id);
+        await fetchData();
+      } else {
+        await inventoryApi.create(authFetch, payload);
+        await addInventoryLog({ foodName: payload.food_name, action: "add", quantity: payload.quantity, storageLocation: payload.storage_location }, user?.id);
+        await fetchData();
+      }
+      if (!editingItem && pendingScanJobId) {
+        if (inventoryScanJobStorageKey) {
+          await AsyncStorage.removeItem(inventoryScanJobStorageKey);
         }
-        setModalVisible(false);
-        fetchData();
+        setPendingScanJobId(null);
+      }
+      setModalVisible(false);
     } catch (e) {
       Alert.alert("错误", "网络异常");
     } finally {
@@ -549,10 +865,15 @@ export default function InventoryScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            await inventoryApi.remove(authFetch, id);
-              setModalVisible(false);
-              setEditingItem(null);
-              fetchData();
+            if (activeHousehold) {
+              await householdApi.inventoryRemove(authFetch, activeHousehold.id, id);
+              await loadFamilyInventory();
+            } else {
+              await inventoryApi.remove(authFetch, id);
+              await fetchData();
+            }
+            setModalVisible(false);
+            setEditingItem(null);
           } catch (e) {
             console.error(e);
           }
@@ -595,7 +916,11 @@ export default function InventoryScreen() {
     );
 
     try {
-      await inventoryApi.update(authFetch, item.id, { storage_location: storageLocation });
+      if (activeHousehold) {
+        await householdApi.inventoryUpdate(authFetch, activeHousehold.id, item.id, { storage_location: storageLocation });
+      } else {
+        await inventoryApi.update(authFetch, item.id, { storage_location: storageLocation });
+      }
     } catch {
       setItems((currentItems) =>
         currentItems.map((currentItem) =>
@@ -604,7 +929,7 @@ export default function InventoryScreen() {
       );
       Alert.alert("移动失败", "未能更新食材的存放位置，请稍后重试。");
     }
-  }, [authFetch]);
+  }, [activeHousehold, authFetch]);
 
   const handleItemDrop = useCallback(async (item: InventoryItem, pageX: number, pageY: number) => {
     const destination = await getStorageLocationAtPoint(pageX, pageY);
@@ -712,7 +1037,7 @@ export default function InventoryScreen() {
     },
   }[activeSegment];
 
-  const filteredRecipes = filterAndRankRecipes(recipes, items, activeRecipeCategory, recipeSearchQuery);
+  const filteredRecipes = filterAndRankRecipes(recipes, items, activeRecipeCategory, recipeSearchQuery, cookTimeLimit, matchStatusFilter);
   const filteredKitchenware = filterKitchenware(kitchenware, activeKitchenwareCategory);
   const visibleRecipes = filteredRecipes.slice(0, visibleRecipeCount);
   const hasMoreRecipes = visibleRecipeCount < filteredRecipes.length;
@@ -735,9 +1060,22 @@ export default function InventoryScreen() {
               <Text className="mt-1 text-[21px] font-black leading-7 text-white">{activeSegmentMeta.title}</Text>
               <Text className="mt-0.5 text-[11px] font-medium text-emerald-50/75">{activeSegmentMeta.subtitle}</Text>
             </View>
-            <View className="mt-1 flex-row items-center gap-1.5 rounded-full border border-white/15 bg-black/15 px-3 py-2">
-              <View className={`h-1.5 w-1.5 rounded-full ${activeSegment === "inventory" && expiringCount > 0 ? "bg-highlight" : "bg-emerald-200"}`} />
-              <Text className="text-[10px] font-bold text-white">{activeSegmentMeta.status}</Text>
+            <View className="flex-col items-end gap-1.5">
+              <View className="mt-1 flex-row items-center gap-1.5 rounded-full border border-white/15 bg-black/15 px-3 py-1.5">
+                <View className={`h-1.5 w-1.5 rounded-full ${activeSegment === "inventory" && expiringCount > 0 ? "bg-highlight" : "bg-emerald-200"}`} />
+                <Text className="text-[10px] font-bold text-white">{activeSegmentMeta.status}</Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => setFamilyModalVisible(true)}
+                className="flex-row items-center gap-1 rounded-full bg-white/20 px-2.5 py-1 border border-white/30 active:bg-white/30"
+              >
+                <FontAwesome6 name={activeHousehold ? "house-user" : "user"} size={10} color="#FFFFFF" />
+                <Text className="text-[10px] font-black text-white">
+                  {activeHousehold ? activeHousehold.name : "个人私享库"}
+                </Text>
+                <FontAwesome6 name="chevron-down" size={8} color="#FFFFFF" />
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -820,7 +1158,15 @@ export default function InventoryScreen() {
                 <View className="bg-canvas pt-4 pb-3">
                   <View className="mb-2 flex-row items-center justify-between px-5">
                     <Text className="text-[11px] font-black text-ink">按位置或品类查看</Text>
-                    <Text className="text-[10px] font-medium text-[#9B8E7D]">长按食材可移动分区</Text>
+                    <View className="flex-row items-center gap-2">
+                      <TouchableOpacity
+                        onPress={openHistoryModal}
+                        className="flex-row items-center gap-1.5 rounded-full border border-[#E7DED1] bg-white px-2.5 py-1"
+                      >
+                        <FontAwesome6 name="clock-rotate-left" size={10} color="#8B7D6B" />
+                        <Text className="text-[10px] font-bold text-copy-muted">操作历史</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                   <View>
                   <ScrollView
@@ -856,6 +1202,36 @@ export default function InventoryScreen() {
                   </ScrollView>
                   </View>
                 </View>
+
+                {/* Phase 3: 已过期食材一键清理 Alert Banner */}
+                {(() => {
+                  const expiredCount = items.filter((i) => getInventoryStatus(i).freshness === "expired").length;
+                  if (expiredCount === 0) return null;
+                  return (
+                    <View className="mx-5 mb-3 flex-row items-center justify-between rounded-2xl border border-rose-200 bg-rose-50 p-3 shadow-2xs">
+                      <View className="flex-row items-center gap-2.5 flex-1 pr-2">
+                        <View className="h-8 w-8 items-center justify-center rounded-full bg-rose-100">
+                          <FontAwesome6 name="triangle-exclamation" size={13} color="#C2413A" />
+                        </View>
+                        <View className="flex-1">
+                          <Text className="text-xs font-black text-rose-900">有 {expiredCount} 种食材已过期</Text>
+                          <Text className="text-[10px] text-rose-700">及时下架移出，保持食材库新鲜健康</Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        onPress={handleBatchClearExpired}
+                        disabled={clearingExpired}
+                        className="rounded-xl bg-rose-600 px-3 py-1.5 active:bg-rose-700 disabled:opacity-50"
+                      >
+                        {clearingExpired ? (
+                          <ActivityIndicator size="small" color="#FFF" />
+                        ) : (
+                          <Text className="text-xs font-bold text-white">一键清理</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })()}
 
                 {/* 🎠 单行极简横向轮播通知卡片集 (Single Swipeable Smart Notice Carousel) */}
                 <View className="bg-canvas px-5 pb-1">
@@ -1132,25 +1508,8 @@ export default function InventoryScreen() {
                                 }}
                               >
                                 {group.items.map((item) => {
-                                  const diffDays = daysUntilDateKey(item.expiration_date) ?? 0;
-
-                                  let badgeBg = "bg-emerald-500/15";
-                                  let statusBadgeText = `保鲜${diffDays}天`;
-                                  let textColor = "text-emerald-700";
-
-                                  if (diffDays < 0) {
-                                    badgeBg = "bg-rose-500/15";
-                                    statusBadgeText = "已到期";
-                                    textColor = "text-rose-700";
-                                  } else if (diffDays <= 1) {
-                                    badgeBg = "bg-amber-500/15";
-                                    statusBadgeText = "急需消耗";
-                                    textColor = "text-amber-800";
-                                  } else if (diffDays <= 3) {
-                                    badgeBg = "bg-amber-400/15";
-                                    statusBadgeText = `剩${diffDays}天`;
-                                    textColor = "text-amber-700";
-                                  }
+                                  const status = getInventoryStatus(item);
+                                  const badge = getExpirationBadgeConfig(status);
 
                                   return (
                                     <Animated.View
@@ -1165,7 +1524,7 @@ export default function InventoryScreen() {
                                           transform: [...dragPan.getTranslateTransform(), { scale: 1.04 }],
                                         },
                                       ]}
-                                      className="relative min-h-[146px] items-start overflow-hidden rounded-[20px] border border-[#EDF0EA] bg-[#FAFBF8] p-3"
+                                      className="relative min-h-[154px] items-start overflow-hidden rounded-[20px] border border-[#EDF0EA] bg-[#FAFBF8] p-3"
                                     >
                                       {/* 点击查看详情；长按可拖动到其他保鲜分区 */}
                                       <TouchableOpacity
@@ -1180,7 +1539,7 @@ export default function InventoryScreen() {
                                           }
                                           openEditModal(item);
                                         }}
-                                        accessibilityLabel={`${item.food_name}，${item.quantity}，${statusBadgeText}`}
+                                        accessibilityLabel={`${item.food_name}，${item.quantity}，${badge.label}`}
                                         className="w-full items-start"
                                       >
                                         <View className="w-full flex-row items-start justify-between">
@@ -1194,8 +1553,8 @@ export default function InventoryScreen() {
                                               <FontAwesome6 name="lemon" size={19} color="#2D6A4F" />
                                             </View>
                                           )}
-                                          <View className={`ml-2 rounded-full px-2 py-1 ${badgeBg}`}>
-                                            <Text className={`text-[9px] font-black ${textColor}`}>{statusBadgeText}</Text>
+                                          <View className={`ml-2 rounded-full px-2 py-1 ${badge.badgeBg}`}>
+                                            <Text className={`text-[9px] font-black ${badge.textColor}`}>{badge.label}</Text>
                                           </View>
                                         </View>
 
@@ -1275,47 +1634,109 @@ export default function InventoryScreen() {
               </View>
 
               {/* Recipe Filter Categories */}
-              <View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerClassName="gap-2 px-5 pb-1"
-              >
-                {["全部", "冰箱全可做", "减脂低卡", "增肌高蛋白", "15分钟快手菜"].map((cat) => {
-                  const cleanCat = cat.replace(/[^a-z0-9\u4e00-\u9fa5]/gi, "");
-                  const isActive =
-                    activeRecipeCategory === cleanCat ||
-                    (cat.includes("冰箱") && activeRecipeCategory === "冰箱可做") ||
-                    (cat === "全部" && activeRecipeCategory === "全部");
-                  return (
+              <View className="gap-2">
+                <View>
+                  <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerClassName="gap-2 px-5 pb-1"
+                >
+                  {["全部", "冰箱全可做", "减脂低卡", "增肌高蛋白", "15分钟快手菜"].map((cat) => {
+                    const cleanCat = cat.replace(/[^a-z0-9\u4e00-\u9fa5]/gi, "");
+                    const isActive =
+                      activeRecipeCategory === cleanCat ||
+                      (cat.includes("冰箱") && activeRecipeCategory === "冰箱可做") ||
+                      (cat === "全部" && activeRecipeCategory === "全部");
+                    return (
+                      <TouchableOpacity
+                        key={cat}
+                        onPress={() => {
+                          if (cat.includes("冰箱")) setActiveRecipeCategory("冰箱可做");
+                          else if (cat.includes("减脂")) setActiveRecipeCategory("减脂");
+                          else if (cat.includes("增肌")) setActiveRecipeCategory("增肌");
+                          else if (cat.includes("快手")) setActiveRecipeCategory("快手菜");
+                          else setActiveRecipeCategory("全部");
+                        }}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: isActive }}
+                        className={`rounded-full border px-3.5 py-1.5 ${
+                          isActive
+                            ? "border-brand bg-brand"
+                            : "border-[#E7DED1] bg-white"
+                        }`}
+                      >
+                        <Text
+                          className={`text-xs font-bold ${
+                            isActive ? "font-black text-white" : "text-[#756858]"
+                          }`}
+                        >
+                          {cat}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                  </ScrollView>
+                </View>
+
+                {/* Phase 2: 今天吃什么 Quick Filter Pills */}
+                <View>
+                  <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerClassName="gap-2 px-5 pb-1"
+                >
+                  {[
+                    { label: "全部时间", limit: 0 },
+                    { label: "15分快手", limit: 15 },
+                    { label: "30分内", limit: 30 },
+                  ].map((timeOption) => (
                     <TouchableOpacity
-                      key={cat}
-                      onPress={() => {
-                        if (cat.includes("冰箱")) setActiveRecipeCategory("冰箱可做");
-                        else if (cat.includes("减脂")) setActiveRecipeCategory("减脂");
-                        else if (cat.includes("增肌")) setActiveRecipeCategory("增肌");
-                        else if (cat.includes("快手")) setActiveRecipeCategory("快手菜");
-                        else setActiveRecipeCategory("全部");
-                      }}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: isActive }}
-                      className={`rounded-full border px-3.5 py-2 ${
-                        isActive
-                          ? "border-brand bg-brand"
-                          : "border-[#E7DED1] bg-white"
+                      key={timeOption.limit}
+                      onPress={() => setCookTimeLimit(timeOption.limit)}
+                      className={`rounded-full border px-3 py-1 ${
+                        cookTimeLimit === timeOption.limit
+                          ? "border-brand/40 bg-brand/10"
+                          : "border-line bg-canvas"
                       }`}
                     >
                       <Text
-                        className={`text-xs font-bold ${
-                          isActive ? "font-black text-white" : "text-[#756858]"
+                        className={`text-[11px] ${
+                          cookTimeLimit === timeOption.limit ? "font-bold text-brand" : "text-copy-muted"
                         }`}
                       >
-                        {cat}
+                        {timeOption.label}
                       </Text>
                     </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+                  ))}
+
+                  <View className="h-4 w-px bg-line self-center mx-1" />
+
+                  {[
+                    { label: "匹配全部", key: "全部" },
+                    { label: "完全可做", key: "完全可做" },
+                    { label: "缺1-2样", key: "缺1-2样" },
+                    { label: "优先临期", key: "优先临期" },
+                  ].map((statusOption) => (
+                    <TouchableOpacity
+                      key={statusOption.key}
+                      onPress={() => setMatchStatusFilter(statusOption.key)}
+                      className={`rounded-full border px-3 py-1 ${
+                        matchStatusFilter === statusOption.key
+                          ? "border-amber-500/40 bg-amber-50"
+                          : "border-line bg-canvas"
+                      }`}
+                    >
+                      <Text
+                        className={`text-[11px] ${
+                          matchStatusFilter === statusOption.key ? "font-bold text-amber-900" : "text-copy-muted"
+                        }`}
+                      >
+                        {statusOption.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                  </ScrollView>
+                </View>
               </View>
             </View>
 
@@ -1329,17 +1750,17 @@ export default function InventoryScreen() {
                 <View className="py-16 items-center bg-white/60 rounded-[28px] border border-line p-6">
                   <FontAwesome6 name="utensils" size={36} color="#D4A276" />
                   <Text className="mt-3 text-base font-bold text-ink">
-                    {activeRecipeCategory === "冰箱可做" ? "暂时没有库存可做的食谱" : "未找到匹配的食谱"}
+                    {activeRecipeCategory === "冰箱可做" ? "暂时没有库存可做的食谱" : "未找到符合条件的食谱"}
                   </Text>
                   <Text className="mt-1 text-center text-xs text-copy-muted">
-                    {activeRecipeCategory === "冰箱可做" ? "先录入食材，或切换到“全部”发现更多灵感" : "尝试搜索其他食材或切换分类"}
+                    尝试重置筛选条件，或拍照录入更多冰箱食材
                   </Text>
                 </View>
               ) : (
                 <View className="flex-row flex-wrap justify-between gap-y-3.5">
                   {visibleRecipes.map((recipe) => {
-                    // 计算冰箱食材与食谱的匹配度
-                    const isFullyMatched = recipeMatchesInventory(recipe, items);
+                    const analysis = analyzeRecipeInventoryMatch(recipe, items);
+                    const expiringMatch = analysis.expiringIngredients[0];
 
                     return (
                       <View
@@ -1366,10 +1787,22 @@ export default function InventoryScreen() {
                               </Text>
                             </View>
 
-                            {/* 冰箱食材匹配角标 */}
-                            {isFullyMatched ? (
+                            {/* 冰箱食材匹配角标 (优先展示临期 > 完全可做 > 缺少X种) */}
+                            {expiringMatch ? (
+                              <View className="absolute top-2 left-2 rounded-full bg-amber-600 px-2 py-0.5">
+                                <Text className="text-[9px] font-black text-white">
+                                  优先消耗{expiringMatch.name}(剩{expiringMatch.daysLeft}天)
+                                </Text>
+                              </View>
+                            ) : analysis.matchStatus === "full" ? (
                               <View className="absolute top-2 left-2 rounded-full bg-brand px-2 py-0.5">
-                                <Text className="text-[9px] font-black text-white">库存可做</Text>
+                                <Text className="text-[9px] font-black text-white">完全可做</Text>
+                              </View>
+                            ) : analysis.missingIngredients.length > 0 ? (
+                              <View className="absolute top-2 left-2 rounded-full bg-black/60 px-2 py-0.5">
+                                <Text className="text-[9px] font-bold text-amber-200">
+                                  缺 {analysis.missingIngredients.length} 种
+                                </Text>
                               </View>
                             ) : (
                               <View className="absolute top-2 left-2 rounded-full bg-black/35 px-2 py-0.5">
@@ -1386,7 +1819,17 @@ export default function InventoryScreen() {
                               {recipe.description}
                             </Text>
 
-                            {/* 首页同款轻量信息行：列表只保留决策所需信息 */}
+                            {/* 缺失/已有食材标签提醒 */}
+                            {analysis.missingIngredients.length > 0 ? (
+                              <Text className="mt-1.5 text-[10px] font-medium text-amber-800" numberOfLines={1}>
+                                缺: {analysis.missingIngredients.map((i) => i.name).slice(0, 2).join("、")}
+                              </Text>
+                            ) : analysis.matchedIngredients.length > 0 ? (
+                              <Text className="mt-1.5 text-[10px] font-medium text-brand" numberOfLines={1}>
+                                已备: {analysis.matchedIngredients.map((i) => i.name).slice(0, 2).join("、")}
+                              </Text>
+                            ) : null}
+
                             <View className="mt-2 flex-row items-center gap-1.5">
                               <FontAwesome6 name="clock" size={9} color="#8B7D6B" />
                               <Text className="text-[9px] font-bold text-[#6F6254]">{recipe.cook_time} 分钟</Text>
@@ -1396,22 +1839,32 @@ export default function InventoryScreen() {
                           </View>
                         </TouchableOpacity>
 
-                        {/* 整卡查看详情，只保留一个明确的快捷动作 */}
+                        {/* 底部快捷操作 */}
                         <View className="px-3 pb-3">
-                          <TouchableOpacity
-                            onPress={() =>
-                              router.push({
-                                pathname: "/ai-assistant",
-                                params: {
-                                  prompt: `请作为我的私厨，为我指导烹饪【${recipe.title}】的详细步骤、调料配比与注意事项。`,
-                                },
-                              })
-                            }
-                            className="flex-row items-center justify-center gap-1.5 rounded-xl bg-[#E7F0EA] py-2 active:opacity-80"
-                          >
-                            <FontAwesome6 name="wand-magic-sparkles" size={9} color="#2D6A4F" />
-                            <Text className="text-[10px] font-black text-brand">AI 烹饪指导</Text>
-                          </TouchableOpacity>
+                          {analysis.missingIngredients.length > 0 ? (
+                            <TouchableOpacity
+                              onPress={() => handleAddMissingFromCard(recipe.title, analysis.missingIngredients)}
+                              className="flex-row items-center justify-center gap-1 rounded-xl bg-amber-50 border border-amber-200/80 py-2 active:opacity-80"
+                            >
+                              <FontAwesome6 name="cart-plus" size={9} color="#9A6B10" />
+                              <Text className="text-[10px] font-black text-amber-900">补齐缺料到采购单</Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <TouchableOpacity
+                              onPress={() =>
+                                router.push({
+                                  pathname: "/ai-assistant",
+                                  params: {
+                                    prompt: `请作为我的私厨，为我指导烹饪【${recipe.title}】的详细步骤、调料配比与注意事项。`,
+                                  },
+                                })
+                              }
+                              className="flex-row items-center justify-center gap-1.5 rounded-xl bg-[#E7F0EA] py-2 active:opacity-80"
+                            >
+                              <FontAwesome6 name="wand-magic-sparkles" size={9} color="#2D6A4F" />
+                              <Text className="text-[10px] font-black text-brand">AI 烹饪指导</Text>
+                            </TouchableOpacity>
+                          )}
                         </View>
                       </View>
                     );
@@ -1710,23 +2163,41 @@ export default function InventoryScreen() {
                 </View>
               ) : (
               <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerClassName="pb-2">
+                {!editingItem && (
+                  <QuickAddPresetChips onSelect={(item) => applyIngredientDefaults(item.name, item.storageLocation)} />
+                )}
                 <View>
                   <Text className="text-xs font-bold text-copy-muted mb-1.5">食材名称 <Text className="text-[#C2413A]">*</Text></Text>
                   <TextInput
                     value={foodName}
-                    onChangeText={setFoodName}
+                    onChangeText={handleFoodNameChange}
                     placeholder="例如：牛油果、希腊酸奶"
                     autoFocus={!editingItem}
                     returnKeyType="next"
                     className="bg-canvas px-4 py-3.5 rounded-2xl border border-line text-base font-semibold text-ink"
                   />
+                  {suggestions.length > 0 && (
+                    <View className="mt-2 flex-row flex-wrap gap-1.5 rounded-2xl border border-line bg-canvas p-2.5">
+                      {suggestions.map((sug) => (
+                        <TouchableOpacity
+                          key={sug.name}
+                          onPress={() => applyIngredientDefaults(sug.name)}
+                          className="flex-row items-center gap-1 rounded-xl bg-brand/10 px-2.5 py-1.5 active:bg-brand/20"
+                        >
+                          <FontAwesome6 name="plus" size={10} color="#2D6A4F" />
+                          <Text className="text-xs font-bold text-brand">{sug.name}</Text>
+                          {sug.category && <Text className="text-[10px] text-copy-muted">({sug.category})</Text>}
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
                 </View>
 
                 <View className="mt-4">
                   <Text className="text-xs font-bold text-copy-muted mb-2">分类</Text>
                   <View>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row" contentContainerClassName="gap-2 pr-4">
-                      {["蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((c) => (
+                      {["蔬菜", "肉食", "水果", "乳制品", "粮油干货", "水产海鲜", "调味品", "休闲零食", "熟食面点"].map((c) => (
                         <TouchableOpacity
                           key={c}
                           onPress={() => setCategory(c)}
@@ -1753,7 +2224,7 @@ export default function InventoryScreen() {
                       className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm font-semibold text-ink"
                     />
                     <View className="flex-row gap-1.5 mt-2">
-                      {["100g", "1份", "2盒"].map((value) => (
+                      {["100g", "1份", "2盒", "500g"].map((value) => (
                         <TouchableOpacity key={value} onPress={() => setQuantity(value)} className="px-2 py-1 rounded-lg bg-background-secondary">
                           <Text className="text-[10px] font-semibold text-copy-muted">{value}</Text>
                         </TouchableOpacity>
@@ -1763,10 +2234,10 @@ export default function InventoryScreen() {
                   <View className="flex-1">
                     <Text className="text-xs font-bold text-copy-muted mb-1.5">存放位置</Text>
                     <View className="flex-row gap-1">
-                      {["冷藏", "冷冻", "常温"].map((loc) => (
+                      {(["冷藏", "冷冻", "常温"] as const).map((loc) => (
                         <TouchableOpacity
                           key={loc}
-                          onPress={() => setStorageLocation(loc)}
+                          onPress={() => handleStorageLocationChange(loc)}
                           className={`flex-1 py-2 rounded-xl border items-center ${
                             storageLocation === loc ? "bg-ink border-ink" : "bg-canvas border-line"
                           }`}
@@ -1851,10 +2322,9 @@ export default function InventoryScreen() {
                           },
                         });
                       }}
-                      className="flex-1 flex-row items-center justify-center gap-1.5 rounded-2xl bg-[#EAF2EC] py-3"
+                      className="flex-1 py-3.5 rounded-2xl bg-highlight/20 items-center border border-highlight/40"
                     >
-                      <FontAwesome6 name="wand-magic-sparkles" size={11} color="#2D6A4F" />
-                      <Text className="text-xs font-black text-brand">用它配餐</Text>
+                      <Text className="text-xs font-bold text-amber-900">AI 生成菜谱</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => handleDeleteItem(editingItem.id)}
@@ -2039,6 +2509,20 @@ export default function InventoryScreen() {
             </View>
           </View>
         </Modal>
+        <InventoryHistoryModal
+          visible={historyModalVisible}
+          logs={historyLogs}
+          onClose={() => setHistoryModalVisible(false)}
+          onClear={handleClearHistory}
+        />
+        <FamilyShareModal
+          visible={familyModalVisible}
+          activeHousehold={activeHousehold}
+          households={households}
+          onClose={() => setFamilyModalVisible(false)}
+          onSelectHousehold={(h) => setActiveHousehold(h)}
+          onRefreshHouseholds={refreshHouseholds}
+        />
       </ScrollView>
     </Screen>
   );

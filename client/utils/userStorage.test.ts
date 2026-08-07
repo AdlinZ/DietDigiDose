@@ -1,6 +1,7 @@
 jest.mock("@react-native-async-storage/async-storage", () => ({
   __esModule: true,
   default: {
+    getAllKeys: jest.fn(),
     multiRemove: jest.fn(),
   },
 }));
@@ -12,15 +13,18 @@ import {
   SHOPPING_LIST_STORAGE_KEY,
   getUserStorageKey,
   purgeLegacyUnscopedPrivateStorage,
+  purgeUserPrivateStorage,
   storageBelongsToCurrentUser,
 } from "./userStorage";
 
 describe("user-scoped private storage", () => {
   const mockMultiRemove = AsyncStorage.multiRemove as jest.Mock;
+  const mockGetAllKeys = AsyncStorage.getAllKeys as jest.Mock;
 
   beforeEach(() => {
     mockMultiRemove.mockReset();
     mockMultiRemove.mockResolvedValue(undefined);
+    mockGetAllKeys.mockReset();
   });
 
   it("uses different storage keys for different users", () => {
@@ -42,6 +46,21 @@ describe("user-scoped private storage", () => {
       CHAT_SESSIONS_STORAGE_KEY,
       SHOPPING_LIST_STORAGE_KEY,
       INVENTORY_SCAN_JOB_STORAGE_KEY,
+    ]);
+  });
+
+  it("removes all private caches for the logged-out user", async () => {
+    mockGetAllKeys.mockResolvedValue([
+      "offline_cache_inventory:user:101",
+      "@shiyu_shopping_list:user:101",
+      "offline_cache_inventory:user:202",
+    ]);
+
+    await purgeUserPrivateStorage(101);
+
+    expect(mockMultiRemove).toHaveBeenCalledWith([
+      "offline_cache_inventory:user:101",
+      "@shiyu_shopping_list:user:101",
     ]);
   });
 });

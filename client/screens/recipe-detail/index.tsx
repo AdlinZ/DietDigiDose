@@ -6,7 +6,12 @@ import {
   Image,
   TouchableOpacity,
   ActivityIndicator,
+  Alert,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getUserStorageKey } from "@/utils/userStorage";
+import { normalizeShoppingItems } from "@/utils/shoppingList";
+import { inferCategoryByName } from "@/utils/ingredientRules";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
@@ -54,7 +59,7 @@ interface Recipe {
 export default function RecipeDetailScreen() {
   const router = useSafeRouter();
   const { id } = useSafeSearchParams<{ id: number }>();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const authFetch = useAuthFetch();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
@@ -200,6 +205,47 @@ export default function RecipeDetailScreen() {
       else next.add(key);
       return next;
     });
+  };
+  const handleAddMissingToShoppingList = async () => {
+    if (missingIngredients.length === 0) return;
+    try {
+      const shoppingKey = getUserStorageKey("shopping_list", user?.id);
+      const existingStr = shoppingKey ? await AsyncStorage.getItem(shoppingKey) : null;
+      const existing = existingStr ? JSON.parse(existingStr) : [];
+      const normalized = normalizeShoppingItems(existing);
+
+      const existingNames = new Set(normalized.map((i) => i.name));
+      const recipeIngredients = recipe?.ingredients || [];
+      const newItems = missingIngredients
+        .filter((item) => !existingNames.has(item.name))
+        .map((item, idx) => {
+          const detail = recipeIngredients.find((r) => r.name === item.name);
+          return {
+            id: `recipe-missing-${Date.now()}-${idx}`,
+            name: item.name,
+            amount: detail?.amount || "适量",
+            category: inferCategoryByName(item.name),
+            checked: false,
+            createdAt: Date.now(),
+          };
+        });
+
+      if (newItems.length === 0) {
+        Alert.alert("已在清单中", "缺失食材已被添加到你的采购清单中。");
+        return;
+      }
+
+      const updated = [...newItems, ...normalized];
+      if (shoppingKey) {
+        await AsyncStorage.setItem(shoppingKey, JSON.stringify(updated));
+      }
+      Alert.alert("已加采购清单", `已成功将 ${newItems.length} 种缺少食材加入你的采购清单！`, [
+        { text: "查看清单", onPress: () => router.push("/shopping-list") },
+        { text: "好的", style: "cancel" },
+      ]);
+    } catch {
+      Alert.alert("添加失败", "保存采购清单时出错，请稍后重试。");
+    }
   };
   const toggleFavorite = async () => {
     if (!isAuthenticated) {
@@ -397,9 +443,18 @@ export default function RecipeDetailScreen() {
                     </Text>
                   ) : null}
                   {missingIngredients.length ? (
-                    <Text className="mt-1 text-[11px] text-[#7A6F63]">
-                      需要补充：{missingIngredients.map((item) => item.name).join("、")}
-                    </Text>
+                    <View className="mt-1">
+                      <Text className="text-[11px] text-[#7A6F63]">
+                        需要补充：{missingIngredients.map((item) => item.name).join("、")}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={handleAddMissingToShoppingList}
+                        className="mt-2.5 flex-row items-center justify-center gap-1.5 rounded-xl bg-brand py-2 px-3 active:opacity-90"
+                      >
+                        <FontAwesome6 name="cart-plus" size={11} color="#FFF" />
+                        <Text className="text-xs font-bold text-white">一键将 {missingIngredients.length} 种缺少食材加入采购清单</Text>
+                      </TouchableOpacity>
+                    </View>
                   ) : null}
                 </View>
               ) : (

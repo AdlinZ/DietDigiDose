@@ -1,14 +1,16 @@
-import { filterAndRankRecipes, filterInventoryItems, filterKitchenware } from "./selectors";
+import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware } from "./selectors";
 import type { InventoryItem, KitchenwareItem, Recipe } from "./types";
+import { dateKeyAfterDays } from "@/utils/date";
 
 const inventory = [
-  { id: 1, food_name: "番茄", category: "蔬菜", storage_location: "冷藏", quantity: "2个", expiration_date: "2030-01-01", image_url: null, is_available: true },
-  { id: 2, food_name: "鸡蛋", category: "乳制品", storage_location: "未知", quantity: "6个", expiration_date: "2030-01-02", image_url: null, is_available: true },
+  { id: 1, food_name: "番茄", category: "蔬菜", storage_location: "冷藏", quantity: "2个", expiration_date: dateKeyAfterDays(1), image_url: null, is_available: true },
+  { id: 2, food_name: "鸡蛋", category: "乳制品", storage_location: "未知", quantity: "6个", expiration_date: dateKeyAfterDays(10), image_url: null, is_available: true },
 ] satisfies InventoryItem[];
 
 const recipes = [
   { id: 1, title: "清炒时蔬", description: "简单", image_url: "", cook_time: 10, difficulty: "简单", calories: 100, protein: 2, carbs: 10, fat: 2, category: "快手菜", tags: [] },
   { id: 2, title: "番茄炒鸡蛋", description: "番茄与鸡蛋", image_url: "", cook_time: 12, difficulty: "简单", calories: 220, protein: 12, carbs: 15, fat: 8, category: "快手菜", tags: [] },
+  { id: 3, title: "慢炖红烧肉", description: "猪肉大火慢炖", image_url: "", cook_time: 60, difficulty: "中等", calories: 600, protein: 25, carbs: 10, fat: 40, category: "大菜", tags: [] },
 ] satisfies Recipe[];
 
 test("filters inventory by storage and treats unknown locations as room temperature", () => {
@@ -16,9 +18,31 @@ test("filters inventory by storage and treats unknown locations as room temperat
   expect(filterInventoryItems(inventory, "常温库").map((item) => item.id)).toEqual([2]);
 });
 
-test("ranks recipes by the number of matching inventory foods", () => {
-  expect(filterAndRankRecipes(recipes, inventory, "全部", "").map((recipe) => recipe.id)).toEqual([2, 1]);
+test("ranks recipes by matching inventory foods and prioritizes expiring items", () => {
+  expect(filterAndRankRecipes(recipes, inventory, "全部", "").map((recipe) => recipe.id)).toEqual([2, 1, 3]);
   expect(filterAndRankRecipes(recipes, inventory, "冰箱可做", "").map((recipe) => recipe.id)).toEqual([2]);
+});
+
+test("filters recipes by cook time limit", () => {
+  expect(filterAndRankRecipes(recipes, inventory, "全部", "", 15).map((r) => r.id)).toEqual([2, 1]);
+  expect(filterAndRankRecipes(recipes, inventory, "全部", "", 10).map((r) => r.id)).toEqual([1]);
+});
+
+test("analyzeRecipeInventoryMatch detects expiring ingredients and calculates status", () => {
+  const recipeWithDetails: Recipe & { ingredients?: Array<{ name: string; amount?: string }> } = {
+    ...recipes[1],
+    ingredients: [
+      { name: "番茄", amount: "2个" },
+      { name: "鸡蛋", amount: "3个" },
+      { name: "牛肉", amount: "200g" },
+    ],
+  };
+
+  const analysis = analyzeRecipeInventoryMatch(recipeWithDetails, inventory);
+  expect(analysis.matchStatus).toBe("partial");
+  expect(analysis.matchedIngredients.map((i) => i.name)).toEqual(["番茄", "鸡蛋"]);
+  expect(analysis.missingIngredients.map((i) => i.name)).toEqual(["牛肉"]);
+  expect(analysis.expiringIngredients.map((i) => i.name)).toEqual(["番茄"]);
 });
 
 test("filters kitchenware by category", () => {

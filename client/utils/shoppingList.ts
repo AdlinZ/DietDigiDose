@@ -5,6 +5,8 @@ export type ShoppingItem = {
   category: string;
   checked: boolean;
   createdAt: number;
+  purchaseDate?: string;
+  storageLocation?: string;
 };
 
 export function normalizeShoppingItems(value: unknown): ShoppingItem[] {
@@ -19,6 +21,15 @@ export function normalizeShoppingItems(value: unknown): ShoppingItem[] {
       : typeof item.addedAt === "string"
         ? Date.parse(item.addedAt)
         : Number.NaN;
+
+    const purchaseDate = typeof item.purchaseDate === "string" && item.purchaseDate.trim()
+      ? item.purchaseDate.trim()
+      : undefined;
+
+    const storageLocation = typeof item.storageLocation === "string" && item.storageLocation.trim()
+      ? item.storageLocation.trim()
+      : undefined;
+
     return [{
       id: typeof item.id === "string" && item.id ? item.id : `${Date.now()}-${index}`,
       name,
@@ -26,6 +37,8 @@ export function normalizeShoppingItems(value: unknown): ShoppingItem[] {
       category: typeof item.category === "string" && item.category.trim() ? item.category.trim() : "其他",
       checked: item.checked === true,
       createdAt: Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : Date.now(),
+      purchaseDate,
+      storageLocation,
     }];
   });
 }

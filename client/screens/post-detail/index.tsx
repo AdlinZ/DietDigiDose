@@ -448,12 +448,35 @@ export default function PostDetailScreen() {
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            onPress={handleShare}
-            className="w-9 h-9 rounded-full bg-background-secondary items-center justify-center"
-          >
-            <FontAwesome6 name="arrow-turn-up" size={14} color="#2D6A4F" />
-          </TouchableOpacity>
+          <View className="flex-row items-center gap-2">
+            <TouchableOpacity
+              onPress={() => {
+                const titleText = post.content.slice(0, 16) || "社区特色菜谱";
+                const mockSteps = JSON.stringify(["食材洗净备齐", "起锅热油炒至熟透", "关火盛盘享用"]);
+                const mockIngredients = JSON.stringify([{ name: "主料", amount: "适量" }]);
+                router.push({
+                  pathname: "/cooking-mode",
+                  params: {
+                    recipeId: post.id,
+                    title: titleText,
+                    steps: mockSteps,
+                    ingredients: mockIngredients,
+                  },
+                });
+              }}
+              className="bg-brand px-3 py-1.5 rounded-full flex-row items-center gap-1 active:opacity-80 shadow-xs"
+            >
+              <FontAwesome6 name="fire-burner" size={11} color="#FFF" />
+              <Text className="text-[11px] font-bold text-white">开启烹饪</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleShare}
+              className="w-9 h-9 rounded-full bg-background-secondary items-center justify-center"
+            >
+              <FontAwesome6 name="arrow-turn-up" size={14} color="#2D6A4F" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* 帖子正文主区域 */}

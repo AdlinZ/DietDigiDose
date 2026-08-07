@@ -7,6 +7,7 @@ export interface InventoryItem {
   storage_location: string;
   image_url: string | null;
   is_available: boolean;
+  scope?: "personal" | "shared";
 }
 
 export type StorageLocation = "冷藏" | "冷冻" | "常温";

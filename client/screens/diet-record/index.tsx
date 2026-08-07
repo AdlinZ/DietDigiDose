@@ -62,6 +62,7 @@ export default function DietRecordScreen() {
   const todayStr = toLocalDateKey();
   const [selectedDate, setSelectedDate] = useState(todayStr);
   const [records, setRecords] = useState<DietRecord[]>([]);
+  const [weeklyCalories, setWeeklyCalories] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
 
@@ -126,10 +127,32 @@ export default function DietRecordScreen() {
     }
   }, [isAuthenticated, authFetch, selectedDate]);
 
+  const fetchWeeklyCalories = useCallback(async () => {
+    if (!isAuthenticated) {
+      setWeeklyCalories({});
+      return;
+    }
+
+    const days = Array.from({ length: 7 }, (_, index) => toLocalDateKey(addLocalDays(index - 6)));
+    const results = await Promise.allSettled(days.map((date) => dietApi.list(authFetch, date)));
+    setWeeklyCalories(Object.fromEntries(results.map((result, index) => [
+      days[index],
+      result.status === "fulfilled" && Array.isArray(result.value)
+        ? result.value.reduce((total, record) => total + (record.calories || 0), 0)
+        : 0,
+    ])));
+  }, [authFetch, isAuthenticated]);
+
   useFocusEffect(
     useCallback(() => {
       fetchRecords();
     }, [fetchRecords])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchWeeklyCalories();
+    }, [fetchWeeklyCalories])
   );
 
   const openAddModal = (meal: string) => {
@@ -218,6 +241,7 @@ export default function DietRecordScreen() {
       await dietApi.create(authFetch, payload);
       setModalVisible(false);
       fetchRecords();
+      void fetchWeeklyCalories();
     } catch (e) {
       Alert.alert("错误", e instanceof ApiError ? e.message : "网络异常");
     } finally {
@@ -235,6 +259,7 @@ export default function DietRecordScreen() {
           try {
             await dietApi.remove(authFetch, id);
             fetchRecords();
+            void fetchWeeklyCalories();
           } catch (e) {
             console.error(e);
           }
@@ -247,6 +272,7 @@ export default function DietRecordScreen() {
   const dayTotalProtein = Math.round(records.reduce((s, r) => s + (r.protein || 0), 0) * 10) / 10;
   const dayTotalCarbs = Math.round(records.reduce((s, r) => s + (r.carbs || 0), 0) * 10) / 10;
   const dayTotalFat = Math.round(records.reduce((s, r) => s + (r.fat || 0), 0) * 10) / 10;
+  const maxWeeklyCalories = Math.max(...Object.values(weeklyCalories), 0);
 
   const targetCal = user?.daily_calories_target || 2000;
   const progressPercent = Math.min(Math.round((dayTotalCal / targetCal) * 100), 100);
@@ -376,6 +402,34 @@ export default function DietRecordScreen() {
                   {dayTotalFat} <Text className="text-[10px] font-normal">g</Text>
                 </Text>
               </View>
+            </View>
+
+            {/* 近 7 天热量趋势微型柱状图 */}
+            <View className="mt-3.5 pt-3 border-t border-white/10 flex-row items-end justify-between h-14 px-1">
+              {pastSevenDays.map((item) => {
+                const isSelected = item.dateStr === selectedDate;
+                const totalCalories = weeklyCalories[item.dateStr] || 0;
+                const barHeightPercent = maxWeeklyCalories > 0 && totalCalories > 0
+                  ? Math.max(10, Math.round((totalCalories / maxWeeklyCalories) * 100))
+                  : 0;
+                return (
+                  <TouchableOpacity
+                    key={`chart-${item.dateStr}`}
+                    onPress={() => setSelectedDate(item.dateStr)}
+                    className="items-center flex-1"
+                  >
+                    <View className="w-2.5 h-8 bg-black/20 rounded-full justify-end overflow-hidden">
+                      <View
+                        className={`w-full rounded-full ${isSelected ? "bg-highlight" : "bg-white/60"}`}
+                        style={{ height: `${barHeightPercent}%` }}
+                      />
+                    </View>
+                    <Text className={`text-[8px] mt-1 font-bold ${isSelected ? "text-highlight" : "text-emerald-100/70"}`}>
+                      {item.isToday ? "今" : item.dayName}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
         </View>

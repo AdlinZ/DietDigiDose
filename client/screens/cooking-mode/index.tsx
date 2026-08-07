@@ -15,6 +15,7 @@ import { useSafeSearchParams, useSafeRouter } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useFocusEffect } from "expo-router";
 import * as Speech from "expo-speech";
+import * as Haptics from "expo-haptics";
 import { useAuthFetch } from "@/contexts/AuthContext";
 import { toLocalDateKey } from "@/utils/date";
 import { aiApi, dietApi, inventoryApi } from "@/services/api";
@@ -307,6 +308,9 @@ export default function CookingModeScreen() {
   };
 
   const handleCompleteStep = () => {
+    try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch {}
     const newSteps = [...cookingSteps];
     newSteps[currentStep].completed = true;
     setCookingSteps(newSteps);
@@ -316,6 +320,9 @@ export default function CookingModeScreen() {
     if (currentStep < cookingSteps.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
+      try {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch {}
       Alert.alert("完成烹饪", "要将这次烹饪同步到库存和饮食记录吗？", [
         { text: "仅完成", onPress: () => router.back(), style: "cancel" },
         { text: "记录这餐", onPress: () => void finishCooking(false) },

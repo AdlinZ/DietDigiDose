@@ -3,6 +3,7 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import { daysUntilDateKey } from "./inventory";
 
 export type NotificationPreferences = {
   expiring_alert: boolean;
@@ -11,6 +12,7 @@ export type NotificationPreferences = {
 };
 
 const SCHEDULE_IDS_KEY = "@notification_schedule_ids";
+const EXPIRING_STOCK_ALERT_IDS_KEY = "@expiring_stock_alert_ids";
 
 if (Platform.OS !== "web") {
   Notifications.setNotificationHandler({
@@ -68,4 +70,53 @@ export async function syncLocalNotificationSchedules(preferences: NotificationPr
     }
   }
   await AsyncStorage.setItem(SCHEDULE_IDS_KEY, JSON.stringify(ids));
+}
+
+export async function scheduleExpiringStockAlerts(
+  inventoryItems: Array<{ food_name: string; expiration_date: string; is_available: boolean }>,
+  enabled: boolean = true
+) {
+  if (Platform.OS === "web" || !enabled) return;
+  const saved = await AsyncStorage.getItem(EXPIRING_STOCK_ALERT_IDS_KEY);
+  const previousIds: string[] = saved ? JSON.parse(saved) : [];
+  await Promise.all(previousIds.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+  await AsyncStorage.removeItem(EXPIRING_STOCK_ALERT_IDS_KEY);
+
+  const permission = await Notifications.getPermissionsAsync();
+  if (permission.status !== "granted") return;
+
+  const urgentItems = inventoryItems.filter((item) => {
+    if (!item.is_available) return false;
+    const days = daysUntilDateKey(item.expiration_date);
+    return days !== null && days >= 0 && days <= 2;
+  });
+
+  if (urgentItems.length === 0) return;
+
+  const itemNames = urgentItems.slice(0, 3).map((i) => i.food_name).join("、");
+  const title = "冰箱临期食用提醒";
+  const body = `你有【${itemNames}】等 ${urgentItems.length} 种食材将在 1-2 天内到期，建议今天优先烹饪！`;
+
+  const id = await Notifications.scheduleNotificationAsync({
+    content: { title, body, sound: "default" },
+    trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour: 9, minute: 0 },
+  });
+  await AsyncStorage.setItem(EXPIRING_STOCK_ALERT_IDS_KEY, JSON.stringify([id]));
+}
+
+export async function sendImmediateTestNotification(
+  title: string = "食光烙记通知测试",
+  body: string = "你的本地临期提醒配置正常！"
+) {
+  if (Platform.OS === "web") return;
+  const permission = await Notifications.getPermissionsAsync();
+  if (permission.status !== "granted") {
+    const request = await Notifications.requestPermissionsAsync();
+    if (request.status !== "granted") return;
+  }
+
+  await Notifications.scheduleNotificationAsync({
+    content: { title, body, sound: "default" },
+    trigger: null,
+  });
 }

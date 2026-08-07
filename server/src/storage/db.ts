@@ -486,6 +486,58 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_created_at
     ON ai_chat_messages(created_at DESC);
   `);
+
+  // 13. Household Family Sharing Tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS households (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      invite_code TEXT UNIQUE NOT NULL,
+      owner_id INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS household_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      household_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      role TEXT DEFAULT 'member',
+      joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(household_id, user_id),
+      FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS household_inventory_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      household_id INTEGER NOT NULL,
+      created_by_user_id INTEGER NOT NULL,
+      food_name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      quantity TEXT NOT NULL,
+      expiration_date TEXT NOT NULL,
+      storage_location TEXT DEFAULT '冷藏',
+      image_url TEXT,
+      is_available INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS household_activity_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      household_id INTEGER NOT NULL,
+      operator_user_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      food_name TEXT NOT NULL,
+      quantity TEXT NOT NULL,
+      storage_location TEXT DEFAULT '冷藏',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE,
+      FOREIGN KEY (operator_user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_ai_usage_logs_created_at
     ON ai_usage_logs(created_at);

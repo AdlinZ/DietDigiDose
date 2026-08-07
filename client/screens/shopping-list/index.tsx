@@ -5,9 +5,9 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
-  FlatList,
   Alert,
   ActivityIndicator,
+  Modal,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Screen } from "@/components/Screen";
@@ -16,8 +16,10 @@ import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { getUserStorageKey, SHOPPING_LIST_STORAGE_KEY } from "@/utils/userStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { inventoryApi } from "@/services/api";
-import { dateKeyAfterDays } from "@/utils/date";
+import { dateKeyAfterDays, parseDateKey, toLocalDateKey } from "@/utils/date";
 import { normalizeShoppingItems, type ShoppingItem } from "@/utils/shoppingList";
+import { inferCategoryByName, inferIngredientDefaults, inferShelfLifeDays } from "@/utils/ingredientRules";
+import { addInventoryLog } from "@/utils/inventoryHistory";
 
 const CATEGORY_OPTIONS = [
   { label: "蔬菜", icon: "carrot", color: "#059669", bg: "bg-emerald-50" },
@@ -25,6 +27,14 @@ const CATEGORY_OPTIONS = [
   { label: "水果", icon: "apple-whole", color: "#E76F51", bg: "bg-red-50" },
   { label: "调料", icon: "bottle-droplet", color: "#D97706", bg: "bg-amber-50" },
   { label: "其他", icon: "cubes", color: "#0284C7", bg: "bg-sky-50" },
+];
+
+const GROUP_SECTION_CONFIG = [
+  { key: "蔬菜", title: "蔬菜生鲜区", icon: "carrot", color: "#059669", bg: "bg-emerald-50" },
+  { key: "肉蛋", title: "肉蛋水产区", icon: "drumstick-bite", color: "#E07A5F", bg: "bg-orange-50" },
+  { key: "水果", title: "水果甜品区", icon: "apple-whole", color: "#E76F51", bg: "bg-red-50" },
+  { key: "调料", title: "调料粮油区", icon: "bottle-droplet", color: "#D97706", bg: "bg-amber-50" },
+  { key: "其他", title: "其他综合区", icon: "cubes", color: "#0284C7", bg: "bg-sky-50" },
 ];
 
 export default function ShoppingListScreen() {
@@ -38,9 +48,19 @@ export default function ShoppingListScreen() {
   const [nameInput, setNameInput] = useState("");
   const [amountInput, setAmountInput] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("蔬菜");
+  const [smartHint, setSmartHint] = useState<string | null>(null);
+
   const [activeTab, setActiveTab] = useState<"all" | "pending" | "done">("pending");
+  const [viewMode, setViewMode] = useState<"grouped" | "flat">("grouped");
   const [movingToInventory, setMovingToInventory] = useState(false);
   const importKeys = useRef(new Map<string, string>());
+
+  // Edit Modal State
+  const [editingItem, setEditingItem] = useState<ShoppingItem | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+  const [editCategory, setEditCategory] = useState("蔬菜");
+  const [editPurchaseDate, setEditPurchaseDate] = useState("");
 
   // 加载数据
   const loadShoppingList = useCallback(async () => {
@@ -74,6 +94,28 @@ export default function ShoppingListScreen() {
     }
   };
 
+  // 输入食材名称时智能反应
+  const handleNameInputChange = (text: string) => {
+    setNameInput(text);
+    if (!text.trim()) {
+      setSmartHint(null);
+      return;
+    }
+    const defaults = inferIngredientDefaults(text);
+    let matchedOpt = CATEGORY_OPTIONS.find((c) => c.label === defaults.category);
+    if (!matchedOpt) {
+      if (defaults.category === "肉食") matchedOpt = CATEGORY_OPTIONS.find((c) => c.label === "肉蛋");
+      else if (defaults.category === "粮油干货") matchedOpt = CATEGORY_OPTIONS.find((c) => c.label === "调料");
+    }
+
+    if (matchedOpt) {
+      setSelectedCategory(matchedOpt.label);
+      setSmartHint(`自动识别为 [${matchedOpt.label}] · 建议存放在 [${defaults.storageLocation}]`);
+    } else {
+      setSmartHint(null);
+    }
+  };
+
   // 添加新食材
   const handleAddItem = () => {
     if (!nameInput.trim()) {
@@ -87,11 +129,44 @@ export default function ShoppingListScreen() {
       category: selectedCategory,
       checked: false,
       createdAt: Date.now(),
+      storageLocation: inferIngredientDefaults(nameInput).storageLocation,
     };
     const updated = [newItem, ...items];
     saveItems(updated);
     setNameInput("");
     setAmountInput("");
+    setSmartHint(null);
+  };
+
+  // 打开编辑弹窗
+  const openEditModal = (item: ShoppingItem) => {
+    setEditingItem(item);
+    setEditName(item.name);
+    setEditAmount(item.amount);
+    setEditCategory(item.category || "蔬菜");
+    setEditPurchaseDate(item.purchaseDate || toLocalDateKey(new Date()));
+  };
+
+  const handleSaveEditedItem = () => {
+    if (!editingItem) return;
+    if (!editName.trim()) {
+      Alert.alert("提示", "食材名称不能为空");
+      return;
+    }
+    const updated = items.map((item) =>
+      item.id === editingItem.id
+        ? {
+            ...item,
+            name: editName.trim(),
+            amount: editAmount.trim() || "适量",
+            category: editCategory,
+            purchaseDate: editPurchaseDate.trim() || toLocalDateKey(new Date()),
+            storageLocation: inferIngredientDefaults(editName).storageLocation,
+          }
+        : item
+    );
+    saveItems(updated);
+    setEditingItem(null);
   };
 
   // 勾选/取消勾选
@@ -125,7 +200,7 @@ export default function ShoppingListScreen() {
     ]);
   };
 
-  // 将已买食材一键存入冰箱库
+  // 将已买食材一键存入冰箱库 (智能应用保质期与存储位置规则)
   const handleMoveCheckedToInventory = async () => {
     const checkedItems = items.filter((i) => i.checked);
     if (checkedItems.length === 0) {
@@ -136,25 +211,50 @@ export default function ShoppingListScreen() {
     setMovingToInventory(true);
     try {
       const signature = checkedItems.map((item) => item.id).sort().join("|");
-      const idempotencyKey = importKeys.current.get(signature)
-        || `shopping-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const idempotencyKey =
+        importKeys.current.get(signature) ||
+        `shopping-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       importKeys.current.set(signature, idempotencyKey);
-      await inventoryApi.importShoppingList(authFetch, idempotencyKey, checkedItems.map((item) => ({
-        food_name: item.name,
-        category: item.category || "蔬菜",
-        quantity: item.amount || "适量",
-        storage_location: "冷藏",
-        expiration_date: dateKeyAfterDays(7),
-        image_url: null,
-      })));
+
+      const itemsToImport = checkedItems.map((item) => {
+        const defaults = inferIngredientDefaults(item.name);
+        const location = item.storageLocation || defaults.storageLocation;
+        const shelfDays = inferShelfLifeDays(item.name, location as any);
+        const startDate = item.purchaseDate ? parseDateKey(item.purchaseDate) || new Date() : new Date();
+        const expDate = dateKeyAfterDays(shelfDays, startDate);
+
+        return {
+          food_name: item.name,
+          category: defaults.category,
+          quantity: item.amount || defaults.defaultQuantity,
+          storage_location: location,
+          expiration_date: expDate,
+          image_url: null,
+        };
+      });
+
+      await inventoryApi.importShoppingList(authFetch, idempotencyKey, itemsToImport);
       importKeys.current.delete(signature);
+
+      // 记录到库存操作历史
+      for (const item of itemsToImport) {
+        await addInventoryLog(
+          {
+            foodName: item.food_name,
+            action: "add",
+            quantity: item.quantity,
+            storageLocation: item.storage_location,
+          },
+          user?.id
+        );
+      }
 
       const remainingItems = items.filter((i) => !i.checked);
       await saveItems(remainingItems);
 
       Alert.alert(
         "入库成功！",
-        `已将 ${checkedItems.length} 件食材一键录入【冰箱食材库】，采购清单已自动更新！`,
+        `已将 ${checkedItems.length} 件食材智能算期录入【冰箱食材库】，已同步写入操作历史！`,
         [
           { text: "继续买菜", style: "cancel" },
           { text: "查看冰箱库", onPress: () => router.push("/inventory") },
@@ -193,7 +293,7 @@ export default function ShoppingListScreen() {
 
         {checkedItems.length > 0 ? (
           <TouchableOpacity onPress={handleClearChecked} className="p-1 active:opacity-70">
-            <Text className="text-xs font-bold text-red-500">清空已买</Text>
+            <Text className="text-xs font-bold text-rose-600">清空已买</Text>
           </TouchableOpacity>
         ) : (
           <View className="w-8" />
@@ -224,10 +324,10 @@ export default function ShoppingListScreen() {
         <View className="bg-white p-4 rounded-3xl border border-line shadow-xs mb-4">
           <Text className="text-xs font-black text-ink mb-2">快速添加采购食材</Text>
 
-          <View className="flex-row gap-2 mb-2.5">
+          <View className="flex-row gap-2 mb-2">
             <TextInput
               value={nameInput}
-              onChangeText={setNameInput}
+              onChangeText={handleNameInputChange}
               placeholder="食材名称 (如: 鸡胸肉)"
               placeholderTextColor="#A3A398"
               className="flex-1 bg-canvas px-3.5 py-2.5 rounded-2xl border border-line text-xs text-ink font-medium"
@@ -241,8 +341,15 @@ export default function ShoppingListScreen() {
             />
           </View>
 
+          {/* 智能保质期推荐提示 */}
+          {smartHint && (
+            <View className="mb-2 px-2 py-1 rounded-xl bg-amber-50 border border-amber-200/60">
+              <Text className="text-[10px] font-bold text-amber-900">{smartHint}</Text>
+            </View>
+          )}
+
           {/* 分类 Pills */}
-          <View className="flex-row items-center justify-between mb-3">
+          <View className="flex-row items-center justify-between mb-1">
             <View className="flex-row items-center gap-1.5 flex-wrap">
               {CATEGORY_OPTIONS.map((cat) => (
                 <TouchableOpacity
@@ -291,64 +398,90 @@ export default function ShoppingListScreen() {
             </View>
             <View className="flex-1">
               <Text className="text-xs font-black text-emerald-900">AI 食语智能算料</Text>
-              <Text className="text-[10px] text-emerald-700 font-medium">向食语提问菜谱，缺失食材将自动计算精准加入清单</Text>
+              <Text className="text-[10px] text-emerald-700 font-medium">菜谱缺失食材一键精准算料生成采购单</Text>
             </View>
           </View>
           <FontAwesome6 name="chevron-right" size={12} color="#059669" />
         </TouchableOpacity>
 
-        {/* Filter Tabs */}
-        <View className="flex-row items-center gap-2 mb-3">
-          <TouchableOpacity
-            onPress={() => setActiveTab("pending")}
-            className={`px-3.5 py-1.5 rounded-full border ${
-              activeTab === "pending"
-                ? "bg-brand border-brand"
-                : "bg-white border-line"
-            }`}
-          >
-            <Text
-              className={`text-xs font-bold ${
-                activeTab === "pending" ? "text-white" : "text-copy-muted"
+        {/* Filter Tabs & View Mode Switcher */}
+        <View className="flex-row items-center justify-between mb-3">
+          <View className="flex-row items-center gap-1.5">
+            <TouchableOpacity
+              onPress={() => setActiveTab("pending")}
+              className={`px-3 py-1.5 rounded-full border ${
+                activeTab === "pending"
+                  ? "bg-brand border-brand"
+                  : "bg-white border-line"
               }`}
             >
-              待采购 ({pendingItems.length})
-            </Text>
-          </TouchableOpacity>
+              <Text
+                className={`text-[11px] font-bold ${
+                  activeTab === "pending" ? "text-white" : "text-copy-muted"
+                }`}
+              >
+                待买 ({pendingItems.length})
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            onPress={() => setActiveTab("done")}
-            className={`px-3.5 py-1.5 rounded-full border ${
-              activeTab === "done"
-                ? "bg-brand border-brand"
-                : "bg-white border-line"
-            }`}
-          >
-            <Text
-              className={`text-xs font-bold ${
-                activeTab === "done" ? "text-white" : "text-copy-muted"
+            <TouchableOpacity
+              onPress={() => setActiveTab("done")}
+              className={`px-3 py-1.5 rounded-full border ${
+                activeTab === "done"
+                  ? "bg-brand border-brand"
+                  : "bg-white border-line"
               }`}
             >
-              已买到 ({checkedItems.length})
-            </Text>
-          </TouchableOpacity>
+              <Text
+                className={`text-[11px] font-bold ${
+                  activeTab === "done" ? "text-white" : "text-copy-muted"
+                }`}
+              >
+                已买 ({checkedItems.length})
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            onPress={() => setActiveTab("all")}
-            className={`px-3.5 py-1.5 rounded-full border ${
-              activeTab === "all"
-                ? "bg-brand border-brand"
-                : "bg-white border-line"
-            }`}
-          >
-            <Text
-              className={`text-xs font-bold ${
-                activeTab === "all" ? "text-white" : "text-copy-muted"
+            <TouchableOpacity
+              onPress={() => setActiveTab("all")}
+              className={`px-3 py-1.5 rounded-full border ${
+                activeTab === "all"
+                  ? "bg-brand border-brand"
+                  : "bg-white border-line"
               }`}
             >
-              全部 ({items.length})
-            </Text>
-          </TouchableOpacity>
+              <Text
+                className={`text-[11px] font-bold ${
+                  activeTab === "all" ? "text-white" : "text-copy-muted"
+                }`}
+              >
+                全部 ({items.length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* 视图模式切换 */}
+          <View className="flex-row items-center rounded-full bg-white border border-line p-0.5">
+            <TouchableOpacity
+              onPress={() => setViewMode("grouped")}
+              className={`px-2.5 py-1 rounded-full ${
+                viewMode === "grouped" ? "bg-brand/10 border border-brand/30" : ""
+              }`}
+            >
+              <Text className={`text-[10px] font-bold ${viewMode === "grouped" ? "text-brand" : "text-copy-muted"}`}>
+                分组
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setViewMode("flat")}
+              className={`px-2.5 py-1 rounded-full ${
+                viewMode === "flat" ? "bg-brand/10 border border-brand/30" : ""
+              }`}
+            >
+              <Text className={`text-[10px] font-bold ${viewMode === "flat" ? "text-brand" : "text-copy-muted"}`}>
+                列表
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* 清单列表 */}
@@ -362,63 +495,43 @@ export default function ShoppingListScreen() {
             </Text>
             <Text className="text-[10px] text-copy-muted mt-1">在上方输入或在 AI 聊天中一键计算生成</Text>
           </View>
-        ) : (
-          <View className="gap-2">
-            {filteredItems.map((item) => {
-              const catOpt = CATEGORY_OPTIONS.find((c) => c.label === item.category) || CATEGORY_OPTIONS[0];
+        ) : viewMode === "grouped" ? (
+          /* 按区域/品类分组视图 */
+          <View className="gap-3">
+            {GROUP_SECTION_CONFIG.map((section) => {
+              const sectionItems = filteredItems.filter((i) => {
+                if (section.key === "蔬菜") return i.category === "蔬菜";
+                if (section.key === "肉蛋") return i.category === "肉蛋" || i.category === "肉食";
+                if (section.key === "水果") return i.category === "水果";
+                if (section.key === "调料") return i.category === "调料" || i.category === "粮油干货";
+                return !["蔬菜", "肉蛋", "肉食", "水果", "调料", "粮油干货"].includes(i.category);
+              });
+
+              if (sectionItems.length === 0) return null;
+
               return (
-                <TouchableOpacity
-                  key={item.id}
-                  onPress={() => handleToggleCheck(item.id)}
-                  activeOpacity={0.8}
-                  className={`p-3.5 rounded-2xl border flex-row items-center justify-between transition-all shadow-2xs ${
-                    item.checked
-                      ? "bg-gray-50 border-gray-200 opacity-60"
-                      : "bg-white border-line"
-                  }`}
-                >
-                  <View className="flex-row items-center gap-3 flex-1 mr-2">
-                    {/* Checkbox */}
-                    <View
-                      className={`w-6 h-6 rounded-full items-center justify-center border transition-all ${
-                        item.checked
-                          ? "bg-emerald-600 border-emerald-600"
-                          : "bg-white border-line"
-                      }`}
-                    >
-                      {item.checked && <FontAwesome6 name="check" size={11} color="#FFF" />}
+                <View key={section.key} className="rounded-3xl border border-line bg-white p-3.5 shadow-2xs">
+                  <View className="flex-row items-center justify-between mb-2.5 px-1 border-b border-line/60 pb-2">
+                    <View className="flex-row items-center gap-2">
+                      <View className={`w-6 h-6 rounded-lg items-center justify-center ${section.bg}`}>
+                        <FontAwesome6 name={section.icon} size={11} color={section.color} />
+                      </View>
+                      <Text className="text-xs font-black text-ink">{section.title}</Text>
                     </View>
-
-                    {/* Category Icon Badge */}
-                    <View className={`w-8 h-8 rounded-xl items-center justify-center ${catOpt.bg}`}>
-                      <FontAwesome6 name={catOpt.icon} size={13} color={catOpt.color} />
-                    </View>
-
-                    {/* Item Details */}
-                    <View className="flex-1">
-                      <Text
-                        className={`text-xs font-black ${
-                          item.checked ? "text-gray-400 line-through" : "text-ink"
-                        }`}
-                      >
-                        {item.name}
-                      </Text>
-                      <Text className="text-[10px] text-copy-muted mt-0.5">
-                        分量/规格: {item.amount}
-                      </Text>
-                    </View>
+                    <Text className="text-[10px] font-bold text-copy-muted">{sectionItems.length} 项</Text>
                   </View>
 
-                  {/* Right Actions */}
-                  <TouchableOpacity
-                    onPress={() => handleDeleteItem(item.id)}
-                    className="w-7 h-7 rounded-full bg-red-50 items-center justify-center border border-red-100 active:bg-red-100"
-                  >
-                    <FontAwesome6 name="trash-can" size={10} color="#EF4444" />
-                  </TouchableOpacity>
-                </TouchableOpacity>
+                  <View className="gap-2">
+                    {sectionItems.map((item) => renderShoppingItemCard(item))}
+                  </View>
+                </View>
               );
             })}
+          </View>
+        ) : (
+          /* 平铺列表视图 */
+          <View className="gap-2">
+            {filteredItems.map((item) => renderShoppingItemCard(item))}
           </View>
         )}
 
@@ -436,6 +549,140 @@ export default function ShoppingListScreen() {
           </TouchableOpacity>
         )}
       </ScrollView>
+
+      {/* 编辑采购项 Modal */}
+      <Modal visible={Boolean(editingItem)} animationType="fade" transparent onRequestClose={() => setEditingItem(null)}>
+        <View className="flex-1 items-center justify-center bg-black/40 p-5">
+          <View className="w-full rounded-[28px] bg-white p-5">
+            <View className="flex-row items-center justify-between border-b border-line pb-3">
+              <Text className="text-base font-black text-ink">编辑采购项目</Text>
+              <TouchableOpacity onPress={() => setEditingItem(null)} className="w-8 h-8 items-center justify-center rounded-full bg-canvas">
+                <FontAwesome6 name="xmark" size={16} color="#8B7D6B" />
+              </TouchableOpacity>
+            </View>
+
+            <View className="mt-4 gap-3">
+              <View>
+                <Text className="text-xs font-bold text-copy-muted mb-1">食材名称</Text>
+                <TextInput
+                  value={editName}
+                  onChangeText={setEditName}
+                  className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink font-medium"
+                />
+              </View>
+
+              <View>
+                <Text className="text-xs font-bold text-copy-muted mb-1">分量 / 规格</Text>
+                <TextInput
+                  value={editAmount}
+                  onChangeText={setEditAmount}
+                  placeholder="如: 500g, 2盒"
+                  className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink font-medium"
+                />
+              </View>
+
+              <View>
+                <Text className="text-xs font-bold text-copy-muted mb-1">购买日期</Text>
+                <TextInput
+                  value={editPurchaseDate}
+                  onChangeText={setEditPurchaseDate}
+                  placeholder="YYYY-MM-DD"
+                  className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink font-medium"
+                />
+              </View>
+
+              <View>
+                <Text className="text-xs font-bold text-copy-muted mb-1">所属品类</Text>
+                <View className="flex-row items-center gap-1.5 flex-wrap">
+                  {CATEGORY_OPTIONS.map((cat) => (
+                    <TouchableOpacity
+                      key={cat.label}
+                      onPress={() => setEditCategory(cat.label)}
+                      className={`px-3 py-1.5 rounded-full border ${
+                        editCategory === cat.label ? "bg-brand border-brand" : "bg-canvas border-line"
+                      }`}
+                    >
+                      <Text className={`text-xs font-bold ${editCategory === cat.label ? "text-white" : "text-ink"}`}>
+                        {cat.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              <TouchableOpacity
+                onPress={handleSaveEditedItem}
+                className="mt-2 bg-brand py-3.5 rounded-2xl items-center shadow-xs active:opacity-90"
+              >
+                <Text className="text-sm font-black text-white">保存修改</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
+
+  function renderShoppingItemCard(item: ShoppingItem) {
+    const catOpt = CATEGORY_OPTIONS.find((c) => c.label === item.category) || CATEGORY_OPTIONS[0];
+    return (
+      <TouchableOpacity
+        key={item.id}
+        onPress={() => handleToggleCheck(item.id)}
+        activeOpacity={0.8}
+        className={`p-3.5 rounded-2xl border flex-row items-center justify-between transition-all shadow-2xs ${
+          item.checked ? "bg-gray-50 border-gray-200 opacity-60" : "bg-white border-line"
+        }`}
+      >
+        <View className="flex-row items-center gap-3 flex-1 mr-2">
+          {/* Checkbox */}
+          <View
+            className={`w-6 h-6 rounded-full items-center justify-center border transition-all ${
+              item.checked ? "bg-emerald-600 border-emerald-600" : "bg-white border-line"
+            }`}
+          >
+            {item.checked && <FontAwesome6 name="check" size={11} color="#FFF" />}
+          </View>
+
+          {/* Category Icon Badge */}
+          <View className={`w-8 h-8 rounded-xl items-center justify-center ${catOpt.bg}`}>
+            <FontAwesome6 name={catOpt.icon} size={13} color={catOpt.color} />
+          </View>
+
+          {/* Item Details */}
+          <View className="flex-1">
+            <Text className={`text-xs font-black ${item.checked ? "text-gray-400 line-through" : "text-ink"}`}>
+              {item.name}
+            </Text>
+            <Text className="text-[10px] text-copy-muted mt-0.5">
+              分量: {item.amount} {item.purchaseDate ? `· 购于 ${item.purchaseDate}` : ""}
+            </Text>
+          </View>
+        </View>
+
+        {/* Right Actions */}
+        <View className="flex-row items-center gap-1.5">
+          <TouchableOpacity
+            onPress={(e) => {
+              e.stopPropagation();
+              openEditModal(item);
+            }}
+            className="w-7 h-7 rounded-full bg-canvas items-center justify-center border border-line active:bg-brand-soft"
+          >
+            <FontAwesome6 name="pen" size={9} color="#8B7D6B" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={(e) => {
+              e.stopPropagation();
+              handleDeleteItem(item.id);
+            }}
+            className="w-7 h-7 rounded-full bg-rose-50 items-center justify-center border border-rose-100 active:bg-rose-100"
+          >
+            <FontAwesome6 name="trash-can" size={9} color="#EF4444" />
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    );
+  }
 }

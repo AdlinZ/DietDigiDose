@@ -6,7 +6,7 @@
     "dev:client": "pnpm --dir ./client start",
     "dev:server": "pnpm --dir ./server dev",
     "dev:admin": "pnpm --dir ./admin dev",
-    "dev:app": "pnpm dlx concurrently --names client,server --prefix-colors cyan,green \"pnpm dev:client\" \"pnpm dev:server\"",
+    "dev:app": "NODE_OPTIONS=--dns-result-order=ipv4first pnpm dlx concurrently --names client,server --prefix-colors cyan,green \"pnpm dev:client\" \"pnpm dev:server\"",
     "dev:all": "pnpm dlx concurrently --names app,admin --prefix-colors cyan,magenta \"pnpm dev:app\" \"pnpm dev:admin\"",
     "dev": "pnpm dev:app",
     "build:client": "pnpm --dir ./client build",

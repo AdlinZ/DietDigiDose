@@ -2,12 +2,14 @@ import { useCallback, useMemo, useState, type ComponentProps, type ReactNode } f
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
@@ -276,7 +278,8 @@ export default function HealthProfileScreen() {
 
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
-      <KeyboardAvoidingView className="flex-1" behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <KeyboardAvoidingView className="flex-1" behavior={Platform.OS === "ios" ? "padding" : undefined}>
         {/* Dietdigidose Platform Top Navigation Header */}
         <View className="border-b border-line bg-canvas">
           <View className="mx-auto flex-row h-14 w-full max-w-2xl items-center justify-between px-4">
@@ -592,18 +595,38 @@ export default function HealthProfileScreen() {
 
             {/* SECTION 05: 营养目标 */}
             <SectionCard icon="bullseye" title="每日营养目标" subtitle="没有明确目标时可以留空，系统会自动按推荐标准匹配。">
-              {/* Presets */}
-              <View className="flex-row items-center gap-2 mb-3">
-                <Text className="text-xs font-bold text-[#6E6256]">快捷预设：</Text>
-                {PRESETS.map((preset) => (
+              {/* Presets & TDEE Smart Calculator */}
+              <View className="flex-row items-center justify-between gap-2 mb-3">
+                <Text className="text-xs font-bold text-[#6E6256]">快捷推荐：</Text>
+                <View className="flex-row items-center gap-1.5 flex-wrap flex-1 justify-end">
+                  {PRESETS.map((preset) => (
+                    <TouchableOpacity
+                      key={preset.label}
+                      onPress={() => applyPreset(preset)}
+                      className="rounded-full border border-[#D8E5DC] bg-[#F1F7F2] px-2.5 py-1"
+                    >
+                      <Text className="text-[11px] font-bold text-brand">{preset.label}</Text>
+                    </TouchableOpacity>
+                  ))}
                   <TouchableOpacity
-                    key={preset.label}
-                    onPress={() => applyPreset(preset)}
-                    className="rounded-full border border-[#D8E5DC] bg-[#F1F7F2] px-3 py-1"
+                    onPress={() => {
+                      const baseBmr = bmrValue || 1600;
+                      const w = Number(weight) || 60;
+                      const targetKcal = Math.round(baseBmr * 1.2 - 250);
+                      const targetProtein = Math.round(w * 1.6);
+                      setCalories(String(targetKcal));
+                      setProtein(String(targetProtein));
+                      setSalt("4");
+                      setSugar("20");
+                      setWater("2200");
+                      Alert.alert("TDEE 智能计算", `根据你的基础代谢 (${baseBmr} kcal) 与目标，已为你自动配置减脂期推荐每日热量 (${targetKcal} kcal) 与蛋白质 (${targetProtein}g)。`);
+                    }}
+                    className="rounded-full border border-brand bg-brand px-3 py-1 flex-row items-center gap-1 active:opacity-80"
                   >
-                    <Text className="text-[11px] font-bold text-brand">{preset.label}</Text>
+                    <FontAwesome6 name="wand-magic-sparkles" size={10} color="#FFF" />
+                    <Text className="text-[11px] font-black text-white">根据 BMR 智能估算</Text>
                   </TouchableOpacity>
-                ))}
+                </View>
               </View>
 
               <View className="gap-3">
@@ -730,8 +753,9 @@ export default function HealthProfileScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
-    </Screen>
-  );
+    </TouchableWithoutFeedback>
+  </Screen>
+);
 }
 function SectionCard({
   icon,

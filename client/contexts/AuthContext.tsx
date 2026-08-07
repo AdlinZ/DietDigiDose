@@ -108,8 +108,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
-    clearAuthState();
-  }, [clearAuthState]);
+    void (async () => {
+      try {
+        await purgeUserPrivateStorage(user?.id);
+      } finally {
+        await clearAuthState();
+      }
+    })();
+  }, [clearAuthState, user?.id]);
 
   const updateProfile = useCallback(async (profileData: Partial<User>) => {
     if (!token) return { success: false, error: '未登录' };

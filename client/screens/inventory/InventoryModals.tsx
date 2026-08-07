@@ -3,6 +3,8 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useCSSVariable } from "uniwind";
 
 import type { DetectedFood, KitchenwareCatalogItem } from "./types";
+import { COMMON_INGREDIENTS, type CommonIngredient } from "@/utils/ingredientRules";
+import type { InventoryLogEntry } from "@/utils/inventoryHistory";
 
 interface BatchReviewModalProps {
   visible: boolean;
@@ -11,9 +13,10 @@ interface BatchReviewModalProps {
   onClose: () => void;
   onChange: (foods: DetectedFood[]) => void;
   onSave: () => void;
+  onAddItem?: (item: CommonIngredient) => void;
 }
 
-export function BatchReviewModal({ visible, foods, saving, onClose, onChange, onSave }: BatchReviewModalProps) {
+export function BatchReviewModal({ visible, foods, saving, onClose, onChange, onSave, onAddItem }: BatchReviewModalProps) {
   const [brand, muted] = useCSSVariable(["--color-brand", "--color-copy-muted"]) as string[];
   const allSelected = foods.length > 0 && foods.every((food) => food.selected);
   const selectedCount = foods.filter((food) => food.selected).length;
@@ -24,13 +27,33 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
         <View className="max-h-[88%] rounded-t-[32px] bg-surface px-page pt-page pb-6" accessibilityViewIsModal>
           <View className="flex-row items-start justify-between border-b border-line pb-4">
             <View className="flex-1 pr-3">
-              <Text className="text-lg font-black text-ink" accessibilityRole="header">确认识别结果</Text>
-              <Text className="mt-1 text-caption leading-4 text-copy-muted">识别到 {foods.length} 种食材；取消勾选不需要入库的项目。</Text>
+              <Text className="text-lg font-black text-ink" accessibilityRole="header">批量确认识别结果</Text>
+              <Text className="mt-1 text-caption leading-4 text-copy-muted">已添加 {foods.length} 种食材；取消勾选不需要入库的项目。</Text>
             </View>
             <TouchableOpacity onPress={onClose} accessibilityRole="button" accessibilityLabel="关闭识别结果" className="min-h-touch min-w-touch items-center justify-center rounded-full bg-canvas">
               <FontAwesome6 name="xmark" size={17} color={muted} />
             </TouchableOpacity>
           </View>
+
+          {onAddItem && (
+            <View className="mt-3">
+              <Text className="text-xs font-bold text-copy-muted mb-1.5">快捷加一项</Text>
+              <View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="gap-2">
+                  {COMMON_INGREDIENTS.slice(0, 10).map((item) => (
+                  <TouchableOpacity
+                    key={item.name}
+                    onPress={() => onAddItem(item)}
+                    className="flex-row items-center gap-1.5 rounded-full border border-brand/30 bg-brand/5 px-3 py-1.5"
+                  >
+                    <FontAwesome6 name="plus" size={10} color="#2D6A4F" />
+                    <Text className="text-xs font-bold text-brand">{item.name}</Text>
+                  </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            </View>
+          )}
 
           <ScrollView className="mt-3" showsVerticalScrollIndicator={false} contentContainerClassName="gap-2 pb-3" accessibilityLiveRegion="polite">
             {foods.map((item) => (
@@ -68,12 +91,122 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
               disabled={saving || selectedCount === 0}
               className="flex-1 min-h-touch items-center justify-center rounded-control bg-brand active:bg-accent-hover disabled:opacity-disabled"
               accessibilityRole="button"
-              accessibilityLabel={`加入 ${selectedCount} 项食材`}
+              accessibilityLabel={`一键批量入库 ${selectedCount} 项`}
               accessibilityState={{ disabled: saving || selectedCount === 0, busy: saving }}
             >
-              {saving ? <ActivityIndicator color="#FFF" /> : <Text className="text-base font-black text-white">加入 {selectedCount} 项食材</Text>}
+              {saving ? <ActivityIndicator color="#FFF" /> : <Text className="text-base font-black text-white">一键批量入库 {selectedCount} 项</Text>}
             </TouchableOpacity>
           </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+export function QuickAddPresetChips({ onSelect }: { onSelect: (ingredient: CommonIngredient) => void }) {
+  return (
+    <View className="mb-3">
+      <Text className="text-xs font-bold text-copy-muted mb-2">常用食材快捷添加</Text>
+      <View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="gap-2">
+          {COMMON_INGREDIENTS.map((item) => (
+          <TouchableOpacity
+            key={item.name}
+            onPress={() => onSelect(item)}
+            className="flex-row items-center gap-1.5 rounded-2xl border border-line bg-canvas px-3 py-2 active:bg-brand-soft active:border-brand/40"
+            accessibilityRole="button"
+            accessibilityLabel={`快捷添加${item.name}`}
+          >
+            <Text className="text-xs font-bold text-ink">{item.name}</Text>
+            <Text className="text-[10px] text-copy-muted">{item.storageLocation}</Text>
+          </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+interface InventoryHistoryModalProps {
+  visible: boolean;
+  logs: InventoryLogEntry[];
+  onClose: () => void;
+  onClear: () => void;
+}
+
+export function InventoryHistoryModal({ visible, logs, onClose, onClear }: InventoryHistoryModalProps) {
+  const [muted] = useCSSVariable(["--color-copy-muted"]) as string[];
+
+  const getActionBadge = (action: InventoryLogEntry["action"]) => {
+    switch (action) {
+      case "add":
+        return { text: "录入", bg: "bg-emerald-100", textColor: "text-emerald-800" };
+      case "consume":
+        return { text: "用完", bg: "bg-amber-100", textColor: "text-amber-800" };
+      case "expire_clear":
+        return { text: "清理", bg: "bg-rose-100", textColor: "text-rose-800" };
+      default:
+        return { text: "修改", bg: "bg-blue-100", textColor: "text-blue-800" };
+    }
+  };
+
+  const formatTime = (ts: number) => {
+    const d = new Date(ts);
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const hours = String(d.getHours()).padStart(2, "0");
+    const mins = String(d.getMinutes()).padStart(2, "0");
+    return `${month}-${day} ${hours}:${mins}`;
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View className="flex-1 justify-end bg-black/40">
+        <View className="max-h-[85%] rounded-t-[32px] bg-surface px-5 pt-5 pb-6">
+          <View className="flex-row items-center justify-between border-b border-line pb-3">
+            <View className="flex-1">
+              <Text className="text-lg font-black text-ink">库存变动历史</Text>
+              <Text className="mt-0.5 text-xs text-copy-muted">记录你的每一次录入、用完扣减与清理</Text>
+            </View>
+            <View className="flex-row items-center gap-2">
+              {logs.length > 0 && (
+                <TouchableOpacity onPress={onClear} className="px-3 py-1.5 rounded-full bg-canvas border border-line">
+                  <Text className="text-xs font-bold text-copy-muted">清空历史</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={onClose} className="w-8 h-8 items-center justify-center rounded-full bg-canvas">
+                <FontAwesome6 name="xmark" size={16} color={muted} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {logs.length === 0 ? (
+            <View className="py-12 items-center">
+              <FontAwesome6 name="clock-rotate-left" size={32} color="#D4A276" />
+              <Text className="mt-3 text-xs font-bold text-copy-muted">暂无变动记录</Text>
+              <Text className="mt-1 text-[11px] text-copy-muted">录入或扣减食材后会在此处自动记录</Text>
+            </View>
+          ) : (
+            <ScrollView className="mt-3" showsVerticalScrollIndicator={false} contentContainerClassName="gap-2.5 pb-4">
+              {logs.map((log) => {
+                const badge = getActionBadge(log.action);
+                return (
+                  <View key={log.id} className="flex-row items-center justify-between rounded-2xl border border-line bg-canvas p-3.5">
+                    <View className="flex-row items-center gap-3">
+                      <View className={`px-2.5 py-1 rounded-full ${badge.bg}`}>
+                        <Text className={`text-[11px] font-black ${badge.textColor}`}>{badge.text}</Text>
+                      </View>
+                      <View>
+                        <Text className="text-sm font-black text-ink">{log.foodName}</Text>
+                        <Text className="mt-0.5 text-[11px] text-copy-muted">{log.quantity} · {log.storageLocation}</Text>
+                      </View>
+                    </View>
+                    <Text className="text-[10px] font-medium text-copy-muted">{formatTime(log.timestamp)}</Text>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          )}
         </View>
       </View>
     </Modal>

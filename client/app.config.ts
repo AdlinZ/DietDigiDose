@@ -8,10 +8,11 @@ const iosBundleIdentifier = process.env.EXPO_PUBLIC_IOS_BUNDLE_IDENTIFIER || 'co
 const easBuildProfile = process.env.EAS_BUILD_PROFILE;
 const allowInsecureHttp = !easBuildProfile && process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP === '1';
 const appVersion = process.env.EXPO_PUBLIC_APP_VERSION || rootPackage.version;
+const easProjectId = 'c89b45c8-5a27-4f6f-af05-4b656f534994';
 // Expo 会在打包时解析 app.config；未显式指定时，这里就是本次构建的时间。
 const buildTime = process.env.EXPO_PUBLIC_BUILD_TIME || new Date().toISOString();
 
-if (easBuildProfile && !process.env.EXPO_PUBLIC_BACKEND_BASE_URL?.startsWith('https://')) {
+if (easBuildProfile && !allowInsecureHttp && !process.env.EXPO_PUBLIC_BACKEND_BASE_URL?.startsWith('https://')) {
   throw new Error(`${easBuildProfile} builds require an HTTPS EXPO_PUBLIC_BACKEND_BASE_URL`);
 }
 
@@ -26,13 +27,21 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     "scheme": "dietdigidose",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": `https://u.expo.dev/${easProjectId}`,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
     "extra": {
       ...config.extra,
       "appVersion": appVersion,
       "buildTime": buildTime,
       "eas": {
         ...config.extra?.eas,
-        "projectId": "c89b45c8-5a27-4f6f-af05-4b656f534994"
+        "projectId": easProjectId
       }
     },
     "ios": {
@@ -40,15 +49,16 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       "bundleIdentifier": iosBundleIdentifier,
       "buildNumber": "5",
       "supportsTablet": true,
-      ...(allowInsecureHttp ? {
-        "infoPlist": {
-          ...config.ios?.infoPlist,
+      "infoPlist": {
+        ...config.ios?.infoPlist,
+        "ITSAppUsesNonExemptEncryption": false,
+        ...(allowInsecureHttp ? {
           "NSAppTransportSecurity": {
             ...(config.ios?.infoPlist?.NSAppTransportSecurity as Record<string, unknown> | undefined),
             "NSAllowsArbitraryLoads": true
           }
-        }
-      } : {})
+        } : {})
+      }
     },
     "android": {
       ...config.android,
@@ -58,7 +68,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "backgroundColor": "#ffffff"
       },
       "package": androidPackage,
-      "versionCode": 4
+      "versionCode": 5
     },
     "web": {
       "bundler": "metro",

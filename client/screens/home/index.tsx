@@ -332,8 +332,10 @@ export default function HomeScreen() {
 
     let active = true;
     const fetchAIRecommendations = async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
       try {
-        const data = await aiApi.homeRecommendations<{ cards?: unknown[] }>(authFetch, period);
+        const data = await aiApi.homeRecommendations<{ cards?: unknown[] }>(authFetch, period, controller.signal);
         const cards: RecommendationCard[] = Array.isArray(data.cards)
           ? data.cards
             .filter((card: unknown): card is Record<string, unknown> => !!card && typeof card === "object")
@@ -349,8 +351,10 @@ export default function HomeScreen() {
           : [];
         if (active && cards.length > 0) setAiRecCards(cards);
       } catch (error) {
-        // 首页保留时段默认卡片，AI 服务不可用时不影响页面使用。
-        console.warn("Home AI recommendations unavailable", error);
+        // 首页保留时段默认卡片，AI 服务不可用或超时时不影响页面使用。
+        console.warn("Home AI recommendations unavailable or timed out", error);
+      } finally {
+        clearTimeout(timer);
       }
     };
 

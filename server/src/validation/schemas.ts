@@ -59,6 +59,29 @@ export const notificationPreferencesSchema = z.object({
   expiring_alert: z.boolean(),
   meal_reminder: z.boolean(),
   water_reminder: z.boolean(),
+  breakfast_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "早餐提醒时间格式无效"),
+  lunch_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "午餐提醒时间格式无效"),
+  dinner_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "晚餐提醒时间格式无效"),
+  water_start_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "饮水开始时间格式无效"),
+  water_end_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "饮水结束时间格式无效"),
+  water_interval_minutes: z.number().int().min(30).max(360),
+  quiet_start_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "静默开始时间格式无效"),
+  quiet_end_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "静默结束时间格式无效"),
+  weekdays_enabled: z.boolean(),
+  weekends_enabled: z.boolean(),
+}).strict();
+
+export const notificationActionSchema = z.object({
+  action: z.enum(["open", "complete", "snooze_today", "plan_recipe"]),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
+export const localNotificationEventSchema = z.object({
+  kind: z.enum(["meal", "water"]),
+  title: trimmedString(1, 80, "提醒标题"),
+  body: trimmedString(1, 500, "提醒内容"),
+  event: z.enum(["received", "opened"]),
+  source_id: z.string().trim().max(200).optional(),
 }).strict();
 
 export const pushDeviceSchema = z.object({
@@ -69,6 +92,16 @@ export const pushDeviceSchema = z.object({
 export const notificationCampaignSchema = z.object({
   title: trimmedString(1, 80, "通知标题"),
   body: trimmedString(1, 500, "通知内容"),
+}).strict();
+
+export const feedbackCreateSchema = z.object({
+  category: z.enum(["issue", "suggestion", "support"]),
+  content: trimmedString(5, 2000, "反馈内容"),
+  context: z.object({
+    page: z.string().trim().max(120).optional(),
+    recipeId: z.number().int().positive().optional(),
+    recipeTitle: z.string().trim().max(160).optional(),
+  }).strict().optional(),
 }).strict();
 
 export const inventoryCreateSchema = z.object({
@@ -90,7 +123,7 @@ export const shoppingInventoryImportSchema = z.object({
 }).strict();
 
 export const dietRecordCreateSchema = z.object({
-  meal_type: z.enum(["早餐", "午餐", "晚餐", "加餐"]),
+  meal_type: z.string().trim().max(30, "餐别标签不能超过 30 个字符").default(""),
   food_name: trimmedString(1, 120, "食物名称"),
   amount: trimmedString(1, 40, "分量").default("1份"),
   calories: nutrition,
@@ -98,6 +131,7 @@ export const dietRecordCreateSchema = z.object({
   carbs: nutrition,
   fat: nutrition,
   recorded_at: isoDate.optional(),
+  recorded_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "进食时间格式必须为 HH:mm").nullable().optional(),
   image_url: optionalImage,
 }).strict();
 
@@ -237,21 +271,26 @@ const aiChatMessageSchema = z.object({
 const normalizeAIChatPayload = (input: unknown) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const raw = input as Record<string, unknown>;
-  const messages = Array.isArray(raw.messages)
+  const normalizedMessages = Array.isArray(raw.messages)
     ? raw.messages.flatMap((message) => {
       if (!message || typeof message !== "object" || Array.isArray(message)) return [];
       const item = message as Record<string, unknown>;
       if ((item.role !== "user" && item.role !== "assistant") || typeof item.content !== "string") return [];
       const content = item.content.trim().slice(0, 12_000);
       return content ? [{ role: item.role, content }] : [];
-    }).slice(-50)
+    })
     : [];
+  // System instructions are server-owned. Silently discard them here so old
+  // clients keep working without elevating untrusted text to system level.
+  const messages = normalizedMessages.slice(-50);
   const prompt = typeof raw.prompt === "string" ? raw.prompt.trim().slice(0, 12_000) : undefined;
   const sessionId = typeof raw.sessionId === "string" ? raw.sessionId.trim().slice(0, 120) : undefined;
+  const source = raw.source === "voice" || raw.source === "cooking" ? raw.source : "assistant";
   return {
     ...(messages.length ? { messages } : {}),
     ...(prompt ? { prompt } : {}),
     ...(sessionId ? { sessionId } : {}),
+    source,
   };
 };
 
@@ -259,6 +298,7 @@ export const aiChatSchema = z.preprocess(normalizeAIChatPayload, z.object({
   messages: z.array(aiChatMessageSchema).max(50).optional(),
   prompt: z.string().min(1).max(12_000).optional(),
   sessionId: z.string().max(120).optional(),
+  source: z.enum(["assistant", "voice", "cooking"]).default("assistant"),
 }).strict().refine((value) => value.prompt || value.messages?.length, "必须提供 prompt 或 messages"));
 
 export const aiWriteConfirmationCommitSchema = z.object({
@@ -278,8 +318,15 @@ export const aiImageSchema = z.object({ image: imagePayload }).strict();
 
 export const aiVoiceCommandSchema = z.object({
   speechText: trimmedString(1, 1000, "语音识别文本"),
+  sessionId: z.string().trim().min(1).max(120),
   currentStep: z.number().int().min(0).max(1000).default(0),
   recipeTitle: z.string().trim().max(120).default(""),
+  recipeSteps: z.array(z.string().max(2000)).max(100).optional(),
+  recipeIngredients: z.array(z.string().max(500)).max(100).optional(),
+  voiceHistory: z.array(z.object({
+    question: z.string().trim().min(1).max(1000),
+    answer: z.string().trim().min(1).max(2000),
+  }).strict()).max(3).optional(),
 }).strict();
 
 export const aiTranscribeSchema = z.object({
@@ -364,7 +411,7 @@ export const adminAIConfigSchema = z.object({
   asrBaseUrl: optionalUrlSchema,
 
   systemPrompt: z.string().trim().min(20, "人设提示词至少需要 20 个字符").max(12_000, "人设提示词不能超过 12000 个字符").optional(),
-}).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个配置字段");
+}).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个需要更新的字段");
 export const adminAIConfigTestSchema = z.object({
   apiKey: z.string().trim().max(1000).optional(),
   baseUrl: optionalUrlSchema,

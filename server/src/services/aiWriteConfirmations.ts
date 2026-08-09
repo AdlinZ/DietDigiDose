@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "../storage/db.js";
-import { currentDateKey, dateKeyAfterDays } from "../utils/date.js";
+import { currentDateKey, currentTimeKey, dateKeyAfterDays } from "../utils/date.js";
 
 export type AIWriteAction = "record_diet_meal" | "add_inventory_item" | "add_kitchenware_item" | "record_health_log";
 
@@ -64,8 +64,11 @@ function executeConfirmedWrite(userId: number, action: AIWriteAction, payload: R
     const foodName = String(payload.foodName || "").trim();
     if (!foodName) throw new Error("缺少食物名称");
     const recordedAt = typeof payload.recordedAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(payload.recordedAt) ? payload.recordedAt : currentDateKey();
-    const result = db.prepare(`INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(userId, mealType, foodName, String(payload.amount || "1份"), numberOrNull(payload.calories), numberOrNull(payload.protein), numberOrNull(payload.carbs), numberOrNull(payload.fat), recordedAt);
+    const recordedTime = typeof payload.recordedTime === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(payload.recordedTime)
+      ? payload.recordedTime
+      : recordedAt === currentDateKey() ? currentTimeKey() : null;
+    const result = db.prepare(`INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, recorded_time)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(userId, mealType, foodName, String(payload.amount || "1份"), numberOrNull(payload.calories), numberOrNull(payload.protein), numberOrNull(payload.carbs), numberOrNull(payload.fat), recordedAt, recordedTime);
     return { action, id: Number(result.lastInsertRowid), message: `已记录${mealType}：${foodName}` };
   }
   if (action === "add_inventory_item") {

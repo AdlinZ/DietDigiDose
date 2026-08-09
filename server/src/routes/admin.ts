@@ -185,7 +185,10 @@ router.get("/chat-conversations", (req, res) => {
       SELECT m.user_id AS userId, m.session_id AS sessionId,
              u.username,
              SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) AS turnCount,
-             COUNT(*) AS messageCount,
+             SUM(CASE WHEN m.role IN ('user', 'assistant') THEN 1 ELSE 0 END) AS messageCount,
+             ROUND(AVG(CASE WHEN m.role = 'assistant' AND m.status = 'completed' THEN m.response_time_ms END)) AS avgResponseTimeMs,
+             SUM(CASE WHEN m.role = 'assistant' AND m.status = 'failed' THEN 1 ELSE 0 END) AS failedCount,
+             GROUP_CONCAT(DISTINCT m.source) AS sources,
              MAX(m.created_at) AS updatedAt,
              (
                SELECT content FROM ai_chat_messages last_user
@@ -212,12 +215,22 @@ router.get("/chat-conversations/:userId/:sessionId", (req, res) => {
     if (!Number.isInteger(userId) || !req.params.sessionId) return res.status(400).json({ error: "会话参数无效" });
     const user = db.prepare("SELECT id, username FROM users WHERE id = ?").get(userId) as { id: number; username: string } | undefined;
     if (!user) return res.status(404).json({ error: "用户不存在" });
-    const messages = db.prepare(`
-      SELECT id, role, content, created_at AS createdAt
-      FROM ai_chat_messages
-      WHERE user_id = ? AND session_id = ?
-      ORDER BY id ASC
-    `).all(userId, req.params.sessionId);
+    const rows = db.prepare(`
+      SELECT m.id, m.role, m.content, m.response_time_ms AS responseTimeMs,
+             m.source, m.status, m.payload_json AS payloadJson,
+             m.created_at AS createdAt, c.status AS confirmationStatus
+      FROM ai_chat_messages m
+      LEFT JOIN ai_write_confirmations c ON c.id = m.confirmation_id
+      WHERE m.user_id = ? AND m.session_id = ?
+      ORDER BY m.id ASC
+    `).all(userId, req.params.sessionId) as Array<Record<string, unknown>>;
+    const messages = rows.map(({ payloadJson, ...message }) => {
+      let payload: unknown = null;
+      if (typeof payloadJson === "string" && payloadJson) {
+        try { payload = JSON.parse(payloadJson); } catch { payload = { legacyCardSummaries: [payloadJson] }; }
+      }
+      return { ...message, payload };
+    });
     if (!messages.length) return res.status(404).json({ error: "对话不存在" });
     return res.json({ user, sessionId: req.params.sessionId, messages });
   } catch (error) {

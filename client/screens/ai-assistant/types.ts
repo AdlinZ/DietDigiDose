@@ -33,9 +33,13 @@ export interface SolutionCard {
   schemeTag: string;
   title: string;
   ingredients: string;
+  ingredientItems?: Array<{ name: string; amount: string }>;
   cookingTip: string;
+  steps?: string[];
   macros: string;
   actionText: string;
+  savedToRecipes?: boolean;
+  source?: "local" | "ai";
 }
 
 export interface InventoryScanFood {
@@ -65,6 +69,8 @@ export interface Message {
   optionsCard?: DietRecordOptionsCard;
   solutionCards?: SolutionCard[];
   inventoryScanCard?: InventoryScanCard;
+  responseTimeMs?: number;
+  status?: "completed" | "failed";
   time: string;
 }
 

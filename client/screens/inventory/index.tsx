@@ -69,7 +69,7 @@ export default function InventoryScreen() {
     ? Math.floor((inventoryGridWidth - 10) / 2)
     : undefined;
   const router = useSafeRouter();
-  const { action } = useSafeSearchParams<{ action?: string }>();
+  const { action, highlightItemId } = useSafeSearchParams<{ action?: string; highlightItemId?: number }>();
   const { isAuthenticated, user } = useAuth();
   const inventoryScanJobStorageKey = getUserStorageKey(
     INVENTORY_SCAN_JOB_STORAGE_KEY,
@@ -91,6 +91,14 @@ export default function InventoryScreen() {
 
   // Top Level Segment State
   const [activeSegment, setActiveSegment] = useState<"inventory" | "recipes" | "kitchenware">("inventory");
+
+  useEffect(() => {
+    if (highlightItemId) setActiveSegment("inventory");
+  }, [highlightItemId]);
+
+  useEffect(() => {
+    DeviceEventEmitter.emit("inventory-segment-change", activeSegment);
+  }, [activeSegment]);
 
   // Kitchenware State
   const [activeKitchenwareCategory, setActiveKitchenwareCategory] = useState("全部");
@@ -191,6 +199,9 @@ export default function InventoryScreen() {
   const storageFolderRefs = useRef<Partial<Record<StorageLocation, View | null>>>({});
   const [activeInventoryCategory, setActiveInventoryCategory] = useState("全部");
   const [activeNoticeSlide, setActiveNoticeSlide] = useState(0);
+  const noticeScrollViewRef = useRef<ScrollView>(null);
+  const activeNoticeSlideRef = useRef(activeNoticeSlide);
+  activeNoticeSlideRef.current = activeNoticeSlide;
   const [modalVisible, setModalVisible] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [entryMode, setEntryMode] = useState<"choose" | "manual">("choose");
@@ -279,6 +290,30 @@ export default function InventoryScreen() {
       void scheduleExpiringStockAlerts(items);
     }
   }, [items]);
+
+  // 保鲜库顶部通知卡片自动轮播 (Auto Play Notice Carousel)
+  useEffect(() => {
+    if (activeSegment !== "inventory") return;
+
+    const expiredCount = items.filter((i) => getInventoryStatus(i).freshness === "expired").length;
+    const urgentExpiringItems = items.filter((i) => getInventoryStatus(i).freshness === "expiring");
+    const count =
+      (expiredCount > 0 ? 1 : 0) +
+      (urgentExpiringItems.length > 0 ? 1 : (expiredCount > 0 ? 0 : 1)) +
+      1 +
+      (items.length > 0 ? 1 : 0);
+
+    if (count <= 1) return;
+
+    const intervalId = setInterval(() => {
+      const nextSlide = (activeNoticeSlideRef.current + 1) % count;
+      const xOffset = nextSlide * (noticeCardWidth + 10);
+      noticeScrollViewRef.current?.scrollTo({ x: xOffset, animated: true });
+      setActiveNoticeSlide(nextSlide);
+    }, 4000);
+
+    return () => clearInterval(intervalId);
+  }, [activeSegment, items, noticeCardWidth]);
 
   const openHistoryModal = async () => {
     if (activeHousehold) {
@@ -786,6 +821,14 @@ export default function InventoryScreen() {
   }, [openAddModal]);
 
   useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("open-add-kitchenware", () => {
+      setActiveSegment("kitchenware");
+      openKitchenwareModal();
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
     if (action !== "add") return;
     setActiveSegment("inventory");
     openAddModal();
@@ -1154,95 +1197,23 @@ export default function InventoryScreen() {
               </View>
             ) : (
               <>
-                {/* Category Slider & Smart Storage Filter */}
-                <View className="bg-canvas pt-4 pb-3">
-                  <View className="mb-2 flex-row items-center justify-between px-5">
-                    <Text className="text-[11px] font-black text-ink">按位置或品类查看</Text>
-                    <View className="flex-row items-center gap-2">
-                      <TouchableOpacity
-                        onPress={openHistoryModal}
-                        className="flex-row items-center gap-1.5 rounded-full border border-[#E7DED1] bg-white px-2.5 py-1"
-                      >
-                        <FontAwesome6 name="clock-rotate-left" size={10} color="#8B7D6B" />
-                        <Text className="text-[10px] font-bold text-copy-muted">操作历史</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                  <View>
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerClassName="gap-2 px-5"
-                  >
-                    {["全部", "冷藏库", "冷冻库", "常温库", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((cat) => {
-                      const cleanCat = cat.split(" ")[0];
-                      const isActive = activeInventoryCategory === cleanCat;
-                      return (
-                        <TouchableOpacity
-                          key={cat}
-                          onPress={() => setActiveInventoryCategory(cleanCat)}
-                          accessibilityRole="button"
-                          accessibilityState={{ selected: isActive }}
-                          className={`rounded-full border px-3.5 py-2 ${
-                            isActive
-                              ? "border-brand bg-brand"
-                              : "border-[#E7DED1] bg-white"
-                          }`}
-                        >
-                          <Text
-                            className={`text-xs font-bold ${
-                              isActive ? "font-black text-white" : "text-[#756858]"
-                            }`}
-                          >
-                            {cat}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                  </View>
-                </View>
-
-                {/* Phase 3: 已过期食材一键清理 Alert Banner */}
-                {(() => {
-                  const expiredCount = items.filter((i) => getInventoryStatus(i).freshness === "expired").length;
-                  if (expiredCount === 0) return null;
-                  return (
-                    <View className="mx-5 mb-3 flex-row items-center justify-between rounded-2xl border border-rose-200 bg-rose-50 p-3 shadow-2xs">
-                      <View className="flex-row items-center gap-2.5 flex-1 pr-2">
-                        <View className="h-8 w-8 items-center justify-center rounded-full bg-rose-100">
-                          <FontAwesome6 name="triangle-exclamation" size={13} color="#C2413A" />
-                        </View>
-                        <View className="flex-1">
-                          <Text className="text-xs font-black text-rose-900">有 {expiredCount} 种食材已过期</Text>
-                          <Text className="text-[10px] text-rose-700">及时下架移出，保持食材库新鲜健康</Text>
-                        </View>
-                      </View>
-                      <TouchableOpacity
-                        onPress={handleBatchClearExpired}
-                        disabled={clearingExpired}
-                        className="rounded-xl bg-rose-600 px-3 py-1.5 active:bg-rose-700 disabled:opacity-50"
-                      >
-                        {clearingExpired ? (
-                          <ActivityIndicator size="small" color="#FFF" />
-                        ) : (
-                          <Text className="text-xs font-bold text-white">一键清理</Text>
-                        )}
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })()}
-
                 {/* 🎠 单行极简横向轮播通知卡片集 (Single Swipeable Smart Notice Carousel) */}
-                <View className="bg-canvas px-5 pb-1">
+                <View className="bg-canvas px-5 pt-4 pb-2">
                   {(() => {
-                    const urgentExpiringItems = priorityItems;
+                    const expiredCount = items.filter((i) => getInventoryStatus(i).freshness === "expired").length;
+                    const urgentExpiringItems = items.filter((i) => getInventoryStatus(i).freshness === "expiring");
                     const firstUrgentItem = urgentExpiringItems[0];
+                    const noticeSlidesCount =
+                      (expiredCount > 0 ? 1 : 0) +
+                      (urgentExpiringItems.length > 0 ? 1 : (expiredCount > 0 ? 0 : 1)) +
+                      1 +
+                      (items.length > 0 ? 1 : 0);
 
                     return (
                       <View>
                         <View>
                         <ScrollView
+                          ref={noticeScrollViewRef}
                           horizontal
                           pagingEnabled
                           showsHorizontalScrollIndicator={false}
@@ -1252,15 +1223,47 @@ export default function InventoryScreen() {
                             const slideWidth = e.nativeEvent.layoutMeasurement.width;
                             const offset = e.nativeEvent.contentOffset.x;
                             const index = Math.round(offset / (slideWidth || 300));
-                            if (index !== activeNoticeSlide && index >= 0 && index <= 2) {
+                            if (index !== activeNoticeSlide && index >= 0 && index < noticeSlidesCount) {
                               setActiveNoticeSlide(index);
                             }
                           }}
                           scrollEventThrottle={16}
                         >
-                          {/* Slide 1: ⏰ 临期预警 / 保鲜周报 */}
-                          <View style={{ width: noticeCardWidth }}>
-                            {urgentExpiringItems.length > 0 ? (
+                          {/* 🚨 Slide A: 红色已过期警告 (单独一页) */}
+                          {expiredCount > 0 && (
+                            <View style={{ width: noticeCardWidth }}>
+                              <View className="flex-row items-center justify-between rounded-[20px] border border-rose-200 bg-rose-50 p-3.5 shadow-2xs">
+                                <View className="flex-row items-center gap-2.5 flex-1 mr-2">
+                                  <View className="h-10 w-10 items-center justify-center rounded-2xl bg-rose-100">
+                                    <FontAwesome6 name="triangle-exclamation" size={13} color="#C2413A" />
+                                  </View>
+                                  <View className="flex-1">
+                                    <Text className="mb-0.5 text-[13px] font-black text-rose-900">
+                                      有 {expiredCount} 种食材已过期
+                                    </Text>
+                                    <Text numberOfLines={1} className="text-[11px] font-medium text-rose-700">
+                                      及时下架移出，保持食材库新鲜健康
+                                    </Text>
+                                  </View>
+                                </View>
+                                <TouchableOpacity
+                                  onPress={handleBatchClearExpired}
+                                  disabled={clearingExpired}
+                                  className="rounded-xl bg-rose-600 px-3 py-1.5 active:bg-rose-700 disabled:opacity-50"
+                                >
+                                  {clearingExpired ? (
+                                    <ActivityIndicator size="small" color="#FFF" />
+                                  ) : (
+                                    <Text className="text-xs font-bold text-white">一键清理</Text>
+                                  )}
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          )}
+
+                          {/* ⏰ Slide B: 黄色临期预警 (单独一页) 或 绿包保鲜周报 */}
+                          {urgentExpiringItems.length > 0 ? (
+                            <View style={{ width: noticeCardWidth }}>
                               <TouchableOpacity
                                 activeOpacity={0.9}
                                 onPress={() =>
@@ -1295,7 +1298,9 @@ export default function InventoryScreen() {
                                   <FontAwesome6 name="chevron-right" size={9} color="#A8641D" />
                                 </View>
                               </TouchableOpacity>
-                            ) : (
+                            </View>
+                          ) : expiredCount === 0 ? (
+                            <View style={{ width: noticeCardWidth }}>
                               <TouchableOpacity
                                 activeOpacity={0.9}
                                 onPress={() =>
@@ -1322,23 +1327,23 @@ export default function InventoryScreen() {
                                   <FontAwesome6 name="chevron-right" size={9} color="#2D6A4F" />
                                 </View>
                               </TouchableOpacity>
-                            )}
-                          </View>
+                            </View>
+                          ) : null}
 
-                          {/* Slide 2: 📸 AI 拍照小票/食材一键入库 */}
+                          {/* Slide C: 📸 AI 拍照小票/食材一键入库 */}
                           <View style={{ width: noticeCardWidth }}>
                             <TouchableOpacity
                               onPress={pendingScanJobId ? openPendingScanResult : handleScanReceiptAndBatchAdd}
                               disabled={scanningReceipt}
-                              className="bg-[#F3F0EA] p-3 rounded-2xl flex-row items-center justify-between active:opacity-90"
+                              className="bg-[#F3F0EA] p-3.5 rounded-[20px] flex-row items-center justify-between active:opacity-90"
                             >
                               <View className="flex-row items-center gap-2.5 flex-1 mr-2">
-                                <View className="w-9 h-9 rounded-xl bg-[#EAF2EC] items-center justify-center">
+                                <View className="w-10 h-10 rounded-2xl bg-[#EAF2EC] items-center justify-center">
                                   <FontAwesome6 name="receipt" size={14} color="#2D6A4F" />
                                 </View>
                                 <View className="flex-1">
-                                  <Text className="text-xs font-black text-ink mb-0.5">{pendingScanJobId ? "上次识别结果待确认" : "AI 拍照小票/食材一键入库"}</Text>
-                                  <Text className="text-[10px] text-copy-muted">{pendingScanJobId ? "点此继续查看并确认入库" : "自动识别食材名分量与建议保质期"}</Text>
+                                  <Text className="text-[13px] font-black text-ink mb-0.5">{pendingScanJobId ? "上次识别结果待确认" : "AI 拍照小票/食材一键入库"}</Text>
+                                  <Text className="text-[11px] text-copy-muted">{pendingScanJobId ? "点此继续查看并确认入库" : "自动识别食材名分量与建议保质期"}</Text>
                                 </View>
                               </View>
                               {scanningReceipt ? (
@@ -1357,7 +1362,7 @@ export default function InventoryScreen() {
                             </TouchableOpacity>
                           </View>
 
-                          {/* Slide 3: 🪄 现有食材极速烹饪匹配 */}
+                          {/* Slide D: 🪄 现有食材极速烹饪匹配 */}
                           {items.length > 0 && (
                             <View style={{ width: noticeCardWidth }}>
                               <TouchableOpacity
@@ -1367,15 +1372,15 @@ export default function InventoryScreen() {
                                     params: { prompt: "帮我用冰箱库现有食材搭配一份减脂晚餐食谱" },
                                   })
                                 }
-                                className="bg-[#EDF5EF] p-3 rounded-2xl flex-row items-center justify-between"
+                                className="bg-[#EDF5EF] p-3.5 rounded-[20px] flex-row items-center justify-between"
                               >
                                 <View className="flex-row items-center gap-2.5 flex-1 mr-2">
-                                  <View className="w-9 h-9 rounded-xl bg-white/70 items-center justify-center">
+                                  <View className="w-10 h-10 rounded-2xl bg-white/70 items-center justify-center">
                                     <FontAwesome6 name="wand-magic-sparkles" size={14} color="#2D6A4F" />
                                   </View>
                                   <View className="flex-1">
-                                    <Text className="text-xs font-black text-ink mb-0.5">现有食材极速烹饪匹配</Text>
-                                    <Text className="text-[10px] text-copy-muted">用现有 {items.length} 种食材极速匹配食谱</Text>
+                                    <Text className="text-[13px] font-black text-ink mb-0.5">现有食材极速烹饪匹配</Text>
+                                    <Text className="text-[11px] text-copy-muted">用现有 {items.length} 种食材极速匹配食谱</Text>
                                   </View>
                                 </View>
                                 <View className="flex-row items-center gap-1">
@@ -1389,12 +1394,12 @@ export default function InventoryScreen() {
                         </View>
 
                         {/* 轮播指示点 */}
-                        <View className="flex-row items-center justify-center gap-1.5 mt-1.5">
-                          {[0, 1, items.length > 0 ? 2 : 1].slice(0, items.length > 0 ? 3 : 2).map((idx) => (
+                        <View className="flex-row items-center justify-center gap-1.5 mt-2">
+                          {Array.from({ length: noticeSlidesCount }).map((_, idx) => (
                             <View
                               key={idx}
                               className={`h-1 rounded-full ${
-                                activeNoticeSlide === idx ? "w-3 bg-[#7C9D8B]" : "w-1 bg-[#DED6CA]"
+                                activeNoticeSlide === idx ? "w-3.5 bg-[#7C9D8B]" : "w-1 bg-[#DED6CA]"
                               }`}
                             />
                           ))}
@@ -1402,6 +1407,63 @@ export default function InventoryScreen() {
                       </View>
                     );
                   })()}
+                </View>
+
+                {/* Category Slider & Smart Storage Filter (Wrapped in White Bento Card Container) */}
+                <View className="px-5 pt-2 pb-3">
+                  <View className="bg-white rounded-[24px] p-4 border border-line shadow-2xs">
+                    <View className="mb-3 flex-row items-center justify-between px-0.5">
+                      <View className="flex-row items-center gap-2">
+                        <View className="w-6 h-6 rounded-lg bg-brand/10 items-center justify-center">
+                          <FontAwesome6 name="sliders" size={10} color="#2D6A4F" />
+                        </View>
+                        <Text className="text-[12px] font-black text-ink">按位置或品类查看</Text>
+                      </View>
+
+                      <TouchableOpacity
+                        onPress={openHistoryModal}
+                        className="flex-row items-center gap-1.5 rounded-full border border-[#E7DED1] bg-[#FAF8F5] px-2.5 py-1 active:bg-[#F3EFE9]"
+                      >
+                        <FontAwesome6 name="clock-rotate-left" size={10} color="#8B7D6B" />
+                        <Text className="text-[10px] font-bold text-copy-muted">操作历史</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        className="flex-row"
+                        contentContainerStyle={{ gap: 8 }}
+                      >
+                      {["全部", "冷藏库", "冷冻库", "常温库", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((cat) => {
+                        const cleanCat = cat.split(" ")[0];
+                        const isActive = activeInventoryCategory === cleanCat;
+                        return (
+                          <TouchableOpacity
+                            key={cat}
+                            onPress={() => setActiveInventoryCategory(cleanCat)}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: isActive }}
+                            className={`rounded-full border px-3 py-1.5 ${
+                              isActive
+                                ? "border-brand bg-brand"
+                                : "border-[#E7DED1] bg-[#FAF8F5]"
+                            }`}
+                          >
+                            <Text
+                              className={`text-xs ${
+                                isActive ? "font-black text-white" : "font-semibold text-[#756858]"
+                              }`}
+                            >
+                              {cat}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                      </ScrollView>
+                    </View>
+                  </View>
                 </View>
 
                 {/* 保鲜分区：由页面主滚动容器统一承载，避免底部导航遮挡嵌套列表 */}
@@ -1524,7 +1586,7 @@ export default function InventoryScreen() {
                                           transform: [...dragPan.getTranslateTransform(), { scale: 1.04 }],
                                         },
                                       ]}
-                                      className="relative min-h-[154px] items-start overflow-hidden rounded-[20px] border border-[#EDF0EA] bg-[#FAFBF8] p-3"
+                                      className={`relative min-h-[154px] items-start overflow-hidden rounded-[20px] border bg-[#FAFBF8] p-3 ${Number(highlightItemId) === item.id ? "border-amber-500" : "border-[#EDF0EA]"}`}
                                     >
                                       {/* 点击查看详情；长按可拖动到其他保鲜分区 */}
                                       <TouchableOpacity
@@ -1601,30 +1663,38 @@ export default function InventoryScreen() {
           </View>
         )}
         {activeSegment === "recipes" && (
-          <View className="flex-1">
-            <View className="mx-5 mb-3 mt-4 flex-row items-center justify-between">
-              <View>
-                <Text className="text-[17px] font-black text-ink">今天想吃什么？</Text>
-                <Text className="mt-0.5 text-[11px] text-copy-muted">优先展示与你现有食材更匹配的菜谱</Text>
+          <View className="flex-1 pt-3">
+            {/* Search Input & Filter (Wrapped in White Bento Card Container) */}
+            <View className="mx-5 mb-4 rounded-[24px] border border-line bg-white p-4 shadow-2xs">
+              {/* Bento Card Header: 标题与投稿收藏按钮 */}
+              <View className="mb-3 flex-row items-center justify-between pb-3 border-b border-[#F4EFE6]">
+                <View className="flex-1 pr-2">
+                  <View className="flex-row items-center gap-2">
+                    <View className="w-6 h-6 rounded-lg bg-brand/10 items-center justify-center">
+                      <FontAwesome6 name="utensils" size={11} color="#2D6A4F" />
+                    </View>
+                    <Text className="text-[14px] font-black text-ink">今天想吃什么？</Text>
+                  </View>
+                  <Text className="mt-0.5 text-[10px] font-medium text-copy-muted">优先展示与你保鲜库食材更匹配的菜谱</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => router.push("/recipe-submit")}
+                  className="flex-row items-center rounded-full border border-[#D8E7DD] bg-[#E7F0EA] px-3 py-1.5 active:opacity-80"
+                >
+                  <FontAwesome6 name="pen" size={10} color="#2D6A4F" />
+                  <Text className="ml-1.5 text-[10px] font-black text-brand">投稿与收藏</Text>
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                onPress={() => router.push("/recipe-submit")}
-                className="flex-row items-center rounded-full border border-[#D8E7DD] bg-[#E7F0EA] px-3 py-2.5"
-              >
-                <FontAwesome6 name="pen" size={10} color="#2D6A4F" />
-                <Text className="ml-1.5 text-[11px] font-black text-brand">投稿与收藏</Text>
-              </TouchableOpacity>
-            </View>
-            {/* Search Input & Filter */}
-            <View className="mb-3">
-              <View className="mx-5 mb-3 flex-row items-center rounded-[18px] border border-[#E7DED1] bg-white px-4 py-3 shadow-2xs">
+
+              {/* Search Bar */}
+              <View className="flex-row items-center rounded-xl border border-line/80 bg-[#FAF8F5] px-3.5 py-2.5 mb-3">
                 <FontAwesome6 name="magnifying-glass" size={13} color="#8B7D6B" className="mr-2" />
                 <TextInput
                   value={recipeSearchQuery}
                   onChangeText={setRecipeSearchQuery}
                   placeholder="搜索菜名、食材或营养目标"
                   placeholderTextColor="#A99D8E"
-                  className="flex-1 text-[13px] text-ink"
+                  className="flex-1 text-[13px] text-ink py-0"
                 />
                 {recipeSearchQuery.length > 0 && (
                   <TouchableOpacity onPress={() => setRecipeSearchQuery("")}>
@@ -1634,107 +1704,109 @@ export default function InventoryScreen() {
               </View>
 
               {/* Recipe Filter Categories */}
-              <View className="gap-2">
+              <View className="gap-2.5">
                 <View>
                   <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerClassName="gap-2 px-5 pb-1"
-                >
-                  {["全部", "冰箱全可做", "减脂低卡", "增肌高蛋白", "15分钟快手菜"].map((cat) => {
-                    const cleanCat = cat.replace(/[^a-z0-9\u4e00-\u9fa5]/gi, "");
-                    const isActive =
-                      activeRecipeCategory === cleanCat ||
-                      (cat.includes("冰箱") && activeRecipeCategory === "冰箱可做") ||
-                      (cat === "全部" && activeRecipeCategory === "全部");
-                    return (
-                      <TouchableOpacity
-                        key={cat}
-                        onPress={() => {
-                          if (cat.includes("冰箱")) setActiveRecipeCategory("冰箱可做");
-                          else if (cat.includes("减脂")) setActiveRecipeCategory("减脂");
-                          else if (cat.includes("增肌")) setActiveRecipeCategory("增肌");
-                          else if (cat.includes("快手")) setActiveRecipeCategory("快手菜");
-                          else setActiveRecipeCategory("全部");
-                        }}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: isActive }}
-                        className={`rounded-full border px-3.5 py-1.5 ${
-                          isActive
-                            ? "border-brand bg-brand"
-                            : "border-[#E7DED1] bg-white"
-                        }`}
-                      >
-                        <Text
-                          className={`text-xs font-bold ${
-                            isActive ? "font-black text-white" : "text-[#756858]"
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ gap: 8 }}
+                    className="flex-row"
+                  >
+                    {["全部", "冰箱全可做", "减脂低卡", "增肌高蛋白", "15分钟快手菜"].map((cat) => {
+                      const cleanCat = cat.replace(/[^a-z0-9\u4e00-\u9fa5]/gi, "");
+                      const isActive =
+                        activeRecipeCategory === cleanCat ||
+                        (cat.includes("冰箱") && activeRecipeCategory === "冰箱可做") ||
+                        (cat === "全部" && activeRecipeCategory === "全部");
+                      return (
+                        <TouchableOpacity
+                          key={cat}
+                          onPress={() => {
+                            if (cat.includes("冰箱")) setActiveRecipeCategory("冰箱可做");
+                            else if (cat.includes("减脂")) setActiveRecipeCategory("减脂");
+                            else if (cat.includes("增肌")) setActiveRecipeCategory("增肌");
+                            else if (cat.includes("快手")) setActiveRecipeCategory("快手菜");
+                            else setActiveRecipeCategory("全部");
+                          }}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: isActive }}
+                          className={`rounded-full border px-3 py-1.5 ${
+                            isActive
+                              ? "border-brand bg-brand"
+                              : "border-[#E7DED1] bg-[#FAF8F5]"
                           }`}
                         >
-                          {cat}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                          <Text
+                            className={`text-xs ${
+                              isActive ? "font-black text-white" : "font-semibold text-[#756858]"
+                            }`}
+                          >
+                            {cat}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </ScrollView>
                 </View>
 
-                {/* Phase 2: 今天吃什么 Quick Filter Pills */}
+                {/* Quick Filter Pills */}
                 <View>
                   <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerClassName="gap-2 px-5 pb-1"
-                >
-                  {[
-                    { label: "全部时间", limit: 0 },
-                    { label: "15分快手", limit: 15 },
-                    { label: "30分内", limit: 30 },
-                  ].map((timeOption) => (
-                    <TouchableOpacity
-                      key={timeOption.limit}
-                      onPress={() => setCookTimeLimit(timeOption.limit)}
-                      className={`rounded-full border px-3 py-1 ${
-                        cookTimeLimit === timeOption.limit
-                          ? "border-brand/40 bg-brand/10"
-                          : "border-line bg-canvas"
-                      }`}
-                    >
-                      <Text
-                        className={`text-[11px] ${
-                          cookTimeLimit === timeOption.limit ? "font-bold text-brand" : "text-copy-muted"
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ gap: 8 }}
+                    className="flex-row"
+                  >
+                    {[
+                      { label: "全部时间", limit: 0 },
+                      { label: "15分快手", limit: 15 },
+                      { label: "30分内", limit: 30 },
+                    ].map((timeOption) => (
+                      <TouchableOpacity
+                        key={timeOption.limit}
+                        onPress={() => setCookTimeLimit(timeOption.limit)}
+                        className={`rounded-full border px-3 py-1 ${
+                          cookTimeLimit === timeOption.limit
+                            ? "border-brand/40 bg-brand/10"
+                            : "border-[#E7DED1] bg-[#FAF8F5]"
                         }`}
                       >
-                        {timeOption.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
+                        <Text
+                          className={`text-[11px] ${
+                            cookTimeLimit === timeOption.limit ? "font-bold text-brand" : "text-copy-muted"
+                          }`}
+                        >
+                          {timeOption.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
 
-                  <View className="h-4 w-px bg-line self-center mx-1" />
+                    <View className="h-4 w-px bg-line self-center mx-0.5" />
 
-                  {[
-                    { label: "匹配全部", key: "全部" },
-                    { label: "完全可做", key: "完全可做" },
-                    { label: "缺1-2样", key: "缺1-2样" },
-                    { label: "优先临期", key: "优先临期" },
-                  ].map((statusOption) => (
-                    <TouchableOpacity
-                      key={statusOption.key}
-                      onPress={() => setMatchStatusFilter(statusOption.key)}
-                      className={`rounded-full border px-3 py-1 ${
-                        matchStatusFilter === statusOption.key
-                          ? "border-amber-500/40 bg-amber-50"
-                          : "border-line bg-canvas"
-                      }`}
-                    >
-                      <Text
-                        className={`text-[11px] ${
-                          matchStatusFilter === statusOption.key ? "font-bold text-amber-900" : "text-copy-muted"
+                    {[
+                      { label: "匹配全部", key: "全部" },
+                      { label: "完全可做", key: "完全可做" },
+                      { label: "缺1-2样", key: "缺1-2样" },
+                      { label: "优先临期", key: "优先临期" },
+                    ].map((statusOption) => (
+                      <TouchableOpacity
+                        key={statusOption.key}
+                        onPress={() => setMatchStatusFilter(statusOption.key)}
+                        className={`rounded-full border px-3 py-1 ${
+                          matchStatusFilter === statusOption.key
+                            ? "border-amber-500/40 bg-amber-50"
+                            : "border-[#E7DED1] bg-[#FAF8F5]"
                         }`}
                       >
-                        {statusOption.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
+                        <Text
+                          className={`text-[11px] ${
+                            matchStatusFilter === statusOption.key ? "font-bold text-amber-900" : "text-copy-muted"
+                          }`}
+                        >
+                          {statusOption.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
                   </ScrollView>
                 </View>
               </View>
@@ -1787,25 +1859,26 @@ export default function InventoryScreen() {
                               </Text>
                             </View>
 
-                            {/* 冰箱食材匹配角标 (优先展示临期 > 完全可做 > 缺少X种) */}
+                            {/* 冰箱食材匹配角标 (左下角: 优先展示临期 > 完全可做 > 缺少X种) */}
                             {expiringMatch ? (
-                              <View className="absolute top-2 left-2 rounded-full bg-amber-600 px-2 py-0.5">
+                              <View className="absolute bottom-2 left-2 flex-row items-center gap-1 rounded-full bg-amber-600 px-2 py-0.5 shadow-2xs">
+                                <FontAwesome6 name="clock-rotate-left" size={8} color="#FFF" />
                                 <Text className="text-[9px] font-black text-white">
-                                  优先消耗{expiringMatch.name}(剩{expiringMatch.daysLeft}天)
+                                  优先消耗 {expiringMatch.name} (剩{expiringMatch.daysLeft}天)
                                 </Text>
                               </View>
                             ) : analysis.matchStatus === "full" ? (
-                              <View className="absolute top-2 left-2 rounded-full bg-brand px-2 py-0.5">
+                              <View className="absolute bottom-2 left-2 rounded-full bg-brand px-2 py-0.5 shadow-2xs">
                                 <Text className="text-[9px] font-black text-white">完全可做</Text>
                               </View>
                             ) : analysis.missingIngredients.length > 0 ? (
-                              <View className="absolute top-2 left-2 rounded-full bg-black/60 px-2 py-0.5">
+                              <View className="absolute bottom-2 left-2 rounded-full bg-black/65 px-2 py-0.5">
                                 <Text className="text-[9px] font-bold text-amber-200">
                                   缺 {analysis.missingIngredients.length} 种
                                 </Text>
                               </View>
                             ) : (
-                              <View className="absolute top-2 left-2 rounded-full bg-black/35 px-2 py-0.5">
+                              <View className="absolute bottom-2 left-2 rounded-full bg-black/40 px-2 py-0.5">
                                 <Text className="text-[9px] font-bold text-white">{recipe.category}</Text>
                               </View>
                             )}

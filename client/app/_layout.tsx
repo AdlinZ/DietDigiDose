@@ -38,6 +38,7 @@ export default function RootLayout() {
             <Stack.Screen name="shopping-list" />
             <Stack.Screen name="legal" />
             <Stack.Screen name="about" />
+            <Stack.Screen name="feedback" />
           </Stack>
       </Provider>
     </>

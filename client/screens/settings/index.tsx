@@ -17,7 +17,12 @@ import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth } from "@/contexts/AuthContext";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { authApi } from "@/services/api";
-import { getExpoPushToken, syncLocalNotificationSchedules, type NotificationPreferences } from "@/utils/notifications";
+import {
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  getExpoPushToken,
+  syncLocalNotificationSchedules,
+  type NotificationPreferences,
+} from "@/utils/notifications";
 import { APP_VERSION } from "@/utils/appVersion";
 import { purgeUserPrivateStorage } from "@/utils/userStorage";
 
@@ -25,32 +30,31 @@ export default function SettingsScreen() {
   const router = useSafeRouter();
   const { user, token, isAuthenticated, logout, updateProfile, deleteAccount } = useAuth();
 
-  // Notification Toggles
-  const [expiringAlert, setExpiringAlert] = useState(true);
-  const [mealReminder, setMealReminder] = useState(true);
-  const [waterReminder, setWaterReminder] = useState(true);
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(DEFAULT_NOTIFICATION_PREFERENCES);
+  const [savingNotifications, setSavingNotifications] = useState(false);
 
   useEffect(() => {
     if (!token) return;
     void authApi.notificationPreferences<NotificationPreferences>(token).then((preferences) => {
-      setExpiringAlert(preferences.expiring_alert);
-      setMealReminder(preferences.meal_reminder);
-      setWaterReminder(preferences.water_reminder);
+      setNotificationPreferences(preferences);
     }).catch(() => undefined);
   }, [token]);
 
-  const updateNotificationPreference = async (key: keyof NotificationPreferences, value: boolean) => {
+  const saveNotificationPreferences = async (next: NotificationPreferences, requestPermission = false) => {
     if (!token) {
       Alert.alert("登录后开启提醒", "登录后可保存提醒偏好，并接收食材临期推送。");
       return;
     }
-    const previous = { expiring_alert: expiringAlert, meal_reminder: mealReminder, water_reminder: waterReminder };
-    const next = { ...previous, [key]: value };
-    setExpiringAlert(next.expiring_alert);
-    setMealReminder(next.meal_reminder);
-    setWaterReminder(next.water_reminder);
+    const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+    if (![next.breakfast_time, next.lunch_time, next.dinner_time, next.water_start_time, next.water_end_time, next.quiet_start_time, next.quiet_end_time].every((value) => timePattern.test(value))) {
+      Alert.alert("时间格式有误", "请使用 24 小时制 HH:mm，例如 08:30。");
+      return;
+    }
+    const previous = notificationPreferences;
+    setNotificationPreferences(next);
+    setSavingNotifications(true);
     try {
-      const pushToken = value ? await getExpoPushToken() : null;
+      const pushToken = requestPermission ? await getExpoPushToken() : null;
       await authApi.updateNotificationPreferences<NotificationPreferences>(token, next);
       if (pushToken && Platform.OS !== "web") {
         const platform = Platform.OS === "android" ? "android" : "ios";
@@ -59,15 +63,19 @@ export default function SettingsScreen() {
       if (Platform.OS !== "web") {
         await syncLocalNotificationSchedules(next);
       }
-      if (value && Platform.OS !== "web" && !pushToken) {
+      if (requestPermission && Platform.OS !== "web" && !pushToken) {
         Alert.alert("未获得通知权限", "系统通知未授权；你仍可稍后在系统设置中允许通知后再次开启提醒。");
       }
     } catch (error) {
-      setExpiringAlert(previous.expiring_alert);
-      setMealReminder(previous.meal_reminder);
-      setWaterReminder(previous.water_reminder);
+      setNotificationPreferences(previous);
       Alert.alert("保存失败", error instanceof Error ? error.message : "提醒设置暂未保存，请稍后重试");
+    } finally {
+      setSavingNotifications(false);
     }
+  };
+
+  const updateNotificationPreference = (key: "expiring_alert" | "meal_reminder" | "water_reminder", value: boolean) => {
+    void saveNotificationPreferences({ ...notificationPreferences, [key]: value }, value);
   };
 
   // Modal State
@@ -267,7 +275,7 @@ export default function SettingsScreen() {
                 </View>
               </View>
               <Switch
-                value={expiringAlert}
+                value={notificationPreferences.expiring_alert}
                 onValueChange={(value) => void updateNotificationPreference("expiring_alert", value)}
                 trackColor={{ false: "#EBE3D5", true: "#2D6A4F" }}
                 thumbColor="#FFFFFF"
@@ -287,7 +295,7 @@ export default function SettingsScreen() {
                 </View>
               </View>
               <Switch
-                value={mealReminder}
+                value={notificationPreferences.meal_reminder}
                 onValueChange={(value) => void updateNotificationPreference("meal_reminder", value)}
                 trackColor={{ false: "#EBE3D5", true: "#2D6A4F" }}
                 thumbColor="#FFFFFF"
@@ -307,11 +315,91 @@ export default function SettingsScreen() {
                 </View>
               </View>
               <Switch
-                value={waterReminder}
+                value={notificationPreferences.water_reminder}
                 onValueChange={(value) => void updateNotificationPreference("water_reminder", value)}
                 trackColor={{ false: "#EBE3D5", true: "#2D6A4F" }}
                 thumbColor="#FFFFFF"
               />
+            </View>
+
+            <View className="border-t border-background-secondary p-4">
+              <Text className="text-sm font-black text-ink">个性化提醒计划</Text>
+              <Text className="mt-1 text-[11px] leading-4 text-copy-muted">24 小时制；静默时段内不会安排三餐和饮水提醒。</Text>
+
+              <View className="mt-3 flex-row gap-2">
+                {([
+                  ["早餐", "breakfast_time"],
+                  ["午餐", "lunch_time"],
+                  ["晚餐", "dinner_time"],
+                ] as const).map(([label, key]) => (
+                  <View key={key} className="flex-1">
+                    <Text className="mb-1 text-[10px] font-bold text-copy-muted">{label}</Text>
+                    <TextInput
+                      value={notificationPreferences[key]}
+                      onChangeText={(value) => setNotificationPreferences((current) => ({ ...current, [key]: value }))}
+                      placeholder="08:00"
+                      maxLength={5}
+                      className="rounded-xl border border-line bg-canvas px-3 py-2 text-center text-xs font-bold text-ink"
+                    />
+                  </View>
+                ))}
+              </View>
+
+              <View className="mt-3 flex-row gap-2">
+                {([
+                  ["饮水开始", "water_start_time"],
+                  ["饮水结束", "water_end_time"],
+                  ["静默开始", "quiet_start_time"],
+                  ["静默结束", "quiet_end_time"],
+                ] as const).map(([label, key]) => (
+                  <View key={key} className="flex-1">
+                    <Text className="mb-1 text-center text-[9px] font-bold text-copy-muted">{label}</Text>
+                    <TextInput
+                      value={notificationPreferences[key]}
+                      onChangeText={(value) => setNotificationPreferences((current) => ({ ...current, [key]: value }))}
+                      maxLength={5}
+                      className="rounded-xl border border-line bg-canvas px-1 py-2 text-center text-[11px] font-bold text-ink"
+                    />
+                  </View>
+                ))}
+              </View>
+
+              <Text className="mb-2 mt-3 text-[10px] font-bold text-copy-muted">饮水间隔</Text>
+              <View className="flex-row gap-2">
+                {[60, 120, 180].map((minutes) => (
+                  <TouchableOpacity
+                    key={minutes}
+                    onPress={() => setNotificationPreferences((current) => ({ ...current, water_interval_minutes: minutes }))}
+                    className={`flex-1 rounded-xl border py-2 ${notificationPreferences.water_interval_minutes === minutes ? "border-brand bg-brand/10" : "border-line bg-canvas"}`}
+                  >
+                    <Text className={`text-center text-[11px] font-bold ${notificationPreferences.water_interval_minutes === minutes ? "text-brand" : "text-copy-muted"}`}>{minutes / 60} 小时</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <View className="mt-3 flex-row gap-2">
+                {([
+                  ["工作日", "weekdays_enabled"],
+                  ["周末", "weekends_enabled"],
+                ] as const).map(([label, key]) => (
+                  <TouchableOpacity
+                    key={key}
+                    onPress={() => setNotificationPreferences((current) => ({ ...current, [key]: !current[key] }))}
+                    className={`flex-1 rounded-xl border py-2.5 ${notificationPreferences[key] ? "border-brand bg-brand/10" : "border-line bg-canvas"}`}
+                  >
+                    <Text className={`text-center text-xs font-bold ${notificationPreferences[key] ? "text-brand" : "text-copy-muted"}`}>{label} · {notificationPreferences[key] ? "开启" : "关闭"}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <TouchableOpacity
+                disabled={savingNotifications}
+                onPress={() => void saveNotificationPreferences(notificationPreferences, notificationPreferences.meal_reminder || notificationPreferences.water_reminder || notificationPreferences.expiring_alert)}
+                className="mt-4 flex-row items-center justify-center gap-2 rounded-xl bg-brand py-3 active:opacity-80"
+              >
+                {savingNotifications && <ActivityIndicator size="small" color="#FFFFFF" />}
+                <Text className="text-xs font-black text-white">保存并重排提醒</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>

@@ -34,7 +34,24 @@ export function createAdminNotificationsRouter() {
       WHERE notification_type = 'expiring_inventory'
       GROUP BY delivery_date, status ORDER BY delivery_date DESC LIMIT 30
     `).all();
-    return res.json({ activeDevices, enabledUsers, campaigns, automatic });
+    const eventRows = db.prepare(`
+      SELECT event_type AS eventType, COUNT(*) AS count
+      FROM notification_events
+      WHERE created_at >= datetime('now', '-30 days')
+      GROUP BY event_type
+    `).all() as Array<{ eventType: string; count: number }>;
+    const eventCounts = Object.fromEntries(eventRows.map((row) => [row.eventType, row.count]));
+    const metrics = {
+      created: eventCounts.created ?? 0,
+      pushSubmitted: eventCounts.push_submitted ?? 0,
+      pushDelivered: eventCounts.push_delivered ?? 0,
+      opened: (eventCounts.opened ?? 0) + (eventCounts.action_open ?? 0),
+      actionClicks: Object.entries(eventCounts)
+        .filter(([eventType]) => eventType.startsWith("action_") && eventType !== "action_open")
+        .reduce((sum, [, count]) => sum + count, 0),
+      pushFailures: (eventCounts.push_submit_failed ?? 0) + (eventCounts.push_delivery_failed ?? 0),
+    };
+    return res.json({ activeDevices, enabledUsers, campaigns, automatic, metrics });
   });
 
   router.post("/notifications/campaigns", validateBody(notificationCampaignSchema), async (req: AuthRequest, res) => {
@@ -52,10 +69,15 @@ export function createAdminNotificationsRouter() {
     const campaignId = Number(created.lastInsertRowid);
     try {
       const addInboxItem = db.prepare(`
-        INSERT INTO user_notification_inbox (user_id, type, title, body, campaign_id)
-        VALUES (?, 'admin_campaign', ?, ?, ?)
+        INSERT INTO user_notification_inbox (user_id, type, title, body, campaign_id, category, priority, action_status)
+        VALUES (?, 'admin_campaign', ?, ?, ?, 'system', 'normal', 'info')
       `);
-      db.transaction(() => recipients.forEach((user) => addInboxItem.run(user.id, title, body, campaignId)))();
+      const addCreatedEvent = db.prepare(`INSERT INTO notification_events
+        (user_id, notification_id, event_type, metadata_json) VALUES (?, ?, 'created', ?)`);
+      db.transaction(() => recipients.forEach((user) => {
+        const inboxItem = addInboxItem.run(user.id, title, body, campaignId);
+        addCreatedEvent.run(user.id, Number(inboxItem.lastInsertRowid), JSON.stringify({ source: "admin_campaign", campaignId }));
+      }))();
       const tickets = await sendExpoPush(devices.map((device) => ({
         to: device.expo_push_token, title, body, data: { type: "admin_campaign", campaignId },
       })));

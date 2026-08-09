@@ -36,7 +36,7 @@ export async function uploadImageDataUrl(dataUrl: string, userId: number, scope:
 
 function getPublicObjectPrefix() {
   const bucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
-  const baseUrl = process.env.SUPABASE_URL?.trim() || process.env.COZE_SUPABASE_URL?.trim();
+  const baseUrl = process.env.SUPABASE_URL?.trim();
   if (!bucket || !baseUrl) return null;
   return `${baseUrl.replace(/\/$/, "")}/storage/v1/object/public/${encodeURIComponent(bucket)}/`;
 }

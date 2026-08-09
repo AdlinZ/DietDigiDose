@@ -215,7 +215,8 @@ router.put("/profile", authMiddleware, validateBody(profileSchema), (req: AuthRe
 
 router.get("/ai-data", authMiddleware, (req: AuthRequest, res) => {
   const messages = db.prepare(`
-    SELECT session_id, role, content, created_at
+    SELECT session_id, role, content, source, status, response_time_ms,
+           payload_json, created_at
     FROM ai_chat_messages WHERE user_id = ? ORDER BY created_at ASC, id ASC
   `).all(req.userId);
   const scanJobs = db.prepare(`

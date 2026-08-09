@@ -474,6 +474,219 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 23,
+    name: "notification_center_v2",
+    up(database) {
+      for (const [column, definition] of [
+        ["breakfast_time", "TEXT NOT NULL DEFAULT '08:00'"],
+        ["lunch_time", "TEXT NOT NULL DEFAULT '12:00'"],
+        ["dinner_time", "TEXT NOT NULL DEFAULT '18:00'"],
+        ["water_start_time", "TEXT NOT NULL DEFAULT '10:00'"],
+        ["water_end_time", "TEXT NOT NULL DEFAULT '18:00'"],
+        ["water_interval_minutes", "INTEGER NOT NULL DEFAULT 120"],
+        ["quiet_start_time", "TEXT NOT NULL DEFAULT '22:00'"],
+        ["quiet_end_time", "TEXT NOT NULL DEFAULT '07:00'"],
+        ["weekdays_enabled", "INTEGER NOT NULL DEFAULT 1"],
+        ["weekends_enabled", "INTEGER NOT NULL DEFAULT 1"],
+      ] as const) addColumn(database, "user_notification_preferences", column, definition);
+
+      for (const [column, definition] of [
+        ["category", "TEXT NOT NULL DEFAULT 'action_required'"],
+        ["priority", "TEXT NOT NULL DEFAULT 'normal'"],
+        ["action_status", "TEXT NOT NULL DEFAULT 'pending'"],
+        ["group_key", "TEXT"],
+        ["read_at", "DATETIME"],
+        ["snoozed_until", "DATETIME"],
+        ["updated_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+      ] as const) addColumn(database, "user_notification_inbox", column, definition);
+
+      database.exec(`
+        UPDATE user_notification_inbox
+        SET category = CASE WHEN type = 'admin_campaign' THEN 'system' ELSE 'action_required' END,
+            action_status = CASE WHEN type = 'admin_campaign' THEN 'info' ELSE 'pending' END,
+            priority = CASE WHEN type = 'expiring_inventory' THEN 'high' ELSE 'normal' END;
+
+        CREATE INDEX IF NOT EXISTS idx_user_notification_inbox_unread
+          ON user_notification_inbox(user_id, is_read, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_user_notification_inbox_filter
+          ON user_notification_inbox(user_id, category, action_status, id DESC);
+
+        CREATE TABLE IF NOT EXISTS notification_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          notification_id INTEGER,
+          event_type TEXT NOT NULL,
+          metadata_json TEXT,
+          expo_ticket_id TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (notification_id) REFERENCES user_notification_inbox(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_notification_events_notification_created
+          ON notification_events(notification_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_notification_events_ticket
+          ON notification_events(expo_ticket_id);
+
+        CREATE TABLE IF NOT EXISTS push_notification_receipts (
+          expo_ticket_id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          notification_id INTEGER,
+          expo_push_token TEXT NOT NULL,
+          submit_status TEXT NOT NULL,
+          receipt_status TEXT NOT NULL DEFAULT 'pending',
+          error_code TEXT,
+          error_message TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          checked_at DATETIME,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (notification_id) REFERENCES user_notification_inbox(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_push_receipts_pending
+          ON push_notification_receipts(receipt_status, created_at);
+      `);
+    },
+  },
+  {
+    version: 24,
+    name: "notification_inventory_groups",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS notification_inventory_items (
+          notification_id INTEGER NOT NULL,
+          inventory_item_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (notification_id, inventory_item_id),
+          FOREIGN KEY (notification_id) REFERENCES user_notification_inbox(id) ON DELETE CASCADE,
+          FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_notification_inventory_items_user
+          ON notification_inventory_items(user_id, notification_id);
+        INSERT OR IGNORE INTO notification_inventory_items (notification_id, inventory_item_id, user_id)
+        SELECT id, inventory_item_id, user_id FROM user_notification_inbox
+        WHERE inventory_item_id IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 25,
+    name: "diet_record_actual_time",
+    up(database) {
+      addColumn(database, "diet_records", "recorded_time", "TEXT");
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_diet_records_user_date_time
+          ON diet_records(user_id, recorded_at, recorded_time DESC, id DESC);
+      `);
+    },
+  },
+  {
+    version: 26,
+    name: "backfill_legacy_diet_record_times",
+    up(database) {
+      database.exec(`
+        UPDATE diet_records
+        SET recorded_time = CASE meal_type
+          WHEN '早餐' THEN '08:00'
+          WHEN '午餐' THEN '12:30'
+          WHEN '晚餐' THEN '18:30'
+          WHEN '加餐' THEN '15:30'
+          ELSE NULL
+        END
+        WHERE recorded_time IS NULL AND meal_type IN ('早餐', '午餐', '晚餐', '加餐');
+      `);
+    },
+  },
+  {
+    version: 27,
+    name: "chat_message_roles_and_response_time",
+    up(database) {
+      // Rebuild the table so per-request system instructions can be audited as
+      // their own role. Existing voice prompts are split out of the user text.
+      addColumn(database, "ai_chat_messages", "response_time_ms", "INTEGER");
+      database.exec(`
+        CREATE TABLE ai_chat_messages_next (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          session_id TEXT NOT NULL,
+          role TEXT NOT NULL CHECK(role IN ('system', 'user', 'assistant')),
+          content TEXT NOT NULL,
+          response_time_ms INTEGER,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        INSERT INTO ai_chat_messages_next (user_id, session_id, role, content, response_time_ms, created_at)
+        SELECT user_id, session_id, role, content, response_time_ms, created_at
+        FROM (
+          SELECT id AS source_id, 0 AS part_order, user_id, session_id,
+                 'system' AS role,
+                 '请用适合语音播报的精炼、亲切表达回答。' AS content,
+                 NULL AS response_time_ms,
+                 created_at
+          FROM ai_chat_messages
+          WHERE role = 'user'
+            AND content LIKE '%' || char(10) || char(10) || '请用适合语音播报的精炼、亲切表达回答。'
+
+          UNION ALL
+
+          SELECT id AS source_id, 1 AS part_order, user_id, session_id, role,
+                 CASE
+                   WHEN role = 'user'
+                    AND content LIKE '%' || char(10) || char(10) || '请用适合语音播报的精炼、亲切表达回答。'
+                   THEN substr(content, 1, length(content) - length(char(10) || char(10) || '请用适合语音播报的精炼、亲切表达回答。'))
+                   ELSE content
+                 END AS content,
+                 NULL AS response_time_ms,
+                 created_at
+          FROM ai_chat_messages
+        ) migrated_messages
+        ORDER BY source_id, part_order;
+
+        DROP TABLE ai_chat_messages;
+        ALTER TABLE ai_chat_messages_next RENAME TO ai_chat_messages;
+        CREATE INDEX idx_ai_chat_messages_session
+          ON ai_chat_messages(user_id, session_id, created_at);
+        CREATE INDEX idx_ai_chat_messages_created_at
+          ON ai_chat_messages(created_at DESC);
+      `);
+    },
+  },
+  {
+    version: 28,
+    name: "unified_chat_message_content",
+    up(database) {
+      addColumn(database, "ai_chat_messages", "source", "TEXT NOT NULL DEFAULT 'legacy'");
+      addColumn(database, "ai_chat_messages", "status", "TEXT NOT NULL DEFAULT 'completed'");
+      addColumn(database, "ai_chat_messages", "payload_json", "TEXT");
+      addColumn(database, "ai_chat_messages", "confirmation_id", "TEXT");
+
+      const legacyCardMessages = database.prepare(`
+        SELECT id, content FROM ai_chat_messages
+        WHERE role = 'assistant' AND content LIKE '%【界面卡片上下文】%'
+      `).all() as Array<{ id: number; content: string }>;
+      const updateLegacyCard = database.prepare(`
+        UPDATE ai_chat_messages SET content = ?, payload_json = ? WHERE id = ?
+      `);
+      for (const message of legacyCardMessages) {
+        const [content, ...legacyCardSummaries] = message.content.split("\n\n【界面卡片上下文】\n");
+        updateLegacyCard.run(
+          content,
+          JSON.stringify({ legacyCardSummaries: legacyCardSummaries.filter(Boolean) }),
+          message.id,
+        );
+      }
+
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_source_created
+          ON ai_chat_messages(source, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_confirmation
+          ON ai_chat_messages(confirmation_id)
+          WHERE confirmation_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 export function runMigrations(database: Database.Database) {

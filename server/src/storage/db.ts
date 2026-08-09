@@ -178,6 +178,7 @@ export function initDatabase() {
       fat REAL DEFAULT 0,
       image_url TEXT,
       recorded_at TEXT NOT NULL,
+      recorded_time TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -474,8 +475,13 @@ export function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       session_id TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+      role TEXT NOT NULL CHECK(role IN ('system', 'user', 'assistant')),
       content TEXT NOT NULL,
+      response_time_ms INTEGER,
+      source TEXT NOT NULL DEFAULT 'assistant',
+      status TEXT NOT NULL DEFAULT 'completed',
+      payload_json TEXT,
+      confirmation_id TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -537,6 +543,17 @@ export function initDatabase() {
       FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE,
       FOREIGN KEY (operator_user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS user_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      category TEXT NOT NULL CHECK(category IN ('issue', 'suggestion', 'support')),
+      content TEXT NOT NULL,
+      context_json TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
   `);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_ai_usage_logs_created_at
@@ -544,6 +561,9 @@ export function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_ai_usage_logs_user_created_at
     ON ai_usage_logs(user_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS idx_user_feedback_user_created
+    ON user_feedback(user_id, created_at DESC);
   `);
   const aiRetentionDays = Math.max(1, Number(process.env.AI_CONVERSATION_RETENTION_DAYS) || 90);
   db.prepare("DELETE FROM ai_chat_messages WHERE created_at < datetime('now', ?)")
@@ -635,7 +655,7 @@ function seedExpandedCommunityPosts() {
   const u5 = userIds.get('fitness_jack')!;
   const u6 = userIds.get('diet_helper')!;
   const expandedPostCount = db.prepare('SELECT COUNT(*) as count FROM community_posts').get() as { count: number };
-  if (expandedPostCount.count < 52) {
+  if (expandedPostCount.count < 70) {
     const insertExpandedPost = db.prepare(`
       INSERT INTO community_posts (user_id, username, nickname, avatar_url, category, content, image_url, likes_count, comment_count, views_count, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
@@ -661,9 +681,92 @@ function seedExpandedCommunityPosts() {
       [userId, 'demo', '绿色食物分享家', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80', '问答', '买坚果时到底选原味还是烘焙？一把的份量是多少？把常见误区整理成图。', 'https://images.unsplash.com/photo-1476224203421-9ac39bcb3327?w=800&auto=format&fit=crop&q=80', 429, 61, 1760, '-40 hours'],
       [u2, 'chef_david', '主厨David', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80', '寻味', '一锅番茄牛肉蔬菜汤：周日晚间煮好分装，工作日午餐加热就能吃。', 'https://images.unsplash.com/photo-1547592180-85f173990554?w=800&auto=format&fit=crop&q=80', 571, 79, 2440, '-2 days'],
       [u4, 'nutritionist_lisa', '注册营养师Lisa', 'https://images.unsplash.com/photo-1500648767791-00dcc9944761-15a19d654956?w=200&auto=format&fit=crop&q=80', '榜单', '膳食纤维食材榜：除了西兰花，豆类、燕麦和菌菇也都是提升饱腹感的好选择。', 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&auto=format&fit=crop&q=80', 802, 128, 3510, '-3 days']
+,
+      [u2, 'chef_david', '主厨David', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80', '寻味', '空气炸锅迷迭香烤三文鱼与口蘑：180度12分钟，油脂自然渗出将口蘑慢烤至鲜嫩多汁！', 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=800&auto=format&fit=crop&q=80', 642, 78, 2150, '-15 minutes'],
+      [u5, 'fitness_jack', '健身达人Jack', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80', '寻味', '夏日彩椒水煮牛肉高蛋白能量碗：牛肉快速飞水，搭配紫甘蓝和温泉蛋，含 42g 优质蛋白！', 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&auto=format&fit=crop&q=80', 489, 53, 1720, '-1 hour'],
+      [u3, 'family_kitchen', '元气烘焙日记', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80', '寻味', '零失败无糖奇亚籽椰奶燕麦杯：冷藏吸饱椰奶，挤上新鲜百香果汁，口感媲美高端甜品！', 'https://images.unsplash.com/photo-1553530666-ba11a7da3888?w=800&auto=format&fit=crop&q=80', 815, 94, 3200, '-3 hours'],
+      [userId, 'demo', '绿色食物分享家', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80', '寻味', '泰式柠檬青榨虾仁凉拌魔芋粉丝：基围虾过冰水，黑胡椒酸辣开胃，热量不到 200 大卡！', 'https://images.unsplash.com/photo-1551248429-40975aa4de74?w=800&auto=format&fit=crop&q=80', 378, 41, 1450, '-7 hours'],
+      [u2, 'chef_david', '主厨David', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80', '寻味', '地中海风味香煎鸡胸肉配慢烤贝贝南瓜：提前用牛至叶蒜末腌制，外焦里嫩饱腹满分！', 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?w=800&auto=format&fit=crop&q=80', 520, 62, 1980, '-11 hours'],
+      [u6, 'diet_helper', '减脂小助手', 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80', '寻味', '无油空气炸老豆腐金针菇煲：老豆腐炸至金黄，铺在金针菇上蒜蓉小火焖煮，入味无负担。', 'https://images.unsplash.com/photo-1547592180-85f173990554?w=800&auto=format&fit=crop&q=80', 733, 89, 2840, '-15 hours'],
+      [u4, 'nutritionist_lisa', '注册营养师Lisa', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80', '寻味', '早晨第一杯抹茶羽衣甘蓝高纤抗氧饮：羽衣甘蓝配半根黄瓜与无糖绿茶打碎，肠道轻松一整天。', 'https://images.unsplash.com/photo-1536256263959-770b48d82b0a?w=800&auto=format&fit=crop&q=80', 912, 110, 3900, '-1 day'],
+
+      [u6, 'diet_helper', '减脂小助手', 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80', '榜单', '🏆 2026便利店控糖加餐热度榜：1.无糖高纤豆浆 2.即食水煮蛋白 3.卤香毛豆 4.希腊酸奶 5.85%黑巧！', 'https://images.unsplash.com/photo-1608219992759-8d74ed8d76eb?w=800&auto=format&fit=crop&q=80', 1420, 185, 6100, '-30 minutes'],
+      [u5, 'fitness_jack', '健身达人Jack', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80', '榜单', '🥇 高蛋白食材性价比实测榜：鸡胸肉（纯蛋白性价比之王）> 鸡蛋 > 巴沙鱼 > 老豆腐 > 瘦牛腱子！', 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&auto=format&fit=crop&q=80', 1180, 142, 4950, '-2 hours'],
+      [u3, 'family_kitchen', '元气烘焙日记', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80', '榜单', '🌟 提升减脂幸福感的厨房神器 TOP 4：0.1g精度电子秤、喷雾橄榄油瓶、玻璃密封分装盒！', 'https://images.unsplash.com/photo-1556911220-e15b29be8c8f?w=800&auto=format&fit=crop&q=80', 890, 97, 3420, '-5 hours'],
+      [u2, 'chef_david', '主厨David', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80', '榜单', '📊 告别高油高糖！4款自制低卡沙拉酱：酸奶蒜香酱、日式和风醋汁、泰式青柠酱、芥末黑醋汁！', 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=800&auto=format&fit=crop&q=80', 1050, 128, 4300, '-9 hours'],
+      [userId, 'demo', '绿色食物分享家', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80', '榜单', '🏆 常温高蛋白坚果加餐榜：巴旦木、腰果、南瓜籽与无糖风干牛肉粒，满足嚼劲不升糖。', 'https://images.unsplash.com/photo-1476224203421-9ac39bcb3327?w=800&auto=format&fit=crop&q=80', 670, 72, 2700, '-18 hours'],
+
+      [userId, 'demo', '绿色食物分享家', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80', '活动', '🔥 #30天减脂餐早安打卡# Day 14：全麦吐司配半颗牛油果与水煮蛋。8,900 位食友在线打卡！', 'https://images.unsplash.com/photo-1525351484163-7529414344d8?w=800&auto=format&fit=crop&q=80', 950, 132, 3890, '-20 minutes'],
+      [u4, 'nutritionist_lisa', '注册营养师Lisa', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80', '活动', '🥗 #彩虹饮食法7天挑战赛# 第一天：红黄绿紫白5色食材搭配，吃出天然抗氧化好气色！', 'https://images.unsplash.com/photo-1540420773420-3366772f4999?w=800&auto=format&fit=crop&q=80', 830, 104, 3100, '-3 hours'],
+      [u2, 'chef_david', '主厨David', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80', '活动', '🍳 #15分钟快手健康晚餐接力# 今晚分享【黑椒蒜香炒虾仁】！8分钟出锅，快来接力！', 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6?w=800&auto=format&fit=crop&q=80', 610, 85, 2540, '-8 hours'],
+      [u6, 'diet_helper', '减脂小助手', 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80', '活动', '🍱 #自制低卡办公室便当大赛# 晒出你精心准备的精致便当！连续7天打卡赢取专属徽章！', 'https://images.unsplash.com/photo-1511690656952-34342bb7c2f2?w=800&auto=format&fit=crop&q=80', 770, 92, 2900, '-16 hours'],
+
+      [u4, 'nutritionist_lisa', '注册营养师Lisa', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80', '问答', '❓ 【专家解答】练后30-60分钟是肌肉合成黄金期！补充 20-30g 蛋白质与快吸收碳水效果最佳。', 'https://images.unsplash.com/photo-1517838277536-f5f99be501cd?w=800&auto=format&fit=crop&q=80', 1250, 168, 5200, '-10 minutes'],
+      [u5, 'fitness_jack', '健身达人Jack', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80', '问答', '💡 【食友提问】长期低碳水饮食需要注意什么？解析适应期、电解质补充技巧与碳水循环策略。', 'https://images.unsplash.com/photo-1490645935967-10de6ba17061?w=800&auto=format&fit=crop&q=80', 930, 114, 3950, '-2.5 hours'],
+      [u4, 'nutritionist_lisa', '注册营养师Lisa', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80', '问答', '🥑 【营养问答】特级初榨橄榄油烟点约为 190°C-210°C，中火短时间小炒完全安全无忧！', 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=800&auto=format&fit=crop&q=80', 870, 96, 3500, '-6 hours'],
+      [u3, 'family_kitchen', '元气烘焙日记', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80', '问答', '🍞 【食友求助】配料表第一位必须是全麦粉！如果第一位是小麦粉或预拌粉，都是假全麦。', 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=800&auto=format&fit=crop&q=80', 1040, 135, 4100, '-14 hours']
     ];
     const seedExpandedPosts = db.transaction(() => expandedPosts.forEach((post) => insertExpandedPost.run(...post)));
     seedExpandedPosts();
+  }
+
+  seedCommunityComments();
+}
+
+function seedCommunityComments() {
+  const commentCount = (db.prepare('SELECT COUNT(*) as count FROM community_comments').get() as any).count;
+  if (commentCount < 30) {
+    const userIds = new Map(
+      (db.prepare("SELECT id, nickname AS seed_key FROM users WHERE nickname IN ('demo', 'chef_david', 'family_kitchen', 'nutritionist_lisa', 'fitness_jack', 'diet_helper')").all() as Array<{ id: number; seed_key: string }>)
+        .map((user) => [user.seed_key, user.id])
+    );
+    const userId = userIds.get('demo')!;
+    const u2 = userIds.get('chef_david')!;
+    const u3 = userIds.get('family_kitchen')!;
+    const u4 = userIds.get('nutritionist_lisa')!;
+    const u5 = userIds.get('fitness_jack')!;
+    const u6 = userIds.get('diet_helper')!;
+
+    const posts = db.prepare('SELECT id, category, username FROM community_posts ORDER BY id ASC LIMIT 50').all() as Array<{ id: number; category: string; username: string }>;
+    const insertComment = db.prepare(`
+      INSERT INTO community_comments (post_id, user_id, username, nickname, avatar_url, content, likes_count, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
+    `);
+
+    const commentsToInsert: Array<[number, number, string, string, string, string, number, string]> = [];
+
+    posts.forEach((p) => {
+      if (p.category === '寻味') {
+        commentsToInsert.push(
+          [p.id, u4, 'nutritionist_lisa', '注册营养师Lisa', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80', '这款搭配非常赞！蛋白质与复合碳水比例合理，继续保持哦！', 18, '-30 minutes'],
+          [p.id, u3, 'family_kitchen', '元气烘焙日记', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80', '看着太有食欲了，今晚我也按照这个配方试试看！', 12, '-1 hour']
+        );
+      } else if (p.category === '问答') {
+        commentsToInsert.push(
+          [p.id, u4, 'nutritionist_lisa', '注册营养师Lisa', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80', '这是一个非常经典的疑问！总结起来关键看三点：1. 蛋白质质量 2. 膳食纤维协同 3. 消化吸收速率。合理搭配才能既控糖又有饱腹感。', 35, '-45 minutes'],
+          [p.id, u2, 'chef_david', '主厨David', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80', '从烹饪角度补充一句：尽量采用中火慢煎或水蒸，能锁住肉汁避免发柴发干。', 24, '-2 hours']
+        );
+      } else if (p.category === '活动') {
+        commentsToInsert.push(
+          [p.id, userId, 'demo', '绿色食物分享家', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80', '已完成今日打卡！感觉身体状态越来越轻松啦 💪', 15, '-10 minutes'],
+          [p.id, u5, 'fitness_jack', '健身达人Jack', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80', '加油组员们！坚持打卡，组队打卡动力更足！', 20, '-40 minutes']
+        );
+      } else if (p.category === '榜单') {
+        commentsToInsert.push(
+          [p.id, u6, 'diet_helper', '减脂小助手', 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=200&auto=format&fit=crop&q=80', '这份榜单整理得太详细了，立刻收藏去超市长线采购！', 28, '-1 hour']
+        );
+      }
+    });
+
+    const seedTx = db.transaction(() => {
+      commentsToInsert.forEach((c) => insertComment.run(...c));
+      db.prepare(`
+        UPDATE community_posts
+        SET comment_count = (SELECT COUNT(*) FROM community_comments WHERE community_comments.post_id = community_posts.id)
+        WHERE id IN (SELECT DISTINCT post_id FROM community_comments)
+      `).run();
+    });
+    seedTx();
   }
 }
 
@@ -1120,9 +1223,15 @@ function seedDefaultData() {
     db.prepare('DELETE FROM diet_records WHERE user_id = ?').run(userId);
 
     const insertDiet = db.prepare(`
-      INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, image_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, recorded_time, image_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const defaultMealTimes: Record<string, string> = {
+      早餐: "08:00",
+      午餐: "12:30",
+      晚餐: "18:30",
+      加餐: "15:30",
+    };
 
     // 7天日志模板数据
     const dailyDietTemplates = [
@@ -1174,7 +1283,7 @@ function seedDefaultData() {
     dailyDietTemplates.forEach((dayItems, dayOffset) => {
       const dateStr = getDateStr(-dayOffset);
       dayItems.forEach(item => {
-        insertDiet.run(userId, item.meal, item.name, item.amount, item.cal, item.p, item.c, item.f, dateStr, item.img);
+        insertDiet.run(userId, item.meal, item.name, item.amount, item.cal, item.p, item.c, item.f, dateStr, defaultMealTimes[item.meal] || null, item.img);
       });
     });
   }

@@ -23,13 +23,37 @@ router.get("/recipes", (req, res) => {
       return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
     }
     if (req.query.source === "official" || req.query.source === "user") {
-      filters.push("r.source = ?");
-      params.push(req.query.source);
+      // Imported recipes are maintained by the platform too. Treat every
+      // non-user source as a catalog recipe, matching the admin UI wording.
+      if (req.query.source === "user") {
+        filters.push("r.source = ?");
+        params.push("user");
+      } else {
+        filters.push("(r.source IS NULL OR r.source <> 'user')");
+      }
     }
     if (["pending", "approved", "rejected"].includes(String(req.query.reviewStatus))) {
       filters.push("r.status = ?");
       params.push(String(req.query.reviewStatus));
     }
+    if (typeof req.query.category === "string" && req.query.category.trim()) {
+      filters.push("r.category = ?");
+      params.push(req.query.category.trim());
+    }
+    if (typeof req.query.search === "string" && req.query.search.trim()) {
+      filters.push("(r.title LIKE ? OR r.description LIKE ?)");
+      const search = `%${req.query.search.trim()}%`;
+      params.push(search, search);
+    }
+    const summary = db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN r.source = 'user' THEN 0 ELSE 1 END) AS platform,
+        SUM(CASE WHEN r.source = 'user' THEN 1 ELSE 0 END) AS user,
+        SUM(CASE WHEN r.status = 'pending' THEN 1 ELSE 0 END) AS pending
+      FROM recipes r
+      WHERE ${filters.join(" AND ")}
+    `).get(...params) as { total: number; platform: number; user: number; pending: number };
     if (cursorId) {
       filters.push("r.id < ?");
       params.push(cursorId);
@@ -48,7 +72,7 @@ router.get("/recipes", (req, res) => {
     const hasMore = cursorMode && recipes.length > pageSize;
     const items = cursorMode ? recipes.slice(0, pageSize) : recipes;
     if (!cursorMode) return res.json(items);
-    return res.json({ items, nextCursor: hasMore ? encodeCursor({ v: 1, id: items.at(-1)!.id }) : null });
+    return res.json({ items, total: summary.total, summary, nextCursor: hasMore ? encodeCursor({ v: 1, id: items.at(-1)!.id }) : null });
   } catch (error) {
     res.status(500).json({ error: "获取食谱列表失败" });
   }

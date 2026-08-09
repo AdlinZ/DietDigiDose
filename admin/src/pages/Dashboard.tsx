@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { Link } from 'react-router';
 import {
   Users,
@@ -20,6 +20,8 @@ import {
   Sparkles,
   Clock3,
   CheckCircle2,
+  CalendarDays,
+  Apple,
 } from 'lucide-react';
 import api from '../services/api';
 import { getAvatarUrl } from '../utils/avatar';
@@ -103,6 +105,7 @@ function formatRelativeTime(val: string) {
 }
 
 export default function Dashboard() {
+  const quickActionScrollerRef = useRef<HTMLDivElement>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [trends, setTrends] = useState<Trend[]>([]);
   const [hoveredTrendIndex, setHoveredTrendIndex] = useState<number | null>(null);
@@ -417,6 +420,13 @@ export default function Dashboard() {
     { label: '安全审计日志', icon: ShieldCheck, link: '/admin/security-audit', color: 'text-blue-600 bg-blue-50' },
   ];
 
+  const scrollQuickActions = (direction: 'previous' | 'next') => {
+    quickActionScrollerRef.current?.scrollBy({
+      left: direction === 'next' ? 240 : -240,
+      behavior: 'smooth',
+    });
+  };
+
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center py-20 bg-white rounded-[24px] shadow-sm">
@@ -436,48 +446,102 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
-      {/* Top Banner & Quick Shortcuts */}
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-5 bg-white p-6 rounded-[24px] shadow-sm">
-        <div>
-          <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-bold text-text-main">欢迎回来，管理员 👋</h2>
-            <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600 border border-emerald-100">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              系统服务运行正常
-            </span>
-          </div>
-          <p className="text-xs text-text-muted mt-1.5 flex items-center gap-2">
-            <span>📅 {todayStr}</span>
-            <span>·</span>
-            <span>全站数据自动实时同步中</span>
-          </p>
-        </div>
+      {/* Command-style overview, inspired by editorial section navigation rather than brand visuals. */}
+      <section className="relative overflow-hidden rounded-[28px] border border-primary/15 bg-[#F7FAF6] shadow-sm">
+        <div className="absolute -right-24 -top-28 h-72 w-72 rounded-full border border-primary/10" />
+        <div className="absolute right-12 top-10 h-28 w-28 rounded-full bg-primary/5 blur-2xl" />
+        <div className="relative grid gap-7 p-6 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.95fr)] lg:p-8">
+          <div className="flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-[0.2em] text-primary/70">
+                <span>Control center</span>
+                <span className="h-px w-10 bg-primary/25" />
+                <span>01 / Overview</span>
+              </div>
+              <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-3">
+                <h2 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-text-main sm:text-3xl">
+                  今日运营概览 <Sparkles size={23} className="text-secondary" aria-hidden="true" />
+                </h2>
+                <span className="flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  系统服务运行正常
+                </span>
+              </div>
+              <p className="mt-3 max-w-xl text-sm leading-6 text-text-muted">
+                在一个工作台内关注用户、内容资产与 AI 服务状态，优先处理需要人工介入的事项。
+              </p>
+            </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          {quickActions.map((action) => (
-            <Link
-              key={action.label}
-              to={action.link}
-              className="flex items-center gap-2 rounded-xl border border-gray-100 bg-background/50 px-3.5 py-2 text-xs font-medium text-text-main transition-all hover:bg-white hover:shadow-sm hover:border-gray-200"
-            >
-              <span className={`rounded-lg p-1.5 ${action.color}`}>
-                <action.icon size={14} />
+            <div className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-text-muted">
+              <span className="flex items-center gap-1.5">
+                <CalendarDays size={14} className="text-primary" aria-hidden="true" />
+                {todayStr}
               </span>
-              <span>{action.label}</span>
-            </Link>
-          ))}
+              <span className="hidden h-3 w-px bg-primary/15 sm:block" />
+              <span>全站数据自动实时同步中</span>
+              <button
+                type="button"
+                onClick={fetchData}
+                disabled={loading}
+                className="inline-flex items-center gap-1.5 font-semibold text-primary transition-colors hover:text-primary-hover disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+                更新数据
+              </button>
+            </div>
+          </div>
 
-          <button
-            type="button"
-            onClick={fetchData}
-            disabled={loading}
-            className="flex items-center px-3.5 py-2 bg-primary text-white text-xs font-medium rounded-xl hover:bg-primary/90 transition-all shadow-sm disabled:opacity-50 ml-1"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
-            刷新
-          </button>
+          <div className="min-w-0 self-end">
+            <div className="mb-3 flex items-center justify-between px-0.5">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary/65">Quick routes</p>
+                <p className="mt-1 text-xs text-text-muted">滑动浏览常用操作</p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-label="查看上一个快捷操作"
+                  onClick={() => scrollQuickActions('previous')}
+                  className="flex h-8 w-8 items-center justify-center rounded-full border border-primary/15 bg-white/80 text-primary transition-colors hover:bg-primary hover:text-white"
+                >
+                  <ChevronRight size={15} className="rotate-180" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="查看下一个快捷操作"
+                  onClick={() => scrollQuickActions('next')}
+                  className="flex h-8 w-8 items-center justify-center rounded-full border border-primary/15 bg-white/80 text-primary transition-colors hover:bg-primary hover:text-white"
+                >
+                  <ChevronRight size={15} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            <div
+              ref={quickActionScrollerRef}
+              className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth pb-2 pr-8 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
+              {quickActions.map((action, index) => (
+                <Link
+                  key={action.label}
+                  to={action.link}
+                  className="group min-w-[198px] shrink-0 snap-start rounded-2xl border border-primary/10 bg-white/80 p-3.5 transition-all hover:-translate-y-0.5 hover:border-primary/25 hover:bg-white hover:shadow-md"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`rounded-xl p-2 ${action.color}`}>
+                      <action.icon size={16} aria-hidden="true" />
+                    </span>
+                    <span className="text-[10px] font-semibold tabular-nums text-text-muted/55">0{index + 1} / 04</span>
+                  </div>
+                  <div className="mt-5 flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-text-main">{action.label}</span>
+                    <ChevronRight className="h-3.5 w-3.5 text-text-muted/50 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" aria-hidden="true" />
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
         </div>
-      </div>
+      </section>
 
       {/* Stats Cards Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-5">
@@ -763,7 +827,7 @@ export default function Dashboard() {
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-9 h-9 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center font-bold text-sm shrink-0">
-                        🍎
+                        <Apple size={18} aria-hidden="true" />
                       </div>
                       <div className="min-w-0">
                         <p className="text-xs font-bold text-text-main truncate">{f.name}</p>

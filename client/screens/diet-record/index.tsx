@@ -15,7 +15,7 @@ import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
-import { addLocalDays, toLocalDateKey } from "@/utils/date";
+import { addLocalDays, parseDateKey, toLocalDateKey } from "@/utils/date";
 import { aiApi, ApiError, dietApi } from "@/services/api";
 
 import * as ImagePicker from "expo-image-picker";
@@ -30,6 +30,7 @@ interface DietRecord {
   carbs: number | null;
   fat: number | null;
   recorded_at: string;
+  recorded_time?: string | null;
   image_url: string | null;
 }
 
@@ -53,6 +54,20 @@ const QUICK_PRESETS: PresetFood[] = [
   { name: "低脂无糖酸奶", amount: "1杯 (150g)", calories: "90", protein: "7.5", carbs: "9", fat: "1.5" },
 ];
 
+function currentTimeValue() {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+function normalizeRecordedTime(value: string) {
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
 export default function DietRecordScreen() {
   const router = useSafeRouter();
   const params = useSafeSearchParams<any>();
@@ -61,13 +76,20 @@ export default function DietRecordScreen() {
 
   const todayStr = toLocalDateKey();
   const [selectedDate, setSelectedDate] = useState(todayStr);
+  const [weekOffset, setWeekOffset] = useState(0);
   const [records, setRecords] = useState<DietRecord[]>([]);
-  const [weeklyCalories, setWeeklyCalories] = useState<Record<string, number>>({});
+  const [weeklyRecordCounts, setWeeklyRecordCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
+  const [calendarVisible, setCalendarVisible] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
 
   // Form
-  const [mealType, setMealType] = useState("早餐");
+  const [mealType, setMealType] = useState("");
+  const [recordedTime, setRecordedTime] = useState(currentTimeValue);
   const [foodName, setFoodName] = useState("");
   const [amount, setAmount] = useState("1份");
   const [calories, setCalories] = useState("");
@@ -95,21 +117,68 @@ export default function DietRecordScreen() {
     }
   }, [params, router]);
 
-  const mealCategories = [
-    { name: "早餐", icon: "sun", color: "#E9C46A", recommended: "建议 400-550 kcal" },
-    { name: "午餐", icon: "utensils", color: "#2D6A4F", recommended: "建议 600-750 kcal" },
-    { name: "晚餐", icon: "moon", color: "#D4A276", recommended: "建议 450-600 kcal" },
-    { name: "加餐", icon: "cookie", color: "#E07A5F", recommended: "建议 150-300 kcal" },
-  ];
-
-  // 生成过去 7 天的日期数组
+  // 生成当前浏览周期的 7 天日期数组；weekOffset 为负数时查看更早周期。
   const pastSevenDays = Array.from({ length: 7 }).map((_, i) => {
-    const d = addLocalDays(-(6 - i));
+    const d = addLocalDays(weekOffset * 7 - (6 - i));
     const dateStr = toLocalDateKey(d);
     const dayName = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
     const isToday = dateStr === todayStr;
-    return { dateStr, dayNum: d.getDate(), dayName, isToday };
+    return { date: d, dateStr, dayNum: d.getDate(), dayName, isToday };
   });
+
+  const calendarMonthStartOffset = (calendarMonth.getDay() + 6) % 7;
+  const calendarDays = Array.from({ length: 42 }, (_, index) => {
+    const date = addLocalDays(index - calendarMonthStartOffset, calendarMonth);
+    const dateStr = toLocalDateKey(date);
+    return {
+      date,
+      dateStr,
+      isCurrentMonth: date.getMonth() === calendarMonth.getMonth(),
+      isFuture: dateStr > todayStr,
+      isToday: dateStr === todayStr,
+      isSelected: dateStr === selectedDate,
+    };
+  });
+  const now = new Date();
+  const isCalendarCurrentMonth =
+    calendarMonth.getFullYear() === now.getFullYear() && calendarMonth.getMonth() === now.getMonth();
+
+  const changeWeek = (delta: -1 | 1) => {
+    const nextOffset = Math.min(0, weekOffset + delta);
+    setWeekOffset(nextOffset);
+    setSelectedDate(toLocalDateKey(addLocalDays(nextOffset * 7)));
+  };
+
+  const goToToday = () => {
+    setWeekOffset(0);
+    setSelectedDate(todayStr);
+  };
+
+  const openCalendar = () => {
+    const selected = parseDateKey(selectedDate) || new Date();
+    setCalendarMonth(new Date(selected.getFullYear(), selected.getMonth(), 1));
+    setCalendarVisible(true);
+  };
+
+  const changeCalendarMonth = (delta: -1 | 1) => {
+    setCalendarMonth((current) => {
+      const next = new Date(current.getFullYear(), current.getMonth() + delta, 1);
+      const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      return next > currentMonth ? current : next;
+    });
+  };
+
+  const selectCalendarDate = (date: Date) => {
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const selectedStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    if (selectedStart > todayStart) return;
+
+    const daysAgo = Math.max(0, Math.round((todayStart.getTime() - selectedStart.getTime()) / 86400000));
+    setWeekOffset(-Math.floor(daysAgo / 7));
+    setSelectedDate(toLocalDateKey(selectedStart));
+    setCalendarVisible(false);
+  };
 
   const fetchRecords = useCallback(async () => {
     if (!isAuthenticated) {
@@ -127,21 +196,24 @@ export default function DietRecordScreen() {
     }
   }, [isAuthenticated, authFetch, selectedDate]);
 
-  const fetchWeeklyCalories = useCallback(async () => {
+  const fetchWeeklyRecordCounts = useCallback(async () => {
     if (!isAuthenticated) {
-      setWeeklyCalories({});
+      setWeeklyRecordCounts({});
       return;
     }
 
-    const days = Array.from({ length: 7 }, (_, index) => toLocalDateKey(addLocalDays(index - 6)));
+    const days = Array.from(
+      { length: 7 },
+      (_, index) => toLocalDateKey(addLocalDays(weekOffset * 7 + index - 6))
+    );
     const results = await Promise.allSettled(days.map((date) => dietApi.list(authFetch, date)));
-    setWeeklyCalories(Object.fromEntries(results.map((result, index) => [
+    setWeeklyRecordCounts(Object.fromEntries(results.map((result, index) => [
       days[index],
       result.status === "fulfilled" && Array.isArray(result.value)
-        ? result.value.reduce((total, record) => total + (record.calories || 0), 0)
+        ? result.value.length
         : 0,
     ])));
-  }, [authFetch, isAuthenticated]);
+  }, [authFetch, isAuthenticated, weekOffset]);
 
   useFocusEffect(
     useCallback(() => {
@@ -151,12 +223,13 @@ export default function DietRecordScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void fetchWeeklyCalories();
-    }, [fetchWeeklyCalories])
+      void fetchWeeklyRecordCounts();
+    }, [fetchWeeklyRecordCounts])
   );
 
-  const openAddModal = (meal: string) => {
+  const openAddModal = (meal = "", time = currentTimeValue()) => {
     setMealType(meal);
+    setRecordedTime(time);
     setFoodName("");
     setAmount("1份");
     setCalories("");
@@ -219,6 +292,11 @@ export default function DietRecordScreen() {
       Alert.alert("提示", "请输入食物名称");
       return;
     }
+    const normalizedTime = normalizeRecordedTime(recordedTime);
+    if (!normalizedTime) {
+      Alert.alert("提示", "请填写有效时间，例如 08:30");
+      return;
+    }
     try {
       setSaving(true);
       const parseNullableNumber = (value: string) => {
@@ -227,7 +305,7 @@ export default function DietRecordScreen() {
         return Number.isFinite(parsed) ? parsed : null;
       };
       const payload = {
-        meal_type: mealType,
+        meal_type: mealType.trim(),
         food_name: foodName,
         amount,
         calories: parseNullableNumber(calories),
@@ -235,13 +313,14 @@ export default function DietRecordScreen() {
         carbs: parseNullableNumber(carbs),
         fat: parseNullableNumber(fat),
         recorded_at: selectedDate,
+        recorded_time: normalizedTime,
         image_url: imageUrl.trim() || null,
       };
 
       await dietApi.create(authFetch, payload);
       setModalVisible(false);
       fetchRecords();
-      void fetchWeeklyCalories();
+      void fetchWeeklyRecordCounts();
     } catch (e) {
       Alert.alert("错误", e instanceof ApiError ? e.message : "网络异常");
     } finally {
@@ -259,7 +338,7 @@ export default function DietRecordScreen() {
           try {
             await dietApi.remove(authFetch, id);
             fetchRecords();
-            void fetchWeeklyCalories();
+            void fetchWeeklyRecordCounts();
           } catch (e) {
             console.error(e);
           }
@@ -272,11 +351,17 @@ export default function DietRecordScreen() {
   const dayTotalProtein = Math.round(records.reduce((s, r) => s + (r.protein || 0), 0) * 10) / 10;
   const dayTotalCarbs = Math.round(records.reduce((s, r) => s + (r.carbs || 0), 0) * 10) / 10;
   const dayTotalFat = Math.round(records.reduce((s, r) => s + (r.fat || 0), 0) * 10) / 10;
-  const maxWeeklyCalories = Math.max(...Object.values(weeklyCalories), 0);
+  const sortedRecords = [...records].sort((a, b) => (a.recorded_time || "").localeCompare(b.recorded_time || ""));
+  const timePercent = (time?: string | null) => {
+    if (!time) return 0;
+    const [hours, minutes] = time.split(":").map(Number);
+    return Math.min(98, Math.max(0, ((hours * 60 + minutes) / (24 * 60)) * 100));
+  };
 
   const targetCal = user?.daily_calories_target || 2000;
   const progressPercent = Math.min(Math.round((dayTotalCal / targetCal) * 100), 100);
   const remainingCal = Math.max(0, targetCal - dayTotalCal);
+  const isSelectedToday = selectedDate === todayStr;
 
   const handleCloseModal = () => {
     setModalVisible(false);
@@ -289,6 +374,15 @@ export default function DietRecordScreen() {
     const dateNum = d.getDate();
     const dayName = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][d.getDay()];
     return `${m}月${dateNum}日 ${dayName}`;
+  };
+
+  const formattedWeekRangeText = () => {
+    const start = pastSevenDays[0].date;
+    const end = pastSevenDays[pastSevenDays.length - 1].date;
+    if (start.getFullYear() !== end.getFullYear()) {
+      return `${start.getFullYear()}年${start.getMonth() + 1}月${start.getDate()}日 – ${end.getFullYear()}年${end.getMonth() + 1}月${end.getDate()}日`;
+    }
+    return `${start.getMonth() + 1}月${start.getDate()}日 – ${end.getMonth() + 1}月${end.getDate()}日`;
   };
 
   if (!isAuthenticated) {
@@ -328,43 +422,45 @@ export default function DietRecordScreen() {
           <View className="flex-row items-center gap-2">
             {selectedDate !== todayStr && (
               <TouchableOpacity
-                onPress={() => setSelectedDate(todayStr)}
+                onPress={goToToday}
                 className="bg-background-secondary px-3 py-2 rounded-xl active:opacity-80 border border-line"
               >
                 <Text className="text-xs font-bold text-ink">回到今天</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              onPress={() => openAddModal("加餐")}
-              className="bg-brand px-4 py-2 rounded-xl flex-row items-center gap-1.5 active:opacity-90 shadow-xs"
+              onPress={() => openAddModal()}
+              accessibilityRole="button"
+              accessibilityLabel="记录饮食"
+              className="bg-brand px-4 py-2.5 rounded-2xl flex-row items-center gap-1.5 active:opacity-90 shadow-xs"
             >
               <FontAwesome6 name="plus" size={12} color="#FFF" />
-              <Text className="text-xs font-bold text-white">手动记录</Text>
+              <Text className="text-xs font-bold text-white">记录饮食</Text>
             </TouchableOpacity>
           </View>
         </View>
 
         {/* 每日卡路里与三大营养素 Dashboard 看板 */}
-        <View className="px-5 py-3">
-          <View className="bg-brand rounded-[24px] p-5 shadow-sm relative overflow-hidden">
+        <View className="px-5 pt-3 pb-2">
+          <View className="bg-brand rounded-[24px] p-4 shadow-sm relative overflow-hidden">
             {/* 背景修饰气泡 */}
             <View className="absolute -right-8 -top-8 w-32 h-32 rounded-full bg-white/5" />
             <View className="absolute left-1/2 -bottom-10 w-28 h-28 rounded-full bg-highlight/10" />
 
-            <View className="flex-row items-center justify-between mb-2">
+            <View className="flex-row items-center justify-between">
               <View>
                 <Text className="text-xs font-medium text-emerald-100/90">
-                  本日摄入总量
+                  {isSelectedToday ? "今日摄入" : "当日摄入"}
                 </Text>
                 <View className="flex-row items-baseline gap-1.5 mt-0.5">
-                  <Text className="text-3xl font-black text-white">{dayTotalCal}</Text>
+                  <Text className="text-[28px] font-black text-white">{dayTotalCal}</Text>
                   <Text className="text-xs text-emerald-100 font-medium">
                     / {targetCal} kcal
                   </Text>
                 </View>
               </View>
 
-              <View className="items-end bg-black/20 px-3 py-1.5 rounded-full border border-white/10">
+              <View className="items-end bg-black/15 px-3 py-1.5 rounded-full border border-white/10">
                 <View className="flex-row items-center gap-1">
                   <FontAwesome6 name="fire" size={11} color="#E9C46A" />
                   <Text className="text-xs font-bold text-highlight">
@@ -375,7 +471,7 @@ export default function DietRecordScreen() {
             </View>
 
             {/* 卡路里进度条 */}
-            <View className="w-full bg-black/20 h-2 rounded-full my-3 overflow-hidden">
+            <View className="w-full bg-black/20 h-2 rounded-full mt-2.5 mb-3 overflow-hidden">
               <View
                 className="bg-highlight h-full rounded-full"
                 style={{ width: `${progressPercent}%` }}
@@ -383,7 +479,7 @@ export default function DietRecordScreen() {
             </View>
 
             {/* 三大营养素统计 */}
-            <View className="flex-row items-center justify-between pt-1.5 border-t border-white/10 mt-1">
+            <View className="flex-row items-center justify-between pt-3 border-t border-white/10">
               <View className="flex-1 items-center border-r border-white/10 pr-2">
                 <Text className="text-[11px] text-emerald-100/80">蛋白质</Text>
                 <Text className="text-sm font-bold text-white mt-0.5">
@@ -404,29 +500,90 @@ export default function DietRecordScreen() {
               </View>
             </View>
 
-            {/* 近 7 天热量趋势微型柱状图 */}
-            <View className="mt-3.5 pt-3 border-t border-white/10 flex-row items-end justify-between h-14 px-1">
+          </View>
+        </View>
+
+        {/* 连续七日日期条 */}
+        <View className="px-5 py-2.5">
+          <View className="bg-white rounded-3xl border border-line shadow-2xs overflow-hidden">
+            <View className="flex-row items-center justify-between px-3 py-2 border-b border-line">
+              <TouchableOpacity
+                onPress={() => changeWeek(-1)}
+                accessibilityRole="button"
+                accessibilityLabel="查看更早七天"
+                className="w-9 h-9 rounded-xl bg-background-secondary items-center justify-center active:opacity-70"
+              >
+                <FontAwesome6 name="chevron-left" size={11} color="#3D3229" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={openCalendar}
+                accessibilityRole="button"
+                accessibilityLabel="打开月历选择日期"
+                className="items-center px-3 py-1 active:opacity-70"
+              >
+                <View className="flex-row items-center gap-1.5">
+                  <FontAwesome6 name="calendar-days" size={11} color="#2D6A4F" />
+                  <Text className="text-xs font-black text-ink">{formattedWeekRangeText()}</Text>
+                </View>
+                <Text className="text-[9px] text-brand font-bold mt-0.5">点此打开月历</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => changeWeek(1)}
+                disabled={weekOffset === 0}
+                accessibilityRole="button"
+                accessibilityLabel="查看较新七天"
+                accessibilityState={{ disabled: weekOffset === 0 }}
+                className={`w-9 h-9 rounded-xl items-center justify-center ${
+                  weekOffset === 0 ? "bg-background-secondary opacity-35" : "bg-background-secondary active:opacity-70"
+                }`}
+              >
+                <FontAwesome6 name="chevron-right" size={11} color="#3D3229" />
+              </TouchableOpacity>
+            </View>
+            <View className="p-1.5 flex-row">
               {pastSevenDays.map((item) => {
                 const isSelected = item.dateStr === selectedDate;
-                const totalCalories = weeklyCalories[item.dateStr] || 0;
-                const barHeightPercent = maxWeeklyCalories > 0 && totalCalories > 0
-                  ? Math.max(10, Math.round((totalCalories / maxWeeklyCalories) * 100))
-                  : 0;
+                const hasRecord = (weeklyRecordCounts[item.dateStr] || 0) > 0;
                 return (
                   <TouchableOpacity
-                    key={`chart-${item.dateStr}`}
+                    key={item.dateStr}
                     onPress={() => setSelectedDate(item.dateStr)}
-                    className="items-center flex-1"
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isSelected }}
+                    accessibilityLabel={`${item.isToday ? "今天" : `周${item.dayName}`} ${item.dayNum}日`}
+                    className={`flex-1 h-14 rounded-2xl items-center justify-center ${isSelected ? "bg-brand" : "bg-white"}`}
                   >
-                    <View className="w-2.5 h-8 bg-black/20 rounded-full justify-end overflow-hidden">
-                      <View
-                        className={`w-full rounded-full ${isSelected ? "bg-highlight" : "bg-white/60"}`}
-                        style={{ height: `${barHeightPercent}%` }}
-                      />
-                    </View>
-                    <Text className={`text-[8px] mt-1 font-bold ${isSelected ? "text-highlight" : "text-emerald-100/70"}`}>
-                      {item.isToday ? "今" : item.dayName}
+                    <Text
+                      className={`text-[10px] ${
+                        isSelected
+                          ? "text-white/80 font-medium"
+                          : item.isToday
+                          ? "text-brand font-black"
+                          : "text-copy-muted"
+                      }`}
+                    >
+                      {item.isToday ? "今天" : `周${item.dayName}`}
                     </Text>
+                    <Text
+                      className={`text-sm font-black mt-0.5 ${
+                        isSelected
+                          ? "text-white"
+                          : item.isToday
+                          ? "text-brand"
+                          : "text-ink"
+                      }`}
+                    >
+                      {item.dayNum}
+                    </Text>
+                    <View
+                      className={`absolute bottom-1 w-1 h-1 rounded-full ${
+                        hasRecord
+                          ? isSelected
+                            ? "bg-highlight"
+                            : "bg-brand"
+                          : "bg-transparent"
+                      }`}
+                    />
                   </TouchableOpacity>
                 );
               })}
@@ -434,57 +591,7 @@ export default function DietRecordScreen() {
           </View>
         </View>
 
-        {/* 日期滑动列表 */}
-        <View className="px-5 py-2.5">
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: 10, paddingRight: 4 }}
-            className="flex-row"
-          >
-            {pastSevenDays.map((item) => {
-              const isSelected = item.dateStr === selectedDate;
-              return (
-                <TouchableOpacity
-                  key={item.dateStr}
-                  onPress={() => setSelectedDate(item.dateStr)}
-                  className={`w-12 h-14 rounded-2xl items-center justify-center border mr-2.5 transition-all ${
-                    isSelected
-                      ? "bg-brand border-brand shadow-xs"
-                      : item.isToday
-                      ? "bg-emerald-50 border-brand/40"
-                      : "bg-white border-line"
-                  }`}
-                >
-                  <Text
-                    className={`text-[10px] ${
-                      isSelected
-                        ? "text-white/80 font-medium"
-                        : item.isToday
-                        ? "text-brand font-bold"
-                        : "text-copy-muted"
-                    }`}
-                  >
-                    {item.isToday ? "今天" : `周${item.dayName}`}
-                  </Text>
-                  <Text
-                    className={`text-sm font-black mt-0.5 ${
-                      isSelected
-                        ? "text-white"
-                        : item.isToday
-                        ? "text-brand"
-                        : "text-ink"
-                    }`}
-                  >
-                    {item.dayNum}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* 4大餐别分类卡片 */}
+        {/* 按实际发生时间排列的饮食时间线 */}
         <ScrollView
           showsVerticalScrollIndicator={false}
           className="flex-1 px-5 pt-2 pb-6"
@@ -496,121 +603,216 @@ export default function DietRecordScreen() {
               <Text className="text-xs text-copy-muted mt-2">读取饮食记录中...</Text>
             </View>
           ) : (
-            <View className="space-y-3.5">
-              {mealCategories.map((cat) => {
-                const mealRecords = records.filter((r) => r.meal_type === cat.name);
-                const categoryCalories = mealRecords.reduce(
-                  (sum, r) => sum + (r.calories || 0),
-                  0
-                );
-
-                return (
-                  <View
-                    key={cat.name}
-                    className="bg-white p-4 rounded-3xl border border-line shadow-2xs"
-                  >
-                    {/* Meal Header */}
-                    <View className="flex-row items-center justify-between mb-3 border-b border-background-secondary pb-2.5">
-                      <View className="flex-row items-center gap-2.5">
-                        <View
-                          className="w-9 h-9 rounded-2xl items-center justify-center"
-                          style={{ backgroundColor: `${cat.color}20` }}
-                        >
-                          <FontAwesome6 name={cat.icon} size={15} color={cat.color} />
-                        </View>
-                        <View>
-                          <View className="flex-row items-center gap-2">
-                            <Text className="text-base font-black text-ink">
-                              {cat.name}
-                            </Text>
-                            {categoryCalories > 0 && (
-                              <View className="bg-brand/10 px-2 py-0.5 rounded-full">
-                                <Text className="text-[10px] font-bold text-brand">
-                                  {categoryCalories} kcal
-                                </Text>
-                              </View>
-                            )}
-                          </View>
-                          <Text className="text-[10px] text-copy-muted mt-0.5">
-                            {cat.recommended}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <TouchableOpacity
-                        onPress={() => openAddModal(cat.name)}
-                        className="bg-background-secondary px-3.5 py-1.5 rounded-xl flex-row items-center gap-1.5 active:opacity-80"
-                      >
-                        <FontAwesome6 name="plus" size={10} color="#3D3229" />
-                        <Text className="text-xs font-bold text-ink">记录</Text>
-                      </TouchableOpacity>
+            <View>
+              <View className="mb-3 px-1">
+                <Text className="text-base font-black text-ink">
+                  {isSelectedToday ? "今天吃了什么" : "这天吃了什么"}
+                </Text>
+                <Text className="text-[11px] text-copy-muted mt-0.5">
+                  {sortedRecords.length > 0 ? `${sortedRecords.length} 条记录 · 按进食时间排列` : "记录每一餐，更轻松地了解营养摄入"}
+                </Text>
+              </View>
+              {sortedRecords.length === 0 ? (
+                <View className="bg-white px-5 py-5 rounded-3xl border border-line shadow-2xs">
+                  <View className="flex-row items-center">
+                    <View className="w-12 h-12 rounded-2xl bg-brand/10 items-center justify-center mr-3.5">
+                      <FontAwesome6 name="utensils" size={18} color="#2D6A4F" />
                     </View>
-
-                    {/* Meal Records or Empty State */}
-                    {mealRecords.length === 0 ? (
-                      <TouchableOpacity
-                        onPress={() => openAddModal(cat.name)}
-                        className="py-3 px-2 rounded-2xl border border-dashed border-line items-center justify-center bg-canvas/50"
-                      >
-                        <Text className="text-xs text-copy-muted font-medium">
-                          尚未记录{cat.name} · 点击【+记录】开启健康饮食
-                        </Text>
-                      </TouchableOpacity>
-                    ) : (
-                      <View className="space-y-2">
-                        {mealRecords.map((r) => (
-                          <View
-                            key={r.id}
-                            className="bg-[#FFFDF9] p-3 rounded-2xl flex-row items-center justify-between border border-line"
-                          >
-                            <View className="flex-row items-center gap-3 flex-1">
-                              {r.image_url ? (
-                                <Image
-                                  source={{ uri: r.image_url }}
-                                  className="w-11 h-11 rounded-xl"
-                                />
-                              ) : (
-                                <View className="w-11 h-11 rounded-xl bg-brand/10 items-center justify-center">
-                                  <FontAwesome6 name="utensils" size={15} color="#2D6A4F" />
-                                </View>
-                              )}
-                              <View className="flex-1">
-                                <View className="flex-row items-center gap-1.5">
-                                  <Text className="text-sm font-bold text-ink" numberOfLines={1}>
-                                    {r.food_name}
-                                  </Text>
-                                  <Text className="text-xs text-copy-muted">({r.amount})</Text>
-                                </View>
-                                <View className="flex-row items-center gap-2 mt-1">
-                                  <View className="flex-row items-center gap-1 bg-[#E07A5F]/10 px-1.5 py-0.5 rounded-md">
-                                    <FontAwesome6 name="fire" size={9} color="#E07A5F" />
-                                    <Text className="text-[10px] font-bold text-[#E07A5F]">
-                                      {r.calories == null ? "—" : `${r.calories} kcal`}
-                                    </Text>
-                                  </View>
-                                  <Text className="text-[10px] text-copy-muted">
-                                    P: {r.protein == null ? "—" : `${r.protein}g`} · C: {r.carbs == null ? "—" : `${r.carbs}g`} · F: {r.fat == null ? "—" : `${r.fat}g`}
-                                  </Text>
-                                </View>
-                              </View>
-                            </View>
-
-                            <TouchableOpacity
-                              onPress={() => handleDelete(r.id)}
-                              className="w-8 h-8 items-center justify-center rounded-full active:bg-background-secondary"
-                            >
-                              <FontAwesome6 name="trash-can" size={13} color="#B0A495" />
-                            </TouchableOpacity>
-                          </View>
-                        ))}
-                      </View>
-                    )}
+                    <View className="flex-1">
+                      <Text className="text-sm font-black text-ink">还没有饮食记录</Text>
+                      <Text className="text-[11px] leading-4 text-copy-muted mt-1">
+                        可手动填写，也可以用 AI 拍照识别食物
+                      </Text>
+                    </View>
                   </View>
-                );
-              })}
+                  <TouchableOpacity
+                    onPress={() => openAddModal()}
+                    accessibilityRole="button"
+                    accessibilityLabel="记录第一餐"
+                    className="bg-brand rounded-2xl py-3 mt-4 flex-row items-center justify-center gap-2 active:opacity-90"
+                  >
+                    <FontAwesome6 name="plus" size={12} color="#FFF" />
+                    <Text className="text-sm font-bold text-white">记录第一餐</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View>
+                  <View className="bg-white rounded-3xl border border-line px-4 pt-3.5 pb-4 mb-3 shadow-2xs">
+                    <View className="flex-row justify-between px-0.5">
+                      {["00", "06", "12", "18", "24"].map((time) => (
+                        <Text key={time} className="text-[9px] font-bold text-copy-muted">{time}</Text>
+                      ))}
+                    </View>
+                    <View className="h-2 rounded-full bg-background-secondary mt-2.5 relative">
+                      <View className="absolute left-1/4 top-0 h-2 w-px bg-line" />
+                      <View className="absolute left-1/2 top-0 h-2 w-px bg-line" />
+                      <View className="absolute left-3/4 top-0 h-2 w-px bg-line" />
+                      {sortedRecords.filter((record) => record.recorded_time).map((record) => (
+                        <View
+                          key={`dot-${record.id}`}
+                          className="absolute -top-1.5 w-5 h-5 rounded-full bg-brand border-2 border-white items-center justify-center"
+                          style={{ left: `${timePercent(record.recorded_time)}%`, marginLeft: -10 }}
+                        >
+                          <FontAwesome6 name="utensils" size={7} color="#FFF" />
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                  <View className="bg-white rounded-3xl border border-line overflow-hidden shadow-2xs">
+                    <View className="px-4 py-2.5 bg-canvas/60 border-b border-line">
+                      <Text className="text-[10px] font-bold text-copy-muted">饮食记录</Text>
+                    </View>
+                    {sortedRecords.map((record, index) => (
+                      <View key={record.id} className={`flex-row ${index < sortedRecords.length - 1 ? "border-b border-line" : ""}`}>
+                        <View className="w-16 bg-canvas/50 border-r border-line items-center pt-4">
+                          <Text className="text-xs font-black text-brand">{record.recorded_time || "—"}</Text>
+                          <View className="w-1.5 h-1.5 rounded-full bg-brand mt-1.5" />
+                        </View>
+                        <View className="flex-1 p-3 flex-row items-center min-h-20">
+                          {record.image_url ? (
+                            <Image source={{ uri: record.image_url }} className="w-10 h-10 rounded-xl mr-2.5" />
+                          ) : (
+                            <View className="w-10 h-10 rounded-xl bg-brand/10 items-center justify-center mr-2.5">
+                              <FontAwesome6 name="utensils" size={14} color="#2D6A4F" />
+                            </View>
+                          )}
+                          <View className="flex-1">
+                            <View className="flex-row items-center gap-1.5">
+                              <Text className="text-sm font-bold text-ink flex-shrink" numberOfLines={1}>{record.food_name}</Text>
+                              {record.meal_type ? <Text className="text-[9px] text-copy-muted">{record.meal_type}</Text> : null}
+                            </View>
+                            <Text className="text-[10px] text-copy-muted mt-0.5">
+                              {record.amount} · {record.calories == null ? "热量未填" : `${record.calories} kcal`}
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            onPress={() => handleDelete(record.id)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`删除${record.food_name}`}
+                            className="w-8 h-8 items-center justify-center"
+                          >
+                            <FontAwesome6 name="trash-can" size={12} color="#B0A495" />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
             </View>
           )}
         </ScrollView>
+
+        {/* 月历日期选择器 */}
+        <Modal
+          visible={calendarVisible}
+          animationType="fade"
+          transparent
+          onRequestClose={() => setCalendarVisible(false)}
+        >
+          <View className="flex-1 bg-black/40 justify-center px-5">
+            <View className="bg-white rounded-[28px] p-5 shadow-xl">
+              <View className="flex-row items-center justify-between mb-4">
+                <View>
+                  <Text className="text-lg font-black text-ink">选择日期</Text>
+                  <Text className="text-[11px] text-copy-muted mt-0.5">可以直接跳转到任意历史记录</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setCalendarVisible(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="关闭月历"
+                  className="w-9 h-9 rounded-full bg-background-secondary items-center justify-center"
+                >
+                  <FontAwesome6 name="xmark" size={15} color="#8B7D6B" />
+                </TouchableOpacity>
+              </View>
+
+              <View className="flex-row items-center justify-between mb-3">
+                <TouchableOpacity
+                  onPress={() => changeCalendarMonth(-1)}
+                  accessibilityRole="button"
+                  accessibilityLabel="上一个月"
+                  className="w-10 h-10 rounded-xl bg-background-secondary items-center justify-center active:opacity-70"
+                >
+                  <FontAwesome6 name="chevron-left" size={12} color="#3D3229" />
+                </TouchableOpacity>
+                <Text className="text-base font-black text-ink">
+                  {calendarMonth.getFullYear()}年{calendarMonth.getMonth() + 1}月
+                </Text>
+                <TouchableOpacity
+                  onPress={() => changeCalendarMonth(1)}
+                  disabled={isCalendarCurrentMonth}
+                  accessibilityRole="button"
+                  accessibilityLabel="下一个月"
+                  accessibilityState={{ disabled: isCalendarCurrentMonth }}
+                  className={`w-10 h-10 rounded-xl bg-background-secondary items-center justify-center ${
+                    isCalendarCurrentMonth ? "opacity-35" : "active:opacity-70"
+                  }`}
+                >
+                  <FontAwesome6 name="chevron-right" size={12} color="#3D3229" />
+                </TouchableOpacity>
+              </View>
+
+              <View className="flex-row mb-1">
+                {["一", "二", "三", "四", "五", "六", "日"].map((day) => (
+                  <View key={day} className="items-center py-1" style={{ width: "14.2857%" }}>
+                    <Text className="text-[10px] font-bold text-copy-muted">{day}</Text>
+                  </View>
+                ))}
+              </View>
+
+              <View className="flex-row flex-wrap">
+                {calendarDays.map((item) => (
+                  <TouchableOpacity
+                    key={item.dateStr}
+                    onPress={() => selectCalendarDate(item.date)}
+                    disabled={item.isFuture}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.date.getMonth() + 1}月${item.date.getDate()}日${item.isToday ? "，今天" : ""}`}
+                    accessibilityState={{ selected: item.isSelected, disabled: item.isFuture }}
+                    className="h-11 items-center justify-center"
+                    style={{ width: "14.2857%" }}
+                  >
+                    <View
+                      className={`w-9 h-9 rounded-full items-center justify-center ${
+                        item.isSelected
+                          ? "bg-brand"
+                          : item.isToday
+                          ? "bg-brand/10 border border-brand"
+                          : "bg-transparent"
+                      }`}
+                    >
+                      <Text
+                        className={`text-xs font-bold ${
+                          item.isSelected
+                            ? "text-white"
+                            : item.isFuture
+                            ? "text-copy-muted/25"
+                            : item.isCurrentMonth
+                            ? item.isToday
+                              ? "text-brand"
+                              : "text-ink"
+                            : "text-copy-muted/45"
+                        }`}
+                      >
+                        {item.date.getDate()}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <TouchableOpacity
+                onPress={() => selectCalendarDate(new Date())}
+                accessibilityRole="button"
+                accessibilityLabel="选择今天"
+                className="mt-4 py-3 rounded-2xl bg-brand/10 items-center active:opacity-70"
+              >
+                <Text className="text-sm font-black text-brand">回到今天</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
 
         {/* 打卡 Bottom Sheet Modal */}
         <Modal visible={modalVisible} animationType="slide" transparent>
@@ -623,7 +825,7 @@ export default function DietRecordScreen() {
                     <FontAwesome6 name="pen-to-square" size={14} color="#2D6A4F" />
                   </View>
                   <Text className="text-lg font-black text-ink">
-                    记录 {mealType}
+                    添加饮食记录
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -635,6 +837,16 @@ export default function DietRecordScreen() {
               </View>
 
               <ScrollView showsVerticalScrollIndicator={false} className="space-y-4">
+                <View className="flex-row gap-3">
+                  <View className="w-28">
+                    <Text className="text-xs font-bold text-copy-muted mb-1">进食时间 *</Text>
+                    <TextInput value={recordedTime} onChangeText={setRecordedTime} placeholder="08:30" keyboardType="numbers-and-punctuation" className="bg-canvas px-3 py-3 rounded-2xl border border-line text-sm text-ink" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-xs font-bold text-copy-muted mb-1">餐别标签（可选）</Text>
+                    <TextInput value={mealType} onChangeText={setMealType} placeholder="如 早餐、运动后加餐" className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink" />
+                  </View>
+                </View>
                 {/* AI 识图入口卡片 */}
                 <TouchableOpacity
                   onPress={handlePickImageAndRecognize}

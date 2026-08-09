@@ -1,9 +1,10 @@
-import { addLocalDays, parseDateKey, toLocalDateKey } from "./date";
+import { addLocalDays, parseDateKey, toLocalDateKey, toLocalTimeKey } from "./date";
 import { daysUntilDateKey, getInventoryStatus } from "./inventory";
 
 describe("local calendar dates", () => {
   test("formats without UTC date shifting", () => {
     expect(toLocalDateKey(new Date(2026, 7, 3, 23, 59))).toBe("2026-08-03");
+    expect(toLocalTimeKey(new Date(2026, 7, 3, 8, 5))).toBe("08:05");
   });
 
   test("adds calendar days across month boundaries", () => {

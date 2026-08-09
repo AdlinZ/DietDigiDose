@@ -14,7 +14,29 @@ export const authApi = {
     method: "PUT", headers: authHeaders(token), body: JSON.stringify(input),
   }),
   notificationPreferences: <T>(token: string) => requestJson<T>(publicFetch, "/api/v1/notifications/preferences", { headers: authHeaders(token) }),
-  notificationHistory: <T>(token: string) => requestJson<T>(publicFetch, "/api/v1/notifications/history", { headers: authHeaders(token) }),
+  notificationHistory: <T>(token: string, input: { filter?: "all" | "pending" | "system"; cursor?: number; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (input.filter) query.set("filter", input.filter);
+    if (input.cursor) query.set("cursor", String(input.cursor));
+    if (input.limit) query.set("limit", String(input.limit));
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return requestJson<T>(publicFetch, `/api/v1/notifications/history${suffix}`, { headers: authHeaders(token) });
+  },
+  notificationUnreadCount: (token: string) => requestJson<{ count: number }>(publicFetch, "/api/v1/notifications/unread-count", { headers: authHeaders(token) }),
+  markNotificationRead: (token: string, id: number) => requestJson<{ id: number; isRead: boolean }>(publicFetch, `/api/v1/notifications/${id}/read`, {
+    method: "PUT", headers: authHeaders(token),
+  }),
+  markAllNotificationsRead: (token: string) => requestJson<{ updated: number }>(publicFetch, "/api/v1/notifications/read-all", {
+    method: "PUT", headers: authHeaders(token),
+  }),
+  notificationAction: (token: string, id: number, action: "open" | "complete" | "snooze_today" | "plan_recipe", metadata?: Record<string, unknown>) =>
+    requestJson<{ id: number; action: string; actionStatus: string }>(publicFetch, `/api/v1/notifications/${id}/actions`, {
+      method: "POST", headers: authHeaders(token), body: JSON.stringify({ action, metadata }),
+    }),
+  recordLocalNotificationEvent: (token: string, input: { kind: "meal" | "water"; title: string; body: string; event: "received" | "opened"; source_id?: string }) =>
+    requestJson<{ id: number }>(publicFetch, "/api/v1/notifications/local-event", {
+      method: "POST", headers: authHeaders(token), body: JSON.stringify(input),
+    }),
   updateNotificationPreferences: <T>(token: string, input: unknown) => requestJson<T>(publicFetch, "/api/v1/notifications/preferences", {
     method: "PUT", headers: authHeaders(token), body: JSON.stringify(input),
   }),

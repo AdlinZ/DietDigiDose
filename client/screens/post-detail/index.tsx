@@ -451,23 +451,12 @@ export default function PostDetailScreen() {
           <View className="flex-row items-center gap-2">
             <TouchableOpacity
               onPress={() => {
-                const titleText = post.content.slice(0, 16) || "社区特色菜谱";
-                const mockSteps = JSON.stringify(["食材洗净备齐", "起锅热油炒至熟透", "关火盛盘享用"]);
-                const mockIngredients = JSON.stringify([{ name: "主料", amount: "适量" }]);
-                router.push({
-                  pathname: "/cooking-mode",
-                  params: {
-                    recipeId: post.id,
-                    title: titleText,
-                    steps: mockSteps,
-                    ingredients: mockIngredients,
-                  },
-                });
+                Alert.alert("暂不能开启烹饪", "这是一条普通社区动态，作者没有提供可执行的食材用量和步骤。请查看已发布的完整菜谱后再开始烹饪。");
               }}
-              className="bg-brand px-3 py-1.5 rounded-full flex-row items-center gap-1 active:opacity-80 shadow-xs"
+              className="bg-copy-muted px-3 py-1.5 rounded-full flex-row items-center gap-1 active:opacity-80 shadow-xs"
             >
-              <FontAwesome6 name="fire-burner" size={11} color="#FFF" />
-              <Text className="text-[11px] font-bold text-white">开启烹饪</Text>
+              <FontAwesome6 name="circle-info" size={11} color="#FFF" />
+              <Text className="text-[11px] font-bold text-white">暂无完整菜谱</Text>
             </TouchableOpacity>
 
             <TouchableOpacity

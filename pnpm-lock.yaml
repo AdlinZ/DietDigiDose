@@ -34,11 +34,6 @@ overrides:
   ws@8: 8.21.0
   yaml: 2.8.3
 
-patchedDependencies:
-  expo@54.0.36:
-    hash: 3e9f6f17e4ce25dc5f3772c969d4b327e1f5b519fbafba8f9828645c77fe7a81
-    path: patches/expo@54.0.36.patch
-
 importers:
 
   .: {}

@@ -7,6 +7,10 @@ import { positiveIntegerParam } from "../middleware/validateParam.js";
 import { getUserLevel } from "../services/userLevel.js";
 import { decodeCursor, encodeCursor } from "../utils/cursor.js";
 import { isStoredMediaUrlForUser } from "../services/mediaStorage.js";
+import {
+  recommendCommunityPosts,
+  type CommunityRecommendationProfile,
+} from "../services/communityRecommendation.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -60,71 +64,53 @@ function serializePost(post: any) {
   };
 }
 
-/**
- * A deliberately small, explainable ranker.  It gives a new community member a
- * useful feed without needing a separate recommendation service or opaque model.
- */
-function recommendPosts(posts: any[], userId: number | null, now = Date.now()) {
-  const likedCategories = new Map<string, number>();
-  let healthGoal = "healthy";
-  let dietaryPreference = "";
-
-  if (userId) {
-    const liked = db.prepare(`
-      SELECT p.category, COUNT(*) AS count
-      FROM community_post_likes l
-      JOIN community_posts p ON p.id = l.post_id
-      WHERE l.user_id = ? AND p.deleted_at IS NULL
-      GROUP BY p.category
-    `).all(userId) as Array<{ category: string; count: number }>;
-    liked.forEach((item) => likedCategories.set(item.category || "寻味", item.count));
-    const profile = db.prepare("SELECT health_goal, dietary_preference FROM user_health_profiles WHERE user_id = ?").get(userId) as any;
-    healthGoal = profile?.health_goal || healthGoal;
-    dietaryPreference = profile?.dietary_preference || "";
+function parseStringList(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      if (typeof item === "string") return [item];
+      if (item && typeof item === "object" && "name" in item && typeof item.name === "string") return [item.name];
+      return [];
+    });
+  } catch {
+    return value.split(/[、,，/;；\s]+/).filter(Boolean);
   }
+}
 
-  const goalKeywords: Record<string, string[]> = {
-    lose_weight: ["减脂", "低卡", "轻食", "控糖", "高纤"],
-    reduce_fat: ["减脂", "低卡", "轻食", "控糖", "高纤"],
-    gain_muscle: ["增肌", "高蛋白", "力量", "鸡胸", "牛肉"],
-    maintain: ["均衡", "家常", "营养", "早餐"],
-    healthy: ["营养", "健康", "蔬菜", "低糖", "均衡"],
+function getRecommendationProfile(userId: number | null): CommunityRecommendationProfile {
+  if (!userId) return { userId: null, healthGoal: "healthy", likedPosts: [], restrictedTerms: [] };
+  const health = db.prepare(`
+    SELECT health_goal, dietary_preference, allergies_json, dietary_restrictions_json, disliked_foods
+    FROM user_health_profiles WHERE user_id = ?
+  `).get(userId) as {
+    health_goal?: string | null;
+    dietary_preference?: string | null;
+    allergies_json?: string | null;
+    dietary_restrictions_json?: string | null;
+    disliked_foods?: string | null;
+  } | undefined;
+  const likedPosts = db.prepare(`
+    SELECT p.user_id, p.content
+    FROM community_post_likes l
+    JOIN community_posts p ON p.id = l.post_id
+    WHERE l.user_id = ? AND p.deleted_at IS NULL
+    ORDER BY l.created_at DESC
+    LIMIT 80
+  `).all(userId) as Array<{ user_id: number; content: string }>;
+
+  return {
+    userId,
+    healthGoal: health?.health_goal || "healthy",
+    dietaryPreference: health?.dietary_preference || "",
+    likedPosts,
+    restrictedTerms: [
+      ...parseStringList(health?.allergies_json),
+      ...parseStringList(health?.dietary_restrictions_json),
+      ...String(health?.disliked_foods || "").split(/[、,，/;；\s]+/),
+    ].filter(Boolean),
   };
-  const keywords = goalKeywords[healthGoal] || goalKeywords.healthy;
-  const preferences = dietaryPreference.split(/[、,，/\s]+/).filter((value: string) => value.length > 1 && value !== "无特别偏好");
-  const ranked = posts.map((post) => {
-    const text = `${post.content || ""} ${post.category || ""}`.toLowerCase();
-    const reasons: string[] = [];
-    let score = Math.log1p(Number(post.likes_count) || 0) * 5 + Math.log1p(Number(post.comment_count) || 0) * 3;
-    const createdAt = new Date(String(post.created_at).replace(" ", "T") + (String(post.created_at).includes("Z") ? "" : "Z")).getTime();
-    const ageHours = Number.isFinite(createdAt) ? Math.max(0, (now - createdAt) / 3_600_000) : 72;
-    score += Math.max(0, 18 - ageHours * 0.35);
-    if (ageHours < 24) reasons.push("新鲜发布");
-    if ((likedCategories.get(post.category || "寻味") || 0) > 0) {
-      score += 24;
-      reasons.push("符合你的点赞偏好");
-    }
-    if (keywords.some((keyword) => text.includes(keyword))) {
-      score += 20;
-      reasons.push("贴合你的健康目标");
-    }
-    if (preferences.some((preference: string) => text.includes(preference.toLowerCase()))) {
-      score += 16;
-      reasons.push("符合饮食偏好");
-    }
-    if ((post.likes_count || 0) >= 100) reasons.push("社区热议");
-    return { ...post, recommendation_score: Math.round(score * 10) / 10, recommendation_reason: reasons[0] || "社区热议" };
-  }).sort((a, b) => b.recommendation_score - a.recommendation_score || b.id - a.id);
-
-  // Avoid placing three posts from one category together when other choices exist.
-  const result: any[] = [];
-  const remaining = [...ranked];
-  while (remaining.length) {
-    const previousCategories = result.slice(-2).map((item) => item.category);
-    const index = remaining.findIndex((item) => !previousCategories.every((category) => category === item.category));
-    result.push(remaining.splice(index === -1 ? 0 : index, 1)[0]);
-  }
-  return result;
 }
 
 // GET /api/v1/community/users?query=xxx
@@ -228,8 +214,11 @@ router.get("/posts", (req: AuthRequest, res) => {
     const cursor = req.query.cursor ? decodeCursor(req.query.cursor) : null;
     const cursorId = cursor ? Number(cursor.id) : null;
     const cursorCategory = typeof cursor?.category === "string" ? cursor.category : "";
+    const validCursorVersion = requestedMode === "recommended"
+      ? cursor?.v === 2 || cursor?.v === 3
+      : cursor?.v === 2;
     if (cursor && (
-      cursor.v !== 2
+      !validCursorVersion
       || cursor.mode !== requestedMode
       || cursorCategory !== (typeof category === "string" ? category : "")
       || !Number.isInteger(cursorId)
@@ -240,7 +229,11 @@ router.get("/posts", (req: AuthRequest, res) => {
     const snapshotNow = requestedMode === "recommended" && cursor ? Number(cursor.at) : Date.now();
     const serialized = posts.map(serializePost);
     let ordered = requestedMode === "recommended"
-      ? recommendPosts(serialized, userId, Number.isFinite(snapshotNow) ? snapshotNow : Date.now())
+      ? recommendCommunityPosts(
+        serialized,
+        getRecommendationProfile(userId),
+        Number.isFinite(snapshotNow) ? snapshotNow : Date.now(),
+      )
       : serialized;
     if (cursor) {
       if (requestedMode === "latest") {
@@ -248,9 +241,9 @@ router.get("/posts", (req: AuthRequest, res) => {
         if (!cursorCreatedAt) return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
         ordered = ordered.filter((post) => post.created_at < cursorCreatedAt || (post.created_at === cursorCreatedAt && post.id < cursorId!));
       } else {
-        const cursorScore = Number(cursor.score);
-        if (!Number.isFinite(cursorScore)) return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
-        ordered = ordered.filter((post) => post.recommendation_score < cursorScore || (post.recommendation_score === cursorScore && post.id < cursorId!));
+        const cursorIndex = ordered.findIndex((post) => post.id === cursorId);
+        if (cursorIndex === -1) return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+        ordered = ordered.slice(cursorIndex + 1);
       }
     }
     const items = ordered.slice(0, pageSize);
@@ -258,7 +251,7 @@ router.get("/posts", (req: AuthRequest, res) => {
     const nextCursor = items.length === pageSize && last && ordered.length > pageSize
       ? encodeCursor(requestedMode === "latest"
         ? { v: 2, mode: requestedMode, category: typeof category === "string" ? category : "", createdAt: last.created_at, id: last.id }
-        : { v: 2, mode: requestedMode, category: typeof category === "string" ? category : "", at: snapshotNow, score: last.recommendation_score, id: last.id })
+        : { v: 3, mode: requestedMode, category: typeof category === "string" ? category : "", at: snapshotNow, id: last.id })
       : null;
     return res.json({
       items,
@@ -266,7 +259,9 @@ router.get("/posts", (req: AuthRequest, res) => {
     });
   }
   const serialized = posts.map(serializePost);
-  const ordered = requestedMode === "recommended" ? recommendPosts(serialized, userId) : serialized;
+  const ordered = requestedMode === "recommended"
+    ? recommendCommunityPosts(serialized, getRecommendationProfile(userId))
+    : serialized;
   res.json(limit === null ? ordered : ordered.slice(offset, offset + limit));
 });
 

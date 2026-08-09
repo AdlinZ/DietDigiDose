@@ -9,6 +9,7 @@ import type {
   InventoryScanCard,
   InventoryScanFood,
   Message,
+  SolutionCard,
 } from "./types";
 
 type AssistantMessageItemProps = {
@@ -23,6 +24,8 @@ type AssistantMessageItemProps = {
   confirmInventoryScanCard: (messageId: string, card: InventoryScanCard) => void | Promise<void>;
   handleSaveToShoppingList: (messageId: string, card: DietRecordMissingCard) => void | Promise<void>;
   handleSendMessage: (text: string) => void | Promise<void>;
+  onStartCooking: (card: SolutionCard) => void;
+  onSaveRecipe: (messageId: string, card: SolutionCard) => void | Promise<void>;
   onOpenInventory: () => void;
   onOpenInventoryAdd: () => void;
 };
@@ -39,6 +42,8 @@ export function AssistantMessageItem({
   confirmInventoryScanCard,
   handleSaveToShoppingList,
   handleSendMessage,
+  onStartCooking,
+  onSaveRecipe,
   onOpenInventory,
   onOpenInventoryAdd,
 }: AssistantMessageItemProps) {
@@ -61,7 +66,9 @@ export function AssistantMessageItem({
                     className={`${msg.inventoryScanCard ? "max-w-[90%]" : "max-w-[78%]"} p-4 rounded-3xl shadow-xs ${
                       msg.sender === "user"
                         ? "bg-brand rounded-tr-none"
-                        : "bg-white border border-line rounded-tl-none"
+                        : msg.status === "failed"
+                          ? "bg-red-50 border border-red-200 rounded-tl-none"
+                          : "bg-white border border-line rounded-tl-none"
                     }`}
                   >
                     {msg.imageUri && (
@@ -78,6 +85,11 @@ export function AssistantMessageItem({
                         {msg.text}
                       </Text>
                     )}
+                    {msg.sender === "ai" && typeof msg.responseTimeMs === "number" ? (
+                      <Text className="mt-1 text-[9px] font-medium text-copy-muted">
+                        回复耗时 {msg.responseTimeMs < 1000 ? `${Math.round(msg.responseTimeMs)} ms` : `${(msg.responseTimeMs / 1000).toFixed(2)} 秒`}
+                      </Text>
+                    ) : null}
 
                     {/* Pre-filled Diet Record Action Card */}
                     {msg.actionCard && (
@@ -342,9 +354,12 @@ export function AssistantMessageItem({
                               <View className="bg-brand px-2.5 py-0.5 rounded-full shrink-0">
                                 <Text className="text-[10px] font-black text-white">{card.schemeTag}</Text>
                               </View>
-                              <Text className="text-xs font-black text-ink flex-1 text-right" numberOfLines={1}>
-                                {card.title}
-                              </Text>
+                              <View className="flex-1 items-end">
+                                <Text className="text-xs font-black text-ink text-right" numberOfLines={1}>{card.title}</Text>
+                                <Text className={`mt-0.5 text-[9px] font-bold ${card.source === "local" ? "text-emerald-700" : "text-amber-700"}`}>
+                                  {card.source === "local" ? "本地菜谱" : "AI 建议"}
+                                </Text>
+                              </View>
                             </View>
 
                             {/* 第二行：营养数据独占一行胶囊 */}
@@ -374,12 +389,20 @@ export function AssistantMessageItem({
                             </View>
 
                             <TouchableOpacity
-                              onPress={() => handleSendMessage(card.actionText)}
+                              onPress={() => onStartCooking(card)}
                               className="bg-brand py-2 rounded-xl items-center flex-row justify-center gap-1.5 shadow-2xs active:opacity-90"
                             >
                               <FontAwesome6 name="utensils" size={10} color="#FFF" />
                               <Text className="text-xs font-bold text-white">选择【{card.schemeTag}】制作</Text>
                               <FontAwesome6 name="chevron-right" size={9} color="#FFF" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              onPress={() => onSaveRecipe(msg.id, card)}
+                              disabled={card.savedToRecipes}
+                              className="mt-2 flex-row items-center justify-center gap-1.5 rounded-xl border border-brand/25 bg-brand/10 py-2 disabled:opacity-60"
+                            >
+                              <FontAwesome6 name={card.savedToRecipes ? "circle-check" : "bookmark"} size={10} color="#2D6A4F" />
+                              <Text className="text-xs font-bold text-brand">{card.savedToRecipes ? "已保存到我的菜谱" : "保存到我的菜谱"}</Text>
                             </TouchableOpacity>
                           </View>
                         ))}

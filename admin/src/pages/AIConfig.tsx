@@ -369,11 +369,11 @@ export default function AIConfig() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-            {/* Card A: 💬 文本对话服务 */}
+            {/* Card A: 文本对话服务 */}
             <div className="p-4 rounded-2xl border border-gray-100 bg-background-alt/50 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-text-main flex items-center gap-1.5">
-                  <Bot size={16} className="text-primary" /> 💬 文本对话服务
+                  <Bot size={16} className="text-primary" aria-hidden="true" /> 文本对话服务
                 </span>
                 <span className="text-[10px] text-text-muted">Chat / Agent</span>
               </div>
@@ -414,11 +414,11 @@ export default function AIConfig() {
               )}
             </div>
 
-            {/* Card B: 👁️ 多模态识图服务 */}
+            {/* Card B: 多模态识图服务 */}
             <div className="p-4 rounded-2xl border border-gray-100 bg-background-alt/50 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-text-main flex items-center gap-1.5">
-                  <Image size={16} className="text-secondary" /> 👁️ 多模态识图服务
+                  <Image size={16} className="text-secondary" aria-hidden="true" /> 多模态识图服务
                 </span>
                 <span className="text-[10px] text-text-muted">Vision / OCR</span>
               </div>
@@ -459,11 +459,11 @@ export default function AIConfig() {
               )}
             </div>
 
-            {/* Card C: 🎙️ 语音识别服务 */}
+            {/* Card C: 语音识别服务 */}
             <div className="p-4 rounded-2xl border border-gray-100 bg-background-alt/50 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-text-main flex items-center gap-1.5">
-                  <Mic size={16} className="text-orange-500" /> 🎙️ 语音识别服务
+                  <Mic size={16} className="text-orange-500" aria-hidden="true" /> 语音识别服务
                 </span>
                 <span className="text-[10px] text-text-muted">ASR / Whisper</span>
               </div>

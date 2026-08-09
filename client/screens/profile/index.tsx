@@ -348,9 +348,11 @@ export default function ProfileScreen() {
                     <Text className="text-[10px] font-black text-ink">V{userLevel?.level ?? 1} {userLevel?.title ?? "健康新芽"}</Text>
                   </View>
                 </View>
-                <Text className="text-emerald-100/90 text-xs mt-0.5" numberOfLines={1}>
-                  {user?.bio || "追求自然原味与有氧健康生活的记录者。"}
-                </Text>
+                {user?.bio?.trim() ? (
+                  <Text className="mt-0.5 text-xs text-emerald-100/90" numberOfLines={1}>
+                    {user.bio.trim()}
+                  </Text>
+                ) : null}
               </View>
             </TouchableOpacity>
 
@@ -724,6 +726,13 @@ export default function ProfileScreen() {
               subtitle="查看并维护已保存的健康记录"
               color="#2D6A4F"
               onPress={() => router.push("/health-data")}
+            />
+            <ServiceRow
+              icon="comment-dots"
+              title="帮助与反馈"
+              subtitle="问题反馈、功能建议与客服支持"
+              color="#2D6A4F"
+              onPress={() => router.push("/feedback")}
             />
             <ServiceRow
               icon="gear"

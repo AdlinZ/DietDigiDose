@@ -9,6 +9,32 @@ export type NotificationPreferences = {
   expiring_alert: boolean;
   meal_reminder: boolean;
   water_reminder: boolean;
+  breakfast_time: string;
+  lunch_time: string;
+  dinner_time: string;
+  water_start_time: string;
+  water_end_time: string;
+  water_interval_minutes: number;
+  quiet_start_time: string;
+  quiet_end_time: string;
+  weekdays_enabled: boolean;
+  weekends_enabled: boolean;
+};
+
+export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  expiring_alert: true,
+  meal_reminder: true,
+  water_reminder: true,
+  breakfast_time: "08:00",
+  lunch_time: "12:00",
+  dinner_time: "18:00",
+  water_start_time: "10:00",
+  water_end_time: "18:00",
+  water_interval_minutes: 120,
+  quiet_start_time: "22:00",
+  quiet_end_time: "07:00",
+  weekdays_enabled: true,
+  weekends_enabled: true,
 };
 
 const SCHEDULE_IDS_KEY = "@notification_schedule_ids";
@@ -29,6 +55,10 @@ export async function getExpoPushToken() {
       vibrationPattern: [0, 250, 250, 250],
     });
   }
+  await Notifications.setNotificationCategoryAsync("inventory-expiring", [
+    { identifier: "PLAN_RECIPE", buttonTitle: "安排食谱" },
+    { identifier: "COMPLETE", buttonTitle: "已处理", options: { opensAppToForeground: false } },
+  ]);
   const existing = await Notifications.getPermissionsAsync();
   const permission = existing.status === "granted" ? existing : await Notifications.requestPermissionsAsync();
   if (permission.status !== "granted") return null;
@@ -40,6 +70,44 @@ async function clearScheduledNotifications() {
   const saved = await AsyncStorage.getItem(SCHEDULE_IDS_KEY);
   const ids: string[] = saved ? JSON.parse(saved) : [];
   await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+}
+
+function timeParts(value: string) {
+  const [hour = 0, minute = 0] = value.split(":").map(Number);
+  return { hour, minute, total: hour * 60 + minute };
+}
+
+function isQuietTime(total: number, preferences: NotificationPreferences) {
+  const start = timeParts(preferences.quiet_start_time).total;
+  const end = timeParts(preferences.quiet_end_time).total;
+  if (start === end) return false;
+  return start < end ? total >= start && total < end : total >= start || total < end;
+}
+
+function enabledWeekdays(preferences: NotificationPreferences) {
+  const days: number[] = [];
+  if (preferences.weekdays_enabled) days.push(2, 3, 4, 5, 6);
+  if (preferences.weekends_enabled) days.push(1, 7);
+  return days;
+}
+
+async function scheduleWeekly(
+  title: string,
+  body: string,
+  time: string,
+  weekdays: number[],
+  data: Record<string, string>,
+) {
+  const { hour, minute } = timeParts(time);
+  return Promise.all(weekdays.map((weekday) => Notifications.scheduleNotificationAsync({
+    content: { title, body, sound: "default", data: { ...data, sourceId: `${data.kind}:${weekday}:${time}` } },
+    trigger: { type: Notifications.SchedulableTriggerInputTypes.CALENDAR, repeats: true, weekday, hour, minute },
+  })));
+}
+
+function minutesToTime(total: number) {
+  const normalized = ((total % 1440) + 1440) % 1440;
+  return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
 }
 
 async function scheduleDaily(title: string, body: string, hour: number) {
@@ -59,14 +127,27 @@ export async function syncLocalNotificationSchedules(preferences: NotificationPr
     return;
   }
   const ids: string[] = [];
+  const weekdays = enabledWeekdays(preferences);
   if (preferences.meal_reminder) {
-    ids.push(await scheduleDaily("该记录一餐啦", "早餐、午餐和晚餐的饮食记录会帮你更好地规划营养。", 8));
-    ids.push(await scheduleDaily("午餐打卡提醒", "记下这一餐，食光会继续为你安排接下来的饮食。", 12));
-    ids.push(await scheduleDaily("晚餐打卡提醒", "晚餐后花一分钟记录，让今日营养更完整。", 18));
+    const meals = [
+      ["早餐打卡提醒", "记下早餐，让今天的营养规划有个好开始。", preferences.breakfast_time, "breakfast"],
+      ["午餐打卡提醒", "记下这一餐，食光会继续为你安排接下来的饮食。", preferences.lunch_time, "lunch"],
+      ["晚餐打卡提醒", "晚餐后花一分钟记录，让今日营养更完整。", preferences.dinner_time, "dinner"],
+    ] as const;
+    for (const [title, body, time, meal] of meals) {
+      if (!isQuietTime(timeParts(time).total, preferences)) {
+        ids.push(...await scheduleWeekly(title, body, time, weekdays, { type: "routine_reminder", kind: "meal", meal }));
+      }
+    }
   }
   if (preferences.water_reminder) {
-    for (const hour of [10, 12, 14, 16, 18]) {
-      ids.push(await scheduleDaily("补充一杯水", "该补充约 250ml 水分了。", hour));
+    const start = timeParts(preferences.water_start_time).total;
+    const end = timeParts(preferences.water_end_time).total;
+    for (let total = start; total <= end; total += preferences.water_interval_minutes) {
+      if (!isQuietTime(total, preferences)) {
+        const time = minutesToTime(total);
+        ids.push(...await scheduleWeekly("补充一杯水", "该补充约 250ml 水分了。", time, weekdays, { type: "routine_reminder", kind: "water" }));
+      }
     }
   }
   await AsyncStorage.setItem(SCHEDULE_IDS_KEY, JSON.stringify(ids));

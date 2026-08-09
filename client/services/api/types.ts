@@ -19,6 +19,7 @@ export type DietRecord = {
   carbs: number | null;
   fat: number | null;
   recorded_at: string;
+  recorded_time?: string | null;
   image_url: string | null;
 };
 

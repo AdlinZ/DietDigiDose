@@ -203,6 +203,17 @@ function splitIngredientEntries(value: string): string[] {
   return sourceEntries.flatMap((entry) => {
     const cleaned = cleanWikiText(entry)
       .replace(/^(?:主食材|主辅料|主料|辅料|调料|调味料|配料)\s*[：:]\s*/, '');
+    // Some pages describe all ingredients in one prose sentence, such as
+    // "主料为小麦面粉，辅料为时令蔬菜，主要使用黄瓜，调料主要使用水、醋…".
+    // Extract the ingredient clauses before falling back to delimiter splitting,
+    // otherwise the introductory sentence itself is imported as an ingredient.
+    const proseEntries = [...cleaned.matchAll(
+      /(?:主料|辅料|调料|调味料)\s*(?:为|是|主要使用)\s*([^。；;]+?)(?=，\s*(?:主料|辅料|调料|调味料|可|也可|按)|[。；;]|$)/g,
+    )].flatMap((match) => match[1]
+      .split(/[，,、；;]/)
+      .map((item) => item.trim().replace(/^(?:主要)?使用/, ''))
+      .filter(Boolean));
+    if (proseEntries.length) return proseEntries;
     return cleaned.split(/[，,、；;]/)
       .map((item) => item.trim())
       .filter((item, index) => Boolean(item) && (
@@ -233,7 +244,7 @@ function ingredientFromEntry(entry: string): Ingredient | null {
     .replace(/^(?:主食材|主辅料|主料|辅料|调料|调味料|配料)\s*[：:]?\s*/, '')
     .trim();
   if (!cleaned || cleaned.length > 100 || /^(适量|少许|若干)$/.test(cleaned)) return null;
-  const amountPattern = /(?:约\s*)?(?:\d+\s*\/\s*\d+|\d+(?:\.\d+)?(?:\s*[-~至到]\s*\d+(?:\.\d+)?)?|[一二三四五六七八九十两半]+)\s*[大小平]?\s*(?:千克|公斤|kg|公克|克|g|毫升|ml|公升|升|l|斤|两|杯|个|只|条|朵|片|根|块|汤匙|茶匙|大匙|大勺|平勺|勺|匙|张|碗|颗|支|瓶|段|瓣)/i;
+  const amountPattern = /(?:约\s*)?(?:\d+\s*\/\s*\d+|\d+(?:\.\d+)?(?:\s*[-~～至到]\s*\d+(?:\.\d+)?)?|[一二三四五六七八九十两半]+)\s*[大小平]?\s*(?:千克|公斤|kg|公克|克|g|毫升|ml|公升|升|l|斤|两|杯|个|只|条|朵|片|根|块|汤匙|茶匙|大匙|大勺|平勺|勺|匙|张|碗|颗|支|瓶|段|瓣)/i;
   const amountMatch = cleaned.match(amountPattern);
   const consumedMatch = cleaned.match(new RegExp(`[（(](?:实耗|约耗|实际耗用?)\\s*(${amountPattern.source})[）)]`, 'i'));
   const qualitativeAmount = cleaned.match(/(?:适量|少许|若干)/)?.[0];
@@ -249,13 +260,15 @@ function ingredientFromEntry(entry: string): Ingredient | null {
     .replace(/[：:].*$/, '')
     .replace(/[（(][^）)]*(?:可选|推荐)[^）)]*[）)]/g, '')
     .replace(/(?:相)?混合[。.]?$/, '')
+    .replace(/等(?:调味品)?$/, '')
     .replace(/[。！？!?]+$/, '')
     .trim();
-  if (/^(?:用量|海鲜|肉类|蔬菜|过程|步骤|建议|备注)$/.test(name)) return null;
+  if (/^(?:用量|海鲜|肉类|蔬菜|时令蔬菜|过程|步骤|建议|备注)$/.test(name)) return null;
   if (
     (!amountMatch && name.length > 12) ||
     (!amountMatch && /^(?:准备|将|把|用|放入|加入|倒入|搓|捏|烤|煮|炒|蒸|制成)/.test(name)) ||
     /^(?:最好|建议|为了|如果|可选用|或购买|约取|包括)/.test(name) ||
+    /(?:所用)?(?:材料|原料|用料|配料)(?:为|是)?$/.test(name) ||
     /玻璃瓶|容器|器皿|模具|烤盘|炒锅|汤锅|电烤炉|电磁炉|冰箱/.test(name) ||
     /肉质|营养成分|风味|口感|增添|提升|富含|用于烹饪|释放出|代表|颜色翠|切成|精准调味|味道|鲜嫩|筋道|香气|提味|可以替换/.test(name)
   ) return null;

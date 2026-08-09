@@ -18,7 +18,6 @@ deploy/server.env
 # Local runtime state and secrets must never be committed.
 server/data/
 server/backups/
-.cozeproj/reduction
 
 # JS/TS bundlers & build outputs
 .next

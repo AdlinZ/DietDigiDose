@@ -15,6 +15,7 @@ import kitchenwareRoutes from "./routes/kitchenware.js";
 import notificationsRoutes from "./routes/notifications.js";
 import mediaRoutes from "./routes/media.js";
 import householdRoutes from "./routes/households.js";
+import feedbackRoutes from "./routes/feedback.js";
 import { initDatabase } from "./storage/db.js";
 import { errorHandler, notFoundHandler, sendError } from "./utils/http.js";
 import { requestContext } from "./middleware/requestContext.js";
@@ -80,6 +81,7 @@ export function createApp() {
   app.use("/api/v1/notifications", notificationsRoutes);
   app.use("/api/v1/media", mediaRoutes);
   app.use("/api/v1/households", householdRoutes);
+  app.use("/api/v1/feedback", feedbackRoutes);
 
   app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (error instanceof SyntaxError && "body" in error) {

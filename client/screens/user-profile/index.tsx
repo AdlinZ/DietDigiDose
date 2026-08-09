@@ -61,7 +61,9 @@ export default function UserProfileScreen() {
         <View className="rounded-full border-4 border-highlight bg-white p-1 shadow-lg"><Image source={getAvatarSource(profile.avatar_url, profile.id)} className="h-20 w-20 rounded-full" /></View>
         <Text className="mt-3 text-xl font-black text-white">{profile.username}</Text>
         <View className="mt-2 flex-row items-center gap-1.5 rounded-full bg-white/15 px-3 py-1"><FontAwesome6 name="medal" size={10} color="#E9C46A" /><Text className="text-[10px] font-bold text-emerald-50">V{profile.level.level} · {profile.level.title}</Text></View>
-        <Text className="mt-3 max-w-[290px] text-center text-xs leading-5 text-emerald-100">{profile.bio || "分享日常饮食与健康生活。"}</Text>
+        {profile.bio?.trim() ? (
+          <Text className="mt-3 max-w-[290px] text-center text-xs leading-5 text-emerald-100">{profile.bio.trim()}</Text>
+        ) : null}
       </View>
       <View className="mt-6 flex-row rounded-[22px] border border-white/10 bg-black/15 py-3.5"><Stat label="动态" value={profile.posts_count} /><Stat label="关注" value={profile.following_count} /><Stat label="粉丝" value={profile.followers_count} /></View>
       <View className="mt-3 rounded-2xl border border-white/10 bg-white/10 px-3 py-2.5"><View className="flex-row items-center justify-between"><Text className="text-[10px] font-bold text-emerald-50">成长经验 {profile.level.xp} XP</Text><Text className="text-[10px] text-emerald-100">{profile.level.nextXp ? `${profile.level.progress}%` : "满级"}</Text></View><View className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/15"><View className="h-full rounded-full bg-highlight" style={{ width: `${profile.level.progress}%` }} /></View></View>

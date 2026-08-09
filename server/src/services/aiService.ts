@@ -85,13 +85,18 @@ export interface SolutionCard {
   schemeTag: string;
   title: string;
   ingredients: string;
+  ingredientItems?: Array<{ name: string; amount: string }>;
   cookingTip: string;
+  steps?: string[];
   macros: string;
   actionText: string;
 }
 
 export interface ChatCompletionResult {
   reply: string;
+  /** Indicates a local response was used because the real model could not be reached. */
+  fallback?: boolean;
+  fallbackReason?: "AI_NOT_CONFIGURED" | "AI_REQUEST_FAILED";
   actionCard?: {
     mealType: string;
     foodName: string;
@@ -113,12 +118,28 @@ export interface ChatCompletionResult {
   writeConfirmation?: { confirmationId: string; action: string; payload: Record<string, unknown>; expiresAt: string };
 }
 
+/**
+ * Some OpenAI-compatible providers (including SiliconFlow) accept only one
+ * system message, and require it to be the first message in the request.
+ * Keep the application-level prompts modular, but combine them at the
+ * provider boundary so the request remains portable.
+ */
+function normalizeProviderMessages(messages: ChatMessage[]): ChatMessage[] {
+  const systemContents = messages.flatMap((message) =>
+    message.role === "system" && typeof message.content === "string" && message.content.trim()
+      ? [message.content.trim()]
+      : [],
+  );
+  const nonSystemMessages = messages.filter((message) => message.role !== "system");
+
+  if (systemContents.length === 0) return nonSystemMessages;
+  return [{ role: "system", content: systemContents.join("\n\n") }, ...nonSystemMessages];
+}
+
 export function parseDietActionCard(userText: string, aiReplyText: string = ""): ChatCompletionResult["actionCard"] {
-  // 如果用户是在询问方案、想吃但缺料、或者 AI 在提供选项，绝不弹出打卡确认卡片！
   const isQueryOrOptionMode = /想吃|买|采购|缺|库存|没有|买菜|方案|选择|推荐|替代|怎么|如何|什么/i.test(userText);
   if (isQueryOrOptionMode) return undefined;
 
-  // 必须用户明确表达“打卡”、“记录”、“今天吃了”、“刚才吃了”等行为才触发
   const isExplicitDietRecord = /打卡|记录|今天吃|刚才吃|早餐吃|午餐吃|晚餐吃|加餐吃|喝了|吃了/i.test(userText);
   if (!isExplicitDietRecord) return undefined;
 
@@ -167,7 +188,6 @@ export function parseDietActionCard(userText: string, aiReplyText: string = ""):
 }
 
 export function parseMissingIngredientsCard(userText: string, aiReplyText: string = ""): ChatCompletionResult["missingCard"] {
-  // 1. 倒序提取用户句尾最后表达的真正意图，过滤“不想吃这个了”等前置否定/转折短语
   let dishName = "";
   const matches = Array.from(userText.matchAll(/(?:想吃|想做|改吃|吃)([^\s，,。!！?？]+)/g));
   if (matches.length > 0) {
@@ -188,13 +208,11 @@ export function parseMissingIngredientsCard(userText: string, aiReplyText: strin
 
   if (!dishName) return undefined;
 
-  // 检查 AI 回复中是否提到了缺食材/采购建议
   const isAiMissingWarn = /采购|补充|缺|没有|买/i.test(aiReplyText) || /缺|没有|买菜/i.test(userText);
   if (!isAiMissingWarn) return undefined;
 
   const missingItems: Array<{ name: string; amount: string }> = [];
 
-  // 根据确切的菜名提取真正缺失的食材
   if (dishName.includes("西红柿炒蛋") || dishName.includes("番茄炒蛋") || dishName.includes("炒鸡蛋")) {
     if (aiReplyText.includes("鸡蛋") || userText.includes("鸡蛋")) missingItems.push({ name: "鲜鸡蛋", amount: "3个" });
     if (aiReplyText.includes("西红柿") || aiReplyText.includes("番茄")) missingItems.push({ name: "西红柿", amount: "2个" });
@@ -208,7 +226,6 @@ export function parseMissingIngredientsCard(userText: string, aiReplyText: strin
   } else if (dishName.includes("牛排") && userText.includes("牛排")) {
     missingItems.push({ name: "原切眼肉牛排", amount: "1块" });
   } else {
-    // 动态从 AI 回复里匹配缺失食材，例如："补充一些鸡蛋" -> "鲜鸡蛋 3个"
     const eggMatch = aiReplyText.match(/补充[一些\s]*([^\s，。！~]+)/);
     if (eggMatch) {
       missingItems.push({ name: eggMatch[1], amount: "适量" });
@@ -224,7 +241,6 @@ export function parseMissingIngredientsCard(userText: string, aiReplyText: strin
 }
 
 export function parseOptionChoicesCard(userText: string, aiReplyText: string = ""): ChatCompletionResult["optionsCard"] {
-  // 如果是烹饪步骤、食谱教程、做饭流程，绝不能误判为方案选项卡片！
   if (
     aiReplyText.includes("步骤") ||
     aiReplyText.includes("做法") ||
@@ -240,7 +256,6 @@ export function parseOptionChoicesCard(userText: string, aiReplyText: string = "
 
   const options: Array<{ label: string; actionText: string }> = [];
 
-  // 1. 匹配“方案 A: xxx”、“方案 B: xxx”等
   const schemeMatches = aiReplyText.matchAll(/方案\s*([A-Za-z0-9一二三四12345])[:：\s]\s*([^\n\r]+)/g);
   for (const match of schemeMatches) {
     const key = match[1].toUpperCase();
@@ -252,7 +267,6 @@ export function parseOptionChoicesCard(userText: string, aiReplyText: string = "
     });
   }
 
-  // 仅在明确有 1~5 个独立方案且非烹饪步骤时才解析
   if (options.length > 0 && options.length <= 5) {
     return {
       title: "👇 点击下方快捷按钮选择您的方案：",
@@ -282,7 +296,7 @@ export function parseSolutionCards(userText: string, aiReplyText: string = ""): 
     const blockText = aiReplyText.slice(startIndex, endIndex);
 
     const macroMatch = blockText.match(/(?:预估|热量|能量)[:：\s]*([^\n\r]+)/) || blockText.match(/(\d+\s*kcal[^\n\r]*)/i);
-    const macros = macroMatch ? macroMatch[1].replace(/[\*\_#]/g, "").trim() : "预估 450 kcal · 营养均衡低卡";
+    const macros = macroMatch ? macroMatch[1].replace(/[\*\_#]/g, "").trim() : "预估 450 kcal · 营养均衡";
 
     const detailLines = blockText
       .split("\n")
@@ -341,6 +355,7 @@ export async function chatCompletion(
   const userText = options.originalUserText ?? (typeof lastMsg?.content === "string" ? lastMsg.content : "");
 
   if (!apiKey) {
+    console.warn("[AI Service] Chat model is not configured; using local fallback");
     const replyText = getFallbackResponse(messages);
     const actionCard = parseDietActionCard(userText, replyText);
     const missingCard = parseMissingIngredientsCard(userText, replyText);
@@ -350,6 +365,8 @@ export async function chatCompletion(
       reply: actionCard
         ? `🍱 食语已为您分析并预填好【${actionCard.mealType}】打卡数据！请在下方核对，点击【确认打卡保存】或【弹出修改】：`
         : replyText,
+      fallback: true,
+      fallbackReason: "AI_NOT_CONFIGURED",
       actionCard,
       missingCard,
       optionsCard,
@@ -358,9 +375,10 @@ export async function chatCompletion(
   }
 
   try {
+    const providerMessages = normalizeProviderMessages(messages);
     const payload: any = {
       model,
-      messages,
+      messages: providerMessages,
       temperature: options.temperature ?? 0.7,
       max_tokens: options.max_tokens ?? 1000,
       response_format: options.jsonMode ? { type: "json_object" } : undefined,
@@ -438,7 +456,6 @@ export async function chatCompletion(
 
       console.log(`[AI Tool Call Triggered] User ${options.userId} -> ${fnName}`, fnArgs);
 
-      // 人机协同模式 (Human-In-The-Loop): 饮食打卡不静默落库，而是生成中间确认卡片
       if (fnName === "record_diet_meal") {
         const card = {
           mealType: fnArgs.mealType || "午餐",
@@ -474,7 +491,11 @@ export async function chatCompletion(
           schemeTag: s.schemeTag || `方案 ${String.fromCharCode(65 + idx)}`,
           title: s.title || "健康推荐料理",
           ingredients: s.ingredients || "优选食材搭配",
+          ingredientItems: Array.isArray(s.ingredientItems)
+            ? s.ingredientItems.filter((item: any) => typeof item?.name === "string" && typeof item?.amount === "string")
+            : [],
           cookingTip: s.cookingTip || "少油少盐，保持食材原汁原味",
+          steps: Array.isArray(s.steps) ? s.steps.filter((step: any) => typeof step === "string" && step.trim()) : [],
           macros: s.macros || "预估 450 kcal · 营养均衡",
           actionText: `我选择【${s.schemeTag || `方案 ${String.fromCharCode(65 + idx)}`}：${s.title || "健康推荐料理"}】，请为我提供详细做法与准备步骤！`,
         }));
@@ -490,7 +511,6 @@ export async function chatCompletion(
         };
       }
 
-      // 其它工具执行 SQLite 操作
       const toolResult = await executeAITool(options.userId, fnName, fnArgs);
       if (toolResult.success) {
         return { reply: `${toolResult.message}\n\n如有其它需求，随时告诉我哦！`, writeConfirmation: toolResult.details?.writeConfirmation };
@@ -531,7 +551,15 @@ export async function chatCompletion(
     const missingCard = parseMissingIngredientsCard(userText, replyText);
     const solutionCards = parseSolutionCards(userText, replyText) || buildRecommendationCard(userText, replyText);
     const optionsCard = solutionCards && solutionCards.length > 0 ? undefined : parseOptionChoicesCard(userText, replyText);
-    return { reply: replyText, actionCard, missingCard, optionsCard, solutionCards };
+    return {
+      reply: replyText,
+      fallback: true,
+      fallbackReason: "AI_REQUEST_FAILED",
+      actionCard,
+      missingCard,
+      optionsCard,
+      solutionCards,
+    };
   }
 }
 
@@ -624,14 +652,27 @@ export async function analyzeImage(
 }
 
 /**
- * 未配置真实 API Key 时的智能降级逻辑
+ * 未配置真实 API Key 时的智能降级逻辑（零正则分类，纯粹文本解析）
  */
 function getFallbackResponse(messages: ChatMessage[]): string {
   const lastMsg = messages[messages.length - 1];
-  const userText = typeof lastMsg.content === "string" ? lastMsg.content : "";
+  const fullContent = typeof lastMsg?.content === "string" ? lastMsg.content : "";
 
-  // 卡片的“查看做法”操作会带有“食材用量”字样，必须先于“食材搭配”处理，
-  // 否则会被误判为再次请求冰箱推荐而造成重复回复。
+  // 做饭模式没有配置模型时，仍需直接回答语音问题，绝不能把完整提示词回显给用户。
+  const voiceQuestionMatch = fullContent.match(/(?:用户语音提问：[“"']|(?:用户|当前)问题：)([^”"'\n]+)(?:[”"']|\n)/);
+  if (voiceQuestionMatch) {
+    const question = voiceQuestionMatch[1].trim();
+    if (/(赶时间|着急)/.test(question) && /解冻|冻肉|冷冻/.test(fullContent)) {
+      return "赶时间可把五花肉密封后浸在冷水里，每 30 分钟换水，500 克约 1–2 小时。解到能切开即可，别用热水或放室温。";
+    }
+    if (/解冻|冻肉|冷冻/.test(question)) {
+      return "最稳妥是放冷藏室 0–4℃ 解冻，500 克五花肉约需 8–12 小时。赶时间可密封后冷水浸泡、每 30 分钟换水；别室温放或用热水泡。";
+    }
+    return `关于“${question}”：先按当前食材状态调整火候和时间；不确定时先小火观察，避免一次加重调味。`;
+  }
+
+  const userText = fullContent;
+
   if (/完整做法|详细做法|制作步骤|烹饪时间|食材用量/.test(userText)) {
     const dishName = userText.match(/【([^】]+)】/)?.[1] || "这道菜";
     return `## ${dishName}做法
@@ -655,38 +696,7 @@ function getFallbackResponse(messages: ChatMessage[]): string {
 - 热量会随主食和实际油量变化，建议按食材标签记录。`;
   }
 
-  if (userText.includes("今晚吃") || userText.includes("吃什么") || userText.includes("吃啥") || userText.includes("推荐") || userText.includes("想吃")) {
-    return `为您根据现有库房食材推荐以下 3 个平替高蛋白健康餐方案：
-
-方案 A：香煎三文鱼配紫麦紫菜沙拉
-• 挪威三文鱼排 150g + 三色藜麦 50g + 羽衣甘蓝 + 菠菜 + 樱桃小番茄 150g
-• 煎香鱼皮，油脂自然渗入藜麦，简单黑胡椒调味
-• 预估：约 605 kcal | 蛋白质 31g
-
-方案 B：蒜香虾仁炒时蔬配生菜沙拉
-• 南美大虾仁 200g + 罗马生菜 100g + 菠菜 100g + 牛油果 1/4 个
-• 虾仁用橄榄油蒜蓉香炒，搭配水煮
-• 预估：约 323 kcal | 蛋白质 36g
-
-方案 C：嫩煎鸡胸肉藜麦能量碗
-• 鸡胸肉 150g + 三色藜麦 50g + 羽衣甘蓝 + 樱桃小番茄 100g
-• 鸡胸肉香料腌制煎制，搭配牛油果泥和藜麦基底
-• 预估：约 520 kcal | 蛋白质 45g
-
-您更倾心哪个方案呢？您可以点击下方卡片开启制作流程！`;
-  }
-
-  if (userText.includes("冰箱") || userText.includes("食材")) {
-    return "根据您当前冰箱的库存记录，我推荐【牛油果高纤蛋白碗】！主料：牛油果 1个、鸡胸肉 150g、菠菜 80g。热量约 420 kcal（蛋白质 32g / 碳水 24g / 脂肪 18g）。适合今晚做一顿健康晚餐！";
-  }
-  if (userText.includes("卡路里") || userText.includes("评估") || userText.includes("营养")) {
-    return "为您分析今日健康数据：您今日已摄入约 1460 kcal（达到日目标的 73%），蛋白质已补充 85g。建议晚餐增加少许优质复合碳水（如紫薯或燕麦）和绿叶蔬菜！";
-  }
-  if (userText.includes("下一步") || userText.includes("做饭")) {
-    return "【AI 下厨指导】：请将蒜末和生姜片放入炒锅中，中小火爆香 30 秒至闻到香味。准备好了说“下一步”！";
-  }
-
-  return `收到您的咨询：“${userText || "健康饮食"}”！建议保持每日膳食平衡：50% 绿叶蔬菜 + 25% 优质蛋白质（鸡肉/鱼肉/蛋类）+ 25% 低 GI 复合碳水化合物（玄米/燕麦/紫薯）。`;
+  return `收到您的咨询：“${userText || "健康饮食"}”！建议保持每日膳食平衡：50% 绿叶蔬菜 + 25% 优质蛋白质（鸡肉/鱼肉/蛋类）+ 25% 低 GI 复合碳水化合物。`;
 }
 
 /**

@@ -27,7 +27,7 @@ import { getUserStorageKey } from "@/utils/userStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { daysUntilDateKey } from "@/utils/inventory";
 import { ingredientNamesMatch, normalizeIngredientName } from "@/utils/ingredients";
-import { aiApi } from "@/services/api";
+import { aiApi, authApi } from "@/services/api";
 import type { InventoryHighlight, RankedRecipe, RecommendationCard } from "./types";
 import { getRecommendationPeriod } from "./recommendations";
 import { useHomeData } from "./useHomeData";
@@ -38,7 +38,7 @@ const RECIPE_BATCH_SIZE = 3;
 
 export default function HomeScreen() {
   const router = useSafeRouter();
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, token } = useAuth();
   const authFetch = useAuthFetch();
 
   const [activeCategory, setActiveCategory] = useState("全部");
@@ -72,12 +72,20 @@ export default function HomeScreen() {
 
   const shoppingStorageKey = getUserStorageKey("shopping_list", user?.id);
   const [shoppingItems, setShoppingItems] = useState<{ id: string; name: string; amount: string; checked: boolean }[]>([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
       setVisibleRecipeCount(RECIPE_BATCH_SIZE);
       lastRecipeBatchLoadAt.current = 0;
       void refresh();
+      if (token) {
+        void authApi.notificationUnreadCount(token)
+          .then(({ count }) => setUnreadNotificationCount(count))
+          .catch(() => undefined);
+      } else {
+        setUnreadNotificationCount(0);
+      }
 
       if (shoppingStorageKey) {
         AsyncStorage.getItem(shoppingStorageKey).then((saved) => {
@@ -88,7 +96,7 @@ export default function HomeScreen() {
           }
         });
       }
-    }, [refresh, shoppingStorageKey])
+    }, [refresh, shoppingStorageKey, token])
   );
 
   // 计算今日三大营养素
@@ -500,8 +508,10 @@ export default function HomeScreen() {
             <View className="flex-row items-center gap-2">
               <TouchableOpacity onPress={() => router.push("/notifications")} className="w-8 h-8 rounded-full bg-white/15 border border-white/20 items-center justify-center relative shadow-xs active:bg-white/30 backdrop-blur-md">
                 <FontAwesome6 name="bell" size={12} color="#FFF" />
-                {expiringItems.length > 0 && (
-                  <View className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-400" />
+                {unreadNotificationCount > 0 && (
+                  <View className="absolute -right-1 -top-1 min-w-4 h-4 px-1 rounded-full bg-amber-400 items-center justify-center">
+                    <Text className="text-[8px] font-black text-[#3D3229]">{unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}</Text>
+                  </View>
                 )}
               </TouchableOpacity>
             </View>
@@ -871,79 +881,65 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* 板块零：智能采购清单 (首页专属缺料提醒与入口卡片) */}
-        <View className="px-5 mb-5">
-          <TouchableOpacity
-            onPress={() => router.push("/shopping-list")}
-            activeOpacity={0.9}
-            className="bg-white rounded-[24px] p-5 border border-line shadow-xs overflow-hidden"
-          >
-            <View className="flex-row items-center justify-between pb-3 border-b border-[#F4EFE6] mb-3">
-              <View className="flex-row items-center gap-2">
-                <View className="w-8 h-8 rounded-xl bg-amber-500/10 items-center justify-center border border-amber-500/20">
-                  <FontAwesome6 name="cart-shopping" size={14} color="#D97706" />
-                </View>
-                <View>
-                  <Text className="text-sm font-black text-ink">
-                    智能采购清单 {shoppingItems.filter(i => !i.checked).length > 0 ? `(${shoppingItems.filter(i => !i.checked).length} 项待买)` : ""}
-                  </Text>
-                  <Text className="text-[10px] text-copy-muted mt-0.5">离线补料买菜 · AI 自动按需存入</Text>
-                </View>
-              </View>
-
-              <View className="flex-row items-center gap-1 bg-brand/10 px-3 py-1.5 rounded-full">
-                <Text className="text-xs font-bold text-brand">去买菜</Text>
-                <FontAwesome6 name="chevron-right" size={10} color="#2D6A4F" />
-              </View>
-            </View>
-
-            {/* 待买项预览 Chips / Empty Hint */}
-            {shoppingItems.filter(i => !i.checked).length > 0 ? (
-              <View className="bg-[#FAF8F5] p-3 rounded-2xl border border-line flex-row items-center justify-between">
-                <View className="flex-row items-center gap-1.5 flex-1 flex-wrap mr-2">
-                  {shoppingItems.filter(i => !i.checked).slice(0, 3).map((item) => (
-                    <View key={item.id} className="bg-white px-2.5 py-1 rounded-full border border-line flex-row items-center gap-1">
-                      <FontAwesome6 name="carrot" size={10} color="#D4A276" />
-                      <Text className="text-[11px] font-bold text-ink">{item.name}</Text>
-                      {item.amount ? <Text className="text-[9px] text-copy-muted">{item.amount}</Text> : null}
-                    </View>
-                  ))}
-                  {shoppingItems.filter(i => !i.checked).length > 3 && (
-                    <Text className="text-[10px] font-bold text-copy-muted ml-1">
-                      等共 {shoppingItems.filter(i => !i.checked).length} 项...
-                    </Text>
-                  )}
-                </View>
-
-                <View className="w-7 h-7 rounded-full bg-brand items-center justify-center">
-                  <FontAwesome6 name="arrow-right" size={11} color="#FFF" />
-                </View>
-              </View>
-            ) : (
-              <View className="bg-[#FAF8F5] p-3 rounded-2xl border border-dashed border-line flex-row items-center justify-between">
-                <Text className="text-xs text-copy-muted font-medium">当前采购清单空空如也，随时点此录入待买食材</Text>
-                <FontAwesome6 name="plus" size={12} color="#D97706" />
-              </View>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* 板块一：食材库概览 (大卡片统合容器) */}
+        {/* 板块一：食材与采购 (统合大卡片) */}
         <View className="px-5 mb-5">
           <View className="bg-white rounded-[24px] p-5 pb-6 border border-line shadow-xs">
+            {/* 顶栏标头与多导航入口 */}
             <View className="flex-row items-center justify-between pb-3.5 border-b border-[#F4EFE6] mb-3.5">
               <View className="flex-row items-center gap-2">
                 <View className="w-7 h-7 rounded-lg bg-brand/10 items-center justify-center">
                   <FontAwesome6 name="basket-shopping" size={13} color="#2D6A4F" />
                 </View>
                 <Text className="text-sm font-bold text-ink">
-                  食材库概览 {inventoryItems.length > 0 ? `(${inventoryItems.length})` : ""}
+                  食材与采购 {inventoryItems.length > 0 ? `(${inventoryItems.length})` : ""}
                 </Text>
               </View>
-              <TouchableOpacity onPress={() => router.push("/inventory")}>
-                <Text className="text-xs font-bold text-brand">全部食材 →</Text>
-              </TouchableOpacity>
+
+              <View className="flex-row items-center gap-3">
+                <TouchableOpacity onPress={() => router.push("/shopping-list")}>
+                  <Text className="text-xs font-bold text-amber-700">
+                    采购单 {shoppingItems.filter(i => !i.checked).length > 0 ? `(${shoppingItems.filter(i => !i.checked).length})` : ""}
+                  </Text>
+                </TouchableOpacity>
+                <Text className="text-xs text-copy-muted">·</Text>
+                <TouchableOpacity onPress={() => router.push("/inventory")}>
+                  <Text className="text-xs font-bold text-brand">保鲜库 →</Text>
+                </TouchableOpacity>
+              </View>
             </View>
+
+            {/* 内嵌智能采购横条 */}
+            <TouchableOpacity
+              onPress={() => router.push("/shopping-list")}
+              activeOpacity={0.85}
+              className="mb-3.5 bg-amber-500/10 p-3 rounded-2xl border border-amber-500/20 flex-row items-center justify-between"
+            >
+              <View className="flex-row items-center gap-2 flex-1 mr-2">
+                <FontAwesome6 name="cart-shopping" size={12} color="#D97706" />
+                {shoppingItems.filter(i => !i.checked).length > 0 ? (
+                  <View className="flex-row items-center gap-1.5 flex-1 flex-wrap">
+                    <Text className="text-[11px] font-black text-amber-900">待买清单:</Text>
+                    {shoppingItems.filter(i => !i.checked).slice(0, 3).map((item) => (
+                      <View key={item.id} className="bg-white/80 px-2 py-0.5 rounded-full border border-amber-500/30 flex-row items-center gap-1">
+                        <Text className="text-[10px] font-bold text-ink">{item.name}</Text>
+                        {item.amount ? <Text className="text-[9px] text-copy-muted">{item.amount}</Text> : null}
+                      </View>
+                    ))}
+                    {shoppingItems.filter(i => !i.checked).length > 3 && (
+                      <Text className="text-[9px] font-bold text-amber-800">
+                        +{shoppingItems.filter(i => !i.checked).length - 3}
+                      </Text>
+                    )}
+                  </View>
+                ) : (
+                  <Text className="text-xs text-amber-800 font-medium">采购清单空空如也，点此管理待买食材</Text>
+                )}
+              </View>
+              <View className="flex-row items-center gap-1 bg-amber-500/20 px-2 py-1 rounded-full">
+                <Text className="text-[10px] font-black text-amber-800">去买菜</Text>
+                <FontAwesome6 name="chevron-right" size={9} color="#B45309" />
+              </View>
+            </TouchableOpacity>
 
             <Animated.View
               style={{ opacity: inventoryHighlightOpacity, transform: [{ translateY: inventoryHighlightOffset }] }}
@@ -1143,7 +1139,7 @@ export default function HomeScreen() {
                         <Text className="text-[10px] font-bold text-white">{recipe.category}</Text>
                       </View>
                       {recipe.inventoryMatchNames.length > 0 && (
-                        <View className="absolute top-2.5 right-2.5 bg-brand/90 px-2.5 py-0.5 rounded-full flex-row items-center gap-1">
+                        <View className={`absolute bottom-2.5 left-2.5 px-2.5 py-0.5 rounded-full flex-row items-center gap-1 shadow-2xs ${recipe.expiringMatchCount > 0 ? "bg-amber-600/95" : "bg-brand/90"}`}>
                           <FontAwesome6
                             name={recipe.expiringMatchCount > 0 ? "clock-rotate-left" : "basket-shopping"}
                             size={9}

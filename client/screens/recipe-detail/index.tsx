@@ -287,19 +287,31 @@ export default function RecipeDetailScreen() {
             >
               <FontAwesome6 name="chevron-left" size={16} color="#23382B" />
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={toggleFavorite}
-              disabled={favoriteLoading}
-              accessibilityLabel={isFavorited ? "取消收藏菜谱" : "收藏菜谱"}
-              className="absolute right-4 top-4 h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/90 shadow-sm active:opacity-80 disabled:opacity-60"
-            >
-              <FontAwesome6
-                name="bookmark"
-                size={18}
-                color={isFavorited ? "#D49A2A" : "#3E4B42"}
-                solid={isFavorited}
-              />
-            </TouchableOpacity>
+            <View className="absolute right-4 top-4 flex-row gap-2">
+              <TouchableOpacity
+                onPress={() => router.push({
+                  pathname: "/feedback",
+                  params: { category: "issue", page: "食谱详情", recipeId: String(recipe.id), recipeTitle: recipe.title },
+                })}
+                accessibilityLabel="反馈此食谱"
+                className="h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/90 shadow-sm active:opacity-80"
+              >
+                <FontAwesome6 name="flag" size={15} color="#7A6F63" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={toggleFavorite}
+                disabled={favoriteLoading}
+                accessibilityLabel={isFavorited ? "取消收藏菜谱" : "收藏菜谱"}
+                className="h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/90 shadow-sm active:opacity-80 disabled:opacity-60"
+              >
+                <FontAwesome6
+                  name="bookmark"
+                  size={18}
+                  color={isFavorited ? "#D49A2A" : "#3E4B42"}
+                  solid={isFavorited}
+                />
+              </TouchableOpacity>
+            </View>
             {favoriteNotice ? (
               <View
                 accessibilityLiveRegion="polite"

@@ -27,17 +27,62 @@ import {
   getUserStorageKey,
   storageBelongsToCurrentUser,
 } from "@/utils/userStorage";
-import { aiApi, ApiError, dietApi, healthApi, inventoryApi } from "@/services/api";
-import { dateKeyAfterDays, toLocalDateKey } from "@/utils/date";
+import { aiApi, ApiError, dietApi, healthApi, inventoryApi, recipesApi } from "@/services/api";
+import { dateKeyAfterDays, toLocalDateKey, toLocalTimeKey } from "@/utils/date";
 import { hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/healthProfile";
 import { MedicalDisclaimer } from "@/components/MedicalDisclaimer";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
-import { RealtimeVoiceMVPModal } from "@/components/RealtimeVoiceMVPModal";
-import type { AIWriteConfirmation, ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message } from "./types";
+import { useTTS } from "@/hooks/useTTS";
+import { VoiceWaveform, type VoiceState } from "@/components/VoiceWaveform";
+import type { AIWriteConfirmation, ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message, SolutionCard } from "./types";
 import { inferInventoryCategory, normalizeInventoryScanFoods } from "./inventoryScan";
 import { AssistantMessageItem } from "./AssistantMessageItem";
 import { normalizeShoppingItems, type ShoppingItem } from "@/utils/shoppingList";
 import { HistoryDrawer, ShoppingListDrawer } from "./AssistantDrawers";
+
+type ChatHistoryMessage = { role: "user" | "assistant"; content: string };
+
+function parseSolutionMacros(macros: string) {
+  const parseValue = (match: RegExpMatchArray | null) => match ? Number(match[1]) : undefined;
+  return {
+    calories: parseValue(macros.match(/(\d+(?:\.\d+)?)\s*kcal/i)),
+    protein: parseValue(macros.match(/蛋白质\s*(\d+(?:\.\d+)?)\s*g/i)),
+    carbs: parseValue(macros.match(/碳水\s*(\d+(?:\.\d+)?)\s*g/i)),
+    fat: parseValue(macros.match(/脂肪\s*(\d+(?:\.\d+)?)\s*g/i)),
+  };
+}
+
+function serializeMessageForAI(message: Message) {
+  if (message.sender === "user") return message.text.trim();
+
+  const cards: string[] = [];
+  if (message.actionCard) {
+    const { mealType, foodName, amount, calories, protein, carbs, fat } = message.actionCard;
+    cards.push(`饮食打卡卡片：${mealType} ${foodName}（${amount}，${calories ?? "未知"} kcal，蛋白质 ${protein ?? "未知"}g，碳水 ${carbs ?? "未知"}g，脂肪 ${fat ?? "未知"}g）`);
+  }
+  if (message.missingCard) {
+    cards.push(`缺料采购卡片：${message.missingCard.dishName}；缺少 ${message.missingCard.missingIngredients.map((item) => `${item.name} ${item.amount}`).join("、")}`);
+  }
+  if (message.optionsCard) {
+    cards.push(`选项卡片：${message.optionsCard.title}；${message.optionsCard.options.map((item) => `${item.label}=${item.actionText}`).join("；")}`);
+  }
+  if (message.solutionCards?.length) {
+    cards.push(`方案卡片：${message.solutionCards.map((card) => `${card.schemeTag}：${card.title}；食材：${card.ingredients}；做法提示：${card.cookingTip}；营养：${card.macros}`).join("\n")}`);
+  }
+
+  return [message.text.trim(), ...cards].filter(Boolean).join("\n\n【界面卡片上下文】\n");
+}
+
+function buildChatHistory(messages: Message[], userText: string): ChatHistoryMessage[] {
+  return messages
+    .filter((message) => message.status !== "failed" && typeof message.text === "string" && message.text.trim().length > 0)
+    .slice(-49)
+    .map((message): ChatHistoryMessage => ({
+      role: message.sender === "user" ? "user" as const : "assistant" as const,
+      content: serializeMessageForAI(message).slice(0, 12_000),
+    }))
+    .concat({ role: "user", content: userText.trim().slice(0, 12_000) });
+}
 
 export default function AIAssistantScreen() {
   const router = useSafeRouter();
@@ -65,10 +110,41 @@ export default function AIAssistantScreen() {
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(false);
   const [showToolsGrid, setShowToolsGrid] = useState(false);
-  const [showRealtimeVoiceMVP, setShowRealtimeVoiceMVP] = useState(false);
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [voiceTTSEnabled, setVoiceTTSEnabled] = useState(true);
+  const [currentRecognizedText, setCurrentRecognizedText] = useState("");
+  const [lastAIReplyText, setLastAIReplyText] = useState("");
   const [isDeepThink, setIsDeepThink] = useState(false);
   const [isWebSearch, setIsWebSearch] = useState(false);
-  const baseInputTextRef = useRef("");
+  const [isMuted, setIsMuted] = useState(false);
+  const [storedMessages, setMessages] = useState<Message[]>([]);
+  const messagesRef = useRef<Message[]>([]);
+  const [selectedImage, setSelectedImage] = useState<{ uri: string; base64: string } | null>(null);
+  const autoSentPromptKey = useRef<string | null>(null);
+  const handledInventoryScanJob = useRef<string | null>(null);
+  const historyLimitNoticeShown = useRef(false);
+  const [inventoryEditTarget, setInventoryEditTarget] = useState<{
+    msgId: string;
+    itemId: string;
+    foodName: string;
+    quantity: string;
+    storageLocation: "冷藏" | "冷冻" | "常温";
+    expireDays: string;
+  } | null>(null);
+  const [storedSessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => String(Date.now()));
+  const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
+  const [headerMoreVisible, setHeaderMoreVisible] = useState(false);
+  const historyBelongsToCurrentUser = storageBelongsToCurrentUser(
+    chatStorageKey,
+    loadedChatStorageKey,
+  );
+  const messages = historyBelongsToCurrentUser ? storedMessages : [];
+  const sessions = historyBelongsToCurrentUser ? storedSessions : [];
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -82,45 +158,120 @@ export default function AIAssistantScreen() {
     return () => { active = false; };
   }, [authFetch, user?.id]);
 
-  const { isRecording, isTranscribing, statusText: voiceStatusText, toggleRecording } = useVoiceRecorder({
+  // --- TTS 语音播报 ---
+  const { speak, stop: stopTTS, isSpeaking, error: ttsError } = useTTS();
+
+  // 同步 TTS 的 isSpeaking 到 voiceState
+  useEffect(() => {
+    if (!isSpeaking && voiceState === "speaking") {
+      setVoiceState("completed");
+    }
+  }, [isSpeaking, voiceState]);
+
+  // --- 语音管线：ASR → LLM → TTS ---
+  const handleVoiceQuery = useCallback(async (userText: string) => {
+    if (!userText.trim()) return;
+
+    setVoiceState("thinking");
+    stopTTS();
+
+    const userMsg: Message = {
+      id: String(Date.now()),
+      sender: "user",
+      text: userText,
+      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setCurrentRecognizedText("");
+
+    try {
+      const sessionId = typeof currentSessionId === "string" && currentSessionId.trim().length <= 120
+        ? currentSessionId.trim()
+        : undefined;
+      const res = (await aiApi.chat(authFetch, {
+        messages: buildChatHistory(messagesRef.current, userText),
+        source: "voice",
+        ...(sessionId ? { sessionId } : {}),
+      })) as { reply?: string; solutionCards?: SolutionCard[]; responseTimeMs?: number };
+
+      const replyText = res.reply || "收到，我已经听明白了。你还想继续问我什么？";
+
+      const aiMsg: Message = {
+        id: String(Date.now() + 1),
+        sender: "ai",
+        text: replyText,
+        solutionCards: res.solutionCards,
+        responseTimeMs: res.responseTimeMs,
+        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+      setMessages((prev) => [...prev, aiMsg]);
+      setLastAIReplyText(replyText);
+      // 聊天回复已经落入消息列表，不能让浏览器的 TTS 初始化或回调异常
+      // 继续占用“思考中”状态。
+      setVoiceState("completed");
+
+      if (voiceTTSEnabled) {
+        speak(replyText);
+      }
+    } catch (err) {
+      console.error("Voice pipeline error:", err);
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : "AI 对话请求失败，请稍后重试";
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: String(Date.now() + 1),
+          sender: "ai",
+          text: message,
+          status: "failed",
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        },
+      ]);
+      setVoiceState("completed");
+    }
+  }, [authFetch, currentSessionId, messages, speak, stopTTS, voiceTTSEnabled]);
+
+  const { isRecording, toggleRecording, stopRecording } = useVoiceRecorder({
     onSpeechResult: (recognizedText) => {
-      const base = baseInputTextRef.current.trim();
-      setInputText(base ? `${base} ${recognizedText}` : recognizedText);
+      setCurrentRecognizedText(recognizedText);
+    },
+    onSpeechFinal: (recognizedText) => {
+      setCurrentRecognizedText(recognizedText);
+      void handleVoiceQuery(recognizedText);
+    },
+    onSpeechEmpty: () => {
+      setCurrentRecognizedText("");
+      setVoiceState("completed");
+      setMessages((prev) => [...prev, {
+        id: String(Date.now()),
+        sender: "ai",
+        text: "这一轮没有听清楚。请靠近麦克风再说一次，或直接使用文字输入。",
+        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      }]);
     },
   });
 
-  const handleToggleVoiceRecording = () => {
-    if (!isRecording) {
-      baseInputTextRef.current = inputText;
+  // --- 麦克风按钮处理（含全双工打断） ---
+  const handleMicPress = useCallback(() => {
+    if (voiceState === "speaking") {
+      stopTTS();
+      setVoiceState("listening");
+      toggleRecording();
+      return;
     }
-    toggleRecording();
-  };
-  const [isMuted, setIsMuted] = useState(false);
-  const [storedMessages, setMessages] = useState<Message[]>([]);
-  const [selectedImage, setSelectedImage] = useState<{ uri: string; base64: string } | null>(null);
-  const autoSentPromptKey = useRef<string | null>(null);
-  const handledInventoryScanJob = useRef<string | null>(null);
-  const historyLimitNoticeShown = useRef(false);
-  const [inventoryEditTarget, setInventoryEditTarget] = useState<{
-    msgId: string;
-    itemId: string;
-    foodName: string;
-    quantity: string;
-    storageLocation: "冷藏" | "冷冻" | "常温";
-    expireDays: string;
-  } | null>(null);
-
-  // 📚 多会话历史记录 State
-  const [storedSessions, setSessions] = useState<ChatSession[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string>(() => String(Date.now()));
-  const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
-  const [headerMoreVisible, setHeaderMoreVisible] = useState(false);
-  const historyBelongsToCurrentUser = storageBelongsToCurrentUser(
-    chatStorageKey,
-    loadedChatStorageKey,
-  );
-  const messages = historyBelongsToCurrentUser ? storedMessages : [];
-  const sessions = historyBelongsToCurrentUser ? storedSessions : [];
+    if (isRecording) {
+      setVoiceState("recognizing");
+      stopRecording();
+    } else {
+      stopTTS();
+      setCurrentRecognizedText("");
+      setLastAIReplyText("");
+      setVoiceState("listening");
+      toggleRecording();
+    }
+  }, [voiceState, isRecording, stopTTS, toggleRecording, stopRecording]);
 
   // 🛒 智能采购清单 Modal State
   const [shoppingListModalVisible, setShoppingListModalVisible] = useState(false);
@@ -243,7 +394,13 @@ export default function AIAssistantScreen() {
   };
 
   // 删除单条会话
-  const handleDeleteSession = (sessionId: string) => {
+  const handleDeleteSession = async (sessionId: string) => {
+    try {
+      await aiApi.deleteConversation(authFetch, sessionId);
+    } catch (error) {
+      Alert.alert("删除失败", error instanceof Error ? error.message : "无法同步删除服务端会话，请稍后重试。");
+      return;
+    }
     const updated = sessions.filter((s) => s.id !== sessionId);
     setSessions(updated);
     if (chatStorageKey) {
@@ -420,18 +577,13 @@ export default function AIAssistantScreen() {
 
     try {
       // 服务端最多接收 50 条消息；预留本次提问，并忽略旧缓存中的无效消息。
-      const validHistory = messages.filter((m) => typeof m.text === "string" && m.text.trim().length > 0);
+      const latestMessages = messagesRef.current;
+      const validHistory = latestMessages.filter((m) => typeof m.text === "string" && m.text.trim().length > 0);
       if (validHistory.length > 49 && !historyLimitNoticeShown.current) {
         Alert.alert("对话提示", "为保证回复速度，本次 AI 将参考最近 50 条对话。更早内容仍保留在本机历史中。");
         historyLimitNoticeShown.current = true;
       }
-      const historyPayload = validHistory
-        .slice(-49)
-        .map((m) => ({
-          role: m.sender === "user" ? "user" : "assistant",
-          content: m.text.trim().slice(0, 12_000),
-        }));
-      historyPayload.push({ role: "user", content: text.trim() });
+      const historyPayload = buildChatHistory(latestMessages, text);
       // AsyncStorage 中的会话来自旧版本或异常缓存时，不能让它破坏本次请求。
       const sessionId = typeof currentSessionId === "string" && currentSessionId.trim().length <= 120
         ? currentSessionId.trim()
@@ -441,13 +593,14 @@ export default function AIAssistantScreen() {
       try {
         data = await aiApi.chat<Record<string, any>>(authFetch, {
           messages: historyPayload,
+          source: "assistant",
           ...(sessionId ? { sessionId } : {}),
         });
       } catch (error) {
         // 历史消息只用于补充上下文；缓存损坏或旧版本格式不兼容时，
         // 退化为当前问题继续完成对话，而不是把校验错误展示给用户。
         // Expo Web 在热更新后可能存在重复模块实例，不能只依赖 instanceof。
-        // 同时不要携带旧 sessionId，避免损坏缓存继续触发服务端校验。
+        // 只丢弃损坏的历史消息；稳定会话 ID 必须保留，避免管理端被拆成新会话。
         const isValidationError = error instanceof ApiError
           ? error.code === "VALIDATION_ERROR"
           : typeof error === "object"
@@ -456,6 +609,8 @@ export default function AIAssistantScreen() {
         if (!isValidationError) throw error;
         data = await aiApi.chat<Record<string, any>>(authFetch, {
           prompt: text.trim(),
+          source: "assistant",
+          ...(sessionId ? { sessionId } : {}),
         });
       }
       const responseText = data.reply || "智能大厨正在整理您的食谱建议...";
@@ -469,16 +624,19 @@ export default function AIAssistantScreen() {
         missingCard: data.missingCard,
         optionsCard: data.optionsCard,
         solutionCards: data.solutionCards,
+        responseTimeMs: data.responseTimeMs,
         time: "刚刚",
       };
 
       setMessages((prev) => [...prev, aiMsg]);
+      setLastAIReplyText(responseText);
     } catch (err: any) {
       console.error("[AIAssistant Error]", err);
       const fallbackMsg: Message = {
         id: (Date.now() + 1).toString(),
         sender: "ai",
-        text: `食语暂时无法回复：${err instanceof Error ? err.message : "请检查网络后重试"}。你的消息仍保留在本次对话中，可以稍后再次发送。`,
+        text: err instanceof Error ? err.message : "AI 对话请求失败，请稍后重试",
+        status: "failed",
         time: "刚刚",
       };
       setMessages((prev) => [...prev, fallbackMsg]);
@@ -814,6 +972,7 @@ export default function AIAssistantScreen() {
         carbs: card.carbs,
         fat: card.fat,
         recorded_at: targetDateStr,
+        recorded_time: isTomorrow ? null : toLocalTimeKey(),
         image_url: null,
       });
         setMessages((prev) =>
@@ -882,6 +1041,7 @@ export default function AIAssistantScreen() {
         carbs,
         fat,
         recorded_at: toLocalDateKey(),
+        recorded_time: toLocalTimeKey(),
         image_url: null,
       });
         if (currentMsgId) {
@@ -988,6 +1148,62 @@ export default function AIAssistantScreen() {
     });
   };
 
+  const handleStartCookingSolution = (card: SolutionCard) => {
+    const steps = card.steps?.map((step) => step.trim()).filter(Boolean) || [];
+    const ingredientItems = card.ingredientItems || [];
+    if (!steps.length || !ingredientItems.length) {
+      Alert.alert("方案信息不完整", "这张旧方案卡没有可执行的食材清单和步骤。请重新请求推荐后再开始制作。");
+      return;
+    }
+    const macros = parseSolutionMacros(card.macros);
+    router.push({
+      pathname: "/cooking-mode",
+      params: {
+        title: card.title,
+        steps: JSON.stringify(steps),
+        ingredients: JSON.stringify(ingredientItems),
+        ...(macros.calories !== undefined ? { calories: macros.calories } : {}),
+        ...(macros.protein !== undefined ? { protein: macros.protein } : {}),
+        ...(macros.carbs !== undefined ? { carbs: macros.carbs } : {}),
+        ...(macros.fat !== undefined ? { fat: macros.fat } : {}),
+      },
+    });
+  };
+
+  const handleSaveSolutionRecipe = async (messageId: string, card: SolutionCard) => {
+    const steps = card.steps?.map((step) => step.trim()).filter(Boolean) || [];
+    const ingredients = card.ingredientItems || [];
+    if (!steps.length || !ingredients.length) {
+      Alert.alert("方案信息不完整", "请先重新生成含完整食材和步骤的方案卡，再保存到我的菜谱。");
+      return;
+    }
+    const { calories, protein, carbs, fat } = parseSolutionMacros(card.macros);
+
+    try {
+      const result = await recipesApi.submit(authFetch, {
+        title: card.title,
+        description: `${card.schemeTag} · ${card.cookingTip}`,
+        cook_time: 20,
+        difficulty: "简单",
+        calories: calories ?? 0,
+        protein: protein ?? 0,
+        carbs: carbs ?? 0,
+        fat: fat ?? 0,
+        nutrition: [],
+        category: "快手菜",
+        tags: ["AI 方案", card.schemeTag],
+        ingredients: ingredients.map((item) => ({ ...item, group: "主料" })),
+        steps,
+      });
+      setMessages((current) => current.map((message) => message.id === messageId && message.solutionCards
+        ? { ...message, solutionCards: message.solutionCards.map((solution) => solution.id === card.id ? { ...solution, savedToRecipes: true } : solution) }
+        : message));
+      Alert.alert("已保存", result.message || "方案已保存到我的菜谱，等待审核后公开。");
+    } catch (error) {
+      Alert.alert("保存失败", error instanceof Error ? error.message : "请稍后重试");
+    }
+  };
+
   const handleSafeGoBack = () => {
     if (router.canGoBack()) {
       router.back();
@@ -1009,6 +1225,8 @@ export default function AIAssistantScreen() {
       confirmInventoryScanCard={confirmInventoryScanCard}
       handleSaveToShoppingList={handleSaveToShoppingList}
       handleSendMessage={handleSendMessage}
+      onStartCooking={handleStartCookingSolution}
+      onSaveRecipe={handleSaveSolutionRecipe}
       onOpenInventory={() => router.push("/inventory")}
       onOpenInventoryAdd={() => router.push("/inventory", { action: "add" })}
     />
@@ -1049,11 +1267,11 @@ export default function AIAssistantScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => setShowRealtimeVoiceMVP(true)}
-              className="h-8 px-2.5 rounded-full bg-emerald-600 items-center justify-center shadow-xs active:opacity-80 flex-row gap-1"
+              onPress={() => setVoiceTTSEnabled(v => !v)}
+              className="h-8 px-2.5 rounded-full bg-white border border-line items-center justify-center shadow-xs active:opacity-80 flex-row gap-1"
             >
-              <FontAwesome6 name="microphone-lines" size={11} color="#FFF" />
-              <Text className="text-xs font-bold text-white">实时语音 MVP</Text>
+              <FontAwesome6 name={voiceTTSEnabled ? "volume-high" : "volume-xmark"} size={11} color="#3D3229" />
+              <Text className="text-xs font-bold text-ink">{voiceTTSEnabled ? "语音播报" : "静音"}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1135,12 +1353,23 @@ export default function AIAssistantScreen() {
               </View>
             </View>
           }
-          ListFooterComponent={loading ? (
-            <View className="flex-row items-center gap-2 bg-white p-3.5 rounded-2xl border border-line self-start ml-2 mb-4 shadow-xs">
-              <ActivityIndicator size="small" color="#2D6A4F" />
-              <Text className="text-xs text-copy-muted font-bold">AI 正在为您检索食材库与营养数据库...</Text>
-            </View>
-          ) : null}
+          ListFooterComponent={
+            <>
+              {currentRecognizedText ? (
+                <View className="bg-emerald-50 border border-emerald-200/80 p-3 rounded-2xl self-end max-w-[82%] mb-2 mr-2">
+                  <Text className="text-xs font-bold text-emerald-900">
+                    正在听：{currentRecognizedText}
+                  </Text>
+                </View>
+              ) : null}
+              {loading ? (
+                <View className="flex-row items-center gap-2 bg-white p-3.5 rounded-2xl border border-line self-start ml-2 mb-4 shadow-xs">
+                  <ActivityIndicator size="small" color="#2D6A4F" />
+                  <Text className="text-xs text-copy-muted font-bold">AI 正在为您检索食材库与营养数据库...</Text>
+                </View>
+              ) : null}
+            </>
+          }
         />
 
 
@@ -1183,13 +1412,51 @@ export default function AIAssistantScreen() {
             </View>
           )}
 
-          {voiceStatusText ? (
+          {/* 语音交互状态栏 */}
+          {voiceState !== "idle" && voiceState !== "completed" ? (
             <View className="mb-2 px-3.5 py-2 rounded-xl bg-brand/10 border border-brand/20 flex-row items-center justify-between">
-              <Text className="text-xs font-medium text-brand">{voiceStatusText}</Text>
-              {isRecording && <View className="w-2.5 h-2.5 rounded-full bg-red-500" />}
-              {isTranscribing && <ActivityIndicator size="small" color="#2D6A4F" />}
+              <View className="flex-row items-center gap-2 flex-1">
+                {voiceState === "listening" && <View className="w-2.5 h-2.5 rounded-full bg-red-500" />}
+                {(voiceState === "thinking" || voiceState === "recognizing") && <ActivityIndicator size="small" color="#2D6A4F" />}
+                {voiceState === "speaking" && <View className="w-2.5 h-2.5 rounded-full bg-sky-500" />}
+                <Text className="text-xs font-bold text-brand" numberOfLines={1}>
+                  {voiceState === "listening" ? "正在倾听…说完停顿会自动提交" :
+                   voiceState === "recognizing" ? "正在识别语音…" :
+                   voiceState === "thinking" ? "食语正在思考…" :
+                   voiceState === "speaking" ? "食语正在回答…" : ""}
+                </Text>
+              </View>
+              {voiceState === "speaking" && (
+                <TouchableOpacity
+                  onPress={() => { stopTTS(); setVoiceState("idle"); }}
+                  className="bg-red-50 px-2.5 py-1 rounded-full border border-red-200 flex-row items-center gap-1"
+                >
+                  <FontAwesome6 name="circle-stop" size={10} color="#EF4444" />
+                  <Text className="text-[10px] font-bold text-red-600">打断</Text>
+                </TouchableOpacity>
+              )}
             </View>
           ) : null}
+
+          {voiceState === "completed" && lastAIReplyText ? (
+            <View className="mb-2 flex-row items-center gap-2">
+              <TouchableOpacity
+                onPress={() => speak(lastAIReplyText)}
+                className="flex-row items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 active:bg-sky-100"
+              >
+                <FontAwesome6 name="volume-high" size={10} color="#0284C7" />
+                <Text className="text-[10px] font-bold text-sky-700">重播回答</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => { setVoiceState("idle"); setLastAIReplyText(""); }}
+                className="rounded-full bg-white border border-line px-2 py-1"
+              >
+                <FontAwesome6 name="xmark" size={10} color="#8B7D6B" />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {ttsError ? <Text className="mb-2 px-4 text-center text-[10px] text-red-600">{ttsError}</Text> : null}
 
           {/* Integrated Card Container */}
           <View className={`bg-white p-3 rounded-[24px] border transition-all shadow-xs ${isRecording ? 'border-red-500 bg-red-50/50' : 'border-line'}`}>
@@ -1197,7 +1464,7 @@ export default function AIAssistantScreen() {
             <TextInput
               value={inputText}
               onChangeText={setInputText}
-              placeholder={isRecording ? "正在录音识别中..." : selectedImage ? "针对照片提问..." : "发消息或按住说话..."}
+              placeholder={isRecording ? "正在倾听..." : selectedImage ? "针对照片提问..." : "发消息或点击麦克风语音提问..."}
               placeholderTextColor="#A3A398"
               multiline
               className="text-xs text-ink min-h-[36px] max-h-[90px] px-1 py-1 align-top"
@@ -1240,19 +1507,11 @@ export default function AIAssistantScreen() {
                   <FontAwesome6 name={showToolsGrid ? "xmark" : "plus"} size={13} color={showToolsGrid ? "#FFFFFF" : "#3D3229"} />
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  onPress={handleToggleVoiceRecording}
-                  disabled={loading || isTranscribing}
-                  className={`w-7.5 h-7.5 rounded-full items-center justify-center transition-all ${
-                    isRecording ? 'bg-red-500' : 'bg-canvas border border-line'
-                  }`}
-                >
-                  <FontAwesome6
-                    name="microphone"
-                    size={13}
-                    color={isRecording ? "#FFFFFF" : "#3D3229"}
-                  />
-                </TouchableOpacity>
+                <VoiceWaveform
+                  voiceState={voiceState}
+                  onPress={handleMicPress}
+                  size="sm"
+                />
 
                 {inputText.trim() || selectedImage ? (
                   <TouchableOpacity
@@ -1616,11 +1875,6 @@ export default function AIAssistantScreen() {
         onRemove={handleRemoveShoppingItem}
       />
 
-      {/* 🎙️ TeleSpeechASR + LLM Realtime Voice Interaction MVP */}
-      <RealtimeVoiceMVPModal
-        visible={showRealtimeVoiceMVP}
-        onClose={() => setShowRealtimeVoiceMVP(false)}
-      />
     </Screen>
   );
 }

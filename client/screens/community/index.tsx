@@ -312,6 +312,12 @@ export default function CommunityScreen() {
 
         {/* 标题 & 作者信息面板 (不等长自然延伸) */}
         <View className="p-3">
+          {post.recommendation_reason ? (
+            <View className="mb-2 flex-row items-center gap-1 self-start rounded-full bg-brand/10 px-2 py-1">
+              <FontAwesome6 name="wand-magic-sparkles" size={9} color="#2D6A4F" />
+              <Text className="text-[9px] font-bold text-brand">{post.recommendation_reason}</Text>
+            </View>
+          ) : null}
           {post.image_url ? <Text className="text-xs font-bold text-[#222222] leading-5" numberOfLines={3}>{post.content}</Text> : null}
 
           <View className="flex-row items-center justify-between mt-2.5 pt-2 border-t border-[#F8F5F0]">

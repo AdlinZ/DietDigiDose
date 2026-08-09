@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, Pressable, Image, Platform, DeviceEventEmitter, Alert } from "react-native";
 import { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -19,11 +20,21 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
   // 获取当前激活的路由
   const currentRouteName = state.routes[state.index]?.name || "index";
   const isHomeRoute = currentRouteName === "index";
+  const [inventorySegment, setInventorySegment] = useState<"inventory" | "recipes" | "kitchenware">("inventory");
+
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(
+      "inventory-segment-change",
+      (segment: "inventory" | "recipes" | "kitchenware") => setInventorySegment(segment),
+    );
+    return () => subscription.remove();
+  }, []);
 
   // 左侧动态按键点击响应
   const handleLeftButtonPress = () => {
     if (currentRouteName === "inventory" && !isAuthenticated) {
-      Alert.alert("登录后录入食材", "登录后才能保存和管理你的食材。", [
+      const actionLabel = inventorySegment === "recipes" ? "食谱" : inventorySegment === "kitchenware" ? "厨具" : "食材";
+      Alert.alert(`登录后保存${actionLabel}`, `登录后才能保存和管理你的${actionLabel}。`, [
         { text: "取消", style: "cancel" },
         { text: "去登录", onPress: () => router.push("/login") },
       ]);
@@ -35,7 +46,13 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
         router.push("/ai-assistant");
         break;
       case "inventory":
-        DeviceEventEmitter.emit("open-add-food");
+        if (inventorySegment === "recipes") {
+          router.push("/recipe-submit");
+        } else if (inventorySegment === "kitchenware") {
+          DeviceEventEmitter.emit("open-add-kitchenware");
+        } else {
+          DeviceEventEmitter.emit("open-add-food");
+        }
         break;
       case "community":
         DeviceEventEmitter.emit("open-community-post");
@@ -77,6 +94,11 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
     community: "发布社区动态",
     profile: "记录一餐",
   }[currentRouteName] || "打开食语 AI 助手";
+  const inventoryQuickAction = {
+    inventory: { label: "存食材", accessibilityLabel: "新增食材", icon: "plus" as const },
+    recipes: { label: "存食谱", accessibilityLabel: "新增食谱", icon: "book-open" as const },
+    kitchenware: { label: "存厨具", accessibilityLabel: "新增厨具", icon: "fire-burner" as const },
+  }[inventorySegment];
 
   return (
     <>
@@ -95,7 +117,7 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
         <Pressable
           onPress={handleLeftButtonPress}
           accessibilityRole="button"
-          accessibilityLabel={quickActionLabel}
+          accessibilityLabel={currentRouteName === "inventory" ? inventoryQuickAction.accessibilityLabel : quickActionLabel}
           accessibilityHint={currentRouteName === "inventory" && !isAuthenticated ? "需要先登录" : undefined}
           className={`w-[60px] h-[60px] items-center justify-center relative active:scale-95 ${isHomeRoute ? "" : "bg-white/95 rounded-full p-1 border border-line"}`}
           style={{
@@ -124,9 +146,9 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
 
           {currentRouteName === "inventory" && (
             <View className="w-[50px] h-[50px] rounded-full bg-brand items-center justify-center relative shadow-xs">
-              <FontAwesome6 name="plus" size={18} color="#FFF" />
+              <FontAwesome6 name={inventoryQuickAction.icon} size={16} color="#FFF" />
               <View className="absolute -bottom-1 bg-highlight px-1.5 py-0.2 rounded-full border border-white">
-                <Text className="text-[8px] font-black text-ink">存食材</Text>
+                <Text className="text-[8px] font-black text-ink">{inventoryQuickAction.label}</Text>
               </View>
             </View>
           )}

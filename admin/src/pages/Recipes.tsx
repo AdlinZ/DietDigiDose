@@ -22,14 +22,14 @@ type Recipe = {
   protein?: number;
   carbs?: number;
   fat?: number;
-  cook_time?: string;
+  cook_time?: string | number;
   difficulty?: string;
   image_url: string;
   description?: string;
   tags?: string;
   steps_json?: string;
   ingredients_json?: string;
-  source?: 'official' | 'user';
+  source?: string;
   status?: 'pending' | 'approved' | 'rejected';
   author_username?: string;
   reject_reason?: string;
@@ -55,7 +55,7 @@ type RecipeFormState = {
   ingredients: Ingredient[];
 };
 
-const CATEGORIES = ['全部', '减脂餐', '增肌餐', '低碳水', '高蛋白', '快手菜'];
+const CATEGORIES = ['全部', '减脂', '增肌', '营养餐单', '快手菜'];
 const DIFFICULTIES = ['简单', '中等', '较难'];
 
 const INITIAL_FORM_STATE: RecipeFormState = {
@@ -81,6 +81,8 @@ export default function Recipes() {
   const [sourceFilter, setSourceFilter] = useState<'all' | 'official' | 'user'>('all');
   const [reviewStatus, setReviewStatus] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [totalRecipes, setTotalRecipes] = useState(0);
+  const [summary, setSummary] = useState({ platform: 0, user: 0, pending: 0 });
 
   // Modal State
   const [showModal, setShowModal] = useState(false);
@@ -95,18 +97,26 @@ export default function Recipes() {
         params: {
           source: sourceFilter === 'all' ? undefined : sourceFilter,
           reviewStatus: reviewStatus === 'all' ? undefined : reviewStatus,
+          category: activeCategory === '全部' ? undefined : activeCategory,
+          search: searchQuery.trim() || undefined,
           pageSize: 50,
           cursor,
         },
       });
       setRecipes(current => cursor ? [...current, ...data.items.filter((item: Recipe) => !current.some(existing => existing.id === item.id))] : data.items);
       setNextCursor(data.nextCursor);
+      setTotalRecipes(Number(data.total || data.items.length));
+      setSummary({
+        platform: Number(data.summary?.platform || 0),
+        user: Number(data.summary?.user || 0),
+        pending: Number(data.summary?.pending || 0),
+      });
     } catch (error) {
       console.error('Error fetching recipes:', error);
     } finally {
       setLoading(false);
     }
-  }, [reviewStatus, sourceFilter]);
+  }, [activeCategory, reviewStatus, searchQuery, sourceFilter]);
 
   useEffect(() => {
     fetchRecipes();
@@ -174,7 +184,7 @@ export default function Recipes() {
       protein: recipe.protein ? String(recipe.protein) : '',
       carbs: recipe.carbs ? String(recipe.carbs) : '',
       fat: recipe.fat ? String(recipe.fat) : '',
-      cook_time: recipe.cook_time || '15分钟',
+      cook_time: recipe.cook_time ? String(recipe.cook_time) : '15分钟',
       difficulty: recipe.difficulty || '简单',
       image_url: recipe.image_url || '',
       description: recipe.description || '',
@@ -225,11 +235,7 @@ export default function Recipes() {
     }
   };
 
-  const filteredRecipes = recipes.filter((recipe) => {
-    const matchesSearch = recipe.title?.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = activeCategory === '全部' || recipe.category === activeCategory;
-    return matchesSearch && matchesCategory;
-  });
+  const filteredRecipes = recipes;
 
   const updateStep = (index: number, val: string) => {
     const newSteps = [...formData.steps];
@@ -253,12 +259,8 @@ export default function Recipes() {
   };
 
   const recipeStats = useMemo(() => {
-    const total = recipes.length;
-    const official = recipes.filter((r) => r.source === 'official' || !r.source).length;
-    const userContributed = recipes.filter((r) => r.source === 'user').length;
-    const pending = recipes.filter((r) => r.status === 'pending').length;
-    return { total, official, userContributed, pending };
-  }, [recipes]);
+    return { total: totalRecipes, platform: summary.platform, userContributed: summary.user, pending: summary.pending };
+  }, [summary, totalRecipes]);
 
   if (loading) return <div className="text-center py-20 text-text-muted">加载中...</div>;
 
@@ -286,7 +288,7 @@ export default function Recipes() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
           <div>
-            <p className="text-xs font-medium text-text-muted">总食谱数量</p>
+            <p className="text-xs font-medium text-text-muted">当前筛选食谱</p>
             <p className="mt-1.5 text-2xl font-bold text-text-main">{recipeStats.total}</p>
           </div>
           <div className="rounded-2xl bg-secondary/10 p-3 text-secondary">
@@ -296,8 +298,8 @@ export default function Recipes() {
 
         <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
           <div>
-            <p className="text-xs font-medium text-text-muted">官方精品食谱</p>
-            <p className="mt-1.5 text-2xl font-bold text-primary">{recipeStats.official}</p>
+            <p className="text-xs font-medium text-text-muted">平台食谱（含导入）</p>
+            <p className="mt-1.5 text-2xl font-bold text-primary">{recipeStats.platform}</p>
           </div>
           <div className="rounded-2xl bg-primary/10 p-3 text-primary">
             <Sparkles className="h-6 w-6" />
@@ -330,7 +332,7 @@ export default function Recipes() {
         <div className="flex flex-wrap items-center gap-2 border-b border-background-alt pb-4">
           {[
             { value: 'all', label: '全部来源' },
-            { value: 'official', label: '官方食谱' },
+            { value: 'official', label: '平台食谱（含导入）' },
             { value: 'user', label: '用户投稿' },
           ].map((item) => (
             <button
@@ -412,9 +414,9 @@ export default function Recipes() {
               <tbody className="divide-y divide-background-alt">
                 {filteredRecipes.map((recipe) => <tr key={recipe.id} className="hover:bg-[#FCFDFB]">
                   <td className="px-5 py-3"><div className="flex items-center gap-3"><img src={recipe.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c'} alt="" className="h-12 w-12 rounded-xl object-cover" /><div className="max-w-56"><div className="truncate text-sm font-semibold text-text-main">{recipe.title}</div><div className="mt-1 line-clamp-1 text-xs text-text-muted">{recipe.description || '暂无简介'}</div></div></div></td>
-                  <td className="px-4 py-3"><div className={cn('inline-flex rounded-full px-2 py-1 text-xs font-medium', recipe.source === 'user' ? 'bg-blue-50 text-blue-600' : 'bg-background-alt text-text-muted')}>{recipe.source === 'user' ? '用户投稿' : '官方食谱'}</div><div className="mt-1 text-xs text-text-muted">{recipe.source === 'user' ? recipe.author_username || '未知用户' : '食光编辑部'}</div></td>
+                  <td className="px-4 py-3"><div className={cn('inline-flex rounded-full px-2 py-1 text-xs font-medium', recipe.source === 'user' ? 'bg-blue-50 text-blue-600' : 'bg-background-alt text-text-muted')}>{recipe.source === 'user' ? '用户投稿' : recipe.source === 'official' ? '官方自建' : '平台导入'}</div><div className="mt-1 text-xs text-text-muted">{recipe.source === 'user' ? recipe.author_username || '未知用户' : recipe.source === 'official' ? '食光编辑部' : recipe.source || '平台资料库'}</div></td>
                   <td className="px-4 py-3"><div className="text-sm text-text-main">{recipe.category || '综合推荐'}</div><div className="mt-1 text-xs text-text-muted">{recipe.difficulty || '简单'}</div></td>
-                  <td className="px-4 py-3"><div className="text-sm font-medium text-text-main">{recipe.cook_time || '-'} </div><div className="mt-1 text-xs text-text-muted">{recipe.calories ?? 0} kcal</div></td>
+                  <td className="px-4 py-3"><div className="text-sm font-medium text-text-main">{typeof recipe.cook_time === 'number' ? `${recipe.cook_time} 分钟` : recipe.cook_time || '-'} </div><div className="mt-1 text-xs text-text-muted">{recipe.calories ?? 0} kcal</div></td>
                   <td className="px-4 py-3 text-xs text-text-muted"><span>碳 {recipe.carbs ?? 0}g</span><span className="mx-2">蛋 {recipe.protein ?? 0}g</span><span>脂 {recipe.fat ?? 0}g</span></td>
                   <td className="px-4 py-3">{recipe.source === 'user' ? <span className={cn('inline-flex rounded-full px-2.5 py-1 text-xs font-medium', recipe.status === 'pending' && 'bg-amber-50 text-amber-700', recipe.status === 'approved' && 'bg-emerald-50 text-emerald-700', recipe.status === 'rejected' && 'bg-red-50 text-red-700')}>{recipe.status === 'pending' ? '待审核' : recipe.status === 'approved' ? '已通过' : '已驳回'}</span> : <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">已发布</span>}</td>
                   <td className="px-5 py-3"><div className="flex items-center justify-end gap-2">{recipe.source === 'user' && recipe.status === 'pending' && <><button onClick={() => handleApprove(recipe.id)} className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-white">通过</button><button onClick={() => handleReject(recipe.id)} className="rounded-lg bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-600">驳回</button></>}<button onClick={() => handleOpenEdit(recipe)} className="rounded-lg p-2 text-text-muted hover:bg-primary/10 hover:text-primary" title="编辑"><Pencil size={15} /></button><button onClick={() => handleDelete(recipe.id)} className="rounded-lg p-2 text-text-muted hover:bg-red-50 hover:text-red-500" title="删除"><Trash2 size={15} /></button></div></td>

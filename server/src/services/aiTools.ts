@@ -1,5 +1,5 @@
 import { db } from "../storage/db.js";
-import { currentDateKey, dateKeyAfterDays } from "../utils/date.js";
+import { currentDateKey, currentTimeKey, dateKeyAfterDays } from "../utils/date.js";
 import { createAIWritePreview } from "./aiWriteConfirmations.js";
 
 /**
@@ -118,10 +118,24 @@ export const aiToolsSchema = [
                 schemeTag: { type: "string", description: "方案编号，如：方案 A、方案 B、方案 C" },
                 title: { type: "string", description: "菜品名称，如：香煎三文鱼配紫麦沙拉、蒜香虾仁炒时蔬" },
                 ingredients: { type: "string", description: "详细食材搭配，如：挪威三文鱼排 150g + 三色藜麦 50g + 菠菜" },
+                ingredientItems: {
+                  type: "array",
+                  description: "进入烹饪模式所需的逐项食材与用量，不得只写概述",
+                  items: {
+                    type: "object",
+                    properties: { name: { type: "string" }, amount: { type: "string" } },
+                    required: ["name", "amount"],
+                  },
+                },
                 cookingTip: { type: "string", description: "烹饪亮点与特色，如：煎香鱼皮，油脂自然渗入藜麦，简单黑胡椒调味" },
+                steps: {
+                  type: "array",
+                  description: "可直接执行的完整烹饪步骤，按顺序给出 2 至 6 步；每步包含动作、火候或时长，不得是泛泛提示",
+                  items: { type: "string" },
+                },
                 macros: { type: "string", description: "预估热量营养，如：约 605 kcal · 蛋白质 31g" },
               },
-              required: ["schemeTag", "title", "ingredients", "cookingTip", "macros"],
+              required: ["schemeTag", "title", "ingredients", "ingredientItems", "cookingTip", "steps", "macros"],
             },
           },
         },
@@ -268,9 +282,9 @@ export async function executeAITool(
       const fat = args.fat ?? 8;
 
       const result = db.prepare(`
-        INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(userId, mealType, foodName, amount, calories, protein, carbs, fat, todayStr);
+        INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, recorded_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(userId, mealType, foodName, amount, calories, protein, carbs, fat, todayStr, currentTimeKey());
 
       return {
         success: true,

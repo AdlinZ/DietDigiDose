@@ -23,8 +23,18 @@ interface VoiceMessage {
   sender: "user" | "ai";
   text: string;
   timestamp: string;
+  solutionCards?: SolutionCard[];
 }
 
+interface SolutionCard {
+  id: string;
+  schemeTag: string;
+  title: string;
+  ingredients: string;
+  cookingTip: string;
+  macros: string;
+  actionText: string;
+}
 interface RealtimeVoiceMVPModalProps {
   visible: boolean;
   onClose: () => void;
@@ -32,6 +42,7 @@ interface RealtimeVoiceMVPModalProps {
 
 export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModalProps) {
   const authFetch = useAuthFetch();
+  const [sessionId] = useState(() => `voice-${Date.now()}`);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [messages, setMessages] = useState<VoiceMessage[]>([]);
   const [currentRecognizedText, setCurrentRecognizedText] = useState("");
@@ -144,17 +155,27 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
           if (ttsStartTimerRef.current) clearTimeout(ttsStartTimerRef.current);
           ttsStartTimerRef.current = null;
         };
-        utterance.onend = () => setVoiceState("completed");
-        utterance.onerror = () => {
-          setTtsError("浏览器没有启动语音播放。请检查此标签页是否静音、系统媒体音量或点击“重播回答”。");
+        utterance.onend = () => {
+          if (ttsStartTimerRef.current) clearTimeout(ttsStartTimerRef.current);
+          ttsStartTimerRef.current = null;
+          setVoiceState("completed");
+        };
+        utterance.onerror = (event) => {
+          if (ttsStartTimerRef.current) clearTimeout(ttsStartTimerRef.current);
+          ttsStartTimerRef.current = null;
+          // Chrome emits these when we intentionally cancel playback to start a new turn.
+          if (event.error !== "canceled" && event.error !== "interrupted") {
+            setTtsError("自动朗读未能启动。请点击“重播回答”手动播放，并检查标签页和系统媒体音量。");
+          }
           setVoiceState("completed");
         };
         window.speechSynthesis.speak(utterance);
         ttsStartTimerRef.current = setTimeout(() => {
           if (!window.speechSynthesis.speaking) {
-            setTtsError("语音未能启动。请取消 Chrome 标签页静音并确认系统媒体音量已开启，然后点“重播回答”。");
+            setTtsError("自动朗读未能启动。请点击“重播回答”手动播放，并检查标签页和系统媒体音量。");
             setVoiceState("completed");
           }
+          ttsStartTimerRef.current = null;
         }, 1500);
         return;
       }
@@ -202,9 +223,11 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
       const res = (await aiApi.chat(
         authFetch,
         {
-          prompt: `【实时语音对话模式】请用精炼亲切的口语（100字以内的短句）回答用户的提问，方便语音播报：${userText}`,
+          messages: [{ role: "user", content: userText }],
+          source: "voice",
+          sessionId,
         }
-      )) as { reply?: string };
+      )) as { reply?: string; solutionCards?: SolutionCard[] };
       const replyText = res.reply || "收到，我已经听明白了。你还想继续问我什么？";
       const llmDoneTime = Date.now();
       const llmMs = llmDoneTime - asrDoneTime;
@@ -214,6 +237,7 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
         id: String(Date.now() + 1),
         sender: "ai",
         text: replyText,
+        solutionCards: res.solutionCards,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
       setMessages((prev) => [...prev, aiMsg]);
@@ -226,15 +250,18 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
 
     } catch (err) {
       console.error("Voice pipeline error:", err);
+      const message = err instanceof Error && err.message
+        ? `食语暂时无法回复：${err.message}`
+        : "食语暂时无法回复，请检查网络后重试。";
       setMessages((prev) => [...prev, {
         id: String(Date.now() + 1),
         sender: "ai",
-        text: "这次语音请求没有完成，请再说一次或改用文字输入。",
+        text: message,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       }]);
       setVoiceState("completed");
     }
-  }, [authFetch, speakReply, stopTTS]);
+  }, [authFetch, sessionId, speakReply, stopTTS]);
 
   // ASR 识别 Hook
   const { isRecording, toggleRecording, stopRecording } = useVoiceRecorder({
@@ -368,6 +395,32 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
                     >
                       {msg.text}
                     </Text>
+                    {msg.sender === "ai" && msg.solutionCards?.length ? (
+                      <View className="mt-3 gap-2">
+                        {msg.solutionCards.map((card) => (
+                          <TouchableOpacity
+                            key={card.id}
+                            onPress={() => handleProcessVoiceQuery(card.actionText)}
+                            className="rounded-xl border border-brand/25 bg-brand/5 p-2.5 active:bg-brand/10"
+                          >
+                            <View className="flex-row items-center justify-between gap-2">
+                              <View className="rounded-full bg-brand px-2 py-0.5">
+                                <Text className="text-[9px] font-black text-white">{card.schemeTag}</Text>
+                              </View>
+                              <Text className="flex-1 text-right text-[11px] font-black text-ink" numberOfLines={1}>
+                                {card.title}
+                              </Text>
+                            </View>
+                            <Text className="mt-1.5 text-[10px] font-medium leading-relaxed text-ink" numberOfLines={2}>
+                              {card.ingredients}
+                            </Text>
+                            <Text className="mt-1 text-[9px] font-bold text-brand">{card.macros}</Text>
+                            <Text className="mt-1 text-[9px] text-copy-muted" numberOfLines={2}>{card.cookingTip}</Text>
+                            <Text className="mt-2 text-center text-[10px] font-black text-brand">点击选择此方案</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    ) : null}
                     <Text
                       className={`text-[9px] mt-1 text-right ${
                         msg.sender === "user" ? "text-emerald-100/70" : "text-copy-muted"

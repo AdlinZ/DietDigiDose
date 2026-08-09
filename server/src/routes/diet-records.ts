@@ -4,7 +4,7 @@ import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { cookingCompletionSchema, dietRecordCreateSchema } from "../validation/schemas.js";
 import { sendError } from "../utils/http.js";
-import { currentDateKey } from "../utils/date.js";
+import { currentDateKey, currentTimeKey } from "../utils/date.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
 import { recordFunnelEvent } from "../services/funnelEvents.js";
 
@@ -44,13 +44,14 @@ router.post("/cooking-completions", validateBody(cookingCompletionSchema), (req:
       }
 
       const recordedAt = record.recorded_at || currentDateKey();
+      const recordedTime = record.recorded_time ?? (recordedAt === currentDateKey() ? currentTimeKey() : null);
       const inserted = db.prepare(`
-        INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, image_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, recorded_time, image_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         userId, record.meal_type, record.food_name, record.amount || "1份",
         record.calories ?? null, record.protein ?? null, record.carbs ?? null, record.fat ?? null,
-        recordedAt, record.image_url || null,
+        recordedAt, recordedTime, record.image_url || null,
       );
       const dietRecord = db.prepare("SELECT * FROM diet_records WHERE id = ?").get(inserted.lastInsertRowid);
       const response = { diet_record: dietRecord, consumed_inventory_item_ids: inventoryIds, repeated: false };
@@ -83,7 +84,7 @@ router.get("/", (req: AuthRequest, res) => {
     params.push(date);
   }
 
-  query += " ORDER BY created_at DESC";
+  query += " ORDER BY CASE WHEN recorded_time IS NULL THEN 1 ELSE 0 END, recorded_time DESC, id DESC";
 
   const records = db.prepare(query).all(...params);
   res.json(records);
@@ -92,12 +93,13 @@ router.get("/", (req: AuthRequest, res) => {
 // POST /api/v1/diet-records
 router.post("/", validateBody(dietRecordCreateSchema), (req: AuthRequest, res) => {
   const todayStr = currentDateKey();
-  const { meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, image_url } = req.body;
+  const { meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, recorded_time, image_url } = req.body;
   const finalRecordedAt = recorded_at || todayStr;
+  const finalRecordedTime = recorded_time ?? (finalRecordedAt === todayStr ? currentTimeKey() : null);
 
   const result = db.prepare(`
-    INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, image_url)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, recorded_time, image_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     req.userId,
     meal_type,
@@ -108,6 +110,7 @@ router.post("/", validateBody(dietRecordCreateSchema), (req: AuthRequest, res) =
     carbs ?? null,
     fat ?? null,
     finalRecordedAt,
+    finalRecordedTime,
     image_url || null
   );
 

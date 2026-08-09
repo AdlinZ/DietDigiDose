@@ -8,6 +8,9 @@ interface Conversation {
   username: string;
   turnCount: number;
   messageCount: number;
+  avgResponseTimeMs: number | null;
+  failedCount: number;
+  sources: string | null;
   updatedAt: string;
   lastUserMessage: string | null;
 }
@@ -15,7 +18,27 @@ interface Conversation {
 interface ConversationDetail {
   user: { id: number; username: string };
   sessionId: string;
-  messages: Array<{ id: number; role: 'user' | 'assistant'; content: string; createdAt: string }>;
+  messages: Array<{
+    id: number;
+    role: 'system' | 'user' | 'assistant';
+    content: string;
+    responseTimeMs: number | null;
+    source: 'assistant' | 'voice' | 'cooking' | 'cooking_voice' | 'legacy';
+    status: 'completed' | 'failed';
+    payload: ConversationPayload | null;
+    confirmationStatus: string | null;
+    createdAt: string;
+  }>;
+}
+
+interface ConversationPayload {
+  actionCard?: { mealType?: string; foodName?: string; amount?: string; calories?: number | null; protein?: number | null; carbs?: number | null; fat?: number | null };
+  missingCard?: { dishName?: string; missingIngredients?: Array<{ name?: string; amount?: string }> };
+  optionsCard?: { title?: string; options?: Array<{ label?: string; actionText?: string }> };
+  solutionCards?: Array<{ id?: string; schemeTag?: string; title?: string; ingredients?: string; cookingTip?: string; macros?: string; source?: string }>;
+  writeConfirmation?: { action?: string };
+  legacyCardSummaries?: string[];
+  errorCode?: string;
 }
 
 interface ScanJob {
@@ -34,9 +57,25 @@ interface ScanJobDetail extends ScanJob {
 
 function formatDateTime(value: string) {
   return new Date(`${value.replace(' ', 'T')}Z`).toLocaleString('zh-CN', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
 }
+
+function formatResponseTime(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '暂无耗时数据';
+  if (value < 1_000) return `${Math.round(value)} ms`;
+  if (value < 60_000) return `${(value / 1_000).toFixed(value < 10_000 ? 2 : 1)} 秒`;
+  const minutes = Math.floor(value / 60_000);
+  return `${minutes} 分 ${((value % 60_000) / 1_000).toFixed(1)} 秒`;
+}
+
+const sourceLabels: Record<string, string> = {
+  assistant: 'AI 助手',
+  voice: '语音助手',
+  cooking: '做饭文字',
+  cooking_voice: '做饭语音',
+  legacy: '历史记录',
+};
 
 export default function AIConversations() {
   const [query, setQuery] = useState('');
@@ -50,6 +89,12 @@ export default function AIConversations() {
   const [scanDetailLoading, setScanDetailLoading] = useState(false);
   const totalTurns = conversations.reduce((sum, item) => sum + Number(item.turnCount || 0), 0);
   const activeUsers = new Set(conversations.map((item) => item.userId)).size;
+  const selectedResponseTimes = selected?.messages
+    .filter((message) => message.role === 'assistant' && message.status === 'completed' && message.responseTimeMs !== null)
+    .map((message) => Number(message.responseTimeMs)) ?? [];
+  const selectedAverageResponseTime = selectedResponseTimes.length
+    ? selectedResponseTimes.reduce((sum, value) => sum + value, 0) / selectedResponseTimes.length
+    : null;
 
   const loadConversations = useCallback(async () => {
     setLoading(true);
@@ -121,8 +166,8 @@ export default function AIConversations() {
 
       <section className="rounded-[24px] bg-white p-6 shadow-sm">
         <div className="mb-5 flex items-center justify-between"><div><h2 className="font-bold text-text-main">会话列表</h2><p className="mt-1 text-xs text-text-muted">最近 100 段会话，每段会话可展开查看逐轮消息。</p></div><span className="rounded-full bg-background-alt px-3 py-1 text-xs text-text-muted">{conversations.length} 段</span></div>
-        <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left"><thead><tr className="border-b border-background-alt text-xs text-text-muted"><th className="w-[22%] pb-3 font-medium">用户</th><th className="w-[14%] pb-3 font-medium">对话轮次</th><th className="w-[34%] pb-3 font-medium">最后提问</th><th className="w-[16%] pb-3 text-right font-medium">最后更新</th><th className="w-[14%] pb-3 text-right font-medium">操作</th></tr></thead>
-          <tbody>{conversations.map((item) => <tr key={`${item.userId}-${item.sessionId}`} className="border-b border-background-alt/60 text-sm last:border-0"><td className="py-4"><p className="font-medium text-text-main">{item.username}</p><p className="mt-0.5 text-xs text-text-muted">ID {item.userId}</p></td><td className="py-4 text-text-main">{item.turnCount} 轮 <span className="text-xs text-text-muted">/ {item.messageCount} 条</span></td><td className="max-w-96 truncate py-4 text-text-muted" title={item.lastUserMessage || ''}>{item.lastUserMessage || '—'}</td><td className="py-4 text-right text-xs text-text-muted">{formatDateTime(item.updatedAt)}</td><td className="py-4 text-right"><button type="button" onClick={() => openDetail(item)} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/15"><Eye className="h-3.5 w-3.5" />查看对话</button></td></tr>)}</tbody></table>
+        <div className="overflow-x-auto"><table className="w-full min-w-[1000px] text-left"><thead><tr className="border-b border-background-alt text-xs text-text-muted"><th className="w-[19%] pb-3 font-medium">用户</th><th className="w-[13%] pb-3 font-medium">对话轮次</th><th className="w-[30%] pb-3 font-medium">最后提问</th><th className="w-[14%] pb-3 text-right font-medium">平均回复耗时</th><th className="w-[14%] pb-3 text-right font-medium">最后更新</th><th className="w-[10%] pb-3 text-right font-medium">操作</th></tr></thead>
+          <tbody>{conversations.map((item) => <tr key={`${item.userId}-${item.sessionId}`} className="border-b border-background-alt/60 text-sm last:border-0"><td className="py-4"><p className="font-medium text-text-main">{item.username}</p><p className="mt-0.5 text-xs text-text-muted">ID {item.userId}</p></td><td className="py-4 text-text-main"><p>{item.turnCount} 轮 <span className="text-xs text-text-muted">/ {item.messageCount} 条可见消息</span>{item.failedCount > 0 ? <span className="ml-1 text-xs text-red-600">· {item.failedCount} 次失败</span> : null}</p><div className="mt-1 flex flex-wrap gap-1">{(item.sources || 'legacy').split(',').map((source) => <span key={source} className="rounded-full bg-background-alt px-1.5 py-0.5 text-[9px] text-text-muted">{sourceLabels[source] || source}</span>)}</div></td><td className="max-w-96 truncate py-4 text-text-muted" title={item.lastUserMessage || ''}>{item.lastUserMessage || '—'}</td><td className="py-4 text-right text-xs font-medium text-text-main">{formatResponseTime(item.avgResponseTimeMs)}</td><td className="py-4 text-right text-xs text-text-muted">{formatDateTime(item.updatedAt)}</td><td className="py-4 text-right"><button type="button" onClick={() => openDetail(item)} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/15"><Eye className="h-3.5 w-3.5" />查看对话</button></td></tr>)}</tbody></table>
           {!loading && conversations.length === 0 ? <div className="py-14 text-center text-sm text-text-muted">暂未记录 AI 对话；新产生的对话会出现在这里。</div> : null}
           {loading ? <div className="py-14 text-center text-sm text-text-muted">正在加载会话记录...</div> : null}
         </div>
@@ -133,9 +178,23 @@ export default function AIConversations() {
         <div className="overflow-x-auto"><table className="w-full min-w-[880px] text-left"><thead><tr className="border-b border-background-alt text-xs text-text-muted"><th className="w-[25%] pb-3 font-medium">用户</th><th className="w-[14%] pb-3 font-medium">状态</th><th className="w-[16%] pb-3 font-medium">结果</th><th className="w-[22%] pb-3 font-medium">异常摘要</th><th className="w-[14%] pb-3 text-right font-medium">最后更新</th><th className="w-[14%] pb-3 text-right font-medium">操作</th></tr></thead><tbody>{scanJobs.map((job) => <tr key={job.id} className="border-b border-background-alt/60 text-sm last:border-0"><td className="py-4"><p className="font-medium text-text-main">{job.username}</p><p className="mt-0.5 text-xs text-text-muted">ID {job.userId}</p></td><td className="py-4"><ScanStatus status={job.status} /></td><td className="py-4 text-text-main">{job.status === 'completed' ? `${job.itemCount} 项食材` : '—'}</td><td className="max-w-52 truncate py-4 text-xs text-red-600" title={job.errorMessage || ''}>{job.errorMessage || '—'}</td><td className="py-4 text-right text-xs text-text-muted">{formatDateTime(job.updatedAt)}</td><td className="py-4 text-right"><button type="button" onClick={() => openScanDetail(job.id)} className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/15"><Eye className="h-3.5 w-3.5" />查看详情</button></td></tr>)}</tbody></table>{scanJobsLoading ? <div className="py-10 text-center text-sm text-text-muted">正在加载识别记录...</div> : null}{!scanJobsLoading && scanJobs.length === 0 ? <div className="py-10 text-center text-sm text-text-muted">暂无图片识别记录</div> : null}</div>
       </section>
 
-      {selected || detailLoading ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-5" onClick={() => !detailLoading && setSelected(null)}><section className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between border-b border-background-alt px-6 py-5"><div><p className="text-xs text-text-muted">AI 对话详情</p><h2 className="mt-1 text-lg font-bold text-text-main">{selected ? `${selected.user.username} 的会话` : '正在加载...'}</h2></div><button type="button" onClick={() => setSelected(null)} disabled={detailLoading} className="rounded-xl p-2 text-text-muted hover:bg-background-alt"><X className="h-5 w-5" /></button></div>{detailLoading || !selected ? <div className="flex h-52 items-center justify-center text-sm text-text-muted">正在加载对话...</div> : <div className="space-y-4 overflow-y-auto bg-background-alt p-6">{selected.messages.map((message) => <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'bg-primary text-white' : 'bg-white text-text-main shadow-sm'}`}><p className="mb-1 text-[10px] opacity-65">{message.role === 'user' ? '用户' : 'AI'} · {formatDateTime(message.createdAt)}</p><p className="whitespace-pre-wrap">{message.content}</p></div></div>)}</div>}</section></div> : null}
+      {selected || detailLoading ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-5" onClick={() => !detailLoading && setSelected(null)}><section className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between border-b border-background-alt px-6 py-5"><div><p className="text-xs text-text-muted">AI 对话详情</p><h2 className="mt-1 text-lg font-bold text-text-main">{selected ? `${selected.user.username} 的会话` : '正在加载...'}</h2></div><button type="button" onClick={() => setSelected(null)} disabled={detailLoading} className="rounded-xl p-2 text-text-muted hover:bg-background-alt"><X className="h-5 w-5" /></button></div>{detailLoading || !selected ? <div className="flex h-52 items-center justify-center text-sm text-text-muted">正在加载对话...</div> : <><div className="grid grid-cols-2 gap-2 border-b border-background-alt bg-white px-6 py-4 sm:grid-cols-4"><div><p className="text-[10px] text-text-muted">用户消息</p><p className="mt-1 text-sm font-bold text-text-main">{selected.messages.filter((message) => message.role === 'user').length} 条</p></div><div><p className="text-[10px] text-text-muted">AI 回复</p><p className="mt-1 text-sm font-bold text-text-main">{selected.messages.filter((message) => message.role === 'assistant').length} 条{selected.messages.some((message) => message.role === 'assistant' && message.status === 'failed') ? <span className="ml-1 text-xs text-red-600">含失败</span> : null}</p></div><div><p className="text-[10px] text-text-muted">系统指令</p><p className="mt-1 text-sm font-bold text-amber-700">{selected.messages.filter((message) => message.role === 'system').length} 条</p></div><div><p className="text-[10px] text-text-muted">平均回复耗时</p><p className="mt-1 text-sm font-bold text-primary">{formatResponseTime(selectedAverageResponseTime)}</p></div></div><div className="space-y-4 overflow-y-auto bg-background-alt p-6">{selected.messages.map((message) => <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : message.role === 'assistant' ? 'justify-start' : 'justify-center'}`}><div className={`rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'max-w-[82%] bg-primary text-white' : message.role === 'assistant' ? `max-w-[82%] border bg-white text-text-main shadow-sm ${message.status === 'failed' ? 'border-red-200' : 'border-transparent'}` : 'max-w-[90%] border border-dashed border-amber-300 bg-amber-50 text-amber-950'}`}><div className="mb-1 flex flex-wrap items-center gap-2 text-[10px] opacity-70"><span>{message.role === 'user' ? '用户' : message.role === 'assistant' ? 'AI 助手' : '系统指令'} · {sourceLabels[message.source] || message.source} · {formatDateTime(message.createdAt)}</span>{message.role === 'assistant' ? <span className={`rounded-full px-2 py-0.5 font-semibold opacity-100 ${message.status === 'failed' ? 'bg-red-50 text-red-600' : 'bg-primary/10 text-primary'}`}>{message.status === 'failed' ? '回复失败' : `回复耗时 ${formatResponseTime(message.responseTimeMs)}`}</span> : null}</div><p className="whitespace-pre-wrap">{message.content}</p>{message.payload ? <ConversationPayloadView payload={message.payload} confirmationStatus={message.confirmationStatus} /> : null}</div></div>)}</div></>}</section></div> : null}
 
       {selectedScanJob || scanDetailLoading ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-5" onClick={() => !scanDetailLoading && setSelectedScanJob(null)}><section className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-[28px] bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between border-b border-background-alt px-6 py-5"><div><p className="text-xs text-text-muted">图片识别详情</p><h2 className="mt-1 text-lg font-bold text-text-main">{selectedScanJob ? `${selectedScanJob.username} 的识别结果` : '正在加载...'}</h2></div><button type="button" onClick={() => setSelectedScanJob(null)} disabled={scanDetailLoading} className="rounded-xl p-2 text-text-muted hover:bg-background-alt"><X className="h-5 w-5" /></button></div>{scanDetailLoading || !selectedScanJob ? <div className="flex h-52 items-center justify-center text-sm text-text-muted">正在加载识别详情...</div> : <div className="max-h-[65vh] overflow-y-auto p-6"><div className="grid grid-cols-3 gap-3 rounded-2xl bg-background-alt p-4 text-sm"><div><p className="text-xs text-text-muted">状态</p><div className="mt-1"><ScanStatus status={selectedScanJob.status} /></div></div><div><p className="text-xs text-text-muted">识别条目</p><p className="mt-1 font-semibold text-text-main">{selectedScanJob.items.length} 项</p></div><div><p className="text-xs text-text-muted">最后更新</p><p className="mt-1 text-xs text-text-main">{formatDateTime(selectedScanJob.updatedAt)}</p></div></div>{selectedScanJob.errorMessage ? <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">{selectedScanJob.errorMessage}</div> : null}{selectedScanJob.items.length > 0 ? <div className="mt-5 overflow-hidden rounded-2xl border border-background-alt">{selectedScanJob.items.map((item, index) => <div key={`${item.foodName}-${index}`} className="grid grid-cols-[1fr_auto_auto] gap-3 border-b border-background-alt px-4 py-3 text-sm last:border-0"><span className="font-medium text-text-main">{item.foodName}</span><span className="text-text-muted">{item.quantity}</span><span className="text-text-muted">{item.suggestedStorageLocation} · {item.estimatedExpireDays} 天</span></div>)}</div> : !selectedScanJob.errorMessage ? <div className="py-10 text-center text-sm text-text-muted">未识别到可入库食材。</div> : null}</div>}</section></div> : null}
+    </div>
+  );
+}
+
+function ConversationPayloadView({ payload, confirmationStatus }: { payload: ConversationPayload; confirmationStatus: string | null }) {
+  return (
+    <div className="mt-3 space-y-2 border-t border-background-alt pt-3 text-xs leading-5">
+      {payload.actionCard ? <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3"><p className="font-bold text-emerald-800">饮食打卡卡片 · {payload.actionCard.mealType || '未分类'}</p><p className="mt-1 text-text-main">{payload.actionCard.foodName || '未命名食物'} · {payload.actionCard.amount || '未填写分量'}</p><p className="text-text-muted">{payload.actionCard.calories ?? '—'} kcal · 蛋白质 {payload.actionCard.protein ?? '—'}g · 碳水 {payload.actionCard.carbs ?? '—'}g · 脂肪 {payload.actionCard.fat ?? '—'}g</p></div> : null}
+      {payload.missingCard ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-3"><p className="font-bold text-amber-800">缺料采购卡片 · {payload.missingCard.dishName || '目标料理'}</p><div className="mt-1 flex flex-wrap gap-1">{(payload.missingCard.missingIngredients || []).map((item, index) => <span key={`${item.name}-${index}`} className="rounded-full bg-white px-2 py-0.5 text-amber-800">{item.name} {item.amount}</span>)}</div></div> : null}
+      {payload.optionsCard ? <div className="rounded-xl border border-blue-100 bg-blue-50 p-3"><p className="font-bold text-blue-800">选项卡片 · {payload.optionsCard.title}</p><div className="mt-1 space-y-1">{(payload.optionsCard.options || []).map((item, index) => <p key={`${item.label}-${index}`}><span className="font-semibold">{item.label}</span>：{item.actionText}</p>)}</div></div> : null}
+      {payload.solutionCards?.map((card, index) => <div key={card.id || `${card.title}-${index}`} className="rounded-xl border border-primary/15 bg-primary/5 p-3"><div className="flex items-center justify-between gap-2"><p className="font-bold text-primary">{card.schemeTag || `方案 ${index + 1}`} · {card.title}</p><span className="rounded-full bg-white px-2 py-0.5 text-[9px] text-text-muted">{card.source === 'local' ? '本地菜谱' : 'AI 方案'}</span></div><p className="mt-1 text-text-main">{card.ingredients}</p>{card.cookingTip ? <p className="text-text-muted">做法：{card.cookingTip}</p> : null}{card.macros ? <p className="font-medium text-primary">{card.macros}</p> : null}</div>)}
+      {payload.legacyCardSummaries?.map((summary, index) => <div key={index} className="rounded-xl border border-slate-200 bg-slate-50 p-3"><p className="mb-1 font-bold text-slate-600">历史卡片摘要</p><p className="whitespace-pre-wrap text-slate-700">{summary}</p></div>)}
+      {payload.writeConfirmation || confirmationStatus ? <div className="rounded-xl bg-background-alt p-2.5 text-text-muted">操作确认：{confirmationStatus === 'committed' ? '已确认执行' : confirmationStatus === 'expired' ? '已过期' : confirmationStatus === 'cancelled' ? '已取消' : '待用户确认'}</div> : null}
+      {payload.errorCode ? <p className="text-[10px] text-red-500">错误代码：{payload.errorCode}</p> : null}
     </div>
   );
 }

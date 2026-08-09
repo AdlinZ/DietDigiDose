@@ -35,7 +35,7 @@ try {
 
   const registered = checked("register", await request("/api/v1/auth/register", {
     method: "POST",
-    body: JSON.stringify({ identifier, nickname: "烟测食友", password }),
+    body: JSON.stringify({ identifier, username: "烟测食友", password }),
   }));
   token = registered.token;
 

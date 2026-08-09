@@ -310,8 +310,9 @@ const findLocalRecipeRecommendations = (ctx: UserContext): SolutionCard[] => {
     .filter(Boolean);
   if (!inventory.length || !ctx.kitchenware.length) return [];
   const rows = db.prepare(`
-    SELECT title, description, cook_time, calories, protein, carbs, fat, steps_json, ingredients_json
+    SELECT id, title, description, cook_time, calories, protein, carbs, fat, steps_json, ingredients_json
     FROM recipes WHERE status = 'approved' AND deleted_at IS NULL
+      AND COALESCE(quality_status, 'trusted') <> 'needs_review'
     ORDER BY updated_at DESC LIMIT 120
   `).all() as Array<Record<string, unknown>>;
 
@@ -333,6 +334,7 @@ const findLocalRecipeRecommendations = (ctx: UserContext): SolutionCard[] => {
       const recipe = item.recipe;
       return {
         id: `local_recipe_${String(recipe.title)}_${index}`,
+        recipeId: Number(recipe.id),
         schemeTag: `本地方案 ${String.fromCharCode(65 + index)}`,
         title: String(recipe.title || "本地菜谱"),
         ingredients: item.ingredientItems.map((ingredient) => `${ingredient.name} ${ingredient.amount}`).join(" + "),

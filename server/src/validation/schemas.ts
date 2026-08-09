@@ -372,6 +372,10 @@ export const adminKitchenwareCatalogSchema = z.object({
   care_note: z.string().trim().max(300).default(""),
 }).strict();
 export const adminRecipeRejectSchema = z.object({ reason: trimmedString(2, 300, "驳回原因") }).strict();
+export const adminRecipeQualitySchema = z.object({
+  status: z.enum(["trusted", "needs_review"]),
+  reason: trimmedString(2, 300, "审核原因"),
+}).strict();
 export const adminEventSchema = z.object({
   event_start_at: z.string().trim().min(1),
   event_end_at: z.string().trim().min(1),

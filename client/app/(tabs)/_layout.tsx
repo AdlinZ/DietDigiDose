@@ -1,12 +1,16 @@
 import { Tabs } from 'expo-router';
 import { AppTabBar } from '@/components/AppTabBar';
+import { Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
   return (
     <Tabs
       tabBar={(props) => <AppTabBar {...props} />}
       screenOptions={{
         headerShown: false,
+        sceneStyle: { paddingBottom: Platform.OS === 'web' ? 88 : 82 + insets.bottom },
       }}
     >
       <Tabs.Screen

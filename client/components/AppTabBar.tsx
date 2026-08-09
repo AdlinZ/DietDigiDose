@@ -7,6 +7,7 @@ import { useCSSVariable } from "uniwind";
 
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth } from "@/contexts/AuthContext";
+import { createAuthReturnTo } from "@/utils/authReturnTo";
 
 export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
@@ -34,9 +35,12 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
   const handleLeftButtonPress = () => {
     if (currentRouteName === "inventory" && !isAuthenticated) {
       const actionLabel = inventorySegment === "recipes" ? "食谱" : inventorySegment === "kitchenware" ? "厨具" : "食材";
+      const returnTo = inventorySegment === "recipes"
+        ? createAuthReturnTo("/recipe-submit")
+        : createAuthReturnTo("/inventory", inventorySegment === "inventory" ? { action: "add" } : {});
       Alert.alert(`登录后保存${actionLabel}`, `登录后才能保存和管理你的${actionLabel}。`, [
         { text: "取消", style: "cancel" },
-        { text: "去登录", onPress: () => router.push("/login") },
+        { text: "去登录", onPress: () => router.push("/login", returnTo ? { returnTo } : {}) },
       ]);
       return;
     }

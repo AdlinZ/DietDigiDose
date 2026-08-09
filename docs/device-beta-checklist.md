@@ -1,6 +1,6 @@
 # 真机验收与小范围内测清单
 
-> 更新于 2026-08-06。仓库已移除候选 profile 中的明文地址和不安全网络开关，并补齐双端 preview/production 配置；但尚未基于同一提交和 HTTPS staging 生成、验收新的 iOS/Android 候选包。因此，历史 APK 只能用于受控调试。
+> 更新于 2026-08-09。正式 preview/production profile 已移除明文地址和不安全网络开关，并补齐双端配置；临时 `preview-http` profile 仅用于当前受控打包测试，不得使用真实敏感数据或作为外部候选包。尚未基于同一提交和 HTTPS staging 生成、验收新的 iOS/Android 候选包。
 
 开发阻断项见 [TODO](../TODO.md)，阶段指标见 [产品路线图](product-roadmap.md)，部署、迁移和恢复步骤见 [运维手册](operations.md)。
 
@@ -54,7 +54,7 @@
 
     pnpm dev
 
-`client/eas.json` 已提供双端内部 preview 与 production profile，iOS bundle identifier 和构建号也已配置。构建时必须通过 EAS 环境注入 HTTPS `EXPO_PUBLIC_BACKEND_BASE_URL`；缺失或使用 HTTP 会直接失败。外部内测前仍要生成同一提交对应的 iOS/Android 候选包，Expo 开发环境和历史调试 APK 都不能替代最终候选包验收。
+`client/eas.json` 已提供双端内部 preview 与 production profile，iOS bundle identifier 和构建号也已配置。正式候选构建必须通过 EAS 环境注入 HTTPS `EXPO_PUBLIC_BACKEND_BASE_URL`；缺失或使用 HTTP 会直接失败。当前确需 HTTP 打包时使用 `preview-http`，仅连接指定测试服务并使用一次性测试账号。外部内测前仍要生成同一提交对应的 HTTPS iOS/Android 候选包，HTTP 调试包不能替代最终候选包验收。
 
 ## 3. 候选提交前的 P0 阻断确认
 

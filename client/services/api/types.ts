@@ -56,6 +56,9 @@ export type Recipe = {
   steps: string[];
   ingredients: Array<{ name: string; amount: string; group?: string }>;
   status?: "pending" | "approved" | "rejected";
+  quality_status: "trusted" | "estimated" | "needs_review";
+  nutrition_basis: "source" | "ingredient_estimate" | "category_fallback";
+  nutrition_is_estimated: boolean;
 };
 
 export type CommunityPost = {

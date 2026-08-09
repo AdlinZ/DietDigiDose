@@ -28,6 +28,11 @@ test("filters recipes by cook time limit", () => {
   expect(filterAndRankRecipes(recipes, inventory, "全部", "", 10).map((r) => r.id)).toEqual([1]);
 });
 
+test("never includes recipes marked as needs review in recommendations", () => {
+  const unsafe = { ...recipes[1], id: 99, quality_status: "needs_review" as const };
+  expect(filterAndRankRecipes([...recipes, unsafe], inventory, "全部", "").some((recipe) => recipe.id === 99)).toBe(false);
+});
+
 test("analyzeRecipeInventoryMatch detects expiring ingredients and calculates status", () => {
   const recipeWithDetails: Recipe & { ingredients?: Array<{ name: string; amount?: string }> } = {
     ...recipes[1],

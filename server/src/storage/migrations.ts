@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { assessRecipeQuality } from "../services/recipeQuality.js";
 
 type Migration = {
   version: number;
@@ -684,6 +685,67 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_confirmation
           ON ai_chat_messages(confirmation_id)
           WHERE confirmation_id IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 29,
+    name: "recipe_quality_gate",
+    up(database) {
+      addColumn(database, "recipes", "quality_status", "TEXT NOT NULL DEFAULT 'trusted'");
+      addColumn(database, "recipes", "nutrition_basis", "TEXT NOT NULL DEFAULT 'source'");
+      addColumn(database, "recipes", "quality_issues_json", "TEXT NOT NULL DEFAULT '[]'");
+      addColumn(database, "recipes", "quality_reviewed_by", "INTEGER");
+      addColumn(database, "recipes", "quality_reviewed_at", "DATETIME");
+      addColumn(database, "recipes", "quality_review_reason", "TEXT");
+
+      const recipes = database.prepare(`
+        SELECT id, source, cook_time, calories, protein, carbs, fat, ingredients_json, steps_json
+        FROM recipes
+      `).all() as Array<{
+        id: number;
+        source: string;
+        cook_time: number;
+        calories: number;
+        protein: number;
+        carbs: number;
+        fat: number;
+        ingredients_json: string | null;
+        steps_json: string | null;
+      }>;
+      const update = database.prepare(`
+        UPDATE recipes
+        SET quality_status = ?, nutrition_basis = ?, quality_issues_json = ?
+        WHERE id = ?
+      `);
+      for (const recipe of recipes) {
+        let ingredients: unknown[] = [];
+        let steps: unknown[] = [];
+        try { ingredients = JSON.parse(recipe.ingredients_json || "[]"); } catch { ingredients = []; }
+        try { steps = JSON.parse(recipe.steps_json || "[]"); } catch { steps = []; }
+        const assessment = assessRecipeQuality({
+          source: recipe.source || "official",
+          cookTime: Number(recipe.cook_time),
+          calories: Number(recipe.calories),
+          protein: Number(recipe.protein),
+          carbs: Number(recipe.carbs),
+          fat: Number(recipe.fat),
+          ingredients: ingredients as Array<{ name?: string; amount?: string } | string>,
+          steps,
+        });
+        update.run(
+          assessment.qualityStatus,
+          assessment.nutritionBasis,
+          JSON.stringify(assessment.issues),
+          recipe.id,
+        );
+      }
+
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_recipes_public_quality
+          ON recipes(status, quality_status, id DESC) WHERE deleted_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_recipes_quality_review
+          ON recipes(quality_status, source, id DESC) WHERE deleted_at IS NULL;
       `);
     },
   },

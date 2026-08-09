@@ -3,7 +3,8 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleShe
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import { Screen } from '@/components/Screen';
 import { useAuthFetch } from '@/contexts/AuthContext';
-import { useSafeRouter } from '@/hooks/useSafeRouter';
+import { useSafeRouter, useSafeSearchParams } from '@/hooks/useSafeRouter';
+import { validateAuthReturnTo } from '@/utils/authReturnTo';
 import { healthApi } from '@/services/api';
 import { ALLERGY_LABELS, type AllergyEntry, type AllergySeverity } from '@/utils/healthProfile';
 
@@ -65,6 +66,8 @@ function ValueSlider({ label, value, unit, minimumValue, maximumValue, step, onV
 
 export default function OnboardingScreen() {
   const router = useSafeRouter(); const authFetch = useAuthFetch();
+  const { returnTo: rawReturnTo } = useSafeSearchParams<{ returnTo?: unknown }>();
+  const returnTo = validateAuthReturnTo(rawReturnTo);
   const [currentStep, setCurrentStep] = useState(1); const [goal, setGoal] = useState<HealthGoal | null>(null);
   const [gender, setGender] = useState<Gender>('保密'); const [age, setAge] = useState(25); const [height, setHeight] = useState(165);
   const [weight, setWeight] = useState(60); const [targetWeight, setTargetWeight] = useState(55); const [activityLevel, setActivityLevel] = useState<ActivityLevel>('moderate');
@@ -82,7 +85,7 @@ export default function OnboardingScreen() {
         health_goal: goal, activity_level: activityLevel, dietary_preference: preference,
         allergies, medications, medical_conditions: conditions, dietary_restrictions: restrictions, disliked_foods: dislikedFoods,
       });
-      router.replace('/');
+      router.replace(returnTo || '/');
     } catch { setError('网络异常，请检查网络后重试'); } finally { setSaving(false); }
   };
   const title = currentStep === 1 ? '你想从哪里开始？' : currentStep === 2 ? '你的性别是？' : currentStep === 3 ? '你今年多大？' : currentStep === 4 ? '你的身高是？' : currentStep === 5 ? '记录身体数据' : currentStep === 6 ? '打造你的饮食方案' : '确认饮食安全信息';
@@ -106,7 +109,7 @@ export default function OnboardingScreen() {
     {error ? <Text style={styles.error}>{error}</Text> : null}
   </ScrollView><View style={styles.footer}>
     {currentStep < 7 ? <TouchableOpacity style={styles.primaryButton} onPress={next}><Text style={styles.primaryButtonText}>下一步</Text></TouchableOpacity> : <TouchableOpacity style={[styles.primaryButton, saving && styles.buttonDisabled]} onPress={finish} disabled={saving}>{saving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryButtonText}>保存并开始使用</Text>}</TouchableOpacity>}
-    <View style={styles.footerLinks}>{currentStep > 1 ? <TouchableOpacity style={styles.footerLink} onPress={back} disabled={saving}><Text style={styles.backText}>返回上一步</Text></TouchableOpacity> : <View style={styles.footerLink} />}<TouchableOpacity style={styles.footerLink} onPress={() => router.replace('/')} disabled={saving}><Text style={styles.skipText}>暂时跳过</Text></TouchableOpacity></View>
+    <View style={styles.footerLinks}>{currentStep > 1 ? <TouchableOpacity style={styles.footerLink} onPress={back} disabled={saving}><Text style={styles.backText}>返回上一步</Text></TouchableOpacity> : <View style={styles.footerLink} />}<TouchableOpacity style={styles.footerLink} onPress={() => router.replace(returnTo || '/')} disabled={saving}><Text style={styles.skipText}>暂时跳过</Text></TouchableOpacity></View>
   </View></KeyboardAvoidingView></Screen>;
 }
 

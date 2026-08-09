@@ -1131,43 +1131,18 @@ export default function AIAssistantScreen() {
   };
 
   const handleActionCookingVoice = () => {
-    router.push({
-      pathname: "/cooking-mode",
-      params: {
-        title: "食光 AI 试做菜谱",
-        steps: JSON.stringify([
-          "备齐食材，主料切丁，热锅冷油",
-          "下蒜末爆香，放入主食材翻炒 3 分钟",
-          "加入少许生抽与关火焖 2 分钟装盘",
-        ]),
-        ingredients: JSON.stringify([
-          { name: "高山牛油果", amount: "1个" },
-          { name: "鸡胸肉", amount: "150g" },
-        ]),
-      },
-    });
+    Alert.alert("从可信菜谱开始", "做饭模式会读取菜谱库中的最新步骤，请先选择一道已通过质量检查的菜谱。", [
+      { text: "去选菜谱", onPress: () => router.push("/inventory") },
+      { text: "取消", style: "cancel" },
+    ]);
   };
 
   const handleStartCookingSolution = (card: SolutionCard) => {
-    const steps = card.steps?.map((step) => step.trim()).filter(Boolean) || [];
-    const ingredientItems = card.ingredientItems || [];
-    if (!steps.length || !ingredientItems.length) {
-      Alert.alert("方案信息不完整", "这张旧方案卡没有可执行的食材清单和步骤。请重新请求推荐后再开始制作。");
+    if (!Number.isInteger(Number(card.recipeId)) || Number(card.recipeId) <= 0) {
+      Alert.alert("请先保存并审核", "AI 临时方案不能直接进入做饭模式。请先保存到我的菜谱，待内容审核通过后再开始烹饪。");
       return;
     }
-    const macros = parseSolutionMacros(card.macros);
-    router.push({
-      pathname: "/cooking-mode",
-      params: {
-        title: card.title,
-        steps: JSON.stringify(steps),
-        ingredients: JSON.stringify(ingredientItems),
-        ...(macros.calories !== undefined ? { calories: macros.calories } : {}),
-        ...(macros.protein !== undefined ? { protein: macros.protein } : {}),
-        ...(macros.carbs !== undefined ? { carbs: macros.carbs } : {}),
-        ...(macros.fat !== undefined ? { fat: macros.fat } : {}),
-      },
-    });
+    router.push("/cooking-mode", { recipeId: Number(card.recipeId) });
   };
 
   const handleSaveSolutionRecipe = async (messageId: string, card: SolutionCard) => {

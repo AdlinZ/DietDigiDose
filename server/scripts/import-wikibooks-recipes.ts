@@ -13,6 +13,7 @@
  */
 import { Converter } from 'opencc-js';
 import { db, initDatabase } from '../src/storage/db.js';
+import { assessRecipeQuality, type NutritionBasis, type RecipeQualityIssue, type RecipeQualityStatus } from '../src/services/recipeQuality.js';
 import { ensureIngredientGroups, type IngredientGroup } from '../src/utils/ingredientGroups.js';
 
 const API_URL = 'https://zh.wikibooks.org/w/api.php';
@@ -60,6 +61,9 @@ type ParsedRecipe = {
   sourceUrl: string;
   revision: string;
   attribution: string;
+  qualityStatus: RecipeQualityStatus;
+  nutritionBasis: NutritionBasis;
+  qualityIssues: RecipeQualityIssue[];
 };
 
 const INGREDIENT_HEADINGS = [
@@ -447,7 +451,8 @@ function parseRecipe(page: WikiPage, foods: NutrientFood[]): ParsedRecipe | null
   const minimumCalories = category === '增肌' ? 250 : category === '减脂' ? 120 : category === '快手菜' ? 180 : 100;
   const macrosAreUnbalanced = (category === '增肌' && nutrition.protein < 8) ||
     (nutrition.protein + nutrition.carbs < 3 && nutrition.fat > 10);
-  if (nutrition.calories < minimumCalories || macrosAreUnbalanced) nutrition = fallbackNutrition(category);
+  const usedFallbackNutrition = nutrition.calories < minimumCalories || macrosAreUnbalanced;
+  if (usedFallbackNutrition) nutrition = fallbackNutrition(category);
   const rawText = cleanWikiText(wikitext);
   const timeMatches = [...rawText.matchAll(/(?:约|大约|需要|用时|耗时)[^\d]{0,8}(\d+)\s*分钟/g)]
     .map((match) => Number(match[1]))
@@ -458,6 +463,14 @@ function parseRecipe(page: WikiPage, foods: NutrientFood[]): ParsedRecipe | null
     .filter((tag) => tag && !/^食谱$/.test(tag));
   const sourceUrl = `https://zh.wikibooks.org/w/index.php?curid=${page.pageid}&oldid=${revision.revid}`;
 
+  const quality = assessRecipeQuality({
+    source: SOURCE,
+    cookTime,
+    ...nutrition,
+    ingredients,
+    steps,
+    nutritionBasis: usedFallbackNutrition ? 'category_fallback' : 'ingredient_estimate',
+  });
   return {
     externalId: String(page.pageid),
     title,
@@ -472,6 +485,9 @@ function parseRecipe(page: WikiPage, foods: NutrientFood[]): ParsedRecipe | null
     sourceUrl,
     revision: String(revision.revid),
     attribution: `中文维基教科书贡献者，《${page.title}》，修订版本 ${revision.revid}`,
+    qualityStatus: quality.qualityStatus,
+    nutritionBasis: quality.nutritionBasis,
+    qualityIssues: quality.issues,
   };
 }
 
@@ -502,15 +518,17 @@ async function main() {
     INSERT INTO recipes (
       title, description, image_url, cook_time, difficulty, calories, protein, carbs, fat,
       category, tags, steps_json, ingredients_json, source, status, external_id, source_url,
-      data_license, source_revision, source_attribution, updated_at
-    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      data_license, source_revision, source_attribution, quality_status, nutrition_basis,
+      quality_issues_json, updated_at
+    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `);
   const update = db.prepare(`
     UPDATE recipes SET
       title = ?, description = ?, cook_time = ?, difficulty = ?, calories = ?, protein = ?,
       carbs = ?, fat = ?, category = ?, tags = ?, steps_json = ?, ingredients_json = ?,
       status = 'approved', source_url = ?, data_license = ?, source_revision = ?,
-      source_attribution = ?, deleted_at = NULL, deleted_by = NULL, updated_at = CURRENT_TIMESTAMP
+      source_attribution = ?, quality_status = ?, nutrition_basis = ?, quality_issues_json = ?,
+      deleted_at = NULL, deleted_by = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `);
 
@@ -527,7 +545,10 @@ async function main() {
       ] as const;
       if (existing) {
         if (!dryRun) {
-          update.run(...values, recipe.sourceUrl, LICENSE, recipe.revision, recipe.attribution, existing.id);
+          update.run(
+            ...values, recipe.sourceUrl, LICENSE, recipe.revision, recipe.attribution,
+            recipe.qualityStatus, recipe.nutritionBasis, JSON.stringify(recipe.qualityIssues), existing.id,
+          );
         }
         updated += 1;
         continue;
@@ -539,7 +560,8 @@ async function main() {
       if (!dryRun) {
         insert.run(
           ...values, SOURCE, recipe.externalId, recipe.sourceUrl, LICENSE,
-          recipe.revision, recipe.attribution,
+          recipe.revision, recipe.attribution, recipe.qualityStatus, recipe.nutritionBasis,
+          JSON.stringify(recipe.qualityIssues),
         );
       }
       existingTitles.set(normalizeTitle(recipe.title), { id: -1, title: recipe.title, source: SOURCE });

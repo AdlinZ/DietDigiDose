@@ -376,6 +376,7 @@ export default function HomeScreen() {
 
     return recipes
       .filter((recipe) => {
+        if (recipe.quality_status === "needs_review") return false;
         const matchCategory = activeCategory === "全部" || recipe.category === activeCategory;
         const matchSearch =
           !searchQuery ||
@@ -1154,7 +1155,7 @@ export default function HomeScreen() {
                       )}
                       <View className="absolute bottom-2.5 right-2.5 bg-white/90 px-2 py-0.5 rounded-full flex-row items-center gap-1">
                         <FontAwesome6 name="clock" size={10} color="#2D6A4F" />
-                        <Text className="text-[10px] font-bold text-brand">{recipe.cook_time}分钟</Text>
+                        <Text className="text-[10px] font-bold text-brand">{recipe.nutrition_is_estimated ? "约" : ""}{recipe.cook_time}分钟</Text>
                       </View>
                     </View>
 
@@ -1169,12 +1170,13 @@ export default function HomeScreen() {
                       <View className="flex-row items-center justify-between mt-2.5 pt-2.5 border-t border-background-secondary">
                         <View className="flex-row items-center gap-3">
                           <Text className="text-xs font-bold text-brand">
-                            <FontAwesome6 name="fire" size={11} color="#2D6A4F" /> {recipe.calories} kcal
+                            <FontAwesome6 name="fire" size={11} color="#2D6A4F" /> {recipe.nutrition_is_estimated ? "约" : ""}{recipe.calories} kcal
                           </Text>
                           <Text className="text-xs text-copy-muted">
                             蛋白 {recipe.protein}g
                           </Text>
                         </View>
+                        {recipe.nutrition_is_estimated ? <Text className="text-[10px] font-bold text-[#8A6818]">营养估算</Text> : null}
                         <View className="bg-brand/10 px-2.5 py-1 rounded-full">
                           <Text className="text-xs font-bold text-brand">开启烹饪 →</Text>
                         </View>

@@ -3,7 +3,8 @@ import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
-import { useSafeRouter } from '@/hooks/useSafeRouter';
+import { useSafeRouter, useSafeSearchParams } from '@/hooks/useSafeRouter';
+import { validateAuthReturnTo } from '@/utils/authReturnTo';
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import { useCSSVariable } from 'uniwind';
 
@@ -19,6 +20,8 @@ export default function LoginScreen() {
   const identifierWasEdited = useRef(false);
   const { login } = useAuth();
   const router = useSafeRouter();
+  const { returnTo: rawReturnTo } = useSafeSearchParams<{ returnTo?: unknown }>();
+  const returnTo = validateAuthReturnTo(rawReturnTo);
   const [brand, muted, critical] = useCSSVariable([
     '--color-brand',
     '--color-copy-muted',
@@ -85,7 +88,7 @@ export default function LoginScreen() {
     const result = await login(trimmedIdentifier, password);
     setLoading(false);
     if (result.success) {
-      router.replace('/');
+      router.replace(returnTo || '/');
     } else {
       setError(result.error || '登录失败');
       setPassword(''); // 清空密码以提升安全防范
@@ -207,7 +210,7 @@ export default function LoginScreen() {
 
               <TouchableOpacity
                 className="flex-row justify-center items-center mt-3 min-h-touch"
-                onPress={() => router.push('/register')}
+                onPress={() => router.push('/register', returnTo ? { returnTo } : {})}
                 accessibilityRole="link"
                 accessibilityLabel="还没有账号？立即注册"
               >

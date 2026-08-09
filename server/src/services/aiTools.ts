@@ -240,7 +240,7 @@ export async function executeAIQueryTool(userId: number, toolName: string, args:
   if (toolName === "search_recipe_library") {
     const names = Array.isArray(args.ingredientNames) ? args.ingredientNames.map(String).filter(Boolean).slice(0, 8) : [];
     const limit = Math.max(1, Math.min(Number(args.limit) || 5, 10));
-    const clauses = ["status = 'approved'", "deleted_at IS NULL"];
+    const clauses = ["status = 'approved'", "deleted_at IS NULL", "COALESCE(quality_status, 'trusted') <> 'needs_review'"];
     const params: Array<string | number> = [];
     for (const name of names) { clauses.push("(title LIKE ? OR ingredients_json LIKE ?)"); params.push(`%${name}%`, `%${name}%`); }
     if (Number.isFinite(Number(args.maxTimeMinutes))) { clauses.push("cook_time <= ?"); params.push(Math.max(0, Number(args.maxTimeMinutes))); }

@@ -18,6 +18,7 @@ type FavoriteRecipe = {
   calories: number;
   difficulty: string;
   category: string;
+  nutrition_is_estimated?: boolean;
 };
 
 export default function FavoritesScreen() {
@@ -125,10 +126,11 @@ export default function FavoritesScreen() {
                   <Text className="text-lg font-black text-[#263A2E]">{recipe.title}</Text>
                   <Text className="mt-1.5 text-xs leading-5 text-[#7A7065]" numberOfLines={2}>{recipe.description}</Text>
                   <View className="mt-3 flex-row gap-4">
-                    <Text className="text-xs font-bold text-[#647367]">{recipe.cook_time} 分钟</Text>
-                    <Text className="text-xs font-bold text-[#C26A4C]">{recipe.calories} kcal</Text>
+                    <Text className="text-xs font-bold text-[#647367]">{recipe.nutrition_is_estimated ? "约" : ""}{recipe.cook_time} 分钟</Text>
+                    <Text className="text-xs font-bold text-[#C26A4C]">{recipe.nutrition_is_estimated ? "约" : ""}{recipe.calories} kcal</Text>
                     <Text className="text-xs font-bold text-[#9A7624]">{recipe.difficulty}</Text>
                   </View>
+                  {recipe.nutrition_is_estimated ? <Text className="mt-2 text-[10px] font-bold text-[#8A6818]">营养估算</Text> : null}
                 </View>
               </TouchableOpacity>
             ))}

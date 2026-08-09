@@ -82,6 +82,7 @@ export interface ChatCompletionOptions {
 
 export interface SolutionCard {
   id: string;
+  recipeId?: number;
   schemeTag: string;
   title: string;
   ingredients: string;

@@ -117,6 +117,13 @@ function validateRecipe(input: RecipeInput): string | null {
 }
 
 function formatRecipe(recipe: any, req?: { protocol: string; get(name: string): string | undefined }) {
+  const {
+    quality_issues_json: _qualityIssues,
+    quality_reviewed_by: _qualityReviewer,
+    quality_reviewed_at: _qualityReviewedAt,
+    quality_review_reason: _qualityReviewReason,
+    ...publicRecipe
+  } = recipe;
   const imageUrl = typeof recipe.image_url === "string" && recipe.image_url.startsWith("/media/")
     ? `${req?.protocol || "http"}://${req?.get("host") || "localhost:9090"}${recipe.image_url}`
     : recipe.image_url;
@@ -126,7 +133,10 @@ function formatRecipe(recipe: any, req?: { protocol: string; get(name: string): 
     { key: "fat", label: "脂肪", value: Math.max(0, Number(recipe.fat) || 0), unit: "g" },
   ];
   return {
-    ...recipe,
+    ...publicRecipe,
+    quality_status: recipe.quality_status || "trusted",
+    nutrition_basis: recipe.nutrition_basis || "source",
+    nutrition_is_estimated: (recipe.nutrition_basis || "source") !== "source",
     image_url: imageUrl,
     tags: parseArray(recipe.tags),
     steps: parseArray(recipe.steps_json),
@@ -164,6 +174,7 @@ router.get("/", (req, res) => {
     FROM recipes r
     LEFT JOIN users u ON u.id = r.author_user_id
     WHERE r.deleted_at IS NULL AND r.status = 'approved'
+      AND COALESCE(r.quality_status, 'trusted') <> 'needs_review'
   `;
   const params: Array<string | number> = [];
 
@@ -218,6 +229,7 @@ router.get("/favorites", authMiddleware, (req: AuthRequest, res) => {
     WHERE f.user_id = ?
       AND r.deleted_at IS NULL
       AND r.status = 'approved'
+      AND COALESCE(r.quality_status, 'trusted') <> 'needs_review'
     ORDER BY f.created_at DESC
   `).all(req.userId);
   return res.json(recipes.map((recipe) => ({ ...formatRecipe(recipe, req), is_favorited: true })));
@@ -229,6 +241,7 @@ router.get("/favorites/count", authMiddleware, (req: AuthRequest, res) => {
     FROM recipe_favorites f
     JOIN recipes r ON r.id = f.recipe_id
     WHERE f.user_id = ? AND r.deleted_at IS NULL AND r.status = 'approved'
+      AND COALESCE(r.quality_status, 'trusted') <> 'needs_review'
   `).get(req.userId) as { count: number };
   return res.json({ count: Number(row?.count || 0) });
 });
@@ -351,7 +364,11 @@ router.get("/:id/favorite", authMiddleware, (req: AuthRequest, res) => {
 
 router.post("/:id/favorite", authMiddleware, (req: AuthRequest, res) => {
   const recipeId = Number(req.params.id);
-  const recipe = db.prepare("SELECT id FROM recipes WHERE id = ? AND deleted_at IS NULL AND status = 'approved'").get(recipeId);
+  const recipe = db.prepare(`
+    SELECT id FROM recipes
+    WHERE id = ? AND deleted_at IS NULL AND status = 'approved'
+      AND COALESCE(quality_status, 'trusted') <> 'needs_review'
+  `).get(recipeId);
   if (!recipe) return res.status(404).json({ error: "未找到该食谱" });
   db.prepare("INSERT OR IGNORE INTO recipe_favorites (user_id, recipe_id) VALUES (?, ?)").run(req.userId, recipeId);
   return res.json({ success: true, is_favorited: true });
@@ -373,6 +390,7 @@ router.get("/:id", (req, res) => {
     FROM recipes r
     LEFT JOIN users u ON u.id = r.author_user_id
     WHERE r.id = ? AND r.deleted_at IS NULL AND r.status = 'approved'
+      AND COALESCE(r.quality_status, 'trusted') <> 'needs_review'
   `).get(req.params.id);
   if (!recipe) return res.status(404).json({ error: "未找到该食谱" });
   return res.json(formatRecipe(recipe, req));

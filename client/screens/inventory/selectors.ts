@@ -103,6 +103,7 @@ export function filterAndRankRecipes(
     .filter(Boolean);
 
   return recipes
+    .filter((recipe) => recipe.quality_status !== "needs_review")
     .map((recipe) => {
       const analysis = analyzeRecipeInventoryMatch(recipe, inventoryItems);
       const inventoryMatchCount = inventoryFoodNames.reduce(

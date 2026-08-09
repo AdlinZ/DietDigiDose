@@ -25,6 +25,8 @@ export interface Recipe {
   fat: number;
   category: string;
   tags: string[];
+  quality_status?: "trusted" | "estimated" | "needs_review";
+  nutrition_is_estimated?: boolean;
 }
 
 export interface KitchenwareItem {

@@ -797,7 +797,7 @@ export default function InventoryScreen() {
     if (!isAuthenticated) {
       Alert.alert("登录后录入食材", "登录后才能保存和管理你的食材。", [
         { text: "取消", style: "cancel" },
-        { text: "去登录", onPress: () => router.push("/login") },
+        { text: "去登录", onPress: () => router.push("/login", { returnTo: { pathname: "/inventory", params: { action: "add" } } }) },
       ]);
       return;
     }
@@ -1179,19 +1179,12 @@ export default function InventoryScreen() {
                 <Text className="text-sm text-copy-muted text-center mt-2 mb-6">
                   登录后可随时记录冰箱食材、自动临期提醒并智能生成美味菜单。
                 </Text>
-                <View className="flex-row gap-3">
+                <View>
                   <TouchableOpacity
-                    onPress={() => router.push("/login")}
+                    onPress={() => router.push("/login", { returnTo: { pathname: "/inventory", params: { action: "add" } } })}
                     className="bg-brand px-6 py-3 rounded-2xl shadow-sm active:opacity-90"
                   >
-                    <Text className="text-sm font-bold text-white">立即登录</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => router.push("/login")}
-                    className="bg-highlight px-6 py-3 rounded-2xl shadow-sm active:opacity-90 flex-row items-center gap-1.5"
-                  >
-                    <FontAwesome6 name="wand-magic-sparkles" size={13} color="#3D3229" />
-                    <Text className="text-sm font-black text-ink">登录后体验</Text>
+                    <Text className="text-sm font-bold text-white">登录并添加食材</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1855,7 +1848,7 @@ export default function InventoryScreen() {
                             <View className="absolute top-2 right-2 flex-row items-center gap-1 rounded-full bg-black/60 px-2 py-0.5">
                               <FontAwesome6 name="fire" size={9} color="#E9C46A" />
                               <Text className="text-[10px] font-black text-white">
-                                {recipe.calories} kcal
+                                {recipe.nutrition_is_estimated ? "约" : ""}{recipe.calories} kcal
                               </Text>
                             </View>
 
@@ -1885,6 +1878,7 @@ export default function InventoryScreen() {
                           </View>
 
                           <View className="p-3 pb-2.5">
+                            {recipe.nutrition_is_estimated ? <Text className="mb-1 text-[9px] font-black text-amber-700">营养估算</Text> : null}
                             <Text numberOfLines={2} className="min-h-[36px] text-sm font-black leading-[18px] text-ink">
                               {recipe.title}
                             </Text>
@@ -1905,7 +1899,7 @@ export default function InventoryScreen() {
 
                             <View className="mt-2 flex-row items-center gap-1.5">
                               <FontAwesome6 name="clock" size={9} color="#8B7D6B" />
-                              <Text className="text-[9px] font-bold text-[#6F6254]">{recipe.cook_time} 分钟</Text>
+                              <Text className="text-[9px] font-bold text-[#6F6254]">{recipe.nutrition_is_estimated ? "约" : ""}{recipe.cook_time} 分钟</Text>
                               <View className="h-1 w-1 rounded-full bg-[#D7CCBE]" />
                               <Text className="text-[9px] font-bold text-brand">蛋白 {recipe.protein}g</Text>
                             </View>

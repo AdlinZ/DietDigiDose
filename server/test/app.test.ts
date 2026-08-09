@@ -96,12 +96,91 @@ describe("API security baseline", () => {
     assert.equal(chatAuditMigration.name, "chat_message_roles_and_response_time");
     const unifiedChatMigration = db.prepare("SELECT name FROM schema_migrations WHERE version = 28").get() as { name: string };
     assert.equal(unifiedChatMigration.name, "unified_chat_message_content");
+    const recipeQualityMigration = db.prepare("SELECT name FROM schema_migrations WHERE version = 29").get() as { name: string };
+    assert.equal(recipeQualityMigration.name, "recipe_quality_gate");
     const chatMessageColumns = db.prepare("PRAGMA table_info(ai_chat_messages)").all() as Array<{ name: string }>;
     assert.ok(chatMessageColumns.some((column) => column.name === "response_time_ms"));
     for (const column of ["source", "status", "payload_json", "confirmation_id"]) {
       assert.ok(chatMessageColumns.some((item) => item.name === column));
     }
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_events'").get());
+  });
+
+  test("recipe quality migration backfills trusted sources and quarantines known fallback nutrition", async () => {
+    const insert = db.prepare(`
+      INSERT INTO recipes (
+        title, description, cook_time, difficulty, calories, protein, carbs, fat,
+        category, tags, steps_json, ingredients_json, source, status, quality_status
+      ) VALUES (?, '迁移测试', ?, '简单', ?, ?, ?, ?, '快手菜', '[]', ?, ?, ?, 'approved', 'trusted')
+    `);
+    const fallback = insert.run(
+      "迁移回填固定营养样本", 25, 520, 32.5, 45.5, 23.1,
+      JSON.stringify(["备料", "烹饪"]), JSON.stringify([{ name: "番茄" }, { name: "鸡蛋" }]), "wikibooks_zh",
+    );
+    const official = insert.run(
+      "迁移回填官方样本", 20, 280, 20, 24, 8,
+      JSON.stringify(["备料", "烹饪"]), JSON.stringify([{ name: "番茄" }, { name: "鸡蛋" }]), "official",
+    );
+    db.prepare("DELETE FROM schema_migrations WHERE version = 29").run();
+    const { runMigrations } = await import("../src/storage/migrations.js");
+    runMigrations(db);
+
+    const fallbackRow = db.prepare("SELECT quality_status, nutrition_basis, quality_issues_json FROM recipes WHERE id = ?")
+      .get(fallback.lastInsertRowid) as JsonObject;
+    assert.equal(fallbackRow.quality_status, "needs_review");
+    assert.equal(fallbackRow.nutrition_basis, "category_fallback");
+    assert.ok(JSON.parse(fallbackRow.quality_issues_json).includes("category_nutrition_fallback"));
+    const officialRow = db.prepare("SELECT quality_status, nutrition_basis FROM recipes WHERE id = ?")
+      .get(official.lastInsertRowid) as JsonObject;
+    assert.deepEqual(officialRow, { quality_status: "trusted", nutrition_basis: "source" });
+    db.prepare("DELETE FROM recipes WHERE id IN (?, ?)").run(fallback.lastInsertRowid, official.lastInsertRowid);
+  });
+
+  test("public recipe pages exclude needs-review rows and admin review can restore one", async () => {
+    const insert = db.prepare(`
+      INSERT INTO recipes (
+        title, description, cook_time, difficulty, calories, protein, carbs, fat,
+        category, tags, steps_json, ingredients_json, source, status,
+        quality_status, nutrition_basis, quality_issues_json
+      ) VALUES (?, '质量门槛分页测试', 20, '简单', 280, 20, 24, 8,
+        '快手菜', '[]', '["备料","烹饪"]', '[{"name":"番茄"},{"name":"鸡蛋"}]',
+        'howtocook', 'approved', ?, ?, ?)
+    `);
+    const ids = [
+      insert.run("质量门槛可信一", "trusted", "source", "[]").lastInsertRowid,
+      insert.run("质量门槛估算二", "estimated", "ingredient_estimate", "[]").lastInsertRowid,
+      insert.run("质量门槛待复核三", "needs_review", "category_fallback", '["category_nutrition_fallback"]').lastInsertRowid,
+      insert.run("质量门槛可信四", "trusted", "source", "[]").lastInsertRowid,
+      insert.run("质量门槛估算五", "estimated", "ingredient_estimate", "[]").lastInsertRowid,
+    ].map(Number);
+
+    const firstPage = await api("/api/v1/recipes?search=质量门槛&pageSize=2");
+    assert.equal(firstPage.response.status, 200);
+    assert.equal((firstPage.body as JsonObject).items.length, 2);
+    assert.ok((firstPage.body as JsonObject).items.every((item: JsonObject) => item.quality_status !== "needs_review"));
+    assert.ok((firstPage.body as JsonObject).items.every((item: JsonObject) => typeof item.nutrition_is_estimated === "boolean"));
+    const secondPage = await api(`/api/v1/recipes?search=质量门槛&pageSize=2&cursor=${encodeURIComponent((firstPage.body as JsonObject).nextCursor)}`);
+    assert.equal((secondPage.body as JsonObject).items.length, 2);
+    assert.equal((secondPage.body as JsonObject).nextCursor, null);
+
+    db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+    const adminLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+    });
+    const adminToken = (adminLogin.body as JsonObject).token;
+    const reviewQueue = await api("/api/v1/admin/recipes?qualityStatus=needs_review&search=质量门槛&pageSize=50", { token: adminToken });
+    assert.ok((reviewQueue.body as JsonObject).items.some((item: JsonObject) => item.id === ids[2]));
+    const reviewed = await api(`/api/v1/admin/recipes/${ids[2]}/quality`, {
+      method: "PUT",
+      token: adminToken,
+      body: JSON.stringify({ status: "trusted", reason: "已逐项核对原始来源和营养依据" }),
+    });
+    assert.equal(reviewed.response.status, 200);
+    const restored = await api(`/api/v1/recipes/${ids[2]}`);
+    assert.equal(restored.response.status, 200);
+    assert.equal((restored.body as JsonObject).quality_status, "trusted");
+    db.prepare(`DELETE FROM recipes WHERE id IN (${ids.map(() => "?").join(",")})`).run(...ids);
   });
 
   test("demo users cover distinct health and dietary recommendation scenarios", async () => {
@@ -139,6 +218,7 @@ describe("API security baseline", () => {
   });
 
   test("version endpoint identifies the server and the calling client build", async () => {
+    const { SERVER_VERSION } = await import("../src/version.js");
     const { response, body } = await api("/api/v1/version", {
       headers: {
         "x-client-version": "1.0.3",
@@ -146,7 +226,7 @@ describe("API security baseline", () => {
       },
     });
     assert.equal(response.status, 200);
-    assert.equal((body as JsonObject).serverVersion, "1.0.3");
+    assert.equal((body as JsonObject).serverVersion, SERVER_VERSION);
     assert.ok((body as JsonObject).serverBuildTime);
     assert.equal((body as JsonObject).clientVersion, "1.0.3");
     assert.equal((body as JsonObject).clientBuildTime, "2026-08-05T08:00:00.000Z");

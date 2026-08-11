@@ -22,6 +22,12 @@ export function createAdminAIConfigRouter() {
         model: config.model,
         visionModel: config.visionModel,
         asrModel: config.asrModel,
+        agents: {
+          supervisorModel: getSystemSetting("AI_SUPERVISOR_MODEL").trim() || config.chat.model,
+          nutritionModel: getSystemSetting("AI_NUTRITION_MODEL").trim() || config.chat.model,
+          recipeModel: getSystemSetting("AI_RECIPE_MODEL").trim() || config.chat.model,
+          operationsModel: getSystemSetting("AI_OPERATIONS_MODEL").trim() || config.chat.model,
+        },
 
         chat: {
           maskedKey: formatMasked(config.chat.apiKey),
@@ -61,6 +67,7 @@ export function createAdminAIConfigRouter() {
     try {
       const {
         apiKey, baseUrl, model, visionModel, asrModel,
+        supervisorModel, nutritionModel, recipeModel, operationsModel,
         chatApiKey, chatBaseUrl, chatModel,
         visionApiKey, visionBaseUrl,
         asrApiKey, asrBaseUrl,
@@ -72,6 +79,10 @@ export function createAdminAIConfigRouter() {
       if (model !== undefined) setSystemSetting("AI_MODEL", model.trim());
       if (visionModel !== undefined) setSystemSetting("AI_VISION_MODEL", visionModel.trim());
       if (asrModel !== undefined) setSystemSetting("AI_ASR_MODEL", asrModel.trim());
+      if (supervisorModel !== undefined) setSystemSetting("AI_SUPERVISOR_MODEL", supervisorModel.trim());
+      if (nutritionModel !== undefined) setSystemSetting("AI_NUTRITION_MODEL", nutritionModel.trim());
+      if (recipeModel !== undefined) setSystemSetting("AI_RECIPE_MODEL", recipeModel.trim());
+      if (operationsModel !== undefined) setSystemSetting("AI_OPERATIONS_MODEL", operationsModel.trim());
 
       if (typeof chatApiKey === "string") setSystemSetting("AI_CHAT_API_KEY", chatApiKey.trim());
       if (chatBaseUrl !== undefined) setSystemSetting("AI_CHAT_BASE_URL", chatBaseUrl.trim());
@@ -101,6 +112,10 @@ export function createAdminAIConfigRouter() {
             modelChanged: model !== undefined,
             visionModelChanged: visionModel !== undefined,
             asrModelChanged: asrModel !== undefined,
+            supervisorModelChanged: supervisorModel !== undefined,
+            nutritionModelChanged: nutritionModel !== undefined,
+            recipeModelChanged: recipeModel !== undefined,
+            operationsModelChanged: operationsModel !== undefined,
             systemPromptChanged: systemPrompt !== undefined,
           },
           ipAddress: req.ip,

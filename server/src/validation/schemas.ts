@@ -307,6 +307,7 @@ export const aiWriteConfirmationCommitSchema = z.object({
 
 export const aiHomeRecommendationsSchema = z.object({
   period: z.string().trim().max(40).optional(),
+  requestKey: z.string().trim().min(1).max(2000).optional(),
 }).strict();
 
 export const aiVisionSchema = z.object({
@@ -334,6 +335,51 @@ export const aiTranscribeSchema = z.object({
   mimeType: z.enum([
     "audio/m4a", "audio/mp4", "audio/mpeg", "audio/wav", "audio/webm", "audio/x-m4a",
   ]).default("audio/m4a"),
+}).strict();
+
+const agentActionEditSchema = z.object({
+  id: z.string().uuid().optional(),
+  actionType: z.enum([
+    "create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item",
+    "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item",
+    "update_inventory_item", "consume_inventory_items", "add_kitchenware_item", "submit_recipe",
+    "record_health_log",
+  ]),
+  summary: z.string().trim().min(1).max(300),
+  payload: z.record(z.string(), z.unknown()),
+  riskLevel: z.enum(["low", "high", "forbidden"]).optional(),
+  version: z.number().int().positive().optional(),
+}).strict();
+
+export const agentRunResumeSchema = z.union([
+  z.object({ input: z.string().trim().min(1).max(4000) }).strict(),
+  z.object({
+    decision: z.enum(["approve", "reject", "edit"]),
+    actions: z.array(agentActionEditSchema).max(150).optional(),
+  }).strict().superRefine((value, context) => {
+    if (value.decision === "edit" && !value.actions?.length) {
+      context.addIssue({ code: "custom", path: ["actions"], message: "编辑批准包时必须提供操作" });
+    }
+  }),
+]);
+
+export const shoppingListItemCreateSchema = z.object({
+  clientId: z.string().trim().max(120).optional(),
+  name: trimmedString(1, 120, "采购项名称"),
+  amount: z.string().trim().min(1).max(80).default("适量"),
+  category: z.string().trim().min(1).max(40).default("其他"),
+  checked: z.boolean().default(false),
+  purchaseDate: isoDate.optional(),
+  storageLocation: z.string().trim().max(40).optional(),
+}).strict();
+
+export const shoppingListItemUpdateSchema = shoppingListItemCreateSchema.partial().extend({
+  version: z.number().int().positive(),
+}).strict().refine((value) => Object.keys(value).some((key) => key !== "version"), "至少提供一个需要更新的字段");
+
+export const shoppingListImportSchema = z.object({
+  importKey: z.string().trim().min(16).max(200),
+  items: z.array(shoppingListItemCreateSchema).max(500),
 }).strict();
 
 export const kitchenwareSchema = z.object({
@@ -403,6 +449,10 @@ export const adminAIConfigSchema = z.object({
   model: z.string().trim().min(1).max(200).optional(),
   visionModel: z.string().trim().min(1).max(200).optional(),
   asrModel: z.string().trim().min(1).max(200).optional(),
+  supervisorModel: z.string().trim().min(1).max(200).optional(),
+  nutritionModel: z.string().trim().min(1).max(200).optional(),
+  recipeModel: z.string().trim().min(1).max(200).optional(),
+  operationsModel: z.string().trim().min(1).max(200).optional(),
 
   chatApiKey: z.string().trim().max(1000).optional(),
   chatBaseUrl: optionalUrlSchema,

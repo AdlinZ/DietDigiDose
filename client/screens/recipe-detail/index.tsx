@@ -8,9 +8,6 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getUserStorageKey } from "@/utils/userStorage";
-import { normalizeShoppingItems } from "@/utils/shoppingList";
 import { inferCategoryByName } from "@/utils/ingredientRules";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
@@ -18,7 +15,7 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { healthApi, inventoryApi, recipesApi, type InventoryItem } from "@/services/api";
+import { healthApi, inventoryApi, recipesApi, shoppingListApi, type InventoryItem } from "@/services/api";
 import { ingredientNamesMatch } from "@/utils/ingredients";
 import { getInventoryStatus } from "@/utils/inventory";
 import { ALLERGY_LABELS, findRecipeAllergyRisks, hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/healthProfile";
@@ -63,7 +60,7 @@ interface Recipe {
 export default function RecipeDetailScreen() {
   const router = useSafeRouter();
   const { id, pendingAction } = useSafeSearchParams<{ id: number; pendingAction?: "favorite" | "shopping-list" }>();
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated } = useAuth();
   const authFetch = useAuthFetch();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
@@ -220,24 +217,19 @@ export default function RecipeDetailScreen() {
   const handleAddMissingToShoppingList = async () => {
     if (missingIngredients.length === 0) return;
     try {
-      const shoppingKey = getUserStorageKey("shopping_list", user?.id);
-      const existingStr = shoppingKey ? await AsyncStorage.getItem(shoppingKey) : null;
-      const existing = existingStr ? JSON.parse(existingStr) : [];
-      const normalized = normalizeShoppingItems(existing);
-
-      const existingNames = new Set(normalized.map((i) => i.name));
+      const existing = await shoppingListApi.list<Array<{ name: string }>>(authFetch);
+      const existingNames = new Set(existing.map((item) => item.name));
       const recipeIngredients = recipe?.ingredients || [];
       const newItems = missingIngredients
         .filter((item) => !existingNames.has(item.name))
-        .map((item, idx) => {
+        .map((item) => {
           const detail = recipeIngredients.find((r) => r.name === item.name);
           return {
-            id: `recipe-missing-${Date.now()}-${idx}`,
+            clientId: `recipe:${recipe.id}:${item.name}`,
             name: item.name,
             amount: detail?.amount || "适量",
             category: inferCategoryByName(item.name),
             checked: false,
-            createdAt: Date.now(),
           };
         });
 
@@ -246,10 +238,7 @@ export default function RecipeDetailScreen() {
         return;
       }
 
-      const updated = [...newItems, ...normalized];
-      if (shoppingKey) {
-        await AsyncStorage.setItem(shoppingKey, JSON.stringify(updated));
-      }
+      await Promise.all(newItems.map((item) => shoppingListApi.create(authFetch, item)));
       Alert.alert("已加采购清单", `已成功将 ${newItems.length} 种缺少食材加入你的采购清单！`, [
         { text: "查看清单", onPress: () => router.push("/shopping-list") },
         { text: "好的", style: "cancel" },

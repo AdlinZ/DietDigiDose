@@ -11,6 +11,9 @@ import foodsRoutes from "./routes/foods.js";
 import communityRoutes from "./routes/community.js";
 import adminRoutes from "./routes/admin.js";
 import aiRoutes from "./routes/ai.js";
+import agentRunRoutes from "./routes/agent-runs.js";
+import shoppingListRoutes from "./routes/shopping-list.js";
+import mealPlanRoutes from "./routes/meal-plans.js";
 import kitchenwareRoutes from "./routes/kitchenware.js";
 import notificationsRoutes from "./routes/notifications.js";
 import mediaRoutes from "./routes/media.js";
@@ -22,11 +25,13 @@ import { requestContext } from "./middleware/requestContext.js";
 import { errorEnvelope } from "./middleware/errorEnvelope.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { SERVER_BUILD_TIME, SERVER_VERSION } from "./version.js";
+import { recoverAgentRuntime } from "./services/agent/runtime.js";
 
 const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
 export function createApp() {
   initDatabase();
+  recoverAgentRuntime();
   const app = express();
   const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080,http://localhost:5173")
     .split(",")
@@ -77,6 +82,9 @@ export function createApp() {
   app.use("/api/v1/community", communityRoutes);
   app.use("/api/v1/admin", adminRoutes);
   app.use("/api/v1/ai", aiRoutes);
+  app.use("/api/v1/ai", agentRunRoutes);
+  app.use("/api/v1/shopping-list", shoppingListRoutes);
+  app.use("/api/v1/meal-plans", mealPlanRoutes);
   app.use("/api/v1/kitchenware", kitchenwareRoutes);
   app.use("/api/v1/notifications", notificationsRoutes);
   app.use("/api/v1/media", mediaRoutes);

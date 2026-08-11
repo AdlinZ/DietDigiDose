@@ -74,6 +74,12 @@ const endpointNames: Record<string, string> = {
   'vision-food': '餐食图片识别',
   'scan-receipt': '小票 / 食材扫描',
   'voice-command': '烹饪语音问答',
+  'agent:Supervisor': 'Agent · Supervisor',
+  'agent:NutritionPlanningAgent': 'Agent · 营养规划',
+  'agent:RecipeCookingAgent': 'Agent · 菜谱烹饪',
+  'agent:VisionAgent': 'Agent · 视觉识别',
+  'agent:VoiceAgent': 'Agent · 语音转录',
+  'agent:OperationsAgent': 'Agent · 业务操作',
 };
 
 const numberFormatter = new Intl.NumberFormat('zh-CN');

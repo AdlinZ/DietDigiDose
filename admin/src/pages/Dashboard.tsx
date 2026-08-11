@@ -18,7 +18,6 @@ import {
   Bot,
   Sliders,
   Sparkles,
-  Clock3,
   CheckCircle2,
   CalendarDays,
   Apple,
@@ -87,6 +86,29 @@ interface AISummary {
   activeUsers: number;
 }
 
+type AgentRunStatus =
+  | 'queued'
+  | 'running'
+  | 'awaiting_input'
+  | 'awaiting_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'expired';
+
+interface AgentSummary {
+  total: number;
+  statusCounts: Array<{ status: AgentRunStatus; count: number }>;
+  items: Array<{ createdAt: string }>;
+  usageSummary: {
+    modelCalls: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+  };
+}
+
 const numberFormatter = new Intl.NumberFormat('zh-CN');
 function formatNumber(val: number) {
   return numberFormatter.format(Number(val) || 0);
@@ -115,6 +137,7 @@ export default function Dashboard() {
     pendingFoods: PendingFood[];
   } | null>(null);
   const [aiSummary, setAiSummary] = useState<AISummary | null>(null);
+  const [agentSummary, setAgentSummary] = useState<AgentSummary | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -123,11 +146,12 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [statsRes, trendsRes, recentRes, aiUsageRes, auditLogsRes] = await Promise.allSettled([
+      const [statsRes, trendsRes, recentRes, aiUsageRes, agentRunsRes, auditLogsRes] = await Promise.allSettled([
         api.get('/admin/stats'),
         api.get('/admin/stats/trends'),
         api.get('/admin/stats/recent'),
         api.get('/admin/ai-usage?range=7d'),
+        api.get('/admin/agent-runs?range=7d&pageSize=10'),
         api.get('/admin/audit-logs?pageSize=5'),
       ]);
 
@@ -135,6 +159,7 @@ export default function Dashboard() {
       if (trendsRes.status === 'fulfilled') setTrends(trendsRes.value.data);
       if (recentRes.status === 'fulfilled') setRecent(recentRes.value.data);
       if (aiUsageRes.status === 'fulfilled') setAiSummary(aiUsageRes.value.data.summary);
+      if (agentRunsRes.status === 'fulfilled') setAgentSummary(agentRunsRes.value.data);
       if (auditLogsRes.status === 'fulfilled') setAuditLogs(auditLogsRes.value.data.items || []);
     } catch (err: any) {
       console.error('Error fetching dashboard data:', err);
@@ -173,6 +198,33 @@ export default function Dashboard() {
     const posts = trends.reduce((acc, t) => acc + t.posts, 0);
     return { users, records, posts };
   }, [trends]);
+
+  const trendInsights = useMemo(() => {
+    if (!trends.length || !trendTotals) return null;
+    const userPeak = trends.reduce((peak, current) => current.users > peak.users ? current : peak);
+    const postPeak = trends.reduce((peak, current) => current.posts > peak.posts ? current : peak);
+    const total = trendTotals.users + trendTotals.records + trendTotals.posts;
+
+    return {
+      userPeak,
+      postPeak,
+      averageRecords: trendTotals.records / trends.length,
+      distribution: [
+        { label: '新用户', value: trendTotals.users, color: 'bg-primary' },
+        { label: '饮食记录', value: trendTotals.records, color: 'bg-blue-500' },
+        { label: '社区帖子', value: trendTotals.posts, color: 'bg-secondary' },
+      ].map((item) => ({ ...item, share: total > 0 ? (item.value / total) * 100 : 0 })),
+    };
+  }, [trendTotals, trends]);
+
+  const agentCounts = useMemo(
+    () => Object.fromEntries((agentSummary?.statusCounts || []).map((item) => [item.status, Number(item.count) || 0])),
+    [agentSummary],
+  );
+
+  const activeAgentRuns = (agentCounts.running || 0) + (agentCounts.queued || 0);
+  const waitingAgentRuns = (agentCounts.awaiting_input || 0) + (agentCounts.awaiting_approval || 0);
+  const failedAgentRuns = (agentCounts.failed || 0) + (agentCounts.expired || 0);
 
   const svgWidth = 800;
   const svgHeight = 250;
@@ -414,6 +466,7 @@ export default function Dashboard() {
   ];
 
   const quickActions = [
+    { label: 'Agent 运行中心', icon: Bot, link: '/admin/agent-runs', color: 'text-violet-600 bg-violet-50' },
     { label: 'AI 模型配置', icon: Sliders, link: '/admin/ai-config', color: 'text-primary bg-primary/10' },
     { label: 'Token 用量监控', icon: Zap, link: '/admin/ai-usage', color: 'text-amber-600 bg-amber-50' },
     { label: '待审核食材', icon: Clock, link: '/admin/ingredients', color: 'text-orange-600 bg-orange-50' },
@@ -530,7 +583,7 @@ export default function Dashboard() {
                     <span className={`rounded-xl p-2 ${action.color}`}>
                       <action.icon size={16} aria-hidden="true" />
                     </span>
-                    <span className="text-[10px] font-semibold tabular-nums text-text-muted/55">0{index + 1} / 04</span>
+                    <span className="text-[10px] font-semibold tabular-nums text-text-muted/55">0{index + 1} / 05</span>
                   </div>
                   <div className="mt-5 flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-text-main">{action.label}</span>
@@ -568,10 +621,10 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Trends & AI Health Section (2 Cols + 1 Col) */}
+      {/* Trends and a unified AI / Agent operations rail */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Trends Chart (2 Cols) */}
-        <div className="bg-white rounded-[24px] p-6 shadow-sm xl:col-span-2">
+        <div className="flex flex-col bg-white rounded-[24px] p-6 shadow-sm xl:col-span-2">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-4">
             <div>
               <h3 className="text-lg font-bold text-text-main flex items-center">
@@ -656,83 +709,149 @@ export default function Dashboard() {
           ) : (
             renderChart()
           )}
+
+          {trendInsights ? (
+            <div className="mt-auto pt-5">
+              <div className="rounded-2xl border border-primary/10 bg-[#FAFBF8] p-4">
+                <div className="grid divide-y divide-primary/10 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+                  <div className="flex items-center gap-3 py-3 sm:py-0 sm:pr-4">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <UserPlus size={17} aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-medium text-text-muted">用户增长高峰</p>
+                      <p className="mt-0.5 text-sm font-bold text-text-main">
+                        {formatNumber(trendInsights.userPeak.users)} 人
+                        <span className="ml-1.5 text-[10px] font-medium text-text-muted">{formatTrendDate(trendInsights.userPeak.date)}</span>
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 py-3 sm:px-4 sm:py-0">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                      <Activity size={17} aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-medium text-text-muted">日均饮食打卡</p>
+                      <p className="mt-0.5 text-sm font-bold text-text-main">
+                        {trendInsights.averageRecords.toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 条
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 py-3 sm:py-0 sm:pl-4">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-secondary/10 text-secondary">
+                      <TrendingUp size={17} aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-medium text-text-muted">社区发布高峰</p>
+                      <p className="mt-0.5 text-sm font-bold text-text-main">
+                        {formatNumber(trendInsights.postPeak.posts)} 篇
+                        <span className="ml-1.5 text-[10px] font-medium text-text-muted">{formatTrendDate(trendInsights.postPeak.date)}</span>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 border-t border-primary/10 pt-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[10px] font-semibold text-text-muted">近 7 日数据构成</span>
+                    <div className="flex flex-wrap items-center gap-3 text-[9px] text-text-muted">
+                      {trendInsights.distribution.map((item) => (
+                        <span key={item.label} className="flex items-center gap-1">
+                          <span className={`h-1.5 w-1.5 rounded-full ${item.color}`} />
+                          {item.label} {item.share.toFixed(0)}%
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div
+                    className="flex h-2 overflow-hidden rounded-full bg-gray-100"
+                    role="img"
+                    aria-label={trendInsights.distribution.map((item) => `${item.label}占${item.share.toFixed(0)}%`).join('，')}
+                  >
+                    {trendInsights.distribution.map((item) => item.share > 0 ? (
+                      <span key={item.label} className={item.color} style={{ width: `${item.share}%` }} />
+                    ) : null)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        {/* AI Service Monitor Card (1 Col) */}
-        <div className="bg-white rounded-[24px] p-6 shadow-sm flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-text-main flex items-center">
-                <Zap className="mr-2 w-5 h-5 text-amber-500" /> AI 服务运行监控
+        {/* AI and Agent share one vertical operations card to preserve readable width. */}
+        <div className="rounded-[24px] bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="flex items-center text-lg font-bold text-text-main">
+                <Activity className="mr-2 h-5 w-5 text-primary" /> AI 与 Agent 运行监控
               </h3>
-              <Link
-                to="/admin/ai-usage"
-                className="text-xs text-amber-600 font-medium hover:underline flex items-center gap-0.5"
-              >
-                用量详情 <ChevronRight size={14} />
-              </Link>
+              <p className="mt-0.5 text-xs text-text-muted">近 7 天服务调用与 Agent 调度概况</p>
             </div>
-            <p className="text-xs text-text-muted mb-4">近 7 天模型调用、Token 消耗与响应健康度</p>
-
-            <div className="space-y-3.5">
-              <div className="flex items-center justify-between p-3 rounded-2xl bg-amber-50/50 border border-amber-100/60">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-600">
-                    <Sparkles size={18} />
-                  </div>
-                  <div>
-                    <span className="text-xs text-text-muted block">Token 消耗总计</span>
-                    <span className="font-bold text-text-main text-base">
-                      {formatNumber(aiSummary?.totalTokens || 0)} Token
-                    </span>
-                  </div>
-                </div>
-                <span className="text-[10px] text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full font-medium">
-                  近 7 天
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="p-3 rounded-2xl bg-background-alt/60">
-                  <span className="text-text-muted block text-[11px]">调用请求</span>
-                  <span className="font-bold text-text-main text-sm mt-0.5 block">
-                    {formatNumber(aiSummary?.requests || 0)} 次
-                  </span>
-                  <span className="text-[10px] text-text-muted">
-                    {formatNumber(aiSummary?.activeUsers || 0)} 位活跃用户
-                  </span>
-                </div>
-                <div className="p-3 rounded-2xl bg-background-alt/60">
-                  <span className="text-text-muted block text-[11px]">请求成功率</span>
-                  <span className="font-bold text-emerald-600 text-sm mt-0.5 block">
-                    {aiSummary?.successRate !== undefined ? `${Number(aiSummary.successRate).toFixed(1)}%` : '—'}
-                  </span>
-                  <span className="text-[10px] text-text-muted">响应正常</span>
-                </div>
-              </div>
-
-              <div className="p-3 rounded-2xl bg-background-alt/60 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <Clock3 className="w-4 h-4 text-blue-500" />
-                  <span className="text-text-muted">平均响应延迟</span>
-                </div>
-                <span className="font-semibold text-text-main">
-                  {formatNumber(aiSummary?.avgLatencyMs || 0)} ms
-                </span>
-              </div>
-            </div>
+            <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">
+              实时聚合
+            </span>
           </div>
 
-          <div className="mt-5 pt-4 border-t border-gray-100 flex items-center justify-between">
-            <span className="text-xs text-text-muted flex items-center gap-1">
-              <Bot className="w-3.5 h-3.5 text-primary" /> Qwen 3.5 / SiliconFlow
-            </span>
-            <Link
-              to="/admin/ai-config"
-              className="text-xs text-primary font-medium hover:underline flex items-center gap-0.5"
-            >
-              配置 Key <ChevronRight size={12} />
-            </Link>
+          <section className="mt-5" aria-labelledby="ai-monitor-heading">
+            <div className="flex items-center justify-between gap-3">
+              <h4 id="ai-monitor-heading" className="flex items-center text-sm font-bold text-text-main">
+                <Zap className="mr-1.5 h-4 w-4 text-amber-500" /> AI 服务
+              </h4>
+              <Link to="/admin/ai-usage" className="flex items-center gap-0.5 text-xs font-medium text-amber-600 hover:underline">
+                用量详情 <ChevronRight size={13} />
+              </Link>
+            </div>
+            <div className="mt-3 rounded-2xl border border-amber-100/70 bg-amber-50/55 p-3.5">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <span className="block text-[11px] text-text-muted">Token 消耗总计</span>
+                  <span className="mt-0.5 block text-lg font-bold text-text-main">{formatNumber(aiSummary?.totalTokens || 0)} Token</span>
+                </div>
+                <span className="rounded-xl bg-white p-2 text-amber-600 shadow-sm"><Sparkles size={17} /></span>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 border-t border-amber-100/70 pt-3 text-[10px]">
+                <div><span className="block text-text-muted">调用请求</span><strong className="mt-0.5 block text-xs text-text-main">{formatNumber(aiSummary?.requests || 0)} 次</strong></div>
+                <div><span className="block text-text-muted">成功率</span><strong className="mt-0.5 block text-xs text-emerald-700">{aiSummary?.successRate !== undefined ? `${Number(aiSummary.successRate).toFixed(1)}%` : '—'}</strong></div>
+                <div><span className="block text-text-muted">平均延迟</span><strong className="mt-0.5 block text-xs text-blue-700">{formatNumber(aiSummary?.avgLatencyMs || 0)} ms</strong></div>
+              </div>
+            </div>
+          </section>
+
+          <div className="my-5 border-t border-gray-100" />
+
+          <section aria-labelledby="agent-monitor-heading">
+            <div className="flex items-center justify-between gap-3">
+              <h4 id="agent-monitor-heading" className="flex items-center text-sm font-bold text-text-main">
+                <Bot className="mr-1.5 h-4 w-4 text-violet-600" /> Agent 运行态
+              </h4>
+              <Link to="/admin/agent-runs" className="flex items-center gap-0.5 text-xs font-medium text-violet-600 hover:underline">
+                运行详情 <ChevronRight size={13} />
+              </Link>
+            </div>
+            <div className="mt-3 flex items-center justify-between rounded-2xl border border-violet-100 bg-violet-50/55 p-3.5">
+              <div>
+                <span className="block text-[11px] text-text-muted">Agent Run 总数</span>
+                <span className="mt-0.5 block text-lg font-bold text-text-main">{loading && !agentSummary ? '—' : formatNumber(agentSummary?.total || 0)}</span>
+              </div>
+              <div className="text-right">
+                <span className="block text-[10px] text-text-muted">Agent Token</span>
+                <strong className="mt-0.5 block text-sm text-violet-700">{formatNumber(agentSummary?.usageSummary.totalTokens || 0)}</strong>
+                <span className="mt-0.5 block text-[9px] text-text-muted">
+                  {agentSummary?.items[0]?.createdAt ? `最近 ${formatRelativeTime(agentSummary.items[0].createdAt)}` : '暂无运行记录'}
+                </span>
+              </div>
+            </div>
+            <div className="mt-2 grid grid-cols-4 gap-2 text-[10px]">
+              <div className="rounded-xl bg-blue-50/70 p-2.5"><span className="block text-text-muted">运行</span><strong className="mt-0.5 block text-xs text-blue-700">{formatNumber(activeAgentRuns)}</strong></div>
+              <div className="rounded-xl bg-amber-50/70 p-2.5"><span className="block text-text-muted">等待</span><strong className="mt-0.5 block text-xs text-amber-700">{formatNumber(waitingAgentRuns)}</strong></div>
+              <div className="rounded-xl bg-emerald-50/70 p-2.5"><span className="block text-text-muted">完成</span><strong className="mt-0.5 block text-xs text-emerald-700">{formatNumber(agentCounts.completed || 0)}</strong></div>
+              <div className="rounded-xl bg-red-50/70 p-2.5"><span className="block text-text-muted">异常</span><strong className="mt-0.5 block text-xs text-red-700">{formatNumber(failedAgentRuns)}</strong></div>
+            </div>
+          </section>
+
+          <div className="mt-5 flex items-center justify-between border-t border-gray-100 pt-4">
+            <span className="flex items-center gap-1 text-[10px] text-text-muted"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> 安全聚合数据</span>
+            <Link to="/admin/ai-config" className="flex items-center gap-0.5 text-[10px] font-medium text-primary hover:underline">模型配置 <ChevronRight size={11} /></Link>
           </div>
         </div>
       </div>

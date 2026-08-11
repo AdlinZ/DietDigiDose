@@ -23,11 +23,11 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
 import { toLocalDateKey } from "@/utils/date";
-import { getUserStorageKey } from "@/utils/userStorage";
+import { AI_DATA_CONSENT_STORAGE_KEY, getUserStorageKey } from "@/utils/userStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { daysUntilDateKey } from "@/utils/inventory";
 import { ingredientNamesMatch, normalizeIngredientName } from "@/utils/ingredients";
-import { aiApi, authApi } from "@/services/api";
+import { aiApi, authApi, waitForAgentRun } from "@/services/api";
 import type { InventoryHighlight, RankedRecipe, RecommendationCard } from "./types";
 import { getRecommendationPeriod } from "./recommendations";
 import { useHomeData } from "./useHomeData";
@@ -48,6 +48,10 @@ export default function HomeScreen() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [allRecordsModalVisible, setAllRecordsModalVisible] = useState(false);
   const [aiRecCards, setAiRecCards] = useState<RecommendationCard[]>([]);
+  const [aiRecError, setAiRecError] = useState<string | null>(null);
+  const [hasAIDataConsent, setHasAIDataConsent] = useState(false);
+  const [loadedAIConsentStorageKey, setLoadedAIConsentStorageKey] = useState<string | null>(null);
+  const aiConsentOwnerKey = useRef<string | null>(null);
   const aiRecommendationRequestKey = useRef("");
   const [activeRecommendationCard, setActiveRecommendationCard] = useState(0);
   const [smartFeedOffset] = useState(() => new Animated.Value(0));
@@ -71,11 +75,13 @@ export default function HomeScreen() {
     useHomeData(authFetch, isAuthenticated, today);
 
   const shoppingStorageKey = getUserStorageKey("shopping_list", user?.id);
+  const aiConsentStorageKey = getUserStorageKey(AI_DATA_CONSENT_STORAGE_KEY, user?.id);
   const [shoppingItems, setShoppingItems] = useState<{ id: string; name: string; amount: string; checked: boolean }[]>([]);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
+      let active = true;
       setVisibleRecipeCount(RECIPE_BATCH_SIZE);
       lastRecipeBatchLoadAt.current = 0;
       void refresh();
@@ -96,7 +102,40 @@ export default function HomeScreen() {
           }
         });
       }
-    }, [refresh, shoppingStorageKey, token])
+
+      if (aiConsentStorageKey) {
+        void AsyncStorage.getItem(aiConsentStorageKey)
+          .then((value) => {
+            if (!active) return;
+            if (aiConsentOwnerKey.current !== aiConsentStorageKey) {
+              aiConsentOwnerKey.current = aiConsentStorageKey;
+              aiRecommendationRequestKey.current = "";
+              setAiRecCards([]);
+              setAiRecError(null);
+            }
+            setLoadedAIConsentStorageKey(aiConsentStorageKey);
+            setHasAIDataConsent(value === "accepted");
+          })
+          .catch(() => {
+            if (!active) return;
+            aiConsentOwnerKey.current = aiConsentStorageKey;
+            aiRecommendationRequestKey.current = "";
+            setLoadedAIConsentStorageKey(aiConsentStorageKey);
+            setHasAIDataConsent(false);
+            setAiRecCards([]);
+            setAiRecError(null);
+          });
+      } else {
+        aiConsentOwnerKey.current = null;
+        aiRecommendationRequestKey.current = "";
+        setLoadedAIConsentStorageKey(null);
+        setHasAIDataConsent(false);
+        setAiRecCards([]);
+        setAiRecError(null);
+      }
+
+      return () => { active = false; };
+    }, [aiConsentStorageKey, refresh, shoppingStorageKey, token])
   );
 
   // 计算今日三大营养素
@@ -149,8 +188,10 @@ export default function HomeScreen() {
   const activeInventoryCard = inventoryHighlights[activeInventoryHighlight] || inventoryHighlights[0];
   const communityPosts = posts.slice(0, 5);
   const featuredCommunityPost = communityPosts[activeCommunityPost] || communityPosts[0];
-  const currentRecommendationHour = new Date().getHours();
-  const mealRecommendationCount = aiRecCards.length || (currentRecommendationHour >= 22 || currentRecommendationHour < 5 ? 1 : 2);
+  const canDisplayAIRecommendations = hasAIDataConsent && loadedAIConsentStorageKey === aiConsentStorageKey;
+  const visibleAIRecCards = canDisplayAIRecommendations ? aiRecCards : [];
+  const visibleAIRecError = canDisplayAIRecommendations ? aiRecError : null;
+  const mealRecommendationCount = visibleAIRecCards.length || (visibleAIRecError ? 1 : 0);
   const smartFeedCardCount = mealRecommendationCount + 1 + (expiringItems.length > 0 ? 1 : 0) + (todayWaterMl < 1600 ? 1 : 0);
 
   const changeSmartFeedCard = useCallback((direction: "prev" | "next") => {
@@ -331,7 +372,7 @@ export default function HomeScreen() {
   }, [communityPostOffset, communityPostOpacity, communityPosts.length]);
 
   useEffect(() => {
-    if (!isAuthenticated || loading) return;
+    if (!isAuthenticated || !hasAIDataConsent || loadedAIConsentStorageKey !== aiConsentStorageKey || loading) return;
 
     const period = getRecommendationPeriod(new Date().getHours());
     const requestKey = `${period}:${targetCalories}:${totalCalories}:${totalProtein}:${inventoryItems.map((item) => `${item.id}-${item.expiration_date}`).join(",")}`;
@@ -340,12 +381,17 @@ export default function HomeScreen() {
 
     let active = true;
     const fetchAIRecommendations = async () => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
       try {
-        const data = await aiApi.homeRecommendations<{ cards?: unknown[] }>(authFetch, period, controller.signal);
-        const cards: RecommendationCard[] = Array.isArray(data.cards)
-          ? data.cards
+        setAiRecError(null);
+        const data = await aiApi.homeRecommendations<{ cards?: unknown[]; run: { id: string; status: string; artifacts?: Array<{ type: string; data: unknown }>; error?: { message?: string } } }>(authFetch, period, requestKey);
+        const run = await waitForAgentRun(authFetch, data.run);
+        const artifactCards = (run.artifacts || []).flatMap((artifact) => {
+          const artifactData = artifact.data as { cards?: unknown[] } | unknown[] | undefined;
+          return Array.isArray(artifactData) ? artifactData : Array.isArray(artifactData?.cards) ? artifactData.cards : [];
+        });
+        const rawCards = data.cards?.length ? data.cards : artifactCards;
+        const cards: RecommendationCard[] = Array.isArray(rawCards)
+          ? rawCards
             .filter((card: unknown): card is Record<string, unknown> => !!card && typeof card === "object")
             .map((card: Record<string, unknown>): RecommendationCard => ({
               title: typeof card.title === "string" ? card.title : "",
@@ -359,16 +405,14 @@ export default function HomeScreen() {
           : [];
         if (active && cards.length > 0) setAiRecCards(cards);
       } catch (error) {
-        // 首页保留时段默认卡片，AI 服务不可用或超时时不影响页面使用。
         console.warn("Home AI recommendations unavailable or timed out", error);
-      } finally {
-        clearTimeout(timer);
+        if (active) setAiRecError(error instanceof Error ? error.message : "Supervisor Agent 推荐失败");
       }
     };
 
     void fetchAIRecommendations();
     return () => { active = false; };
-  }, [authFetch, inventoryItems, isAuthenticated, loading, targetCalories, totalCalories, totalProtein]);
+  }, [aiConsentStorageKey, authFetch, hasAIDataConsent, inventoryItems, isAuthenticated, loadedAIConsentStorageKey, loading, targetCalories, totalCalories, totalProtein]);
 
   const filteredRecipes = useMemo<RankedRecipe[]>(() => {
     const availableInventory = inventoryItems.filter((item) => item.is_available && item.food_name.trim());
@@ -555,99 +599,16 @@ export default function HomeScreen() {
         {/* ⏰ 时段智能推荐轮播卡片 (Time-Aware Carousel) */}
         {(() => {
           const hour = new Date().getHours();
-          let periodTitle = "晨间唤醒配餐推荐";
-          let periodSub = "高蛋白元气早餐 · 激活全天的基础代谢";
-          let recCards = [
-            {
-              title: "燕麦水煮蛋能量碗",
-              tag: "高蛋白",
-              desc: "优质碳水结合蛋白质，饱腹持久不升糖",
-              calories: "320 kcal",
-              prompt: "帮我评估早餐吃燕麦水煮蛋的营养比例",
-            },
-            {
-              title: "保鲜库牛油果全麦吐司",
-              tag: "优质脂肪",
-              desc: "用保鲜库现有牛油果涂抹全麦面包",
-              calories: "280 kcal",
-              prompt: "用保鲜库牛油果推荐一份15分钟快手早餐",
-            },
-          ];
-
-          if (hour >= 11 && hour < 14) {
-            periodTitle = "午间元气续航推荐";
-            periodSub = "控糖低脂膳食 · 避免午后嗜睡困倦";
-            recCards = [
-              {
-                title: "鸡胸肉藜麦牛油果沙拉",
-                tag: "低脂减脂",
-                desc: "煎鸡胸肉配新鲜蔬菜，补充优质蛋白",
-                calories: "420 kcal",
-                prompt: "帮我用保鲜库鸡胸肉做一份低卡减脂午餐食谱",
-              },
-              {
-                title: "清蒸鲈鱼配杂粮饭",
-                tag: "易消化",
-                desc: "优质白肉蛋白，补充丰富微量元素",
-                calories: "450 kcal",
-                prompt: "推荐一份适合工作日的低脂快手午餐",
-              },
-            ];
-          } else if (hour >= 14 && hour < 18) {
-            periodTitle = "下午茶防暴饮暴食";
-            periodSub = "轻卡低糖冲饮 · 缓解下午精神疲劳";
-            recCards = [
-              {
-                title: "希腊酸奶配一把坚果",
-                tag: "低糖高纤",
-                desc: "替代高糖奶茶，稳定血糖与注意力",
-                calories: "160 kcal",
-                prompt: "推荐几款低于200卡路里的健康下午茶替代品",
-              },
-              {
-                title: "无糖黑咖啡配水蜜桃",
-                tag: "去水肿",
-                desc: "促进代谢，帮助下半场恢复精力",
-                calories: "80 kcal",
-                prompt: "下午茶想吃甜食有什么低卡解馋选择",
-              },
-            ];
-          } else if (hour >= 18 && hour < 22) {
-            periodTitle = "晚间轻负担食谱与明日规划";
-            periodSub = "少油少盐易吸收 · 提前规划明日健康食谱";
-            recCards = [
-              {
-                title: "蒜蓉炒鸡胸肉配水煮西蓝花",
-                tag: "夜间修护",
-                desc: "保鲜库鸡胸肉少油清炒，减轻肠胃负担",
-                calories: "310 kcal",
-                prompt: "帮我规划明天一整天的健康减脂一日三餐食谱",
-              },
-              {
-                title: "菌菇豆腐清汤",
-                tag: "暖胃低热",
-                desc: "低卡丰富鲜味，防止夜间高盐浮肿",
-                calories: "180 kcal",
-                prompt: "晚餐想吃热乎乎的低卡汤品有什么推荐",
-              },
-            ];
-          } else if (hour >= 22 || hour < 5) {
-            periodTitle = "深夜守护与睡眠恢复";
-            periodSub = "避免高糖大夜宵 · 助睡眠安神推荐";
-            recCards = [
-              {
-                title: "暖洋甘菊茶 / 温无糖牛奶",
-                tag: "助眠安神",
-                desc: "温暖胃部，促进睡眠，告别失眠与肚饿",
-                calories: "110 kcal",
-                prompt: "深夜有点饿有什么不会发胖的健康食物",
-              },
-            ];
-          }
-
-          if (aiRecCards.length > 0) {
-            recCards = aiRecCards;
-          }
+          const period = getRecommendationPeriod(hour);
+          const periodTitle = `${period} Supervisor 配餐推荐`;
+          const periodSub = "结合库存、今日摄入与营养目标动态生成";
+          const recCards: RecommendationCard[] = visibleAIRecCards.length ? visibleAIRecCards : visibleAIRecError ? [{
+            title: "AI Agent 推荐未完成",
+            tag: "执行失败",
+            desc: visibleAIRecError,
+            calories: "未生成",
+            prompt: `请重新生成${period}配餐建议，并明确说明刚才任务失败后需要重新执行。`,
+          }] : [];
 
           const smartCards = [
             ...recCards.map((card) => ({

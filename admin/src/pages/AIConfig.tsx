@@ -53,6 +53,10 @@ export default function AIConfig() {
   const [hasChatApiKey, setHasChatApiKey] = useState(false);
   const [chatBaseUrl, setChatBaseUrl] = useState("");
   const [model, setModel] = useState("deepseek-ai/DeepSeek-V3");
+  const [supervisorModel, setSupervisorModel] = useState("deepseek-ai/DeepSeek-V3");
+  const [nutritionModel, setNutritionModel] = useState("deepseek-ai/DeepSeek-V3");
+  const [recipeModel, setRecipeModel] = useState("deepseek-ai/DeepSeek-V3");
+  const [operationsModel, setOperationsModel] = useState("deepseek-ai/DeepSeek-V3");
 
   // 多模态识图服务配置
   const [visionApiKey, setVisionApiKey] = useState("");
@@ -93,6 +97,12 @@ export default function AIConfig() {
       if (data.model) setModel(data.model);
       if (data.visionModel) setVisionModel(data.visionModel);
       if (data.asrModel) setAsrModel(data.asrModel);
+      if (data.agents) {
+        setSupervisorModel(data.agents.supervisorModel || data.model);
+        setNutritionModel(data.agents.nutritionModel || data.model);
+        setRecipeModel(data.agents.recipeModel || data.model);
+        setOperationsModel(data.agents.operationsModel || data.model);
+      }
 
       // 文本对话服务
       if (data.chat) {
@@ -139,6 +149,10 @@ export default function AIConfig() {
   const handleApplyPreset = (preset: (typeof PROVIDER_PRESETS)[0]) => {
     setBaseUrl(preset.baseUrl);
     setModel(preset.model);
+    setSupervisorModel(preset.model);
+    setNutritionModel(preset.model);
+    setRecipeModel(preset.model);
+    setOperationsModel(preset.model);
     setVisionModel(preset.visionModel);
     if (preset.asrModel) setAsrModel(preset.asrModel);
     setStatusMsg(`已应用【${preset.name}】的基准配置，请输入该平台的 API Key`);
@@ -154,6 +168,10 @@ export default function AIConfig() {
         model,
         visionModel,
         asrModel,
+        supervisorModel,
+        nutritionModel,
+        recipeModel,
+        operationsModel,
 
         // 独立接入点
         chatApiKey: enablePerServiceProviders ? chatApiKey.trim() : "",
@@ -347,11 +365,36 @@ export default function AIConfig() {
           </div>
         </div>
 
-        {/* 2. 各能力模型配置 */}
+        {/* 2. Supervisor Runtime 模型 */}
         <div className="space-y-4 pt-2">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
             <h3 className="text-base font-bold text-text-main flex items-center gap-2">
-              <Cpu className="text-secondary" size={18} /> 2. 各 AI 服务能力模型名称与独立接入点
+              <Bot className="text-primary" size={18} /> 2. Supervisor 多 Agent Runtime
+            </h3>
+            <span className="text-xs text-text-muted bg-background-alt px-2.5 py-1 rounded-lg">留空策略由服务端继承 Chat Model</span>
+          </div>
+          <p className="text-xs text-text-muted">所有文本、首页、烹饪、视觉与语音任务均先进入 Supervisor；Vision 与 Voice 继续使用下方专用模型。</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            <label className="text-[11px] font-semibold text-text-main">Supervisor
+              <input value={supervisorModel} onChange={(event) => setSupervisorModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
+            </label>
+            <label className="text-[11px] font-semibold text-text-main">Nutrition Planning
+              <input value={nutritionModel} onChange={(event) => setNutritionModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
+            </label>
+            <label className="text-[11px] font-semibold text-text-main">Recipe Cooking
+              <input value={recipeModel} onChange={(event) => setRecipeModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
+            </label>
+            <label className="text-[11px] font-semibold text-text-main">Operations
+              <input value={operationsModel} onChange={(event) => setOperationsModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
+            </label>
+          </div>
+        </div>
+
+        {/* 3. 各能力模型配置 */}
+        <div className="space-y-4 pt-2">
+          <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+            <h3 className="text-base font-bold text-text-main flex items-center gap-2">
+              <Cpu className="text-secondary" size={18} /> 3. 各 AI 服务能力模型名称与独立接入点
             </h3>
 
             <button

@@ -12,3 +12,4 @@ export * from "./system";
 export * from "./media";
 export * from "./households";
 export * from "./feedback";
+export * from "./shopping";

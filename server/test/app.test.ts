@@ -98,12 +98,23 @@ describe("API security baseline", () => {
     assert.equal(unifiedChatMigration.name, "unified_chat_message_content");
     const recipeQualityMigration = db.prepare("SELECT name FROM schema_migrations WHERE version = 29").get() as { name: string };
     assert.equal(recipeQualityMigration.name, "recipe_quality_gate");
+    const agentUsageMigration = db.prepare("SELECT name FROM schema_migrations WHERE version = 33").get() as { name: string };
+    assert.equal(agentUsageMigration.name, "agent_run_token_usage_attribution");
+    const agentSafetyMigration = db.prepare("SELECT name FROM schema_migrations WHERE version = 34").get() as { name: string };
+    assert.equal(agentSafetyMigration.name, "agent_undo_versions_and_chat_deletions");
+    const aiUsageColumns = db.prepare("PRAGMA table_info(ai_usage_logs)").all() as Array<{ name: string }>;
+    for (const column of ["run_id", "agent_name", "phase"]) {
+      assert.ok(aiUsageColumns.some((item) => item.name === column));
+    }
     const chatMessageColumns = db.prepare("PRAGMA table_info(ai_chat_messages)").all() as Array<{ name: string }>;
     assert.ok(chatMessageColumns.some((column) => column.name === "response_time_ms"));
     for (const column of ["source", "status", "payload_json", "confirmation_id"]) {
       assert.ok(chatMessageColumns.some((item) => item.name === column));
     }
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_events'").get());
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_chat_session_deletions'").get());
+    const mealPlanColumns = db.prepare("PRAGMA table_info(meal_plans)").all() as Array<{ name: string }>;
+    assert.ok(mealPlanColumns.some((column) => column.name === "version"));
   });
 
   test("recipe quality migration backfills trusted sources and quarantines known fallback nutrition", async () => {
@@ -157,11 +168,16 @@ describe("API security baseline", () => {
     const firstPage = await api("/api/v1/recipes?search=质量门槛&pageSize=2");
     assert.equal(firstPage.response.status, 200);
     assert.equal((firstPage.body as JsonObject).items.length, 2);
+    assert.equal((firstPage.body as JsonObject).total, 4);
     assert.ok((firstPage.body as JsonObject).items.every((item: JsonObject) => item.quality_status !== "needs_review"));
     assert.ok((firstPage.body as JsonObject).items.every((item: JsonObject) => typeof item.nutrition_is_estimated === "boolean"));
     const secondPage = await api(`/api/v1/recipes?search=质量门槛&pageSize=2&cursor=${encodeURIComponent((firstPage.body as JsonObject).nextCursor)}`);
     assert.equal((secondPage.body as JsonObject).items.length, 2);
+    assert.equal((secondPage.body as JsonObject).total, 4);
     assert.equal((secondPage.body as JsonObject).nextCursor, null);
+    const tooQuick = await api("/api/v1/recipes?search=质量门槛&maxCookTime=15&pageSize=2");
+    assert.equal((tooQuick.body as JsonObject).total, 0);
+    assert.equal((tooQuick.body as JsonObject).items.length, 0);
 
     db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
     const adminLogin = await api("/api/v1/auth/login", {
@@ -1156,6 +1172,198 @@ describe("core business authorization", () => {
     assert.equal((ownerDelete.body as JsonObject).deleted, 3);
   });
 
+  test("a deleted chat session rejects late background audit writes but allows newer turns", async () => {
+    const sessionId = "deleted-running-agent-session";
+    const requestedBeforeDeletion = Date.now() - 2_000;
+    db.prepare(`INSERT INTO ai_chat_session_deletions (user_id, session_id, deleted_at)
+      VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))`).run(first.user.id, sessionId);
+    const { recordChatTurn } = await import("../src/routes/ai.js");
+
+    recordChatTurn({
+      userId: first.user.id,
+      sessionId,
+      source: "assistant",
+      userContent: "删除前的问题",
+      assistantContent: "删除后才完成的回答",
+      responseTimeMs: 2_500,
+      requestedAt: requestedBeforeDeletion,
+      respondedAt: Date.now(),
+    });
+    let count = db.prepare("SELECT COUNT(*) AS count FROM ai_chat_messages WHERE user_id = ? AND session_id = ?")
+      .get(first.user.id, sessionId) as { count: number };
+    assert.equal(count.count, 0);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const requestedAfterDeletion = Date.now();
+    recordChatTurn({
+      userId: first.user.id,
+      sessionId,
+      source: "assistant",
+      userContent: "删除后的新问题",
+      assistantContent: "新的回答",
+      responseTimeMs: 20,
+      requestedAt: requestedAfterDeletion,
+      respondedAt: requestedAfterDeletion + 20,
+    });
+    count = db.prepare("SELECT COUNT(*) AS count FROM ai_chat_messages WHERE user_id = ? AND session_id = ?")
+      .get(first.user.id, sessionId) as { count: number };
+    assert.equal(count.count, 2);
+  });
+
+  test("cancelled runs cannot write and undo refuses to overwrite newer edits", async () => {
+    const cancelledRunId = "44444444-4444-4444-8444-444444444444";
+    const cancelledActionId = "55555555-5555-4555-8555-555555555555";
+    db.prepare(`INSERT INTO agent_runs
+      (id, user_id, session_id, modality, source, status, input_json, checkpoint_thread_id)
+      VALUES (?, ?, 'cancelled-write-test', 'text', 'assistant', 'cancelled', '{}', ?)`)
+      .run(cancelledRunId, first.user.id, cancelledRunId);
+    db.prepare(`INSERT INTO agent_actions
+      (id, run_id, user_id, action_type, risk_level, status, payload_json, idempotency_key)
+      VALUES (?, ?, ?, 'add_shopping_items', 'low', 'proposed', ?, ?)`)
+      .run(cancelledActionId, cancelledRunId, first.user.id, JSON.stringify({ items: [{ name: "不应写入的食材" }] }), `cancelled:${cancelledActionId}`);
+    const { executeAgentActions } = await import("../src/services/agent/operations.js");
+    assert.throws(() => executeAgentActions(first.user.id, cancelledRunId, [{
+      id: cancelledActionId,
+      actionType: "add_shopping_items",
+      riskLevel: "low",
+      summary: "取消后不应写入",
+      payload: { items: [{ name: "不应写入的食材" }] },
+    }]), /已取消|不再允许/);
+    const cancelledWrites = db.prepare("SELECT COUNT(*) AS count FROM shopping_list_items WHERE user_id = ? AND name = '不应写入的食材'")
+      .get(first.user.id) as { count: number };
+    assert.equal(cancelledWrites.count, 0);
+
+    const undoRunId = "66666666-6666-4666-8666-666666666666";
+    const undoActionId = "77777777-7777-4777-8777-777777777777";
+    const shoppingId = "88888888-8888-4888-8888-888888888888";
+    db.prepare(`INSERT INTO agent_runs
+      (id, user_id, session_id, modality, source, status, input_json, checkpoint_thread_id, started_at, completed_at)
+      VALUES (?, ?, 'undo-conflict-test', 'text', 'assistant', 'completed', '{}', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+      .run(undoRunId, first.user.id, undoRunId);
+    db.prepare(`INSERT INTO shopping_list_items
+      (id, user_id, name, amount, category, checked, version, source_run_id)
+      VALUES (?, ?, '用户后续修改', '2份', '蔬菜', 0, 3, ?)`)
+      .run(shoppingId, first.user.id, undoRunId);
+    db.prepare(`INSERT INTO agent_actions
+      (id, run_id, user_id, action_type, risk_level, status, payload_json, before_json, result_json,
+       idempotency_key, executed_at)
+      VALUES (?, ?, ?, 'update_shopping_item', 'low', 'executed', '{}', ?, ?, ?, CURRENT_TIMESTAMP)`)
+      .run(
+        undoActionId,
+        undoRunId,
+        first.user.id,
+        JSON.stringify({ id: shoppingId, name: "Agent 修改前", amount: "1份", category: "其他", checked: 0, purchase_date: null, storage_location: null, version: 1 }),
+        JSON.stringify({ itemId: shoppingId }),
+        `undo:${undoActionId}`,
+      );
+    const undo = await api(`/api/v1/ai/agent-runs/${undoRunId}/undo`, { method: "POST", token: first.token });
+    assert.equal(undo.response.status, 400);
+    assert.match((undo.body as JsonObject).error, /发生变化/);
+    const retained = db.prepare("SELECT name, version FROM shopping_list_items WHERE id = ?").get(shoppingId) as { name: string; version: number };
+    assert.deepEqual(retained, { name: "用户后续修改", version: 3 });
+  });
+
+  test("admins can inspect Agent Run timelines without receiving raw media", async () => {
+    const runId = "11111111-1111-4111-8111-111111111111";
+    const actionId = "22222222-2222-4222-8222-222222222222";
+    db.prepare(`
+      INSERT INTO agent_runs
+        (id, user_id, session_id, modality, source, status, input_json, result_json,
+         checkpoint_thread_id, started_at, completed_at, created_at, updated_at)
+      VALUES (?, ?, ?, 'image', 'vision-food', 'completed', ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      runId,
+      first.user.id,
+      "admin-agent-run-test",
+      JSON.stringify({ modality: "image", prompt: "识别这份沙拉", mediaRef: "media-secret-ref" }),
+      JSON.stringify({
+        reply: "识别为蔬菜沙拉",
+        artifacts: [
+          { type: "vision", data: { confidence: 0.91 } },
+          {
+            type: "recipes",
+            data: {
+              recipeName: "鸡胸蔬菜沙拉",
+              ingredients: ["鸡胸肉 150克", "生菜 100克"],
+              steps: ["鸡胸肉煎熟切片", "与生菜拌匀"],
+              estimatedNutrition: "约 350 千卡",
+            },
+          },
+        ],
+      }),
+      runId,
+      "2026-08-09 08:00:00",
+      "2026-08-09 08:00:03",
+      "2026-08-09 08:00:00",
+      "2026-08-09 08:00:03",
+    );
+    db.prepare("INSERT INTO agent_run_media (id, run_id, user_id, kind, mime_type, data_base64) VALUES (?, ?, ?, 'image', 'image/png', ?)")
+      .run("33333333-3333-4333-8333-333333333333", runId, first.user.id, "raw-media-must-not-leak");
+    db.prepare("INSERT INTO agent_run_events (run_id, user_id, sequence, agent_name, event_type, summary, payload_json) VALUES (?, ?, 1, 'Supervisor', 'routing_started', ?, ?)")
+      .run(runId, first.user.id, "开始分派", JSON.stringify({ specialists: ["VisionAgent"] }));
+    db.prepare("INSERT INTO agent_run_events (run_id, user_id, sequence, agent_name, event_type, summary, payload_json) VALUES (?, ?, 2, 'VisionAgent', 'agent_completed', ?, ?)")
+      .run(runId, first.user.id, "视觉识别完成", JSON.stringify({ summary: "识别出一份蔬菜沙拉", artifacts: [{ type: "vision", data: { confidence: 0.91 } }] }));
+    db.prepare("INSERT INTO agent_run_events (run_id, user_id, sequence, agent_name, event_type, summary) VALUES (?, ?, 3, 'OperationsAgent', 'agent_completed', ?)")
+      .run(runId, first.user.id, "已生成 1 个业务动作");
+    db.prepare("INSERT INTO agent_run_events (run_id, user_id, sequence, agent_name, event_type, summary) VALUES (?, ?, 4, 'Supervisor', 'run_completed', ?)")
+      .run(runId, first.user.id, "Supervisor 已完成最终答复");
+    db.prepare(`
+      INSERT INTO ai_usage_logs
+        (user_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens, latency_ms, success, estimated_cost_usd, run_id, agent_name, phase)
+      VALUES (?, 'agent:Supervisor', 'test-supervisor', 120, 30, 150, 800, 1, 0.0012, ?, 'Supervisor', 'routing'),
+             (?, 'agent:VisionAgent', 'test-vision', 200, 50, 250, 1200, 1, 0.0025, ?, 'VisionAgent', 'recognition')
+    `).run(first.user.id, runId, first.user.id, runId);
+    db.prepare(`
+      INSERT INTO agent_actions
+        (id, run_id, user_id, action_type, risk_level, status, payload_json, idempotency_key)
+      VALUES (?, ?, ?, 'add_inventory_item', 'high', 'awaiting_approval', ?, ?)
+    `).run(actionId, runId, first.user.id, JSON.stringify({ foodName: "生菜" }), `admin-agent-test-${runId}`);
+
+    const userRun = await api(`/api/v1/ai/agent-runs/${runId}`, { token: first.token });
+    assert.equal(userRun.response.status, 200);
+    assert.equal((userRun.body as JsonObject).solutionCards[0].title, "鸡胸蔬菜沙拉");
+    assert.equal((userRun.body as JsonObject).solutionCards[0].ingredientItems[0].amount, "150克");
+
+    const denied = await api(`/api/v1/admin/agent-runs?query=${runId}`, { token: first.token });
+    assert.equal(denied.response.status, 403);
+
+    db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+    const adminLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+    });
+    const adminToken = (adminLogin.body as JsonObject).token;
+    const list = await api(`/api/v1/admin/agent-runs?query=${runId}&range=all`, { token: adminToken });
+    assert.equal(list.response.status, 200);
+    assert.equal((list.body as JsonObject).total, 1);
+    assert.equal((list.body as JsonObject).items[0].eventCount, 4);
+    assert.equal((list.body as JsonObject).items[0].specialists, "VisionAgent,OperationsAgent");
+    assert.equal((list.body as JsonObject).items[0].hasMedia, 1);
+    assert.equal((list.body as JsonObject).items[0].modelCallCount, 2);
+    assert.equal((list.body as JsonObject).items[0].totalTokens, 400);
+    assert.equal((list.body as JsonObject).usageSummary.promptTokens, 320);
+    assert.equal((list.body as JsonObject).usageSummary.completionTokens, 80);
+
+    const detail = await api(`/api/v1/admin/agent-runs/${runId}`, { token: adminToken });
+    assert.equal(detail.response.status, 200);
+    assert.equal((detail.body as JsonObject).run.input.prompt, "识别这份沙拉");
+    assert.equal((detail.body as JsonObject).run.input.mediaRef, undefined);
+    assert.equal((detail.body as JsonObject).events[1].agentName, "VisionAgent");
+    assert.equal((detail.body as JsonObject).events[1].payload.summary, "识别出一份蔬菜沙拉");
+    assert.equal((detail.body as JsonObject).events[1].payload.artifacts[0].data.confidence, 0.91);
+    assert.equal((detail.body as JsonObject).events[2].payload.actions[0].payload.foodName, "生菜");
+    assert.equal((detail.body as JsonObject).events[2].payload.recoveredFromRun, true);
+    assert.equal((detail.body as JsonObject).events[3].payload.reply, "识别为蔬菜沙拉");
+    assert.equal((detail.body as JsonObject).events[3].payload.recoveredFromRun, true);
+    assert.equal((detail.body as JsonObject).actions[0].payload.foodName, "生菜");
+    assert.equal((detail.body as JsonObject).usage.summary.totalTokens, 400);
+    assert.equal((detail.body as JsonObject).usage.byAgent[0].agentName, "VisionAgent");
+    assert.equal((detail.body as JsonObject).usage.records[0].phase, "routing");
+    assert.equal(JSON.stringify(detail.body).includes("raw-media-must-not-leak"), false);
+    const audited = db.prepare("SELECT 1 FROM admin_audit_logs WHERE action = 'agent_run.view' AND resource_id = ?").get(runId);
+    assert.ok(audited);
+  });
+
   test("users can export and delete their server-side AI data", async () => {
     db.prepare("INSERT INTO ai_chat_messages (user_id, session_id, role, content) VALUES (?, ?, 'user', ?)")
       .run(first.user.id, "export-test", "需要导出的内容");
@@ -1202,7 +1410,7 @@ describe("core business authorization", () => {
     assert.equal(remainingInventory.count, 0);
   });
 
-  test("chat does not present a local AI fallback as a successful answer", async () => {
+  test("chat immediately returns a durable run and never presents a local AI fallback as success", async () => {
     const account = await register("chat-unavailable@example.com");
     const previousAiKey = process.env.AI_API_KEY;
     const previousOpenAiKey = process.env.OPENAI_API_KEY;
@@ -1216,15 +1424,27 @@ describe("core business authorization", () => {
         token: account.token,
         body: JSON.stringify({ prompt: "今晚吃什么？", sessionId: "failed-chat-audit", source: "assistant" }),
       });
-      assert.equal(result.response.status, 503);
-      assert.equal((result.body as JsonObject).code, "AI_NOT_CONFIGURED");
-      assert.doesNotMatch((result.body as JsonObject).error, /收到您的咨询/);
-      const failedMessages = db.prepare(`
-        SELECT role, content, source, status FROM ai_chat_messages
-        WHERE user_id = ? AND session_id = ? ORDER BY id
-      `).all(account.user.id, "failed-chat-audit") as JsonObject[];
+      assert.equal(result.response.status, 202);
+      const runId = (result.body as JsonObject).run?.id;
+      assert.match(runId, /^[0-9a-f-]{36}$/i);
+
+      let runResult: Awaited<ReturnType<typeof api>> | undefined;
+      let failedMessages: JsonObject[] = [];
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        runResult = await api(`/api/v1/ai/agent-runs/${runId}`, { token: account.token });
+        failedMessages = db.prepare(`
+          SELECT role, content, source, status FROM ai_chat_messages
+          WHERE user_id = ? AND session_id = ? ORDER BY id
+        `).all(account.user.id, "failed-chat-audit") as JsonObject[];
+        if ((runResult.body as JsonObject).run?.status === "failed" && failedMessages.length === 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      assert.equal((runResult?.body as JsonObject).run.status, "failed");
+      assert.match((runResult?.body as JsonObject).run.error.message, /未配置/);
+      assert.doesNotMatch((runResult?.body as JsonObject).run.error.message, /收到您的咨询/);
       assert.deepEqual(failedMessages.map((message) => message.role), ["user", "assistant"]);
-      assert.equal(failedMessages[1].content, (result.body as JsonObject).error);
+      assert.equal(failedMessages[1].content, (runResult?.body as JsonObject).run.error.message);
       assert.equal(failedMessages[1].source, "assistant");
       assert.equal(failedMessages[1].status, "failed");
     } finally {

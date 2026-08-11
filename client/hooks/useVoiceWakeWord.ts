@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Platform } from "react-native";
 import { useAuthFetch } from "@/contexts/AuthContext";
-import { aiApi } from "@/services/api";
+import { aiApi, waitForAgentRun } from "@/services/api";
 
 interface UseVoiceWakeWordOptions {
   onWakeWordDetected?: (transcript: string) => void;
@@ -11,8 +11,6 @@ interface UseVoiceWakeWordOptions {
 
 export function useVoiceWakeWord({
   onWakeWordDetected,
-  onSpeechRecognized,
-  wakeWords = ["食语食语", "小食小食", "食语", "hey shiyu"],
 }: UseVoiceWakeWordOptions = {}) {
   const authFetch = useAuthFetch();
   const [isWakeEnabled, setIsWakeEnabledState] = useState(false);
@@ -25,11 +23,9 @@ export function useVoiceWakeWord({
   const wokenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wakeEnabledRef = useRef(false);
 
-  // 初始化检查语音识别兼容性 (Web)
-  const isWebSpeechSupported =
-    Platform.OS === "web" &&
-    typeof window !== "undefined" &&
-    ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+  // 连续浏览器 ASR 会绕开 VoiceAgent。全量 Agent 模式下保留点击录音，
+  // 音频统一交给服务端转录；待支持流式 Agent ASR 后再恢复免手扶唤醒。
+  const isWebSpeechSupported = false;
 
   const stopRecognition = useCallback(() => {
     if (recognitionRef.current) {
@@ -48,7 +44,9 @@ export function useVoiceWakeWord({
       setStatusText("做饭免手扶唤醒模式未开启");
       stopRecognition();
     } else if (!isWebSpeechSupported) {
-      setStatusText("当前环境支持点击语音输入按钮呼叫食语");
+      setIsListening(false);
+      setTranscript("");
+      setStatusText("全量 Agent 模式：请点击语音按钮，录音将由 VoiceAgent 识别");
     }
   }, [isWebSpeechSupported, stopRecognition]);
 
@@ -93,80 +91,6 @@ export function useVoiceWakeWord({
     }
   }, [playWakeSound, onWakeWordDetected]);
 
-  // 开启 / 关闭 实时 Web Speech 唤醒引擎
-  useEffect(() => {
-    if (!isWakeEnabled) {
-      return;
-    }
-
-    if (!isWebSpeechSupported) {
-      return;
-    }
-
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    let cancelled = false;
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "zh-CN";
-
-      recognition.onstart = () => {
-        setIsListening(true);
-        setStatusText("正在持续监听【食语食语】做饭唤醒词...");
-      };
-
-      recognition.onresult = (event: any) => {
-        let currentText = "";
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          currentText += event.results[i][0].transcript;
-        }
-
-        const lower = currentText.toLowerCase().trim();
-        setTranscript(lower);
-
-        if (onSpeechRecognized) {
-          onSpeechRecognized(lower);
-        }
-
-        const matchedWord = wakeWords.find((w) => lower.includes(w.toLowerCase()));
-        if (matchedWord) {
-          const commandText = lower.slice(lower.indexOf(matchedWord) + matchedWord.length).trim();
-          triggerWakeUp(commandText || "在");
-        }
-      };
-
-      recognition.onerror = (err: any) => {
-        if (err.error !== "no-speech") {
-          console.warn("[SpeechRecognition Error]", err);
-        }
-      };
-
-      recognition.onend = () => {
-        if (wakeEnabledRef.current) {
-          try { recognition.start(); } catch {}
-        } else {
-          setIsListening(false);
-        }
-      };
-
-      recognition.start();
-      recognitionRef.current = recognition;
-    } catch (e) {
-      console.warn("[VoiceWakeWord Setup Error]", e);
-      queueMicrotask(() => {
-        if (!cancelled) setStatusText("支持点击语音图标随时呼叫食语");
-      });
-    }
-
-    return () => {
-      cancelled = true;
-      stopRecognition();
-    };
-  }, [isWakeEnabled, isWebSpeechSupported, wakeWords, triggerWakeUp, onSpeechRecognized, stopRecognition]);
-
   useEffect(() => () => {
     wakeEnabledRef.current = false;
     if (wokenTimerRef.current) clearTimeout(wokenTimerRef.current);
@@ -175,8 +99,9 @@ export function useVoiceWakeWord({
   // 手动模拟录音/语音提交（发送给后端 API /transcribe）
   const transcribeAudioFile = useCallback(async (audioBase64: string, mimeType = "audio/m4a") => {
     try {
-      const data = await aiApi.transcribe<{ text?: string }>(authFetch, audioBase64, mimeType);
-      return data.text || "";
+      const data = await aiApi.transcribe<{ text?: string; run: { id: string; status: string; transcript?: string; error?: { message?: string } } }>(authFetch, audioBase64, mimeType);
+      const run = await waitForAgentRun(authFetch, data.run);
+      return data.text || run.transcript || "";
     } catch (e) {
       console.error("[transcribeAudioFile Error]", e);
     }
@@ -192,5 +117,6 @@ export function useVoiceWakeWord({
     statusText,
     transcribeAudioFile,
     playWakeSound,
+    triggerWakeUp,
   };
 }

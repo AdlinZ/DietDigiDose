@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { deleteUserAgentData } from "../services/agent/repository.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { db, logAdminAction } from "../storage/db.js";
@@ -223,7 +224,18 @@ router.get("/ai-data", authMiddleware, (req: AuthRequest, res) => {
     SELECT id, status, result_json, error_message, created_at, updated_at
     FROM inventory_scan_jobs WHERE user_id = ? ORDER BY created_at ASC
   `).all(req.userId);
-  return res.json({ exported_at: new Date().toISOString(), messages, scan_jobs: scanJobs });
+  const agentRuns = db.prepare("SELECT * FROM agent_runs WHERE user_id = ? ORDER BY created_at ASC").all(req.userId);
+  const agentEvents = db.prepare("SELECT e.* FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id WHERE r.user_id = ? ORDER BY e.created_at ASC, e.sequence ASC").all(req.userId);
+  const agentActions = db.prepare("SELECT a.* FROM agent_actions a JOIN agent_runs r ON r.id = a.run_id WHERE r.user_id = ? ORDER BY a.created_at ASC").all(req.userId);
+  const agentMediaReferences = db.prepare("SELECT id, run_id, kind, mime_type, created_at FROM agent_run_media WHERE user_id = ? ORDER BY created_at ASC").all(req.userId);
+  const checkpointTableExists = Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'checkpoints'").get());
+  const checkpoints = checkpointTableExists ? db.prepare(`SELECT c.thread_id, c.checkpoint_ns, c.checkpoint_id, c.parent_checkpoint_id, c.type,
+    CAST(c.checkpoint AS TEXT) AS checkpoint_json, CAST(c.metadata AS TEXT) AS metadata_json
+    FROM checkpoints c JOIN agent_runs r ON r.checkpoint_thread_id = c.thread_id WHERE r.user_id = ? ORDER BY c.checkpoint_id ASC`).all(req.userId) : [];
+  const checkpointWrites = checkpointTableExists ? db.prepare(`SELECT w.thread_id, w.checkpoint_ns, w.checkpoint_id, w.task_id, w.idx, w.channel, w.type,
+    CAST(w.value AS TEXT) AS value_json FROM writes w JOIN agent_runs r ON r.checkpoint_thread_id = w.thread_id
+    WHERE r.user_id = ? ORDER BY w.checkpoint_id ASC, w.idx ASC`).all(req.userId) : [];
+  return res.json({ exported_at: new Date().toISOString(), messages, scan_jobs: scanJobs, agent_runs: agentRuns, agent_events: agentEvents, agent_actions: agentActions, agent_media_references: agentMediaReferences, agent_checkpoints: checkpoints, agent_checkpoint_writes: checkpointWrites });
 });
 
 router.delete("/ai-data", authMiddleware, (req: AuthRequest, res) => {
@@ -232,6 +244,8 @@ router.delete("/ai-data", authMiddleware, (req: AuthRequest, res) => {
     scan_jobs: db.prepare("DELETE FROM inventory_scan_jobs WHERE user_id = ?").run(req.userId).changes,
     usage_logs: db.prepare("DELETE FROM ai_usage_logs WHERE user_id = ?").run(req.userId).changes,
     write_confirmations: db.prepare("DELETE FROM ai_write_confirmations WHERE user_id = ?").run(req.userId).changes,
+    chat_session_deletions: db.prepare("DELETE FROM ai_chat_session_deletions WHERE user_id = ?").run(req.userId).changes,
+    agent_runs: deleteUserAgentData(req.userId!),
   }))();
   return res.json({ success: true, deleted });
 });

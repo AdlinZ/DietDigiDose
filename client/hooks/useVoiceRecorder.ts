@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { Platform } from "react-native";
 import { useAuthFetch } from "@/contexts/AuthContext";
-import { aiApi } from "@/services/api";
+import { aiApi, waitForAgentRun } from "@/services/api";
 
 interface VoiceRecorderOptions {
   /** 识别中的临时文本，用于更新 UI。 */
@@ -65,65 +65,7 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
     submittedRef.current = false;
     emptyNotifiedRef.current = false;
 
-    // 1. 优先尝试 Web Speech Recognition API (原生的流式实时文字识别)
-    if (
-      Platform.OS === "web" &&
-      typeof window !== "undefined" &&
-      ("SpeechRecognition" in window || "webkitSpeechRecognition" in window)
-    ) {
-      try {
-        const SpeechRecognition =
-          (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        const recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = true;
-        recognition.lang = "zh-CN";
-
-        recognition.onresult = (event: any) => {
-          let finalTranscript = "";
-          let interimTranscript = "";
-
-          for (let i = 0; i < event.results.length; ++i) {
-            const res = event.results[i];
-            const transcriptText = res[0]?.transcript || "";
-            if (res.isFinal) {
-              finalTranscript += transcriptText;
-            } else {
-              interimTranscript += transcriptText;
-            }
-          }
-
-          const currentText = (finalTranscript + interimTranscript).trim();
-          if (currentText) {
-            transcriptRef.current = currentText;
-            onSpeechResult?.(currentText);
-          }
-        };
-
-        recognition.onerror = (err: any) => {
-          if (err.error !== "no-speech") {
-            console.warn("[WebSpeech Error]", err);
-          }
-          setIsRecording(false);
-          setStatusText("");
-        };
-
-        recognition.onend = () => {
-          setIsRecording(false);
-          setStatusText("");
-          // Web Speech 在用户停顿后会触发 onend；这就是本 MVP 的自动结束回合。
-          if (!emitFinalTranscript()) emitEmptySpeech();
-        };
-
-        recognition.start();
-        webRecognitionRef.current = recognition;
-        return;
-      } catch (e) {
-        console.warn("[WebSpeech Start Error]", e);
-      }
-    }
-
-    // 2. 次选：使用 MediaRecorder 录音并通过后端 /api/v1/ai/transcribe (SenseVoice / Whisper) 转译
+    // 所有转录统一通过后端 VoiceAgent，避免浏览器 ASR 绕开 Agent Run 与审计。
     if (
       Platform.OS === "web" &&
       typeof navigator !== "undefined" &&
@@ -150,12 +92,14 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
           reader.onloadend = async () => {
             const base64data = (reader.result as string) || "";
             try {
-              const res = await aiApi.transcribe<{ text?: string }>(authFetch, base64data, "audio/webm");
-              if (res.text && onSpeechResult) {
-                transcriptRef.current = res.text;
-                onSpeechResult(res.text);
+              const res = await aiApi.transcribe<{ text?: string; run: { id: string; status: string; transcript?: string; error?: { message?: string } } }>(authFetch, base64data, "audio/webm");
+              const run = await waitForAgentRun(authFetch, res.run);
+              const transcript = res.text || run.transcript || "";
+              if (transcript && onSpeechResult) {
+                transcriptRef.current = transcript;
+                onSpeechResult(transcript);
               }
-              if (!emitFinalTranscript(res.text)) emitEmptySpeech();
+              if (!emitFinalTranscript(transcript)) emitEmptySpeech();
             } catch (err) {
               console.error("[Transcribe Error]", err);
               emitEmptySpeech();

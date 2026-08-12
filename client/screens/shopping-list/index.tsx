@@ -15,7 +15,7 @@ import { FontAwesome6 } from "@expo/vector-icons";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { getUserStorageKey, SHOPPING_LIST_STORAGE_KEY } from "@/utils/userStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { inventoryApi } from "@/services/api";
+import { inventoryApi, shoppingListApi } from "@/services/api";
 import { dateKeyAfterDays, parseDateKey, toLocalDateKey } from "@/utils/date";
 import { normalizeShoppingItems, type ShoppingItem } from "@/utils/shoppingList";
 import { inferCategoryByName, inferIngredientDefaults, inferShelfLifeDays } from "@/utils/ingredientRules";
@@ -45,6 +45,7 @@ export default function ShoppingListScreen() {
 
   const [items, setItems] = useState<ShoppingItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [serverReady, setServerReady] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [amountInput, setAmountInput] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("蔬菜");
@@ -70,24 +71,39 @@ export default function ShoppingListScreen() {
     }
     try {
       const saved = await AsyncStorage.getItem(storageKey);
-      if (saved) {
-        setItems(normalizeShoppingItems(JSON.parse(saved)));
-      } else {
-        setItems([]);
-      }
+      const cachedItems = saved ? normalizeShoppingItems(JSON.parse(saved)) : [];
+      setItems(cachedItems);
+      const imported = await shoppingListApi.import<{ items: unknown[] }>(
+        authFetch,
+        `shopping-list-migration-v1:${user?.id || "anonymous"}`,
+        cachedItems.map((item) => ({
+          clientId: item.clientId || item.id,
+          name: item.name,
+          amount: item.amount,
+          category: item.category,
+          checked: item.checked,
+          purchaseDate: item.purchaseDate,
+          storageLocation: item.storageLocation,
+        })),
+      );
+      const authoritative = normalizeShoppingItems(imported.items);
+      setItems(authoritative);
+      await AsyncStorage.setItem(storageKey, JSON.stringify(authoritative));
+      setServerReady(true);
     } catch (err) {
       console.error("Failed to load shopping list:", err);
+      setServerReady(false);
     } finally {
       setLoading(false);
     }
-  }, [storageKey]);
+  }, [authFetch, storageKey, user?.id]);
 
   useEffect(() => {
     loadShoppingList();
   }, [loadShoppingList]);
 
   // 保存数据
-  const saveItems = async (newItems: ShoppingItem[]) => {
+  const cacheItems = async (newItems: ShoppingItem[]) => {
     setItems(newItems);
     if (storageKey) {
       await AsyncStorage.setItem(storageKey, JSON.stringify(newItems));
@@ -117,25 +133,33 @@ export default function ShoppingListScreen() {
   };
 
   // 添加新食材
-  const handleAddItem = () => {
+  const handleAddItem = async () => {
     if (!nameInput.trim()) {
       Alert.alert("提示", "请输入食材名称");
       return;
     }
-    const newItem: ShoppingItem = {
-      id: String(Date.now()),
-      name: nameInput.trim(),
-      amount: amountInput.trim() || "适量",
-      category: selectedCategory,
-      checked: false,
-      createdAt: Date.now(),
-      storageLocation: inferIngredientDefaults(nameInput).storageLocation,
-    };
-    const updated = [newItem, ...items];
-    saveItems(updated);
-    setNameInput("");
-    setAmountInput("");
-    setSmartHint(null);
+    if (!serverReady) {
+      Alert.alert("当前为离线缓存", "采购清单以服务端为准，请恢复网络后再修改。");
+      return;
+    }
+    try {
+      const created = await shoppingListApi.create<unknown>(authFetch, {
+        clientId: `manual:${Date.now()}`,
+        name: nameInput.trim(),
+        amount: amountInput.trim() || "适量",
+        category: selectedCategory,
+        checked: false,
+        storageLocation: inferIngredientDefaults(nameInput).storageLocation,
+      });
+      const newItem = normalizeShoppingItems([created])[0];
+      if (!newItem) throw new Error("服务端返回了无效采购项");
+      await cacheItems([newItem, ...items]);
+      setNameInput("");
+      setAmountInput("");
+      setSmartHint(null);
+    } catch (error) {
+      Alert.alert("添加失败", error instanceof Error ? error.message : "请稍后重试");
+    }
   };
 
   // 打开编辑弹窗
@@ -147,40 +171,57 @@ export default function ShoppingListScreen() {
     setEditPurchaseDate(item.purchaseDate || toLocalDateKey(new Date()));
   };
 
-  const handleSaveEditedItem = () => {
+  const handleSaveEditedItem = async () => {
     if (!editingItem) return;
     if (!editName.trim()) {
       Alert.alert("提示", "食材名称不能为空");
       return;
     }
-    const updated = items.map((item) =>
-      item.id === editingItem.id
-        ? {
-            ...item,
-            name: editName.trim(),
-            amount: editAmount.trim() || "适量",
-            category: editCategory,
-            purchaseDate: editPurchaseDate.trim() || toLocalDateKey(new Date()),
-            storageLocation: inferIngredientDefaults(editName).storageLocation,
-          }
-        : item
-    );
-    saveItems(updated);
-    setEditingItem(null);
+    if (!serverReady || !editingItem.version) {
+      Alert.alert("无法修改", "请联网刷新采购清单后重试。");
+      return;
+    }
+    try {
+      const saved = await shoppingListApi.update<unknown>(authFetch, editingItem.id, {
+        version: editingItem.version,
+        name: editName.trim(),
+        amount: editAmount.trim() || "适量",
+        category: editCategory,
+        purchaseDate: editPurchaseDate.trim() || toLocalDateKey(new Date()),
+        storageLocation: inferIngredientDefaults(editName).storageLocation,
+      });
+      const updatedItem = normalizeShoppingItems([saved])[0];
+      if (!updatedItem) throw new Error("服务端返回了无效采购项");
+      await cacheItems(items.map((item) => item.id === editingItem.id ? updatedItem : item));
+      setEditingItem(null);
+    } catch (error) {
+      Alert.alert("保存失败", error instanceof Error ? error.message : "请刷新后重试");
+    }
   };
 
   // 勾选/取消勾选
-  const handleToggleCheck = (id: string) => {
-    const updated = items.map((item) =>
-      item.id === id ? { ...item, checked: !item.checked } : item
-    );
-    saveItems(updated);
+  const handleToggleCheck = async (id: string) => {
+    const item = items.find((candidate) => candidate.id === id);
+    if (!serverReady || !item?.version) return Alert.alert("当前为离线缓存", "联网后才能修改采购状态。");
+    try {
+      const saved = await shoppingListApi.update<unknown>(authFetch, id, { version: item.version, checked: !item.checked });
+      const updatedItem = normalizeShoppingItems([saved])[0];
+      if (!updatedItem) throw new Error("服务端返回了无效采购项");
+      await cacheItems(items.map((candidate) => candidate.id === id ? updatedItem : candidate));
+    } catch (error) {
+      Alert.alert("更新失败", error instanceof Error ? error.message : "请刷新后重试");
+    }
   };
 
   // 删除单项
-  const handleDeleteItem = (id: string) => {
-    const updated = items.filter((item) => item.id !== id);
-    saveItems(updated);
+  const handleDeleteItem = async (id: string) => {
+    if (!serverReady) return Alert.alert("当前为离线缓存", "联网后才能删除采购项。");
+    try {
+      await shoppingListApi.remove(authFetch, id);
+      await cacheItems(items.filter((item) => item.id !== id));
+    } catch (error) {
+      Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试");
+    }
   };
 
   // 清空已买项目
@@ -193,8 +234,14 @@ export default function ShoppingListScreen() {
         text: "确认清除",
         style: "destructive",
         onPress: () => {
-          const updated = items.filter((i) => !i.checked);
-          saveItems(updated);
+          void (async () => {
+            try {
+              await Promise.all(items.filter((item) => item.checked).map((item) => shoppingListApi.remove(authFetch, item.id)));
+              await cacheItems(items.filter((item) => !item.checked));
+            } catch (error) {
+              Alert.alert("清除失败", error instanceof Error ? error.message : "请稍后重试");
+            }
+          })();
         },
       },
     ]);
@@ -249,8 +296,9 @@ export default function ShoppingListScreen() {
         );
       }
 
+      await Promise.all(checkedItems.map((item) => shoppingListApi.remove(authFetch, item.id)));
       const remainingItems = items.filter((i) => !i.checked);
-      await saveItems(remainingItems);
+      await cacheItems(remainingItems);
 
       Alert.alert(
         "入库成功！",

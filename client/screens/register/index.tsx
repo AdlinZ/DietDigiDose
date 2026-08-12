@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, ActivityIndicator } from 'react-native';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
-import { useSafeRouter } from '@/hooks/useSafeRouter';
+import { useSafeRouter, useSafeSearchParams } from '@/hooks/useSafeRouter';
+import { validateAuthReturnTo } from '@/utils/authReturnTo';
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import { useCSSVariable } from 'uniwind';
 
@@ -16,6 +17,8 @@ export default function RegisterScreen() {
   const [error, setError] = useState('');
   const { register } = useAuth();
   const router = useSafeRouter();
+  const { returnTo: rawReturnTo } = useSafeSearchParams<{ returnTo?: unknown }>();
+  const returnTo = validateAuthReturnTo(rawReturnTo);
   const [brand, muted] = useCSSVariable([
     '--color-brand',
     '--color-copy-muted',
@@ -49,7 +52,7 @@ export default function RegisterScreen() {
     const result = await register(identifier.trim(), username.trim(), password);
     setLoading(false);
     if (result.success) {
-      router.replace('/onboarding');
+      router.replace('/onboarding', returnTo ? { returnTo } : {});
     } else {
       setError(result.error || '注册失败');
     }

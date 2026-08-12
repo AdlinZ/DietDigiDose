@@ -2,6 +2,9 @@ import { useState } from "react";
 import { View } from "react-native";
 import { Image } from "expo-image";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import { withUniwind } from "uniwind";
+
+const StyledImage = withUniwind(Image);
 
 interface RecipeCoverProps {
   uri?: string | null;
@@ -28,7 +31,7 @@ export function RecipeCover({
   }
 
   return (
-    <Image
+    <StyledImage
       source={{ uri }}
       className={className}
       contentFit="cover"

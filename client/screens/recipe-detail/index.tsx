@@ -8,9 +8,6 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getUserStorageKey } from "@/utils/userStorage";
-import { normalizeShoppingItems } from "@/utils/shoppingList";
 import { inferCategoryByName } from "@/utils/ingredientRules";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
@@ -18,10 +15,11 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { healthApi, inventoryApi, recipesApi, type InventoryItem } from "@/services/api";
+import { healthApi, inventoryApi, recipesApi, shoppingListApi, type InventoryItem } from "@/services/api";
 import { ingredientNamesMatch } from "@/utils/ingredients";
 import { getInventoryStatus } from "@/utils/inventory";
 import { ALLERGY_LABELS, findRecipeAllergyRisks, hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/healthProfile";
+import { getRecipeNutritionPresentation } from "@/utils/recipeQuality";
 
 type IconName = ComponentProps<typeof FontAwesome6>["name"];
 
@@ -54,12 +52,15 @@ interface Recipe {
   source?: string;
   author_username?: string;
   author_avatar_url?: string;
+  quality_status: "trusted" | "estimated" | "needs_review";
+  nutrition_basis: "source" | "ingredient_estimate" | "category_fallback";
+  nutrition_is_estimated: boolean;
 }
 
 export default function RecipeDetailScreen() {
   const router = useSafeRouter();
-  const { id } = useSafeSearchParams<{ id: number }>();
-  const { isAuthenticated, user } = useAuth();
+  const { id, pendingAction } = useSafeSearchParams<{ id: number; pendingAction?: "favorite" | "shopping-list" }>();
+  const { isAuthenticated } = useAuth();
   const authFetch = useAuthFetch();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
@@ -116,6 +117,12 @@ export default function RecipeDetailScreen() {
   }, [authFetch, id, isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated || !pendingAction) return;
+    showFavoriteNotice(pendingAction === "favorite" ? "已返回菜谱，请再次点击收藏" : "已返回菜谱，请确认加入采购清单");
+    router.setParams({ pendingAction: undefined });
+  }, [isAuthenticated, pendingAction, showFavoriteNotice]);
+
+  useEffect(() => {
     if (!isAuthenticated) {
       setInventory([]);
       setHealthProfile(null);
@@ -158,6 +165,7 @@ export default function RecipeDetailScreen() {
   }
 
   const tags = (recipe.tags || []).filter(Boolean).slice(0, 3);
+  const nutritionPresentation = getRecipeNutritionPresentation(recipe.nutrition_is_estimated);
   const nutrition = (recipe.nutrition?.length ? recipe.nutrition : [
     { key: "protein", label: "蛋白质", value: recipe.protein, unit: "g" },
     { key: "carbs", label: "碳水", value: recipe.carbs, unit: "g" },
@@ -209,24 +217,19 @@ export default function RecipeDetailScreen() {
   const handleAddMissingToShoppingList = async () => {
     if (missingIngredients.length === 0) return;
     try {
-      const shoppingKey = getUserStorageKey("shopping_list", user?.id);
-      const existingStr = shoppingKey ? await AsyncStorage.getItem(shoppingKey) : null;
-      const existing = existingStr ? JSON.parse(existingStr) : [];
-      const normalized = normalizeShoppingItems(existing);
-
-      const existingNames = new Set(normalized.map((i) => i.name));
+      const existing = await shoppingListApi.list<Array<{ name: string }>>(authFetch);
+      const existingNames = new Set(existing.map((item) => item.name));
       const recipeIngredients = recipe?.ingredients || [];
       const newItems = missingIngredients
         .filter((item) => !existingNames.has(item.name))
-        .map((item, idx) => {
+        .map((item) => {
           const detail = recipeIngredients.find((r) => r.name === item.name);
           return {
-            id: `recipe-missing-${Date.now()}-${idx}`,
+            clientId: `recipe:${recipe.id}:${item.name}`,
             name: item.name,
             amount: detail?.amount || "适量",
             category: inferCategoryByName(item.name),
             checked: false,
-            createdAt: Date.now(),
           };
         });
 
@@ -235,10 +238,7 @@ export default function RecipeDetailScreen() {
         return;
       }
 
-      const updated = [...newItems, ...normalized];
-      if (shoppingKey) {
-        await AsyncStorage.setItem(shoppingKey, JSON.stringify(updated));
-      }
+      await Promise.all(newItems.map((item) => shoppingListApi.create(authFetch, item)));
       Alert.alert("已加采购清单", `已成功将 ${newItems.length} 种缺少食材加入你的采购清单！`, [
         { text: "查看清单", onPress: () => router.push("/shopping-list") },
         { text: "好的", style: "cancel" },
@@ -249,7 +249,7 @@ export default function RecipeDetailScreen() {
   };
   const toggleFavorite = async () => {
     if (!isAuthenticated) {
-      router.push("/login");
+      router.push("/login", { returnTo: { pathname: "/recipe-detail", params: { id: recipe.id, pendingAction: "favorite" } } });
       return;
     }
     if (favoriteLoading) return;
@@ -373,9 +373,9 @@ export default function RecipeDetailScreen() {
             ) : null}
 
             <View className="mt-5 flex-row rounded-2xl bg-[#F6F2EA] px-2 py-4">
-              <QuickInfo icon="clock" label="用时" value={`${recipe.cook_time}分钟`} color="#2D6A4F" />
+              <QuickInfo icon="clock" label="用时" value={`${nutritionPresentation.prefix}${recipe.cook_time}分钟`} color="#2D6A4F" />
               <View className="w-px bg-[#E3D9CA]" />
-              <QuickInfo icon="fire" label="热量" value={`${recipe.calories} kcal`} color="#D4674F" />
+              <QuickInfo icon="fire" label="热量" value={`${nutritionPresentation.prefix}${recipe.calories} kcal`} color="#D4674F" />
               <View className="w-px bg-[#E3D9CA]" />
               <QuickInfo icon="signal" label="难度" value={recipe.difficulty} color="#B47B39" />
               <View className="w-px bg-[#E3D9CA]" />
@@ -408,7 +408,12 @@ export default function RecipeDetailScreen() {
           ) : null}
 
           <View className="mx-4 mt-4 rounded-[24px] border border-[#E8DFD2] bg-[#FFFDF9] p-5 md:mx-8 md:p-6">
-            <SectionTitle icon="chart-pie" eyebrow="每份参考" title="营养成分" />
+            <SectionTitle icon="chart-pie" eyebrow="每份参考" title={nutritionPresentation.title} />
+            {nutritionPresentation.disclosure ? (
+              <Text testID="nutrition-estimate-label" className="mt-3 rounded-xl bg-[#FFF4D8] px-3 py-2 text-xs font-bold leading-5 text-[#7B5B16]">
+                {nutritionPresentation.disclosure}
+              </Text>
+            ) : null}
             <View testID="nutrition-grid" className="mt-4 gap-2.5">
               {nutritionRows.map((row, rowIndex) => (
                 <View key={`nutrition-row-${rowIndex}`} testID="nutrition-row" className="flex-row gap-2.5">
@@ -544,17 +549,7 @@ export default function RecipeDetailScreen() {
                 requestSafeReplacement();
                 return;
               }
-              router.push("/cooking-mode", {
-                recipeId: recipe.id,
-                title: recipe.title,
-                steps: JSON.stringify(recipe.steps || []),
-                ingredients: JSON.stringify(recipe.ingredients || []),
-                cookTime: recipe.cook_time || 30,
-                calories: recipe.calories,
-                protein: recipe.protein,
-                carbs: recipe.carbs,
-                fat: recipe.fat,
-              });
+              router.push("/cooking-mode", { recipeId: recipe.id });
             }}
             className={`flex-row items-center justify-center rounded-2xl px-5 py-3.5 shadow-sm active:opacity-85 md:px-8 ${hasAllergyRisk ? "bg-[#A63D2B]" : "bg-brand"}`}
           >

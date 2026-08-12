@@ -14,6 +14,7 @@ import {
 import { withUniwind } from 'uniwind';
 import { useSafeAreaInsets, Edge } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import { useIsFocused } from '@react-navigation/native';
 // 引入 KeyboardAware 系列组件
 import {
   KeyboardAwareScrollView,
@@ -150,6 +151,7 @@ const RawScreen = ({
   style,
 }: ScreenProps) => {
   const insets = useSafeAreaInsets();
+  const isFocused = useIsFocused();
   const [keyboardShown, setKeyboardShown] = React.useState(false);
 
   useEffect(() => {
@@ -273,7 +275,12 @@ const RawScreen = ({
 
   return (
     // 核心原则：严禁使用 SafeAreaView，统一使用 View + padding 手动管理
-    <View style={wrapperStyle}>
+    <View
+      style={wrapperStyle}
+      accessibilityElementsHidden={!isFocused}
+      importantForAccessibility={isFocused ? 'auto' : 'no-hide-descendants'}
+      aria-hidden={!isFocused}
+    >
       {/* 状态栏配置：强制透明背景 + 沉浸式，以支持背景图延伸 */}
       <StatusBar
         style={statusBarStyle}

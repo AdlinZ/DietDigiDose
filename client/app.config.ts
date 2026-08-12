@@ -6,7 +6,7 @@ const appSlug = process.env.EXPO_PUBLIC_APP_SLUG || 'dietdigidose';
 const androidPackage = process.env.EXPO_PUBLIC_ANDROID_PACKAGE || 'com.dietdigidose.app';
 const iosBundleIdentifier = process.env.EXPO_PUBLIC_IOS_BUNDLE_IDENTIFIER || 'com.dietdigidose.app';
 const easBuildProfile = process.env.EAS_BUILD_PROFILE;
-const insecureHttpBuildProfiles = new Set(['preview', 'simulator']);
+const insecureHttpBuildProfiles = new Set(['preview-http', 'simulator']);
 const allowInsecureHttp = (!easBuildProfile || insecureHttpBuildProfiles.has(easBuildProfile))
   && process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP === '1';
 const appVersion = process.env.EXPO_PUBLIC_APP_VERSION || rootPackage.version;

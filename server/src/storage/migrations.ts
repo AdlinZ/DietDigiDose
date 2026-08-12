@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { assessRecipeQuality } from "../services/recipeQuality.js";
 
 type Migration = {
   version: number;
@@ -684,6 +685,267 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_confirmation
           ON ai_chat_messages(confirmation_id)
           WHERE confirmation_id IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 29,
+    name: "recipe_quality_gate",
+    up(database) {
+      addColumn(database, "recipes", "quality_status", "TEXT NOT NULL DEFAULT 'trusted'");
+      addColumn(database, "recipes", "nutrition_basis", "TEXT NOT NULL DEFAULT 'source'");
+      addColumn(database, "recipes", "quality_issues_json", "TEXT NOT NULL DEFAULT '[]'");
+      addColumn(database, "recipes", "quality_reviewed_by", "INTEGER");
+      addColumn(database, "recipes", "quality_reviewed_at", "DATETIME");
+      addColumn(database, "recipes", "quality_review_reason", "TEXT");
+
+      const recipes = database.prepare(`
+        SELECT id, source, cook_time, calories, protein, carbs, fat, ingredients_json, steps_json
+        FROM recipes
+      `).all() as Array<{
+        id: number;
+        source: string;
+        cook_time: number;
+        calories: number;
+        protein: number;
+        carbs: number;
+        fat: number;
+        ingredients_json: string | null;
+        steps_json: string | null;
+      }>;
+      const update = database.prepare(`
+        UPDATE recipes
+        SET quality_status = ?, nutrition_basis = ?, quality_issues_json = ?
+        WHERE id = ?
+      `);
+      for (const recipe of recipes) {
+        let ingredients: unknown[] = [];
+        let steps: unknown[] = [];
+        try { ingredients = JSON.parse(recipe.ingredients_json || "[]"); } catch { ingredients = []; }
+        try { steps = JSON.parse(recipe.steps_json || "[]"); } catch { steps = []; }
+        const assessment = assessRecipeQuality({
+          source: recipe.source || "official",
+          cookTime: Number(recipe.cook_time),
+          calories: Number(recipe.calories),
+          protein: Number(recipe.protein),
+          carbs: Number(recipe.carbs),
+          fat: Number(recipe.fat),
+          ingredients: ingredients as Array<{ name?: string; amount?: string } | string>,
+          steps,
+        });
+        update.run(
+          assessment.qualityStatus,
+          assessment.nutritionBasis,
+          JSON.stringify(assessment.issues),
+          recipe.id,
+        );
+      }
+
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_recipes_public_quality
+          ON recipes(status, quality_status, id DESC) WHERE deleted_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_recipes_quality_review
+          ON recipes(quality_status, source, id DESC) WHERE deleted_at IS NULL;
+      `);
+    },
+  },
+  {
+    version: 30,
+    name: "supervisor_agent_runtime",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS agent_runs (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          session_id TEXT NOT NULL,
+          modality TEXT NOT NULL CHECK(modality IN ('text', 'home', 'cooking', 'image', 'audio', 'inventory_scan', 'receipt')),
+          source TEXT NOT NULL DEFAULT 'assistant',
+          status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'awaiting_input', 'awaiting_approval', 'completed', 'failed', 'cancelled', 'expired')),
+          input_json TEXT NOT NULL,
+          result_json TEXT,
+          pending_approval_json TEXT,
+          error_code TEXT,
+          error_message TEXT,
+          checkpoint_thread_id TEXT NOT NULL,
+          started_at DATETIME,
+          completed_at DATETIME,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_user_created
+          ON agent_runs(user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_status_updated
+          ON agent_runs(status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_session
+          ON agent_runs(user_id, session_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS agent_run_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          sequence INTEGER NOT NULL,
+          agent_name TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          payload_json TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (run_id) REFERENCES agent_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(run_id, sequence)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_sequence
+          ON agent_run_events(run_id, sequence);
+
+        CREATE TABLE IF NOT EXISTS agent_actions (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          action_type TEXT NOT NULL,
+          risk_level TEXT NOT NULL CHECK(risk_level IN ('low', 'high', 'forbidden')),
+          status TEXT NOT NULL CHECK(status IN ('proposed', 'awaiting_approval', 'executed', 'rejected', 'undone', 'failed', 'expired')),
+          payload_json TEXT NOT NULL,
+          before_json TEXT,
+          result_json TEXT,
+          idempotency_key TEXT NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          expires_at DATETIME,
+          executed_at DATETIME,
+          undone_at DATETIME,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (run_id) REFERENCES agent_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(user_id, idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_actions_run_status
+          ON agent_actions(run_id, status);
+
+        CREATE TABLE IF NOT EXISTS meal_plans (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          start_date TEXT NOT NULL,
+          end_date TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('draft', 'active', 'completed', 'cancelled')),
+          source TEXT NOT NULL DEFAULT 'agent',
+          constraints_json TEXT NOT NULL DEFAULT '{}',
+          created_by_run_id TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          deleted_at DATETIME,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (created_by_run_id) REFERENCES agent_runs(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_meal_plans_user_dates
+          ON meal_plans(user_id, start_date, end_date);
+
+        CREATE TABLE IF NOT EXISTS meal_plan_items (
+          id TEXT PRIMARY KEY,
+          plan_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          planned_date TEXT NOT NULL,
+          meal_type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          recipe_id INTEGER,
+          ingredients_json TEXT NOT NULL DEFAULT '[]',
+          steps_json TEXT NOT NULL DEFAULT '[]',
+          calories REAL,
+          protein REAL,
+          carbs REAL,
+          fat REAL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (plan_id) REFERENCES meal_plans(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_meal_plan_items_user_date
+          ON meal_plan_items(user_id, planned_date, meal_type);
+
+        CREATE TABLE IF NOT EXISTS shopping_list_items (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          client_id TEXT,
+          name TEXT NOT NULL,
+          amount TEXT NOT NULL DEFAULT '适量',
+          category TEXT NOT NULL DEFAULT '其他',
+          checked INTEGER NOT NULL DEFAULT 0,
+          purchase_date TEXT,
+          storage_location TEXT,
+          source_run_id TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          deleted_at DATETIME,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (source_run_id) REFERENCES agent_runs(id) ON DELETE SET NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_shopping_items_user_client
+          ON shopping_list_items(user_id, client_id) WHERE client_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_shopping_items_user_active
+          ON shopping_list_items(user_id, checked, updated_at DESC) WHERE deleted_at IS NULL;
+      `);
+    },
+  },
+  {
+    version: 31,
+    name: "agent_media_and_approval_audit",
+    up(database) {
+      addColumn(database, "agent_actions", "approval_decision", "TEXT");
+      addColumn(database, "agent_actions", "approved_by_user_id", "INTEGER");
+      addColumn(database, "agent_actions", "approved_at", "DATETIME");
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS agent_run_media (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('image', 'audio')),
+          mime_type TEXT,
+          data_base64 TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (run_id) REFERENCES agent_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_run_media_run ON agent_run_media(run_id);
+      `);
+    },
+  },
+  {
+    version: 32,
+    name: "agent_supplemental_input",
+    up(database) {
+      addColumn(database, "agent_runs", "pending_input_json", "TEXT");
+    },
+  },
+  {
+    version: 33,
+    name: "agent_run_token_usage_attribution",
+    up(database) {
+      addColumn(database, "ai_usage_logs", "run_id", "TEXT");
+      addColumn(database, "ai_usage_logs", "agent_name", "TEXT");
+      addColumn(database, "ai_usage_logs", "phase", "TEXT");
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_ai_usage_logs_run_agent
+          ON ai_usage_logs(run_id, agent_name, created_at);
+      `);
+    },
+  },
+  {
+    version: 34,
+    name: "agent_undo_versions_and_chat_deletions",
+    up(database) {
+      addColumn(database, "meal_plans", "version", "INTEGER NOT NULL DEFAULT 1");
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS ai_chat_session_deletions (
+          user_id INTEGER NOT NULL,
+          session_id TEXT NOT NULL,
+          deleted_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+          PRIMARY KEY (user_id, session_id),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_chat_session_deletions_time
+          ON ai_chat_session_deletions(deleted_at);
       `);
     },
   },

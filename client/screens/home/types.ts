@@ -12,6 +12,8 @@ export interface Recipe {
   category: string;
   tags: string[];
   ingredients: Array<{ name?: string; amount?: string } | string>;
+  quality_status?: "trusted" | "estimated" | "needs_review";
+  nutrition_is_estimated?: boolean;
 }
 
 export interface RankedRecipe extends Recipe {

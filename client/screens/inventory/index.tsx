@@ -31,11 +31,10 @@ import {
 } from "@/utils/userStorage";
 import { dateKeyAfterDays } from "@/utils/date";
 import { daysUntilDateKey, getExpirationBadgeConfig, getInventoryStatus } from "@/utils/inventory";
-import { aiApi, foodsApi, householdApi, inventoryApi, kitchenwareApi, type Household, type HouseholdActivityLog, type HouseholdInventoryItem } from "@/services/api";
+import { aiApi, foodsApi, householdApi, inventoryApi, kitchenwareApi, shoppingListApi, type Household, type HouseholdActivityLog, type HouseholdInventoryItem } from "@/services/api";
 import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, StorageLocation } from "./types";
 import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, normalizeDetectedFoods } from "./scan";
 import { useInventoryData } from "./useInventoryData";
-import { normalizeShoppingItems } from "@/utils/shoppingList";
 import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
 import { BatchReviewModal, CatalogDetailModal, InventoryHistoryModal, QuickAddPresetChips } from "./InventoryModals";
 import { FamilyShareModal } from "./FamilyShareModal";
@@ -80,13 +79,18 @@ export default function InventoryScreen() {
     items,
     setItems,
     recipes,
+    recipeTotal,
+    hasMoreRecipes,
     kitchenware,
     kitchenwareCatalog,
     loadingItems,
     loadingRecipes,
+    loadingMoreRecipes,
     loadingKitchenware,
     sectionErrors,
     refresh: fetchData,
+    reloadRecipes,
+    loadMoreRecipes,
   } = useInventoryData(authFetch, isAuthenticated, user?.id);
 
   // Top Level Segment State
@@ -430,21 +434,17 @@ export default function InventoryScreen() {
   const handleAddMissingFromCard = async (recipeTitle: string, missingItems: Array<{ name: string; amount?: string }>) => {
     if (!missingItems.length) return;
     try {
-      const shoppingKey = getUserStorageKey("shopping_list", user?.id);
-      const existingStr = shoppingKey ? await AsyncStorage.getItem(shoppingKey) : null;
-      const existing = existingStr ? JSON.parse(existingStr) : [];
-      const normalized = normalizeShoppingItems(existing);
-      const existingNames = new Set(normalized.map((i) => i.name));
+      const existing = await shoppingListApi.list<Array<{ name: string }>>(authFetch);
+      const existingNames = new Set(existing.map((item) => item.name));
 
       const newItems = missingItems
         .filter((item) => !existingNames.has(item.name))
-        .map((item, idx) => ({
-          id: `recipe-missing-${Date.now()}-${idx}`,
+        .map((item) => ({
+          clientId: `inventory-recipe:${recipeTitle}:${item.name}`,
           name: item.name,
           amount: item.amount || "适量",
           category: inferCategoryByName(item.name),
           checked: false,
-          createdAt: Date.now(),
         }));
 
       if (newItems.length === 0) {
@@ -452,10 +452,7 @@ export default function InventoryScreen() {
         return;
       }
 
-      const updated = [...newItems, ...normalized];
-      if (shoppingKey) {
-        await AsyncStorage.setItem(shoppingKey, JSON.stringify(updated));
-      }
+      await Promise.all(newItems.map((item) => shoppingListApi.create(authFetch, item)));
       Alert.alert("已加入采购清单", `已为【${recipeTitle}】将 ${newItems.length} 种缺少食材加入采购清单！`, [
         { text: "查看清单", onPress: () => router.push("/shopping-list") },
         { text: "好的", style: "cancel" },
@@ -778,11 +775,13 @@ export default function InventoryScreen() {
   // Recipe State
   const [activeRecipeCategory, setActiveRecipeCategory] = useState("全部");
   const [recipeSearchQuery, setRecipeSearchQuery] = useState("");
-  const [visibleRecipeCount, setVisibleRecipeCount] = useState(12);
+  const [debouncedRecipeSearchQuery, setDebouncedRecipeSearchQuery] = useState("");
+  const recipeFiltersInitializedRef = useRef(false);
 
   useEffect(() => {
-    setVisibleRecipeCount(12);
-  }, [activeRecipeCategory, recipeSearchQuery]);
+    const timeout = setTimeout(() => setDebouncedRecipeSearchQuery(recipeSearchQuery.trim()), 300);
+    return () => clearTimeout(timeout);
+  }, [recipeSearchQuery]);
 
   const inventoryCategories = ["全部", "家庭共享", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"];
   const recipeCategories = ["全部", "减脂", "增肌", "营养餐单", "快手菜"];
@@ -793,11 +792,25 @@ export default function InventoryScreen() {
     }, [fetchData])
   );
 
+  useEffect(() => {
+    if (!recipeFiltersInitializedRef.current) {
+      recipeFiltersInitializedRef.current = true;
+      return;
+    }
+    void reloadRecipes({
+      category: activeRecipeCategory === "全部" || activeRecipeCategory === "冰箱可做"
+        ? undefined
+        : activeRecipeCategory,
+      search: debouncedRecipeSearchQuery || undefined,
+      maxCookTime: cookTimeLimit || undefined,
+    });
+  }, [activeRecipeCategory, cookTimeLimit, debouncedRecipeSearchQuery, reloadRecipes]);
+
   const openAddModal = useCallback(() => {
     if (!isAuthenticated) {
       Alert.alert("登录后录入食材", "登录后才能保存和管理你的食材。", [
         { text: "取消", style: "cancel" },
-        { text: "去登录", onPress: () => router.push("/login") },
+        { text: "去登录", onPress: () => router.push("/login", { returnTo: { pathname: "/inventory", params: { action: "add" } } }) },
       ]);
       return;
     }
@@ -1071,7 +1084,7 @@ export default function InventoryScreen() {
     recipes: {
       title: "今日精选食谱",
       subtitle: "结合库存，找到更合适的一餐",
-      status: `${recipes.length} 道`,
+      status: `${recipeTotal} 道`,
     },
     kitchenware: {
       title: "厨房装备库",
@@ -1082,8 +1095,6 @@ export default function InventoryScreen() {
 
   const filteredRecipes = filterAndRankRecipes(recipes, items, activeRecipeCategory, recipeSearchQuery, cookTimeLimit, matchStatusFilter);
   const filteredKitchenware = filterKitchenware(kitchenware, activeKitchenwareCategory);
-  const visibleRecipes = filteredRecipes.slice(0, visibleRecipeCount);
-  const hasMoreRecipes = visibleRecipeCount < filteredRecipes.length;
 
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
@@ -1091,6 +1102,13 @@ export default function InventoryScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 132 }}
         className="bg-canvas"
+        onScroll={(event) => {
+          if (activeSegment !== "recipes" || !hasMoreRecipes || loadingMoreRecipes) return;
+          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+          const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+          if (distanceFromBottom < 360) void loadMoreRecipes();
+        }}
+        scrollEventThrottle={16}
       >
         {/* 统一品牌头部：标题、状态和三类资产在首屏内形成清晰层级。 */}
         <View className="relative overflow-hidden rounded-b-[30px] bg-brand px-5 pt-4 pb-5 shadow-sm">
@@ -1125,7 +1143,7 @@ export default function InventoryScreen() {
           <View className="mt-4 flex-row rounded-[18px] border border-white/30 bg-white/95 p-1.5 shadow-sm">
             {[
               { key: "inventory" as const, label: "食材", count: items.length, icon: "boxes-stacked" },
-              { key: "recipes" as const, label: "食谱", count: recipes.length, icon: "utensils" },
+              { key: "recipes" as const, label: "食谱", count: recipeTotal, icon: "utensils" },
               { key: "kitchenware" as const, label: "厨具", count: kitchenware.length, icon: "fire-burner" },
             ].map((segment) => {
               const isActive = activeSegment === segment.key;
@@ -1179,19 +1197,12 @@ export default function InventoryScreen() {
                 <Text className="text-sm text-copy-muted text-center mt-2 mb-6">
                   登录后可随时记录冰箱食材、自动临期提醒并智能生成美味菜单。
                 </Text>
-                <View className="flex-row gap-3">
+                <View>
                   <TouchableOpacity
-                    onPress={() => router.push("/login")}
+                    onPress={() => router.push("/login", { returnTo: { pathname: "/inventory", params: { action: "add" } } })}
                     className="bg-brand px-6 py-3 rounded-2xl shadow-sm active:opacity-90"
                   >
-                    <Text className="text-sm font-bold text-white">立即登录</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => router.push("/login")}
-                    className="bg-highlight px-6 py-3 rounded-2xl shadow-sm active:opacity-90 flex-row items-center gap-1.5"
-                  >
-                    <FontAwesome6 name="wand-magic-sparkles" size={13} color="#3D3229" />
-                    <Text className="text-sm font-black text-ink">登录后体验</Text>
+                    <Text className="text-sm font-bold text-white">登录并添加食材</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1830,7 +1841,7 @@ export default function InventoryScreen() {
                 </View>
               ) : (
                 <View className="flex-row flex-wrap justify-between gap-y-3.5">
-                  {visibleRecipes.map((recipe) => {
+                  {filteredRecipes.map((recipe) => {
                     const analysis = analyzeRecipeInventoryMatch(recipe, items);
                     const expiringMatch = analysis.expiringIngredients[0];
 
@@ -1855,7 +1866,7 @@ export default function InventoryScreen() {
                             <View className="absolute top-2 right-2 flex-row items-center gap-1 rounded-full bg-black/60 px-2 py-0.5">
                               <FontAwesome6 name="fire" size={9} color="#E9C46A" />
                               <Text className="text-[10px] font-black text-white">
-                                {recipe.calories} kcal
+                                {recipe.nutrition_is_estimated ? "约" : ""}{recipe.calories} kcal
                               </Text>
                             </View>
 
@@ -1885,6 +1896,7 @@ export default function InventoryScreen() {
                           </View>
 
                           <View className="p-3 pb-2.5">
+                            {recipe.nutrition_is_estimated ? <Text className="mb-1 text-[9px] font-black text-amber-700">营养估算</Text> : null}
                             <Text numberOfLines={2} className="min-h-[36px] text-sm font-black leading-[18px] text-ink">
                               {recipe.title}
                             </Text>
@@ -1905,7 +1917,7 @@ export default function InventoryScreen() {
 
                             <View className="mt-2 flex-row items-center gap-1.5">
                               <FontAwesome6 name="clock" size={9} color="#8B7D6B" />
-                              <Text className="text-[9px] font-bold text-[#6F6254]">{recipe.cook_time} 分钟</Text>
+                              <Text className="text-[9px] font-bold text-[#6F6254]">{recipe.nutrition_is_estimated ? "约" : ""}{recipe.cook_time} 分钟</Text>
                               <View className="h-1 w-1 rounded-full bg-[#D7CCBE]" />
                               <Text className="text-[9px] font-bold text-brand">蛋白 {recipe.protein}g</Text>
                             </View>
@@ -1942,20 +1954,30 @@ export default function InventoryScreen() {
                       </View>
                     );
                   })}
+                </View>
+              )}
+              {!loadingRecipes && (hasMoreRecipes || recipes.length > 0) && (
+                <View className="w-full items-center pt-3">
                   {hasMoreRecipes && (
-                    <View className="w-full items-center pt-1">
-                      <TouchableOpacity
-                        onPress={() => setVisibleRecipeCount((count) => count + 12)}
-                        className="flex-row items-center gap-2 rounded-full border border-[#D8CCBA] bg-white px-6 py-3"
-                      >
-                        <Text className="text-xs font-black text-[#6F6254]">再看 12 道</Text>
+                    <TouchableOpacity
+                      onPress={() => void loadMoreRecipes()}
+                      disabled={loadingMoreRecipes}
+                      className="flex-row items-center gap-2 rounded-full border border-[#D8CCBA] bg-white px-6 py-3 disabled:opacity-60"
+                    >
+                      {loadingMoreRecipes ? (
+                        <ActivityIndicator size="small" color="#2D6A4F" />
+                      ) : (
                         <FontAwesome6 name="chevron-down" size={9} color="#8B7D6B" />
-                      </TouchableOpacity>
-                      <Text className="mt-2 text-[10px] text-[#9B8E7D]">
-                        已展示 {visibleRecipes.length} / {filteredRecipes.length} 道
+                      )}
+                      <Text className="text-xs font-black text-[#6F6254]">
+                        {loadingMoreRecipes ? "正在加载" : "继续加载"}
                       </Text>
-                    </View>
+                    </TouchableOpacity>
                   )}
+                  <Text className="mt-2 text-[10px] text-[#9B8E7D]">
+                    已加载 {recipes.length} / {recipeTotal} 道
+                    {filteredRecipes.length !== recipes.length ? ` · 当前条件展示 ${filteredRecipes.length} 道` : ""}
+                  </Text>
                 </View>
               )}
             </View>

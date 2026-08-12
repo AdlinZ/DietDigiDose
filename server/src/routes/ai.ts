@@ -1,10 +1,7 @@
 import { Router } from "express";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { db } from "../storage/db.js";
-import { chatCompletion, analyzeImage, transcribeAudio, type ChatMessage, type SolutionCard } from "../services/aiService.js";
-import { buildAIPromptMessages, buildUserContext, type UserContext } from "../services/contextBuilder.js";
-import { aiToolsSchema } from "../services/aiTools.js";
 import { commitAIWritePreview } from "../services/aiWriteConfirmations.js";
 import { validateBody } from "../middleware/validate.js";
 import {
@@ -18,7 +15,9 @@ import {
 } from "../validation/schemas.js";
 import { uuidParam } from "../middleware/validateParam.js";
 import { sharedRateLimit } from "../middleware/sharedRateLimit.js";
-import { currentDateKey } from "../utils/date.js";
+import { startSupervisorRun, waitForSupervisorRunCompletion } from "../services/agent/runtime.js";
+import { getAgentRunRow, toAgentRunSummary } from "../services/agent/repository.js";
+import { buildAgentSolutionCards } from "../services/agent/cards.js";
 
 const router = Router();
 router.param("jobId", uuidParam);
@@ -85,42 +84,6 @@ const parseHomeRecommendations = (reply: string): HomeRecommendation[] => {
   return [];
 };
 
-const buildFallbackHomeRecommendations = (ctx: UserContext, period: string): HomeRecommendation[] => {
-  const ingredientNames = [...new Set(ctx.inventory.map((item) => item.food_name.trim()).filter(Boolean))].slice(0, 5);
-  if (ingredientNames.length > 0) {
-    return ingredientNames.map((name, index) => ({
-      title: `${name}食用建议`,
-      tag: ["优先消耗", "库存搭配", "轻松料理", "营养补给", "下餐灵感"][index] || "库存搭配",
-      desc: `优先利用库存中的${name}，减少闲置。`,
-      calories: [180, 240, 320, 260, 220][index] || 220,
-      prompt: `我想优先使用库存中的【${name}】安排${period}的一餐。请结合我的饮食目标和现有厨具，给出简单做法。`,
-    }));
-  }
-
-  return [
-    { title: "补充饮水", tag: "日常提醒", desc: "先喝一杯温水，再安排下一餐。", calories: 0, prompt: "请提醒我今天如何科学补水。" },
-    { title: "查看库存", tag: "备餐准备", desc: "先补充常用食材，方便规划下一餐。", calories: 1, prompt: "请告诉我适合日常备餐的基础食材清单。" },
-    { title: "记录一餐", tag: "饮食管理", desc: "记录已吃食物，推荐会更贴合。", calories: 1, prompt: "我想记录刚吃的一餐，请告诉我需要提供哪些信息。" },
-    { title: "规划下一餐", tag: "均衡饮食", desc: "按饥饿感和今日摄入安排食物。", calories: 1, prompt: "请帮我规划下一餐，并先询问我的可用食材。" },
-    { title: "添加食材", tag: "库存完善", desc: "录入食材后可获得个性化推荐。", calories: 1, prompt: "请推荐适合家庭常备的健康食材。" },
-  ];
-};
-
-const INVENTORY_SCAN_PROMPT = `请识别图片中所有清晰可见、适合加入家庭食材库存的食品条目。图片可能是超市购物清单、订单截图、小票、多个商品摆在一起的照片，不能只返回第一项。
-
-规则：
-1. 每种不同商品/食材各返回一项；相同商品重复出现时合并数量。订单截图中应逐行识别商品名称与包装规格（如 300g、400g、500毫升）。
-2. 仅返回食品、调味品和饮料；不要返回价格、优惠、运费、店铺名、售后信息或非食品。
-3. 看不清的项目不要猜测；最多返回 30 项。数量优先保留图片中的规格或件数，无法确定时写“1份”。
-4. suggestedStorageLocation 只能是“冷藏”“冷冻”或“常温”；estimatedExpireDays 是未开封状态下的保守估计，范围 1 到 365。
-5. 只返回严格 JSON，不要使用 Markdown 或补充说明。格式如下：
-{
-  "items": [
-    { "foodName": "牛油果", "quantity": "2个", "suggestedStorageLocation": "冷藏", "estimatedExpireDays": 5 },
-    { "foodName": "鲜牛奶", "quantity": "1盒", "suggestedStorageLocation": "冷藏", "estimatedExpireDays": 7 }
-  ]
-}`;
-
 const normalizeInventoryScanItems = (raw: unknown): InventoryScanItem[] =>
   (Array.isArray(raw) ? raw : [])
     .filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && typeof item.foodName === "string" && item.foodName.trim().length > 0)
@@ -133,27 +96,6 @@ const normalizeInventoryScanItems = (raw: unknown): InventoryScanItem[] =>
         : "冷藏",
       estimatedExpireDays: Math.max(1, Math.min(Number(item.estimatedExpireDays) || 7, 365)),
     }));
-
-const processInventoryScanJob = async (jobId: string, userId: number, image: string) => {
-  db.prepare("UPDATE inventory_scan_jobs SET status = 'processing', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(jobId);
-  try {
-    const rawResponse = await analyzeImage(image, INVENTORY_SCAN_PROMPT, {
-      jsonMode: true,
-      userId,
-      endpoint: "scan-receipt",
-    });
-    const parsed = JSON.parse(rawResponse);
-    const items = normalizeInventoryScanItems(parsed.items);
-    db.prepare("UPDATE inventory_scan_jobs SET status = 'completed', result_json = ?, error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .run(JSON.stringify(items), jobId);
-  } catch (error) {
-    const internalMessage = error instanceof Error ? error.message : "识别图片失败";
-    const publicMessage = "识别图片失败，请稍后重试";
-    console.error("[AI Inventory Scan Job Error]", { jobId, message: internalMessage });
-    db.prepare("UPDATE inventory_scan_jobs SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .run(publicMessage, jobId);
-  }
-};
 
 type ChatTurnAudit = {
   userId: number;
@@ -173,7 +115,7 @@ type ChatTurnAudit = {
 const toStoredDateTime = (timestamp: number) =>
   new Date(timestamp).toISOString().slice(0, 23).replace("T", " ");
 
-const recordChatTurn = ({
+export const recordChatTurn = ({
   userId,
   sessionId,
   source,
@@ -195,6 +137,12 @@ const recordChatTurn = ({
   `);
   const save = db.transaction(() => {
     const requestTime = toStoredDateTime(requestedAt);
+    const deletedAfterRequest = db.prepare(`
+      SELECT 1 FROM ai_chat_session_deletions
+      WHERE user_id = ? AND session_id = ? AND deleted_at >= ?
+      LIMIT 1
+    `).get(userId, sessionId, requestTime);
+    if (deletedAfterRequest) return false;
     [...new Set(systemContents.map((content) => content.trim()).filter(Boolean))].forEach((content) => {
       insert.run(userId, sessionId, "system", content.slice(0, 12000), null, source, "completed", null, null, requestTime);
     });
@@ -211,145 +159,10 @@ const recordChatTurn = ({
       confirmationId,
       toStoredDateTime(respondedAt),
     );
+    return true;
   });
   try { save(); } catch (error) { console.error("[AI Chat Audit Error]", error); }
 };
-
-const getRecordedChatHistory = (userId: number, sessionId: string): ChatMessage[] => {
-  const rows = db.prepare(`
-    SELECT role, content, payload_json AS payloadJson FROM ai_chat_messages
-    WHERE user_id = ? AND session_id = ? AND role IN ('user', 'assistant')
-      AND status = 'completed'
-    ORDER BY created_at DESC, id DESC
-    LIMIT 48
-  `).all(userId, sessionId) as Array<{ role: "user" | "assistant"; content: string; payloadJson: string | null }>;
-  return rows.reverse().map((row) => ({
-    role: row.role,
-    content: row.role === "assistant" ? serializePayloadForModel(row.content, row.payloadJson) : row.content,
-  }));
-};
-
-const serializePayloadForModel = (content: string, payloadJson: string | null) => {
-  if (!payloadJson) return content;
-  let payload: Record<string, any> = {};
-  try { payload = JSON.parse(payloadJson); } catch { return content; }
-  const cards: string[] = [];
-  if (payload.actionCard) cards.push(`饮食打卡卡片：${payload.actionCard.mealType} ${payload.actionCard.foodName}（${payload.actionCard.amount}）`);
-  if (payload.missingCard) cards.push(`缺料采购卡片：${payload.missingCard.dishName}；缺少 ${(payload.missingCard.missingIngredients || []).map((item: any) => `${item.name} ${item.amount}`).join("、")}`);
-  if (payload.optionsCard) cards.push(`选项卡片：${payload.optionsCard.title}；${(payload.optionsCard.options || []).map((item: any) => `${item.label}=${item.actionText}`).join("；")}`);
-  if (payload.solutionCards?.length) cards.push(`方案卡片：${payload.solutionCards.map((card: any) => `${card.schemeTag}：${card.title}；食材：${card.ingredients}；做法提示：${card.cookingTip}；营养：${card.macros}`).join("\n")}`);
-  if (payload.legacyCardSummaries?.length) cards.push(...payload.legacyCardSummaries);
-  return [content, ...cards].filter(Boolean).join("\n\n【结构化卡片上下文】\n");
-};
-
-const buildAssistantPayload = (
-  result: Awaited<ReturnType<typeof chatCompletion>>,
-  solutionSource: "local" | "ai" = "ai",
-) => ({
-  ...(result.actionCard ? { actionCard: result.actionCard } : {}),
-  ...(result.missingCard ? { missingCard: result.missingCard } : {}),
-  ...(result.optionsCard ? { optionsCard: result.optionsCard } : {}),
-  ...(result.solutionCards?.length
-    ? { solutionCards: result.solutionCards.map((card) => ({ ...card, source: solutionSource })) }
-    : {}),
-  ...(result.writeConfirmation ? { writeConfirmation: result.writeConfirmation } : {}),
-});
-
-const parseJsonArray = (value: unknown): unknown[] => {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== "string") return [];
-  try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
-};
-
-const normalizeIngredientName = (value: string) => value.replace(/[\s\d.]+(?:g|kg|ml|个|份|两)?/gi, "").replace(/[（(].*?[）)]/g, "").trim();
-
-const isMealRecommendationRequest = (value: string) => /(吃什么|吃啥|推荐.*(?:餐|菜|吃)|(?:早|午|晚)餐.*(?:推荐|吃)|配餐|搭配.*(?:餐|菜))/.test(value);
-
-const hasPersonalizedSafetyConstraints = (ctx: UserContext) => {
-  const profile = ctx.healthProfile;
-  if (!profile) return false;
-  return Boolean(
-    profile.allergies.length
-    || profile.dietary_restrictions.length
-    || profile.medical_conditions.length
-    || profile.medications?.trim()
-    || profile.medical_notes?.trim()
-    || profile.disliked_foods?.trim()
-    || profile.dietary_preference?.trim(),
-  );
-};
-
-const recipeFitsAvailableCookware = (steps: string[], ctx: UserContext) => {
-  if (!ctx.kitchenware.length) return false;
-  const instructions = steps.join(" ");
-  const available = ctx.kitchenware.map((item) => item.name.replace(/\s/g, ""));
-  const requirements = [
-    { pattern: /烤箱|烘烤/, aliases: ["烤箱"] },
-    { pattern: /空气炸|气炸/, aliases: ["空气炸锅", "气炸锅"] },
-    { pattern: /微波/, aliases: ["微波炉"] },
-    { pattern: /破壁|料理机|搅拌机/, aliases: ["破壁机", "料理机", "搅拌机"] },
-    { pattern: /电饭|饭煲/, aliases: ["电饭煲", "电饭锅"] },
-    { pattern: /高压|压力锅/, aliases: ["高压锅", "压力锅"] },
-    { pattern: /蒸制|上锅蒸|蒸锅|蒸箱/, aliases: ["蒸锅", "蒸箱", "锅"] },
-    { pattern: /煎|炒|焖|炖|煮沸|热锅/, aliases: ["锅", "灶", "电磁炉"] },
-  ];
-  return requirements.every(({ pattern, aliases }) =>
-    !pattern.test(instructions) || available.some((name) => aliases.some((alias) => name.includes(alias))),
-  );
-};
-
-const findLocalRecipeRecommendations = (ctx: UserContext): SolutionCard[] => {
-  // Recipes do not carry enough structured metadata to safely evaluate health
-  // constraints. Let the model apply the full safety prompt whenever such a
-  // constraint exists instead of taking the local fast path.
-  if (hasPersonalizedSafetyConstraints(ctx)) return [];
-  const today = currentDateKey();
-  const inventory = ctx.inventory
-    .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item.expiration_date) && item.expiration_date >= today)
-    .map((item) => normalizeIngredientName(item.food_name))
-    .filter(Boolean);
-  if (!inventory.length || !ctx.kitchenware.length) return [];
-  const rows = db.prepare(`
-    SELECT title, description, cook_time, calories, protein, carbs, fat, steps_json, ingredients_json
-    FROM recipes WHERE status = 'approved' AND deleted_at IS NULL
-    ORDER BY updated_at DESC LIMIT 120
-  `).all() as Array<Record<string, unknown>>;
-
-  return rows.map((recipe) => {
-    const ingredientItems = parseJsonArray(recipe.ingredients_json)
-      .map((item) => typeof item === "string" ? { name: item, amount: "适量" } : item as { name?: unknown; amount?: unknown })
-      .map((item) => ({ name: String(item.name || "").trim(), amount: String(item.amount || "适量").trim() }))
-      .filter((item) => item.name);
-    const matched = ingredientItems.filter((item) => {
-      const name = normalizeIngredientName(item.name);
-      return name.length > 1 && inventory.some((stock) => stock.includes(name) || name.includes(stock));
-    });
-    const steps = parseJsonArray(recipe.steps_json).map((step) => String(step).trim()).filter(Boolean);
-    return { recipe, ingredientItems, matched, steps, score: matched.length / Math.max(ingredientItems.length, 1) };
-  }).filter((item) => item.matched.length > 0 && item.steps.length > 0 && recipeFitsAvailableCookware(item.steps, ctx))
-    .sort((a, b) => b.score - a.score || b.matched.length - a.matched.length)
-    .slice(0, 3)
-    .map((item, index) => {
-      const recipe = item.recipe;
-      return {
-        id: `local_recipe_${String(recipe.title)}_${index}`,
-        schemeTag: `本地方案 ${String.fromCharCode(65 + index)}`,
-        title: String(recipe.title || "本地菜谱"),
-        ingredients: item.ingredientItems.map((ingredient) => `${ingredient.name} ${ingredient.amount}`).join(" + "),
-        ingredientItems: item.ingredientItems,
-        cookingTip: String(recipe.description || "按菜谱步骤烹饪，注意火候与食材熟度。"),
-        steps: item.steps,
-        macros: `约 ${Number(recipe.calories) || 0} kcal · 蛋白质 ${Number(recipe.protein) || 0}g · 碳水 ${Number(recipe.carbs) || 0}g · 脂肪 ${Number(recipe.fat) || 0}g`,
-        actionText: "",
-        source: "local" as const,
-      };
-    });
-};
-
-const CHAT_SOURCE_PROMPTS = {
-  voice: "当前为实时语音对话。回答应精炼、亲切并适合语音播报；若返回结构化方案卡片，只用一句话概括并引导用户查看卡片。",
-  cooking: "当前为烹饪过程中的问答。结合用户提供的当前菜品和步骤，给出实用、简短且符合食品安全要求的建议。",
-} as const;
 
 /**
  * 1. AI 对话 / 营养大厨答疑 (含 Function Calling 自动写库)
@@ -361,135 +174,74 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
   const sessionId = typeof requestedSessionId === "string" && requestedSessionId.trim()
     ? requestedSessionId.trim().slice(0, 120)
     : randomUUID();
-  const clientMessages = Array.isArray(messages)
-    ? messages.filter((msg: any): msg is ChatMessage => Boolean(msg?.role && msg?.content))
-    : [];
-  const sourceSystemContent = source === "voice"
-    ? CHAT_SOURCE_PROMPTS.voice
-    : source === "cooking" ? CHAT_SOURCE_PROMPTS.cooking : undefined;
-  const requestedContent = [...clientMessages].reverse().find((message) => message.role === "user")?.content ?? prompt;
+  const clientMessages = Array.isArray(messages) ? messages : [];
+  const requestedContent = [...clientMessages].reverse().find((message: any) => message.role === "user")?.content ?? prompt;
   const requestedText = typeof requestedContent === "string" ? requestedContent : "";
 
-  const recordFailure = (message: string, code: string) => {
-    if (!requestedText) return;
-    const respondedAt = Date.now();
-    recordChatTurn({
-      userId,
-      sessionId,
-      source,
-      userContent: requestedText,
-      assistantContent: message,
-      systemContents: sourceSystemContent ? [sourceSystemContent] : [],
-      status: "failed",
-      payload: { errorCode: code },
-      responseTimeMs: respondedAt - requestStartedAt,
-      requestedAt: requestStartedAt,
-      respondedAt,
-    });
-  };
-
   try {
-    // 构建用户数据库 Context
-    const userCtx = buildUserContext(userId);
-    const fullMessages: ChatMessage[] = buildAIPromptMessages(userCtx);
-    if (sourceSystemContent) fullMessages.push({ role: "system", content: sourceSystemContent });
-    const recordedHistory = getRecordedChatHistory(userId, sessionId);
-
-    if (clientMessages.length > 1) {
-      clientMessages.forEach((msg) => {
-        if (msg.role && msg.content) {
-          fullMessages.push({ role: msg.role, content: msg.content });
-        }
-      });
-    } else if (recordedHistory.length > 0 && clientMessages.length === 1) {
-      fullMessages.push(...recordedHistory, clientMessages[0]);
-    } else if (clientMessages.length === 1) {
-      fullMessages.push(clientMessages[0]);
-    } else if (prompt) {
-      fullMessages.push({ role: "user", content: prompt });
-    } else {
-      return res.status(400).json({ error: "必须提供 prompt 或 messages" });
-    }
-
-    const latestRequestedContent = [...fullMessages].reverse().find((message) => message.role === "user")?.content;
-    const latestRequestedText = typeof latestRequestedContent === "string" ? latestRequestedContent : "";
-    if (isMealRecommendationRequest(latestRequestedText)) {
-      const localCards = findLocalRecipeRecommendations(userCtx);
-      if (localCards.length) {
-        const reply = "我优先从本地菜谱中找到了与当前库存匹配的做法：";
-        const respondedAt = Date.now();
-        const responseTimeMs = respondedAt - requestStartedAt;
-        const payload = { solutionCards: localCards };
+    const response = await startSupervisorRun(userId, {
+      modality: source === "cooking" ? "cooking" : "text",
+      source,
+      prompt: requestedText,
+      messages: clientMessages,
+      sessionId,
+    }, 0);
+    const respondedAt = Date.now();
+    const responseTimeMs = respondedAt - requestStartedAt;
+    const artifacts = response.artifacts ?? response.run.artifacts;
+    const solutionCards = buildAgentSolutionCards(response.run.id, artifacts);
+    if (response.run.status === "queued" || response.run.status === "running") {
+      void waitForSupervisorRunCompletion(response.run.id).then((completedRun) => {
+        const completedAt = Date.now();
+        const assistantContent = completedRun.reply || completedRun.error?.message;
+        if (!requestedText || !assistantContent) return;
         recordChatTurn({
           userId,
           sessionId,
           source,
-          userContent: latestRequestedText,
-          assistantContent: reply,
-          systemContents: sourceSystemContent ? [sourceSystemContent] : [],
-          payload,
-          responseTimeMs,
+          userContent: requestedText,
+          assistantContent,
+          status: completedRun.status === "failed" ? "failed" : "completed",
+          payload: {
+            agentRunId: completedRun.id,
+            artifacts: completedRun.artifacts,
+            solutionCards: buildAgentSolutionCards(completedRun.id, completedRun.artifacts),
+            pendingApproval: completedRun.pendingApproval,
+            errorCode: completedRun.error?.code,
+          },
+          responseTimeMs: completedAt - requestStartedAt,
           requestedAt: requestStartedAt,
-          respondedAt,
+          respondedAt: completedAt,
         });
-        return res.json({ reply, sessionId, solutionCards: localCards, responseTimeMs });
+      }).catch((error) => console.error("[AI Chat Async Audit Error]", error));
+    }
+    if (response.run.status === "failed") {
+      const errorMessage = response.run.error?.message || "AI Agent 执行失败，请稍后重试";
+      const errorCode = errorMessage.includes("未配置") ? "AI_NOT_CONFIGURED" : (response.run.error?.code || "AI_AGENT_FAILED");
+      if (requestedText) {
+        recordChatTurn({
+          userId, sessionId, source, userContent: requestedText, assistantContent: errorMessage,
+          status: "failed", payload: { agentRunId: response.run.id, errorCode }, responseTimeMs,
+          requestedAt: requestStartedAt, respondedAt,
+        });
       }
+      return res.status(503).json({ ...response, error: errorMessage, code: errorCode, sessionId, responseTimeMs });
     }
-
-    const result = await chatCompletion(fullMessages, {
-      temperature: 0.7,
-      tools: aiToolsSchema,
-      userId,
-      endpoint: "chat",
+    if (response.reply) recordChatTurn({
+      userId, sessionId, source, userContent: requestedText, assistantContent: response.reply,
+      payload: { agentRunId: response.run.id, artifacts, solutionCards, pendingApproval: response.pendingApproval },
+      responseTimeMs, requestedAt: requestStartedAt, respondedAt,
     });
-    // Chat fallback text must never masquerade as a successful AI response.
-    if (result.fallback) {
-      const isNotConfigured = result.fallbackReason === "AI_NOT_CONFIGURED";
-      const errorMessage = isNotConfigured
-        ? "AI 对话尚未配置，请在管理端完成聊天模型配置后重试"
-        : "AI 对话服务暂时不可用，请稍后重试";
-      recordFailure(errorMessage, result.fallbackReason || "AI_REQUEST_FAILED");
-      return res.status(503).json({
-        error: errorMessage,
-        code: result.fallbackReason,
-      });
-    }
-    const latestUserMessage = [...fullMessages].reverse().find((message) => message.role === "user");
-    const userContent = typeof latestUserMessage?.content === "string" ? latestUserMessage.content : "";
-    const respondedAt = Date.now();
-    const responseTimeMs = respondedAt - requestStartedAt;
-    const payload = buildAssistantPayload(result);
-    recordChatTurn({
-      userId,
-      sessionId,
-      source,
-      userContent,
-      assistantContent: result.reply,
-      systemContents: sourceSystemContent ? [sourceSystemContent] : [],
-      payload,
-      confirmationId: result.writeConfirmation?.confirmationId,
-      responseTimeMs,
-      requestedAt: requestStartedAt,
-      respondedAt,
-    });
-    return res.json({
-      reply: result.reply,
-      sessionId,
-      responseTimeMs,
-      actionCard: result.actionCard,
-      missingCard: result.missingCard,
-      optionsCard: result.optionsCard,
-      solutionCards: payload.solutionCards,
-      writeConfirmation: result.writeConfirmation,
-      contextSummary: {
-        inventoryCount: userCtx.inventory.length,
-        kitchenwareCount: userCtx.kitchenware.length,
-      },
+    return res.status(response.run.status === "queued" || response.run.status === "running" ? 202 : 200).json({
+      ...response, solutionCards, sessionId, responseTimeMs,
     });
   } catch (error: any) {
     console.error("[AI Router Chat Error]", error);
     const errorMessage = "AI 对话请求失败，请稍后重试";
-    recordFailure(errorMessage, "AI_CHAT_FAILED");
+    if (requestedText) {
+      const respondedAt = Date.now();
+      recordChatTurn({ userId, sessionId, source, userContent: requestedText, assistantContent: errorMessage, status: "failed", payload: { errorCode: "AI_AGENT_FAILED" }, responseTimeMs: respondedAt - requestStartedAt, requestedAt: requestStartedAt, respondedAt });
+    }
     return res.status(500).json({ error: errorMessage, code: "AI_CHAT_FAILED" });
   }
 });
@@ -499,8 +251,16 @@ router.delete("/chat-conversations/:sessionId", (req: AuthRequest, res) => {
   if (!sessionId || sessionId.length > 120) {
     return res.status(400).json({ error: "会话参数无效" });
   }
-  const deleted = db.prepare("DELETE FROM ai_chat_messages WHERE user_id = ? AND session_id = ?")
-    .run(req.userId!, sessionId).changes;
+  const deleted = db.transaction(() => {
+    const changes = db.prepare("DELETE FROM ai_chat_messages WHERE user_id = ? AND session_id = ?")
+      .run(req.userId!, sessionId).changes;
+    db.prepare(`
+      INSERT INTO ai_chat_session_deletions (user_id, session_id, deleted_at)
+      VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+      ON CONFLICT(user_id, session_id) DO UPDATE SET deleted_at = excluded.deleted_at
+    `).run(req.userId!, sessionId);
+    return changes;
+  })();
   return res.json({ success: true, deleted });
 });
 
@@ -526,40 +286,22 @@ router.post("/write-confirmations/:confirmationId/commit", validateBody(aiWriteC
 router.post("/home-recommendations", validateBody(aiHomeRecommendationsSchema), async (req: AuthRequest, res) => {
   const userId = req.userId!;
   const period = typeof req.body?.period === "string" ? req.body.period.slice(0, 40) : "当前时段";
-  const userCtx = buildUserContext(userId);
+  const requestKey = typeof req.body?.requestKey === "string" ? req.body.requestKey.trim().slice(0, 2000) : undefined;
   try {
-    const prompt = `现在是${period}。请结合系统提供的用户库存、今日饮食记录、每日热量目标和临期食材，为首页生成 5 条简短、可执行的个性化饮食推荐。
-
-优先使用库存食材；若库存不适合，可给出容易获得的替代品。注意用户今天已经摄入的热量，不要推荐不合时宜的高热量餐食。
-5 条内容必须明显不同，尽量覆盖饮品、加餐、轻食、正餐或食材消耗方案，避免同一种食物或同一种做法重复。只返回严格 JSON，不要 Markdown：
-{
-  "cards": [
-    {
-      "title": "食物或组合名称（不超过 14 个中文字符）",
-      "tag": "短标签（不超过 6 个中文字符）",
-      "desc": "一句推荐理由（不超过 24 个中文字符）",
-      "calories": 160,
-      "prompt": "用户点击后交给 AI 助手继续生成详细做法的提问"
-    }
-  ]
-}`;
-    const result = await chatCompletion([
-      ...buildAIPromptMessages(userCtx),
-      { role: "user", content: prompt },
-    ], {
-      temperature: 0.45,
-      max_tokens: 450,
-      jsonMode: true,
-      userId,
-      endpoint: "home-recommendations",
+    const response = await startSupervisorRun(userId, {
+      modality: "home", source: "home", period,
+      idempotencyKey: requestKey ? `home:${requestKey}` : undefined,
+      prompt: `现在是${period}。结合库存、今日摄入、营养目标与临期食材生成 5 条明显不同的首页建议。每条需要 title、tag、desc、calories、prompt，并作为结构化 artifact 返回。`,
+    }, 0);
+    const artifactCards = (response.artifacts || []).flatMap((artifact) => {
+      const data = artifact.data as { cards?: unknown } | unknown[] | undefined;
+      return normalizeHomeRecommendations(Array.isArray(data) ? data : data?.cards);
     });
-    const cards = parseHomeRecommendations(result.reply);
-    if (cards.length > 0) return res.json({ cards });
-    console.warn("[AI Home Recommendations] Invalid AI payload; using inventory fallback");
-    return res.json({ cards: buildFallbackHomeRecommendations(userCtx, period), fallback: true });
+    const cards = artifactCards.length ? artifactCards.slice(0, 5) : response.reply ? parseHomeRecommendations(response.reply) : [];
+    return res.status(response.run.status === "queued" || response.run.status === "running" ? 202 : 200).json({ ...response, cards });
   } catch (error: any) {
     console.error("[AI Home Recommendations Error]", error);
-    return res.json({ cards: buildFallbackHomeRecommendations(userCtx, period), fallback: true });
+    return res.status(500).json({ error: "首页 Agent 推荐失败", code: "HOME_AGENT_FAILED" });
   }
 });
 
@@ -573,30 +315,9 @@ router.post("/vision-food", validateBody(aiVisionSchema), async (req: AuthReques
       return res.status(400).json({ error: "缺少图片数据 (Base64 或 URL)" });
     }
 
-    const prompt = `请分析这张餐食照片，识别其中的食物种类。${userPrompt ? `用户附带提问：“${userPrompt}”，请在回答中专门回答该提问。` : ""}以 JSON 格式返回结果，格式要求如下：
-{
-  "foodName": "菜品/食材名称",
-  "estimatedWeightGrams": 200,
-  "calories": 350,
-  "proteinGrams": 25,
-  "carbsGrams": 30,
-  "fatGrams": 12,
-  "description": "针对照片与用户疑问的解答评价"
-}`;
-
-    const rawResponse = await analyzeImage(image, prompt, {
-      jsonMode: true,
-      userId: req.userId,
-      endpoint: "vision-food",
-    });
-    
-    // 尝试解析 JSON
-    try {
-      const parsed = JSON.parse(rawResponse);
-      return res.json({ success: true, data: parsed });
-    } catch {
-      return res.json({ success: true, rawText: rawResponse });
-    }
+    const response = await startSupervisorRun(req.userId!, { modality: "image", source: "vision-food", image, prompt: userPrompt || "识别餐食、分量与估算营养" });
+    const vision = response.artifacts?.find((artifact) => artifact.type === "vision")?.data;
+    return res.status(response.run.status === "queued" || response.run.status === "running" ? 202 : 200).json({ ...response, success: response.run.status === "completed", data: vision, rawText: vision ? undefined : response.reply });
   } catch (error: any) {
     console.error("[AI Vision Error]", error);
     return res.status(500).json({ error: "识别图片失败" });
@@ -607,7 +328,7 @@ router.post("/vision-food", validateBody(aiVisionSchema), async (req: AuthReques
  * 3. 创建可恢复的食材图片识别任务。
  * 上传成功后立刻返回任务 ID；后续识别在服务端继续，即使客户端关闭也不会丢失。
  */
-router.post("/inventory-scan-jobs", validateBody(aiImageSchema), (req: AuthRequest, res) => {
+router.post("/inventory-scan-jobs", validateBody(aiImageSchema), async (req: AuthRequest, res) => {
   const { image } = req.body;
   if (typeof image !== "string" || !image.trim()) {
     return res.status(400).json({ error: "缺少图片数据" });
@@ -616,46 +337,27 @@ router.post("/inventory-scan-jobs", validateBody(aiImageSchema), (req: AuthReque
     return res.status(413).json({ error: "图片过大，请裁剪到只保留订单或商品区域后重试" });
   }
 
-  const userId = req.userId!;
-  const imageHash = createHash("sha256").update(image).digest("hex");
-  const existing = db.prepare(`
-    SELECT id, status, result_json, error_message
-    FROM inventory_scan_jobs
-    WHERE user_id = ? AND image_hash = ?
-      AND created_at >= datetime('now', '-10 minutes')
-    ORDER BY created_at DESC LIMIT 1
-  `).get(userId, imageHash) as { id: string; status: string; result_json: string | null; error_message: string | null } | undefined;
-
-  if (existing) {
-    if (existing.status === "failed") {
-      db.prepare("UPDATE inventory_scan_jobs SET status = 'queued', error_message = NULL, result_json = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?")
-        .run(existing.id, userId);
-      void processInventoryScanJob(existing.id, userId, image);
-      return res.status(202).json({
-        jobId: existing.id,
-        status: "queued",
-        deduplicated: true,
-        retried: true,
-      });
-    }
-    return res.status(existing.status === "completed" ? 200 : 202).json({
-      jobId: existing.id,
-      status: existing.status,
-      items: existing.result_json ? JSON.parse(existing.result_json) : undefined,
-      error: existing.error_message || undefined,
-      deduplicated: true,
-    });
+  try {
+    const response = await startSupervisorRun(req.userId!, { modality: "inventory_scan", source: "inventory", image, prompt: "识别所有可加入家庭库存的食品条目、数量、保存位置与保守保质期" }, 0);
+    return res.status(202).json({ mode: "agent", run: response.run, jobId: response.run.id, status: "queued", deduplicated: false });
+  } catch (error) {
+    console.error("[Agent Inventory Scan Start Error]", error);
+    return res.status(500).json({ error: "创建识别任务失败", code: "INVENTORY_AGENT_START_FAILED" });
   }
-
-  const jobId = randomUUID();
-  db.prepare("INSERT INTO inventory_scan_jobs (id, user_id, image_hash, status) VALUES (?, ?, ?, 'queued')")
-    .run(jobId, userId, imageHash);
-  void processInventoryScanJob(jobId, userId, image);
-  return res.status(202).json({ jobId, status: "queued", deduplicated: false });
 });
 
 /** Get a durable recognition job. */
 router.get("/inventory-scan-jobs/:jobId", (req: AuthRequest, res) => {
+  const agentRow = getAgentRunRow(String(req.params.jobId), req.userId!);
+  if (agentRow) {
+    const run = toAgentRunSummary(agentRow);
+    const vision = run.artifacts.find((artifact) => artifact.type === "vision")?.data as { items?: unknown } | undefined;
+    const items = normalizeInventoryScanItems(vision?.items);
+    const confidence = Number((vision as { confidence?: unknown } | undefined)?.confidence);
+    const lowConfidence = !Number.isFinite(confidence) || confidence < 0.65;
+    const status = run.status === "completed" ? "completed" : run.status === "failed" || run.status === "cancelled" || run.status === "expired" ? "failed" : "processing";
+    return res.json({ mode: "agent", run, jobId: run.id, status, items, confidence: Number.isFinite(confidence) ? confidence : null, lowConfidence, error: run.error?.message, createdAt: run.createdAt, updatedAt: run.updatedAt });
+  }
   const job = db.prepare(`
     SELECT id, status, result_json, error_message, created_at, updated_at
     FROM inventory_scan_jobs WHERE id = ? AND user_id = ?
@@ -681,18 +383,9 @@ router.post("/scan-receipt", validateBody(aiImageSchema), async (req: AuthReques
       return res.status(400).json({ error: "缺少图片数据" });
     }
 
-    const rawResponse = await analyzeImage(image, INVENTORY_SCAN_PROMPT, {
-      jsonMode: true,
-      userId: req.userId,
-      endpoint: "scan-receipt",
-    });
-
-    try {
-      const parsed = JSON.parse(rawResponse);
-      return res.json({ success: true, items: normalizeInventoryScanItems(parsed.items) });
-    } catch {
-      return res.json({ success: true, rawText: rawResponse, items: [] });
-    }
+    const response = await startSupervisorRun(req.userId!, { modality: "receipt", source: "scan-receipt", image, prompt: "识别小票中的食品、规格、数量和价格，并给出可加入采购或库存的结构化结果" });
+    const vision = response.artifacts?.find((artifact) => artifact.type === "vision")?.data as { items?: unknown } | undefined;
+    return res.status(response.run.status === "queued" || response.run.status === "running" ? 202 : 200).json({ ...response, success: response.run.status === "completed", items: normalizeInventoryScanItems(vision?.items), rawText: vision ? undefined : response.reply });
   } catch (error: any) {
     console.error("[AI Scan Error]", error);
     return res.status(500).json({ error: "识别小票/食材失败" });
@@ -711,19 +404,15 @@ router.post("/voice-command", validateBody(aiVoiceCommandSchema), async (req: Au
   try {
     const { currentStep = 0, recipeTitle = "", recipeSteps, recipeIngredients, voiceHistory } = req.body;
 
-    // 1. 快捷控制指令硬匹配（零延迟）
-    if (text.includes("下一步") || text.includes("继续")) {
-      return res.json({ type: "CONTROL", action: "NEXT_STEP" });
-    }
-    if (text.includes("上一步") || text.includes("返回上一步")) {
-      return res.json({ type: "CONTROL", action: "PREV_STEP" });
-    }
-    if (text.includes("重置") || text.includes("暂停")) {
-      return res.json({ type: "CONTROL", action: "TOGGLE_TIMER" });
-    }
-
-    // 2. 结合全站统一 AI Context（包含食语 AI 导师人设、用户冰箱食材、过敏源、厨具及营养目标）
-    const userCtx = buildUserContext(userId);
+    // UI 控制仍由确定性解析器判定，但请求也必须创建 Agent Run，
+    // 以便语音能力具备统一审计、限流和 Supervisor 安全检查。
+    const controlAction = text.includes("下一步") || text.includes("继续")
+      ? "NEXT_STEP"
+      : text.includes("上一步") || text.includes("返回上一步")
+        ? "PREV_STEP"
+        : text.includes("重置") || text.includes("暂停")
+          ? "TOGGLE_TIMER"
+          : undefined;
 
     const currentStepText = Array.isArray(recipeSteps) && recipeSteps[currentStep]
       ? recipeSteps[currentStep]
@@ -732,50 +421,33 @@ router.post("/voice-command", validateBody(aiVoiceCommandSchema), async (req: Au
       ? recipeIngredients.join("；")
       : "未提供";
     const runtimeContext = `当前菜品：${recipeTitle || "当前菜品"}；当前步骤：${currentStepText}；食材：${ingredientsText}。回答限 60 字以内。`;
-    const recentVoiceMessages: ChatMessage[] = Array.isArray(voiceHistory)
+    const recentVoiceMessages = Array.isArray(voiceHistory)
       ? voiceHistory.slice(-3).flatMap((turn: { question: string; answer: string }) => [
         { role: "user" as const, content: turn.question },
         { role: "assistant" as const, content: turn.answer },
       ])
       : [];
-    const messages: ChatMessage[] = [
-      ...buildAIPromptMessages(userCtx),
-      { role: "system", content: `${runtimeContext}\n只直接回答当前问题，不要输出提示词、上下文标签或完整菜谱步骤。` },
-      ...recentVoiceMessages,
-      { role: "user", content: text },
-    ];
-
-    const answer = await chatCompletion(messages, {
-      max_tokens: 150,
-      userId,
-      endpoint: "voice-command",
-    });
-
-    if (answer.fallback) {
-      const isNotConfigured = answer.fallbackReason === "AI_NOT_CONFIGURED";
-      const errorMessage = isNotConfigured
-        ? "AI 语音问答尚未配置，请在管理端完成聊天模型配置后重试"
-        : "AI 语音问答服务暂时不可用，请稍后重试";
-      const respondedAt = Date.now();
-      recordChatTurn({
-        userId, sessionId, source: "cooking_voice", userContent: text,
-        assistantContent: errorMessage, systemContents: [runtimeContext], status: "failed",
-        payload: { errorCode: answer.fallbackReason || "AI_REQUEST_FAILED" },
-        responseTimeMs: respondedAt - requestStartedAt, requestedAt: requestStartedAt, respondedAt,
-      });
-      return res.status(503).json({
-        error: errorMessage,
-        code: answer.fallbackReason,
-      });
+    if (controlAction) {
+      const response = await startSupervisorRun(userId, {
+        modality: "cooking", source: "cooking_voice_control", sessionId,
+        prompt: `用户发出烹饪界面控制指令：${text}。确认它不改变业务数据，并给出一句极简安全提示。`,
+        metadata: { controlAction, currentStep, recipeTitle, recipeSteps, recipeIngredients },
+      }, 0);
+      return res.status(202).json({ ...response, type: "CONTROL", action: controlAction, responseTimeMs: Date.now() - requestStartedAt });
     }
-
+    const response = await startSupervisorRun(userId, {
+      modality: "cooking", source: "cooking_voice", sessionId,
+      prompt: `${text}\n${runtimeContext}`,
+      messages: [...recentVoiceMessages, { role: "user", content: text }],
+      metadata: { currentStep, recipeTitle, recipeSteps, recipeIngredients },
+    });
     const respondedAt = Date.now();
-    recordChatTurn({
+    if (response.reply) recordChatTurn({
       userId, sessionId, source: "cooking_voice", userContent: text,
-      assistantContent: answer.reply, systemContents: [runtimeContext],
+      assistantContent: response.reply, systemContents: [runtimeContext], payload: { agentRunId: response.run.id, artifacts: response.artifacts },
       responseTimeMs: respondedAt - requestStartedAt, requestedAt: requestStartedAt, respondedAt,
     });
-    return res.json({ type: "QUESTION", answerText: answer.reply, responseTimeMs: respondedAt - requestStartedAt });
+    return res.status(response.run.status === "queued" || response.run.status === "running" ? 202 : 200).json({ ...response, type: "QUESTION", answerText: response.reply, responseTimeMs: respondedAt - requestStartedAt });
   } catch (error: any) {
     console.error("[AI Voice Command Error]", error);
     const errorMessage = "处理语音指令失败，请稍后重试";
@@ -797,11 +469,8 @@ router.post("/voice-command", validateBody(aiVoiceCommandSchema), async (req: Au
 router.post("/transcribe", validateBody(aiTranscribeSchema), async (req: AuthRequest, res) => {
   try {
     const { audioBase64, mimeType } = req.body || {};
-    const result = await transcribeAudio(audioBase64 || "", {
-      userId: req.userId,
-      mimeType: mimeType || "audio/m4a",
-    });
-    return res.json({ text: result.text });
+    const response = await startSupervisorRun(req.userId!, { modality: "audio", source: "transcribe", audioBase64, mimeType, prompt: "准确转录这段语音，并理解其中的饮食任务；不要执行未明确要求的业务操作" });
+    return res.status(response.run.status === "queued" || response.run.status === "running" ? 202 : 200).json({ ...response, text: response.transcript || "" });
   } catch (error: any) {
     console.error("[AI Transcribe Error]", error);
     return res.status(500).json({ error: "语音识别失败" });

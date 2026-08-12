@@ -25,6 +25,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { db, initDatabase } from '../src/storage/db.js';
+import { assessRecipeQuality, type NutritionBasis, type RecipeQualityIssue, type RecipeQualityStatus } from '../src/services/recipeQuality.js';
 import { ensureIngredientGroups, type IngredientGroup } from '../src/utils/ingredientGroups.js';
 
 const SOURCE = 'howtocook';
@@ -68,6 +69,9 @@ type ParsedRecipe = {
   steps: string[];
   ingredients: Ingredient[];
   sourceUrl: string;
+  qualityStatus: RecipeQualityStatus;
+  nutritionBasis: NutritionBasis;
+  qualityIssues: RecipeQualityIssue[];
 };
 
 const args = process.argv.slice(2);
@@ -236,6 +240,14 @@ function estimateMacros(
     : category === '减脂'
       ? { protein: 0.22, carbs: 0.43, fat: 0.35 }
       : { protein: 0.16, carbs: 0.52, fat: 0.32 };
+  const quality = assessRecipeQuality({
+    source: SOURCE,
+    cookTime,
+    calories,
+    ...macros,
+    ingredients,
+    steps,
+  });
   return {
     protein: Math.round((calories * ratios.protein / 4) * 10) / 10,
     carbs: Math.round((calories * ratios.carbs / 4) * 10) / 10,
@@ -293,6 +305,9 @@ function parseRecipe(
     steps,
     ingredients,
     sourceUrl: `${REPOSITORY_URL}/blob/${revision}/${encodedPath}`,
+    qualityStatus: quality.qualityStatus,
+    nutritionBasis: quality.nutritionBasis,
+    qualityIssues: quality.issues,
   };
 }
 
@@ -423,14 +438,15 @@ async function main() {
     INSERT INTO recipes (
       title, description, image_url, cook_time, difficulty, calories, protein, carbs, fat,
       category, tags, steps_json, ingredients_json, source, status, external_id, source_url,
-      data_license, source_revision, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      data_license, source_revision, quality_status, nutrition_basis, quality_issues_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `);
   const update = db.prepare(`
     UPDATE recipes SET
       title = ?, description = ?, image_url = ?, cook_time = ?, difficulty = ?, calories = ?,
       protein = ?, carbs = ?, fat = ?, category = ?, tags = ?, steps_json = ?, ingredients_json = ?,
       status = 'approved', source_url = ?, data_license = ?, source_revision = ?,
+      quality_status = ?, nutrition_basis = ?, quality_issues_json = ?,
       deleted_at = NULL, deleted_by = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `);
@@ -447,10 +463,16 @@ async function main() {
       ] as const;
       const row = existing.get(SOURCE, recipe.externalId) as { id: number } | undefined;
       if (row) {
-        if (!dryRun) update.run(...values, recipe.sourceUrl, LICENSE, revision, row.id);
+        if (!dryRun) update.run(
+          ...values, recipe.sourceUrl, LICENSE, revision, recipe.qualityStatus,
+          recipe.nutritionBasis, JSON.stringify(recipe.qualityIssues), row.id,
+        );
         updated += 1;
       } else {
-        if (!dryRun) insert.run(...values, SOURCE, recipe.externalId, recipe.sourceUrl, LICENSE, revision);
+        if (!dryRun) insert.run(
+          ...values, SOURCE, recipe.externalId, recipe.sourceUrl, LICENSE, revision,
+          recipe.qualityStatus, recipe.nutritionBasis, JSON.stringify(recipe.qualityIssues),
+        );
         inserted += 1;
       }
     }

@@ -1,18 +1,23 @@
 import type { ComponentType } from "react";
 import { useEffect } from "react";
 import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
-import { useRouter } from "expo-router";
+import { usePathname } from "expo-router";
 import { FontAwesome6 } from "@expo/vector-icons";
 import { Screen } from "@/components/Screen";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
+import { createAuthReturnTo } from "@/utils/authReturnTo";
 
 export function RequireAuth({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
+  const router = useSafeRouter();
+  const pathname = usePathname();
+  const params = useSafeSearchParams<Record<string, unknown>>();
   const { isAuthenticated, isLoading } = useAuth();
+  const returnTo = createAuthReturnTo(pathname, params);
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) router.replace("/login");
-  }, [isAuthenticated, isLoading, router]);
+    if (!isLoading && !isAuthenticated) router.replace("/login", returnTo ? { returnTo } : {});
+  }, [isAuthenticated, isLoading, pathname]);
 
   if (isLoading) {
     return (
@@ -35,7 +40,7 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
             accessibilityRole="button"
             accessibilityLabel="去登录"
             className="mt-5 min-h-11 justify-center rounded-2xl bg-brand px-7 py-3"
-            onPress={() => router.replace("/login")}
+            onPress={() => router.replace("/login", returnTo ? { returnTo } : {})}
           >
             <Text className="font-bold text-white">去登录</Text>
           </TouchableOpacity>

@@ -30,6 +30,7 @@ export interface DietRecordOptionsCard {
 
 export interface SolutionCard {
   id: string;
+  recipeId?: number;
   schemeTag: string;
   title: string;
   ingredients: string;
@@ -56,6 +57,71 @@ export interface InventoryScanCard {
   status: "processing" | "review" | "saving" | "saved" | "failed";
   items: InventoryScanFood[];
   error?: string;
+  lowConfidence?: boolean;
+  confidence?: number | null;
+}
+
+export type AgentRunStatus =
+  | "queued"
+  | "running"
+  | "awaiting_input"
+  | "awaiting_approval"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "expired";
+
+export interface AgentActionProposal {
+  id?: string;
+  actionType: string;
+  riskLevel: "low" | "high" | "forbidden";
+  summary: string;
+  payload: Record<string, unknown>;
+  version?: number;
+}
+
+export interface AgentRunEvent {
+  sequence: number;
+  agentName: "Supervisor" | "NutritionPlanningAgent" | "RecipeCookingAgent" | "VisionAgent" | "VoiceAgent" | "OperationsAgent" | "PolicyGate";
+  eventType: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface AgentRunSummary {
+  id: string;
+  sessionId: string;
+  modality: string;
+  source: string;
+  status: AgentRunStatus;
+  reply?: string;
+  transcript?: string;
+  artifacts: Array<{ type: string; title?: string; data: unknown }>;
+  pendingApproval?: { version: number; actions: AgentActionProposal[]; expiresAt: string };
+  pendingInput?: { question: string };
+  error?: { code: string; message: string };
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+}
+
+export interface AgentRunView {
+  run: AgentRunSummary;
+  events: AgentRunEvent[];
+  undoState?: "available" | "completed";
+}
+
+export interface AgentResponse {
+  mode: "agent";
+  run: AgentRunSummary;
+  reply?: string;
+  transcript?: string;
+  artifacts?: AgentRunSummary["artifacts"];
+  solutionCards?: SolutionCard[];
+  pendingApproval?: AgentRunSummary["pendingApproval"];
+  responseTimeMs?: number;
 }
 
 export interface Message {
@@ -69,6 +135,8 @@ export interface Message {
   optionsCard?: DietRecordOptionsCard;
   solutionCards?: SolutionCard[];
   inventoryScanCard?: InventoryScanCard;
+  agentRun?: AgentRunView;
+  agentCardsHydrated?: boolean;
   responseTimeMs?: number;
   status?: "completed" | "failed";
   time: string;

@@ -103,6 +103,7 @@ export function filterAndRankRecipes(
     .filter(Boolean);
 
   return recipes
+    .filter((recipe) => recipe.quality_status !== "needs_review")
     .map((recipe) => {
       const analysis = analyzeRecipeInventoryMatch(recipe, inventoryItems);
       const inventoryMatchCount = inventoryFoodNames.reduce(
@@ -129,7 +130,8 @@ export function filterAndRankRecipes(
       // 2. Search query match
       const searchMatch = !searchQuery ||
         recipe.title.includes(searchQuery) ||
-        recipe.description?.includes(searchQuery);
+        recipe.description?.includes(searchQuery) ||
+        recipe.tags?.some((tag) => tag.includes(searchQuery));
       if (!searchMatch) return false;
 
       // 3. Match status filter

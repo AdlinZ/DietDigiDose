@@ -1,7 +1,7 @@
 {
   "name": "dietdigidose",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.4-beta.1",
   "scripts": {
     "dev:client": "pnpm --dir ./client start",
     "dev:server": "pnpm --dir ./server dev",

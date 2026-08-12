@@ -570,6 +570,19 @@ export function initDatabase() {
     .run(`-${aiRetentionDays} days`);
 
   runMigrations(db);
+  db.prepare("DELETE FROM ai_chat_session_deletions WHERE deleted_at < datetime('now', ?)")
+    .run(`-${aiRetentionDays} days`);
+  const expiredAgentThreads = db.prepare("SELECT checkpoint_thread_id FROM agent_runs WHERE created_at < datetime('now', ?)")
+    .all(`-${aiRetentionDays} days`) as Array<{ checkpoint_thread_id: string }>;
+  if (expiredAgentThreads.length && db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'checkpoints'").get()) {
+    const deleteWrites = db.prepare("DELETE FROM writes WHERE thread_id = ?");
+    const deleteCheckpoints = db.prepare("DELETE FROM checkpoints WHERE thread_id = ?");
+    for (const thread of expiredAgentThreads) {
+      deleteWrites.run(thread.checkpoint_thread_id);
+      deleteCheckpoints.run(thread.checkpoint_thread_id);
+    }
+  }
+  db.prepare("DELETE FROM agent_runs WHERE created_at < datetime('now', ?)").run(`-${aiRetentionDays} days`);
   db.prepare("DELETE FROM rate_limit_buckets WHERE updated_at < datetime('now', '-2 days')").run();
 
   db.exec(`
@@ -782,6 +795,9 @@ export function logAIUsage(params: {
   userId: number;
   endpoint: string;
   model: string;
+  runId?: string;
+  agentName?: string;
+  phase?: string;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
@@ -791,28 +807,34 @@ export function logAIUsage(params: {
   failureReason?: string;
 }): void {
   try {
+    const promptTokens = Math.max(0, params.promptTokens || 0);
+    const completionTokens = Math.max(0, params.completionTokens || 0);
+    const totalTokens = Math.max(0, params.totalTokens ?? (promptTokens + completionTokens));
     const inputRate = Number(process.env.AI_INPUT_COST_PER_MILLION_USD) || 0;
     const outputRate = Number(process.env.AI_OUTPUT_COST_PER_MILLION_USD) || 0;
     const estimatedCostUsd = params.estimatedCostUsd ?? (
-      ((params.promptTokens || 0) * inputRate + (params.completionTokens || 0) * outputRate) / 1_000_000
+      (promptTokens * inputRate + completionTokens * outputRate) / 1_000_000
     );
     db.prepare(`
       INSERT INTO ai_usage_logs (
         user_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens,
-        latency_ms, success, estimated_cost_usd, failure_reason
+        latency_ms, success, estimated_cost_usd, failure_reason, run_id, agent_name, phase
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       params.userId,
       params.endpoint,
       params.model,
-      params.promptTokens || 0,
-      params.completionTokens || 0,
-      params.totalTokens || 0,
+      promptTokens,
+      completionTokens,
+      totalTokens,
       params.latencyMs || 0,
       params.success !== false ? 1 : 0,
       Math.max(0, estimatedCostUsd),
       params.failureReason?.slice(0, 500) || null,
+      params.runId || null,
+      params.agentName?.slice(0, 80) || null,
+      params.phase?.slice(0, 80) || null,
     );
   } catch (e) {
     console.error('[logAIUsage Error]', e);

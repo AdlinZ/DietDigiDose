@@ -21,20 +21,21 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import {
+  AI_DATA_CONSENT_STORAGE_KEY,
   CHAT_SESSIONS_STORAGE_KEY,
   INVENTORY_SCAN_JOB_STORAGE_KEY,
   SHOPPING_LIST_STORAGE_KEY,
   getUserStorageKey,
   storageBelongsToCurrentUser,
 } from "@/utils/userStorage";
-import { aiApi, ApiError, dietApi, healthApi, inventoryApi, recipesApi } from "@/services/api";
+import { aiApi, ApiError, dietApi, healthApi, inventoryApi, recipesApi, shoppingListApi, waitForAgentRun } from "@/services/api";
 import { dateKeyAfterDays, toLocalDateKey, toLocalTimeKey } from "@/utils/date";
 import { hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/healthProfile";
 import { MedicalDisclaimer } from "@/components/MedicalDisclaimer";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useTTS } from "@/hooks/useTTS";
 import { VoiceWaveform, type VoiceState } from "@/components/VoiceWaveform";
-import type { AIWriteConfirmation, ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message, SolutionCard } from "./types";
+import type { AgentActionProposal, AgentResponse, AgentRunEvent, AgentRunSummary, AIWriteConfirmation, ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message, SolutionCard } from "./types";
 import { inferInventoryCategory, normalizeInventoryScanFoods } from "./inventoryScan";
 import { AssistantMessageItem } from "./AssistantMessageItem";
 import { normalizeShoppingItems, type ShoppingItem } from "@/utils/shoppingList";
@@ -84,6 +85,15 @@ function buildChatHistory(messages: Message[], userText: string): ChatHistoryMes
     .concat({ role: "user", content: userText.trim().slice(0, 12_000) });
 }
 
+function agentMessageText(run: AgentRunSummary, reply?: string) {
+  if (reply || run.reply) return reply || run.reply || "";
+  if (run.status === "failed") return run.error?.message || "Agent 执行失败，请重试。";
+  if (run.status === "awaiting_input") return run.pendingInput?.question || "Supervisor 需要你补充一些信息。";
+  if (run.status === "awaiting_approval") return "方案已经准备好，请检查并确认下方操作。";
+  if (run.status === "queued") return "任务正在排队，我会在这里持续更新进度。";
+  return "Supervisor 正在协调专业 Agent 处理这项任务…";
+}
+
 export default function AIAssistantScreen() {
   const router = useSafeRouter();
   const insets = useSafeAreaInsets();
@@ -105,7 +115,7 @@ export default function AIAssistantScreen() {
   const [healthProfile, setHealthProfile] = useState<HealthProfile | null>(null);
   const chatStorageKey = getUserStorageKey(CHAT_SESSIONS_STORAGE_KEY, user?.id);
   const shoppingListStorageKey = getUserStorageKey(SHOPPING_LIST_STORAGE_KEY, user?.id);
-  const aiConsentStorageKey = getUserStorageKey("@ai_data_consent_v1", user?.id);
+  const aiConsentStorageKey = getUserStorageKey(AI_DATA_CONSENT_STORAGE_KEY, user?.id);
   const [loadedChatStorageKey, setLoadedChatStorageKey] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -135,16 +145,61 @@ export default function AIAssistantScreen() {
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => String(Date.now()));
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
   const [headerMoreVisible, setHeaderMoreVisible] = useState(false);
+  const [aiConsentVisible, setAIConsentVisible] = useState(false);
+  const [aiConsentSaving, setAIConsentSaving] = useState(false);
+  const [aiConsentError, setAIConsentError] = useState("");
+  const pendingConsentSend = useRef<{ textToSend?: string } | null>(null);
+  const [selectedPendingInputMessageId, setSelectedPendingInputMessageId] = useState<string | null>(null);
+  const [composerBusy, setComposerBusy] = useState(false);
+  const [composerError, setComposerError] = useState("");
   const historyBelongsToCurrentUser = storageBelongsToCurrentUser(
     chatStorageKey,
     loadedChatStorageKey,
   );
   const messages = historyBelongsToCurrentUser ? storedMessages : [];
   const sessions = historyBelongsToCurrentUser ? storedSessions : [];
+  const pendingInputMessages = messages.filter((message) => message.agentRun?.run.status === "awaiting_input" && message.agentRun.run.pendingInput);
+  const pendingInputTarget = pendingInputMessages.find((message) => message.id === selectedPendingInputMessageId)
+    || pendingInputMessages[pendingInputMessages.length - 1];
 
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  const agentPollingKey = messages
+    .filter((message) => message.agentRun && (["queued", "running"].includes(message.agentRun.run.status) || message.agentRun.events.length === 0 || message.agentCardsHydrated !== true))
+    .map((message) => `${message.id}:${message.agentRun!.run.id}:${message.agentRun!.run.status}:${message.agentRun!.events.length}:${message.agentCardsHydrated === true}`)
+    .join("|");
+
+  useEffect(() => {
+    if (!agentPollingKey) return;
+    let active = true;
+    const poll = async () => {
+      const targets = messagesRef.current.filter((message) => message.agentRun
+        && (["queued", "running"].includes(message.agentRun.run.status) || message.agentRun.events.length === 0 || message.agentCardsHydrated !== true));
+      await Promise.all(targets.map(async (target) => {
+        try {
+          const result = await aiApi.agentRun<{ run: AgentRunSummary; events: AgentRunEvent[]; solutionCards?: SolutionCard[] }>(authFetch, target.agentRun!.run.id);
+          if (!active) return;
+          setMessages((current) => current.map((message) => message.id === target.id ? {
+            ...message,
+            text: agentMessageText(result.run),
+            status: result.run.status === "failed" ? "failed" : result.run.status === "completed" ? "completed" : message.status,
+            responseTimeMs: result.run.durationMs ?? message.responseTimeMs,
+            solutionCards: result.solutionCards ?? message.solutionCards,
+            agentCardsHydrated: true,
+            agentRun: { ...message.agentRun!, run: result.run, events: result.events },
+          } : message));
+          if (result.run.reply) setLastAIReplyText(result.run.reply);
+        } catch (error) {
+          console.warn("[Agent polling]", error);
+        }
+      }));
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 2_000);
+    return () => { active = false; clearInterval(timer); };
+  }, [agentPollingKey, authFetch]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -192,15 +247,17 @@ export default function AIAssistantScreen() {
         messages: buildChatHistory(messagesRef.current, userText),
         source: "voice",
         ...(sessionId ? { sessionId } : {}),
-      })) as { reply?: string; solutionCards?: SolutionCard[]; responseTimeMs?: number };
-
-      const replyText = res.reply || "收到，我已经听明白了。你还想继续问我什么？";
+      })) as AgentResponse & { solutionCards?: SolutionCard[] };
+      const completedRun = await waitForAgentRun(authFetch, res.run);
+      const replyText = agentMessageText(completedRun, completedRun.reply || res.reply);
 
       const aiMsg: Message = {
         id: String(Date.now() + 1),
         sender: "ai",
         text: replyText,
         solutionCards: res.solutionCards,
+        agentCardsHydrated: res.solutionCards !== undefined,
+        agentRun: { run: completedRun, events: [] },
         responseTimeMs: res.responseTimeMs,
         time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
@@ -283,14 +340,12 @@ export default function AIAssistantScreen() {
       return;
     }
     try {
-      const saved = await AsyncStorage.getItem(shoppingListStorageKey);
-      if (saved) {
-          setShoppingItems(normalizeShoppingItems(JSON.parse(saved)));
-      } else {
-        setShoppingItems([]);
-      }
+      const authoritative = normalizeShoppingItems(await shoppingListApi.list<unknown[]>(authFetch));
+      setShoppingItems(authoritative);
+      await AsyncStorage.setItem(shoppingListStorageKey, JSON.stringify(authoritative));
     } catch {
-      setShoppingItems([]);
+      const saved = await AsyncStorage.getItem(shoppingListStorageKey);
+      setShoppingItems(saved ? normalizeShoppingItems(JSON.parse(saved)) : []);
     }
   };
 
@@ -300,10 +355,13 @@ export default function AIAssistantScreen() {
   };
 
   const handleRemoveShoppingItem = async (id: string) => {
-    const updated = shoppingItems.filter((i) => i.id !== id);
-    setShoppingItems(updated);
-    if (shoppingListStorageKey) {
-      await AsyncStorage.setItem(shoppingListStorageKey, JSON.stringify(updated));
+    try {
+      await shoppingListApi.remove(authFetch, id);
+      const updated = shoppingItems.filter((i) => i.id !== id);
+      setShoppingItems(updated);
+      if (shoppingListStorageKey) await AsyncStorage.setItem(shoppingListStorageKey, JSON.stringify(updated));
+    } catch (error) {
+      Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试");
     }
   };
 
@@ -383,6 +441,8 @@ export default function AIAssistantScreen() {
     const newId = String(Date.now());
     setCurrentSessionId(newId);
     setMessages([]);
+    setSelectedPendingInputMessageId(null);
+    setComposerError("");
     setHistoryDrawerVisible(false);
   };
 
@@ -390,6 +450,8 @@ export default function AIAssistantScreen() {
   const handleSelectSession = (session: ChatSession) => {
     setCurrentSessionId(session.id);
     setMessages(session.messages || []);
+    setSelectedPendingInputMessageId(null);
+    setComposerError("");
     setHistoryDrawerVisible(false);
   };
 
@@ -480,22 +542,9 @@ export default function AIAssistantScreen() {
     const text = textToSend || inputText;
     if ((!text.trim() && !selectedImage) || loading) return;
     if (!aiConsentStorageKey || await AsyncStorage.getItem(aiConsentStorageKey) !== "accepted") {
-      Alert.alert(
-        "发送给 AI 前请确认",
-        "当前问题、最近对话及你填写的健康档案可能发送给部署环境配置的 AI 服务商。服务端会保存完整对话，直到账户删除或运营方按请求删除；授权管理员可为排障查看。请勿发送无关敏感信息。",
-        [
-          { text: "查看隐私说明", onPress: () => router.push("/legal") },
-          { text: "取消", style: "cancel" },
-          {
-            text: "同意并发送",
-            onPress: () => {
-              if (!aiConsentStorageKey) return;
-              void AsyncStorage.setItem(aiConsentStorageKey, "accepted")
-                .then(() => handleSendMessage(textToSend));
-            },
-          },
-        ],
-      );
+      pendingConsentSend.current = { textToSend };
+      setAIConsentError("");
+      setAIConsentVisible(true);
       return;
     }
 
@@ -519,12 +568,13 @@ export default function AIAssistantScreen() {
       setLoading(true);
 
       try {
-        const resData = await aiApi.visionFood<{ data?: Record<string, unknown> }>(
+        const resData = await aiApi.visionFood<{ data?: Record<string, unknown>; run: AgentRunSummary }>(
           authFetch,
           base64Image,
           userPromptText,
         );
-        const food = resData.data || {};
+        const visionRun = await waitForAgentRun(authFetch, resData.run);
+        const food = resData.data || visionRun.artifacts.find((artifact) => artifact.type === "vision")?.data as Record<string, unknown> || {};
         const readNumber = (value: unknown) => typeof value === "number" ? value : null;
           const replyText = `食语 AI 识别完成！已为你预填好打卡数据卡片：\n\n• 食物名称：${food.foodName || "健康料理"}\n• 预估热量：约 ${food.calories || 0} kcal\n• 营养比例：蛋白质 ${food.proteinGrams || 0}g | 碳水 ${food.carbsGrams || 0}g | 脂肪 ${food.fatGrams || 0}g\n\n点评：${food.description || "符合健康膳食平衡，请选择一键确认或弹出修改！"}`;
 
@@ -613,7 +663,8 @@ export default function AIAssistantScreen() {
           ...(sessionId ? { sessionId } : {}),
         });
       }
-      const responseText = data.reply || "智能大厨正在整理您的食谱建议...";
+      const agentResponse = data as AgentResponse & Record<string, any>;
+      const responseText = agentResponse.run ? agentMessageText(agentResponse.run, data.reply) : (data.reply || "智能大厨正在整理您的食谱建议...");
 
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -624,6 +675,8 @@ export default function AIAssistantScreen() {
         missingCard: data.missingCard,
         optionsCard: data.optionsCard,
         solutionCards: data.solutionCards,
+        agentCardsHydrated: data.solutionCards !== undefined,
+        agentRun: agentResponse.run ? { run: agentResponse.run, events: [] } : undefined,
         responseTimeMs: data.responseTimeMs,
         time: "刚刚",
       };
@@ -644,6 +697,43 @@ export default function AIAssistantScreen() {
       setLoading(false);
     }
   }, [aiConsentStorageKey, authFetch, inputText, selectedImage, loading, messages, currentSessionId, router]);
+
+  const closeAIConsent = useCallback(() => {
+    if (aiConsentSaving) return;
+    pendingConsentSend.current = null;
+    setAIConsentError("");
+    setAIConsentVisible(false);
+  }, [aiConsentSaving]);
+
+  const openAIPrivacyNotice = useCallback(() => {
+    if (aiConsentSaving) return;
+    pendingConsentSend.current = null;
+    setAIConsentError("");
+    setAIConsentVisible(false);
+    router.push("/legal");
+  }, [aiConsentSaving, router]);
+
+  const acceptAIConsentAndSend = useCallback(async () => {
+    const pending = pendingConsentSend.current;
+    if (!pending || aiConsentSaving) return;
+    if (!aiConsentStorageKey) {
+      setAIConsentError("账号信息仍在同步，请稍后重试。");
+      return;
+    }
+
+    setAIConsentSaving(true);
+    setAIConsentError("");
+    try {
+      await AsyncStorage.setItem(aiConsentStorageKey, "accepted");
+      pendingConsentSend.current = null;
+      setAIConsentVisible(false);
+      setAIConsentSaving(false);
+      void handleSendMessage(pending.textToSend);
+    } catch {
+      setAIConsentError("授权状态保存失败，请检查浏览器存储权限后重试。");
+      setAIConsentSaving(false);
+    }
+  }, [aiConsentSaving, aiConsentStorageKey, handleSendMessage]);
 
   // 其他页面携带 prompt 跳转时，进入对话页后自动发给 AI，而不是只填入输入框。
   useEffect(() => {
@@ -702,7 +792,7 @@ export default function AIAssistantScreen() {
                 ? {
                     ...message,
                     text: `识别完成，共找到 ${items.length} 项。请检查并修改后，再确认加入食材库。`,
-                    inventoryScanCard: { jobId, status: "review", items },
+                    inventoryScanCard: { jobId, status: "review", items, lowConfidence: Boolean(data.lowConfidence), confidence: typeof data.confidence === "number" ? data.confidence : null },
                   }
                 : message
             ));
@@ -857,26 +947,14 @@ export default function AIAssistantScreen() {
       return;
     }
     try {
-      const existingStr = await AsyncStorage.getItem(shoppingListStorageKey);
-      let existingList: ShoppingItem[] = [];
-      if (existingStr) {
-        try {
-          existingList = normalizeShoppingItems(JSON.parse(existingStr));
-        } catch {
-          existingList = [];
-        }
-      }
-
-      const newItems = missingCard.missingIngredients.map((item) => ({
-        id: String(Date.now() + Math.random()),
+      await Promise.all(missingCard.missingIngredients.map((item, index) => shoppingListApi.create<unknown>(authFetch, {
+        clientId: `assistant:${msgId}:${index}`,
         name: item.name,
         amount: item.amount,
         category: "其他",
         checked: false,
-        createdAt: Date.now(),
-      }));
-
-      const updatedList = [...newItems, ...existingList];
+      })));
+      const updatedList = normalizeShoppingItems(await shoppingListApi.list<unknown[]>(authFetch));
       await AsyncStorage.setItem(shoppingListStorageKey, JSON.stringify(updatedList));
 
       setMessages((prev) =>
@@ -923,8 +1001,9 @@ export default function AIAssistantScreen() {
       setLoading(true);
 
       {
-        const resData = await aiApi.visionFood<{ data?: Record<string, unknown> }>(authFetch, base64Image);
-        const food = resData.data || {};
+        const resData = await aiApi.visionFood<{ data?: Record<string, unknown>; run: AgentRunSummary }>(authFetch, base64Image);
+        const visionRun = await waitForAgentRun(authFetch, resData.run);
+        const food = resData.data || visionRun.artifacts.find((artifact) => artifact.type === "vision")?.data as Record<string, unknown> || {};
         const replyText = `食语 AI 多模态识别结果：\n\n• 食物名称：${food.foodName || "健康料理"}\n• 预估分量：${food.estimatedWeightGrams || 100}g\n• 估计热量：约 ${food.calories || 0} kcal\n• 营养元素：蛋白质 ${food.proteinGrams || 0}g | 碳水 ${food.carbsGrams || 0}g | 脂肪 ${food.fatGrams || 0}g\n\n小建议：符合您的今日膳食营养配比，建议结合低盐调味享用！`;
 
         setMessages((prev) => [
@@ -1100,11 +1179,13 @@ export default function AIAssistantScreen() {
       setLoading(true);
 
       {
-        const resData = await aiApi.scanReceipt<{ items?: any[] }>(authFetch, base64Image);
-        const items: any[] = resData.items || [];
+        const resData = await aiApi.scanReceipt<{ items?: any[]; run: AgentRunSummary }>(authFetch, base64Image);
+        const visionRun = await waitForAgentRun(authFetch, resData.run);
+        const visionData = visionRun.artifacts.find((artifact) => artifact.type === "vision")?.data as { items?: any[] } | undefined;
+        const items: any[] = resData.items?.length ? resData.items : visionData?.items || [];
         const itemsText = items.length > 0
           ? items.map((it: any) => `• ${it.foodName || "食材"} (${it.quantity || "1份"}, 建议存放${it.suggestedStorageLocation || "保鲜库"}, 保质${it.estimatedExpireDays || 7}天)`).join("\n")
-          : "• 高山牛油果 (1个, 保鲜库, 5天)\n• 鸡胸肉 (200g, 冷冻库, 14天)";
+          : "没有识别出可信的食品条目，请换一张更清晰、只包含小票或商品的照片。";
 
         const replyText = `食语为您识别出的购物列表：\n\n${itemsText}\n\n已智能分类，可前往【冰箱库存】一键录入保鲜库！`;
 
@@ -1131,43 +1212,18 @@ export default function AIAssistantScreen() {
   };
 
   const handleActionCookingVoice = () => {
-    router.push({
-      pathname: "/cooking-mode",
-      params: {
-        title: "食光 AI 试做菜谱",
-        steps: JSON.stringify([
-          "备齐食材，主料切丁，热锅冷油",
-          "下蒜末爆香，放入主食材翻炒 3 分钟",
-          "加入少许生抽与关火焖 2 分钟装盘",
-        ]),
-        ingredients: JSON.stringify([
-          { name: "高山牛油果", amount: "1个" },
-          { name: "鸡胸肉", amount: "150g" },
-        ]),
-      },
-    });
+    Alert.alert("从可信菜谱开始", "做饭模式会读取菜谱库中的最新步骤，请先选择一道已通过质量检查的菜谱。", [
+      { text: "去选菜谱", onPress: () => router.push("/inventory") },
+      { text: "取消", style: "cancel" },
+    ]);
   };
 
   const handleStartCookingSolution = (card: SolutionCard) => {
-    const steps = card.steps?.map((step) => step.trim()).filter(Boolean) || [];
-    const ingredientItems = card.ingredientItems || [];
-    if (!steps.length || !ingredientItems.length) {
-      Alert.alert("方案信息不完整", "这张旧方案卡没有可执行的食材清单和步骤。请重新请求推荐后再开始制作。");
+    if (!Number.isInteger(Number(card.recipeId)) || Number(card.recipeId) <= 0) {
+      Alert.alert("请先保存并审核", "AI 临时方案不能直接进入做饭模式。请先保存到我的菜谱，待内容审核通过后再开始烹饪。");
       return;
     }
-    const macros = parseSolutionMacros(card.macros);
-    router.push({
-      pathname: "/cooking-mode",
-      params: {
-        title: card.title,
-        steps: JSON.stringify(steps),
-        ingredients: JSON.stringify(ingredientItems),
-        ...(macros.calories !== undefined ? { calories: macros.calories } : {}),
-        ...(macros.protein !== undefined ? { protein: macros.protein } : {}),
-        ...(macros.carbs !== undefined ? { carbs: macros.carbs } : {}),
-        ...(macros.fat !== undefined ? { fat: macros.fat } : {}),
-      },
-    });
+    router.push("/cooking-mode", { recipeId: Number(card.recipeId) });
   };
 
   const handleSaveSolutionRecipe = async (messageId: string, card: SolutionCard) => {
@@ -1204,6 +1260,105 @@ export default function AIAssistantScreen() {
     }
   };
 
+  const updateAgentMessage = useCallback((messageId: string, run: AgentRunSummary, solutionCards?: SolutionCard[]) => {
+    setMessages((current) => current.map((message) => message.id === messageId ? {
+      ...message,
+      text: agentMessageText(run),
+      status: run.status === "failed" ? "failed" : run.status === "completed" ? "completed" : message.status,
+      responseTimeMs: run.durationMs ?? message.responseTimeMs,
+      solutionCards: solutionCards ?? message.solutionCards,
+      agentCardsHydrated: solutionCards !== undefined ? true : message.agentCardsHydrated,
+      agentRun: message.agentRun ? { ...message.agentRun, run } : { run, events: [] },
+    } : message));
+    if (run.reply) setLastAIReplyText(run.reply);
+  }, []);
+
+  const handleAgentResume = useCallback(async (
+    messageId: string,
+    runId: string,
+    decision: "approve" | "reject" | "edit",
+    actions?: AgentActionProposal[],
+  ) => {
+    try {
+      const response = await aiApi.resumeAgentRun<AgentResponse>(authFetch, runId, { decision, ...(actions ? { actions } : {}) });
+      updateAgentMessage(messageId, response.run, response.solutionCards);
+    } catch (error) {
+      Alert.alert("操作未提交", error instanceof Error ? error.message : "请刷新后重试");
+      throw error;
+    }
+  }, [authFetch, updateAgentMessage]);
+
+  const handleAgentCancel = useCallback(async (messageId: string, runId: string) => {
+    try {
+      await aiApi.cancelAgentRun(authFetch, runId);
+      setMessages((current) => current.map((message) => message.id === messageId && message.agentRun ? {
+        ...message,
+        text: "任务已取消，没有执行后续操作。",
+        agentRun: { ...message.agentRun, run: { ...message.agentRun.run, status: "cancelled" } },
+      } : message));
+    } catch (error) {
+      Alert.alert("取消失败", error instanceof Error ? error.message : "请稍后重试");
+      throw error;
+    }
+  }, [authFetch]);
+
+  const handleAgentRetry = useCallback(async (messageId: string, runId: string) => {
+    try {
+      const response = await aiApi.retryAgentRun<AgentResponse>(authFetch, runId);
+      updateAgentMessage(messageId, response.run, response.solutionCards);
+    } catch (error) {
+      Alert.alert("重试失败", error instanceof Error ? error.message : "请稍后重试");
+      throw error;
+    }
+  }, [authFetch, updateAgentMessage]);
+
+  const handleAgentUndo = useCallback(async (messageId: string, runId: string) => {
+    try {
+      await aiApi.undoAgentRun(authFetch, runId);
+      setMessages((current) => current.map((message) => message.id === messageId && message.agentRun
+        ? { ...message, agentRun: { ...message.agentRun, undoState: "completed" } }
+        : message));
+      Alert.alert("已撤销", "本次自动写入已恢复到执行前状态。");
+    } catch (error) {
+      Alert.alert("无法撤销", error instanceof Error ? error.message : "撤销入口可能已过期");
+      throw error;
+    }
+  }, [authFetch]);
+
+  const handleAgentInput = useCallback(async (messageId: string, runId: string, input: string) => {
+    const response = await aiApi.resumeAgentRun<AgentResponse>(authFetch, runId, { input });
+    updateAgentMessage(messageId, response.run, response.solutionCards);
+  }, [authFetch, updateAgentMessage]);
+
+  const handleComposerSend = useCallback(async () => {
+    if (!pendingInputTarget) {
+      await handleSendMessage();
+      return;
+    }
+
+    const input = inputText.trim();
+    if (!input || selectedImage || composerBusy) return;
+    setComposerBusy(true);
+    setComposerError("");
+    try {
+      await handleAgentInput(pendingInputTarget.id, pendingInputTarget.agentRun!.run.id, input);
+      setInputText("");
+      setSelectedPendingInputMessageId(null);
+    } catch (error) {
+      setComposerError(error instanceof Error ? error.message : "无法继续任务，请稍后重试");
+    } finally {
+      setComposerBusy(false);
+    }
+  }, [composerBusy, handleAgentInput, handleSendMessage, inputText, pendingInputTarget, selectedImage]);
+
+  const selectNextPendingInput = useCallback(() => {
+    if (pendingInputMessages.length < 2) return;
+    const currentIndex = pendingInputMessages.findIndex((message) => message.id === pendingInputTarget?.id);
+    const next = pendingInputMessages[(currentIndex + 1) % pendingInputMessages.length];
+    setSelectedPendingInputMessageId(next.id);
+    setComposerError("");
+  }, [pendingInputMessages, pendingInputTarget?.id]);
+
   const handleSafeGoBack = () => {
     if (router.canGoBack()) {
       router.back();
@@ -1229,6 +1384,10 @@ export default function AIAssistantScreen() {
       onSaveRecipe={handleSaveSolutionRecipe}
       onOpenInventory={() => router.push("/inventory")}
       onOpenInventoryAdd={() => router.push("/inventory", { action: "add" })}
+      onAgentResume={handleAgentResume}
+      onAgentCancel={handleAgentCancel}
+      onAgentRetry={handleAgentRetry}
+      onAgentUndo={handleAgentUndo}
     />
   );
 
@@ -1458,23 +1617,72 @@ export default function AIAssistantScreen() {
 
           {ttsError ? <Text className="mb-2 px-4 text-center text-[10px] text-red-600">{ttsError}</Text> : null}
 
+          {pendingInputTarget?.agentRun?.run.pendingInput ? (
+            <View className="mb-2.5 rounded-2xl border border-brand/25 bg-[#F2F8F4] px-3.5 py-3">
+              <View className="flex-row items-center justify-between gap-3">
+                <View className="min-w-0 flex-1 flex-row items-center gap-2">
+                  <View className="h-7 w-7 items-center justify-center rounded-xl bg-brand">
+                    <FontAwesome6 name="reply" size={10} color="#FFFFFF" />
+                  </View>
+                  <View className="min-w-0 flex-1">
+                    <Text className="text-[10px] font-black text-brand">正在补充 Supervisor 任务</Text>
+                    <Text className="mt-0.5 text-[10px] leading-4 text-copy-muted" numberOfLines={2}>
+                      {pendingInputTarget.agentRun.run.pendingInput.question}
+                    </Text>
+                  </View>
+                </View>
+                {pendingInputMessages.length > 1 ? (
+                  <TouchableOpacity
+                    onPress={selectNextPendingInput}
+                    disabled={composerBusy}
+                    className="rounded-full border border-brand/20 bg-white px-2.5 py-1.5 disabled:opacity-50"
+                  >
+                    <Text className="text-[9px] font-bold text-brand">切换任务</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              {selectedImage ? (
+                <Text className="mt-2 text-[10px] font-bold text-red-600">补充信息暂不支持图片，请先移除下方附件。</Text>
+              ) : (
+                <Text className="mt-2 text-[9px] text-brand/80">底部发送将继续这个任务，不会新建一轮对话。</Text>
+              )}
+            </View>
+          ) : null}
+
+          {composerError ? <Text className="mb-2 px-3 text-center text-[10px] font-bold text-red-600">{composerError}</Text> : null}
+
           {/* Integrated Card Container */}
-          <View className={`bg-white p-3 rounded-[24px] border transition-all shadow-xs ${isRecording ? 'border-red-500 bg-red-50/50' : 'border-line'}`}>
+          <View className={`bg-white p-3 rounded-[24px] border transition-all shadow-xs ${isRecording ? 'border-red-500 bg-red-50/50' : pendingInputTarget ? 'border-brand/40' : 'border-line'}`}>
             {/* Input Area */}
             <TextInput
               value={inputText}
-              onChangeText={setInputText}
-              placeholder={isRecording ? "正在倾听..." : selectedImage ? "针对照片提问..." : "发消息或点击麦克风语音提问..."}
+              onChangeText={(value) => {
+                setInputText(value);
+                if (composerError) setComposerError("");
+              }}
+              placeholder={isRecording
+                ? "正在倾听..."
+                : pendingInputTarget?.agentRun?.run.pendingInput
+                  ? "在这里补充信息，发送后继续当前任务..."
+                  : selectedImage
+                    ? "针对照片提问..."
+                    : "发消息或点击麦克风语音提问..."}
               placeholderTextColor="#A3A398"
               multiline
+              editable={!composerBusy}
               className="text-xs text-ink min-h-[36px] max-h-[90px] px-1 py-1 align-top"
-              onSubmitEditing={() => handleSendMessage()}
+              onSubmitEditing={() => void handleComposerSend()}
             />
 
             {/* Bottom Control Bar */}
             <View className="flex-row items-center justify-between pt-2 border-t border-line/40 mt-1">
               {/* Left Side: Practical Food AI Chips (Hide when + tools grid expanded for perfect adaptation) */}
-              {!showToolsGrid ? (
+              {pendingInputTarget ? (
+                <View className="flex-row items-center gap-1.5">
+                  <FontAwesome6 name="circle-nodes" size={10} color="#2D6A4F" />
+                  <Text className="text-[10px] font-bold text-brand">回复后继续原任务</Text>
+                </View>
+              ) : !showToolsGrid ? (
                 <View className="flex-row items-center gap-1.5 flex-wrap">
                   <TouchableOpacity
                     onPress={() => setInputText("根据现有冰箱食材推荐一份健康减脂晚餐")}
@@ -1498,28 +1706,34 @@ export default function AIAssistantScreen() {
 
               {/* Right Side: Action Buttons */}
               <View className="flex-row items-center gap-1.5 ml-2">
-                <TouchableOpacity
-                  onPress={() => setShowToolsGrid((prev) => !prev)}
-                  className={`w-7.5 h-7.5 rounded-full border items-center justify-center transition-all ${
-                    showToolsGrid ? 'bg-brand border-brand' : 'bg-canvas border-line active:bg-line/50'
-                  }`}
-                >
-                  <FontAwesome6 name={showToolsGrid ? "xmark" : "plus"} size={13} color={showToolsGrid ? "#FFFFFF" : "#3D3229"} />
-                </TouchableOpacity>
+                {!pendingInputTarget ? (
+                  <>
+                    <TouchableOpacity
+                      onPress={() => setShowToolsGrid((prev) => !prev)}
+                      className={`w-7.5 h-7.5 rounded-full border items-center justify-center transition-all ${
+                        showToolsGrid ? 'bg-brand border-brand' : 'bg-canvas border-line active:bg-line/50'
+                      }`}
+                    >
+                      <FontAwesome6 name={showToolsGrid ? "xmark" : "plus"} size={13} color={showToolsGrid ? "#FFFFFF" : "#3D3229"} />
+                    </TouchableOpacity>
 
-                <VoiceWaveform
-                  voiceState={voiceState}
-                  onPress={handleMicPress}
-                  size="sm"
-                />
+                    <VoiceWaveform
+                      voiceState={voiceState}
+                      onPress={handleMicPress}
+                      size="sm"
+                    />
+                  </>
+                ) : null}
 
                 {inputText.trim() || selectedImage ? (
                   <TouchableOpacity
-                    onPress={() => handleSendMessage()}
-                    disabled={loading}
-                    className="w-7.5 h-7.5 rounded-full bg-brand items-center justify-center shadow-xs active:scale-95"
+                    onPress={() => void handleComposerSend()}
+                    disabled={loading || composerBusy || Boolean(pendingInputTarget && selectedImage)}
+                    accessibilityRole="button"
+                    accessibilityLabel={pendingInputTarget ? "补充信息并继续任务" : "发送消息"}
+                    className="w-7.5 h-7.5 rounded-full bg-brand items-center justify-center shadow-xs active:scale-95 disabled:opacity-50"
                   >
-                    <FontAwesome6 name="arrow-up" size={13} color="#FFFFFF" />
+                    {composerBusy ? <ActivityIndicator size="small" color="#FFFFFF" /> : <FontAwesome6 name="arrow-up" size={13} color="#FFFFFF" />}
                   </TouchableOpacity>
                 ) : null}
               </View>
@@ -1527,7 +1741,7 @@ export default function AIAssistantScreen() {
           </View>
 
           {/* Bottom 5 Core AI Action Grid (按 + 号展开多彩轻奢图标面板) */}
-          {showToolsGrid && (
+          {showToolsGrid && !pendingInputTarget && (
             <View className="bg-white rounded-2xl p-3.5 border border-line mt-2.5 flex-row items-center justify-between shadow-sm">
               <TouchableOpacity
                 onPress={() => {
@@ -1597,6 +1811,72 @@ export default function AIAssistantScreen() {
           )}
         </View>
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={aiConsentVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeAIConsent}
+      >
+        <View className="flex-1 items-center justify-center bg-black/45 px-6">
+          <View className="w-full max-w-md rounded-[28px] border border-line bg-white p-6 shadow-2xl">
+            <View className="mb-4 flex-row items-start gap-3">
+              <View className="h-10 w-10 items-center justify-center rounded-2xl bg-brand/10">
+                <FontAwesome6 name="shield-halved" size={16} color="#2D6A4F" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-base font-black text-ink">发送给 AI 前请确认</Text>
+                <Text className="mt-1 text-[11px] leading-5 text-copy-muted">
+                  当前问题、最近对话及你填写的健康档案可能发送给部署环境配置的 AI 服务商。
+                </Text>
+              </View>
+            </View>
+
+            <View className="rounded-2xl bg-canvas px-4 py-3">
+              <Text className="text-[11px] leading-5 text-copy-muted">
+                服务端会保存完整对话，直到账户删除或运营方按请求删除；授权管理员可为排障查看。请勿发送无关敏感信息。
+              </Text>
+            </View>
+
+            {aiConsentError ? (
+              <Text className="mt-3 text-center text-[11px] font-bold text-red-600">{aiConsentError}</Text>
+            ) : null}
+
+            <TouchableOpacity
+              onPress={acceptAIConsentAndSend}
+              disabled={aiConsentSaving}
+              accessibilityRole="button"
+              accessibilityLabel="同意隐私说明并发送"
+              className="mt-5 items-center rounded-2xl bg-brand py-3.5 disabled:opacity-50"
+            >
+              {aiConsentSaving ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text className="text-sm font-black text-white">同意并发送</Text>
+              )}
+            </TouchableOpacity>
+
+            <View className="mt-2 flex-row gap-2">
+              <TouchableOpacity
+                onPress={openAIPrivacyNotice}
+                disabled={aiConsentSaving}
+                accessibilityRole="button"
+                className="flex-1 items-center rounded-2xl border border-line bg-white py-3 disabled:opacity-50"
+              >
+                <Text className="text-xs font-bold text-brand">查看隐私说明</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={closeAIConsent}
+                disabled={aiConsentSaving}
+                accessibilityRole="button"
+                className="flex-1 items-center rounded-2xl border border-line bg-white py-3 disabled:opacity-50"
+              >
+                <Text className="text-xs font-bold text-copy-muted">取消</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={Boolean(inventoryEditTarget)}

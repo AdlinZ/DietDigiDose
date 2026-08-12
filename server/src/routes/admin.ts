@@ -9,6 +9,7 @@ import { createAdminCommunityRouter } from "./admin/community.js";
 import { createAdminRecipesRouter } from "./admin/recipes.js";
 import { createAdminAssetsRouter } from "./admin/assets.js";
 import { createAdminNotificationsRouter } from "./admin/notifications.js";
+import { createAdminAgentRunsRouter } from "./admin/agent-runs.js";
 import { auditAdminAction as audit } from "./admin/shared.js";
 
 const router = Router();
@@ -23,6 +24,7 @@ router.use(createAdminCommunityRouter());
 router.use(createAdminRecipesRouter());
 router.use(createAdminAssetsRouter());
 router.use(createAdminNotificationsRouter());
+router.use(createAdminAgentRunsRouter());
 
 // 1. 获取统计数据
 router.get("/stats", (req, res) => {

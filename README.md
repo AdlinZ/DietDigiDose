@@ -6,20 +6,20 @@
 
 > 当前项目仍在开发阶段，不应被视为医疗诊断或治疗工具。营养估算和 AI 输出仅供日常参考。
 
-## 当前状态（2026-08-06）
+## 当前状态（2026-08-09）
 
 项目处于 **Beta 收口期**：主要页面和服务端业务已经实现，工程基线可以支持候选包验收，但尚未达到可公开发布或承载真实敏感健康数据的标准。
 
 已验证的基线：
 
 - client、server、admin 的 TypeScript/Lint 校验通过。
-- 自动化测试共 13 个测试文件、58 条测试通过，其中包括服务端核心业务、公开身份保护、AI 数据权利、共享限流、迁移、事务幂等、用户隔离、游标分页、媒体格式校验，以及客户端库存筛选与排序测试。
+- 自动化测试共 22 个测试文件、102 条测试通过，其中包括服务端核心业务、菜谱质量回填与公开过滤、管理审核、登录续接白名单、无障碍树、构建传输策略、事务幂等、用户隔离、游标分页和媒体格式校验。
 - CI 会安装冻结依赖、执行三端校验与测试、构建 client/server/admin，并审计生产依赖。
-- 仓库已包含 Android 内部预览构建配置；iOS 候选包、正式发布配置和双端真机验收仍未完成。
+- 仓库已包含 iOS/Android preview、production、受控 `preview-http` 测试包和独立 simulator 配置；HTTP 测试包只允许使用一次性测试账号，不属于可外发候选包。本轮只完成仓库内与本地构建验收，尚未生成双端候选包或执行外部内测。
 
-代码内的公开身份隔离、采购与烹饪闭环、版本化迁移、安全会话存储和演示数据隔离已完成；对外内测前仍须部署 HTTPS staging、补齐 AI 第三方与具体保留期限说明，并完成双端候选包及备份恢复验收。
+代码内的公开身份隔离、可信菜谱门槛、登录续接、采购与烹饪闭环、版本化迁移、安全会话存储和演示数据隔离已完成；对外内测前仍须完成 HTTPS staging 验收、双端候选包、真机闭环和备份恢复演练。
 
-当前执行计划见 [开发 TODO](TODO.md)，产品阶段目标见 [产品路线图](docs/product-roadmap.md)，发布候选验收见 [真机验收与小范围内测清单](docs/device-beta-checklist.md)，部署与恢复见 [运维手册](docs/operations.md)。
+当前执行计划见 [开发 TODO](TODO.md)，产品阶段目标见 [产品路线图](docs/product-roadmap.md)，Agent 改造验收见 [Agent 系统模拟用户验收清单](docs/agent-user-journey-checklist.md)，发布候选验收见 [真机验收与小范围内测清单](docs/device-beta-checklist.md)，部署与恢复见 [运维手册](docs/operations.md)。
 
 ## 项目沿革与重启说明
 
@@ -138,7 +138,7 @@ SQLite 数据库会在 `server/data/dietdigidose.db` 中自动创建，该目录
 
 ## 候选包说明
 
-`client/eas.json` 已包含双端内部预览和 production profile，不再内置后端地址或不安全网络开关；EAS 构建必须从受控环境提供 HTTPS `EXPO_PUBLIC_BACKEND_BASE_URL`。尚未完成同一提交的双端候选包生成与真机验收，因此仍不得用于外部用户或真实健康数据内测。
+`client/eas.json` 已包含双端内部预览和 production profile；二者必须从受控环境提供 HTTPS `EXPO_PUBLIC_BACKEND_BASE_URL`。临时 `preview-http` profile 仅用于当前受控打包测试，会启用 iOS 非安全网络访问和 Android cleartext，只能使用一次性测试账号，不得作为外部 Beta 候选包。尚未完成同一提交的双端 HTTPS 候选包生成与真机验收，因此仍不得用于外部用户或真实健康数据内测。
 
 ## 数据和第三方内容
 
@@ -153,6 +153,10 @@ SQLite 数据库会在 `server/data/dietdigidose.db` 中自动创建，该目录
 - AI 密钥只保存在服务端环境变量或管理端系统设置中，不要使用 `EXPO_PUBLIC_` 暴露密钥。
 - 外部内测和生产环境只能通过 HTTPS 传输登录凭据、Token、健康资料和 AI 上下文。
 - 部署前运行 `pnpm lint:all`、`pnpm test:all`、三端构建和 `pnpm audit:prod`，并完成真机与备份恢复验收。
+
+### 生产依赖审计例外
+
+`pnpm audit --prod` 当前会报告两项已精确忽略的高危告警：`CVE-2025-71329` 与 `CVE-2025-71330`。它们来自 Expo/Metro 构建链中的 `image-size`，当前上游尚无已修复版本；例外范围仅限这两个 CVE，不得将审计结果描述为“零漏洞”。每次 Expo/Metro 升级以及每次 Beta 候选验收前都必须重新运行审计、确认依赖路径与上游修复状态，并在出现可用修复后移除例外。
 
 ## 许可证
 

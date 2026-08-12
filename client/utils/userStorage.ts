@@ -3,6 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 export const CHAT_SESSIONS_STORAGE_KEY = "@shiyu_ai_chat_sessions";
 export const SHOPPING_LIST_STORAGE_KEY = "@shiyu_shopping_list";
 export const INVENTORY_SCAN_JOB_STORAGE_KEY = "@inventory_scan_job";
+export const AI_DATA_CONSENT_STORAGE_KEY = "@ai_data_consent_v1";
 
 const LEGACY_UNSCOPED_PRIVATE_KEYS = [
   CHAT_SESSIONS_STORAGE_KEY,

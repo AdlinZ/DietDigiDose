@@ -16,20 +16,22 @@ import {
   Layers3,
   SlidersHorizontal,
   Bell,
+  Workflow,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import api from '../services/api';
 import logoUrl from '../../../client/assets/logo.png';
 
 export default function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const mainScrollRef = useRef<HTMLElement>(null);
   const [adminName, setAdminName] = useState('');
   const assetRoutes = ['/admin/ingredients', '/admin/recipes', '/admin/kitchenware'];
   const assetSectionActive = assetRoutes.some((route) => location.pathname.startsWith(route));
   const [assetSectionOpen, setAssetSectionOpen] = useState(assetSectionActive);
-  const aiRoutes = ['/admin/ai-config', '/admin/ai-usage'];
+  const aiRoutes = ['/admin/ai-config', '/admin/ai-usage', '/admin/ai-conversations', '/admin/agent-runs'];
   const aiSectionActive = aiRoutes.some((route) => location.pathname.startsWith(route));
   const [aiSectionOpen, setAiSectionOpen] = useState(aiSectionActive);
 
@@ -46,6 +48,15 @@ export default function AdminLayout() {
   useEffect(() => {
     if (aiSectionActive) setAiSectionOpen(true);
   }, [aiSectionActive]);
+
+  // The main panel owns the scroll instead of the document. Reset it when the
+  // route changes so a newly opened page never inherits the previous page's
+  // scroll position and appears clipped from the top.
+  useLayoutEffect(() => {
+    if (!mainScrollRef.current) return;
+    mainScrollRef.current.scrollTop = 0;
+    mainScrollRef.current.scrollLeft = 0;
+  }, [location.pathname]);
 
   const handleLogout = () => {
     localStorage.removeItem('adminToken');
@@ -65,6 +76,7 @@ export default function AdminLayout() {
     { to: '/admin/ai-config', icon: SlidersHorizontal, label: '模型配置' },
     { to: '/admin/ai-usage', icon: ChartNoAxesCombined, label: '模型用量' },
     { to: '/admin/ai-conversations', icon: MessageSquare, label: '对话记录' },
+    { to: '/admin/agent-runs', icon: Workflow, label: 'Agent 运行' },
   ];
   const secondaryNavItems = [
     { to: '/admin/community', icon: MessageSquare, label: '社区审核' },
@@ -75,9 +87,9 @@ export default function AdminLayout() {
   ];
 
   return (
-    <div className="flex h-screen bg-background-alt font-sans">
+    <div className="flex h-screen h-dvh min-h-0 overflow-hidden bg-background-alt font-sans">
       {/* Sidebar */}
-      <aside className="w-64 bg-background shadow-md flex flex-col">
+      <aside className="flex min-h-0 w-64 shrink-0 flex-col bg-background shadow-md">
         <div className="flex items-center gap-3 border-b border-gray-100 p-5">
           <img
             src={logoUrl}
@@ -89,7 +101,7 @@ export default function AdminLayout() {
             <p className="mt-0.5 text-xs text-text-muted">管理控制台</p>
           </div>
         </div>
-        <nav className="flex-1 p-4 space-y-2">
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
           {primaryNavItems.map((item) => (
             <NavLink
               key={item.to}
@@ -241,7 +253,7 @@ export default function AdminLayout() {
             </NavLink>
           ))}
         </nav>
-        <div className="p-4 border-t border-gray-100 space-y-2">
+        <div className="p-4 border-t border-gray-100 space-y-2 shrink-0">
           {/* 管理员信息 */}
           {adminName && (
             <div className="flex items-center space-x-3 px-4 py-3">
@@ -274,8 +286,8 @@ export default function AdminLayout() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto">
-        <div className="p-8">
+      <main ref={mainScrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className="p-4 sm:p-6 lg:p-8">
           <Outlet />
         </div>
       </main>

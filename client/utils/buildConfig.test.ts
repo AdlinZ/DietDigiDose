@@ -7,7 +7,7 @@ function loadExpoConfig(profile: string, baseUrl: string, allowInsecure = "0") {
   process.env.EAS_BUILD_PROFILE = profile;
   process.env.EXPO_PUBLIC_BACKEND_BASE_URL = baseUrl;
   process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP = allowInsecure;
-  const createConfig = require("../app.config").default as (context: { config: Record<string, unknown> }) => any;
+  const createConfig = require("../app.config") as (context: { config: Record<string, unknown> }) => any;
   return createConfig({ config: {} });
 }
 

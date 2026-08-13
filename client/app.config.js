@@ -11,6 +11,7 @@ const insecureHttpBuildProfiles = new Set(['preview-http', 'simulator']);
 const allowInsecureHttp = (!easBuildProfile || insecureHttpBuildProfiles.has(easBuildProfile))
   && process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP === '1';
 const appVersion = process.env.EXPO_PUBLIC_APP_VERSION || rootPackage.version;
+const androidVersionCode = Number(process.env.EXPO_PUBLIC_ANDROID_VERSION_CODE || 5);
 const easProjectId = 'c89b45c8-5a27-4f6f-af05-4b656f534994';
 // Expo 会在打包时解析 app.config；未显式指定时，这里就是本次构建的时间。
 const buildTime = process.env.EXPO_PUBLIC_BUILD_TIME || new Date().toISOString();
@@ -71,7 +72,7 @@ module.exports = ({ config }) => ({
       backgroundColor: '#ffffff',
     },
     package: androidPackage,
-    versionCode: 5,
+    versionCode: androidVersionCode,
     softwareKeyboardLayoutMode: 'resize',
     userInterfaceStyle: 'light',
     permissions: ['android.permission.RECORD_AUDIO'],

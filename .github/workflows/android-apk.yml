@@ -1,0 +1,106 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: Android versionCode (must increase for upgrades)
+        required: true
+        default: '15'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      EAS_BUILD_PROFILE: preview-http
+      EXPO_PUBLIC_BACKEND_BASE_URL: http://118.145.165.226:8088
+      EXPO_PUBLIC_ALLOW_INSECURE_HTTP: '1'
+      EXPO_PUBLIC_ANDROID_VERSION_CODE: ${{ inputs.version_code }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.18.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/dietdigidose-release.jks"
+          chmod 600 "$RUNNER_TEMP/dietdigidose-release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/dietdigidose-release.jks" >> "$GITHUB_ENV"
+
+      - name: Generate Android project
+        working-directory: client
+        run: pnpm exec expo prebuild --platform android --clean --no-install
+
+      - name: Configure release signing
+        working-directory: client
+        run: node scripts/configure-android-signing.mjs
+
+      - name: Build signed release APK
+        working-directory: client/android
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Verify APK signature and package
+        working-directory: client
+        run: |
+          APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK_PATH"
+          apksigner verify --verbose --print-certs "$APK_PATH" | tee "$RUNNER_TEMP/apksigner.txt"
+          grep -F "Signer #1 certificate SHA-256 digest: 7473251630e89fbad819b5193c07b857b3ac5b64244551c1bbad55460fbe9cd2" "$RUNNER_TEMP/apksigner.txt"
+          apkanalyzer manifest application-id "$APK_PATH" | grep -Fx 'com.dietdigidose.app'
+          apkanalyzer manifest version-code "$APK_PATH" | grep -Fx "$EXPO_PUBLIC_ANDROID_VERSION_CODE"
+
+      - name: Prepare artifact
+        working-directory: client
+        run: |
+          mkdir -p artifact
+          cp android/app/build/outputs/apk/release/app-release.apk "artifact/DietDigiDose-${{ github.sha }}-v${EXPO_PUBLIC_ANDROID_VERSION_CODE}.apk"
+          cd artifact
+          sha256sum *.apk > SHA256SUMS.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DietDigiDose-Android-v${{ inputs.version_code }}
+          path: client/artifact/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

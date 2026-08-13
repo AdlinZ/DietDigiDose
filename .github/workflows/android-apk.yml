@@ -82,11 +82,16 @@ jobs:
         working-directory: client
         run: |
           APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
+          BUILD_TOOLS_DIR="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          APKANALYZER="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
           test -f "$APK_PATH"
-          apksigner verify --verbose --print-certs "$APK_PATH" | tee "$RUNNER_TEMP/apksigner.txt"
+          test -x "$APKSIGNER"
+          test -x "$APKANALYZER"
+          "$APKSIGNER" verify --verbose --print-certs "$APK_PATH" | tee "$RUNNER_TEMP/apksigner.txt"
           grep -F "Signer #1 certificate SHA-256 digest: 7473251630e89fbad819b5193c07b857b3ac5b64244551c1bbad55460fbe9cd2" "$RUNNER_TEMP/apksigner.txt"
-          apkanalyzer manifest application-id "$APK_PATH" | grep -Fx 'com.dietdigidose.app'
-          apkanalyzer manifest version-code "$APK_PATH" | grep -Fx "$EXPO_PUBLIC_ANDROID_VERSION_CODE"
+          "$APKANALYZER" manifest application-id "$APK_PATH" | grep -Fx 'com.dietdigidose.app'
+          "$APKANALYZER" manifest version-code "$APK_PATH" | grep -Fx "$EXPO_PUBLIC_ANDROID_VERSION_CODE"
 
       - name: Prepare artifact
         working-directory: client

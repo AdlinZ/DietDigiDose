@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Paths } from "expo-file-system";
 
 export const CHAT_SESSIONS_STORAGE_KEY = "@shiyu_ai_chat_sessions";
 export const SHOPPING_LIST_STORAGE_KEY = "@shiyu_shopping_list";
@@ -10,6 +11,7 @@ const LEGACY_UNSCOPED_PRIVATE_KEYS = [
   SHOPPING_LIST_STORAGE_KEY,
   INVENTORY_SCAN_JOB_STORAGE_KEY,
 ];
+const APP_CACHE_PREFIXES = ["offline_cache_"];
 
 export function getUserStorageKey(baseKey: string, userId?: number | null) {
   if (!Number.isInteger(userId) || Number(userId) <= 0) return null;
@@ -37,4 +39,50 @@ export async function purgeUserPrivateStorage(userId?: number | null) {
   const keys = await AsyncStorage.getAllKeys();
   const userKeys = keys.filter((key) => key.endsWith(suffix));
   if (userKeys.length) await AsyncStorage.multiRemove(userKeys);
+}
+
+export async function getUserPrivateStorageSize(userId?: number | null) {
+  if (!Number.isInteger(userId) || Number(userId) <= 0) return 0;
+  const suffix = `:user:${userId}`;
+  const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.endsWith(suffix));
+  if (!keys.length) return 0;
+  const entries = await AsyncStorage.multiGet(keys);
+  return entries.reduce((total, [key, value]) => total + key.length + (value?.length || 0), 0) * 2;
+}
+
+const getClearableCacheKeys = async (userId?: number | null) => {
+  const suffix = Number.isInteger(userId) && Number(userId) > 0 ? `:user:${userId}` : null;
+  return (await AsyncStorage.getAllKeys()).filter((key) =>
+    (suffix && key.endsWith(suffix)) || APP_CACHE_PREFIXES.some((prefix) => key.startsWith(prefix))
+  );
+};
+
+export async function purgeClearableCache(userId?: number | null) {
+  const keys = await getClearableCacheKeys(userId);
+  if (keys.length) await AsyncStorage.multiRemove(keys);
+}
+
+export async function getClearableCacheSize(userId?: number | null) {
+  const keys = await getClearableCacheKeys(userId);
+  if (!keys.length) return 0;
+  const entries = await AsyncStorage.multiGet(keys);
+  return entries.reduce((total, [key, value]) => total + key.length + (value?.length || 0), 0) * 2;
+}
+
+export function getNativeFileCacheSize() {
+  try {
+    return Math.max(0, Number(Paths.cache.size) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+export async function getTotalClearableCacheSize(userId?: number | null) {
+  return (await getClearableCacheSize(userId)) + getNativeFileCacheSize();
+}
+
+export function formatStorageBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

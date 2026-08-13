@@ -20,6 +20,8 @@
    STAGING_BASE_URL=https://staging-api.example.com node deploy/staging-smoke.mjs
    ```
 
+   如果服务器使用 Nginx 而非 Caddy，可从 `deploy/nginx.staging.conf.example` 创建站点配置。必须将 `/api/`、`/media/` 和 `/share/` 都反向代理到 API；其中 `/share/` 是动态分享承接页，不能交给管理端 SPA 的 `try_files`。
+
 5. 先盘点、再迁移旧版内联社区图片；`--apply` 前先备份数据库并验证 bucket：
 
    ```bash

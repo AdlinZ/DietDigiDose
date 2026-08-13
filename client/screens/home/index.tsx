@@ -275,6 +275,14 @@ export default function HomeScreen() {
     changeSmartFeedCard(deltaX < 0 ? "next" : "prev");
   }, [changeSmartFeedCard]);
 
+  const shouldClaimSmartFeedGesture = useCallback((event: GestureResponderEvent) => {
+    const start = smartFeedTouchStart.current;
+    if (!start) return false;
+    const deltaX = event.nativeEvent.pageX - start.x;
+    const deltaY = event.nativeEvent.pageY - start.y;
+    return Math.abs(deltaX) > 10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.15;
+  }, []);
+
   useEffect(() => {
     Animated.timing(calorieProgress, {
       toValue: calPercent,
@@ -655,6 +663,8 @@ export default function HomeScreen() {
           return (
             <View className="px-5 mt-4 mb-5">
               <Animated.View
+                onMoveShouldSetResponder={shouldClaimSmartFeedGesture}
+                onResponderRelease={handleSmartFeedTouchEnd}
                 accessibilityHint={smartCards.length > 1 ? "左右滑动可切换推荐卡片" : undefined}
                 onTouchStart={handleSmartFeedTouchStart}
                 onTouchEnd={handleSmartFeedTouchEnd}

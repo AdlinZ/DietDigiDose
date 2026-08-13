@@ -2,8 +2,13 @@ jest.mock("@react-native-async-storage/async-storage", () => ({
   __esModule: true,
   default: {
     getAllKeys: jest.fn(),
+    multiGet: jest.fn(),
     multiRemove: jest.fn(),
   },
+}));
+
+jest.mock("expo-file-system", () => ({
+  Paths: { cache: { size: 4096 } },
 }));
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -13,6 +18,9 @@ import {
   INVENTORY_SCAN_JOB_STORAGE_KEY,
   SHOPPING_LIST_STORAGE_KEY,
   getUserStorageKey,
+  getClearableCacheSize,
+  getTotalClearableCacheSize,
+  purgeClearableCache,
   purgeLegacyUnscopedPrivateStorage,
   purgeUserPrivateStorage,
   storageBelongsToCurrentUser,
@@ -21,11 +29,39 @@ import {
 describe("user-scoped private storage", () => {
   const mockMultiRemove = AsyncStorage.multiRemove as jest.Mock;
   const mockGetAllKeys = AsyncStorage.getAllKeys as jest.Mock;
+  const mockMultiGet = AsyncStorage.multiGet as jest.Mock;
 
   beforeEach(() => {
     mockMultiRemove.mockReset();
     mockMultiRemove.mockResolvedValue(undefined);
     mockGetAllKeys.mockReset();
+    mockMultiGet.mockReset();
+  });
+
+  it("includes shared offline recipe data in visible cache size and clearing", async () => {
+    mockGetAllKeys.mockResolvedValue([
+      "offline_cache_recipes",
+      "@shiyu_ai_chat_sessions:user:101",
+      "@shiyu_ai_chat_sessions:user:202",
+      "unrelated_preference",
+    ]);
+    mockMultiGet.mockResolvedValue([
+      ["offline_cache_recipes", "recipes"],
+      ["@shiyu_ai_chat_sessions:user:101", "chat"],
+    ]);
+
+    const size = await getClearableCacheSize(101);
+    expect(size).toBeGreaterThan(0);
+    await purgeClearableCache(101);
+    expect(mockMultiRemove).toHaveBeenCalledWith([
+      "offline_cache_recipes",
+      "@shiyu_ai_chat_sessions:user:101",
+    ]);
+  });
+
+  it("includes the native file cache in the displayed total", async () => {
+    mockGetAllKeys.mockResolvedValue([]);
+    expect(await getTotalClearableCacheSize(101)).toBe(4096);
   });
 
   it("uses different storage keys for different users", () => {

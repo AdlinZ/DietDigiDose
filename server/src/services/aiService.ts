@@ -101,6 +101,8 @@ export interface ChatCompletionResult {
   /** Indicates a local response was used because the real model could not be reached. */
   fallback?: boolean;
   fallbackReason?: "AI_NOT_CONFIGURED" | "AI_REQUEST_FAILED";
+  /** Sanitized provider failure used only for the authenticated admin audit log. */
+  failureMessage?: string;
   actionCard?: {
     mealType: string;
     foodName: string;
@@ -565,6 +567,7 @@ export async function chatCompletion(
       reply: replyText,
       fallback: true,
       fallbackReason: "AI_REQUEST_FAILED",
+      failureMessage: err instanceof Error ? err.message.slice(0, 500) : "Unknown AI provider error",
       actionCard,
       missingCard,
       optionsCard,

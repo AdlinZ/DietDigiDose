@@ -9,6 +9,15 @@ export const authApi = {
   register: <T>(identifier: string, username: string, password: string) => requestJson<T>(publicFetch, "/api/v1/auth/register", {
     method: "POST", body: JSON.stringify({ identifier, username, password }),
   }),
+  sendSmsCode: <T>(phone: string) => requestJson<T>(publicFetch, "/api/v1/auth/sms/send", {
+    method: "POST", body: JSON.stringify({ phone }),
+  }),
+  verifySmsCode: <T>(challengeId: string, code: string) => requestJson<T>(publicFetch, "/api/v1/auth/sms/verify", {
+    method: "POST", body: JSON.stringify({ challengeId, code }),
+  }),
+  registerWithSms: <T>(registrationToken: string, username: string, password: string) => requestJson<T>(publicFetch, "/api/v1/auth/sms/register", {
+    method: "POST", body: JSON.stringify({ registrationToken, username, password }),
+  }),
   me: <T>(token: string) => requestJson<T>(publicFetch, "/api/v1/auth/me", { headers: authHeaders(token) }),
   updateProfile: <T>(token: string, input: unknown) => requestJson<T>(publicFetch, "/api/v1/auth/profile", {
     method: "PUT", headers: authHeaders(token), body: JSON.stringify(input),

@@ -99,6 +99,7 @@ logs/
 .codegraph
 node_modules/
 dist/
+client/dist-android-check/
 build/
 *.apk
 .expo/

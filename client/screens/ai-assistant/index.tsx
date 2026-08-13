@@ -1411,40 +1411,16 @@ export default function AIAssistantScreen() {
           </View>
 
           <View className="flex-row items-center gap-1.5">
-            {/* Direct Header Button: 🛒 采购清单 */}
-            <TouchableOpacity
-              onPress={handleOpenShoppingList}
-              className="h-8 px-2.5 rounded-full bg-amber-500/10 border border-amber-500/30 flex-row items-center gap-1.5 active:opacity-80 relative"
-            >
-              <FontAwesome6 name="cart-shopping" size={12} color="#D97706" />
-              <Text className="text-xs font-bold text-amber-800">采购清单</Text>
-              {shoppingItems.length > 0 ? (
-                <View className="bg-critical px-1.5 py-0.2 rounded-full">
-                  <Text className="text-[9px] font-black text-white">{shoppingItems.length}</Text>
-                </View>
-              ) : null}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setVoiceTTSEnabled(v => !v)}
-              className="h-8 px-2.5 rounded-full bg-white border border-line items-center justify-center shadow-xs active:opacity-80 flex-row gap-1"
-            >
-              <FontAwesome6 name={voiceTTSEnabled ? "volume-high" : "volume-xmark"} size={11} color="#3D3229" />
-              <Text className="text-xs font-bold text-ink">{voiceTTSEnabled ? "语音播报" : "静音"}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={handleStartNewChat}
-              className="w-8 h-8 rounded-full bg-brand items-center justify-center shadow-xs active:opacity-80"
-            >
-              <FontAwesome6 name="plus" size={13} color="#FFF" />
-            </TouchableOpacity>
-
             <TouchableOpacity
               onPress={() => setHeaderMoreVisible(true)}
-              className="w-8 h-8 rounded-full bg-white items-center justify-center border border-line"
+              className="relative w-9 h-9 rounded-full bg-white items-center justify-center border border-line"
             >
               <FontAwesome6 name="ellipsis" size={14} color="#3D3229" />
+              {shoppingItems.length > 0 ? (
+                <View className="absolute -right-1 -top-1 min-w-4 h-4 rounded-full bg-critical items-center justify-center px-1">
+                  <Text className="text-[8px] font-black text-white">{shoppingItems.length > 9 ? "9+" : shoppingItems.length}</Text>
+                </View>
+              ) : null}
             </TouchableOpacity>
           </View>
         </View>
@@ -1746,14 +1722,14 @@ export default function AIAssistantScreen() {
               <TouchableOpacity
                 onPress={() => {
                   setShowToolsGrid(false);
-                  handleActionVisionFood();
+                  handlePickImageAttachment();
                 }}
                 className="items-center gap-1.5 active:opacity-80 flex-1"
               >
                 <View className="w-11 h-11 rounded-2xl bg-emerald-50 items-center justify-center border border-emerald-200/80 shadow-xs">
-                  <FontAwesome6 name="camera" size={18} color="#059669" />
+                  <FontAwesome6 name="image" size={18} color="#059669" />
                 </View>
-                <Text className="text-[11px] font-bold text-ink">识菜热量</Text>
+                <Text className="text-[11px] font-bold text-ink">添加图片</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -2089,10 +2065,20 @@ export default function AIAssistantScreen() {
             onPress={() => setHeaderMoreVisible(false)}
             className="absolute inset-0 bg-black/10"
           />
-          <View
+            <View
             style={{ position: "absolute", top: insets.top + 58, right: 16 }}
-            className="w-44 rounded-2xl border border-line bg-white p-1.5 shadow-xl"
-          >
+              className="w-44 rounded-2xl border border-line bg-white p-1.5 shadow-xl"
+            >
+            <TouchableOpacity
+              onPress={() => {
+                setHeaderMoreVisible(false);
+                handleStartNewChat();
+              }}
+              className="flex-row items-center gap-3 rounded-xl px-3 py-3 active:bg-background-secondary"
+            >
+              <FontAwesome6 name="plus" size={14} color="#2D6A4F" />
+              <Text className="text-sm font-bold text-ink">新建对话</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => {
                 setHeaderMoreVisible(false);

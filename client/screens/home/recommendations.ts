@@ -5,3 +5,14 @@ export const getRecommendationPeriod = (hour: number) => {
   if (hour >= 22 || hour < 5) return "深夜";
   return "晨间";
 };
+
+const NON_FOOD_RECOMMENDATION_PATTERN = /记录|添加食材|完善资料|补水|饮水|查看|检查|处理/;
+
+export function formatRecommendationMetric(card: Record<string, unknown>) {
+  if (typeof card.metric === "string" && card.metric.trim()) return card.metric.trim();
+
+  const calories = Number(card.calories);
+  const searchableText = `${String(card.title || "")} ${String(card.tag || "")} ${String(card.desc || "")}`;
+  if (NON_FOOD_RECOMMENDATION_PATTERN.test(searchableText) && calories <= 1) return "查看建议";
+  return calories > 0 ? `${calories} kcal` : "查看建议";
+}

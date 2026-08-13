@@ -1,27 +1,58 @@
 import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, Pressable, Image, Platform, DeviceEventEmitter, Alert } from "react-native";
+import { View, Text, TouchableOpacity, Pressable, Image, Platform, DeviceEventEmitter, Alert, StyleSheet } from "react-native";
 import { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import { BlurView } from "expo-blur";
 import { useCSSVariable } from "uniwind";
 
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { createAuthReturnTo } from "@/utils/authReturnTo";
 
+function GlassBackdrop({ borderRadius }: { borderRadius: number }) {
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        StyleSheet.absoluteFillObject,
+        {
+          borderRadius,
+          overflow: "hidden",
+          borderWidth: 1,
+          borderColor: "rgba(255, 255, 255, 0.72)",
+        },
+      ]}
+    >
+      <BlurView
+        pointerEvents="none"
+        tint="systemMaterialLight"
+        intensity={62}
+        {...(Platform.OS === "android"
+          ? { experimentalBlurMethod: "dimezisBlurView" as const }
+          : {})}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <View
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFillObject,
+          { backgroundColor: "rgba(255, 255, 255, 0.12)" },
+        ]}
+      />
+    </View>
+  );
+}
+
 export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const router = useSafeRouter();
   const { isAuthenticated } = useAuth();
-  const [ink, muted] = useCSSVariable([
-    "--color-ink",
-    "--color-copy-muted",
-  ]) as string[];
+  const [ink] = useCSSVariable(["--color-ink"]) as string[];
 
   // 获取当前激活的路由
   const currentRouteName = state.routes[state.index]?.name || "index";
-  const isHomeRoute = currentRouteName === "index";
-  const [inventorySegment, setInventorySegment] = useState<"inventory" | "recipes" | "kitchenware">("inventory");
+  const [inventorySegment, setInventorySegment] = useState<"inventory" | "recipes" | "kitchenware">("recipes");
 
   useEffect(() => {
     const subscription = DeviceEventEmitter.addListener(
@@ -123,18 +154,17 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
           accessibilityRole="button"
           accessibilityLabel={currentRouteName === "inventory" ? inventoryQuickAction.accessibilityLabel : quickActionLabel}
           accessibilityHint={currentRouteName === "inventory" && !isAuthenticated ? "需要先登录" : undefined}
-          className={`w-[60px] h-[60px] items-center justify-center relative active:scale-95 ${isHomeRoute ? "" : "bg-white/95 rounded-full p-1 border border-line"}`}
+          className="w-[60px] h-[60px] rounded-full items-center justify-center relative active:scale-95"
           style={{
-            backgroundColor: isHomeRoute ? "transparent" : "rgba(255, 255, 255, 0.95)",
-            borderWidth: isHomeRoute ? 0 : 1,
-            padding: isHomeRoute ? 0 : 4,
             shadowColor: ink,
-            shadowOffset: { width: 0, height: 0 },
-            shadowOpacity: 0.1,
-            shadowRadius: 0,
-            elevation: 0,
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.14,
+            shadowRadius: 12,
+            elevation: 7,
           }}
         >
+          <GlassBackdrop borderRadius={30} />
+
           {currentRouteName === "index" && (
             <View className="items-center justify-center relative" style={{ width: 56, height: 56 }}>
               <Image
@@ -176,17 +206,19 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
           )}
         </Pressable>
 
-        {/* 右侧主导航栏：较大的触控区与左侧快捷键保持同一视觉量级。 */}
+        {/* 右侧主导航栏：半透明磨砂玻璃 Dock，页面内容可隐约透出。 */}
         <View
-          className="flex-1 h-[60px] ml-3 bg-white/95 backdrop-blur-md rounded-full px-2.5 flex-row items-center justify-between border border-line shadow-md"
+          className="flex-1 h-[60px] ml-3 rounded-full px-2.5 flex-row items-center justify-between"
           style={{
             shadowColor: ink,
-            shadowOffset: { width: 0, height: 3 },
-            shadowOpacity: 0.1,
-            shadowRadius: 8,
-            elevation: 6,
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.14,
+            shadowRadius: 12,
+            elevation: 7,
           }}
         >
+          <GlassBackdrop borderRadius={30} />
+
           {visibleRoutes.map((route) => {
             const isFocused = state.routes[state.index].key === route.key;
             const config = getTabConfig(route.name);
@@ -226,7 +258,17 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
                 ) : (
                   <View className="items-center justify-center">
                     <View className="w-7 h-7 items-center justify-center relative">
-                      <FontAwesome6 name={config.icon as any} size={16} color={muted} />
+                      <FontAwesome6
+                        name={config.icon as any}
+                        size={16}
+                        color={ink}
+                        style={{
+                          opacity: 0.76,
+                          textShadowColor: "rgba(255, 255, 255, 0.92)",
+                          textShadowOffset: { width: 0, height: 1 },
+                          textShadowRadius: 3,
+                        }}
+                      />
                       {/* 未读数字/圆点 Badge (如社区消息) */}
                       {config.badge ? (
                         <View accessibilityLiveRegion="polite" className="absolute -top-1 -right-1.5 bg-critical px-1 py-0.2 rounded-full min-w-3.5 items-center justify-center border border-white">
@@ -236,7 +278,7 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
                         </View>
                       ) : null}
                     </View>
-                    <Text className="text-[10.5px] font-bold text-copy-muted mt-1">
+                    <Text className="text-[10.5px] font-bold text-ink mt-1" style={{ opacity: 0.8 }}>
                       {config.label}
                     </Text>
                   </View>

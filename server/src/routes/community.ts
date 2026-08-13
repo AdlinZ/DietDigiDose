@@ -1,12 +1,17 @@
 import { Router } from "express";
+import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { Reader, type Response } from "maxmind";
 import { db } from "../storage/db.js";
 import { authMiddleware, optionalAuthMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { communityCommentSchema, communityPostSchema } from "../validation/schemas.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
-import { getUserLevel } from "../services/userLevel.js";
+import { getUserLevel, getUserLevelRule } from "../services/userLevel.js";
 import { decodeCursor, encodeCursor } from "../utils/cursor.js";
 import { isStoredMediaUrlForUser } from "../services/mediaStorage.js";
+import { currentDateKey } from "../utils/date.js";
 import {
   recommendCommunityPosts,
   type CommunityRecommendationProfile,
@@ -18,6 +23,51 @@ router.param("postId", positiveIntegerParam);
 router.param("commentId", positiveIntegerParam);
 router.param("userId", positiveIntegerParam);
 router.use(optionalAuthMiddleware);
+
+const COUNTRY_NAMES = new Intl.DisplayNames(["zh-CN"], { type: "region" });
+type CountryLookup = Response & {
+  country_code?: string;
+  country?: { iso_code?: string };
+  city?: { names?: Record<string, string> };
+};
+
+let geoIpReader: Reader<CountryLookup> | null = null;
+const require = createRequire(import.meta.url);
+
+function initializeGeoIpReader() {
+  const databasePath = process.env.GEOIP_DATABASE_PATH?.trim()
+    || require.resolve("@ip-location-db/geolite2-country-mmdb/geolite2-country.mmdb");
+  try {
+    geoIpReader = new Reader<CountryLookup>(readFileSync(databasePath));
+  } catch (error) {
+    console.warn("GeoIP database unavailable", error);
+  }
+}
+
+initializeGeoIpReader();
+
+function getRequestLocation(req: AuthRequest) {
+  // Only trust country headers when a configured edge proxy strips the incoming
+  // client values and writes its own. Direct clients can forge these headers.
+  if (process.env.TRUST_GEO_HEADERS === "1") {
+    const region = String(req.get("cf-ipcountry") || req.get("x-vercel-ip-country") || "").trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(region) && region !== "XX" && region !== "T1") {
+      return COUNTRY_NAMES.of(region) || region;
+    }
+  }
+  const ip = String(req.ip || req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+  if (/^(::1|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)) {
+    return "本地网络";
+  }
+  const lookup = geoIpReader?.get(ip);
+  const countryCode = lookup?.country_code || lookup?.country?.iso_code;
+  if (countryCode) {
+    const country = COUNTRY_NAMES.of(countryCode) || countryCode;
+    const city = lookup.city?.names?.["zh-CN"] || lookup.city?.names?.en;
+    return city ? `${country} · ${city}` : country;
+  }
+  return null;
+}
 
 function getAuthenticatedUser(req: AuthRequest): { userId: number; user: any } | null {
   if (!req.userId) return null;
@@ -145,6 +195,29 @@ router.get("/level", authMiddleware, (req: AuthRequest, res) => {
   const auth = getAuthenticatedUser(req);
   if (!auth) return res.status(401).json({ error: "未登录" });
   res.json(getUserLevel(auth.userId));
+});
+
+router.get("/check-in", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
+  if (!auth) return res.status(401).json({ error: "未登录" });
+  const date = currentDateKey();
+  const checkedIn = Boolean(db.prepare("SELECT 1 FROM user_daily_check_ins WHERE user_id = ? AND check_in_date = ?").get(auth.userId, date));
+  res.json({ checkedIn, date, xpReward: getUserLevelRule().xp.dailyCheckIn });
+});
+
+router.post("/check-in", authMiddleware, (req: AuthRequest, res) => {
+  const auth = getAuthenticatedUser(req);
+  if (!auth) return res.status(401).json({ error: "未登录" });
+  const date = currentDateKey();
+  const result = db.prepare("INSERT OR IGNORE INTO user_daily_check_ins (user_id, check_in_date) VALUES (?, ?)").run(auth.userId, date);
+  const created = result.changes === 1;
+  res.status(created ? 201 : 200).json({
+    checkedIn: true,
+    alreadyCheckedIn: !created,
+    date,
+    awardedXp: created ? getUserLevelRule().xp.dailyCheckIn : 0,
+    level: getUserLevel(auth.userId),
+  });
 });
 
 router.post("/users/:userId/follow", authMiddleware, (req: AuthRequest, res) => {
@@ -276,6 +349,43 @@ router.get("/posts/:id", (req: AuthRequest, res) => {
   res.json({ ...serializePost(post), views_count: (post.views_count || 0) + 1, is_liked: Boolean(post.is_liked) });
 });
 
+router.post("/posts/:id/share", (req: AuthRequest, res) => {
+  const post = db.prepare("SELECT id FROM community_posts WHERE id = ? AND deleted_at IS NULL").get(req.params.id);
+  if (!post) return res.status(404).json({ error: "帖子不存在" });
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  let code = "";
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    code = randomBytes(5).toString("hex").toUpperCase();
+    try {
+      db.prepare("INSERT INTO community_share_codes (code, post_id, created_by, expires_at) VALUES (?, ?, ?, ?)")
+        .run(code, req.params.id, req.userId ?? null, expiresAt);
+      break;
+    } catch {
+      code = "";
+    }
+  }
+  if (!code) return res.status(503).json({ error: "分享码生成失败，请稍后重试" });
+  const baseUrl = String(process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+  res.status(201).json({
+    code,
+    url: `${baseUrl}/share/posts/${code}`,
+    app_url: `dietdigidose://post-detail?id=${req.params.id}&shareCode=${code}`,
+    expires_at: expiresAt,
+  });
+});
+
+router.get("/shares/:code", (req, res) => {
+  const code = String(req.params.code || "").trim().toUpperCase();
+  const share = db.prepare(`
+    SELECT s.post_id, s.expires_at
+    FROM community_share_codes s
+    JOIN community_posts p ON p.id = s.post_id
+    WHERE s.code = ? AND s.expires_at > CURRENT_TIMESTAMP AND p.deleted_at IS NULL
+  `).get(code) as { post_id: number; expires_at: string } | undefined;
+  if (!share) return res.status(404).json({ error: "分享码无效或已过期" });
+  res.json({ post_id: share.post_id, expires_at: share.expires_at });
+});
+
 // POST /api/v1/community/posts
 router.post("/posts", authMiddleware, validateBody(communityPostSchema), (req: AuthRequest, res) => {
   const auth = getAuthenticatedUser(req);
@@ -311,9 +421,9 @@ router.post("/posts", authMiddleware, validateBody(communityPostSchema), (req: A
   const result = db.prepare(`
     INSERT INTO community_posts (
       user_id, username, avatar_url, category, content, image_url, image_urls,
-      event_start_at, event_end_at, question_status, likes_count
+      event_start_at, event_end_at, question_status, ip_location, likes_count
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
   `).run(
     auth.userId,
     auth.user.username || `食友${auth.userId}`,
@@ -325,6 +435,7 @@ router.post("/posts", authMiddleware, validateBody(communityPostSchema), (req: A
     eventStartAt,
     eventEndAt,
     normalizedCategory === "问答" ? "open" : null,
+    getRequestLocation(req),
   );
 
   const newPost = db.prepare("SELECT * FROM community_posts WHERE id = ?").get(result.lastInsertRowid);

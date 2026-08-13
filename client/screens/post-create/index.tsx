@@ -69,14 +69,19 @@ export default function PostCreateScreen() {
         const uploaded = await mediaApi.uploadImage(authFetch, imageUrl);
         return uploaded.url;
       }));
-      await communityApi.createPost(authFetch, {
+      const createdPost = await communityApi.createPost(authFetch, {
           content: [title.trim(), content.trim()].filter(Boolean).join("\n"),
           image_urls: storedImageUrls,
           category,
           event_start_at: category === "活动" ? eventStartAt : null,
           event_end_at: category === "活动" ? eventEndAt : null,
       });
-      router.back();
+      setPublishing(false);
+      Alert.alert(
+        "发布成功",
+        "动态已经发布，可在社区中查看。",
+        [{ text: "查看动态", onPress: () => router.replace("/post-detail", { id: createdPost.id }) }],
+      );
     } catch (error) {
       Alert.alert("发布失败", error instanceof Error ? error.message : "请稍后重试");
     } finally {

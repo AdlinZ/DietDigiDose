@@ -20,7 +20,10 @@ router.use(sharedRateLimit({
 router.post("/images", validateBody(mediaImageUploadSchema), async (req: AuthRequest, res) => {
   try {
     const result = await uploadImageDataUrl(req.body.data_url, req.userId!, req.body.scope);
-    return res.status(201).json(result);
+    const url = result.url.startsWith("/")
+      ? `${req.protocol}://${req.get("host")}${result.url}`
+      : result.url;
+    return res.status(201).json({ ...result, url });
   } catch (error) {
     if (error instanceof InvalidMediaError) return res.status(400).json({ error: error.message, code: "INVALID_MEDIA" });
     if (error instanceof MediaStorageUnavailableError) return res.status(503).json({ error: error.message, code: "MEDIA_STORAGE_UNAVAILABLE" });

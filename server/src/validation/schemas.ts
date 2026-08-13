@@ -398,6 +398,33 @@ export const adminLevelAdjustmentSchema = z.object({
   xp_delta: z.number().int().min(-10_000).max(10_000).refine((value) => value !== 0, "经验调整不能为 0"),
   reason: trimmedString(2, 200, "调整原因"),
 }).strict();
+export const adminUserLevelRuleSchema = z.object({
+  levels: z.array(z.object({
+    level: z.number().int().min(1).max(20),
+    title: trimmedString(1, 20, "等级称号"),
+    requiredXp: z.number().int().min(0).max(10_000_000),
+  }).strict()).min(2, "至少配置两个等级").max(20, "最多配置 20 个等级"),
+  xp: z.object({
+    dietRecord: z.number().int().min(0).max(10_000),
+    streakDay: z.number().int().min(0).max(10_000),
+    recipeFavorite: z.number().int().min(0).max(10_000),
+    communityPost: z.number().int().min(0).max(10_000),
+    follower: z.number().int().min(0).max(10_000),
+    dailyCheckIn: z.number().int().min(0).max(10_000),
+  }).strict(),
+}).strict().superRefine((value, context) => {
+  value.levels.forEach((item, index) => {
+    if (item.level !== index + 1) {
+      context.addIssue({ code: "custom", path: ["levels", index, "level"], message: "等级编号必须从 1 连续递增" });
+    }
+    if (index === 0 && item.requiredXp !== 0) {
+      context.addIssue({ code: "custom", path: ["levels", index, "requiredXp"], message: "第一级门槛必须为 0 XP" });
+    }
+    if (index > 0 && item.requiredXp <= value.levels[index - 1].requiredXp) {
+      context.addIssue({ code: "custom", path: ["levels", index, "requiredXp"], message: "升级门槛必须严格递增" });
+    }
+  });
+});
 export const adminUserCredentialsSchema = z.object({
   identifier: z.string().trim().min(1, "邮箱或手机号不能为空").max(254, "邮箱或手机号不能超过 254 个字符").optional(),
   newPassword: z.string()

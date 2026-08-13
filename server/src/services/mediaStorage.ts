@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 import { getSupabaseClient, getSupabaseServiceRoleKey } from "../storage/database/supabase-client.js";
 
@@ -17,10 +19,10 @@ export async function uploadImageDataUrl(dataUrl: string, userId: number, scope:
   const parsed = parseImageDataUrl(dataUrl);
   const bucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
   if (!bucket || !getSupabaseServiceRoleKey()) {
-    throw new MediaStorageUnavailableError("媒体对象存储尚未配置");
+    return uploadToLocalMedia(parsed, userId, scope);
   }
   const client = getSupabaseClient();
-  if (!client) throw new MediaStorageUnavailableError("媒体对象存储尚未配置");
+  if (!client) return uploadToLocalMedia(parsed, userId, scope);
 
   const objectPath = `${scope}/${userId}/${new Date().toISOString().slice(0, 10)}/${randomUUID()}.${parsed.extension}`;
   const { error } = await client.storage.from(bucket).upload(objectPath, parsed.buffer, {
@@ -34,6 +36,31 @@ export async function uploadImageDataUrl(dataUrl: string, userId: number, scope:
   return { url: data.publicUrl, objectPath, bytes: parsed.buffer.byteLength, mimeType: parsed.mimeType };
 }
 
+const getPublicMediaRoot = () => path.resolve(process.env.MEDIA_LOCAL_ROOT || path.join(process.cwd(), "public"));
+
+async function uploadToLocalMedia(
+  parsed: ReturnType<typeof parseImageDataUrl>,
+  userId: number,
+  scope: "community",
+) {
+  const date = new Date().toISOString().slice(0, 10);
+  const fileName = `${randomUUID()}.${parsed.extension}`;
+  const objectPath = `uploads/${scope}/${userId}/${date}/${fileName}`;
+  const publicMediaRoot = getPublicMediaRoot();
+  const destination = path.resolve(publicMediaRoot, objectPath);
+  if (!destination.startsWith(`${publicMediaRoot}${path.sep}`)) {
+    throw new InvalidMediaError("媒体保存路径无效");
+  }
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, parsed.buffer, { flag: "wx" });
+  return {
+    url: `/media/${objectPath}`,
+    objectPath,
+    bytes: parsed.buffer.byteLength,
+    mimeType: parsed.mimeType,
+  };
+}
+
 function getPublicObjectPrefix() {
   const bucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
   const baseUrl = process.env.SUPABASE_URL?.trim();
@@ -43,10 +70,28 @@ function getPublicObjectPrefix() {
 
 export function isStoredMediaUrlForUser(url: string, userId: number, scope: "community" = "community") {
   const prefix = getPublicObjectPrefix();
-  return Boolean(prefix && url.startsWith(`${prefix}${scope}/${userId}/`));
+  const localPrefix = `/media/uploads/${scope}/${userId}/`;
+  let pathname = url;
+  try { pathname = new URL(url).pathname; } catch { /* relative media URL */ }
+  return pathname.startsWith(localPrefix) || Boolean(prefix && url.startsWith(`${prefix}${scope}/${userId}/`));
 }
 
 export async function deleteStoredMediaUrls(userId: number, urls: Array<string | null | undefined>) {
+  const localUrls = urls.flatMap((url) => {
+    if (typeof url !== "string") return [];
+    try {
+      const pathname = new URL(url).pathname;
+      return pathname.startsWith(`/media/uploads/community/${userId}/`) ? [pathname] : [];
+    } catch {
+      return url.startsWith(`/media/uploads/community/${userId}/`) ? [url] : [];
+    }
+  });
+  const publicMediaRoot = getPublicMediaRoot();
+  await Promise.all(localUrls.map(async (url) => {
+    const relativePath = url.slice("/media/".length);
+    const destination = path.resolve(publicMediaRoot, relativePath);
+    if (destination.startsWith(`${publicMediaRoot}${path.sep}`)) await rm(destination, { force: true });
+  }));
   const bucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
   const prefix = getPublicObjectPrefix();
   if (!bucket || !prefix || !getSupabaseServiceRoleKey()) return;

@@ -27,7 +27,8 @@ module.exports = ({ config }) => ({
   orientation: 'portrait',
   icon: './assets/images/adaptive-icon-safe.png',
   scheme: 'dietdigidose',
-  userInterfaceStyle: 'automatic',
+  // 正式深色设计完成前固定浅色，避免部分 Android 厂商对页面强制反色。
+  userInterfaceStyle: 'light',
   newArchEnabled: true,
   runtimeVersion: {
     policy: 'appVersion',
@@ -71,6 +72,9 @@ module.exports = ({ config }) => ({
     },
     package: androidPackage,
     versionCode: 5,
+    softwareKeyboardLayoutMode: 'resize',
+    userInterfaceStyle: 'light',
+    permissions: ['android.permission.RECORD_AUDIO'],
   },
   web: {
     bundler: 'metro',

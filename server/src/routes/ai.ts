@@ -208,6 +208,12 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
             solutionCards: buildAgentSolutionCards(completedRun.id, completedRun.artifacts),
             pendingApproval: completedRun.pendingApproval,
             errorCode: completedRun.error?.code,
+            errorType: "agent_run",
+            errorMessage: completedRun.error?.message,
+            failureStage: "agent_execution",
+            requestId: String(res.locals.requestId || ""),
+            occurredAt: new Date(completedAt).toISOString(),
+            source,
           },
           responseTimeMs: completedAt - requestStartedAt,
           requestedAt: requestStartedAt,
@@ -221,7 +227,16 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
       if (requestedText) {
         recordChatTurn({
           userId, sessionId, source, userContent: requestedText, assistantContent: errorMessage,
-          status: "failed", payload: { agentRunId: response.run.id, errorCode }, responseTimeMs,
+          status: "failed", payload: {
+            agentRunId: response.run.id,
+            errorCode,
+            errorType: errorCode === "AI_NOT_CONFIGURED" ? "configuration" : "agent_run",
+            errorMessage,
+            failureStage: "agent_execution",
+            requestId: String(res.locals.requestId || ""),
+            occurredAt: new Date(respondedAt).toISOString(),
+            source,
+          }, responseTimeMs,
           requestedAt: requestStartedAt, respondedAt,
         });
       }
@@ -240,7 +255,15 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
     const errorMessage = "AI 对话请求失败，请稍后重试";
     if (requestedText) {
       const respondedAt = Date.now();
-      recordChatTurn({ userId, sessionId, source, userContent: requestedText, assistantContent: errorMessage, status: "failed", payload: { errorCode: "AI_AGENT_FAILED" }, responseTimeMs: respondedAt - requestStartedAt, requestedAt: requestStartedAt, respondedAt });
+      recordChatTurn({ userId, sessionId, source, userContent: requestedText, assistantContent: errorMessage, status: "failed", payload: {
+        errorCode: "AI_AGENT_FAILED",
+        errorType: "server",
+        errorMessage: error instanceof Error ? error.message.slice(0, 500) : "Unknown server error",
+        failureStage: "request_processing",
+        requestId: String(res.locals.requestId || ""),
+        occurredAt: new Date(respondedAt).toISOString(),
+        source,
+      }, responseTimeMs: respondedAt - requestStartedAt, requestedAt: requestStartedAt, respondedAt });
     }
     return res.status(500).json({ error: errorMessage, code: "AI_CHAT_FAILED" });
   }

@@ -15,8 +15,10 @@ import {
 } from "../middleware/loginRateLimit.js";
 import { deleteFunnelEvents, recordFunnelEvent } from "../services/funnelEvents.js";
 import { deleteStoredMediaUrls } from "../services/mediaStorage.js";
+import smsAuthRoutes from "./auth-sms.js";
 
 const router = Router();
+router.use("/sms", smsAuthRoutes);
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phonePattern = /^1[3-9]\d{9}$/;
@@ -34,6 +36,9 @@ router.post("/register", validateBody(registerSchema), async (req, res) => {
     const { identifier, username, password } = req.body;
     const loginIdentifier = parseLoginIdentifier(identifier);
     if (!loginIdentifier) return sendError(res, 400, "请输入有效的邮箱或手机号", "INVALID_IDENTIFIER");
+    if (loginIdentifier.phone) {
+      return sendError(res, 400, "手机号注册必须先完成短信验证", "PHONE_VERIFICATION_REQUIRED");
+    }
 
     // Check existing
     const existing = db.prepare("SELECT id FROM users WHERE email = ? OR phone = ?").get(loginIdentifier.email, loginIdentifier.phone);
@@ -134,7 +139,7 @@ router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res
 
 // GET /api/v1/auth/me
 router.get("/me", authMiddleware, (req: AuthRequest, res) => {
-  const user = db.prepare("SELECT id, username, email, phone, avatar_url, bio, daily_calories_target, created_at, role, must_change_password, last_login_at, last_login_ip FROM users WHERE id = ?").get(req.userId);
+  const user = db.prepare("SELECT id, username, email, phone, phone_verified_at, avatar_url, bio, daily_calories_target, created_at, role, must_change_password, last_login_at, last_login_ip FROM users WHERE id = ?").get(req.userId);
   if (!user) return sendError(res, 404, "用户不存在", "USER_NOT_FOUND");
   return res.json(user);
 });

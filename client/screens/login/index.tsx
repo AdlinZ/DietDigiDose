@@ -1,225 +1,296 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Image, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
+import { useCSSVariable } from 'uniwind';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter, useSafeSearchParams } from '@/hooks/useSafeRouter';
 import { validateAuthReturnTo } from '@/utils/authReturnTo';
-import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
-import { useCSSVariable } from 'uniwind';
 
 const REMEMBERED_IDENTIFIER_KEY = '@remembered_login_identifier';
 
 export default function LoginScreen() {
+  const [mode, setMode] = useState<'sms' | 'password'>('sms');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
+  const [challengeId, setChallengeId] = useState('');
+  const [phoneMasked, setPhoneMasked] = useState('');
+  const [countdown, setCountdown] = useState(0);
   const [rememberIdentifier, setRememberIdentifier] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const identifierWasEdited = useRef(false);
-  const { login } = useAuth();
+  const { login, sendSmsCode, verifySmsCode } = useAuth();
   const router = useSafeRouter();
   const { returnTo: rawReturnTo } = useSafeSearchParams<{ returnTo?: unknown }>();
   const returnTo = validateAuthReturnTo(rawReturnTo);
-  const [brand, muted, critical] = useCSSVariable([
-    '--color-brand',
-    '--color-copy-muted',
-    '--color-critical',
-  ]) as string[];
+  const [brand, muted, critical] = useCSSVariable(['--color-brand', '--color-copy-muted', '--color-critical']) as string[];
 
   useEffect(() => {
-    (async () => {
-      try {
-        const savedIdentifier = await AsyncStorage.getItem(REMEMBERED_IDENTIFIER_KEY);
-        if (savedIdentifier && !identifierWasEdited.current) {
-          setIdentifier(savedIdentifier);
-          setRememberIdentifier(true);
-        }
-      } catch (e) {
-        // Ignore read errors
-      }
-    })();
+    void AsyncStorage.getItem(REMEMBERED_IDENTIFIER_KEY).then((saved) => {
+      if (saved && !identifierWasEdited.current) setIdentifier(saved);
+    }).catch(() => undefined);
   }, []);
 
-  const handleIdentifierChange = (value: string) => {
-    identifierWasEdited.current = true;
-    setIdentifier(value);
-    if (!rememberIdentifier) return;
-    const normalizedValue = value.trim();
-    void (normalizedValue
-      ? AsyncStorage.setItem(REMEMBERED_IDENTIFIER_KEY, normalizedValue)
-      : AsyncStorage.removeItem(REMEMBERED_IDENTIFIER_KEY)
-    ).catch(() => undefined);
-  };
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const timer = setInterval(() => setCountdown((current) => Math.max(0, current - 1)), 1000);
+    return () => clearInterval(timer);
+  }, [countdown]);
 
-  const handleRememberIdentifierChange = () => {
-    const nextValue = !rememberIdentifier;
-    setRememberIdentifier(nextValue);
-    const normalizedIdentifier = identifier.trim();
-    void (nextValue && normalizedIdentifier
-      ? AsyncStorage.setItem(REMEMBERED_IDENTIFIER_KEY, normalizedIdentifier)
-      : AsyncStorage.removeItem(REMEMBERED_IDENTIFIER_KEY)
-    ).catch(() => undefined);
-  };
-
-  const handleLogin = async () => {
-    const trimmedIdentifier = identifier.trim();
-    if (!trimmedIdentifier || !password.trim()) {
-      setError('请输入邮箱或手机号和密码');
-      return;
-    }
-    const atIndex = trimmedIdentifier.indexOf('@');
-    const isEmail = atIndex > 0 && trimmedIdentifier.slice(atIndex + 1).includes('.');
-    const isPhone = /^1[3-9]\d{9}$/.test(trimmedIdentifier);
-    if (!isEmail && !isPhone) {
-      setError('请输入注册时使用的邮箱或手机号');
-      return;
-    }
+  const changeMode = (next: 'sms' | 'password') => {
+    setMode(next);
     setError('');
-    setLoading(true);
-
-    if (rememberIdentifier) {
-      await AsyncStorage.setItem(REMEMBERED_IDENTIFIER_KEY, trimmedIdentifier).catch(() => undefined);
-    } else {
-      await AsyncStorage.removeItem(REMEMBERED_IDENTIFIER_KEY).catch(() => undefined);
-    }
-
-    const result = await login(trimmedIdentifier, password);
-    setLoading(false);
-    if (result.success) {
-      router.replace(returnTo || '/');
-    } else {
-      setError(result.error || '登录失败');
-      setPassword(''); // 清空密码以提升安全防范
-    }
   };
 
-  const isSubmitDisabled = loading || !identifier.trim() || !password.trim();
+  const handlePasswordLogin = async () => {
+    const normalized = identifier.trim().toLowerCase();
+    const atIndex = normalized.indexOf('@');
+    const validEmail = atIndex > 0 && normalized.slice(atIndex + 1).includes('.') && !normalized.includes(' ');
+    const validIdentifier = validEmail || /^1[3-9]\d{9}$/.test(normalized);
+    if (!validIdentifier || !password) return setError('请输入注册邮箱/手机号和密码');
+    setLoading(true);
+    setError('');
+    if (rememberIdentifier) await AsyncStorage.setItem(REMEMBERED_IDENTIFIER_KEY, normalized).catch(() => undefined);
+    else await AsyncStorage.removeItem(REMEMBERED_IDENTIFIER_KEY).catch(() => undefined);
+    const result = await login(normalized, password);
+    setLoading(false);
+    if (result.success) router.replace(returnTo || '/');
+    else { setError(result.error || '登录失败'); setPassword(''); }
+  };
 
+  const handleSendCode = async () => {
+    const normalized = phone.replace(/[\s-]/g, '').replace(/^\+?86/, '');
+    if (!/^1[3-9]\d{9}$/.test(normalized)) return setError('请输入有效的中国大陆手机号');
+    setLoading(true);
+    setError('');
+    const result = await sendSmsCode(normalized);
+    setLoading(false);
+    if (!result.success || !result.challengeId) return setError(result.error || '验证码发送失败');
+    setPhone(normalized);
+    setChallengeId(result.challengeId);
+    setPhoneMasked(result.phoneMasked || normalized.replace(/^(\d{3})\d{4}(\d{4})$/, '$1****$2'));
+    setCountdown(result.resendAfter || 60);
+    setCode('');
+  };
+
+  const handleVerifyCode = async () => {
+    if (!challengeId) return handleSendCode();
+    if (!/^\d{6}$/.test(code)) return setError('请输入 6 位数字验证码');
+    setLoading(true);
+    setError('');
+    const result = await verifySmsCode(challengeId, code);
+    setLoading(false);
+    if (!result.success) return setError(result.error || '验证码核验失败');
+    if (result.registrationRequired) router.push('/register', { mode: 'sms', ...(returnTo ? { returnTo } : {}) });
+    else router.replace(returnTo || '/');
+  };
+
+  const switchPhone = () => {
+    setChallengeId('');
+    setCode('');
+    setPhoneMasked('');
+    setCountdown(0);
+    setError('');
+  };
+
+  const disabled = loading || (mode === 'password'
+    ? !identifier.trim() || !password
+    : challengeId ? !/^\d{6}$/.test(code) : !phone.trim());
   return (
-    <Screen>
-      <KeyboardAvoidingView
-        className="flex-1"
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-          <View className="flex-1 justify-center px-8">
-            {/* Logo & Title */}
-            <View className="items-center mb-12">
-              <View className="w-20 h-20 rounded-full bg-brand-soft items-center justify-center mb-4">
-                <Image
-                  source={require("@/assets/logo.png")}
-                  style={{ width: 68, height: 68 }}
-                  resizeMode="contain"
-                  accessible={false}
-                />
-              </View>
-              <Text className="text-display font-bold text-brand-strong mb-2" accessibilityRole="header">食光烙记</Text>
-              <Text className="text-body text-copy-muted">智能食材管理，健康饮食推荐</Text>
-            </View>
+    <Screen backgroundColor="#FDF8F0">
+      <View className="flex-1 px-6 pb-5">
+        <View className="flex-row items-center justify-between pt-2">
+          <TouchableOpacity
+            onPress={() => router.canGoBack() ? router.back() : router.replace('/')}
+            accessibilityRole="button"
+            accessibilityLabel="返回"
+            className="h-10 w-10 items-center justify-center active:opacity-70"
+          >
+            <FontAwesome6 name="chevron-left" size={14} color={brand} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => router.push('/feedback', { category: 'support', page: '登录页' })}
+            accessibilityRole="link"
+            accessibilityLabel="帮助"
+            className="h-10 w-10 items-center justify-center active:opacity-70"
+          >
+            <FontAwesome6 name="circle-question" size={16} color={muted} />
+          </TouchableOpacity>
+        </View>
 
-            {/* Form */}
-            <View className="gap-4">
-              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
-                <FontAwesome6 name="envelope" size={18} color={brand} className="mr-3" />
-                <TextInput
-                  className="flex-1 text-base text-ink py-0"
-                  placeholder="请输入注册时的邮箱或手机号"
-                  placeholderTextColor={muted}
-                  value={identifier}
-                  onChangeText={handleIdentifierChange}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoComplete="username"
-                  textContentType="username"
-                  accessibilityLabel="邮箱或手机号"
-                />
-              </View>
+        <View className="mt-5 flex-row items-center gap-2.5">
+          <Image source={require('@/assets/logo.png')} style={{ width: 42, height: 42 }} resizeMode="contain" accessible={false} />
+          <View>
+            <Text className="text-base font-black text-brand-strong">食光烙记</Text>
+            <Text className="mt-0.5 text-[9px] font-bold tracking-[1.5px] text-copy-muted">DIET · MEMORY · LIFE</Text>
+          </View>
+        </View>
 
-              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
-                <FontAwesome6 name="lock" size={18} color={brand} className="mr-3" />
+        <View className="mt-10">
+          <Text className="max-w-[330px] text-[32px] font-black leading-[39px] text-ink" accessibilityRole="header">
+            继续你的食光记录
+          </Text>
+          <Text className="mt-2 text-[12px] font-medium text-copy-muted">登录后同步饮食、库存与健康资料</Text>
+        </View>
+
+        <View className="mt-auto pt-8">
+        <View className="overflow-hidden rounded-[24px] border border-line bg-white/90 shadow-2xs">
+          {mode === 'sms' ? (
+            <>
+              <View className="h-[62px] flex-row items-center px-5">
+                <FontAwesome6 name="mobile-screen-button" size={18} color={brand} className="mr-3" />
                 <TextInput
-                  className="flex-1 text-base text-ink py-0"
-                  placeholder="请输入密码"
+                  className="flex-1 py-0 text-base text-ink"
+                  placeholder="中国大陆手机号"
                   placeholderTextColor={muted}
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPassword}
-                  autoComplete="current-password"
-                  textContentType="password"
-                  accessibilityLabel="密码"
+                  value={phone}
+                  onChangeText={(value) => { setPhone(value); if (challengeId) switchPhone(); }}
+                  editable={!challengeId && !loading}
+                  keyboardType="phone-pad"
+                  autoComplete="tel"
+                  textContentType="telephoneNumber"
+                  maxLength={15}
+                  accessibilityLabel="手机号"
                 />
+                {challengeId ? <TouchableOpacity onPress={switchPhone}><Text className="text-body font-bold text-brand">更换</Text></TouchableOpacity> : null}
+              </View>
+              {challengeId ? (
+                <>
+                  <View className="mx-5 h-px bg-line" />
+                  <View className="h-[62px] flex-row items-center px-5">
+                    <FontAwesome6 name="shield-halved" size={18} color={brand} className="mr-3" />
+                    <TextInput
+                      className="flex-1 py-0 text-base tracking-widest text-ink"
+                      placeholder="6 位验证码"
+                      placeholderTextColor={muted}
+                      value={code}
+                      onChangeText={(value) => setCode(value.replace(/\D/g, '').slice(0, 6))}
+                      keyboardType="number-pad"
+                      autoComplete="sms-otp"
+                      textContentType="oneTimeCode"
+                      maxLength={6}
+                      accessibilityLabel="短信验证码"
+                    />
+                    <TouchableOpacity onPress={handleSendCode} disabled={countdown > 0 || loading}>
+                      <Text className={countdown > 0 ? 'text-copy-muted text-body' : 'text-brand text-body font-medium'}>
+                        {countdown > 0 ? `${countdown}s` : '重新发送'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <View className="h-[62px] flex-row items-center px-5">
+                <FontAwesome6 name="user" size={18} color={brand} className="mr-3" />
+                <TextInput className="flex-1 py-0 text-base text-ink" placeholder="注册邮箱或手机号" placeholderTextColor={muted} value={identifier}
+                  onChangeText={(value) => { identifierWasEdited.current = true; setIdentifier(value); }} autoCapitalize="none" autoCorrect={false} autoComplete="username" textContentType="username" accessibilityLabel="邮箱或手机号" />
                 <TouchableOpacity
-                  onPress={() => setShowPassword(!showPassword)}
-                  className="min-w-touch min-h-touch items-center justify-center"
-                  accessibilityRole="button"
-                  accessibilityLabel={showPassword ? '隐藏密码' : '显示密码'}
+                  className="ml-2 min-h-touch flex-row items-center gap-1"
+                  onPress={() => setRememberIdentifier((value) => !value)}
+                  accessibilityRole="checkbox"
+                  accessibilityLabel="记住登录账号"
+                  accessibilityState={{ checked: rememberIdentifier }}
                 >
+                  <FontAwesome6 name={rememberIdentifier ? 'square-check' : 'square'} size={14} color={rememberIdentifier ? brand : muted} />
+                  <Text className="text-[10px] font-medium text-copy-muted">记住</Text>
+                </TouchableOpacity>
+              </View>
+              <View className="mx-5 h-px bg-line" />
+              <View className="h-[62px] flex-row items-center px-5">
+                <FontAwesome6 name="lock" size={18} color={brand} className="mr-3" />
+                <TextInput className="flex-1 py-0 text-base text-ink" placeholder="密码" placeholderTextColor={muted} value={password} onChangeText={setPassword}
+                  secureTextEntry={!showPassword} autoComplete="current-password" textContentType="password" accessibilityLabel="密码" />
+                <TouchableOpacity onPress={() => setShowPassword((value) => !value)} className="min-h-touch min-w-touch items-center justify-center">
                   <FontAwesome6 name={showPassword ? 'eye-slash' : 'eye'} size={18} color={muted} />
                 </TouchableOpacity>
               </View>
+            </>
+          )}
+        </View>
 
-              {/* 记住用户名与安全提示 */}
-              <View className="flex-row justify-between items-center px-1 mt-0.5">
-                <TouchableOpacity
-                  className="flex-row items-center gap-1.5 min-h-touch"
-                  onPress={handleRememberIdentifierChange}
-                  activeOpacity={0.7}
-                  accessibilityRole="checkbox"
-                  accessibilityState={{ checked: rememberIdentifier }}
-                  accessibilityLabel="记住登录方式"
-                >
-                  <FontAwesome6
-                    name={rememberIdentifier ? "square-check" : "square"}
-                    size={18}
-                    color={rememberIdentifier ? brand : muted}
-                  />
-                  <Text className="text-body text-copy-muted">记住登录方式</Text>
-                </TouchableOpacity>
-                <View className="flex-row items-center gap-1">
-                  <FontAwesome6 name="shield-halved" size={13} color={brand} />
-                  <Text className="text-caption text-copy-muted">加密保护</Text>
-                </View>
-              </View>
+        {mode === 'sms' && challengeId ? (
+          <Text className="mt-2 px-1 text-caption text-copy-muted">验证码已发送至 {phoneMasked}，5 分钟内有效</Text>
+        ) : null}
 
-              {error ? (
-                <View
-                  className="flex-row items-center justify-center bg-danger-soft rounded-control py-2 px-3"
-                  accessibilityRole="alert"
-                  accessibilityLiveRegion="polite"
-                >
-                  <FontAwesome6 name="circle-exclamation" size={14} color={critical} style={{ marginRight: 6 }} />
-                  <Text className="text-critical text-body font-medium">{error}</Text>
-                </View>
-              ) : null}
-
-              <TouchableOpacity
-                className={`bg-brand rounded-control h-14 items-center justify-center mt-2 active:bg-accent-hover ${isSubmitDisabled ? 'opacity-disabled' : ''}`}
-                onPress={handleLogin}
-                disabled={isSubmitDisabled}
-                accessibilityRole="button"
-                accessibilityLabel="登录"
-                accessibilityState={{ disabled: isSubmitDisabled, busy: loading }}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text className="text-white text-lg font-semibold">登录</Text>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                className="flex-row justify-center items-center mt-3 min-h-touch"
-                onPress={() => router.push('/register', returnTo ? { returnTo } : {})}
-                accessibilityRole="link"
-                accessibilityLabel="还没有账号？立即注册"
-              >
-                <Text className="text-copy-muted text-body">还没有账号？</Text>
-                <Text className="text-brand text-body font-semibold ml-1">立即注册</Text>
-              </TouchableOpacity>
-            </View>
+        {error ? (
+          <View className="mt-3 flex-row items-center rounded-2xl bg-danger-soft px-4 py-2.5" accessibilityRole="alert">
+            <FontAwesome6 name="circle-exclamation" size={14} color={critical} style={{ marginRight: 6 }} />
+            <Text className="flex-shrink text-body font-medium text-critical">{error}</Text>
           </View>
-      </KeyboardAvoidingView>
+        ) : null}
+
+        <TouchableOpacity
+          className={`mt-3 h-14 flex-row items-center justify-between rounded-full bg-brand py-1.5 pl-6 pr-1.5 shadow-xs ${disabled ? 'opacity-disabled' : ''}`}
+          onPress={mode === 'password' ? handlePasswordLogin : handleVerifyCode}
+          disabled={disabled}
+          accessibilityRole="button"
+          accessibilityState={{ disabled, busy: loading }}
+        >
+          {loading ? (
+            <View className="flex-1 items-center"><ActivityIndicator color="#fff" /></View>
+          ) : (
+            <>
+              <Text className="text-[15px] font-black text-white">
+                {mode === 'sms' ? (challengeId ? '验证并继续' : '获取验证码') : '登录并继续'}
+              </Text>
+              <View className="h-11 w-11 items-center justify-center rounded-full bg-white/20">
+                <FontAwesome6 name="arrow-right" size={13} color="#FFFFFF" />
+              </View>
+            </>
+          )}
+        </TouchableOpacity>
+
+        <View className="mt-2 h-14 flex-row gap-2">
+          <View className="flex-row rounded-full bg-[#F1EBE2] p-1" style={{ flex: 2 }}>
+            {(['sms', 'password'] as const).map((item) => {
+              const selected = mode === item;
+              return (
+                <TouchableOpacity
+                  key={item}
+                  onPress={() => changeMode(item)}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected }}
+                  className={`flex-1 items-center justify-center rounded-full ${selected ? 'bg-white shadow-2xs' : ''}`}
+                >
+                  <Text className={`text-[11px] ${selected ? 'font-black text-brand-strong' : 'font-bold text-copy-muted'}`}>
+                    {item === 'sms' ? '验证码登录' : '密码登录'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <TouchableOpacity
+            className="flex-1 flex-row items-center justify-between rounded-full bg-[#F1EBE2] py-1 pl-4 pr-1"
+            onPress={() => router.push('/register', returnTo ? { returnTo } : {})}
+            accessibilityRole="button"
+            accessibilityLabel="创建账号"
+          >
+            <Text className="text-[11px] font-bold text-brand-strong">创建账号</Text>
+            <View className="h-10 w-10 items-center justify-center rounded-full bg-white/80">
+              <FontAwesome6 name="arrow-right" size={11} color={brand} />
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        <View className="mt-3 flex-row flex-wrap items-center justify-center">
+          <Text className="text-[9px] text-copy-muted">继续即表示你已阅读并同意</Text>
+          <TouchableOpacity onPress={() => router.push('/legal', { type: 'terms' })} accessibilityRole="link">
+            <Text className="text-[9px] font-medium text-brand">服务协议</Text>
+          </TouchableOpacity>
+          <Text className="text-[9px] text-copy-muted">与</Text>
+          <TouchableOpacity onPress={() => router.push('/legal', { type: 'privacy' })} accessibilityRole="link">
+            <Text className="text-[9px] font-medium text-brand">隐私政策</Text>
+          </TouchableOpacity>
+        </View>
+        </View>
+      </View>
     </Screen>
   );
 }

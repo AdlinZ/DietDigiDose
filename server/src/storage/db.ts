@@ -78,6 +78,7 @@ export function initDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       deleted_at DATETIME,
       deleted_by INTEGER,
+      ip_location TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL

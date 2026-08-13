@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Image, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
@@ -39,9 +39,12 @@ export default function AboutScreen() {
 
       <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 48 }} showsVerticalScrollIndicator={false}>
         <View className="items-center py-7">
-          <View className="w-16 h-16 rounded-3xl bg-brand items-center justify-center shadow-md mb-3">
-            <FontAwesome6 name="leaf" size={28} color="#FFFFFF" />
-          </View>
+          <Image
+            source={require("@/assets/logo.png")}
+            className="mb-3 h-20 w-20 rounded-3xl"
+            resizeMode="contain"
+            accessibilityLabel="食光烙记 Logo"
+          />
           <Text className="text-xl font-black text-ink">食光烙记</Text>
           <Text className="text-xs text-copy-muted mt-1">让每一餐都留下健康的记录</Text>
         </View>

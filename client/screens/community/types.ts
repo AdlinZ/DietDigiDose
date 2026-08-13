@@ -20,6 +20,7 @@ export interface Post {
   author_is_expert?: boolean;
   recommendation_reason?: string;
   recommendation_score?: number;
+  ip_location?: string | null;
   created_at: string;
 }
 

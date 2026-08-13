@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Dimensions,
+  useWindowDimensions,
   Alert,
   Modal,
   DeviceEventEmitter,
@@ -14,6 +15,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Screen } from "@/components/Screen";
+import { GlassSurface } from "@/components/GlassSurface";
 import { useFocusEffect } from "expo-router";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
@@ -21,7 +23,7 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { LineChart } from "react-native-chart-kit";
 import { addLocalDays, toLocalDateKey } from "@/utils/date";
-import { communityApi, dietApi, healthApi, recipesApi } from "@/services/api";
+import { authApi, communityApi, dietApi, healthApi, recipesApi } from "@/services/api";
 import { ALLERGY_LABELS, hasSafetyProfile, type HealthProfile as SavedHealthProfile } from "@/utils/healthProfile";
 
 
@@ -46,11 +48,14 @@ interface DietRecord {
 }
 
 interface UserLevel { level: number; title: string; xp: number; nextXp: number | null; progress: number; }
+interface CheckInStatus { checkedIn: boolean; date: string; xpReward: number; }
+interface CheckInResult { checkedIn: boolean; alreadyCheckedIn: boolean; awardedXp: number; level: UserLevel; }
 
 export default function ProfileScreen() {
   const router = useSafeRouter();
   const insets = useSafeAreaInsets();
-  const { user, isAuthenticated, isLoading: authLoading, logout } = useAuth();
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const { user, token, isAuthenticated, isLoading: authLoading, logout } = useAuth();
   const authFetch = useAuthFetch();
 
   const [healthData, setHealthData] = useState<HealthData | null>(null);
@@ -60,19 +65,23 @@ export default function ProfileScreen() {
   const [dietTrend, setDietTrend] = useState<{ date: string; calories: number }[]>([]);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const profileScrollOffset = useRef(0);
   const [waterMl, setWaterMl] = useState<number | null>(null);
   const [favoriteCount, setFavoriteCount] = useState(0);
   const [dietRecordCount, setDietRecordCount] = useState(0);
   const [streakDays, setStreakDays] = useState(0);
   const [followingCount, setFollowingCount] = useState(0);
   const [userLevel, setUserLevel] = useState<UserLevel | null>(null);
+  const [checkInStatus, setCheckInStatus] = useState<CheckInStatus | null>(null);
+  const [checkingIn, setCheckingIn] = useState(false);
   const [loadWarning, setLoadWarning] = useState<string | null>(null);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
 
   const today = toLocalDateKey();
 
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener("open-quick-record", () => {
-      router.push("/");
+      router.push("/diet-record");
     });
     return () => sub.remove();
   }, [router]);
@@ -92,8 +101,9 @@ export default function ProfileScreen() {
       recipesApi.favoriteCount(authFetch),
       communityApi.following<{ id: number }>(authFetch),
       communityApi.level<UserLevel>(authFetch),
+      communityApi.checkInStatus<CheckInStatus>(authFetch),
     ]);
-    const [healthResult, healthLogsResult, healthProfileResult, dietResult, favoriteResult, followingResult, levelResult] = results;
+    const [healthResult, healthLogsResult, healthProfileResult, dietResult, favoriteResult, followingResult, levelResult, checkInResult] = results;
     const failedSections: string[] = [];
 
     if (favoriteResult.status === "fulfilled") setFavoriteCount(Number(favoriteResult.value?.count || 0));
@@ -102,6 +112,8 @@ export default function ProfileScreen() {
     else failedSections.push("关注");
     if (levelResult.status === "fulfilled") setUserLevel(levelResult.value);
     else failedSections.push("等级");
+    if (checkInResult.status === "fulfilled") setCheckInStatus(checkInResult.value);
+    else failedSections.push("签到状态");
 
     if (healthResult.status === "fulfilled") {
       const latestHealth = Array.isArray(healthResult.value) ? healthResult.value[0] : healthResult.value;
@@ -149,8 +161,20 @@ export default function ProfileScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Expo Tabs can restore the native list at the top without emitting a
+      // scroll event. Reset the derived header state on focus so a stale
+      // collapsed header never covers the profile hero.
+      profileScrollOffset.current = 0;
+      setIsScrolled(false);
       fetchData();
-    }, [fetchData])
+      if (token) {
+        void authApi.notificationUnreadCount(token)
+          .then(({ count }) => setUnreadNotificationCount(count))
+          .catch(() => undefined);
+      } else {
+        setUnreadNotificationCount(0);
+      }
+    }, [fetchData, token])
   );
 
   const handleAddWater = async (addAmount: number) => {
@@ -167,6 +191,26 @@ export default function ProfileScreen() {
     }
   };
 
+  const handleCheckIn = async () => {
+    if (checkingIn || checkInStatus?.checkedIn) return;
+    setCheckingIn(true);
+    try {
+      const result = await communityApi.checkIn<CheckInResult>(authFetch);
+      setCheckInStatus((current) => ({
+        checkedIn: true,
+        date: current?.date ?? today,
+        xpReward: current?.xpReward ?? result.awardedXp,
+      }));
+      setUserLevel(result.level);
+      Alert.alert("签到成功", result.awardedXp > 0 ? `成长经验 +${result.awardedXp} XP` : "今天已经签到过了");
+    } catch (error) {
+      console.error("Daily check-in failed", error);
+      Alert.alert("签到失败", "暂时无法签到，请稍后重试");
+    } finally {
+      setCheckingIn(false);
+    }
+  };
+
   const handleLogout = () => {
     setLogoutModalOpen(true);
   };
@@ -178,25 +222,139 @@ export default function ProfileScreen() {
   };
 
   if (!authLoading && !isAuthenticated) {
+    const isWideGuestLayout = viewportWidth >= 820 && viewportHeight >= 620;
+
     return (
-      <Screen backgroundColor="#FDF8F0">
-        <View className="flex-1 items-center justify-center px-8">
-          <View className="w-20 h-20 rounded-full bg-brand/10 items-center justify-center mb-6 border border-brand/20">
-            <FontAwesome6 name="user" size={36} color="#2D6A4F" />
+      <Screen backgroundColor="#F6F1E7" safeAreaEdges={["top", "left", "right"]}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: isWideGuestLayout ? 136 : 104 }}
+        >
+          <View className={`flex-1 items-center justify-center px-5 ${isWideGuestLayout ? "py-6" : "py-4"}`}>
+            <View
+              style={{
+                width: "100%",
+                maxWidth: 980,
+                flexDirection: isWideGuestLayout ? "row" : "column",
+              }}
+              className="overflow-hidden rounded-[34px] border border-[#DCD4C7] bg-[#FFFCF7] shadow-lg"
+            >
+              <View
+                style={{
+                  flex: isWideGuestLayout ? 1.35 : undefined,
+                  minHeight: isWideGuestLayout ? 360 : 288,
+                }}
+                className={`relative overflow-hidden bg-brand ${isWideGuestLayout ? "px-6 py-7" : "px-5 py-5"}`}
+              >
+                <View className="absolute -right-14 -top-16 h-52 w-52 rounded-full border border-white/10 bg-white/5" />
+                <View className="absolute -bottom-20 -left-16 h-56 w-56 rounded-full bg-highlight/10" />
+                <View className="absolute right-8 top-24 h-3 w-3 rounded-full bg-highlight" />
+
+                <View className={`${isWideGuestLayout ? "mb-8" : "mb-4"} flex-row items-center gap-2 self-start rounded-full border border-white/15 bg-white/10 px-3 py-1.5`}>
+                  <FontAwesome6 name="seedling" size={10} color="#F4D884" />
+                  <Text className="text-[10px] font-black tracking-[1.5px] text-[#FFF8E8]">
+                    MY FOOD JOURNAL
+                  </Text>
+                </View>
+
+                <Text className={`max-w-[440px] font-black text-white ${isWideGuestLayout ? "text-[30px] leading-[40px]" : "text-[25px] leading-[33px]"}`}>
+                  把每一餐，慢慢吃成更懂自己的生活。
+                </Text>
+                <Text className={`max-w-[430px] text-[#DCECE2] ${isWideGuestLayout ? "mt-3 text-sm leading-6" : "mt-2 text-xs leading-5"}`}>
+                  {isWideGuestLayout
+                    ? "记下营养、身体变化和厨房里的新鲜度，让健康不再是一串冷冰冰的数字。"
+                    : "记录三餐与身体变化，让健康不再是一串冷冰冰的数字。"}
+                </Text>
+
+                {isWideGuestLayout ? (
+                  <View className="mt-7 flex-row flex-wrap gap-2">
+                    {[
+                      ["utensils", "三餐营养"],
+                      ["chart-line", "身体趋势"],
+                      ["box-open", "食材保鲜"],
+                    ].map(([icon, label]) => (
+                      <View key={label} className="flex-row items-center gap-2 rounded-full bg-black/10 px-3 py-2">
+                        <FontAwesome6 name={icon as any} size={10} color="#F4D884" />
+                        <Text className="text-[11px] font-bold text-white">{label}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+
+                <View className={`mt-auto ${isWideGuestLayout ? "pt-8" : "pt-5"}`}>
+                  <View className={`max-w-[440px] flex-row items-center rounded-[22px] border border-white/15 bg-white/10 ${isWideGuestLayout ? "p-3.5" : "p-3"}`}>
+                    <View className={`${isWideGuestLayout ? "h-11 w-11" : "h-10 w-10"} items-center justify-center rounded-2xl bg-highlight`}>
+                      <FontAwesome6 name="mug-hot" size={isWideGuestLayout ? 17 : 15} color="#3D3229" />
+                    </View>
+                    <View className="ml-3 flex-1">
+                      <Text className="text-[10px] font-bold text-[#BFD8C7]">今天 · 07:40</Text>
+                      <Text className="mt-0.5 text-sm font-black text-white">从一顿好早餐开始</Text>
+                    </View>
+                    <View className="items-end">
+                      <Text className="text-base font-black text-highlight">01</Text>
+                      <Text className="text-[9px] text-[#BFD8C7]">今日记录</Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+
+              <View
+                style={{ width: isWideGuestLayout ? 350 : "100%" }}
+                className={`justify-between bg-[#FFFCF7] ${isWideGuestLayout ? "p-6" : "px-5 py-5"}`}
+              >
+                <View>
+                  <View className={`${isWideGuestLayout ? "mb-7" : "mb-4"} flex-row items-center justify-between`}>
+                    <View className={`${isWideGuestLayout ? "h-12 w-12" : "h-10 w-10"} items-center justify-center rounded-2xl bg-brand-soft`}>
+                      <FontAwesome6 name="fingerprint" size={isWideGuestLayout ? 21 : 17} color="#2D6A4F" />
+                    </View>
+                    <View className="rounded-full bg-[#F3E8C8] px-3 py-1.5">
+                      <Text className="text-[10px] font-black text-[#705B22]">个人空间</Text>
+                    </View>
+                  </View>
+
+                  <Text className={`${isWideGuestLayout ? "text-2xl leading-8" : "text-xl leading-7"} font-black text-ink`}>欢迎回来</Text>
+                  <Text className={`${isWideGuestLayout ? "mt-2 text-sm leading-6" : "mt-1.5 text-xs leading-5"} text-copy-muted`}>
+                    登录后，你的每一次记录都会沉淀成专属健康档案。
+                  </Text>
+
+                  <View className={`${isWideGuestLayout ? "my-6 gap-3" : "my-4 flex-row gap-2"}`}>
+                    {[
+                      ["shield-heart", "隐私留在你的账户里", "档案数据仅用于个性化体验"],
+                      ["wand-magic-sparkles", "越记录，推荐越懂你", "从饮食偏好到安全提醒"],
+                    ].map(([icon, title, subtitle]) => (
+                      <View key={title} className={`${isWideGuestLayout ? "flex-row items-center p-3" : "flex-1 p-2.5"} rounded-2xl bg-[#F7F3EB]`}>
+                        <View className={`${isWideGuestLayout ? "h-9 w-9" : "h-7 w-7"} items-center justify-center rounded-xl bg-white`}>
+                          <FontAwesome6 name={icon as any} size={13} color="#2D6A4F" />
+                        </View>
+                        <View className={`${isWideGuestLayout ? "ml-3" : "mt-2"} flex-1`}>
+                          <Text className={`${isWideGuestLayout ? "text-xs" : "text-[10px] leading-4"} font-black text-ink`}>{title}</Text>
+                          {isWideGuestLayout ? (
+                            <Text className="mt-0.5 text-[10px] leading-4 text-copy-muted">{subtitle}</Text>
+                          ) : null}
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+
+                <View>
+                  <TouchableOpacity
+                    className="w-full flex-row items-center justify-center rounded-2xl bg-brand px-5 py-4 shadow-md active:opacity-90"
+                    onPress={() => router.push("/login")}
+                    accessibilityRole="button"
+                    accessibilityLabel="登录或注册"
+                  >
+                    <Text className="text-base font-black text-white">登录 / 注册</Text>
+                    <FontAwesome6 name="arrow-right" size={12} color="white" style={{ marginLeft: 10 }} />
+                  </TouchableOpacity>
+                  <Text className="mt-3 text-center text-[10px] leading-4 text-copy-muted">
+                    新朋友也可以从登录页快速创建账户
+                  </Text>
+                </View>
+              </View>
+            </View>
           </View>
-          <Text className="text-xl font-black text-ink mb-2">
-            欢迎来到食光烙记
-          </Text>
-          <Text className="text-sm text-copy-muted text-center mb-8 leading-6 px-4">
-            登录后精准记录三餐营养、追踪身体健康指标与食材保鲜。
-          </Text>
-          <TouchableOpacity
-            className="bg-brand px-10 py-4 rounded-2xl w-full items-center shadow-md active:opacity-90"
-            onPress={() => router.push("/login")}
-          >
-            <Text className="text-white text-base font-bold">登录 / 注册</Text>
-          </TouchableOpacity>
-        </View>
+        </ScrollView>
       </Screen>
     );
   }
@@ -279,7 +437,7 @@ export default function ProfileScreen() {
       {/* 悬浮 Mini 胶囊顶栏 */}
       {isScrolled && (
         <View style={{ top: miniTopOffset }} className="absolute left-4 right-4 z-50">
-          <View className="bg-white/95 px-4 py-2 rounded-full flex-row items-center justify-between shadow-lg border border-line backdrop-blur-md">
+          <GlassSurface className="px-4 py-2 rounded-full flex-row items-center justify-between shadow-lg border border-line">
             <View className="flex-row items-center gap-2">
               <View className="w-7 h-7 rounded-full bg-brand/15 items-center justify-center border border-brand">
                 <FontAwesome6 name="user" size={11} color="#2D6A4F" />
@@ -294,6 +452,19 @@ export default function ProfileScreen() {
 
             <View className="flex-row items-center gap-2">
               <TouchableOpacity
+                onPress={() => router.push("/notifications")}
+                accessibilityRole="button"
+                accessibilityLabel="通知中心"
+                className="relative w-7 h-7 rounded-full bg-background-secondary items-center justify-center"
+              >
+                <FontAwesome6 name="bell" size={10} color="#3D3229" />
+                {unreadNotificationCount > 0 ? (
+                  <View className="absolute -right-1 -top-1 h-3.5 min-w-3.5 items-center justify-center rounded-full bg-highlight px-0.5">
+                    <Text className="text-[7px] font-black text-ink">{unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}</Text>
+                  </View>
+                ) : null}
+              </TouchableOpacity>
+              <TouchableOpacity
                 onPress={() => router.push("/profile-edit")}
                 className="w-7 h-7 rounded-full bg-background-secondary items-center justify-center"
               >
@@ -306,7 +477,7 @@ export default function ProfileScreen() {
                 <FontAwesome6 name="gear" size={11} color="#3D3229" />
               </TouchableOpacity>
             </View>
-          </View>
+          </GlassSurface>
         </View>
       )}
 
@@ -314,6 +485,7 @@ export default function ProfileScreen() {
         showsVerticalScrollIndicator={false}
         onScroll={(e) => {
           const offsetY = e.nativeEvent.contentOffset.y;
+          profileScrollOffset.current = offsetY;
           if (offsetY > 70 && !isScrolled) setIsScrolled(true);
           else if (offsetY <= 70 && isScrolled) setIsScrolled(false);
         }}
@@ -358,6 +530,19 @@ export default function ProfileScreen() {
 
             <View className="flex-row items-center gap-2">
               <TouchableOpacity
+                onPress={() => router.push("/notifications")}
+                accessibilityRole="button"
+                accessibilityLabel="通知中心"
+                className="relative w-9 h-9 rounded-full bg-white/15 border border-white/20 items-center justify-center backdrop-blur-md shadow-xs active:bg-white/30"
+              >
+                <FontAwesome6 name="bell" size={13} color="#FFF" />
+                {unreadNotificationCount > 0 ? (
+                  <View className="absolute -right-1 -top-1 h-4 min-w-4 items-center justify-center rounded-full bg-highlight px-1">
+                    <Text className="text-[8px] font-black text-ink">{unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}</Text>
+                  </View>
+                ) : null}
+              </TouchableOpacity>
+              <TouchableOpacity
                 onPress={() => router.push("/profile-edit")}
                 className="w-9 h-9 rounded-full bg-white/15 border border-white/20 items-center justify-center backdrop-blur-md shadow-xs active:bg-white/30"
               >
@@ -379,6 +564,18 @@ export default function ProfileScreen() {
                 <Text className="text-[10px] text-emerald-100">{userLevel.nextXp ? `距离下一等级 ${userLevel.nextXp - userLevel.xp} XP` : "已达最高等级"}</Text>
               </View>
               <View className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/15"><View className="h-full rounded-full bg-highlight" style={{ width: `${userLevel.progress}%` }} /></View>
+              <TouchableOpacity
+                onPress={() => void handleCheckIn()}
+                disabled={checkingIn || checkInStatus?.checkedIn}
+                accessibilityRole="button"
+                accessibilityLabel={checkInStatus?.checkedIn ? "今日已签到" : "每日签到"}
+                className={`mt-2.5 flex-row items-center justify-center rounded-lg border py-2 ${checkInStatus?.checkedIn ? "border-white/10 bg-white/5" : "border-highlight/50 bg-highlight"}`}
+              >
+                {checkingIn ? <ActivityIndicator size="small" color="#3D3229" /> : <FontAwesome6 name={checkInStatus?.checkedIn ? "circle-check" : "calendar-check"} size={11} color={checkInStatus?.checkedIn ? "#DCECE2" : "#3D3229"} />}
+                <Text className={`ml-1.5 text-[11px] font-black ${checkInStatus?.checkedIn ? "text-emerald-100" : "text-ink"}`}>
+                  {checkingIn ? "签到中…" : checkInStatus?.checkedIn ? "今日已签到" : `每日签到 +${checkInStatus?.xpReward ?? 5} XP`}
+                </Text>
+              </TouchableOpacity>
             </View>
           ) : null}
 

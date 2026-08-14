@@ -530,67 +530,35 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
         className="bg-canvas"
       >
-        {/* Emerald 绿色智能看板 Header 顶栏 */}
-        <View className="bg-brand px-5 pt-4 pb-5 rounded-b-[28px] shadow-sm relative overflow-hidden">
-          <View className="absolute -right-12 -top-12 w-44 h-44 rounded-full bg-white/5" />
-          <View className="absolute left-1/3 -bottom-8 w-32 h-32 rounded-full bg-highlight/10" />
-
-          {/* 第一行：用户状态与通知入口 */}
-          <View className="flex-row items-center justify-between mb-3">
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => router.push(isAuthenticated ? "/profile" : "/login")}
-              className="flex-row items-center gap-2.5 bg-black/20 px-3 py-1.5 rounded-full border border-white/15 shadow-2xs"
-            >
-              {isAuthenticated ? (
-                <Image
-                  source={getAvatarSource(user?.avatar_url, user?.id ?? user?.username)}
-                  className="w-6 h-6 rounded-full border border-highlight"
-                  style={{ width: 24, height: 24, borderRadius: 12 }}
-                />
-              ) : (
-                <View className="w-6 h-6 rounded-full bg-white/20 items-center justify-center">
-                  <FontAwesome6 name="user" size={10} color="#FFF" />
-                </View>
-              )}
-              <Text className="text-xs font-bold text-white">
-                {isAuthenticated ? `嗨，${user?.username || `食友${user?.id}`}` : "未登录 · 点击登录"}
-              </Text>
-            </TouchableOpacity>
-
-            <View className="flex-row items-center gap-2">
-              <TouchableOpacity onPress={() => router.push("/notifications")} className="w-8 h-8 rounded-full bg-white/15 border border-white/20 items-center justify-center relative shadow-xs active:bg-white/30 backdrop-blur-md">
-                <FontAwesome6 name="bell" size={12} color="#FFF" />
-                {unreadNotificationCount > 0 && (
-                  <View className="absolute -right-1 -top-1 min-w-4 h-4 px-1 rounded-full bg-amber-400 items-center justify-center">
-                    <Text className="text-[8px] font-black text-[#3D3229]">{unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* 首页主任务：直接搜索或让 AI 开始配餐 */}
-          <View className="mt-1 bg-white p-2 rounded-2xl border border-white/40 shadow-sm flex-row items-center gap-2">
-            <View className="flex-1 bg-canvas px-3.5 py-2.5 rounded-xl border border-line/60 flex-row items-center gap-2">
-            <FontAwesome6 name="magnifying-glass" size={13} color="#8B7D6B" />
-            <TextInput
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              placeholder="搜索低卡菜谱、食材或热量..."
-              placeholderTextColor="#B0A495"
-              className="flex-1 text-xs text-ink py-0"
-            />
-            {searchQuery ? (
-              <TouchableOpacity onPress={() => setSearchQuery("")}>
-                <FontAwesome6 name="circle-xmark" size={13} color="#B0A495" />
-              </TouchableOpacity>
-            ) : null}
+        {/* 首页工具栏：去掉厚重品牌外壳，只保留必要入口。 */}
+        <View className="bg-canvas px-5 pt-3 pb-3">
+          <View className="flex-row items-center gap-2">
+            <View className="h-11 flex-1 flex-row items-center gap-2 rounded-full border border-line bg-white px-4 shadow-2xs">
+              <FontAwesome6 name="magnifying-glass" size={13} color="#2D6A4F" />
+              <TextInput
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="搜索低卡菜谱、食材或热量..."
+                placeholderTextColor="#A89B8A"
+                className="min-w-0 flex-1 py-0 text-xs font-medium text-ink"
+                returnKeyType="search"
+              />
+              {searchQuery ? (
+                <TouchableOpacity
+                  onPress={() => setSearchQuery("")}
+                  accessibilityRole="button"
+                  accessibilityLabel="清空搜索"
+                >
+                  <FontAwesome6 name="circle-xmark" size={13} color="#A89B8A" />
+                </TouchableOpacity>
+              ) : null}
             </View>
 
             <TouchableOpacity
               onPress={() => router.push("/ai-assistant")}
-              className="bg-brand px-4 py-2.5 rounded-xl flex-row items-center gap-1.5 shadow-xs active:opacity-90"
+              accessibilityRole="button"
+              accessibilityLabel="打开食语 AI 配餐"
+              className="h-11 flex-row items-center gap-1.5 rounded-full bg-brand px-4 shadow-xs active:opacity-90"
             >
               <FontAwesome6 name="wand-magic-sparkles" size={12} color="#FFF" />
               <Text className="text-xs font-black text-white">配餐</Text>

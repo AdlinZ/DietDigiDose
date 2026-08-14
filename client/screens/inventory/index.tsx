@@ -16,6 +16,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { Screen } from "@/components/Screen";
+import { GlassSurface } from "@/components/GlassSurface";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
@@ -1075,24 +1076,6 @@ export default function InventoryScreen() {
   });
   const expiringCount = priorityItems.length;
 
-  const activeSegmentMeta = {
-    inventory: {
-      title: "食材保鲜库",
-      subtitle: "分区保鲜 · 临期提醒 · 智能配餐",
-      status: expiringCount > 0 ? `${expiringCount} 件待处理` : "状态良好",
-    },
-    recipes: {
-      title: "今日精选食谱",
-      subtitle: "结合库存，找到更合适的一餐",
-      status: `${recipeTotal} 道`,
-    },
-    kitchenware: {
-      title: "厨房装备库",
-      subtitle: "厨具状态、保养与专属食谱",
-      status: `${kitchenware.length} 件`,
-    },
-  }[activeSegment];
-
   const filteredRecipes = filterAndRankRecipes(recipes, items, activeRecipeCategory, recipeSearchQuery, cookTimeLimit, matchStatusFilter);
   const filteredKitchenware = filterKitchenware(kitchenware, activeKitchenwareCategory);
 
@@ -1100,6 +1083,7 @@ export default function InventoryScreen() {
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
+        stickyHeaderIndices={[0]}
         contentContainerStyle={{ paddingBottom: 132 }}
         className="bg-canvas"
         onScroll={(event) => {
@@ -1110,37 +1094,9 @@ export default function InventoryScreen() {
         }}
         scrollEventThrottle={16}
       >
-        {/* 统一品牌头部：标题、状态和三类资产在首屏内形成清晰层级。 */}
-        <View className="relative overflow-hidden rounded-b-[30px] bg-brand px-5 pt-4 pb-5 shadow-sm">
-          <View className="absolute -right-12 -top-12 h-44 w-44 rounded-full bg-white/5" />
-          <View className="absolute left-1/3 -bottom-12 h-32 w-32 rounded-full bg-highlight/10" />
-
-          <View className="flex-row items-start justify-between">
-            <View className="flex-1 pr-4">
-              <Text className="text-[10px] font-bold tracking-[2px] text-emerald-100/75">膳食资产</Text>
-              <Text className="mt-1 text-[21px] font-black leading-7 text-white">{activeSegmentMeta.title}</Text>
-              <Text className="mt-0.5 text-[11px] font-medium text-emerald-50/75">{activeSegmentMeta.subtitle}</Text>
-            </View>
-            <View className="flex-col items-end gap-1.5">
-              <View className="mt-1 flex-row items-center gap-1.5 rounded-full border border-white/15 bg-black/15 px-3 py-1.5">
-                <View className={`h-1.5 w-1.5 rounded-full ${activeSegment === "inventory" && expiringCount > 0 ? "bg-highlight" : "bg-emerald-200"}`} />
-                <Text className="text-[10px] font-bold text-white">{activeSegmentMeta.status}</Text>
-              </View>
-
-              <TouchableOpacity
-                onPress={() => setFamilyModalVisible(true)}
-                className="flex-row items-center gap-1 rounded-full bg-white/20 px-2.5 py-1 border border-white/30 active:bg-white/30"
-              >
-                <FontAwesome6 name={activeHousehold ? "house-user" : "user"} size={10} color="#FFFFFF" />
-                <Text className="text-[10px] font-black text-white">
-                  {activeHousehold ? activeHousehold.name : "个人私享库"}
-                </Text>
-                <FontAwesome6 name="chevron-down" size={8} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View className="mt-4 flex-row rounded-[18px] border border-white/30 bg-white/95 p-1.5 shadow-sm">
+        {/* 三类资产是页面唯一顶栏，滚动时保持吸顶。 */}
+        <GlassSurface className="border-b border-line/70 px-4 py-2">
+          <View className="h-11 flex-row items-center gap-1">
             {[
               { key: "inventory" as const, label: "食材", count: items.length, icon: "boxes-stacked" },
               { key: "recipes" as const, label: "食谱", count: recipeTotal, icon: "utensils" },
@@ -1151,22 +1107,22 @@ export default function InventoryScreen() {
                 <TouchableOpacity
                   key={segment.key}
                   onPress={() => setActiveSegment(segment.key)}
-                  accessibilityRole="button"
+                  accessibilityRole="tab"
                   accessibilityState={{ selected: isActive }}
-                  className={`flex-1 flex-row items-center justify-center gap-1.5 rounded-[14px] py-2.5 ${
-                    isActive ? "bg-[#E5F0E8]" : "bg-transparent"
+                  className={`flex-1 flex-row items-center justify-center gap-1.5 rounded-full py-2.5 ${
+                    isActive ? "bg-brand shadow-xs" : "bg-transparent"
                   }`}
                 >
                   <FontAwesome6
                     name={segment.icon as any}
                     size={12}
-                    color={isActive ? "#2D6A4F" : "#9B8E7D"}
+                    color={isActive ? "#FFFFFF" : "#9B8E7D"}
                   />
-                  <Text className={`text-xs ${isActive ? "font-black text-brand" : "font-bold text-copy-muted"}`}>
+                  <Text className={`text-xs ${isActive ? "font-black text-white" : "font-bold text-copy-muted"}`}>
                     {segment.label}
                   </Text>
-                  <View className={`min-w-5 items-center rounded-full px-1.5 py-0.5 ${isActive ? "bg-white/80" : "bg-[#F3EEE7]"}`}>
-                    <Text className={`text-[9px] font-black ${isActive ? "text-brand" : "text-[#9B8E7D]"}`}>
+                  <View className={`min-w-5 items-center rounded-full px-1.5 py-0.5 ${isActive ? "bg-white/20" : "bg-[#F3EEE7]"}`}>
+                    <Text className={`text-[9px] font-black ${isActive ? "text-white" : "text-[#9B8E7D]"}`}>
                       {segment.count}
                     </Text>
                   </View>
@@ -1174,7 +1130,7 @@ export default function InventoryScreen() {
               );
             })}
           </View>
-        </View>
+        </GlassSurface>
 
         {sectionErrors[activeSegment] ? (
           <TouchableOpacity
@@ -1415,66 +1371,71 @@ export default function InventoryScreen() {
                             />
                           ))}
                         </View>
+
+                        {/* 与食谱页保持一致的筛选工具卡 */}
+                        <View className="pt-3 pb-1">
+                          <View className="bg-white rounded-[24px] p-4 border border-line shadow-2xs">
+                            <View className="mb-3 flex-row items-center justify-between border-b border-[#F4EFE6] pb-3">
+                              <View className="flex-1 pr-2">
+                                <View className="flex-row items-center gap-2">
+                                  <View className="w-6 h-6 rounded-lg bg-brand/10 items-center justify-center">
+                                    <FontAwesome6 name="sliders" size={10} color="#2D6A4F" />
+                                  </View>
+                                  <Text className="text-[14px] font-black text-ink">按位置或品类查看</Text>
+                                </View>
+                                <Text className="mt-0.5 text-[10px] font-medium text-copy-muted">
+                                  快速定位不同存放区域与食材类型
+                                </Text>
+                              </View>
+
+                              <TouchableOpacity
+                                onPress={openHistoryModal}
+                                className="flex-row items-center rounded-full border border-[#D8E7DD] bg-[#E7F0EA] px-3 py-1.5 active:opacity-80"
+                              >
+                                <FontAwesome6 name="clock-rotate-left" size={10} color="#2D6A4F" />
+                                <Text className="ml-1.5 text-[10px] font-black text-brand">操作历史</Text>
+                              </TouchableOpacity>
+                            </View>
+
+                            <View>
+                              <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                className="flex-row"
+                                contentContainerStyle={{ gap: 8 }}
+                              >
+                                {["全部", "冷藏库", "冷冻库", "常温库", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((cat) => {
+                                  const cleanCat = cat.split(" ")[0];
+                                  const isActive = activeInventoryCategory === cleanCat;
+                                  return (
+                                    <TouchableOpacity
+                                      key={cat}
+                                      onPress={() => setActiveInventoryCategory(cleanCat)}
+                                      accessibilityRole="button"
+                                      accessibilityState={{ selected: isActive }}
+                                      className={`rounded-full border px-3 py-1.5 ${
+                                        isActive
+                                          ? "border-brand bg-brand"
+                                          : "border-[#E7DED1] bg-[#FAF8F5]"
+                                      }`}
+                                    >
+                                      <Text
+                                        className={`text-xs ${
+                                          isActive ? "font-black text-white" : "font-semibold text-[#756858]"
+                                        }`}
+                                      >
+                                        {cat}
+                                      </Text>
+                                    </TouchableOpacity>
+                                  );
+                                })}
+                              </ScrollView>
+                            </View>
+                          </View>
+                        </View>
                       </View>
                     );
                   })()}
-                </View>
-
-                {/* Category Slider & Smart Storage Filter (Wrapped in White Bento Card Container) */}
-                <View className="px-5 pt-2 pb-3">
-                  <View className="bg-white rounded-[24px] p-4 border border-line shadow-2xs">
-                    <View className="mb-3 flex-row items-center justify-between px-0.5">
-                      <View className="flex-row items-center gap-2">
-                        <View className="w-6 h-6 rounded-lg bg-brand/10 items-center justify-center">
-                          <FontAwesome6 name="sliders" size={10} color="#2D6A4F" />
-                        </View>
-                        <Text className="text-[12px] font-black text-ink">按位置或品类查看</Text>
-                      </View>
-
-                      <TouchableOpacity
-                        onPress={openHistoryModal}
-                        className="flex-row items-center gap-1.5 rounded-full border border-[#E7DED1] bg-[#FAF8F5] px-2.5 py-1 active:bg-[#F3EFE9]"
-                      >
-                        <FontAwesome6 name="clock-rotate-left" size={10} color="#8B7D6B" />
-                        <Text className="text-[10px] font-bold text-copy-muted">操作历史</Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    <View>
-                      <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        className="flex-row"
-                        contentContainerStyle={{ gap: 8 }}
-                      >
-                      {["全部", "冷藏库", "冷冻库", "常温库", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((cat) => {
-                        const cleanCat = cat.split(" ")[0];
-                        const isActive = activeInventoryCategory === cleanCat;
-                        return (
-                          <TouchableOpacity
-                            key={cat}
-                            onPress={() => setActiveInventoryCategory(cleanCat)}
-                            accessibilityRole="button"
-                            accessibilityState={{ selected: isActive }}
-                            className={`rounded-full border px-3 py-1.5 ${
-                              isActive
-                                ? "border-brand bg-brand"
-                                : "border-[#E7DED1] bg-[#FAF8F5]"
-                            }`}
-                          >
-                            <Text
-                              className={`text-xs ${
-                                isActive ? "font-black text-white" : "font-semibold text-[#756858]"
-                              }`}
-                            >
-                              {cat}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                      </ScrollView>
-                    </View>
-                  </View>
                 </View>
 
                 {/* 保鲜分区：由页面主滚动容器统一承载，避免底部导航遮挡嵌套列表 */}
@@ -1860,7 +1821,6 @@ export default function InventoryScreen() {
                               uri={recipe.image_url}
                               className="h-32 w-full"
                               placeholderClassName="h-32 w-full items-center justify-center bg-[#EAF2EC]"
-                              iconSize={20}
                             />
                             {/* 卡路里胶囊 */}
                             <View className="absolute top-2 right-2 flex-row items-center gap-1 rounded-full bg-black/60 px-2 py-0.5">

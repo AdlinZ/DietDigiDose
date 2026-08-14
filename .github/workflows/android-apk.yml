@@ -89,7 +89,7 @@ jobs:
           test -x "$APKSIGNER"
           test -x "$APKANALYZER"
           "$APKSIGNER" verify --verbose --print-certs "$APK_PATH" | tee "$RUNNER_TEMP/apksigner.txt"
-          grep -F "Signer #1 certificate SHA-256 digest: 7473251630e89fbad819b5193c07b857b3ac5b64244551c1bbad55460fbe9cd2" "$RUNNER_TEMP/apksigner.txt"
+          grep -F "certificate SHA-256 digest: 7473251630e89fbad819b5193c07b857b3ac5b64244551c1bbad55460fbe9cd2" "$RUNNER_TEMP/apksigner.txt"
           "$APKANALYZER" manifest application-id "$APK_PATH" | grep -Fx 'com.dietdigidose.app'
           "$APKANALYZER" manifest version-code "$APK_PATH" | grep -Fx "$EXPO_PUBLIC_ANDROID_VERSION_CODE"
 

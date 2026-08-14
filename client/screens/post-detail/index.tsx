@@ -413,9 +413,6 @@ export default function PostDetailScreen() {
               <Text className="text-xs font-bold text-[#222222]" numberOfLines={1}>
                 {post.username}
               </Text>
-              <Text className="text-[10px] text-copy-muted">
-                {formatLocalDateTime(post.created_at)}
-              </Text>
               </View>
             </TouchableOpacity>
 
@@ -441,20 +438,12 @@ export default function PostDetailScreen() {
 
           <View className="flex-row items-center gap-2">
             <TouchableOpacity
-              onPress={() => {
-                Alert.alert("暂不能开启烹饪", "这是一条普通社区动态，作者没有提供可执行的食材用量和步骤。请查看已发布的完整菜谱后再开始烹饪。");
-              }}
-              className="bg-copy-muted px-3 py-1.5 rounded-full flex-row items-center gap-1 active:opacity-80 shadow-xs"
-            >
-              <FontAwesome6 name="circle-info" size={11} color="#FFF" />
-              <Text className="text-[11px] font-bold text-white">暂无完整菜谱</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
               onPress={handleShare}
+              accessibilityRole="button"
+              accessibilityLabel="分享帖子"
               className="w-9 h-9 rounded-full bg-background-secondary items-center justify-center"
             >
-              <FontAwesome6 name="arrow-turn-up" size={14} color="#2D6A4F" />
+              <FontAwesome6 name="arrow-up-from-bracket" size={15} color="#2D6A4F" />
             </TouchableOpacity>
           </View>
         </View>

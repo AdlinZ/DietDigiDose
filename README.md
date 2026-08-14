@@ -19,11 +19,11 @@
 
 代码内的公开身份隔离、可信菜谱门槛、登录续接、采购与烹饪闭环、版本化迁移、安全会话存储和演示数据隔离已完成；对外内测前仍须完成 HTTPS staging 验收、双端候选包、真机闭环和备份恢复演练。
 
-当前执行计划见 [开发 TODO](TODO.md)，产品阶段目标见 [产品路线图](docs/product-roadmap.md)，Agent 改造验收见 [Agent 系统模拟用户验收清单](docs/agent-user-journey-checklist.md)，发布候选验收见 [真机验收与小范围内测清单](docs/device-beta-checklist.md)，部署与恢复见 [运维手册](docs/operations.md)。
+当前执行计划见 [开发 TODO](TODO.md)，未来期望功能与排期见 [未来功能排期清单](docs/future-feature-roadmap.md)，产品阶段目标见 [产品路线图](docs/product-roadmap.md)，Android APK 实机问题见 [Android APK 实机测试问题清单](docs/android-apk-bug-log.md)，Agent 改造验收见 [Agent 系统模拟用户验收清单](docs/agent-user-journey-checklist.md)，发布候选验收见 [真机验收与小范围内测清单](docs/device-beta-checklist.md)，部署与恢复见 [运维手册](docs/operations.md)。
 
 ## 项目沿革与重启说明
 
-“食光烙记”的早期产品构想形成于 2025 年高校软件创新竞赛期间，围绕智能食材管理、减少家庭食材浪费、饮食记录和健康饮食建议完成过产品规划与原型验证。该构想曾在第十八届全国大学生软件创新大赛·软件设计创新赛中获得西南赛区一等奖和全国赛三等奖。
+“食光烙记”的早期产品构想形成于 2025 年高校软件创新竞赛期间，围绕智能食材管理、减少家庭食材浪费、饮食记录和健康饮食建议完成过产品规划与原型验证。该构想曾在[第十八届全国大学生软件创新大赛·软件设计创新赛](https://www.swcontest.com.cn/information?activeTab=notice&detailId=d6d9f4a293ba48f59cec8824ca901332)中获得西南赛区一等奖和全国赛三等奖。
 
 2026 年，项目以“复活 / 重启”的方式重新开始开发。当前仓库不是早期参赛版本的迁移或续写：
 

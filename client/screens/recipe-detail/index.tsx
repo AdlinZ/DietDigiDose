@@ -277,7 +277,6 @@ export default function RecipeDetailScreen() {
               uri={recipe.image_url}
               className="h-[300px] w-full md:h-[420px]"
               placeholderClassName="h-[300px] w-full items-center justify-center bg-[#DDE8DF] md:h-[420px]"
-              iconSize={42}
             />
             <View className="absolute inset-0 bg-black/10" />
             <TouchableOpacity

@@ -723,7 +723,7 @@ export default function CommunityScreen() {
                 onPress={() => setSearchOpen(true)}
                 accessibilityRole="button"
                 accessibilityLabel="搜索社区"
-                className="h-10 w-10 items-center justify-center rounded-full border border-line bg-white shadow-2xs active:opacity-80"
+                className="h-10 w-10 items-center justify-center rounded-full border border-brand/20 bg-brand/10 shadow-2xs active:opacity-80"
               >
                 <FontAwesome6 name="magnifying-glass" size={13} color="#2D6A4F" />
               </TouchableOpacity>

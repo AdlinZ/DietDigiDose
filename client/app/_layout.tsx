@@ -14,6 +14,7 @@ export default function RootLayout() {
             <Stack.Screen name="register" />
             <Stack.Screen name="onboarding" />
             <Stack.Screen name="profile-edit" />
+            <Stack.Screen name="search" options={{ animation: "fade" }} />
             <Stack.Screen name="recipe-detail" />
             <Stack.Screen name="recipe-submit" />
             <Stack.Screen name="favorites" />
@@ -22,6 +23,7 @@ export default function RootLayout() {
             <Stack.Screen name="diet-record" />
             <Stack.Screen name="health-data" />
             <Stack.Screen name="health-profile" />
+            <Stack.Screen name="cooking-queue" />
             <Stack.Screen name="cooking-mode" />
             <Stack.Screen name="post-detail" />
             <Stack.Screen name="post-create" />

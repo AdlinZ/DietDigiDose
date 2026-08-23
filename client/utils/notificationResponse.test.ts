@@ -24,6 +24,10 @@ describe("notification response routing", () => {
       pathname: "/(tabs)/inventory",
       params: { highlightItemId: 34 },
     });
+    expect(resolveNotificationDestination({ type: "cooking_reminder", recipeId: 8 }, "default"))
+      .toEqual({ pathname: "/cooking-queue", params: { highlightRecipeId: 8 } });
+    expect(resolveNotificationDestination({ type: "cooking_reminder", recipeId: 8 }, "START_COOKING"))
+      .toEqual({ pathname: "/cooking-mode", params: { recipeId: 8, fromQueue: true } });
   });
 
   it("preserves expiring inventory actions", () => {

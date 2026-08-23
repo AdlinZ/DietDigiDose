@@ -213,30 +213,6 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
   );
 }
 
-export function QuickAddPresetChips({ onSelect }: { onSelect: (ingredient: CommonIngredient) => void }) {
-  return (
-    <View className="mb-3">
-      <Text className="text-xs font-bold text-copy-muted mb-2">常用食材快捷添加</Text>
-      <View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="gap-2">
-          {COMMON_INGREDIENTS.map((item) => (
-          <TouchableOpacity
-            key={item.name}
-            onPress={() => onSelect(item)}
-            className="flex-row items-center gap-1.5 rounded-2xl border border-line bg-canvas px-3 py-2 active:bg-brand-soft active:border-brand/40"
-            accessibilityRole="button"
-            accessibilityLabel={`快捷添加${item.name}`}
-          >
-            <Text className="text-xs font-bold text-ink">{item.name}</Text>
-            <Text className="text-[10px] text-copy-muted">{item.storageLocation}</Text>
-          </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-    </View>
-  );
-}
-
 interface InventoryHistoryModalProps {
   visible: boolean;
   logs: InventoryLogEntry[];

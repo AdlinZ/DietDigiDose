@@ -313,9 +313,9 @@ export default function ProfileScreen() {
         contentContainerStyle={{ paddingBottom: 144 }}
         className="bg-canvas"
       >
-        {/* 身份信息：轻量化处理，避免大色块压住健康内容。 */}
+        {/* 个人概览：身份、成长和饮食足迹合并在同一卡片中。 */}
         <View className="px-5 pb-4 pt-3">
-          <View className="rounded-[28px] border border-line bg-white px-4 pb-3.5 pt-4 shadow-xs">
+          <View className="rounded-[28px] border border-line bg-white px-4 pb-4 pt-4 shadow-xs">
             <View className="flex-row items-center justify-between">
             <TouchableOpacity
               onPress={() => user?.id && router.push("/user-profile", { userId: user.id })}
@@ -361,63 +361,63 @@ export default function ProfileScreen() {
             </View>
             </View>
 
-          {userLevel ? (
-            <View className="mt-4 border-t border-[#F1EDE6] pt-3">
-              <View className="flex-row items-center justify-between">
-                <Text className="text-[10px] font-bold text-copy-muted">成长经验 <Text className="text-brand">{userLevel.xp} XP</Text></Text>
-                <Text className="text-[10px] text-copy-muted">{userLevel.nextXp ? `再获得 ${userLevel.nextXp - userLevel.xp} XP 升级` : "已达最高等级"}</Text>
+            {userLevel ? (
+              <View className="mt-4 border-t border-[#F1EDE6] pt-3">
+                <View className="flex-row items-center justify-between">
+                  <Text className="text-[10px] font-bold text-copy-muted">成长经验 <Text className="text-brand">{userLevel.xp} XP</Text></Text>
+                  <Text className="text-[10px] text-copy-muted">{userLevel.nextXp ? `再获得 ${userLevel.nextXp - userLevel.xp} XP 升级` : "已达最高等级"}</Text>
+                </View>
+                <View className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand/10">
+                  <View className="h-full rounded-full bg-brand" style={{ width: `${userLevel.progress}%` }} />
+                </View>
               </View>
-              <View className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand/10">
-                <View className="h-full rounded-full bg-brand" style={{ width: `${userLevel.progress}%` }} />
+            ) : null}
+
+            <View className="mt-4 border-t border-[#F1EDE6] pt-3">
+              <View className="mb-2.5 flex-row items-center justify-between">
+                <Text className="text-xs font-black text-ink">我的饮食足迹</Text>
+                <TouchableOpacity onPress={() => router.push("/diet-record")} className="flex-row items-center gap-1">
+                  <Text className="text-[11px] font-bold text-brand">查看记录</Text>
+                  <FontAwesome6 name="chevron-right" size={8} color="#2D6A4F" />
+                </TouchableOpacity>
+              </View>
+              <View className="flex-row items-center justify-around">
+                <TouchableOpacity
+                  onPress={() => router.push("/diet-record")}
+                  className="items-center active:opacity-70"
+                  accessibilityRole="button"
+                  accessibilityLabel="查看连续打卡记录"
+                >
+                  <Text className="text-base font-black text-brand">{streakDays}</Text>
+                  <Text className="mt-0.5 text-[10px] text-copy-muted">连续打卡</Text>
+                </TouchableOpacity>
+                <View className="h-7 w-px bg-[#DDE8DF]" />
+                <TouchableOpacity
+                  onPress={() => router.push("/diet-record")}
+                  className="items-center active:opacity-70"
+                  accessibilityRole="button"
+                  accessibilityLabel="查看饮食记录"
+                >
+                  <Text className="text-base font-black text-brand">{dietRecordCount}</Text>
+                  <Text className="mt-0.5 text-[10px] text-copy-muted">记录餐数</Text>
+                </TouchableOpacity>
+                <View className="h-7 w-px bg-[#DDE8DF]" />
+                <TouchableOpacity onPress={() => router.push("/favorites")} className="items-center">
+                  <Text className="text-base font-black text-brand">{favoriteCount}</Text>
+                  <Text className="mt-0.5 text-[10px] text-copy-muted">收藏菜谱</Text>
+                </TouchableOpacity>
+                <View className="h-7 w-px bg-[#DDE8DF]" />
+                <TouchableOpacity
+                  onPress={() => router.push("/following")}
+                  className="items-center active:opacity-70"
+                  accessibilityRole="button"
+                  accessibilityLabel="查看关注好友"
+                >
+                  <Text className="text-base font-black text-brand">{followingCount}</Text>
+                  <Text className="mt-0.5 text-[10px] text-copy-muted">关注好友</Text>
+                </TouchableOpacity>
               </View>
             </View>
-          ) : null}
-          </View>
-        </View>
-
-        <View className="mx-5 mb-4 rounded-[24px] border border-line bg-white px-4 py-3.5 shadow-xs">
-          <View className="mb-2.5 flex-row items-center justify-between">
-            <Text className="text-xs font-black text-ink">我的饮食足迹</Text>
-            <TouchableOpacity onPress={() => router.push("/diet-record")} className="flex-row items-center gap-1">
-              <Text className="text-[11px] font-bold text-brand">查看记录</Text>
-              <FontAwesome6 name="chevron-right" size={8} color="#2D6A4F" />
-            </TouchableOpacity>
-          </View>
-          <View className="flex-row items-center justify-around border-t border-[#F1EDE6] pt-3">
-            <TouchableOpacity
-              onPress={() => router.push("/diet-record")}
-              className="items-center active:opacity-70"
-              accessibilityRole="button"
-              accessibilityLabel="查看连续打卡记录"
-            >
-              <Text className="text-base font-black text-brand">{streakDays}</Text>
-              <Text className="mt-0.5 text-[10px] text-copy-muted">连续打卡</Text>
-            </TouchableOpacity>
-            <View className="h-7 w-px bg-[#DDE8DF]" />
-            <TouchableOpacity
-              onPress={() => router.push("/diet-record")}
-              className="items-center active:opacity-70"
-              accessibilityRole="button"
-              accessibilityLabel="查看饮食记录"
-            >
-              <Text className="text-base font-black text-brand">{dietRecordCount}</Text>
-              <Text className="mt-0.5 text-[10px] text-copy-muted">记录餐数</Text>
-            </TouchableOpacity>
-            <View className="h-7 w-px bg-[#DDE8DF]" />
-            <TouchableOpacity onPress={() => router.push("/favorites")} className="items-center">
-              <Text className="text-base font-black text-brand">{favoriteCount}</Text>
-              <Text className="mt-0.5 text-[10px] text-copy-muted">收藏菜谱</Text>
-            </TouchableOpacity>
-            <View className="h-7 w-px bg-[#DDE8DF]" />
-            <TouchableOpacity
-              onPress={() => router.push("/following")}
-              className="items-center active:opacity-70"
-              accessibilityRole="button"
-              accessibilityLabel="查看关注好友"
-            >
-              <Text className="text-base font-black text-brand">{followingCount}</Text>
-              <Text className="mt-0.5 text-[10px] text-copy-muted">关注好友</Text>
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -608,41 +608,6 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        {/* 2x2 核心功能矩阵 */}
-        <View className="mx-5 mb-5">
-          <Text className="text-base font-black text-ink mb-3">快捷核心服务</Text>
-          <View className="flex-row flex-wrap justify-between gap-y-3">
-            <QuickActionTile
-              icon="utensils"
-              label="饮食日志"
-              desc="卡路里与三餐打卡"
-              color="#2D6A4F"
-              onPress={() => router.push("/diet-record")}
-            />
-            <QuickActionTile
-              icon="heart-pulse"
-              label="健康数据"
-              desc="体重体脂趋势分析"
-              color="#E07A5F"
-              onPress={() => router.push("/health-data")}
-            />
-            <QuickActionTile
-              icon="basket-shopping"
-              label="食材管理"
-              desc="保鲜库与临期预警"
-              color="#D4A276"
-              onPress={() => router.push("/inventory")}
-            />
-            <QuickActionTile
-              icon="heart"
-              label="收藏菜谱"
-              desc={`${favoriteCount} 道灵感待尝试`}
-              color="#E07A5F"
-              onPress={() => router.push("/favorites")}
-            />
-          </View>
-        </View>
-
         {/* 今日饮食小记 */}
         <View className="mx-5 mb-5">
           <View className="bg-white rounded-3xl p-5 border border-line shadow-xs">
@@ -710,6 +675,13 @@ export default function ProfileScreen() {
         <View className="mx-5 mb-5">
           <Text className="text-base font-black text-ink mb-3">更多服务与设置</Text>
           <View className="bg-white rounded-3xl p-2 border border-line shadow-xs">
+            <ServiceRow
+              icon="list-check"
+              title="烹饪队列"
+              subtitle="统一安排待做菜谱与开始顺序"
+              color="#2D6A4F"
+              onPress={() => router.push("/cooking-queue")}
+            />
             <ServiceRow
               icon="book-bookmark"
               title="我的收藏菜谱"
@@ -807,39 +779,6 @@ function HealthStat({
       </Text>
       <Text className="mt-0.5 text-[10px] text-[#B0A495]">{unit || "尚未记录"}</Text>
     </View>
-  );
-}
-
-function QuickActionTile({
-  icon,
-  label,
-  desc,
-  color,
-  onPress,
-}: {
-  icon: string;
-  label: string;
-  desc: string;
-  color: string;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      className="bg-white rounded-3xl p-4 border border-line shadow-xs active:scale-95 transition-transform"
-      style={{ width: "48%" }}
-    >
-      <View
-        className="w-10 h-10 rounded-2xl items-center justify-center mb-3"
-        style={{ backgroundColor: `${color}15` }}
-      >
-        <FontAwesome6 name={icon as any} size={18} color={color} />
-      </View>
-      <Text className="text-sm font-black text-ink">{label}</Text>
-      <Text className="text-[10px] text-copy-muted mt-0.5" numberOfLines={1}>
-        {desc}
-      </Text>
-    </TouchableOpacity>
   );
 }
 

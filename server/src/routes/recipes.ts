@@ -182,9 +182,9 @@ router.get("/", (req, res) => {
     filterParams.push(category);
   }
   if (typeof search === "string" && search.trim()) {
-    filters.push("(r.title LIKE ? OR r.description LIKE ? OR r.tags LIKE ?)");
+    filters.push("(r.title LIKE ? OR r.description LIKE ? OR r.tags LIKE ? OR r.ingredients_json LIKE ?)");
     const term = `%${search.trim()}%`;
-    filterParams.push(term, term, term);
+    filterParams.push(term, term, term, term);
   }
   if (maxCookTime !== null) {
     filters.push("r.cook_time <= ?");

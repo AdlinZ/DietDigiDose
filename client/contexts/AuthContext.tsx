@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { purgeLegacyUnscopedPrivateStorage, purgeUserPrivateStorage } from '@/utils/userStorage';
 import { ApiError, authApi } from '@/services/api';
 import { AUTH_USER_KEY, getStoredToken, removeStoredToken, setStoredToken } from '@/utils/authStorage';
+import { cancelCookingQueueRemindersForUser } from '@/utils/cookingReminders';
 
 interface User {
   id: number;
@@ -167,6 +168,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     void (async () => {
       try {
+        await cancelCookingQueueRemindersForUser(user?.id).catch(() => undefined);
         await purgeUserPrivateStorage(user?.id);
       } finally {
         await clearAuthState();
@@ -210,6 +212,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!token || !user) return { success: false, error: '请先登录' };
     try {
       await authApi.deleteAccount(token, password);
+      await cancelCookingQueueRemindersForUser(user.id).catch(() => undefined);
       await purgeUserPrivateStorage(user.id);
       await clearAuthState();
       return { success: true };

@@ -1,129 +1,531 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Image } from "react-native";
-import { Screen } from "@/components/Screen";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
-import { useSafeRouter } from "@/hooks/useSafeRouter";
-import { foodsApi } from "@/services/api";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import {
+  ActivityIndicator,
+  Image,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
+import { RecipeCover } from "@/components/RecipeCover";
+import { Screen } from "@/components/Screen";
+import { useAuthFetch } from "@/contexts/AuthContext";
+import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
+import { communityApi, foodsApi, recipesApi, type CommunityPost, type Recipe } from "@/services/api";
+import { getAvatarSource } from "@/utils/defaultAvatar";
+import { formatLocalPostDate } from "@/utils/postDate";
+
+const SEARCH_HISTORY_KEY = "@dietdigidose:global-search-history";
+const MAX_HISTORY_ITEMS = 8;
+const POPULAR_SEARCHES = ["高蛋白早餐", "鸡胸肉", "15分钟晚餐", "减脂便当", "燕麦"];
+
+type SearchCategory = "all" | "recipes" | "foods" | "posts" | "users";
+type IconName = ComponentProps<typeof FontAwesome6>["name"];
+
+type FoodSearchResult = {
+  id?: number | string;
+  name: string;
+  category?: string | null;
+  calories_100g: number;
+  protein_100g: number;
+  carbs_100g: number;
+  fat_100g: number;
+  source?: string;
+};
+
+type UserSearchResult = {
+  id: number;
+  username: string;
+  avatar_url: string | null;
+  bio?: string | null;
+};
+
+type SearchResults = {
+  recipes: Recipe[];
+  foods: FoodSearchResult[];
+  posts: CommunityPost[];
+  users: UserSearchResult[];
+};
+
+const EMPTY_RESULTS: SearchResults = { recipes: [], foods: [], posts: [], users: [] };
+
+const CATEGORY_CONFIG: Array<{ key: SearchCategory; label: string; icon: IconName }> = [
+  { key: "all", label: "全部", icon: "border-all" },
+  { key: "recipes", label: "菜谱", icon: "utensils" },
+  { key: "foods", label: "食材", icon: "carrot" },
+  { key: "posts", label: "社区", icon: "compass" },
+  { key: "users", label: "用户", icon: "user-group" },
+];
+
+function SectionHeader({
+  title,
+  count,
+  icon,
+  onSeeAll,
+}: {
+  title: string;
+  count: number;
+  icon: IconName;
+  onSeeAll?: () => void;
+}) {
+  return (
+    <View className="mb-3 flex-row items-center justify-between">
+      <View className="flex-row items-center gap-2">
+        <View className="h-7 w-7 items-center justify-center rounded-lg bg-brand/10">
+          <FontAwesome6 name={icon} size={11} color="#2D6A4F" />
+        </View>
+        <Text className="text-sm font-black text-ink">{title}</Text>
+        <Text className="text-[10px] font-bold text-copy-muted">{count}</Text>
+      </View>
+      {onSeeAll ? (
+        <TouchableOpacity onPress={onSeeAll} className="flex-row items-center gap-1 px-1 py-2">
+          <Text className="text-[11px] font-bold text-brand">查看全部</Text>
+          <FontAwesome6 name="chevron-right" size={8} color="#2D6A4F" />
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
 
 export default function SearchScreen() {
   const router = useSafeRouter();
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<any[]>([]);
+  const params = useSafeSearchParams<{ initialQuery?: string }>();
+  const authFetch = useAuthFetch();
+  const [query, setQuery] = useState(() => params.initialQuery?.trim() || "");
+  const [activeCategory, setActiveCategory] = useState<SearchCategory>("all");
+  const [results, setResults] = useState<SearchResults>(EMPTY_RESULTS);
+  const [history, setHistory] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
-  // Debounce search
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (query.trim().length > 0) {
-        performSearch(query.trim());
-      } else {
-        setResults([]);
-        setHasSearched(false);
-      }
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [query]);
+    AsyncStorage.getItem(SEARCH_HISTORY_KEY)
+      .then((saved) => {
+        if (!saved) return;
+        const parsed = JSON.parse(saved) as unknown;
+        if (Array.isArray(parsed)) {
+          setHistory(parsed.filter((item): item is string => typeof item === "string").slice(0, MAX_HISTORY_ITEMS));
+        }
+      })
+      .catch(() => undefined);
+  }, []);
 
-  const performSearch = async (q: string) => {
+  const commitHistory = useCallback((rawQuery: string) => {
+    const value = rawQuery.trim();
+    if (!value) return;
+    setHistory((current) => {
+      const next = [value, ...current.filter((item) => item !== value)].slice(0, MAX_HISTORY_ITEMS);
+      void AsyncStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const performSearch = useCallback(async (rawQuery: string) => {
+    const value = rawQuery.trim();
+    if (!value) return;
+
+    const sequence = requestSequence.current + 1;
+    requestSequence.current = sequence;
     setLoading(true);
-    setHasSearched(true);
-    try {
-      const data = await foodsApi.search<any>(q);
-      setResults(data);
-    } catch (e) {
-      console.error(e);
-    } finally {
+    setError(null);
+
+    const encodedQuery = encodeURIComponent(value);
+    const [recipeResult, foodResult, postResult, userResult] = await Promise.allSettled([
+      recipesApi.listPage<Recipe>(`?search=${encodedQuery}&pageSize=12`),
+      foodsApi.search<FoodSearchResult>(value),
+      communityApi.posts<CommunityPost>(`?search=${encodedQuery}&limit=12`, authFetch),
+      communityApi.users<UserSearchResult>(authFetch, value),
+    ]);
+
+    if (requestSequence.current !== sequence) return;
+
+    const nextResults: SearchResults = {
+      recipes: recipeResult.status === "fulfilled" ? recipeResult.value.items : [],
+      foods: foodResult.status === "fulfilled" ? foodResult.value : [],
+      posts: postResult.status === "fulfilled" ? postResult.value : [],
+      users: userResult.status === "fulfilled" ? userResult.value : [],
+    };
+    const failedCount = [recipeResult, foodResult, postResult, userResult]
+      .filter((result) => result.status === "rejected").length;
+
+    setResults(nextResults);
+    setError(failedCount === 4
+      ? "搜索服务暂时不可用，请稍后重试"
+      : failedCount > 0
+        ? "部分结果暂时未能加载"
+        : null);
+    setLoading(false);
+  }, [authFetch]);
+
+  useEffect(() => {
+    const value = query.trim();
+    if (!value) return;
+
+    const timer = setTimeout(() => void performSearch(value), 420);
+    return () => clearTimeout(timer);
+  }, [performSearch, query]);
+
+  const counts = useMemo(() => ({
+    all: results.recipes.length + results.foods.length + results.posts.length + results.users.length,
+    recipes: results.recipes.length,
+    foods: results.foods.length,
+    posts: results.posts.length,
+    users: results.users.length,
+  }), [results]);
+
+  const updateQuery = (value: string) => {
+    setQuery(value);
+    setActiveCategory("all");
+    if (!value.trim()) {
+      requestSequence.current += 1;
+      setResults(EMPTY_RESULTS);
       setLoading(false);
+      setError(null);
     }
   };
 
-  return (
-    <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "bottom"]}>
-      {/* Header */}
-      <View className="px-5 pt-2 pb-4 flex-row items-center gap-4 border-b border-line bg-white">
-        <TouchableOpacity onPress={() => router.back()} className="p-2 -ml-2">
-          <FontAwesome6 name="arrow-left" size={20} color="#3D3229" />
-        </TouchableOpacity>
-        <View className="flex-1 flex-row items-center bg-background-secondary px-4 py-2.5 rounded-2xl">
-          <FontAwesome6 name="magnifying-glass" size={16} color="#8B7D6B" />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="搜索食材，例如：鸡蛋、鸡胸肉..."
-            autoFocus
-            className="flex-1 ml-2 text-sm text-ink"
-            placeholderTextColor="#9E9085"
-          />
-          {query.length > 0 && (
-            <TouchableOpacity onPress={() => setQuery("")}>
-              <FontAwesome6 name="circle-xmark" size={16} color="#8B7D6B" />
-            </TouchableOpacity>
-          )}
+  const chooseSuggestion = (value: string) => {
+    updateQuery(value);
+    commitHistory(value);
+  };
+
+  const openRecipe = (recipe: Recipe) => {
+    commitHistory(query);
+    router.push("/recipe-detail", { id: recipe.id });
+  };
+
+  const openFood = (food: FoodSearchResult) => {
+    commitHistory(query);
+    router.push("/diet-record", {
+      prefill_food: food.name,
+      prefill_amount: "100g",
+      prefill_calories: food.calories_100g,
+      prefill_protein: food.protein_100g,
+      prefill_carbs: food.carbs_100g,
+      prefill_fat: food.fat_100g,
+    });
+  };
+
+  const openPost = (post: CommunityPost) => {
+    commitHistory(query);
+    router.push("/post-detail", { id: post.id, postData: post });
+  };
+
+  const openUser = (user: UserSearchResult) => {
+    commitHistory(query);
+    router.push("/user-profile", { userId: user.id });
+  };
+
+  const renderRecipe = (recipe: Recipe) => (
+    <TouchableOpacity
+      key={recipe.id}
+      onPress={() => openRecipe(recipe)}
+      accessibilityLabel={`查看菜谱${recipe.title}`}
+      className="mb-3 flex-row overflow-hidden rounded-[20px] border border-line bg-white active:opacity-85"
+    >
+      <RecipeCover
+        uri={recipe.image_url}
+        className="h-[94px] w-[104px]"
+        placeholderClassName="h-[94px] w-[104px]"
+      />
+      <View className="min-w-0 flex-1 justify-center px-3.5 py-3">
+        <Text className="text-sm font-black text-ink" numberOfLines={1}>{recipe.title}</Text>
+        <Text className="mt-1 text-[11px] leading-4 text-copy-muted" numberOfLines={2}>{recipe.description}</Text>
+        <View className="mt-2 flex-row items-center gap-3">
+          <Text className="text-[10px] font-black text-brand">{recipe.calories} kcal</Text>
+          <Text className="text-[10px] text-copy-muted">{recipe.cook_time} 分钟</Text>
         </View>
       </View>
+      <View className="justify-center pr-3">
+        <FontAwesome6 name="chevron-right" size={10} color="#A89B8A" />
+      </View>
+    </TouchableOpacity>
+  );
 
-      {/* Results */}
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 20 }}>
-        {loading ? (
-          <View className="py-20 items-center">
-            <ActivityIndicator size="large" color="#2D6A4F" />
-            <Text className="text-copy-muted mt-4">正在各大权威库中检索...</Text>
+  const renderFood = (food: FoodSearchResult, index: number) => (
+    <TouchableOpacity
+      key={`${food.id ?? food.name}-${index}`}
+      onPress={() => openFood(food)}
+      accessibilityLabel={`记录食材${food.name}`}
+      className="mb-3 flex-row items-center rounded-[20px] border border-line bg-white p-3.5 active:opacity-85"
+    >
+      <View className="h-12 w-12 items-center justify-center rounded-2xl bg-[#FFF3D6]">
+        <FontAwesome6 name="leaf" size={17} color="#A66A18" />
+      </View>
+      <View className="min-w-0 flex-1 px-3">
+        <View className="flex-row items-center gap-2">
+          <Text className="shrink text-sm font-black text-ink" numberOfLines={1}>{food.name}</Text>
+          <Text className="rounded-md bg-brand/10 px-1.5 py-0.5 text-[8px] font-black text-brand">
+            {food.source === "open_api" ? "USDA" : "食材库"}
+          </Text>
+        </View>
+        <Text className="mt-1 text-[10px] text-copy-muted">
+          蛋白质 {food.protein_100g ?? 0}g · 碳水 {food.carbs_100g ?? 0}g · 脂肪 {food.fat_100g ?? 0}g
+        </Text>
+      </View>
+      <View className="items-end">
+        <Text className="text-xs font-black text-brand">{food.calories_100g ?? 0} kcal</Text>
+        <Text className="mt-1 text-[9px] text-copy-muted">按 100g 记餐</Text>
+      </View>
+    </TouchableOpacity>
+  );
+
+  const renderPost = (post: CommunityPost) => (
+    <TouchableOpacity
+      key={post.id}
+      onPress={() => openPost(post)}
+      accessibilityLabel={`查看${post.username}的社区动态`}
+      className="mb-3 flex-row overflow-hidden rounded-[20px] border border-line bg-white p-3.5 active:opacity-85"
+    >
+      <Image source={getAvatarSource(post.avatar_url, post.user_id)} className="h-10 w-10 rounded-full" />
+      <View className="min-w-0 flex-1 pl-3">
+        <View className="flex-row items-center justify-between gap-2">
+          <Text className="shrink text-xs font-black text-ink" numberOfLines={1}>{post.username}</Text>
+          <Text className="text-[9px] text-copy-muted">{formatLocalPostDate(post.created_at)}</Text>
+        </View>
+        <Text className="mt-1.5 text-xs leading-5 text-ink" numberOfLines={2}>{post.content}</Text>
+        <View className="mt-2 flex-row items-center gap-1.5">
+          <FontAwesome6 name="heart" size={9} color="#8B7D6B" />
+          <Text className="text-[9px] text-copy-muted">{post.likes_count} 赞</Text>
+          {post.category ? <Text className="ml-2 text-[9px] font-bold text-brand">#{post.category}</Text> : null}
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+
+  const renderUser = (user: UserSearchResult) => (
+    <TouchableOpacity
+      key={user.id}
+      onPress={() => openUser(user)}
+      accessibilityLabel={`查看用户${user.username}`}
+      className="mb-3 flex-row items-center rounded-[20px] border border-line bg-white p-3.5 active:opacity-85"
+    >
+      <Image source={getAvatarSource(user.avatar_url, user.id)} className="h-12 w-12 rounded-full" />
+      <View className="min-w-0 flex-1 px-3">
+        <Text className="text-sm font-black text-ink" numberOfLines={1}>{user.username}</Text>
+        <Text className="mt-1 text-[10px] text-copy-muted" numberOfLines={1}>
+          {user.bio?.trim() || "正在记录自己的健康食光"}
+        </Text>
+      </View>
+      <View className="rounded-full bg-brand/10 px-3 py-1.5">
+        <Text className="text-[10px] font-black text-brand">主页</Text>
+      </View>
+    </TouchableOpacity>
+  );
+
+  const renderSection = (
+    category: Exclude<SearchCategory, "all">,
+    title: string,
+    icon: IconName,
+    items: React.ReactNode[],
+  ) => {
+    const total = counts[category];
+    if (!total) return null;
+    const visibleItems = activeCategory === "all" ? items.slice(0, 3) : items;
+    return (
+      <View key={category} className="mb-5">
+        <SectionHeader
+          title={title}
+          count={total}
+          icon={icon}
+          onSeeAll={activeCategory === "all" && total > 3 ? () => setActiveCategory(category) : undefined}
+        />
+        {visibleItems}
+      </View>
+    );
+  };
+
+  const hasQuery = query.trim().length > 0;
+  const visibleSections = [
+    renderSection("recipes", "菜谱", "utensils", results.recipes.map(renderRecipe)),
+    renderSection("foods", "食材营养", "carrot", results.foods.map(renderFood)),
+    renderSection("posts", "社区动态", "compass", results.posts.map(renderPost)),
+    renderSection("users", "食友", "user-group", results.users.map(renderUser)),
+  ];
+
+  return (
+    <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "bottom"]}>
+      <View className="border-b border-line bg-canvas px-4 pb-3 pt-2">
+        <View className="flex-row items-center gap-2.5">
+          <TouchableOpacity
+            onPress={() => router.back()}
+            accessibilityLabel="返回"
+            className="h-11 w-10 items-center justify-center rounded-full active:bg-brand/10"
+          >
+            <FontAwesome6 name="arrow-left" size={17} color="#3D3229" />
+          </TouchableOpacity>
+          <View className="h-12 flex-1 flex-row items-center rounded-full border border-line bg-white px-4 shadow-2xs">
+            <FontAwesome6 name="magnifying-glass" size={14} color="#2D6A4F" />
+            <TextInput
+              value={query}
+              onChangeText={updateQuery}
+              onSubmitEditing={() => commitHistory(query)}
+              placeholder="搜菜谱、食材、动态或食友"
+              placeholderTextColor="#A89B8A"
+              autoFocus
+              autoCorrect={false}
+              returnKeyType="search"
+              className="min-w-0 flex-1 px-3 py-0 text-sm font-medium text-ink"
+            />
+            {query ? (
+              <TouchableOpacity onPress={() => updateQuery("")} accessibilityLabel="清空搜索">
+                <FontAwesome6 name="circle-xmark" size={15} color="#A89B8A" />
+              </TouchableOpacity>
+            ) : null}
           </View>
-        ) : hasSearched && results.length === 0 ? (
-          <View className="py-20 items-center">
-            <View className="w-16 h-16 bg-[#D4A276]/10 rounded-full items-center justify-center mb-4">
-              <FontAwesome6 name="lemon" size={28} color="#D4A276" />
+        </View>
+
+        {hasQuery ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 8, paddingTop: 12, paddingHorizontal: 2 }}
+          >
+            {CATEGORY_CONFIG.map((category) => {
+              const selected = activeCategory === category.key;
+              const unavailable = category.key !== "all" && counts[category.key] === 0;
+              return (
+                <TouchableOpacity
+                  key={category.key}
+                  onPress={() => setActiveCategory(category.key)}
+                  disabled={unavailable}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected }}
+                  className={`flex-row items-center gap-1.5 rounded-full border px-3 py-1.5 ${
+                    selected ? "border-brand bg-brand" : "border-line bg-white"
+                  } ${unavailable ? "opacity-40" : ""}`}
+                >
+                  <FontAwesome6 name={category.icon} size={9} color={selected ? "#FFFFFF" : "#8B7D6B"} />
+                  <Text className={`text-[11px] font-bold ${selected ? "text-white" : "text-copy-muted"}`}>
+                    {category.label}{counts[category.key] ? ` ${counts[category.key]}` : ""}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        ) : null}
+      </View>
+
+      <ScrollView
+        className="flex-1 bg-canvas"
+        contentContainerStyle={{ padding: 20, paddingBottom: 48 }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {!hasQuery ? (
+          <View>
+            {history.length ? (
+              <View className="mb-8">
+                <View className="mb-3 flex-row items-center justify-between">
+                  <Text className="text-sm font-black text-ink">最近搜索</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setHistory([]);
+                      void AsyncStorage.removeItem(SEARCH_HISTORY_KEY);
+                    }}
+                    className="px-2 py-1"
+                  >
+                    <Text className="text-[11px] font-bold text-copy-muted">清除</Text>
+                  </TouchableOpacity>
+                </View>
+                <View className="flex-row flex-wrap gap-2">
+                  {history.map((item) => (
+                    <TouchableOpacity
+                      key={item}
+                      onPress={() => chooseSuggestion(item)}
+                      className="flex-row items-center gap-1.5 rounded-full border border-line bg-white px-3 py-2"
+                    >
+                      <FontAwesome6 name="clock-rotate-left" size={9} color="#8B7D6B" />
+                      <Text className="text-xs font-semibold text-ink">{item}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            <View className="mb-5">
+              <Text className="mb-3 text-sm font-black text-ink">大家常搜</Text>
+              <View className="flex-row flex-wrap gap-2">
+                {POPULAR_SEARCHES.map((item, index) => (
+                  <TouchableOpacity
+                    key={item}
+                    onPress={() => chooseSuggestion(item)}
+                    className="flex-row items-center gap-1.5 rounded-full bg-brand/10 px-3 py-2"
+                  >
+                    {index < 3 ? <FontAwesome6 name="arrow-trend-up" size={9} color="#2D6A4F" /> : null}
+                    <Text className="text-xs font-bold text-brand">{item}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
-            <Text className="text-lg font-bold text-ink">未找到该食材</Text>
-            <Text className="text-sm text-copy-muted text-center mt-2 mb-8">
-              系统及全网库中没有找到完全匹配的食材。您可以尝试其他关键词，或者自己添加它。
-            </Text>
-            <TouchableOpacity 
-              onPress={() => router.push("/custom-food")}
-              className="bg-brand px-6 py-3.5 rounded-2xl flex-row items-center gap-2"
+
+            <View className="mt-4 overflow-hidden rounded-[26px] border border-brand/10 bg-brand p-5">
+              <View className="h-10 w-10 items-center justify-center rounded-2xl bg-white/15">
+                <FontAwesome6 name="wand-magic-sparkles" size={15} color="#FFFFFF" />
+              </View>
+              <Text className="mt-4 text-lg font-black text-white">一次搜索，找到完整答案</Text>
+              <Text className="mt-2 text-xs leading-5 text-white/75">
+                从可做菜谱到食材营养，再到食友分享，结果会按类型整理好。
+              </Text>
+            </View>
+          </View>
+        ) : loading ? (
+          <View className="items-center py-24">
+            <ActivityIndicator size="large" color="#2D6A4F" />
+            <Text className="mt-4 text-xs font-medium text-copy-muted">正在整理相关结果…</Text>
+          </View>
+        ) : error && counts.all === 0 ? (
+          <View className="items-center py-20">
+            <View className="h-16 w-16 items-center justify-center rounded-full bg-amber-100">
+              <FontAwesome6 name="wifi" size={21} color="#A66A18" />
+            </View>
+            <Text className="mt-5 text-base font-black text-ink">搜索暂时没有响应</Text>
+            <Text className="mt-2 text-center text-xs leading-5 text-copy-muted">{error}</Text>
+            <TouchableOpacity
+              onPress={() => void performSearch(query)}
+              className="mt-6 rounded-full bg-brand px-5 py-3"
             >
-              <FontAwesome6 name="plus" size={14} color="#FFF" />
-              <Text className="text-white font-bold text-base">手动添加新食材</Text>
+              <Text className="text-xs font-black text-white">重新搜索</Text>
+            </TouchableOpacity>
+          </View>
+        ) : counts.all === 0 ? (
+          <View className="items-center py-20">
+            <View className="h-16 w-16 items-center justify-center rounded-full bg-brand/10">
+              <FontAwesome6 name="magnifying-glass" size={22} color="#2D6A4F" />
+            </View>
+            <Text className="mt-5 text-base font-black text-ink">没有找到“{query.trim()}”</Text>
+            <Text className="mt-2 max-w-[280px] text-center text-xs leading-5 text-copy-muted">
+              试试更短的关键词，或者提交新的食材营养信息。
+            </Text>
+            <TouchableOpacity
+              onPress={() => router.push("/custom-food")}
+              className="mt-6 flex-row items-center gap-2 rounded-full bg-brand px-5 py-3"
+            >
+              <FontAwesome6 name="plus" size={11} color="#FFFFFF" />
+              <Text className="text-xs font-black text-white">添加新食材</Text>
             </TouchableOpacity>
           </View>
         ) : (
-          <View className="gap-3">
-            {results.map((item, index) => (
-              <View key={index} className="bg-white p-4 rounded-[22px] border border-line flex-row items-center gap-4">
-                <View className="w-12 h-12 rounded-full bg-brand/10 items-center justify-center">
-                  <FontAwesome6 name="leaf" size={20} color="#2D6A4F" />
-                </View>
-                <View className="flex-1">
-                  <View className="flex-row items-center gap-2">
-                    <Text className="text-base font-bold text-ink">{item.name}</Text>
-                    <View className="bg-amber-100 px-2 py-0.5 rounded-md">
-                      <Text className="text-[10px] text-amber-700 font-bold">
-                        {item.source === 'open_api' ? 'USDA库' : '系统精选'}
-                      </Text>
-                    </View>
-                  </View>
-                  <Text className="text-sm text-brand font-black mt-1">
-                    {item.calories_100g} kcal <Text className="text-xs font-normal text-copy-muted">/ 100g</Text>
-                  </Text>
-                  <View className="flex-row gap-3 mt-1.5">
-                    <Text className="text-[11px] text-copy-muted">碳 {item.carbs_100g}g</Text>
-                    <Text className="text-[11px] text-copy-muted">蛋 {item.protein_100g}g</Text>
-                    <Text className="text-[11px] text-copy-muted">脂 {item.fat_100g}g</Text>
-                  </View>
-                </View>
-              </View>
-            ))}
-            
-            {results.length > 0 && (
-              <TouchableOpacity 
-                onPress={() => router.push("/custom-food")}
-                className="mt-6 border border-dashed border-[#D4A276] p-4 rounded-2xl items-center"
+          <View>
+            {error ? (
+              <TouchableOpacity
+                onPress={() => void performSearch(query)}
+                className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-3"
               >
-                <Text className="text-[#D4A276] font-medium text-sm">没找到准确的？点击自定义上传</Text>
+                <Text className="text-xs font-bold text-amber-800">{error} · 点击重试</Text>
               </TouchableOpacity>
-            )}
+            ) : null}
+            <Text className="mb-5 text-xs text-copy-muted">
+              找到 <Text className="font-black text-brand">{counts.all}</Text> 条与“{query.trim()}”相关的结果
+            </Text>
+            {activeCategory === "all"
+              ? visibleSections
+              : visibleSections.filter((_, index) => CATEGORY_CONFIG[index + 1]?.key === activeCategory)}
           </View>
         )}
       </ScrollView>

@@ -16,10 +16,11 @@ import { useSafeSearchParams, useSafeRouter } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import * as Speech from "expo-speech";
 import * as Haptics from "expo-haptics";
-import { useAuthFetch } from "@/contexts/AuthContext";
+import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { toLocalDateKey, toLocalTimeKey } from "@/utils/date";
 import { aiApi, dietApi, inventoryApi, recipesApi, waitForAgentRun, type Recipe } from "@/services/api";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import { removeFromCookingQueue } from "@/utils/cookingQueue";
 
 interface CookingStep {
   text: string;
@@ -50,9 +51,11 @@ type CookingAgentRun = {
 
 export default function CookingModeScreen() {
   const insets = useSafeAreaInsets();
-  const { recipeId } = useSafeSearchParams<{ recipeId: number }>();
+  const { recipeId, fromQueue } = useSafeSearchParams<{ recipeId: number; fromQueue?: boolean }>();
 
   const router = useSafeRouter();
+  const { user } = useAuth();
+  const userId = user?.id;
   const authFetch = useAuthFetch();
   const [cookingChatSessionId] = useState(() => `cooking-${Date.now()}`);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
@@ -579,6 +582,8 @@ export default function CookingModeScreen() {
         },
       });
 
+      if (fromQueue && userId) await removeFromCookingQueue(userId, Number(recipeId));
+
       setShowFinishModal(false);
       Alert.alert(
         result.repeated ? "已完成" : "烹饪完成！",
@@ -587,7 +592,12 @@ export default function CookingModeScreen() {
             ? `，并自动扣减了 ${result.consumed_inventory_item_ids.length} 项库存食材`
             : ""
         }。`,
-        [{ text: "查看饮食记录", onPress: () => router.replace("/diet-record") }]
+        fromQueue
+          ? [
+            { text: "继续下一道", onPress: () => router.replace("/cooking-queue") },
+            { text: "查看饮食记录", onPress: () => router.replace("/diet-record") },
+          ]
+          : [{ text: "查看饮食记录", onPress: () => router.replace("/diet-record") }]
       );
     } catch (error) {
       Alert.alert("完成失败", error instanceof Error ? error.message : "请稍后重试");
@@ -1362,18 +1372,21 @@ export default function CookingModeScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity
-                onPress={() => {
+                onPress={() => void (async () => {
+                  if (fromQueue && userId) await removeFromCookingQueue(userId, Number(recipeId));
                   setShowFinishModal(false);
-                  if (router.canGoBack()) {
+                  if (fromQueue) {
+                    router.replace("/cooking-queue");
+                  } else if (router.canGoBack()) {
                     router.back();
                   } else {
                     router.replace("/(tabs)");
                   }
-                }}
+                })()}
                 disabled={isCompleting}
                 className="py-2.5 items-center justify-center active:opacity-70"
               >
-                <Text className="text-[#8B7D6B] text-xs font-semibold">不记录，直接退出</Text>
+                <Text className="text-[#8B7D6B] text-xs font-semibold">{fromQueue ? "不记录，完成并返回队列" : "不记录，直接退出"}</Text>
               </TouchableOpacity>
             </View>
           </View>

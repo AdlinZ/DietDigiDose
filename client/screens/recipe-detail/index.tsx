@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
+import { useFocusEffect } from "expo-router";
 import { inferCategoryByName } from "@/utils/ingredientRules";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
@@ -20,6 +21,7 @@ import { ingredientNamesMatch } from "@/utils/ingredients";
 import { getInventoryStatus } from "@/utils/inventory";
 import { ALLERGY_LABELS, findRecipeAllergyRisks, hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/healthProfile";
 import { getRecipeNutritionPresentation } from "@/utils/recipeQuality";
+import { addToCookingQueue, getCookingQueue } from "@/utils/cookingQueue";
 
 type IconName = ComponentProps<typeof FontAwesome6>["name"];
 
@@ -59,8 +61,9 @@ interface Recipe {
 
 export default function RecipeDetailScreen() {
   const router = useSafeRouter();
-  const { id, pendingAction } = useSafeSearchParams<{ id: number; pendingAction?: "favorite" | "shopping-list" }>();
-  const { isAuthenticated } = useAuth();
+  const { id, pendingAction } = useSafeSearchParams<{ id: number; pendingAction?: "favorite" | "shopping-list" | "queue" }>();
+  const { isAuthenticated, user } = useAuth();
+  const userId = user?.id;
   const authFetch = useAuthFetch();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,6 +75,8 @@ export default function RecipeDetailScreen() {
   const favoriteNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [healthProfile, setHealthProfile] = useState<HealthProfile | null>(null);
+  const [isQueued, setIsQueued] = useState(false);
+  const [queueSaving, setQueueSaving] = useState(false);
 
   const showFavoriteNotice = useCallback((message: string) => {
     if (favoriteNoticeTimer.current) clearTimeout(favoriteNoticeTimer.current);
@@ -118,9 +123,32 @@ export default function RecipeDetailScreen() {
 
   useEffect(() => {
     if (!isAuthenticated || !pendingAction) return;
-    showFavoriteNotice(pendingAction === "favorite" ? "已返回菜谱，请再次点击收藏" : "已返回菜谱，请确认加入采购清单");
+    const notice = pendingAction === "favorite"
+      ? "已返回菜谱，请再次点击收藏"
+      : pendingAction === "queue"
+        ? "已返回菜谱，请确认加入烹饪队列"
+        : "已返回菜谱，请确认加入采购清单";
+    showFavoriteNotice(notice);
     router.setParams({ pendingAction: undefined });
   }, [isAuthenticated, pendingAction, showFavoriteNotice]);
+
+  useFocusEffect(useCallback(() => {
+    if (!userId || !id) {
+      setIsQueued(false);
+      return;
+    }
+    let active = true;
+    void getCookingQueue(userId)
+      .then((items) => {
+        if (active) setIsQueued(items.some((item) => item.recipeId === Number(id)));
+      })
+      .catch(() => {
+        if (active) setIsQueued(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [id, userId]));
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -265,6 +293,55 @@ export default function RecipeDetailScreen() {
       showFavoriteNotice("操作失败，请稍后重试");
     } finally {
       setFavoriteLoading(false);
+    }
+  };
+
+  const handleQueueAction = async () => {
+    if (hasAllergyRisk) {
+      requestSafeReplacement();
+      return;
+    }
+    if (!isAuthenticated || !userId) {
+      router.push("/login", {
+        returnTo: { pathname: "/recipe-detail", params: { id: recipe.id, pendingAction: "queue" } },
+      });
+      return;
+    }
+    if (isQueued) {
+      router.push("/cooking-queue");
+      return;
+    }
+    if (queueSaving) return;
+
+    setQueueSaving(true);
+    try {
+      const result = await addToCookingQueue(userId, {
+        recipeId: recipe.id,
+        title: recipe.title,
+        imageUrl: recipe.image_url,
+        cookTime: recipe.cook_time,
+        calories: recipe.calories,
+        difficulty: recipe.difficulty,
+        addedAt: Date.now(),
+        ingredients: (recipe.ingredients || []).map((ingredient) => ({
+          name: ingredient.name,
+          amount: ingredient.amount || "适量",
+        })),
+        preparedIngredientNames: [],
+      });
+      setIsQueued(true);
+      if (!result.added) {
+        router.push("/cooking-queue");
+        return;
+      }
+      Alert.alert("已加入烹饪队列", "准备好后，可以从队列开始烹饪。", [
+        { text: "查看队列", onPress: () => router.push("/cooking-queue") },
+        { text: "继续浏览", style: "cancel" },
+      ]);
+    } catch {
+      Alert.alert("加入失败", "保存烹饪队列时出错，请稍后重试。");
+    } finally {
+      setQueueSaving(false);
     }
   };
 
@@ -539,21 +616,22 @@ export default function RecipeDetailScreen() {
       <View className="border-t border-[#E4DBCE] bg-[#FFFDF9] px-4 py-3">
         <View className="w-full max-w-[896px] self-center flex-row items-center">
           <View className="mr-4 flex-1">
-            <Text className="text-sm font-bold text-[#273A2E]">准备好开始了吗？</Text>
-            <Text className="mt-0.5 text-[10px] text-copy-muted">分步指导 · 计时提醒 · AI 助手</Text>
+            <Text className="text-sm font-bold text-[#273A2E]">
+              {hasAllergyRisk ? "需要先确认食材安全吗？" : isQueued ? "已加入烹饪队列" : "想稍后再做这道菜？"}
+            </Text>
+            <Text className="mt-0.5 text-[10px] text-copy-muted">
+              {hasAllergyRisk ? "先获取安全替换方案" : isQueued ? "从队列中统一安排开始顺序" : "加入队列，不会立即进入做饭模式"}
+            </Text>
           </View>
           <TouchableOpacity
-            onPress={() => {
-              if (hasAllergyRisk) {
-                requestSafeReplacement();
-                return;
-              }
-              router.push("/cooking-mode", { recipeId: recipe.id });
-            }}
-            className={`flex-row items-center justify-center rounded-2xl px-5 py-3.5 shadow-sm active:opacity-85 md:px-8 ${hasAllergyRisk ? "bg-[#A63D2B]" : "bg-brand"}`}
+            onPress={() => void handleQueueAction()}
+            disabled={queueSaving}
+            className={`flex-row items-center justify-center rounded-2xl px-5 py-3.5 shadow-sm active:opacity-85 disabled:opacity-60 md:px-8 ${hasAllergyRisk ? "bg-[#A63D2B]" : "bg-brand"}`}
           >
-            <FontAwesome6 name={hasAllergyRisk ? "shield-halved" : "kitchen-set"} size={17} color="white" />
-            <Text className="ml-2 text-sm font-bold text-white">{hasAllergyRisk ? "先获取安全替换" : "开始烹饪"}</Text>
+            <FontAwesome6 name={hasAllergyRisk ? "shield-halved" : isQueued ? "list-check" : "plus"} size={17} color="white" />
+            <Text className="ml-2 text-sm font-bold text-white">
+              {hasAllergyRisk ? "先获取安全替换" : queueSaving ? "加入中…" : isQueued ? "查看队列" : "加入队列"}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>

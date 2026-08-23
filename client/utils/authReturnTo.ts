@@ -1,10 +1,10 @@
 export type AuthReturnTo = {
-  pathname: "/" | "/recipe-detail" | "/cooking-mode" | "/inventory" | "/favorites" | "/shopping-list" | "/recipe-submit";
+  pathname: "/" | "/recipe-detail" | "/cooking-mode" | "/cooking-queue" | "/inventory" | "/favorites" | "/shopping-list" | "/recipe-submit";
   params?: Record<string, string | number>;
 };
 
 const POSITIVE_ID_PATHS = new Set(["/recipe-detail", "/cooking-mode"]);
-const PARAMETERLESS_PATHS = new Set(["/", "/favorites", "/shopping-list", "/recipe-submit"]);
+const PARAMETERLESS_PATHS = new Set(["/", "/favorites", "/shopping-list", "/recipe-submit", "/cooking-queue"]);
 
 function positiveInteger(value: unknown) {
   const parsed = Number(value);
@@ -27,7 +27,7 @@ export function validateAuthReturnTo(value: unknown): AuthReturnTo | null {
     const id = positiveInteger(params[key]);
     if (!id) return null;
     const safeParams: Record<string, string | number> = { [key]: id };
-    if (candidate.pathname === "/recipe-detail" && ["favorite", "shopping-list"].includes(String(params.pendingAction))) {
+    if (candidate.pathname === "/recipe-detail" && ["favorite", "shopping-list", "queue"].includes(String(params.pendingAction))) {
       safeParams.pendingAction = String(params.pendingAction);
     }
     return { pathname: candidate.pathname as AuthReturnTo["pathname"], params: safeParams };

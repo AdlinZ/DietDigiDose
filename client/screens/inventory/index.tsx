@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
+  KeyboardAvoidingView,
   Alert,
   DeviceEventEmitter,
   Platform,
@@ -18,6 +19,7 @@ import {
 import { Screen } from "@/components/Screen";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useFocusEffect } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
@@ -42,7 +44,6 @@ import {
   CatalogDetailModal,
   ExpiredCleanupModal,
   InventoryHistoryModal,
-  QuickAddPresetChips,
   type ExpiredCleanupResult,
 } from "./InventoryModals";
 import { FamilyShareModal } from "./FamilyShareModal";
@@ -68,8 +69,21 @@ const KITCHENWARE_STARTER_KITS = [
   { name: "烘焙入门", items: ["烤箱", "烤盘", "蛋糕模具", "打蛋器", "硅胶刮刀"] },
 ] as const;
 
+const INVENTORY_ENTRY_CATEGORIES = [
+  "蔬菜",
+  "肉食",
+  "水果",
+  "乳制品",
+  "粮油干货",
+  "水产海鲜",
+  "调味品",
+  "休闲零食",
+  "熟食面点",
+] as const;
+
 export default function InventoryScreen() {
   const { width: windowWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const noticeCardWidth = Math.max(windowWidth - 40, 280);
   const [inventoryGridWidth, setInventoryGridWidth] = useState(0);
   const inventoryCardWidth = inventoryGridWidth > 0
@@ -216,6 +230,7 @@ export default function InventoryScreen() {
   // Form State for Inventory Item
   const [foodName, setFoodName] = useState("");
   const [category, setCategory] = useState("蔬菜");
+  const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
   const [quantity, setQuantity] = useState("1份");
   const [expirationDate, setExpirationDate] = useState(
     dateKeyAfterDays(7)
@@ -812,6 +827,7 @@ export default function InventoryScreen() {
     setEditingItem(null);
     setFoodName("");
     setCategory("蔬菜");
+    setCategoryMenuOpen(false);
     setQuantity("100g");
     setExpirationDate(dateKeyAfterDays(5));
     setStorageLocation("冷藏");
@@ -847,6 +863,7 @@ export default function InventoryScreen() {
     setEditingItem(item);
     setFoodName(item.food_name);
     setCategory(item.category);
+    setCategoryMenuOpen(false);
     setQuantity(item.quantity);
     setExpirationDate(item.expiration_date);
     setStorageLocation(item.storage_location);
@@ -2126,260 +2143,353 @@ export default function InventoryScreen() {
           </View>
         )}
 
-        {/* Inventory Add/Edit Modal */}
-        <Modal visible={modalVisible && isAuthenticated} animationType="slide" transparent>
-          <View className="flex-1 bg-black/40 justify-end">
-            <View className="bg-white rounded-t-[32px] px-5 pt-5 pb-6 max-h-[90%]">
-              <View className="flex-row items-center justify-between mb-4 border-b border-background-secondary pb-3">
-                <View>
-                  <Text className="text-lg font-black text-ink">
-                    {editingItem ? "编辑食材" : entryMode === "choose" ? "添加食材" : "手动录入"}
-                  </Text>
-                  {!editingItem && <Text className="text-[11px] text-copy-muted mt-0.5">{entryMode === "choose" ? "选一种最适合你的录入方式" : "填好名称、数量和到期日即可入库"}</Text>}
+        {/* 全屏录入页：避免小屏设备上的底部弹层拥挤，底部主操作始终可达。 */}
+        <Modal
+          visible={modalVisible && isAuthenticated}
+          animationType="slide"
+          presentationStyle="fullScreen"
+          onRequestClose={() => setModalVisible(false)}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            className="flex-1 bg-canvas"
+            style={{ paddingTop: insets.top }}
+          >
+            <View className="border-b border-line bg-white">
+              <View className="h-14 w-full max-w-[720px] self-center flex-row items-center px-4">
+                <View className="w-[84px] items-start">
+                  <TouchableOpacity
+                    onPress={() => setModalVisible(false)}
+                    accessibilityLabel="关闭食材录入页面"
+                    className="h-9 w-9 items-center justify-center rounded-full bg-canvas active:opacity-70"
+                  >
+                    <FontAwesome6 name="xmark" size={15} color="#6F6254" />
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity
-                  onPress={() => setModalVisible(false)}
-                  accessibilityLabel="关闭录入食材弹窗"
-                  className="w-9 h-9 -mr-2 items-center justify-center rounded-full bg-canvas"
-                >
-                  <FontAwesome6 name="xmark" size={18} color="#8B7D6B" />
-                </TouchableOpacity>
+                <View className="flex-1 items-center">
+                  <Text className="text-[16px] font-black text-ink">
+                    {editingItem ? "编辑食材" : entryMode === "choose" ? "添加食材" : "新建食材"}
+                  </Text>
+                </View>
+                <View className="w-[84px] items-end">
+                  {!editingItem && entryMode === "manual" ? (
+                    <TouchableOpacity
+                      onPress={() => setEntryMode("choose")}
+                      accessibilityLabel="切换到智能录入"
+                      className="h-9 flex-row items-center gap-1.5 px-1 active:opacity-70"
+                    >
+                      <FontAwesome6 name="wand-magic-sparkles" size={10} color="#2D6A4F" />
+                      <Text className="text-[11px] font-black text-brand">AI 录入</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <View className="h-9" />
+                  )}
+                </View>
               </View>
+            </View>
 
-              {!editingItem && entryMode === "choose" ? (
-                <View className="pb-2">
-                  <Text className="mt-1 text-xl font-black text-ink">这次怎么添加？</Text>
-                  <Text className="mt-1 text-xs leading-5 text-copy-muted">单个食材、购物清单或订单截图都可以，识别多项后再由你确认。</Text>
+            {!editingItem && entryMode === "choose" ? (
+              <ScrollView
+                className="flex-1"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}
+              >
+                <View className="w-full max-w-[680px] self-center px-5 pb-6 pt-5">
+                  <View className="mb-4">
+                    <Text className="text-[26px] font-black leading-8 text-ink">怎么添加更方便？</Text>
+                    <Text className="mt-2 text-sm leading-6 text-copy-muted">拍一张照片自动识别，或用不到一分钟手动填好。</Text>
+                  </View>
 
                   <TouchableOpacity
                     onPress={openAiFoodAssist}
                     disabled={aiAssisting}
-                    className="mt-5 overflow-hidden rounded-[24px] bg-brand p-5 active:opacity-90 disabled:opacity-60"
+                    className="min-h-[190px] overflow-hidden rounded-[28px] bg-brand p-6 active:opacity-90 disabled:opacity-60"
                   >
-                    <View className="absolute -right-5 -top-5 h-28 w-28 rounded-full bg-white/10" />
-                    <View className="h-11 w-11 items-center justify-center rounded-2xl bg-white/15">
-                      {aiAssisting ? <ActivityIndicator color="#FFF" /> : <FontAwesome6 name="wand-magic-sparkles" size={18} color="#FFF" />}
+                    <View className="absolute -right-10 -top-12 h-44 w-44 rounded-full bg-white/10" />
+                    <View className="h-12 w-12 items-center justify-center rounded-2xl bg-white/15">
+                      {aiAssisting ? <ActivityIndicator color="#FFF" /> : <FontAwesome6 name="camera" size={19} color="#FFF" />}
                     </View>
-                    <View className="mt-5 flex-row items-end justify-between">
-                      <View>
-                        <Text className="text-base font-black text-white">{aiAssisting ? "AI 正在识别…" : "拍照，让 AI 整理入库"}</Text>
-                        <Text className="mt-1 text-[11px] text-emerald-50">支持多种食材，名称、数量、保存位置、建议到期日</Text>
+                    <View className="mt-8 flex-row items-end justify-between gap-4">
+                      <View className="flex-1">
+                        <Text className="text-lg font-black text-white">{aiAssisting ? "AI 正在识别…" : "拍照智能录入"}</Text>
+                        <Text className="mt-1.5 text-xs leading-5 text-emerald-50">自动识别名称、数量、存放位置和建议到期日</Text>
                       </View>
-                      {!aiAssisting && <FontAwesome6 name="arrow-right" size={15} color="#FFF" />}
+                      {!aiAssisting && (
+                        <View className="h-10 w-10 items-center justify-center rounded-full bg-white/15">
+                          <FontAwesome6 name="arrow-right" size={14} color="#FFF" />
+                        </View>
+                      )}
                     </View>
                   </TouchableOpacity>
 
-                  <TouchableOpacity onPress={() => setEntryMode("manual")} className="mt-3 flex-row items-center rounded-[22px] border border-line bg-canvas p-4 active:opacity-80">
-                    <View className="h-10 w-10 items-center justify-center rounded-xl bg-white">
-                      <FontAwesome6 name="pen" size={14} color="#8B7D6B" />
+                  <TouchableOpacity
+                    onPress={() => setEntryMode("manual")}
+                    className="mt-4 flex-row items-center rounded-[24px] border border-line bg-white p-4 active:opacity-80"
+                  >
+                    <View className="h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft">
+                      <FontAwesome6 name="pen" size={15} color="#2D6A4F" />
                     </View>
-                    <View className="ml-3 flex-1">
-                      <Text className="text-sm font-black text-ink">手动填写</Text>
-                      <Text className="mt-0.5 text-[10px] text-copy-muted">适合没有照片，或想自己精确填写时</Text>
+                    <View className="ml-4 flex-1">
+                      <Text className="text-[15px] font-black text-ink">手动录入</Text>
+                      <Text className="mt-1 text-[11px] leading-4 text-copy-muted">信息少、想精确填写时更合适</Text>
                     </View>
                     <FontAwesome6 name="chevron-right" size={12} color="#8B7D6B" />
                   </TouchableOpacity>
 
-                  <TouchableOpacity onPress={() => { setModalVisible(false); handleScanReceiptAndBatchAdd(); }} className="mt-4 flex-row items-center justify-center gap-2 py-3">
+                  <TouchableOpacity
+                    onPress={() => { setModalVisible(false); handleScanReceiptAndBatchAdd(); }}
+                    className="mt-5 flex-row items-center justify-center gap-2 py-3"
+                  >
                     <FontAwesome6 name="receipt" size={13} color="#2D6A4F" />
-                    <Text className="text-xs font-bold text-brand">有一整张小票或多种食材？批量导入</Text>
+                    <Text className="text-xs font-black text-brand">扫描小票，批量导入多种食材</Text>
                   </TouchableOpacity>
                 </View>
-              ) : (
-              <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerClassName="pb-2">
-                {!editingItem && (
-                  <QuickAddPresetChips onSelect={(item) => applyIngredientDefaults(item.name, item.storageLocation)} />
-                )}
-                <View>
-                  <Text className="text-xs font-bold text-copy-muted mb-1.5">食材名称 <Text className="text-[#C2413A]">*</Text></Text>
-                  <TextInput
-                    value={foodName}
-                    onChangeText={handleFoodNameChange}
-                    placeholder="例如：牛油果、希腊酸奶"
-                    autoFocus={!editingItem}
-                    returnKeyType="next"
-                    className="bg-canvas px-4 py-3.5 rounded-2xl border border-line text-base font-semibold text-ink"
-                  />
-                  {suggestions.length > 0 && (
-                    <View className="mt-2 flex-row flex-wrap gap-1.5 rounded-2xl border border-line bg-canvas p-2.5">
-                      {suggestions.map((sug) => (
-                        <TouchableOpacity
-                          key={sug.name}
-                          onPress={() => applyIngredientDefaults(sug.name)}
-                          className="flex-row items-center gap-1 rounded-xl bg-brand/10 px-2.5 py-1.5 active:bg-brand/20"
-                        >
-                          <FontAwesome6 name="plus" size={10} color="#2D6A4F" />
-                          <Text className="text-xs font-bold text-brand">{sug.name}</Text>
-                          {sug.category && <Text className="text-[10px] text-copy-muted">({sug.category})</Text>}
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
-                </View>
-
-                <View className="mt-4">
-                  <Text className="text-xs font-bold text-copy-muted mb-2">分类</Text>
-                  <View>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row" contentContainerClassName="gap-2 pr-4">
-                      {["蔬菜", "肉食", "水果", "乳制品", "粮油干货", "水产海鲜", "调味品", "休闲零食", "熟食面点"].map((c) => (
-                        <TouchableOpacity
-                          key={c}
-                          onPress={() => setCategory(c)}
-                          className={`px-3.5 py-2 rounded-xl border ${
-                            category === c ? "bg-brand border-brand" : "bg-white border-line"
-                          }`}
-                        >
-                          <Text className={`text-xs ${category === c ? "text-white font-bold" : "text-copy-muted font-medium"}`}>
-                            {c}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                </View>
-
-                <View className="flex-row gap-3 mt-4">
-                  <View className="flex-1">
-                    <Text className="text-xs font-bold text-copy-muted mb-1.5">数量 <Text className="text-[#C2413A]">*</Text></Text>
-                    <TextInput
-                      value={quantity}
-                      onChangeText={setQuantity}
-                      placeholder="如: 500g, 2盒"
-                      className="bg-canvas px-4 py-3 rounded-2xl border border-line text-sm font-semibold text-ink"
-                    />
-                    <View className="flex-row gap-1.5 mt-2">
-                      {["100g", "1份", "2盒", "500g"].map((value) => (
-                        <TouchableOpacity key={value} onPress={() => setQuantity(value)} className="px-2 py-1 rounded-lg bg-background-secondary">
-                          <Text className="text-[10px] font-semibold text-copy-muted">{value}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                  <View className="flex-1">
-                    <Text className="text-xs font-bold text-copy-muted mb-1.5">存放位置</Text>
-                    <View className="flex-row gap-1">
-                      {(["冷藏", "冷冻", "常温"] as const).map((loc) => (
-                        <TouchableOpacity
-                          key={loc}
-                          onPress={() => handleStorageLocationChange(loc)}
-                          className={`flex-1 py-2 rounded-xl border items-center ${
-                            storageLocation === loc ? "bg-ink border-ink" : "bg-canvas border-line"
-                          }`}
-                        >
-                          <Text className={`text-xs ${storageLocation === loc ? "text-white font-bold" : "text-copy-muted"}`}>
-                            {loc}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                </View>
-
-                <View className="mt-4 rounded-2xl bg-[#F8F3EA] p-3.5">
-                  <View className="flex-row items-center justify-between mb-2.5">
-                    <View className="flex-row items-center gap-2">
-                      <View className="w-7 h-7 rounded-full bg-highlight/30 items-center justify-center">
-                        <FontAwesome6 name="bell" size={11} color="#9A6B10" />
+              </ScrollView>
+            ) : (
+              <>
+                <ScrollView
+                  className="flex-1"
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  contentContainerStyle={{ paddingBottom: 16 }}
+                >
+                  <View className="w-full max-w-[720px] self-center px-5 pb-4 pt-4">
+                    <View className="rounded-[24px] border border-line bg-white p-4 shadow-xs">
+                      <View className="mb-2 flex-row items-center justify-between">
+                        <Text className="text-xs font-black text-ink">食材名称 <Text className="text-critical">*</Text></Text>
+                        <Text className="text-[10px] text-copy-muted">输入后自动推荐分类和保质期</Text>
                       </View>
-                      <View>
-                        <Text className="text-xs font-black text-ink">到期提醒</Text>
-                        <Text className="text-[10px] text-copy-muted">我们会在临期时提醒你优先食用</Text>
+                      <View className="flex-row items-center rounded-2xl border border-line bg-canvas px-4">
+                        <View className="mr-3 h-8 w-8 items-center justify-center rounded-xl bg-brand-soft">
+                          <FontAwesome6 name="leaf" size={12} color="#2D6A4F" />
+                        </View>
+                        <TextInput
+                          nativeID="inventory-food-name"
+                          value={foodName}
+                          onChangeText={handleFoodNameChange}
+                          placeholder="输入食材名称"
+                          autoFocus={!editingItem}
+                          returnKeyType="next"
+                          className="min-h-14 flex-1 py-3.5 text-[17px] font-bold text-ink outline-none"
+                        />
                       </View>
-                    </View>
-                    <Text className="text-[10px] font-bold text-brand">{storageLocation}</Text>
-                  </View>
-                  <View className="flex-row gap-2 mb-3">
-                    {[{ label: "3天", days: 3 }, { label: "7天", days: 7 }, { label: "30天", days: 30 }].map(({ label, days }) => {
-                      const date = dateKeyAfterDays(days);
-                      const selected = expirationDate === date;
-                      return (
-                        <TouchableOpacity key={label} onPress={() => setExpirationDate(date)} className={`flex-1 items-center py-1.5 rounded-xl border ${selected ? "bg-brand border-brand" : "bg-white border-line"}`}>
-                          <Text className={`text-[11px] font-bold ${selected ? "text-white" : "text-copy-muted"}`}>{label}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                  <SmartDateInput value={expirationDate} onChange={setExpirationDate} />
-                </View>
-
-                <View className="mt-3 rounded-2xl border border-line bg-white p-3">
-                  <View className="flex-row items-center justify-between">
-                    <View className="flex-row items-center gap-2">
-                      {imageUrl ? (
-                        <Image source={{ uri: imageUrl }} className="h-9 w-9 rounded-xl bg-background-secondary" />
-                      ) : (
-                        <View className="h-9 w-9 items-center justify-center rounded-xl bg-background-secondary">
-                          <FontAwesome6 name="image" size={14} color="#8B7D6B" />
+                      {suggestions.length > 0 && (
+                        <View className="mt-2 flex-row flex-wrap gap-1.5 rounded-2xl bg-brand-soft p-2.5">
+                          {suggestions.map((sug) => (
+                            <TouchableOpacity
+                              key={sug.name}
+                              onPress={() => applyIngredientDefaults(sug.name)}
+                              className="flex-row items-center gap-1 rounded-xl bg-brand/10 px-2.5 py-1.5 active:bg-brand/20"
+                            >
+                              <FontAwesome6 name="plus" size={10} color="#2D6A4F" />
+                              <Text className="text-xs font-bold text-brand">{sug.name}</Text>
+                              {sug.category && <Text className="text-[10px] text-copy-muted">({sug.category})</Text>}
+                            </TouchableOpacity>
+                          ))}
                         </View>
                       )}
-                      <View>
-                        <Text className="text-xs font-bold text-ink">食材照片 <Text className="font-medium text-copy-muted">（可选）</Text></Text>
-                        <Text className="mt-0.5 text-[10px] text-copy-muted">{imageUrl ? "照片已添加" : "方便以后快速辨认"}</Text>
+
+                      <View className="mt-4 border-t border-line pt-4">
+                        <Text className="mb-1.5 text-xs font-bold text-copy-muted">分类</Text>
+                        <TouchableOpacity
+                          onPress={() => setCategoryMenuOpen((open) => !open)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`选择食材分类，当前为${category}`}
+                          accessibilityState={{ expanded: categoryMenuOpen }}
+                          className="flex-row items-center rounded-2xl border border-line bg-canvas px-4 py-3"
+                        >
+                          <View className="h-8 w-8 items-center justify-center rounded-xl bg-brand-soft">
+                            <FontAwesome6 name="shapes" size={11} color="#2D6A4F" />
+                          </View>
+                          <Text className="ml-3 flex-1 text-sm font-bold text-ink">{category}</Text>
+                          <Text className="mr-2 text-[10px] text-copy-muted">选择分类</Text>
+                          <FontAwesome6 name={categoryMenuOpen ? "chevron-up" : "chevron-down"} size={10} color="#8B7D6B" />
+                        </TouchableOpacity>
+                        {categoryMenuOpen && (
+                          <View className="mt-2 overflow-hidden rounded-2xl border border-line bg-white">
+                            {INVENTORY_ENTRY_CATEGORIES.map((item, index) => {
+                              const selected = category === item;
+                              return (
+                                <TouchableOpacity
+                                  key={item}
+                                  onPress={() => {
+                                    setCategory(item);
+                                    setCategoryMenuOpen(false);
+                                  }}
+                                  className={`flex-row items-center px-4 py-3 ${index > 0 ? "border-t border-line" : ""} ${selected ? "bg-brand-soft" : "bg-white"}`}
+                                >
+                                  <Text className={`flex-1 text-sm ${selected ? "font-black text-brand" : "font-medium text-ink"}`}>{item}</Text>
+                                  {selected && <FontAwesome6 name="check" size={11} color="#2D6A4F" />}
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        )}
+                      </View>
+
+                    <View className="mt-4 border-t border-line pt-4">
+                      <View className="mb-3 flex-row items-center justify-between">
+                        <View className="flex-row items-center gap-2">
+                          <View className="h-7 w-7 items-center justify-center rounded-xl bg-brand-soft">
+                            <FontAwesome6 name="box" size={11} color="#2D6A4F" />
+                          </View>
+                          <Text className="text-sm font-black text-ink">库存信息</Text>
+                        </View>
+                        <Text className="text-[10px] text-copy-muted">数量与保存方式</Text>
+                      </View>
+
+                      <View className="flex-row items-end gap-3">
+                        <View className="w-[42%]">
+                          <Text className="mb-1.5 text-xs font-bold text-copy-muted">数量 <Text className="text-critical">*</Text></Text>
+                          <TextInput
+                            nativeID="inventory-quantity"
+                            value={quantity}
+                            onChangeText={setQuantity}
+                            placeholder="500g、2盒"
+                            className="rounded-2xl border border-line bg-canvas px-4 py-3 text-sm font-semibold text-ink outline-none"
+                          />
+                        </View>
+                        <View className="flex-1">
+                          <Text className="mb-1.5 text-xs font-bold text-copy-muted">存放位置</Text>
+                          <View className="flex-row rounded-2xl border border-line bg-canvas p-1">
+                            {(["冷藏", "冷冻", "常温"] as const).map((loc) => (
+                              <TouchableOpacity
+                                key={loc}
+                                onPress={() => handleStorageLocationChange(loc)}
+                                className={`flex-1 items-center rounded-xl py-2.5 ${storageLocation === loc ? "bg-brand shadow-xs" : "bg-transparent"}`}
+                              >
+                                <Text className={`text-[11px] ${storageLocation === loc ? "font-bold text-white" : "font-medium text-copy-muted"}`}>{loc}</Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        </View>
+                      </View>
+                      <View className="mt-2 flex-row gap-1.5">
+                        {["100g", "1份", "2盒", "500g"].map((value) => (
+                          <TouchableOpacity
+                            key={value}
+                            onPress={() => setQuantity(value)}
+                            className={`flex-1 items-center rounded-full border py-1.5 ${quantity === value ? "border-brand/20 bg-brand-soft" : "border-line bg-canvas"}`}
+                          >
+                            <Text className={`text-[10px] font-bold ${quantity === value ? "text-brand" : "text-copy-muted"}`}>{value}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+
+                      <View className="mt-4 border-t border-line pt-4">
+                      <View className="mb-2.5 flex-row items-center justify-between">
+                        <View className="flex-row items-center gap-2.5">
+                          <View className="h-7 w-7 items-center justify-center rounded-xl bg-brand-soft">
+                            <FontAwesome6 name="bell" size={11} color="#2D6A4F" />
+                          </View>
+                          <Text className="text-sm font-black text-ink">到期日期</Text>
+                        </View>
+                        <View className="rounded-full bg-brand-soft px-2.5 py-1">
+                          <Text className="text-[10px] font-black text-brand">临期提醒</Text>
+                        </View>
+                      </View>
+                      <View className="mb-2 flex-row gap-2">
+                        {[{ label: "3 天", days: 3 }, { label: "7 天", days: 7 }, { label: "30 天", days: 30 }].map(({ label, days }) => {
+                          const date = dateKeyAfterDays(days);
+                          const selected = expirationDate === date;
+                          return (
+                            <TouchableOpacity key={label} onPress={() => setExpirationDate(date)} className={`flex-1 items-center rounded-xl border py-2 ${selected ? "border-brand bg-brand" : "border-line bg-canvas"}`}>
+                              <Text className={`text-[11px] font-bold ${selected ? "text-white" : "text-copy-muted"}`}>{label}</Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                      <SmartDateInput
+                        value={expirationDate}
+                        onChange={setExpirationDate}
+                        containerStyle={{ marginBottom: 0 }}
+                        inputStyle={{ height: 46, borderColor: "#EBE3D5", shadowOpacity: 0, elevation: 0 }}
+                        iconColor="#6F6254"
+                        iconSize={16}
+                      />
+                    </View>
+                    </View>
+
+                    <View className="mt-4 border-t border-line pt-4">
+                      <View className="flex-row items-center justify-between gap-3">
+                        <View className="flex-1 flex-row items-center gap-3">
+                          {imageUrl ? (
+                            <Image source={{ uri: imageUrl }} className="h-11 w-11 rounded-2xl bg-canvas" />
+                          ) : (
+                            <View className="h-11 w-11 items-center justify-center rounded-2xl bg-canvas">
+                              <FontAwesome6 name="image" size={15} color="#8B7D6B" />
+                            </View>
+                          )}
+                          <View className="flex-1">
+                            <Text className="text-xs font-bold text-ink">食材照片 <Text className="font-medium text-copy-muted">（可选）</Text></Text>
+                            <Text className="mt-0.5 text-[10px] text-copy-muted">{imageUrl ? "照片已添加" : "添加后更容易辨认"}</Text>
+                          </View>
+                        </View>
+                        <View className="flex-row gap-2">
+                          <TouchableOpacity accessibilityLabel="拍摄食材照片" onPress={() => selectFoodPhoto("camera")} className="h-10 w-10 items-center justify-center rounded-xl bg-brand-soft">
+                            <FontAwesome6 name="camera" size={13} color="#2D6A4F" />
+                          </TouchableOpacity>
+                          <TouchableOpacity accessibilityLabel="从相册选择食材照片" onPress={() => selectFoodPhoto("library")} className="h-10 w-10 items-center justify-center rounded-xl bg-canvas">
+                            <FontAwesome6 name="images" size={13} color="#8B7D6B" />
+                          </TouchableOpacity>
+                          {imageUrl && (
+                            <TouchableOpacity accessibilityLabel="移除食材照片" onPress={() => setImageUrl("")} className="h-10 w-10 items-center justify-center rounded-xl bg-red-50">
+                              <FontAwesome6 name="trash" size={12} color="#C2413A" />
+                            </TouchableOpacity>
+                          )}
+                        </View>
                       </View>
                     </View>
-                    <View className="flex-row gap-2">
-                      <TouchableOpacity onPress={() => selectFoodPhoto("camera")} className="h-9 w-9 items-center justify-center rounded-xl bg-brand/10">
-                        <FontAwesome6 name="camera" size={13} color="#2D6A4F" />
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={() => selectFoodPhoto("library")} className="h-9 w-9 items-center justify-center rounded-xl bg-background-secondary">
-                        <FontAwesome6 name="images" size={13} color="#8B7D6B" />
-                      </TouchableOpacity>
-                      {imageUrl && (
-                        <TouchableOpacity onPress={() => setImageUrl("")} className="h-9 w-9 items-center justify-center rounded-xl bg-red-50">
-                          <FontAwesome6 name="trash" size={12} color="#C2413A" />
-                        </TouchableOpacity>
-                      )}
                     </View>
-                  </View>
-                </View>
 
-                {editingItem && (
-                  <View className="mt-4 flex-row gap-2.5">
-                    <TouchableOpacity
-                      onPress={() => {
-                        setModalVisible(false);
-                        router.push({
-                          pathname: "/ai-assistant",
-                          params: {
-                            prefill_food: editingItem.food_name,
-                            prompt: `我冰箱里有【${editingItem.food_name}】(${editingItem.quantity})，请帮我生成一份优先消耗它的营养餐单！`,
-                          },
-                        });
-                      }}
-                      className="flex-1 py-3.5 rounded-2xl bg-highlight/20 items-center border border-highlight/40"
-                    >
-                      <Text className="text-xs font-bold text-amber-900">AI 生成菜谱</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => handleDeleteItem(editingItem.id)}
-                      className="flex-row items-center justify-center gap-1.5 rounded-2xl bg-red-50 px-4 py-3"
-                    >
-                      <FontAwesome6 name="trash-can" size={11} color="#B5483F" />
-                      <Text className="text-xs font-bold text-[#B5483F]">移除</Text>
-                    </TouchableOpacity>
+                    {editingItem && (
+                      <View className="mt-3 flex-row gap-2.5">
+                        <TouchableOpacity
+                          onPress={() => {
+                            setModalVisible(false);
+                            router.push({
+                              pathname: "/ai-assistant",
+                              params: {
+                                prefill_food: editingItem.food_name,
+                                prompt: `我冰箱里有【${editingItem.food_name}】(${editingItem.quantity})，请帮我生成一份优先消耗它的营养餐单！`,
+                              },
+                            });
+                          }}
+                          className="flex-1 items-center rounded-2xl border border-highlight/40 bg-highlight/20 py-3.5"
+                        >
+                          <Text className="text-xs font-bold text-amber-900">AI 生成菜谱</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => handleDeleteItem(editingItem.id)}
+                          className="flex-row items-center justify-center gap-1.5 rounded-2xl bg-red-50 px-5 py-3"
+                        >
+                          <FontAwesome6 name="trash-can" size={11} color="#B5483F" />
+                          <Text className="text-xs font-bold text-[#B5483F]">移除</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
-                )}
+                </ScrollView>
 
-                <TouchableOpacity
-                  onPress={handleSaveItem}
-                  disabled={saving}
-                  className="bg-brand py-4 rounded-2xl items-center mt-4 shadow-sm active:opacity-90"
-                >
-                  {saving ? (
-                    <ActivityIndicator color="#FFF" />
-                  ) : (
-                    <Text className="text-base font-bold text-white">{editingItem ? "保存修改" : "加入食材库"}</Text>
-                  )}
-                </TouchableOpacity>
-                {!editingItem && (
-                  <TouchableOpacity onPress={() => setEntryMode("choose")} className="items-center py-3">
-                    <Text className="text-xs font-bold text-copy-muted">选择其他录入方式</Text>
+                <View className="border-t border-line bg-white px-5 pt-3" style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
+                  <TouchableOpacity
+                    onPress={handleSaveItem}
+                    disabled={saving}
+                    className="w-full max-w-[680px] self-center items-center rounded-2xl bg-brand py-4 shadow-sm active:opacity-90 disabled:opacity-60"
+                  >
+                    {saving ? (
+                      <ActivityIndicator color="#FFF" />
+                    ) : (
+                      <View className="flex-row items-center gap-2">
+                        <FontAwesome6 name="check" size={13} color="#FFF" />
+                        <Text className="text-base font-bold text-white">{editingItem ? "保存修改" : "加入食材库"}</Text>
+                      </View>
+                    )}
                   </TouchableOpacity>
-                )}
-              </ScrollView>
-              )}
-            </View>
-          </View>
+                </View>
+              </>
+            )}
+          </KeyboardAvoidingView>
         </Modal>
 
         <BatchReviewModal

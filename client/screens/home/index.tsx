@@ -15,7 +15,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Screen } from "@/components/Screen";
-import { MedicalDisclaimer } from "@/components/MedicalDisclaimer";
 import { useFocusEffect } from "expo-router";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
@@ -23,11 +22,11 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
 import { toLocalDateKey } from "@/utils/date";
-import { AI_DATA_CONSENT_STORAGE_KEY, getUserStorageKey } from "@/utils/userStorage";
+import { getUserStorageKey } from "@/utils/userStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { daysUntilDateKey } from "@/utils/inventory";
 import { ingredientNamesMatch, normalizeIngredientName } from "@/utils/ingredients";
-import { aiApi, authApi, waitForAgentRun } from "@/services/api";
+import { aiApi } from "@/services/api";
 import type { InventoryHighlight, RankedRecipe, RecommendationCard } from "./types";
 import { getRecommendationPeriod } from "./recommendations";
 import { useHomeData } from "./useHomeData";
@@ -38,7 +37,7 @@ const RECIPE_BATCH_SIZE = 3;
 
 export default function HomeScreen() {
   const router = useSafeRouter();
-  const { isAuthenticated, user, token } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const authFetch = useAuthFetch();
 
   const [activeCategory, setActiveCategory] = useState("全部");
@@ -48,10 +47,6 @@ export default function HomeScreen() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [allRecordsModalVisible, setAllRecordsModalVisible] = useState(false);
   const [aiRecCards, setAiRecCards] = useState<RecommendationCard[]>([]);
-  const [aiRecError, setAiRecError] = useState<string | null>(null);
-  const [hasAIDataConsent, setHasAIDataConsent] = useState(false);
-  const [loadedAIConsentStorageKey, setLoadedAIConsentStorageKey] = useState<string | null>(null);
-  const aiConsentOwnerKey = useRef<string | null>(null);
   const aiRecommendationRequestKey = useRef("");
   const [activeRecommendationCard, setActiveRecommendationCard] = useState(0);
   const [smartFeedOffset] = useState(() => new Animated.Value(0));
@@ -75,23 +70,13 @@ export default function HomeScreen() {
     useHomeData(authFetch, isAuthenticated, today);
 
   const shoppingStorageKey = getUserStorageKey("shopping_list", user?.id);
-  const aiConsentStorageKey = getUserStorageKey(AI_DATA_CONSENT_STORAGE_KEY, user?.id);
   const [shoppingItems, setShoppingItems] = useState<{ id: string; name: string; amount: string; checked: boolean }[]>([]);
-  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
-      let active = true;
       setVisibleRecipeCount(RECIPE_BATCH_SIZE);
       lastRecipeBatchLoadAt.current = 0;
       void refresh();
-      if (token) {
-        void authApi.notificationUnreadCount(token)
-          .then(({ count }) => setUnreadNotificationCount(count))
-          .catch(() => undefined);
-      } else {
-        setUnreadNotificationCount(0);
-      }
 
       if (shoppingStorageKey) {
         AsyncStorage.getItem(shoppingStorageKey).then((saved) => {
@@ -102,40 +87,7 @@ export default function HomeScreen() {
           }
         });
       }
-
-      if (aiConsentStorageKey) {
-        void AsyncStorage.getItem(aiConsentStorageKey)
-          .then((value) => {
-            if (!active) return;
-            if (aiConsentOwnerKey.current !== aiConsentStorageKey) {
-              aiConsentOwnerKey.current = aiConsentStorageKey;
-              aiRecommendationRequestKey.current = "";
-              setAiRecCards([]);
-              setAiRecError(null);
-            }
-            setLoadedAIConsentStorageKey(aiConsentStorageKey);
-            setHasAIDataConsent(value === "accepted");
-          })
-          .catch(() => {
-            if (!active) return;
-            aiConsentOwnerKey.current = aiConsentStorageKey;
-            aiRecommendationRequestKey.current = "";
-            setLoadedAIConsentStorageKey(aiConsentStorageKey);
-            setHasAIDataConsent(false);
-            setAiRecCards([]);
-            setAiRecError(null);
-          });
-      } else {
-        aiConsentOwnerKey.current = null;
-        aiRecommendationRequestKey.current = "";
-        setLoadedAIConsentStorageKey(null);
-        setHasAIDataConsent(false);
-        setAiRecCards([]);
-        setAiRecError(null);
-      }
-
-      return () => { active = false; };
-    }, [aiConsentStorageKey, refresh, shoppingStorageKey, token])
+    }, [refresh, shoppingStorageKey])
   );
 
   // 计算今日三大营养素
@@ -188,10 +140,8 @@ export default function HomeScreen() {
   const activeInventoryCard = inventoryHighlights[activeInventoryHighlight] || inventoryHighlights[0];
   const communityPosts = posts.slice(0, 5);
   const featuredCommunityPost = communityPosts[activeCommunityPost] || communityPosts[0];
-  const canDisplayAIRecommendations = hasAIDataConsent && loadedAIConsentStorageKey === aiConsentStorageKey;
-  const visibleAIRecCards = canDisplayAIRecommendations ? aiRecCards : [];
-  const visibleAIRecError = canDisplayAIRecommendations ? aiRecError : null;
-  const mealRecommendationCount = visibleAIRecCards.length || (visibleAIRecError ? 1 : 0);
+  const currentRecommendationHour = new Date().getHours();
+  const mealRecommendationCount = aiRecCards.length || (currentRecommendationHour >= 22 || currentRecommendationHour < 5 ? 1 : 2);
   const smartFeedCardCount = mealRecommendationCount + 1 + (expiringItems.length > 0 ? 1 : 0) + (todayWaterMl < 1600 ? 1 : 0);
 
   const changeSmartFeedCard = useCallback((direction: "prev" | "next") => {
@@ -274,14 +224,6 @@ export default function HomeScreen() {
 
     changeSmartFeedCard(deltaX < 0 ? "next" : "prev");
   }, [changeSmartFeedCard]);
-
-  const shouldClaimSmartFeedGesture = useCallback((event: GestureResponderEvent) => {
-    const start = smartFeedTouchStart.current;
-    if (!start) return false;
-    const deltaX = event.nativeEvent.pageX - start.x;
-    const deltaY = event.nativeEvent.pageY - start.y;
-    return Math.abs(deltaX) > 10 && Math.abs(deltaX) > Math.abs(deltaY) * 1.15;
-  }, []);
 
   useEffect(() => {
     Animated.timing(calorieProgress, {
@@ -380,7 +322,7 @@ export default function HomeScreen() {
   }, [communityPostOffset, communityPostOpacity, communityPosts.length]);
 
   useEffect(() => {
-    if (!isAuthenticated || !hasAIDataConsent || loadedAIConsentStorageKey !== aiConsentStorageKey || loading) return;
+    if (!isAuthenticated || loading) return;
 
     const period = getRecommendationPeriod(new Date().getHours());
     const requestKey = `${period}:${targetCalories}:${totalCalories}:${totalProtein}:${inventoryItems.map((item) => `${item.id}-${item.expiration_date}`).join(",")}`;
@@ -389,17 +331,12 @@ export default function HomeScreen() {
 
     let active = true;
     const fetchAIRecommendations = async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
       try {
-        setAiRecError(null);
-        const data = await aiApi.homeRecommendations<{ cards?: unknown[]; run: { id: string; status: string; artifacts?: Array<{ type: string; data: unknown }>; error?: { message?: string } } }>(authFetch, period, requestKey);
-        const run = await waitForAgentRun(authFetch, data.run);
-        const artifactCards = (run.artifacts || []).flatMap((artifact) => {
-          const artifactData = artifact.data as { cards?: unknown[] } | unknown[] | undefined;
-          return Array.isArray(artifactData) ? artifactData : Array.isArray(artifactData?.cards) ? artifactData.cards : [];
-        });
-        const rawCards = data.cards?.length ? data.cards : artifactCards;
-        const cards: RecommendationCard[] = Array.isArray(rawCards)
-          ? rawCards
+        const data = await aiApi.homeRecommendations<{ cards?: unknown[] }>(authFetch, period, requestKey, controller.signal);
+        const cards: RecommendationCard[] = Array.isArray(data.cards)
+          ? data.cards
             .filter((card: unknown): card is Record<string, unknown> => !!card && typeof card === "object")
             .map((card: Record<string, unknown>): RecommendationCard => ({
               title: typeof card.title === "string" ? card.title : "",
@@ -413,14 +350,16 @@ export default function HomeScreen() {
           : [];
         if (active && cards.length > 0) setAiRecCards(cards);
       } catch (error) {
+        // 首页保留时段默认卡片，AI 服务不可用或超时时不影响页面使用。
         console.warn("Home AI recommendations unavailable or timed out", error);
-        if (active) setAiRecError(error instanceof Error ? error.message : "Supervisor Agent 推荐失败");
+      } finally {
+        clearTimeout(timer);
       }
     };
 
     void fetchAIRecommendations();
     return () => { active = false; };
-  }, [aiConsentStorageKey, authFetch, hasAIDataConsent, inventoryItems, isAuthenticated, loadedAIConsentStorageKey, loading, targetCalories, totalCalories, totalProtein]);
+  }, [authFetch, inventoryItems, isAuthenticated, loading, targetCalories, totalCalories, totalProtein]);
 
   const filteredRecipes = useMemo<RankedRecipe[]>(() => {
     const availableInventory = inventoryItems.filter((item) => item.is_available && item.food_name.trim());
@@ -530,8 +469,8 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
         className="bg-canvas"
       >
-        {/* 首页工具栏：去掉厚重品牌外壳，只保留必要入口。 */}
-        <View className="bg-canvas px-5 pt-3 pb-3">
+        {/* 首页工具栏：只保留搜索与 AI 配餐入口。 */}
+        <View className="bg-canvas px-5 pt-3 pb-1">
           <View className="flex-row items-center gap-2">
             <View className="h-11 flex-1 flex-row items-center gap-2 rounded-full border border-line bg-white px-4 shadow-2xs">
               <FontAwesome6 name="magnifying-glass" size={13} color="#2D6A4F" />
@@ -575,23 +514,100 @@ export default function HomeScreen() {
         {/* ⏰ 时段智能推荐轮播卡片 (Time-Aware Carousel) */}
         {(() => {
           const hour = new Date().getHours();
-          const period = getRecommendationPeriod(hour);
-          const periodTitle = `${period} Supervisor 配餐推荐`;
-          const periodSub = "结合库存、今日摄入与营养目标动态生成";
-          const recCards: RecommendationCard[] = visibleAIRecCards.length ? visibleAIRecCards : visibleAIRecError ? [{
-            title: "AI Agent 推荐未完成",
-            tag: "执行失败",
-            desc: visibleAIRecError,
-            calories: "未生成",
-            prompt: `请重新生成${period}配餐建议，并明确说明刚才任务失败后需要重新执行。`,
-          }] : [];
+          let periodTitle = "早餐吃什么";
+          let recCards = [
+            {
+              title: "燕麦水煮蛋能量碗",
+              tag: "高蛋白",
+              desc: "优质碳水结合蛋白质，饱腹持久不升糖",
+              calories: "320 kcal",
+              prompt: "帮我评估早餐吃燕麦水煮蛋的营养比例",
+            },
+            {
+              title: "保鲜库牛油果全麦吐司",
+              tag: "优质脂肪",
+              desc: "用保鲜库现有牛油果涂抹全麦面包",
+              calories: "280 kcal",
+              prompt: "用保鲜库牛油果推荐一份15分钟快手早餐",
+            },
+          ];
+
+          if (hour >= 11 && hour < 14) {
+            periodTitle = "午餐吃什么";
+            recCards = [
+              {
+                title: "鸡胸肉藜麦牛油果沙拉",
+                tag: "低脂减脂",
+                desc: "煎鸡胸肉配新鲜蔬菜，补充优质蛋白",
+                calories: "420 kcal",
+                prompt: "帮我用保鲜库鸡胸肉做一份低卡减脂午餐食谱",
+              },
+              {
+                title: "清蒸鲈鱼配杂粮饭",
+                tag: "易消化",
+                desc: "优质白肉蛋白，补充丰富微量元素",
+                calories: "450 kcal",
+                prompt: "推荐一份适合工作日的低脂快手午餐",
+              },
+            ];
+          } else if (hour >= 14 && hour < 18) {
+            periodTitle = "下午加餐";
+            recCards = [
+              {
+                title: "希腊酸奶配一把坚果",
+                tag: "低糖高纤",
+                desc: "替代高糖奶茶，稳定血糖与注意力",
+                calories: "160 kcal",
+                prompt: "推荐几款低于200卡路里的健康下午茶替代品",
+              },
+              {
+                title: "无糖黑咖啡配水蜜桃",
+                tag: "去水肿",
+                desc: "促进代谢，帮助下半场恢复精力",
+                calories: "80 kcal",
+                prompt: "下午茶想吃甜食有什么低卡解馋选择",
+              },
+            ];
+          } else if (hour >= 18 && hour < 22) {
+            periodTitle = "今晚吃什么";
+            recCards = [
+              {
+                title: "蒜蓉炒鸡胸肉配水煮西蓝花",
+                tag: "夜间修护",
+                desc: "保鲜库鸡胸肉少油清炒，减轻肠胃负担",
+                calories: "310 kcal",
+                prompt: "帮我规划明天一整天的健康减脂一日三餐食谱",
+              },
+              {
+                title: "菌菇豆腐清汤",
+                tag: "暖胃低热",
+                desc: "低卡丰富鲜味，防止夜间高盐浮肿",
+                calories: "180 kcal",
+                prompt: "晚餐想吃热乎乎的低卡汤品有什么推荐",
+              },
+            ];
+          } else if (hour >= 22 || hour < 5) {
+            periodTitle = "深夜有点饿？";
+            recCards = [
+              {
+                title: "暖洋甘菊茶 / 温无糖牛奶",
+                tag: "助眠安神",
+                desc: "温暖胃部，促进睡眠，告别失眠与肚饿",
+                calories: "110 kcal",
+                prompt: "深夜有点饿有什么不会发胖的健康食物",
+              },
+            ];
+          }
+
+          if (aiRecCards.length > 0) {
+            recCards = aiRecCards;
+          }
 
           const smartCards = [
             ...recCards.map((card) => ({
               ...card,
               headerTitle: periodTitle,
-              headerSub: periodSub,
-              actionLabel: "点击让【食语】生成此食谱",
+              actionLabel: "让食语生成食谱",
             })),
             ...(expiringItems.length > 0 ? [{
               title: `${expiringItems.length} 件食材临近到期`,
@@ -600,8 +616,7 @@ export default function HomeScreen() {
               calories: "优先处理",
               prompt: `我有${expiringItems.length}件临期食材：${expiringItems.map((item) => item.food_name).join("、")}。请优先用它们安排一份容易完成的餐食。`,
               headerTitle: "临期食材提醒",
-              headerSub: "优先消耗，减少浪费，也让食材保持最佳赏味期",
-              actionLabel: "点击让【食语】安排消耗方案",
+              actionLabel: "安排消耗方案",
             }] : []),
             {
               title: `今日已摄入 ${totalCalories} kcal`,
@@ -612,8 +627,7 @@ export default function HomeScreen() {
               calories: `${calPercent}%`,
               prompt: `我今天已摄入${totalCalories} kcal，目标是${targetCalories} kcal。请根据我现有库存规划今天接下来的饮食。`,
               headerTitle: "今日饮食进度",
-              headerSub: "结合已摄入热量，帮你平衡接下来的每一餐",
-              actionLabel: "点击让【食语】规划下一餐",
+              actionLabel: "规划下一餐",
             },
             ...(todayWaterMl < 1600 ? [{
               title: `今日饮水 ${todayWaterMl} / 2000 ml`,
@@ -622,17 +636,15 @@ export default function HomeScreen() {
               calories: `${Math.max(0, 2000 - todayWaterMl)} ml`,
               prompt: `我今天已饮水${todayWaterMl} ml。请给我一个不影响睡眠和用餐的补水计划。`,
               headerTitle: "今日补水提醒",
-              headerSub: "少量多次补水，帮助保持精神与代谢状态",
-              actionLabel: "点击让【食语】制定补水计划",
+              actionLabel: "制定补水计划",
             }] : []),
           ];
-          const activeSmartCard = smartCards[activeRecommendationCard] || smartCards[0];
+          const visibleSmartCardIndex = Math.min(activeRecommendationCard, smartCards.length - 1);
+          const activeSmartCard = smartCards[visibleSmartCardIndex] || smartCards[0];
 
           return (
-            <View className="px-5 mt-4 mb-5">
+            <View className="px-5 mt-3 mb-4">
               <Animated.View
-                onMoveShouldSetResponder={shouldClaimSmartFeedGesture}
-                onResponderRelease={handleSmartFeedTouchEnd}
                 accessibilityHint={smartCards.length > 1 ? "左右滑动可切换推荐卡片" : undefined}
                 onTouchStart={handleSmartFeedTouchStart}
                 onTouchEnd={handleSmartFeedTouchEnd}
@@ -640,68 +652,71 @@ export default function HomeScreen() {
                   smartFeedTouchStart.current = null;
                 }}
                 style={{
-                  minHeight: 212,
+                  minHeight: 184,
                   opacity: smartFeedOpacity,
                   transform: [{ translateX: smartFeedOffset }],
                 }}
-                className="bg-white p-5 rounded-[28px] border border-line shadow-xs overflow-hidden"
+                className="overflow-hidden rounded-[28px] border border-[#DCE8DE] bg-[#F1F6F1] p-5"
               >
-                <View className="flex-row items-center justify-between mb-3.5 pb-2.5 border-b border-[#F4EFE6]">
-                  <View>
+                <View className="mb-4 flex-row items-center justify-between">
+                  <View className="flex-row items-center gap-2">
+                    <View className="h-7 w-7 items-center justify-center rounded-xl bg-brand">
+                      <FontAwesome6 name="wand-magic-sparkles" size={10} color="#FFFFFF" />
+                    </View>
                     <Text className="text-sm font-black text-ink">{activeSmartCard.headerTitle}</Text>
-                    <Text className="text-[10px] text-copy-muted mt-0.5">{activeSmartCard.headerSub}</Text>
                   </View>
-                  <TouchableOpacity
-                    onPress={() => router.push({ pathname: "/ai-assistant", params: { prompt: activeSmartCard.prompt } })}
-                    className="bg-brand/10 px-3 py-1.5 rounded-full flex-row items-center gap-1 active:opacity-80"
-                  >
-                    <FontAwesome6 name="wand-magic-sparkles" size={11} color="#2D6A4F" />
-                    <Text className="text-[11px] font-bold text-brand">问食语 AI</Text>
-                  </TouchableOpacity>
+                  <View className="items-end">
+                    <Text className="text-[10px] font-bold text-brand">食语推荐</Text>
+                    <Text className="mt-0.5 text-[9px] font-black text-copy-muted">
+                      {visibleSmartCardIndex + 1} / {smartCards.length}
+                    </Text>
+                  </View>
                 </View>
 
-                {/* 整张智能卡内容会随提醒类型一同纵向切换 */}
-                <View>
-                  <TouchableOpacity
+                <TouchableOpacity
                     onPress={() =>
                       router.push({
                         pathname: "/ai-assistant",
                         params: { prefill_food: activeSmartCard.title, prompt: activeSmartCard.prompt },
                       })
                     }
-                    className="justify-between active:opacity-80"
+                    className="active:opacity-80"
                   >
-                    <View className="flex-row items-center justify-between mb-3">
-                      <View className="bg-brand px-2.5 py-0.5 rounded-full">
-                        <Text className="text-[10px] font-bold text-white">{activeSmartCard.tag}</Text>
+                    <View className="mb-2.5 flex-row items-center gap-2">
+                      <View className="rounded-full bg-white/75 px-2.5 py-1">
+                        <Text className="text-[10px] font-bold text-brand">{activeSmartCard.tag}</Text>
                       </View>
-                      <Text className="text-xs font-black text-highlight">{activeSmartCard.calories}</Text>
+                      <Text className="text-[10px] font-black text-[#A97816]">{activeSmartCard.calories}</Text>
                     </View>
-                    <Text className="text-base font-black text-ink mb-1.5">{activeSmartCard.title}</Text>
-                    <Text className="text-xs text-copy-muted leading-5 mb-4" numberOfLines={2}>
+                    <Text className="text-[17px] font-black leading-6 text-ink">{activeSmartCard.title}</Text>
+                    <Text className="mt-1 text-[11px] leading-4 text-copy-muted" numberOfLines={1}>
                       {activeSmartCard.desc}
                     </Text>
-                    <View className="border-t border-[#F4EFE6] pt-3 items-center">
-                      <Text className="text-[11px] font-bold text-brand">{activeSmartCard.actionLabel}</Text>
+                    <View className="mt-4 flex-row items-center justify-between">
+                      {smartCards.length > 1 ? (
+                        <View className="flex-row items-center gap-1.5">
+                          {smartCards.map((_, index) => (
+                            <View
+                              key={index}
+                              className={`h-1.5 rounded-full ${visibleSmartCardIndex === index ? "w-4 bg-brand" : "w-1.5 bg-brand/20"}`}
+                            />
+                          ))}
+                        </View>
+                      ) : <View />}
+                      <View className="flex-row items-center rounded-full bg-brand px-4 py-2">
+                        <Text className="text-[11px] font-black text-white">{activeSmartCard.actionLabel}</Text>
+                        <FontAwesome6 name="arrow-right" size={9} color="#FFFFFF" style={{ marginLeft: 6 }} />
+                      </View>
                     </View>
                   </TouchableOpacity>
-                {smartCards.length > 1 && (
-                  <View className="mt-3 flex-row items-center justify-center gap-1.5">
-                    {smartCards.map((_, index) => (
-                      <View
-                        key={index}
-                        className={`h-1.5 rounded-full ${
-                          activeRecommendationCard === index ? "w-4 bg-brand" : "w-1.5 bg-highlight/40"
-                        }`}
-                      />
-                    ))}
-                  </View>
-                )}
+
+                <View className="mt-3 flex-row items-start border-t border-brand/10 pt-2.5">
+                  <FontAwesome6 name="circle-info" size={9} color="#8B7D6B" style={{ marginTop: 2 }} />
+                  <Text className="ml-1.5 flex-1 text-[9px] leading-3.5 text-copy-muted" numberOfLines={2}>
+                    AI 营养估算仅供日常健康管理，不构成医疗诊断或治疗建议。
+                  </Text>
                 </View>
               </Animated.View>
-                <View className="mt-2">
-                <MedicalDisclaimer compact />
-              </View>
             </View>
           );
         })()}
@@ -710,6 +725,35 @@ export default function HomeScreen() {
         <View className="px-5 mb-5">
           <View className="bg-white rounded-[24px] p-4 border border-line shadow-xs overflow-hidden relative">
             <View className="absolute -right-8 -top-12 w-32 h-32 rounded-full bg-brand/5" />
+            {todayRecords.length === 0 ? (
+              <View>
+                <View className="flex-row items-center">
+                  <View className="h-11 w-11 items-center justify-center rounded-2xl bg-brand/10">
+                    <FontAwesome6 name="bowl-food" size={16} color="#2D6A4F" />
+                  </View>
+                  <View className="ml-3 flex-1">
+                    <Text className="text-sm font-black text-ink">今天还没记录饮食</Text>
+                    <Text className="mt-1 text-[10px] leading-4 text-copy-muted">记下第一餐后，这里会显示热量与营养趋势</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => router.push("/diet-record")}
+                    className="ml-3 flex-row items-center rounded-full bg-brand px-3.5 py-2 active:opacity-80"
+                  >
+                    <FontAwesome6 name="plus" size={10} color="#FFFFFF" />
+                    <Text className="ml-1.5 text-[11px] font-black text-white">记一餐</Text>
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity
+                  onPress={() => router.push("/health-data")}
+                  className="mt-3 flex-row items-center justify-center border-t border-[#F4EFE6] pt-3"
+                >
+                  <FontAwesome6 name="heart-pulse" size={10} color="#2D6A4F" />
+                  <Text className="ml-1.5 text-[10px] font-bold text-brand">查看健康档案</Text>
+                  <FontAwesome6 name="chevron-right" size={8} color="#2D6A4F" style={{ marginLeft: 5 }} />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
             <View className="flex-row items-center justify-between">
               <View className="flex-row items-center gap-3">
                 <View className="w-10 h-10 rounded-2xl bg-brand/10 items-center justify-center">
@@ -812,12 +856,14 @@ export default function HomeScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => router.push("/health-data")}
-                className="flex-1 bg-highlight py-2 rounded-xl items-center flex-row justify-center gap-1.5 active:opacity-80"
+                className="flex-1 bg-brand/10 py-2 rounded-xl items-center flex-row justify-center gap-1.5 active:opacity-80"
               >
-                <FontAwesome6 name="heart-pulse" size={11} color="#3D3229" />
-                <Text className="text-[11px] font-black text-ink">健康档案</Text>
+                <FontAwesome6 name="heart-pulse" size={11} color="#2D6A4F" />
+                <Text className="text-[11px] font-black text-brand">健康档案</Text>
               </TouchableOpacity>
             </View>
+              </>
+            )}
           </View>
         </View>
 

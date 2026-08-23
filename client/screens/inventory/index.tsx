@@ -16,7 +16,6 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { Screen } from "@/components/Screen";
-import { GlassSurface } from "@/components/GlassSurface";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
@@ -32,12 +31,20 @@ import {
 } from "@/utils/userStorage";
 import { dateKeyAfterDays } from "@/utils/date";
 import { daysUntilDateKey, getExpirationBadgeConfig, getInventoryStatus } from "@/utils/inventory";
-import { aiApi, foodsApi, householdApi, inventoryApi, kitchenwareApi, shoppingListApi, type Household, type HouseholdActivityLog, type HouseholdInventoryItem } from "@/services/api";
+import { aiApi, foodsApi, householdApi, inventoryApi, kitchenwareApi, type Household, type HouseholdActivityLog, type HouseholdInventoryItem } from "@/services/api";
 import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, StorageLocation } from "./types";
 import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, normalizeDetectedFoods } from "./scan";
 import { useInventoryData } from "./useInventoryData";
+import { normalizeShoppingItems } from "@/utils/shoppingList";
 import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
-import { BatchReviewModal, CatalogDetailModal, InventoryHistoryModal, QuickAddPresetChips } from "./InventoryModals";
+import {
+  BatchReviewModal,
+  CatalogDetailModal,
+  ExpiredCleanupModal,
+  InventoryHistoryModal,
+  QuickAddPresetChips,
+  type ExpiredCleanupResult,
+} from "./InventoryModals";
 import { FamilyShareModal } from "./FamilyShareModal";
 import {
   addInventoryLog,
@@ -80,18 +87,13 @@ export default function InventoryScreen() {
     items,
     setItems,
     recipes,
-    recipeTotal,
-    hasMoreRecipes,
     kitchenware,
     kitchenwareCatalog,
     loadingItems,
     loadingRecipes,
-    loadingMoreRecipes,
     loadingKitchenware,
     sectionErrors,
     refresh: fetchData,
-    reloadRecipes,
-    loadMoreRecipes,
   } = useInventoryData(authFetch, isAuthenticated, user?.id);
 
   // Top Level Segment State
@@ -238,6 +240,8 @@ export default function InventoryScreen() {
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
   const [historyLogs, setHistoryLogs] = useState<InventoryLogEntry[]>([]);
   const [clearingExpired, setClearingExpired] = useState(false);
+  const [expiredCleanupVisible, setExpiredCleanupVisible] = useState(false);
+  const [expiredCleanupResult, setExpiredCleanupResult] = useState<ExpiredCleanupResult | null>(null);
 
   // Household Family Sharing State (Phase 5)
   const [familyModalVisible, setFamilyModalVisible] = useState(false);
@@ -382,70 +386,73 @@ export default function InventoryScreen() {
     ]);
   };
 
-  const handleBatchClearExpired = async () => {
-    const expiredItems = items.filter((item) => {
-      const status = getInventoryStatus(item);
-      return status.freshness === "expired";
-    });
+  const getExpiredItems = () => items.filter(
+    (item) => getInventoryStatus(item).freshness === "expired"
+  );
 
-    if (expiredItems.length === 0) return;
+  const handleBatchClearExpired = () => {
+    if (getExpiredItems().length === 0) return;
+    setExpiredCleanupResult(null);
+    setExpiredCleanupVisible(true);
+  };
 
-    Alert.alert("确认清理", `确定要批量清理 ${expiredItems.length} 种已过期的食材吗？`, [
-      { text: "取消", style: "cancel" },
-      {
-        text: "一键清理",
-        style: "destructive",
-        onPress: async () => {
-          setClearingExpired(true);
-          try {
-            await Promise.allSettled(
-              expiredItems.map(async (item) => {
-                if (activeHousehold) {
-                  await householdApi.inventoryRemove(authFetch, activeHousehold.id, item.id);
-                } else {
-                  await inventoryApi.remove(authFetch, item.id);
-                  await addInventoryLog(
-                    {
-                      foodName: item.food_name,
-                      action: "expire_clear",
-                      quantity: item.quantity,
-                      storageLocation: item.storage_location,
-                    },
-                    user?.id
-                  );
-                }
-              })
-            );
-            if (activeHousehold) {
-              await loadFamilyInventory();
-            } else {
-              await fetchData();
-            }
-            Alert.alert("清理完成", `已将 ${expiredItems.length} 种已过期食材移除保鲜库。`);
-          } catch {
-            Alert.alert("部分清理失败", "请稍后重试。");
-          } finally {
-            setClearingExpired(false);
-          }
-        },
-      },
-    ]);
+  const confirmBatchClearExpired = async () => {
+    const expiredItems = getExpiredItems();
+    if (expiredItems.length === 0 || clearingExpired) return;
+
+    setClearingExpired(true);
+    const removalResults = await Promise.allSettled(
+      expiredItems.map((item) => activeHousehold
+        ? householdApi.inventoryRemove(authFetch, activeHousehold.id, item.id)
+        : inventoryApi.remove(authFetch, item.id)
+      )
+    );
+    const succeededItems = expiredItems.filter((_, index) => removalResults[index]?.status === "fulfilled");
+    const failedCount = expiredItems.length - succeededItems.length;
+
+    if (!activeHousehold && succeededItems.length > 0) {
+      await Promise.allSettled(
+        succeededItems.map((item) => addInventoryLog(
+          {
+            foodName: item.food_name,
+            action: "expire_clear",
+            quantity: item.quantity,
+            storageLocation: item.storage_location,
+          },
+          user?.id
+        ))
+      );
+    }
+
+    if (succeededItems.length > 0) {
+      const succeededIds = new Set(succeededItems.map((item) => item.id));
+      setItems((current) => current.filter((item) => !succeededIds.has(item.id)));
+      if (activeHousehold) await loadFamilyInventory();
+      else await fetchData();
+    }
+
+    setExpiredCleanupResult({ succeeded: succeededItems.length, failed: failedCount });
+    setClearingExpired(false);
   };
 
   const handleAddMissingFromCard = async (recipeTitle: string, missingItems: Array<{ name: string; amount?: string }>) => {
     if (!missingItems.length) return;
     try {
-      const existing = await shoppingListApi.list<Array<{ name: string }>>(authFetch);
-      const existingNames = new Set(existing.map((item) => item.name));
+      const shoppingKey = getUserStorageKey("shopping_list", user?.id);
+      const existingStr = shoppingKey ? await AsyncStorage.getItem(shoppingKey) : null;
+      const existing = existingStr ? JSON.parse(existingStr) : [];
+      const normalized = normalizeShoppingItems(existing);
+      const existingNames = new Set(normalized.map((i) => i.name));
 
       const newItems = missingItems
         .filter((item) => !existingNames.has(item.name))
-        .map((item) => ({
-          clientId: `inventory-recipe:${recipeTitle}:${item.name}`,
+        .map((item, idx) => ({
+          id: `recipe-missing-${Date.now()}-${idx}`,
           name: item.name,
           amount: item.amount || "适量",
           category: inferCategoryByName(item.name),
           checked: false,
+          createdAt: Date.now(),
         }));
 
       if (newItems.length === 0) {
@@ -453,7 +460,10 @@ export default function InventoryScreen() {
         return;
       }
 
-      await Promise.all(newItems.map((item) => shoppingListApi.create(authFetch, item)));
+      const updated = [...newItems, ...normalized];
+      if (shoppingKey) {
+        await AsyncStorage.setItem(shoppingKey, JSON.stringify(updated));
+      }
       Alert.alert("已加入采购清单", `已为【${recipeTitle}】将 ${newItems.length} 种缺少食材加入采购清单！`, [
         { text: "查看清单", onPress: () => router.push("/shopping-list") },
         { text: "好的", style: "cancel" },
@@ -776,13 +786,11 @@ export default function InventoryScreen() {
   // Recipe State
   const [activeRecipeCategory, setActiveRecipeCategory] = useState("全部");
   const [recipeSearchQuery, setRecipeSearchQuery] = useState("");
-  const [debouncedRecipeSearchQuery, setDebouncedRecipeSearchQuery] = useState("");
-  const recipeFiltersInitializedRef = useRef(false);
+  const [visibleRecipeCount, setVisibleRecipeCount] = useState(12);
 
   useEffect(() => {
-    const timeout = setTimeout(() => setDebouncedRecipeSearchQuery(recipeSearchQuery.trim()), 300);
-    return () => clearTimeout(timeout);
-  }, [recipeSearchQuery]);
+    setVisibleRecipeCount(12);
+  }, [activeRecipeCategory, recipeSearchQuery]);
 
   const inventoryCategories = ["全部", "家庭共享", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"];
   const recipeCategories = ["全部", "减脂", "增肌", "营养餐单", "快手菜"];
@@ -792,20 +800,6 @@ export default function InventoryScreen() {
       fetchData();
     }, [fetchData])
   );
-
-  useEffect(() => {
-    if (!recipeFiltersInitializedRef.current) {
-      recipeFiltersInitializedRef.current = true;
-      return;
-    }
-    void reloadRecipes({
-      category: activeRecipeCategory === "全部" || activeRecipeCategory === "冰箱可做"
-        ? undefined
-        : activeRecipeCategory,
-      search: debouncedRecipeSearchQuery || undefined,
-      maxCookTime: cookTimeLimit || undefined,
-    });
-  }, [activeRecipeCategory, cookTimeLimit, debouncedRecipeSearchQuery, reloadRecipes]);
 
   const openAddModal = useCallback(() => {
     if (!isAuthenticated) {
@@ -1069,15 +1063,12 @@ export default function InventoryScreen() {
   };
 
   const filteredItems = filterInventoryItems(items, activeInventoryCategory);
-
-  const priorityItems = items.filter((item) => {
-    const status = getInventoryStatus(item).freshness;
-    return status === "expired" || status === "expiring";
-  });
-  const expiringCount = priorityItems.length;
+  const expiredItemsForCleanup = getExpiredItems();
 
   const filteredRecipes = filterAndRankRecipes(recipes, items, activeRecipeCategory, recipeSearchQuery, cookTimeLimit, matchStatusFilter);
   const filteredKitchenware = filterKitchenware(kitchenware, activeKitchenwareCategory);
+  const visibleRecipes = filteredRecipes.slice(0, visibleRecipeCount);
+  const hasMoreRecipes = visibleRecipeCount < filteredRecipes.length;
 
   return (
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
@@ -1086,20 +1077,13 @@ export default function InventoryScreen() {
         stickyHeaderIndices={[0]}
         contentContainerStyle={{ paddingBottom: 132 }}
         className="bg-canvas"
-        onScroll={(event) => {
-          if (activeSegment !== "recipes" || !hasMoreRecipes || loadingMoreRecipes) return;
-          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-          const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-          if (distanceFromBottom < 360) void loadMoreRecipes();
-        }}
-        scrollEventThrottle={16}
       >
         {/* 三类资产是页面唯一顶栏，滚动时保持吸顶。 */}
-        <GlassSurface className="border-b border-line/70 px-4 py-2">
+        <View className="border-b border-line/70 bg-canvas/95 px-4 py-2">
           <View className="h-11 flex-row items-center gap-1">
             {[
               { key: "inventory" as const, label: "食材", count: items.length, icon: "boxes-stacked" },
-              { key: "recipes" as const, label: "食谱", count: recipeTotal, icon: "utensils" },
+              { key: "recipes" as const, label: "食谱", count: recipes.length, icon: "utensils" },
               { key: "kitchenware" as const, label: "厨具", count: kitchenware.length, icon: "fire-burner" },
             ].map((segment) => {
               const isActive = activeSegment === segment.key;
@@ -1130,7 +1114,7 @@ export default function InventoryScreen() {
               );
             })}
           </View>
-        </GlassSurface>
+        </View>
 
         {sectionErrors[activeSegment] ? (
           <TouchableOpacity
@@ -1371,71 +1355,66 @@ export default function InventoryScreen() {
                             />
                           ))}
                         </View>
-
-                        {/* 与食谱页保持一致的筛选工具卡 */}
-                        <View className="pt-3 pb-1">
-                          <View className="bg-white rounded-[24px] p-4 border border-line shadow-2xs">
-                            <View className="mb-3 flex-row items-center justify-between border-b border-[#F4EFE6] pb-3">
-                              <View className="flex-1 pr-2">
-                                <View className="flex-row items-center gap-2">
-                                  <View className="w-6 h-6 rounded-lg bg-brand/10 items-center justify-center">
-                                    <FontAwesome6 name="sliders" size={10} color="#2D6A4F" />
-                                  </View>
-                                  <Text className="text-[14px] font-black text-ink">按位置或品类查看</Text>
-                                </View>
-                                <Text className="mt-0.5 text-[10px] font-medium text-copy-muted">
-                                  快速定位不同存放区域与食材类型
-                                </Text>
-                              </View>
-
-                              <TouchableOpacity
-                                onPress={openHistoryModal}
-                                className="flex-row items-center rounded-full border border-[#D8E7DD] bg-[#E7F0EA] px-3 py-1.5 active:opacity-80"
-                              >
-                                <FontAwesome6 name="clock-rotate-left" size={10} color="#2D6A4F" />
-                                <Text className="ml-1.5 text-[10px] font-black text-brand">操作历史</Text>
-                              </TouchableOpacity>
-                            </View>
-
-                            <View>
-                              <ScrollView
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                className="flex-row"
-                                contentContainerStyle={{ gap: 8 }}
-                              >
-                                {["全部", "冷藏库", "冷冻库", "常温库", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((cat) => {
-                                  const cleanCat = cat.split(" ")[0];
-                                  const isActive = activeInventoryCategory === cleanCat;
-                                  return (
-                                    <TouchableOpacity
-                                      key={cat}
-                                      onPress={() => setActiveInventoryCategory(cleanCat)}
-                                      accessibilityRole="button"
-                                      accessibilityState={{ selected: isActive }}
-                                      className={`rounded-full border px-3 py-1.5 ${
-                                        isActive
-                                          ? "border-brand bg-brand"
-                                          : "border-[#E7DED1] bg-[#FAF8F5]"
-                                      }`}
-                                    >
-                                      <Text
-                                        className={`text-xs ${
-                                          isActive ? "font-black text-white" : "font-semibold text-[#756858]"
-                                        }`}
-                                      >
-                                        {cat}
-                                      </Text>
-                                    </TouchableOpacity>
-                                  );
-                                })}
-                              </ScrollView>
-                            </View>
-                          </View>
-                        </View>
                       </View>
                     );
                   })()}
+                </View>
+
+                {/* Category Slider & Smart Storage Filter (Wrapped in White Bento Card Container) */}
+                <View className="px-5 pt-2 pb-3">
+                  <View className="bg-white rounded-[24px] p-4 border border-line shadow-2xs">
+                    <View className="mb-3 flex-row items-center justify-between px-0.5">
+                      <View className="flex-row items-center gap-2">
+                        <View className="w-6 h-6 rounded-lg bg-brand/10 items-center justify-center">
+                          <FontAwesome6 name="sliders" size={10} color="#2D6A4F" />
+                        </View>
+                        <Text className="text-[12px] font-black text-ink">按位置或品类查看</Text>
+                      </View>
+
+                      <TouchableOpacity
+                        onPress={openHistoryModal}
+                        className="flex-row items-center gap-1.5 rounded-full border border-[#E7DED1] bg-[#FAF8F5] px-2.5 py-1 active:bg-[#F3EFE9]"
+                      >
+                        <FontAwesome6 name="clock-rotate-left" size={10} color="#8B7D6B" />
+                        <Text className="text-[10px] font-bold text-copy-muted">操作历史</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        className="flex-row"
+                        contentContainerStyle={{ gap: 8 }}
+                      >
+                      {["全部", "冷藏库", "冷冻库", "常温库", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((cat) => {
+                        const cleanCat = cat.split(" ")[0];
+                        const isActive = activeInventoryCategory === cleanCat;
+                        return (
+                          <TouchableOpacity
+                            key={cat}
+                            onPress={() => setActiveInventoryCategory(cleanCat)}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: isActive }}
+                            className={`rounded-full border px-3 py-1.5 ${
+                              isActive
+                                ? "border-brand bg-brand"
+                                : "border-[#E7DED1] bg-[#FAF8F5]"
+                            }`}
+                          >
+                            <Text
+                              className={`text-xs ${
+                                isActive ? "font-black text-white" : "font-semibold text-[#756858]"
+                              }`}
+                            >
+                              {cat}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                      </ScrollView>
+                    </View>
+                  </View>
                 </View>
 
                 {/* 保鲜分区：由页面主滚动容器统一承载，避免底部导航遮挡嵌套列表 */}
@@ -1802,7 +1781,7 @@ export default function InventoryScreen() {
                 </View>
               ) : (
                 <View className="flex-row flex-wrap justify-between gap-y-3.5">
-                  {filteredRecipes.map((recipe) => {
+                  {visibleRecipes.map((recipe) => {
                     const analysis = analyzeRecipeInventoryMatch(recipe, items);
                     const expiringMatch = analysis.expiringIngredients[0];
 
@@ -1914,30 +1893,20 @@ export default function InventoryScreen() {
                       </View>
                     );
                   })}
-                </View>
-              )}
-              {!loadingRecipes && (hasMoreRecipes || recipes.length > 0) && (
-                <View className="w-full items-center pt-3">
                   {hasMoreRecipes && (
-                    <TouchableOpacity
-                      onPress={() => void loadMoreRecipes()}
-                      disabled={loadingMoreRecipes}
-                      className="flex-row items-center gap-2 rounded-full border border-[#D8CCBA] bg-white px-6 py-3 disabled:opacity-60"
-                    >
-                      {loadingMoreRecipes ? (
-                        <ActivityIndicator size="small" color="#2D6A4F" />
-                      ) : (
+                    <View className="w-full items-center pt-1">
+                      <TouchableOpacity
+                        onPress={() => setVisibleRecipeCount((count) => count + 12)}
+                        className="flex-row items-center gap-2 rounded-full border border-[#D8CCBA] bg-white px-6 py-3"
+                      >
+                        <Text className="text-xs font-black text-[#6F6254]">再看 12 道</Text>
                         <FontAwesome6 name="chevron-down" size={9} color="#8B7D6B" />
-                      )}
-                      <Text className="text-xs font-black text-[#6F6254]">
-                        {loadingMoreRecipes ? "正在加载" : "继续加载"}
+                      </TouchableOpacity>
+                      <Text className="mt-2 text-[10px] text-[#9B8E7D]">
+                        已展示 {visibleRecipes.length} / {filteredRecipes.length} 道
                       </Text>
-                    </TouchableOpacity>
+                    </View>
                   )}
-                  <Text className="mt-2 text-[10px] text-[#9B8E7D]">
-                    已加载 {recipes.length} / {recipeTotal} 道
-                    {filteredRecipes.length !== recipes.length ? ` · 当前条件展示 ${filteredRecipes.length} 道` : ""}
-                  </Text>
                 </View>
               )}
             </View>
@@ -2420,6 +2389,23 @@ export default function InventoryScreen() {
           onClose={() => setBatchReviewVisible(false)}
           onChange={setDetectedFoods}
           onSave={saveDetectedFoods}
+        />
+
+        <ExpiredCleanupModal
+          visible={expiredCleanupVisible}
+          items={expiredItemsForCleanup}
+          clearing={clearingExpired}
+          result={expiredCleanupResult}
+          onClose={() => {
+            if (clearingExpired) return;
+            setExpiredCleanupVisible(false);
+            setExpiredCleanupResult(null);
+          }}
+          onConfirm={() => void confirmBatchClearExpired()}
+          onRetry={() => {
+            setExpiredCleanupResult(null);
+            void confirmBatchClearExpired();
+          }}
         />
 
         <CatalogDetailModal

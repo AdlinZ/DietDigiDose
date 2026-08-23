@@ -11,10 +11,8 @@ import {
   TextInput,
   Alert,
   DeviceEventEmitter,
-  useWindowDimensions,
 } from "react-native";
 import { Screen } from "@/components/Screen";
-import { GlassSurface } from "@/components/GlassSurface";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
@@ -29,8 +27,6 @@ const PAGE_SIZE = 12;
 
 export default function CommunityScreen() {
   const router = useSafeRouter();
-  const { width: viewportWidth } = useWindowDimensions();
-  const masonryColumnWidth = Math.floor((Math.min(viewportWidth, 720) - 24 - 10) / 2);
   const { isAuthenticated } = useAuth();
   const authFetch = useAuthFetch();
 
@@ -43,7 +39,6 @@ export default function CommunityScreen() {
   const [activityFilter, setActivityFilter] = useState<"进行中" | "即将开始" | "往期活动">("进行中");
   const [questionFilter, setQuestionFilter] = useState<"热门问题" | "待回答" | "已解决">("热门问题");
   const [hasMore, setHasMore] = useState(false);
-  const [rankingSummaryInstance, setRankingSummaryInstance] = useState(0);
   const refreshSequence = useRef(0);
   const fetchRequestSequence = useRef(0);
   const nextCursorRef = useRef<string | null>(null);
@@ -59,11 +54,6 @@ export default function CommunityScreen() {
   }, [router]);
 
   const tabs = ["寻味", "榜单", "活动", "问答"];
-
-  const selectTab = (tab: string) => {
-    setActiveTab(tab);
-    if (tab === "榜单") setRankingSummaryInstance((instance) => instance + 1);
-  };
 
   const fetchPosts = useCallback(async (forceRefresh = false, append = false) => {
     const requestSequence = ++fetchRequestSequence.current;
@@ -107,7 +97,7 @@ export default function CommunityScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      fetchPosts(true);
+      fetchPosts();
     }, [fetchPosts])
   );
 
@@ -660,76 +650,62 @@ export default function CommunityScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
         className="bg-[#FAFAFA]"
       >
-        {/* 分类 Tab 栏始终吸顶，搜索在原位展开。 */}
-        <GlassSurface className="border-b border-line/70 px-4 py-2">
-          {searchOpen ? (
-            <View className="h-11 flex-row items-center gap-2 rounded-full border border-brand/20 bg-white/95 px-3.5 shadow-2xs">
-              <FontAwesome6 name="magnifying-glass" size={13} color="#2D6A4F" />
-              <TextInput
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                placeholder="搜索动态、食材搭配或食友..."
-                placeholderTextColor="#A89B8A"
-                className="flex-1 py-0 text-xs font-medium text-ink"
-                autoFocus
-                returnKeyType="search"
-              />
-              {searchQuery ? (
-                <TouchableOpacity
-                  onPress={() => setSearchQuery("")}
-                  accessibilityRole="button"
-                  accessibilityLabel="清空搜索"
-                  className="h-7 w-7 items-center justify-center rounded-full bg-canvas"
-                >
-                  <FontAwesome6 name="xmark" size={11} color="#8B7D6B" />
-                </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity
-                onPress={() => setSearchOpen(false)}
-                accessibilityRole="button"
-                accessibilityLabel="关闭搜索"
-                className="h-7 items-center justify-center rounded-full bg-brand/10 px-2.5"
-              >
-                <Text className="text-[10px] font-black text-brand">取消</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View className="h-11 flex-row items-center gap-2">
-              <View className="min-w-0 flex-1 flex-row items-center gap-1">
-                {tabs.map((tab) => {
-                  const isActive = activeTab === tab;
-                  return (
-                    <TouchableOpacity
-                      key={tab}
-                      onPress={() => selectTab(tab)}
-                      accessibilityRole="tab"
-                      accessibilityState={{ selected: isActive }}
-                      className={`flex-1 items-center justify-center rounded-full py-2.5 ${
-                        isActive ? "bg-brand shadow-xs" : "bg-transparent"
-                      }`}
+        {/* 单层频道栏：发布操作由底部动态 Dock 承担 */}
+        <View className="z-20 border-b border-line/60 bg-[#FAFAFA] px-4 py-2">
+          <View className="h-11 flex-row items-center">
+            <TouchableOpacity
+              onPress={() => setSearchOpen(!searchOpen)}
+              accessibilityLabel={searchOpen ? "收起搜索" : "搜索社区内容"}
+              className={`h-10 w-10 items-center justify-center rounded-full active:opacity-70 ${searchOpen ? "bg-brand" : "bg-white"}`}
+            >
+              <FontAwesome6 name={searchOpen ? "xmark" : "magnifying-glass"} size={14} color={searchOpen ? "#FFFFFF" : "#2D6A4F"} />
+            </TouchableOpacity>
+
+            <View className="ml-2 flex-1 flex-row self-stretch">
+              {tabs.map((tab) => {
+                const isActive = activeTab === tab;
+                return (
+                  <TouchableOpacity
+                    key={tab}
+                    onPress={() => setActiveTab(tab)}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: isActive }}
+                    className="relative flex-1 items-center justify-center"
+                  >
+                    <Text
+                      className={`text-xs ${isActive ? "font-black text-brand" : "font-bold text-copy-muted"}`}
                     >
-                      <Text
-                        className={`text-[11px] font-bold ${
-                          isActive ? "text-white font-black" : "text-copy-muted"
-                        }`}
-                      >
-                        {tab}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              <TouchableOpacity
-                onPress={() => setSearchOpen(true)}
-                accessibilityRole="button"
-                accessibilityLabel="搜索社区"
-                className="h-10 w-10 items-center justify-center rounded-full border border-brand/20 bg-brand/10 shadow-2xs active:opacity-80"
-              >
-                <FontAwesome6 name="magnifying-glass" size={13} color="#2D6A4F" />
-              </TouchableOpacity>
+                      {tab}
+                    </Text>
+                    {isActive ? (
+                      <View className="absolute bottom-0 h-[3px] w-5 rounded-full bg-brand" />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-          )}
-        </GlassSurface>
+          </View>
+        </View>
+
+        {/* 搜索展开框 */}
+        {searchOpen && (
+          <View className="mx-5 mt-2 mb-2 bg-white px-3.5 py-2.5 rounded-2xl border border-line flex-row items-center gap-2 shadow-xs">
+            <FontAwesome6 name="magnifying-glass" size={13} color="#8B7D6B" />
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="搜索社区动态、食材搭配或食友..."
+              placeholderTextColor="#B0A495"
+              className="flex-1 text-xs text-ink py-0"
+              autoFocus
+            />
+            {searchQuery ? (
+              <TouchableOpacity onPress={() => setSearchQuery("")}>
+                <FontAwesome6 name="circle-xmark" size={13} color="#B0A495" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        )}
 
         {fetchError ? (
           <TouchableOpacity onPress={() => void fetchPosts()} className="mx-5 my-2 rounded-2xl border border-red-200 bg-red-50 p-3">
@@ -756,7 +732,7 @@ export default function CommunityScreen() {
           </View>
         ) : activeTab === "榜单" ? (
           <View className="px-4 pb-2 pt-1">
-            <View key={`ranking-summary-${rankingSummaryInstance}`} className="mb-3 min-h-24 overflow-hidden rounded-[22px] bg-[#244F3D] p-4">
+            <View className="mb-3 overflow-hidden rounded-[22px] bg-[#244F3D] p-4">
               <View className="absolute -right-6 -top-8 h-28 w-28 rounded-full bg-white/5" />
               <View className="flex-row items-start justify-between">
                 <View className="flex-1 pr-3">
@@ -863,14 +839,14 @@ export default function CommunityScreen() {
             )}
           </View>
         ) : (
-          <View className="px-3 flex-row justify-center gap-2.5 mt-1">
+          <View className="px-3 flex-row gap-2.5 mt-1">
             {/* 左列 */}
-            <View style={{ width: masonryColumnWidth }}>
+            <View className="flex-1">
               {leftColumn.map((post, i) => renderPostCard(post, i))}
             </View>
 
             {/* 右列 */}
-            <View style={{ width: masonryColumnWidth }}>
+            <View className="flex-1">
               {rightColumn.map((post, i) => renderPostCard(post, i))}
             </View>
           </View>

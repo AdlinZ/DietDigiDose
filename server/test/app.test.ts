@@ -290,6 +290,26 @@ describe("API security baseline", () => {
     }
   });
 
+  test("public search covers recipe ingredients, community posts and public users", async () => {
+    const recipes = await api(`/api/v1/recipes?search=${encodeURIComponent("鸡胸肉")}&pageSize=50`);
+    assert.equal(recipes.response.status, 200);
+    const recipeItems = (recipes.body as JsonObject).items as JsonObject[];
+    assert.ok(recipeItems.length > 0);
+    assert.ok(recipeItems.some((recipe) => JSON.stringify(recipe.ingredients).includes("鸡胸肉")));
+
+    const posts = await api(`/api/v1/community/posts?search=${encodeURIComponent("鸡胸肉")}&limit=30`);
+    assert.equal(posts.response.status, 200);
+    assert.ok(Array.isArray(posts.body));
+    assert.ok((posts.body as JsonObject[]).length > 0);
+    assert.ok((posts.body as JsonObject[]).every((post) => post.content.includes("鸡胸肉")));
+
+    const users = await api(`/api/v1/community/users?query=${encodeURIComponent("健身")}`);
+    assert.equal(users.response.status, 200);
+    assert.ok(Array.isArray(users.body));
+    assert.ok((users.body as JsonObject[]).some((user) => user.username === "健身达人Jack"));
+    assert.ok((users.body as JsonObject[]).every((user) => !("email" in user) && !("phone" in user)));
+  });
+
   test("AI data policy exposes the configured retention and processor disclosure", async () => {
     const { response, body } = await api("/api/v1/ai-data-policy");
     assert.equal(response.status, 200);

@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   Image,
   ActivityIndicator,
-  TextInput,
   Dimensions,
   Platform,
   Easing,
@@ -22,7 +21,7 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
 import { toLocalDateKey } from "@/utils/date";
-import { getUserStorageKey } from "@/utils/userStorage";
+import { getUserStorageKey, SHOPPING_LIST_STORAGE_KEY } from "@/utils/userStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { daysUntilDateKey } from "@/utils/inventory";
 import { ingredientNamesMatch, normalizeIngredientName } from "@/utils/ingredients";
@@ -31,6 +30,7 @@ import type { InventoryHighlight, RankedRecipe, RecommendationCard } from "./typ
 import { getRecommendationPeriod } from "./recommendations";
 import { useHomeData } from "./useHomeData";
 import { TodayRecordsModal } from "./TodayRecordsModal";
+import { getCookingQueue } from "@/utils/cookingQueue";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const RECIPE_BATCH_SIZE = 3;
@@ -38,10 +38,10 @@ const RECIPE_BATCH_SIZE = 3;
 export default function HomeScreen() {
   const router = useSafeRouter();
   const { isAuthenticated, user } = useAuth();
+  const userId = user?.id;
   const authFetch = useAuthFetch();
 
   const [activeCategory, setActiveCategory] = useState("全部");
-  const [searchQuery, setSearchQuery] = useState("");
   const [visibleRecipeCount, setVisibleRecipeCount] = useState(RECIPE_BATCH_SIZE);
   const lastRecipeBatchLoadAt = useRef(0);
   const [isScrolled, setIsScrolled] = useState(false);
@@ -69,8 +69,9 @@ export default function HomeScreen() {
   const { recipes, inventoryItems, expiringItems, todayRecords, posts, healthLogs, loading, error, refresh } =
     useHomeData(authFetch, isAuthenticated, today);
 
-  const shoppingStorageKey = getUserStorageKey("shopping_list", user?.id);
+  const shoppingStorageKey = getUserStorageKey(SHOPPING_LIST_STORAGE_KEY, userId);
   const [shoppingItems, setShoppingItems] = useState<{ id: string; name: string; amount: string; checked: boolean }[]>([]);
+  const [cookingQueueCount, setCookingQueueCount] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
@@ -84,10 +85,16 @@ export default function HomeScreen() {
             try {
               setShoppingItems(JSON.parse(saved));
             } catch {}
-          }
+          } else setShoppingItems([]);
         });
-      }
-    }, [refresh, shoppingStorageKey])
+      } else setShoppingItems([]);
+
+      if (userId) {
+        void getCookingQueue(userId)
+          .then((items) => setCookingQueueCount(items.length))
+          .catch(() => setCookingQueueCount(0));
+      } else setCookingQueueCount(0);
+    }, [refresh, shoppingStorageKey, userId])
   );
 
   // 计算今日三大营养素
@@ -369,11 +376,7 @@ export default function HomeScreen() {
       .filter((recipe) => {
         if (recipe.quality_status === "needs_review") return false;
         const matchCategory = activeCategory === "全部" || recipe.category === activeCategory;
-        const matchSearch =
-          !searchQuery ||
-          recipe.title.includes(searchQuery) ||
-          recipe.description?.includes(searchQuery);
-        return matchCategory && matchSearch;
+        return matchCategory;
       })
       .map((recipe) => {
         const recipeIngredientNames = (recipe.ingredients || [])
@@ -400,7 +403,7 @@ export default function HomeScreen() {
         }
         return right.id - left.id;
       });
-  }, [activeCategory, expiringItems, inventoryItems, recipes, searchQuery]);
+  }, [activeCategory, expiringItems, inventoryItems, recipes]);
 
   const visibleRecipes = filteredRecipes.slice(0, visibleRecipeCount);
   const hasMoreRecipes = visibleRecipeCount < filteredRecipes.length;
@@ -411,7 +414,7 @@ export default function HomeScreen() {
       lastRecipeBatchLoadAt.current = 0;
     }, 0);
     return () => clearTimeout(resetId);
-  }, [activeCategory, searchQuery]);
+  }, [activeCategory]);
 
   const insets = useSafeAreaInsets();
   const miniTopOffset = Platform.OS === 'web' ? 12 : Math.max(insets.top + 6, 12);
@@ -469,29 +472,35 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
         className="bg-canvas"
       >
-        {/* 首页工具栏：只保留搜索与 AI 配餐入口。 */}
+        {/* 首页工具栏：搜索、烹饪队列与 AI 配餐。 */}
         <View className="bg-canvas px-5 pt-3 pb-1">
           <View className="flex-row items-center gap-2">
-            <View className="h-11 flex-1 flex-row items-center gap-2 rounded-full border border-line bg-white px-4 shadow-2xs">
+            <TouchableOpacity
+              onPress={() => router.push("/search")}
+              accessibilityRole="button"
+              accessibilityLabel="打开全局搜索"
+              className="h-11 flex-1 flex-row items-center gap-2 rounded-full border border-line bg-white px-4 shadow-2xs active:opacity-85"
+            >
               <FontAwesome6 name="magnifying-glass" size={13} color="#2D6A4F" />
-              <TextInput
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                placeholder="搜索低卡菜谱、食材或热量..."
-                placeholderTextColor="#A89B8A"
-                className="min-w-0 flex-1 py-0 text-xs font-medium text-ink"
-                returnKeyType="search"
-              />
-              {searchQuery ? (
-                <TouchableOpacity
-                  onPress={() => setSearchQuery("")}
-                  accessibilityRole="button"
-                  accessibilityLabel="清空搜索"
-                >
-                  <FontAwesome6 name="circle-xmark" size={13} color="#A89B8A" />
-                </TouchableOpacity>
+              <Text className="min-w-0 flex-1 text-xs font-medium text-[#A89B8A]">
+                搜菜谱、食材、动态或食友
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => router.push("/cooking-queue")}
+              accessibilityRole="button"
+              accessibilityLabel={cookingQueueCount ? `烹饪队列，有 ${cookingQueueCount} 道待做` : "打开烹饪队列"}
+              className="relative h-11 flex-row items-center gap-1.5 rounded-full border border-line bg-white px-3 shadow-2xs active:opacity-85"
+            >
+              <FontAwesome6 name="list-check" size={12} color="#2D6A4F" />
+              <Text className="text-[11px] font-black text-brand">队列</Text>
+              {cookingQueueCount ? (
+                <View className="absolute -right-1.5 -top-1.5 min-w-5 items-center justify-center rounded-full border-2 border-canvas bg-[#D49A2A] px-1 py-0.5">
+                  <Text className="text-[8px] font-black text-white">{cookingQueueCount > 99 ? "99+" : cookingQueueCount}</Text>
+                </View>
               ) : null}
-            </View>
+            </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => router.push("/ai-assistant")}

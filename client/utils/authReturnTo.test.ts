@@ -10,6 +10,9 @@ describe("login returnTo allowlist", () => {
       pathname: "/inventory",
       params: { action: "add" },
     });
+    expect(createAuthReturnTo("/cooking-queue", { ignored: "value" })).toEqual({
+      pathname: "/cooking-queue",
+    });
   });
 
   it("rejects external, login and malformed destinations", () => {
@@ -24,5 +27,7 @@ describe("login returnTo allowlist", () => {
       pathname: "/recipe-detail",
       params: { id: 8, pendingAction: "favorite", redirect: "https://evil.example" },
     })).toEqual({ pathname: "/recipe-detail", params: { id: 8, pendingAction: "favorite" } });
+    expect(validateAuthReturnTo({ pathname: "/recipe-detail", params: { id: 8, pendingAction: "queue" } }))
+      .toEqual({ pathname: "/recipe-detail", params: { id: 8, pendingAction: "queue" } });
   });
 });

@@ -326,6 +326,7 @@ export default function CommunityScreen() {
               <Image
                 source={getAvatarSource(post.avatar_url, post.user_id ?? post.username)}
                 className="w-5 h-5 rounded-full"
+                style={{ width: 20, height: 20, borderRadius: 10, flexShrink: 0 }}
               />
               <Text className="flex-1 text-[10px] font-medium text-[#777777]" numberOfLines={1}>
                 {post.username}
@@ -410,6 +411,7 @@ export default function CommunityScreen() {
                 <Image
                   source={getAvatarSource(post.avatar_url, post.user_id ?? post.username)}
                   className="h-6 w-6 rounded-full"
+                  style={{ width: 24, height: 24, borderRadius: 12, flexShrink: 0 }}
                 />
                 <Text className="flex-1 text-[11px] font-semibold text-[#74685B]" numberOfLines={1}>
                   {post.username}
@@ -872,6 +874,7 @@ export default function CommunityScreen() {
                 <Image
                   source={getAvatarSource(selectedPost?.avatar_url, selectedPost?.user_id ?? selectedPost?.username)}
                   className="w-10 h-10 rounded-full border border-brand/20"
+                  style={{ width: 40, height: 40, borderRadius: 20, flexShrink: 0 }}
                 />
                 <View>
                   <Text className="text-sm font-bold text-ink">

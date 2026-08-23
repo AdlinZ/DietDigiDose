@@ -164,19 +164,25 @@ function getRecommendationProfile(userId: number | null): CommunityRecommendatio
 }
 
 // GET /api/v1/community/users?query=xxx
-// 提及选择器只需要最少的公开资料，避免把用户完整资料暴露给评论端。
-router.get("/users", authMiddleware, (req: AuthRequest, res) => {
-  const auth = getAuthenticatedUser(req);
-  if (!auth) return res.status(401).json({ error: "未登录" });
+// 全局搜索与提及选择器只返回公开主页摘要，避免暴露登录标识和联系方式。
+router.get("/users", (req: AuthRequest, res) => {
   const query = String(req.query.query || "").trim();
   const pattern = `%${query.replace(/[%_\\]/g, "\\$&")}%`;
-  const users = db.prepare(`
-    SELECT id, username, avatar_url
-    FROM users
-    WHERE id != ? AND username LIKE ? ESCAPE '\\'
-    ORDER BY id DESC
-    LIMIT 12
-  `).all(auth.userId, pattern);
+  const users = req.userId
+    ? db.prepare(`
+        SELECT id, username, avatar_url, bio
+        FROM users
+        WHERE id != ? AND username LIKE ? ESCAPE '\\' AND is_disabled = 0
+        ORDER BY id DESC
+        LIMIT 12
+      `).all(req.userId, pattern)
+    : db.prepare(`
+        SELECT id, username, avatar_url, bio
+        FROM users
+        WHERE username LIKE ? ESCAPE '\\' AND is_disabled = 0
+        ORDER BY id DESC
+        LIMIT 12
+      `).all(pattern);
   res.json(users);
 });
 
@@ -262,6 +268,7 @@ router.get("/users/:userId/profile", (req: AuthRequest, res) => {
 // GET /api/v1/community/posts
 router.get("/posts", (req: AuthRequest, res) => {
   const { category, sort } = req.query;
+  const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 80) : "";
   const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
   const pageSize = Math.min(30, Math.max(1, Number(req.query.pageSize) || 12));
   const rawLimit = Number(req.query.limit);
@@ -269,18 +276,21 @@ router.get("/posts", (req: AuthRequest, res) => {
   const limit = Number.isInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), 30) : null;
   const offset = Number.isInteger(rawOffset) ? Math.max(rawOffset, 0) : 0;
   const userId = req.userId ?? null;
-  let posts;
-  if (category) {
-    posts = db.prepare(`
-      ${postSelect(userId)} WHERE p.category = ? AND p.deleted_at IS NULL
-      ORDER BY p.created_at DESC, p.id DESC
-    `).all(category);
-  } else {
-    posts = db.prepare(`
-      ${postSelect(userId)} WHERE p.deleted_at IS NULL
-      ORDER BY p.created_at DESC, p.id DESC
-    `).all();
+  const filters = ["p.deleted_at IS NULL"];
+  const filterParams: string[] = [];
+  if (typeof category === "string" && category) {
+    filters.push("p.category = ?");
+    filterParams.push(category);
   }
+  if (search) {
+    filters.push("(p.content LIKE ? OR p.category LIKE ? OR u.username LIKE ?)");
+    const pattern = `%${search}%`;
+    filterParams.push(pattern, pattern, pattern);
+  }
+  const posts = db.prepare(`
+    ${postSelect(userId)} WHERE ${filters.join(" AND ")}
+    ORDER BY p.created_at DESC, p.id DESC
+  `).all(...filterParams);
 
   const requestedMode = sort === "recommended" ? "recommended" : "latest";
   if (cursorMode) {

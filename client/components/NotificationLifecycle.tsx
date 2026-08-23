@@ -14,7 +14,7 @@ import {
 const LAST_HANDLED_NOTIFICATION_RESPONSE_KEY = "@last_handled_notification_response";
 
 export function NotificationLifecycle() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const router = useSafeRouter();
 
   useEffect(() => {
@@ -35,6 +35,7 @@ export function NotificationLifecycle() {
     const handleResponse = (response: Notifications.NotificationResponse) => {
       const notification = response.notification;
       const data = notification.request.content.data as AppNotificationData;
+      if (data.type === "cooking_reminder" && data.userId !== user?.id) return;
       recordRoutine(notification, "opened");
       if (data.type === "expiring_inventory" && typeof data.notificationId === "number") {
         const action = getExpiringNotificationAction(response.actionIdentifier);
@@ -81,7 +82,7 @@ export function NotificationLifecycle() {
       receivedSubscription.remove();
       responseSubscription.remove();
     };
-  }, [router, token]);
+  }, [router, token, user?.id]);
 
   return null;
 }

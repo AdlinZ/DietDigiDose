@@ -4,6 +4,8 @@ export type AppNotificationData = {
   sourceId?: string;
   notificationId?: number;
   inventoryItemId?: number;
+  recipeId?: number;
+  userId?: number;
 };
 
 export type ExpiringNotificationAction = "open" | "complete" | "plan_recipe";
@@ -13,6 +15,8 @@ export type NotificationDestination =
   | { pathname: "/ai-assistant"; params: { prompt: string } }
   | { pathname: "/diet-record" }
   | { pathname: "/notifications" }
+  | { pathname: "/cooking-queue"; params: { highlightRecipeId: number } }
+  | { pathname: "/cooking-mode"; params: { recipeId: number; fromQueue: boolean } }
   | null;
 
 export function getExpiringNotificationAction(actionIdentifier: string): ExpiringNotificationAction {
@@ -43,6 +47,12 @@ export function resolveNotificationDestination(
     if (data.kind === "meal") return { pathname: "/diet-record" };
     if (data.kind === "water") return { pathname: "/notifications" };
     return null;
+  }
+
+  if (data.type === "cooking_reminder" && typeof data.recipeId === "number") {
+    return actionIdentifier === "START_COOKING"
+      ? { pathname: "/cooking-mode", params: { recipeId: data.recipeId, fromQueue: true } }
+      : { pathname: "/cooking-queue", params: { highlightRecipeId: data.recipeId } };
   }
 
   if (data.type === "admin_campaign") return { pathname: "/notifications" };

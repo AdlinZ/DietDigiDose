@@ -2,9 +2,119 @@ import { ActivityIndicator, Modal, ScrollView, Text, TouchableOpacity, View } fr
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useCSSVariable } from "uniwind";
 
-import type { DetectedFood, KitchenwareCatalogItem } from "./types";
+import type { DetectedFood, InventoryItem, KitchenwareCatalogItem } from "./types";
 import { COMMON_INGREDIENTS, type CommonIngredient } from "@/utils/ingredientRules";
 import type { InventoryLogEntry } from "@/utils/inventoryHistory";
+
+export type ExpiredCleanupResult = {
+  succeeded: number;
+  failed: number;
+};
+
+interface ExpiredCleanupModalProps {
+  visible: boolean;
+  items: InventoryItem[];
+  clearing: boolean;
+  result: ExpiredCleanupResult | null;
+  onClose: () => void;
+  onConfirm: () => void;
+  onRetry: () => void;
+}
+
+export function ExpiredCleanupModal({
+  visible,
+  items,
+  clearing,
+  result,
+  onClose,
+  onConfirm,
+  onRetry,
+}: ExpiredCleanupModalProps) {
+  const previewNames = items.slice(0, 3).map((item) => item.food_name).join("、");
+  const remainingCount = Math.max(0, items.length - 3);
+  const fullyCleared = result !== null && result.failed === 0;
+
+  return (
+    <Modal visible={visible} animationType="fade" transparent onRequestClose={clearing ? undefined : onClose}>
+      <View className="flex-1 items-center justify-center bg-black/45 px-5">
+        <View className="w-full max-w-md rounded-[28px] bg-surface p-5 shadow-lg" accessibilityViewIsModal>
+          <View className={`h-12 w-12 items-center justify-center rounded-2xl ${result ? (fullyCleared ? "bg-brand/10" : "bg-amber-100") : "bg-rose-100"}`}>
+            <FontAwesome6
+              name={result ? (fullyCleared ? "check" : "triangle-exclamation") : "trash-can"}
+              size={17}
+              color={result ? (fullyCleared ? "#2D6A4F" : "#B7791F") : "#C2413A"}
+            />
+          </View>
+
+          {result ? (
+            <>
+              <Text className="mt-4 text-lg font-black text-ink">
+                {fullyCleared ? "清理完成" : "部分食材未能清理"}
+              </Text>
+              <Text className="mt-2 text-sm leading-5 text-copy-muted">
+                已成功移除 {result.succeeded} 种食材
+                {result.failed > 0 ? `，另有 ${result.failed} 种处理失败并保留在列表中。` : "，库存列表与操作历史已同步更新。"}
+              </Text>
+              <View className="mt-5 flex-row gap-2.5">
+                {result.failed > 0 ? (
+                  <>
+                    <TouchableOpacity onPress={onClose} className="min-h-touch flex-1 items-center justify-center rounded-2xl border border-line bg-canvas">
+                      <Text className="text-sm font-bold text-copy-muted">稍后处理</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={onRetry} className="min-h-touch flex-1 items-center justify-center rounded-2xl bg-brand">
+                      <Text className="text-sm font-black text-white">重试 {result.failed} 种</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <TouchableOpacity onPress={onClose} className="min-h-touch flex-1 items-center justify-center rounded-2xl bg-brand">
+                    <Text className="text-sm font-black text-white">完成</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </>
+          ) : (
+            <>
+              <Text className="mt-4 text-lg font-black text-ink">清理已过期食材</Text>
+              <Text className="mt-2 text-sm leading-5 text-copy-muted">
+                将从保鲜库移除 {items.length} 种已过期食材，此操作会记入库存变动历史。
+              </Text>
+              {previewNames ? (
+                <View className="mt-3 rounded-2xl bg-rose-50 px-3.5 py-3">
+                  <Text className="text-xs font-bold leading-5 text-rose-800">
+                    {previewNames}{remainingCount > 0 ? ` 等 ${items.length} 种` : ""}
+                  </Text>
+                </View>
+              ) : null}
+              <View className="mt-5 flex-row gap-2.5">
+                <TouchableOpacity
+                  onPress={onClose}
+                  disabled={clearing}
+                  className="min-h-touch flex-1 items-center justify-center rounded-2xl border border-line bg-canvas disabled:opacity-50"
+                >
+                  <Text className="text-sm font-bold text-copy-muted">取消</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={onConfirm}
+                  disabled={clearing || items.length === 0}
+                  className="min-h-touch flex-1 flex-row items-center justify-center rounded-2xl bg-rose-600 disabled:opacity-50"
+                >
+                  {clearing ? (
+                    <>
+                      <ActivityIndicator size="small" color="#FFF" />
+                      <Text className="ml-2 text-sm font-black text-white">正在清理</Text>
+                    </>
+                  ) : (
+                    <Text className="text-sm font-black text-white">确认清理 {items.length} 种</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 interface BatchReviewModalProps {
   visible: boolean;

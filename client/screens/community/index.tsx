@@ -638,6 +638,7 @@ export default function CommunityScreen() {
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
+        stickyHeaderIndices={[0]}
         refreshControl={
           <RefreshControl
             refreshing={loading}
@@ -649,30 +650,36 @@ export default function CommunityScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
         className="bg-[#FAFAFA]"
       >
-        {/* 工具导航：发布操作由底部全局按钮承担 */}
-        <View className="bg-[#FAFAFA] px-5 pt-4 pb-2">
-          <View className="flex-row items-center gap-2">
-            <TouchableOpacity onPress={() => setSearchOpen(!searchOpen)} className="h-10 w-10 items-center justify-center rounded-full border border-line bg-white active:opacity-80">
-              <FontAwesome6 name="magnifying-glass" size={14} color="#2D6A4F" />
+        {/* 单层频道栏：发布操作由底部动态 Dock 承担 */}
+        <View className="z-20 border-b border-line/60 bg-[#FAFAFA] px-4 py-2">
+          <View className="h-11 flex-row items-center">
+            <TouchableOpacity
+              onPress={() => setSearchOpen(!searchOpen)}
+              accessibilityLabel={searchOpen ? "收起搜索" : "搜索社区内容"}
+              className={`h-10 w-10 items-center justify-center rounded-full active:opacity-70 ${searchOpen ? "bg-brand" : "bg-white"}`}
+            >
+              <FontAwesome6 name={searchOpen ? "xmark" : "magnifying-glass"} size={14} color={searchOpen ? "#FFFFFF" : "#2D6A4F"} />
             </TouchableOpacity>
-            <View className="flex-1 bg-white p-1.5 rounded-2xl border border-line shadow-2xs flex-row">
+
+            <View className="ml-2 flex-1 flex-row self-stretch">
               {tabs.map((tab) => {
                 const isActive = activeTab === tab;
                 return (
                   <TouchableOpacity
                     key={tab}
                     onPress={() => setActiveTab(tab)}
-                    className={`flex-1 py-2.5 rounded-xl items-center justify-center ${
-                      isActive ? "bg-brand shadow-xs" : ""
-                    }`}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: isActive }}
+                    className="relative flex-1 items-center justify-center"
                   >
                     <Text
-                      className={`text-xs font-bold ${
-                        isActive ? "text-white font-black" : "text-copy-muted"
-                      }`}
+                      className={`text-xs ${isActive ? "font-black text-brand" : "font-bold text-copy-muted"}`}
                     >
                       {tab}
                     </Text>
+                    {isActive ? (
+                      <View className="absolute bottom-0 h-[3px] w-5 rounded-full bg-brand" />
+                    ) : null}
                   </TouchableOpacity>
                 );
               })}

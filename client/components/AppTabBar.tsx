@@ -1,26 +1,73 @@
 import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, Pressable, Image, Platform, DeviceEventEmitter, Alert } from "react-native";
+import { View, Text, TouchableOpacity, Pressable, Platform, DeviceEventEmitter, Alert, StyleSheet } from "react-native";
 import { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import { BlurView } from "expo-blur";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import Animated, {
+  FadeIn,
+  FadeInUp,
+  FadeOutDown,
+  LinearTransition,
+  ReduceMotion,
+  useReducedMotion,
+} from "react-native-reanimated";
 import { useCSSVariable } from "uniwind";
 
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { createAuthReturnTo } from "@/utils/authReturnTo";
 
+const TAB_LAYOUT_TRANSITION = LinearTransition.duration(220).reduceMotion(ReduceMotion.System);
+const QUICK_ACTION_ENTERING = FadeIn.duration(150).reduceMotion(ReduceMotion.System);
+const QUICK_ACTION_HINT_STORAGE_KEY = "@dietdigidose:dock-quick-action-hint-seen";
+const QUICK_ACTION_HINT_ENTERING = FadeInUp.duration(240).reduceMotion(ReduceMotion.System);
+const QUICK_ACTION_HINT_EXITING = FadeOutDown.duration(180).reduceMotion(ReduceMotion.System);
+
+function GlassBackdrop({ borderRadius }: { borderRadius: number }) {
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        StyleSheet.absoluteFillObject,
+        {
+          borderRadius,
+          overflow: "hidden",
+          borderWidth: 1,
+          borderColor: "rgba(255, 255, 255, 0.72)",
+        },
+      ]}
+    >
+      <BlurView
+        pointerEvents="none"
+        tint="systemMaterialLight"
+        intensity={62}
+        {...(Platform.OS === "android"
+          ? { experimentalBlurMethod: "dimezisBlurView" as const }
+          : {})}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <View
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFillObject,
+          { backgroundColor: "rgba(255, 255, 255, 0.12)" },
+        ]}
+      />
+    </View>
+  );
+}
+
 export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const router = useSafeRouter();
   const { isAuthenticated } = useAuth();
-  const [ink, muted] = useCSSVariable([
-    "--color-ink",
-    "--color-copy-muted",
-  ]) as string[];
+  const reduceMotion = useReducedMotion();
+  const [ink] = useCSSVariable(["--color-ink"]) as string[];
+  const [showQuickActionHint, setShowQuickActionHint] = useState(false);
 
-  // 获取当前激活的路由
   const currentRouteName = state.routes[state.index]?.name || "index";
-  const isHomeRoute = currentRouteName === "index";
   const [inventorySegment, setInventorySegment] = useState<"inventory" | "recipes" | "kitchenware">("inventory");
 
   useEffect(() => {
@@ -31,8 +78,29 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
     return () => subscription.remove();
   }, []);
 
-  // 左侧动态按键点击响应
-  const handleLeftButtonPress = () => {
+  useEffect(() => {
+    let isMounted = true;
+    let hideTimer: ReturnType<typeof setTimeout> | undefined;
+
+    AsyncStorage.getItem(QUICK_ACTION_HINT_STORAGE_KEY)
+      .then((hasSeenHint) => {
+        if (!isMounted || hasSeenHint === "1") return;
+
+        setShowQuickActionHint(true);
+        void AsyncStorage.setItem(QUICK_ACTION_HINT_STORAGE_KEY, "1").catch(() => undefined);
+        hideTimer = setTimeout(() => setShowQuickActionHint(false), 4200);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isMounted = false;
+      if (hideTimer) clearTimeout(hideTimer);
+    };
+  }, []);
+
+  const handleQuickActionPress = () => {
+    setShowQuickActionHint(false);
+
     if (currentRouteName === "inventory" && !isAuthenticated) {
       const actionLabel = inventorySegment === "recipes" ? "食谱" : inventorySegment === "kitchenware" ? "厨具" : "食材";
       const returnTo = inventorySegment === "recipes"
@@ -44,9 +112,9 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
       ]);
       return;
     }
+
     switch (currentRouteName) {
       case "index":
-        // 与首页卡片、库存等入口统一使用完整的食语页面，避免两套对话体验分叉。
         router.push("/ai-assistant");
         break;
       case "inventory":
@@ -62,7 +130,7 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
         DeviceEventEmitter.emit("open-community-post");
         break;
       case "profile":
-        DeviceEventEmitter.emit("open-quick-record");
+        router.push("/diet-record");
         break;
       default:
         router.push("/ai-assistant");
@@ -70,7 +138,6 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
     }
   };
 
-  // Filter routes to exclude hidden ones (like health-overview)
   const visibleRoutes = state.routes.filter((route) => {
     const { options } = descriptors[route.key];
     return (options as any).href !== null;
@@ -91,161 +158,186 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
     }
   };
 
-  const bottomMargin = Platform.OS === 'web' ? 14 : Math.max(insets.bottom + 6, 12);
-  const quickActionLabel = {
-    index: "打开食语 AI 助手",
-    inventory: "新增食材",
-    community: "发布社区动态",
-    profile: "记录一餐",
-  }[currentRouteName] || "打开食语 AI 助手";
+  const bottomMargin = Platform.OS === "web" ? 14 : Math.max(insets.bottom + 6, 12);
   const inventoryQuickAction = {
     inventory: { label: "存食材", accessibilityLabel: "新增食材", icon: "plus" as const },
     recipes: { label: "存食谱", accessibilityLabel: "新增食谱", icon: "book-open" as const },
     kitchenware: { label: "存厨具", accessibilityLabel: "新增厨具", icon: "fire-burner" as const },
   }[inventorySegment];
+  const quickAction = currentRouteName === "inventory"
+    ? inventoryQuickAction
+    : currentRouteName === "community"
+      ? { label: "发布", accessibilityLabel: "发布社区动态", icon: "pen" as const }
+      : currentRouteName === "profile"
+        ? { label: "记餐", accessibilityLabel: "记录一餐", icon: "utensils" as const }
+        : { label: "食语", accessibilityLabel: "打开食语 AI 助手", icon: "wand-magic-sparkles" as const };
 
   return (
-    <>
+    <View
+      style={{
+        position: Platform.OS === "web" ? ("fixed" as any) : "absolute",
+        bottom: bottomMargin,
+        left: 0,
+        right: 0,
+        zIndex: 99,
+        paddingHorizontal: 16,
+      }}
+      className="pointer-events-box-none"
+    >
+      {showQuickActionHint ? (
+        <View pointerEvents="none" className="absolute -top-12 left-0 right-0 items-center">
+          <Animated.View
+            entering={QUICK_ACTION_HINT_ENTERING}
+            exiting={QUICK_ACTION_HINT_EXITING}
+            accessibilityLiveRegion="polite"
+            className="rounded-full border border-brand/15 bg-ink px-3.5 py-2 shadow-md"
+          >
+            <Text className="text-[11px] font-bold text-white">
+              高亮区域右侧会随页面提供快捷操作
+            </Text>
+          </Animated.View>
+        </View>
+      ) : null}
+
       <View
+        className="h-[64px] flex-row items-center justify-between rounded-full px-2.5"
         style={{
-          position: Platform.OS === "web" ? ("fixed" as any) : "absolute",
-          bottom: bottomMargin,
-          left: 0,
-          right: 0,
-          zIndex: 99,
-          paddingHorizontal: 16,
+          shadowColor: ink,
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.14,
+          shadowRadius: 12,
+          elevation: 7,
         }}
-        className="flex-row items-center justify-between pointer-events-box-none"
       >
-        {/* 左侧动态多功能浮动按钮 (首页: AI助手 | 膳食资产: 存食材 | 社区: 发动态 | 我的: 记一餐) */}
-        <Pressable
-          onPress={handleLeftButtonPress}
-          accessibilityRole="button"
-          accessibilityLabel={currentRouteName === "inventory" ? inventoryQuickAction.accessibilityLabel : quickActionLabel}
-          accessibilityHint={currentRouteName === "inventory" && !isAuthenticated ? "需要先登录" : undefined}
-          className={`w-[60px] h-[60px] items-center justify-center relative active:scale-95 ${isHomeRoute ? "" : "bg-white/95 rounded-full p-1 border border-line"}`}
-          style={{
-            backgroundColor: isHomeRoute ? "transparent" : "rgba(255, 255, 255, 0.95)",
-            borderWidth: isHomeRoute ? 0 : 1,
-            padding: isHomeRoute ? 0 : 4,
-            shadowColor: ink,
-            shadowOffset: { width: 0, height: 0 },
-            shadowOpacity: 0.1,
-            shadowRadius: 0,
-            elevation: 0,
-          }}
-        >
-          {currentRouteName === "index" && (
-            <View className="items-center justify-center relative" style={{ width: 56, height: 56 }}>
-              <Image
-                source={require("@/assets/logo.png")}
-                style={{ width: 56, height: 56 }}
-                resizeMode="contain"
-              />
-              <View className="absolute bottom-0 bg-[#104020] px-1.5 py-0.5 rounded-full border border-white">
-                <Text className="text-[8.5px] font-black text-white">食语 AI</Text>
-              </View>
-            </View>
-          )}
+        <GlassBackdrop borderRadius={30} />
 
-          {currentRouteName === "inventory" && (
-            <View className="w-[50px] h-[50px] rounded-full bg-brand items-center justify-center relative shadow-xs">
-              <FontAwesome6 name={inventoryQuickAction.icon} size={16} color="#FFF" />
-              <View className="absolute -bottom-1 bg-highlight px-1.5 py-0.2 rounded-full border border-white">
-                <Text className="text-[8px] font-black text-ink">{inventoryQuickAction.label}</Text>
-              </View>
-            </View>
-          )}
+        {visibleRoutes.map((route) => {
+          const isFocused = state.routes[state.index].key === route.key;
+          const config = getTabConfig(route.name);
+          const animatedContainerStyle = {
+            flexBasis: 0,
+            flexGrow: isFocused ? 1.55 : 1,
+            flexShrink: 1,
+            height: 52,
+            ...(Platform.OS === "web"
+              ? {
+                  transitionDuration: reduceMotion ? "0ms" : "220ms",
+                  transitionProperty: "flex-grow",
+                  transitionTimingFunction: "cubic-bezier(0.22, 1, 0.36, 1)",
+                }
+              : {}),
+          } as any;
 
-          {currentRouteName === "community" && (
-            <View className="w-[50px] h-[50px] rounded-full bg-highlight items-center justify-center relative shadow-xs">
-              <FontAwesome6 name="pen-to-square" size={17} color={ink} />
-              <View className="absolute -bottom-1 bg-brand px-1.5 py-0.2 rounded-full border border-white">
-                <Text className="text-[8px] font-black text-white">发动态</Text>
-              </View>
-            </View>
-          )}
+          const onPress = () => {
+            const event = navigation.emit({
+              type: "tabPress",
+              target: route.key,
+              canPreventDefault: true,
+            });
 
-          {currentRouteName === "profile" && (
-            <View className="w-[50px] h-[50px] rounded-full bg-critical items-center justify-center relative shadow-xs">
-              <FontAwesome6 name="fire-flame-curved" size={17} color="#FFF" />
-              <View className="absolute -bottom-1 bg-ink px-1.5 py-0.2 rounded-full border border-white">
-                <Text className="text-[8px] font-black text-white">记一餐</Text>
-              </View>
-            </View>
-          )}
-        </Pressable>
+            if (!isFocused && !event.defaultPrevented) {
+              navigation.navigate(route.name);
+            }
+          };
 
-        {/* 右侧主导航栏：较大的触控区与左侧快捷键保持同一视觉量级。 */}
-        <View
-          className="flex-1 h-[60px] ml-3 bg-white/95 backdrop-blur-md rounded-full px-2.5 flex-row items-center justify-between border border-line shadow-md"
-          style={{
-            shadowColor: ink,
-            shadowOffset: { width: 0, height: 3 },
-            shadowOpacity: 0.1,
-            shadowRadius: 8,
-            elevation: 6,
-          }}
-        >
-          {visibleRoutes.map((route) => {
-            const isFocused = state.routes[state.index].key === route.key;
-            const config = getTabConfig(route.name);
-
-            const onPress = () => {
-              const event = navigation.emit({
-                type: "tabPress",
-                target: route.key,
-                canPreventDefault: true,
-              });
-
-              if (!isFocused && !event.defaultPrevented) {
-                navigation.navigate(route.name);
-              }
-            };
-
+          if (isFocused) {
             return (
-              <TouchableOpacity
+              <Animated.View
                 key={route.key}
+                layout={TAB_LAYOUT_TRANSITION}
+                style={animatedContainerStyle}
+              >
+                <Animated.View
+                  entering={QUICK_ACTION_ENTERING}
+                  className="h-[50px] w-full flex-row items-center rounded-[23px] border border-brand/10 bg-brand/5 px-1"
+                >
+                  <TouchableOpacity
+                    onPress={onPress}
+                    activeOpacity={0.8}
+                    accessibilityRole="tab"
+                    accessibilityLabel={config.label}
+                    accessibilityState={{ selected: true }}
+                    className="h-[50px] flex-1 items-center justify-center"
+                  >
+                    <View className="h-7 w-7 items-center justify-center">
+                      <FontAwesome6 name={config.icon as any} size={16} color="#2D6A4F" />
+                    </View>
+                    <Text numberOfLines={1} className="mt-1 text-[10.5px] font-black text-brand">
+                      {config.label}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <Pressable
+                    onPress={handleQuickActionPress}
+                    accessibilityRole="button"
+                    accessibilityLabel={quickAction.accessibilityLabel}
+                    accessibilityHint={currentRouteName === "inventory" && !isAuthenticated ? "需要先登录" : undefined}
+                    className="h-[50px] flex-1 items-center justify-center"
+                  >
+                    <View className="h-7 w-7 items-center justify-center">
+                      <FontAwesome6
+                        name={quickAction.icon}
+                        size={16}
+                        color={ink}
+                        style={{
+                          opacity: 0.76,
+                          textShadowColor: "rgba(255, 255, 255, 0.92)",
+                          textShadowOffset: { width: 0, height: 1 },
+                          textShadowRadius: 3,
+                        }}
+                      />
+                    </View>
+                    <Text numberOfLines={1} className="mt-1 text-[10.5px] font-bold text-ink" style={{ opacity: 0.8 }}>
+                      {quickAction.label}
+                    </Text>
+                  </Pressable>
+                </Animated.View>
+              </Animated.View>
+            );
+          }
+
+          return (
+            <Animated.View
+              key={route.key}
+              layout={TAB_LAYOUT_TRANSITION}
+              style={animatedContainerStyle}
+            >
+              <TouchableOpacity
                 onPress={onPress}
                 activeOpacity={0.8}
                 accessibilityRole="tab"
                 accessibilityLabel={config.label}
-                accessibilityState={{ selected: isFocused }}
-                className="flex-1 items-center justify-center relative py-1"
+                accessibilityState={{ selected: false }}
+                className="h-[52px] w-full items-center justify-center"
               >
-                {/* 选中高亮 Pill 胶囊背景 */}
-                {isFocused ? (
-                  <View className="items-center justify-center">
-                    <View className="w-8 h-8 rounded-full bg-brand items-center justify-center shadow-xs">
-                      <FontAwesome6 name={config.icon as any} size={15} color="#FFF" />
+                <View className="w-7 h-7 items-center justify-center relative">
+                  <FontAwesome6
+                    name={config.icon as any}
+                    size={16}
+                    color={ink}
+                    style={{
+                      opacity: 0.76,
+                      textShadowColor: "rgba(255, 255, 255, 0.92)",
+                      textShadowOffset: { width: 0, height: 1 },
+                      textShadowRadius: 3,
+                    }}
+                  />
+                  {config.badge ? (
+                    <View accessibilityLiveRegion="polite" className="absolute -top-1 -right-1.5 bg-critical px-1 py-0.2 rounded-full min-w-3.5 items-center justify-center border border-white">
+                      <Text className="text-[8px] font-black text-white">
+                        {config.badge}
+                      </Text>
                     </View>
-                    <Text className="text-[10.5px] font-black text-brand mt-1">
-                      {config.label}
-                    </Text>
-                  </View>
-                ) : (
-                  <View className="items-center justify-center">
-                    <View className="w-7 h-7 items-center justify-center relative">
-                      <FontAwesome6 name={config.icon as any} size={16} color={muted} />
-                      {/* 未读数字/圆点 Badge (如社区消息) */}
-                      {config.badge ? (
-                        <View accessibilityLiveRegion="polite" className="absolute -top-1 -right-1.5 bg-critical px-1 py-0.2 rounded-full min-w-3.5 items-center justify-center border border-white">
-                          <Text className="text-[8px] font-black text-white">
-                            {config.badge}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    <Text className="text-[10.5px] font-bold text-copy-muted mt-1">
-                      {config.label}
-                    </Text>
-                  </View>
-                )}
+                  ) : null}
+                </View>
+                <Text numberOfLines={1} className="mt-1 text-[10.5px] font-bold text-ink" style={{ opacity: 0.8 }}>
+                  {config.label}
+                </Text>
               </TouchableOpacity>
-            );
-          })}
-        </View>
+            </Animated.View>
+          );
+        })}
       </View>
-    </>
+    </View>
   );
 }

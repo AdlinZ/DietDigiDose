@@ -37,7 +37,14 @@ import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, normalizeDetectedFoods }
 import { useInventoryData } from "./useInventoryData";
 import { normalizeShoppingItems } from "@/utils/shoppingList";
 import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
-import { BatchReviewModal, CatalogDetailModal, InventoryHistoryModal, QuickAddPresetChips } from "./InventoryModals";
+import {
+  BatchReviewModal,
+  CatalogDetailModal,
+  ExpiredCleanupModal,
+  InventoryHistoryModal,
+  QuickAddPresetChips,
+  type ExpiredCleanupResult,
+} from "./InventoryModals";
 import { FamilyShareModal } from "./FamilyShareModal";
 import {
   addInventoryLog,
@@ -233,6 +240,8 @@ export default function InventoryScreen() {
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
   const [historyLogs, setHistoryLogs] = useState<InventoryLogEntry[]>([]);
   const [clearingExpired, setClearingExpired] = useState(false);
+  const [expiredCleanupVisible, setExpiredCleanupVisible] = useState(false);
+  const [expiredCleanupResult, setExpiredCleanupResult] = useState<ExpiredCleanupResult | null>(null);
 
   // Household Family Sharing State (Phase 5)
   const [familyModalVisible, setFamilyModalVisible] = useState(false);
@@ -377,54 +386,53 @@ export default function InventoryScreen() {
     ]);
   };
 
-  const handleBatchClearExpired = async () => {
-    const expiredItems = items.filter((item) => {
-      const status = getInventoryStatus(item);
-      return status.freshness === "expired";
-    });
+  const getExpiredItems = () => items.filter(
+    (item) => getInventoryStatus(item).freshness === "expired"
+  );
 
-    if (expiredItems.length === 0) return;
+  const handleBatchClearExpired = () => {
+    if (getExpiredItems().length === 0) return;
+    setExpiredCleanupResult(null);
+    setExpiredCleanupVisible(true);
+  };
 
-    Alert.alert("确认清理", `确定要批量清理 ${expiredItems.length} 种已过期的食材吗？`, [
-      { text: "取消", style: "cancel" },
-      {
-        text: "一键清理",
-        style: "destructive",
-        onPress: async () => {
-          setClearingExpired(true);
-          try {
-            await Promise.allSettled(
-              expiredItems.map(async (item) => {
-                if (activeHousehold) {
-                  await householdApi.inventoryRemove(authFetch, activeHousehold.id, item.id);
-                } else {
-                  await inventoryApi.remove(authFetch, item.id);
-                  await addInventoryLog(
-                    {
-                      foodName: item.food_name,
-                      action: "expire_clear",
-                      quantity: item.quantity,
-                      storageLocation: item.storage_location,
-                    },
-                    user?.id
-                  );
-                }
-              })
-            );
-            if (activeHousehold) {
-              await loadFamilyInventory();
-            } else {
-              await fetchData();
-            }
-            Alert.alert("清理完成", `已将 ${expiredItems.length} 种已过期食材移除保鲜库。`);
-          } catch {
-            Alert.alert("部分清理失败", "请稍后重试。");
-          } finally {
-            setClearingExpired(false);
-          }
-        },
-      },
-    ]);
+  const confirmBatchClearExpired = async () => {
+    const expiredItems = getExpiredItems();
+    if (expiredItems.length === 0 || clearingExpired) return;
+
+    setClearingExpired(true);
+    const removalResults = await Promise.allSettled(
+      expiredItems.map((item) => activeHousehold
+        ? householdApi.inventoryRemove(authFetch, activeHousehold.id, item.id)
+        : inventoryApi.remove(authFetch, item.id)
+      )
+    );
+    const succeededItems = expiredItems.filter((_, index) => removalResults[index]?.status === "fulfilled");
+    const failedCount = expiredItems.length - succeededItems.length;
+
+    if (!activeHousehold && succeededItems.length > 0) {
+      await Promise.allSettled(
+        succeededItems.map((item) => addInventoryLog(
+          {
+            foodName: item.food_name,
+            action: "expire_clear",
+            quantity: item.quantity,
+            storageLocation: item.storage_location,
+          },
+          user?.id
+        ))
+      );
+    }
+
+    if (succeededItems.length > 0) {
+      const succeededIds = new Set(succeededItems.map((item) => item.id));
+      setItems((current) => current.filter((item) => !succeededIds.has(item.id)));
+      if (activeHousehold) await loadFamilyInventory();
+      else await fetchData();
+    }
+
+    setExpiredCleanupResult({ succeeded: succeededItems.length, failed: failedCount });
+    setClearingExpired(false);
   };
 
   const handleAddMissingFromCard = async (recipeTitle: string, missingItems: Array<{ name: string; amount?: string }>) => {
@@ -1055,30 +1063,7 @@ export default function InventoryScreen() {
   };
 
   const filteredItems = filterInventoryItems(items, activeInventoryCategory);
-
-  const priorityItems = items.filter((item) => {
-    const status = getInventoryStatus(item).freshness;
-    return status === "expired" || status === "expiring";
-  });
-  const expiringCount = priorityItems.length;
-
-  const activeSegmentMeta = {
-    inventory: {
-      title: "食材保鲜库",
-      subtitle: "分区保鲜 · 临期提醒 · 智能配餐",
-      status: expiringCount > 0 ? `${expiringCount} 件待处理` : "状态良好",
-    },
-    recipes: {
-      title: "今日精选食谱",
-      subtitle: "结合库存，找到更合适的一餐",
-      status: `${recipes.length} 道`,
-    },
-    kitchenware: {
-      title: "厨房装备库",
-      subtitle: "厨具状态、保养与专属食谱",
-      status: `${kitchenware.length} 件`,
-    },
-  }[activeSegment];
+  const expiredItemsForCleanup = getExpiredItems();
 
   const filteredRecipes = filterAndRankRecipes(recipes, items, activeRecipeCategory, recipeSearchQuery, cookTimeLimit, matchStatusFilter);
   const filteredKitchenware = filterKitchenware(kitchenware, activeKitchenwareCategory);
@@ -1089,40 +1074,13 @@ export default function InventoryScreen() {
     <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
+        stickyHeaderIndices={[0]}
         contentContainerStyle={{ paddingBottom: 132 }}
         className="bg-canvas"
       >
-        {/* 统一品牌头部：标题、状态和三类资产在首屏内形成清晰层级。 */}
-        <View className="relative overflow-hidden rounded-b-[30px] bg-brand px-5 pt-4 pb-5 shadow-sm">
-          <View className="absolute -right-12 -top-12 h-44 w-44 rounded-full bg-white/5" />
-          <View className="absolute left-1/3 -bottom-12 h-32 w-32 rounded-full bg-highlight/10" />
-
-          <View className="flex-row items-start justify-between">
-            <View className="flex-1 pr-4">
-              <Text className="text-[10px] font-bold tracking-[2px] text-emerald-100/75">膳食资产</Text>
-              <Text className="mt-1 text-[21px] font-black leading-7 text-white">{activeSegmentMeta.title}</Text>
-              <Text className="mt-0.5 text-[11px] font-medium text-emerald-50/75">{activeSegmentMeta.subtitle}</Text>
-            </View>
-            <View className="flex-col items-end gap-1.5">
-              <View className="mt-1 flex-row items-center gap-1.5 rounded-full border border-white/15 bg-black/15 px-3 py-1.5">
-                <View className={`h-1.5 w-1.5 rounded-full ${activeSegment === "inventory" && expiringCount > 0 ? "bg-highlight" : "bg-emerald-200"}`} />
-                <Text className="text-[10px] font-bold text-white">{activeSegmentMeta.status}</Text>
-              </View>
-
-              <TouchableOpacity
-                onPress={() => setFamilyModalVisible(true)}
-                className="flex-row items-center gap-1 rounded-full bg-white/20 px-2.5 py-1 border border-white/30 active:bg-white/30"
-              >
-                <FontAwesome6 name={activeHousehold ? "house-user" : "user"} size={10} color="#FFFFFF" />
-                <Text className="text-[10px] font-black text-white">
-                  {activeHousehold ? activeHousehold.name : "个人私享库"}
-                </Text>
-                <FontAwesome6 name="chevron-down" size={8} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View className="mt-4 flex-row rounded-[18px] border border-white/30 bg-white/95 p-1.5 shadow-sm">
+        {/* 三类资产是页面唯一顶栏，滚动时保持吸顶。 */}
+        <View className="border-b border-line/70 bg-canvas/95 px-4 py-2">
+          <View className="h-11 flex-row items-center gap-1">
             {[
               { key: "inventory" as const, label: "食材", count: items.length, icon: "boxes-stacked" },
               { key: "recipes" as const, label: "食谱", count: recipes.length, icon: "utensils" },
@@ -1133,22 +1091,22 @@ export default function InventoryScreen() {
                 <TouchableOpacity
                   key={segment.key}
                   onPress={() => setActiveSegment(segment.key)}
-                  accessibilityRole="button"
+                  accessibilityRole="tab"
                   accessibilityState={{ selected: isActive }}
-                  className={`flex-1 flex-row items-center justify-center gap-1.5 rounded-[14px] py-2.5 ${
-                    isActive ? "bg-[#E5F0E8]" : "bg-transparent"
+                  className={`flex-1 flex-row items-center justify-center gap-1.5 rounded-full py-2.5 ${
+                    isActive ? "bg-brand shadow-xs" : "bg-transparent"
                   }`}
                 >
                   <FontAwesome6
                     name={segment.icon as any}
                     size={12}
-                    color={isActive ? "#2D6A4F" : "#9B8E7D"}
+                    color={isActive ? "#FFFFFF" : "#9B8E7D"}
                   />
-                  <Text className={`text-xs ${isActive ? "font-black text-brand" : "font-bold text-copy-muted"}`}>
+                  <Text className={`text-xs ${isActive ? "font-black text-white" : "font-bold text-copy-muted"}`}>
                     {segment.label}
                   </Text>
-                  <View className={`min-w-5 items-center rounded-full px-1.5 py-0.5 ${isActive ? "bg-white/80" : "bg-[#F3EEE7]"}`}>
-                    <Text className={`text-[9px] font-black ${isActive ? "text-brand" : "text-[#9B8E7D]"}`}>
+                  <View className={`min-w-5 items-center rounded-full px-1.5 py-0.5 ${isActive ? "bg-white/20" : "bg-[#F3EEE7]"}`}>
+                    <Text className={`text-[9px] font-black ${isActive ? "text-white" : "text-[#9B8E7D]"}`}>
                       {segment.count}
                     </Text>
                   </View>
@@ -2432,6 +2390,23 @@ export default function InventoryScreen() {
           onClose={() => setBatchReviewVisible(false)}
           onChange={setDetectedFoods}
           onSave={saveDetectedFoods}
+        />
+
+        <ExpiredCleanupModal
+          visible={expiredCleanupVisible}
+          items={expiredItemsForCleanup}
+          clearing={clearingExpired}
+          result={expiredCleanupResult}
+          onClose={() => {
+            if (clearingExpired) return;
+            setExpiredCleanupVisible(false);
+            setExpiredCleanupResult(null);
+          }}
+          onConfirm={() => void confirmBatchClearExpired()}
+          onRetry={() => {
+            setExpiredCleanupResult(null);
+            void confirmBatchClearExpired();
+          }}
         />
 
         <CatalogDetailModal

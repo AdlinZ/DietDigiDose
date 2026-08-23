@@ -18,7 +18,7 @@ import * as Speech from "expo-speech";
 import * as Haptics from "expo-haptics";
 import { useAuthFetch } from "@/contexts/AuthContext";
 import { toLocalDateKey, toLocalTimeKey } from "@/utils/date";
-import { aiApi, dietApi, inventoryApi, recipesApi, type Recipe } from "@/services/api";
+import { aiApi, dietApi, inventoryApi, recipesApi, waitForAgentRun, type Recipe } from "@/services/api";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 
 interface CookingStep {
@@ -39,6 +39,14 @@ interface VoiceConversationTurn {
   question: string;
   answer: string;
 }
+
+type CookingAgentRun = {
+  id: string;
+  status: string;
+  reply?: string;
+  error?: { message?: string };
+  durationMs?: number;
+};
 
 export default function CookingModeScreen() {
   const insets = useSafeAreaInsets();
@@ -287,7 +295,7 @@ export default function CookingModeScreen() {
     });
 
     try {
-      const data = await aiApi.voiceCommand<{ type: string; action?: string; answerText?: string }>(
+      const data = await aiApi.voiceCommand<{ type: string; action?: string; answerText?: string; run?: CookingAgentRun }>(
         authFetch,
         {
           speechText: text,
@@ -328,7 +336,8 @@ export default function CookingModeScreen() {
 
         Speech.speak(actionDoneText, { language: "zh-CN", rate: 1.0 });
       } else {
-        const reply = data.answerText || "已为您提供下厨解答";
+        const completedRun = data.run ? await waitForAgentRun(authFetch, data.run) : undefined;
+        const reply = completedRun?.reply || data.answerText || completedRun?.error?.message || "已为您提供下厨解答";
         setVoiceConversation((previous) => [
           ...previous,
           { question: text, answer: reply },
@@ -605,7 +614,7 @@ export default function CookingModeScreen() {
       const currentDish = title || "这道菜";
       const currentStepText = cookingSteps[currentStep]?.text || "准备中";
 
-      const data = await aiApi.chat<{ reply?: string; responseTimeMs?: number }>(authFetch, {
+      const data = await aiApi.chat<{ reply?: string; responseTimeMs?: number; run: CookingAgentRun }>(authFetch, {
         source: "cooking",
         sessionId: cookingChatSessionId,
         messages: [
@@ -617,13 +626,14 @@ export default function CookingModeScreen() {
           { role: "user", content: chatInput.trim() },
         ],
       });
+      const completedRun = await waitForAgentRun(authFetch, data.run);
 
       const assistantMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: data.reply || "抱歉，我暂时无法回答这个问题。",
+        content: completedRun.reply || data.reply || completedRun.error?.message || "抱歉，我暂时无法回答这个问题。",
         timestamp: new Date(),
-        responseTimeMs: data.responseTimeMs,
+        responseTimeMs: completedRun.durationMs ?? data.responseTimeMs,
       };
 
       setChatMessages((prev) => [...prev, assistantMessage]);

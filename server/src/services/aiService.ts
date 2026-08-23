@@ -75,6 +75,9 @@ export interface ChatCompletionOptions {
   tools?: any[];
   userId?: number;
   endpoint?: string;
+  runId?: string;
+  agentName?: string;
+  phase?: string;
   toolRounds?: number;
   seenToolCalls?: string[];
   originalUserText?: string;
@@ -98,6 +101,8 @@ export interface ChatCompletionResult {
   /** Indicates a local response was used because the real model could not be reached. */
   fallback?: boolean;
   fallbackReason?: "AI_NOT_CONFIGURED" | "AI_REQUEST_FAILED";
+  /** Sanitized provider failure used only for the authenticated admin audit log. */
+  failureMessage?: string;
   actionCard?: {
     mealType: string;
     foodName: string;
@@ -414,6 +419,9 @@ export async function chatCompletion(
         userId: options.userId,
         endpoint: options.endpoint || "chat",
         model: data.model || model,
+        runId: options.runId,
+        agentName: options.agentName,
+        phase: options.phase,
         promptTokens: Number(usage.prompt_tokens ?? usage.input_tokens) || 0,
         completionTokens: Number(usage.completion_tokens ?? usage.output_tokens) || 0,
         totalTokens: Number(usage.total_tokens)
@@ -542,6 +550,9 @@ export async function chatCompletion(
         userId: options.userId,
         endpoint: options.endpoint || "chat",
         model,
+        runId: options.runId,
+        agentName: options.agentName,
+        phase: options.phase,
         latencyMs: Date.now() - startedAt,
         success: false,
         failureReason: err instanceof Error ? err.message : String(err),
@@ -556,6 +567,7 @@ export async function chatCompletion(
       reply: replyText,
       fallback: true,
       fallbackReason: "AI_REQUEST_FAILED",
+      failureMessage: err instanceof Error ? err.message.slice(0, 500) : "Unknown AI provider error",
       actionCard,
       missingCard,
       optionsCard,
@@ -649,6 +661,9 @@ export async function analyzeImage(
   ];
 
   const res = await chatCompletion(messages, { apiKey, baseUrl, model, ...options });
+  if (res.fallback) {
+    throw new Error(res.fallbackReason === "AI_NOT_CONFIGURED" ? "视觉模型尚未配置" : "视觉模型调用失败");
+  }
   return res.reply;
 }
 
@@ -705,7 +720,7 @@ function getFallbackResponse(messages: ChatMessage[]): string {
  */
 export async function transcribeAudio(
   audioBase64: string,
-  options: { userId?: number; mimeType?: string } = {}
+  options: { userId?: number; mimeType?: string; runId?: string; agentName?: string; phase?: string } = {}
 ): Promise<{ text: string }> {
   const { apiKey, baseUrl, model: asrModel } = getAsrConfig();
   const startedAt = Date.now();
@@ -741,6 +756,9 @@ export async function transcribeAudio(
               userId: options.userId,
               endpoint: "voice-transcribe",
               model: asrModel,
+              runId: options.runId,
+              agentName: options.agentName,
+              phase: options.phase,
               promptTokens: Math.ceil(audioBuffer.length / 100),
               completionTokens: data.text.length,
               latencyMs: Date.now() - startedAt,
@@ -757,6 +775,9 @@ export async function transcribeAudio(
           userId: options.userId,
           endpoint: "voice-transcribe",
           model: asrModel,
+          runId: options.runId,
+          agentName: options.agentName,
+          phase: options.phase,
           latencyMs: Date.now() - startedAt,
           success: false,
           failureReason: err instanceof Error ? err.message : String(err),
@@ -772,6 +793,9 @@ export async function transcribeAudio(
       userId: options.userId,
       endpoint: "voice-transcribe",
       model: asrModel,
+      runId: options.runId,
+      agentName: options.agentName,
+      phase: options.phase,
       latencyMs: Date.now() - startedAt,
       success: false,
       failureReason: error.message,

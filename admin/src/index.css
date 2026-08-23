@@ -13,3 +13,14 @@
 body {
   @apply bg-background text-text-main font-sans antialiased;
 }
+
+html,
+body,
+#root {
+  height: 100%;
+  min-height: 0;
+}
+
+body {
+  overflow: hidden;
+}

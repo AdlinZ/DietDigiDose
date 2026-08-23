@@ -6,11 +6,10 @@ import {
   StyleSheet, 
   Keyboard,
   Platform,
-  useColorScheme,
   ViewStyle,
   TextStyle
 } from 'react-native';
-import DateTimePickerModal from 'react-native-modal-datetime-picker';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import dayjs from 'dayjs';
 import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 
@@ -59,8 +58,6 @@ export const SmartDateInput = ({
   iconSize = 18
 }: SmartDateInputProps) => {
   const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
 
   // 默认展示格式
   const format = displayFormat || (mode === 'time' ? 'HH:mm' : 'YYYY-MM-DD');
@@ -116,6 +113,15 @@ export const SmartDateInput = ({
     // 采用带本地偏移的 ISO 字符串，避免 date 模式在非 UTC 时区出现跨天
     const serverString = dayjs(date).format(format);
     onChange(serverString);
+  };
+
+  const handleNativeChange = (event: DateTimePickerEvent, date?: Date) => {
+    // Android picker closes after either confirmation or dismissal. Keeping
+    // this controlled here avoids the extra modal wrapper that crashed in
+    // production builds when the kitchenware form re-rendered.
+    if (Platform.OS === 'android') hideDatePicker();
+    if (event.type !== 'set' || !date) return;
+    handleConfirm(date);
   };
 
   // 根据 mode 选择图标
@@ -199,25 +205,23 @@ export const SmartDateInput = ({
       
       {error && <Text style={[styles.errorText, errorTextStyle]}>{error}</Text>}
 
-      {/* 
-         DateTimePickerModal 是 React Native Modal。
-         它会覆盖在所有 View 之上。
-      */}
-      <DateTimePickerModal
-        isVisible={isDatePickerVisible}
-        mode={mode}
-        date={dateObjectForPicker} // 传入 Date 对象
-        onConfirm={handleConfirm}
-        onCancel={hideDatePicker}
-        // iOS 只有用这个 display 样式才最稳，避免乱七八糟的 inline 样式
-        display={Platform.OS === 'ios' ? 'spinner' : 'default'} 
-        // 自动适配系统深色模式，或者根据 isDark 变量控制
-        isDarkModeEnabled={isDark}
-        // 强制使用中文环境
-        locale="zh-CN"
-        confirmTextIOS="确定"
-        cancelTextIOS="取消"
-      />
+      {isDatePickerVisible ? (
+        <View style={Platform.OS === 'ios' ? styles.iosPicker : undefined}>
+          <DateTimePicker
+            value={dateObjectForPicker}
+            mode={mode}
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            locale="zh-CN"
+            themeVariant="light"
+            onChange={handleNativeChange}
+          />
+          {Platform.OS === 'ios' ? (
+            <TouchableOpacity onPress={hideDatePicker} style={styles.iosDoneButton}>
+              <Text style={styles.iosDoneText}>完成</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 };
@@ -272,5 +276,24 @@ const styles = StyleSheet.create({
     marginLeft: 2,
     fontSize: 12,
     color: '#EF4444',
-  }
+  },
+  iosPicker: {
+    marginTop: 8,
+    overflow: 'hidden',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF',
+  },
+  iosDoneButton: {
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    paddingVertical: 10,
+  },
+  iosDoneText: {
+    color: '#2D6A4F',
+    fontSize: 14,
+    fontWeight: '700',
+  },
 });

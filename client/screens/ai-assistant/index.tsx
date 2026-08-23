@@ -29,13 +29,13 @@ import {
   getUserStorageKey,
   storageBelongsToCurrentUser,
 } from "@/utils/userStorage";
-import { aiApi, ApiError, dietApi, healthApi, inventoryApi, recipesApi } from "@/services/api";
+import { aiApi, ApiError, dietApi, healthApi, inventoryApi, recipesApi, waitForAgentRun } from "@/services/api";
 import { dateKeyAfterDays, toLocalDateKey, toLocalTimeKey } from "@/utils/date";
 import { hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/healthProfile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useTTS } from "@/hooks/useTTS";
 import { VoiceWaveform, type VoiceState } from "@/components/VoiceWaveform";
-import type { AIWriteConfirmation, ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message, SolutionCard } from "./types";
+import type { AgentActionProposal, AgentResponse, AgentRunSummary, AIWriteConfirmation, ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message, SolutionCard } from "./types";
 import { inferInventoryCategory, normalizeInventoryScanFoods } from "./inventoryScan";
 import { AssistantMessageItem } from "./AssistantMessageItem";
 import { normalizeShoppingItems, type ShoppingItem } from "@/utils/shoppingList";
@@ -117,6 +117,15 @@ function buildChatHistory(messages: Message[], userText: string): ChatHistoryMes
       content: serializeMessageForAI(message).slice(0, 12_000),
     }))
     .concat({ role: "user", content: userText.trim().slice(0, 12_000) });
+}
+
+function agentMessageText(run: AgentRunSummary, reply?: string) {
+  if (reply || run.reply) return reply || run.reply || "";
+  if (run.status === "failed") return run.error?.message || "Agent 执行失败，请重试。";
+  if (run.status === "awaiting_input") return run.pendingInput?.question || "Supervisor 需要你补充一些信息。";
+  if (run.status === "awaiting_approval") return "方案已经准备好，请检查并确认下方操作。";
+  if (run.status === "queued") return "任务正在排队，我会在这里持续更新进度。";
+  return "Supervisor 正在协调专业 Agent 处理这项任务…";
 }
 
 export default function AIAssistantScreen() {
@@ -227,16 +236,17 @@ export default function AIAssistantScreen() {
         messages: buildChatHistory(messagesRef.current, userText),
         source: "voice",
         ...(sessionId ? { sessionId } : {}),
-      })) as { reply?: string; solutionCards?: SolutionCard[]; responseTimeMs?: number };
-
-      const replyText = res.reply || "收到，我已经听明白了。你还想继续问我什么？";
+      })) as AgentResponse;
+      const completedRun = await waitForAgentRun(authFetch, res.run);
+      const replyText = agentMessageText(completedRun, completedRun.reply || res.reply);
 
       const aiMsg: Message = {
         id: String(Date.now() + 1),
         sender: "ai",
         text: replyText,
         solutionCards: res.solutionCards,
-        responseTimeMs: res.responseTimeMs,
+        agentRun: { run: completedRun, events: [] },
+        responseTimeMs: completedRun.durationMs ?? res.responseTimeMs,
         time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
       setMessages((prev) => [...prev, aiMsg]);
@@ -621,7 +631,13 @@ export default function AIAssistantScreen() {
           ...(sessionId ? { sessionId } : {}),
         });
       }
-      const responseText = data.reply || "智能大厨正在整理您的食谱建议...";
+      const agentResponse = data as AgentResponse & Record<string, any>;
+      const completedRun = agentResponse.run
+        ? await waitForAgentRun(authFetch, agentResponse.run)
+        : undefined;
+      const responseText = completedRun
+        ? agentMessageText(completedRun, completedRun.reply || data.reply)
+        : (data.reply || "智能大厨正在整理您的食谱建议...");
 
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -632,7 +648,8 @@ export default function AIAssistantScreen() {
         missingCard: data.missingCard,
         optionsCard: data.optionsCard,
         solutionCards: data.solutionCards,
-        responseTimeMs: data.responseTimeMs,
+        agentRun: completedRun ? { run: completedRun, events: [] } : undefined,
+        responseTimeMs: completedRun?.durationMs ?? data.responseTimeMs,
         time: "刚刚",
       };
 
@@ -1187,6 +1204,53 @@ export default function AIAssistantScreen() {
     }
   };
 
+  const updateAgentMessage = useCallback((messageId: string, response: AgentResponse) => {
+    setMessages((current) => current.map((message) => message.id === messageId ? {
+      ...message,
+      text: response.reply || response.run.reply || message.text,
+      status: response.run.status === "failed" ? "failed" : response.run.status === "completed" ? "completed" : message.status,
+      responseTimeMs: response.run.durationMs ?? message.responseTimeMs,
+      solutionCards: response.solutionCards ?? message.solutionCards,
+      agentRun: message.agentRun
+        ? { ...message.agentRun, run: response.run }
+        : { run: response.run, events: [] },
+    } : message));
+  }, []);
+
+  const handleAgentResume = useCallback(async (
+    messageId: string,
+    runId: string,
+    decision: "approve" | "reject" | "edit",
+    actions?: AgentActionProposal[],
+  ) => {
+    const response = await aiApi.resumeAgentRun<AgentResponse>(authFetch, runId, {
+      decision,
+      ...(actions ? { actions } : {}),
+    });
+    updateAgentMessage(messageId, response);
+  }, [authFetch, updateAgentMessage]);
+
+  const handleAgentCancel = useCallback(async (messageId: string, runId: string) => {
+    await aiApi.cancelAgentRun(authFetch, runId);
+    setMessages((current) => current.map((message) => message.id === messageId && message.agentRun ? {
+      ...message,
+      text: "任务已取消，没有执行后续操作。",
+      agentRun: { ...message.agentRun, run: { ...message.agentRun.run, status: "cancelled" } },
+    } : message));
+  }, [authFetch]);
+
+  const handleAgentRetry = useCallback(async (messageId: string, runId: string) => {
+    const response = await aiApi.retryAgentRun<AgentResponse>(authFetch, runId);
+    updateAgentMessage(messageId, response);
+  }, [authFetch, updateAgentMessage]);
+
+  const handleAgentUndo = useCallback(async (messageId: string, runId: string) => {
+    await aiApi.undoAgentRun(authFetch, runId);
+    setMessages((current) => current.map((message) => message.id === messageId && message.agentRun
+      ? { ...message, agentRun: { ...message.agentRun, undoState: "completed" } }
+      : message));
+  }, [authFetch]);
+
   const handleSafeGoBack = () => {
     if (router.canGoBack()) {
       router.back();
@@ -1212,6 +1276,10 @@ export default function AIAssistantScreen() {
       onSaveRecipe={handleSaveSolutionRecipe}
       onOpenInventory={() => router.push("/inventory")}
       onOpenInventoryAdd={() => router.push("/inventory", { action: "add" })}
+      onAgentResume={handleAgentResume}
+      onAgentCancel={handleAgentCancel}
+      onAgentRetry={handleAgentRetry}
+      onAgentUndo={handleAgentUndo}
     />
   );
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Linking, ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { Image, Linking, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
@@ -395,11 +395,15 @@ export default function LegalScreen() {
         ))}
 
         <View className="mt-1 items-center rounded-3xl border border-line bg-white px-5 py-6">
-          <FontAwesome6 name="leaf" size={18} color="#2D6A4F" />
+          <Image
+            source={require("@/assets/logo.png")}
+            style={{ width: 48, height: 48 }}
+            resizeMode="contain"
+            accessible={false}
+          />
           <Text className="mt-2 text-sm font-black text-ink">食光烙记</Text>
-          <Text className="mt-1 text-center text-xs leading-5 text-copy-muted">
-            感谢您花时间了解这份{policy.title}\n我们会认真保护每一份信任
-          </Text>
+          <Text className="mt-1 text-center text-xs leading-5 text-copy-muted">感谢您花时间了解这份{policy.title}</Text>
+          <Text className="text-center text-xs leading-5 text-copy-muted">我们会认真保护每一份信任</Text>
         </View>
       </ScrollView>
     </Screen>

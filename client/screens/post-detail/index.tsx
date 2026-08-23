@@ -22,6 +22,7 @@ import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 import { getAvatarSource } from "@/utils/defaultAvatar";
+import { formatLocalDateTime, formatLocalPostDate, parseUtcDatabaseDate } from "@/utils/postDate";
 import { communityApi, mediaApi } from "@/services/api";
 
 
@@ -46,6 +47,7 @@ interface Post {
   accepted_comment_id?: number | null;
   author_is_expert?: boolean;
   author_is_followed?: boolean;
+  ip_location?: string | null;
   created_at: string;
 }
 
@@ -82,18 +84,6 @@ const getPostImages = (post: Post): string[] => {
     }
   }
   return post.image_url ? [post.image_url] : [];
-};
-
-const parsePostDate = (value?: string | null) => {
-  if (!value) return null;
-  const date = new Date(value.includes("T") ? value : value.replace(" ", "T"));
-  return Number.isNaN(date.getTime()) ? null : date;
-};
-
-const formatPostDate = (value?: string | null) => {
-  const date = parsePostDate(value);
-  if (!date) return "长期开放";
-  return `${date.getMonth() + 1}月${date.getDate()}日`;
 };
 
 export default function PostDetailScreen() {
@@ -356,11 +346,12 @@ export default function PostDetailScreen() {
   const handleShare = async () => {
     if (!post) return;
     try {
+      const share = await communityApi.createShare(authFetch, post.id);
       await Share.share({
-        message: `【食光社区】查看来自 ${post.username} 的健康分享：${post.content.slice(0, 50)}...`,
+        message: `【食光社区】查看来自 ${post.username} 的健康分享：${post.content.slice(0, 50)}…\n分享码：SG${share.code}\n${share.url}\n打开 App：${share.app_url}`,
       });
     } catch (error) {
-      console.error(error);
+      Alert.alert("分享失败", error instanceof Error ? error.message : "请稍后重试");
     }
   };
 
@@ -393,7 +384,7 @@ export default function PostDetailScreen() {
 
   const postImages = getPostImages(post).filter((imageUrl) => !failedImageUrls.includes(imageUrl));
   const activityEnded = post.category === "活动" && Boolean(
-    parsePostDate(post.event_end_at) && parsePostDate(post.event_end_at)!.getTime() < Date.now()
+    parseUtcDatabaseDate(post.event_end_at) && parseUtcDatabaseDate(post.event_end_at)!.getTime() < Date.now()
   );
 
   return (
@@ -422,9 +413,6 @@ export default function PostDetailScreen() {
               <Text className="text-xs font-bold text-[#222222]" numberOfLines={1}>
                 {post.username}
               </Text>
-              <Text className="text-[10px] text-copy-muted">
-                {post.created_at || "刚刚"}
-              </Text>
               </View>
             </TouchableOpacity>
 
@@ -450,20 +438,12 @@ export default function PostDetailScreen() {
 
           <View className="flex-row items-center gap-2">
             <TouchableOpacity
-              onPress={() => {
-                Alert.alert("暂不能开启烹饪", "这是一条普通社区动态，作者没有提供可执行的食材用量和步骤。请查看已发布的完整菜谱后再开始烹饪。");
-              }}
-              className="bg-copy-muted px-3 py-1.5 rounded-full flex-row items-center gap-1 active:opacity-80 shadow-xs"
-            >
-              <FontAwesome6 name="circle-info" size={11} color="#FFF" />
-              <Text className="text-[11px] font-bold text-white">暂无完整菜谱</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
               onPress={handleShare}
+              accessibilityRole="button"
+              accessibilityLabel="分享帖子"
               className="w-9 h-9 rounded-full bg-background-secondary items-center justify-center"
             >
-              <FontAwesome6 name="arrow-turn-up" size={14} color="#2D6A4F" />
+              <FontAwesome6 name="arrow-up-from-bracket" size={15} color="#2D6A4F" />
             </TouchableOpacity>
           </View>
         </View>
@@ -471,7 +451,7 @@ export default function PostDetailScreen() {
         {/* 帖子正文主区域 */}
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 100 }}
+          contentContainerStyle={{ paddingBottom: 88 + insets.bottom }}
           className="flex-1 bg-white"
         >
           {/* 大图全屏化展示 */}
@@ -541,7 +521,7 @@ export default function PostDetailScreen() {
                   </View>
                 </View>
                 <Text className="mt-3 text-xs font-semibold text-[#657268]">
-                  {formatPostDate(post.event_start_at)}—{formatPostDate(post.event_end_at)}
+                  {formatLocalPostDate(post.event_start_at)}—{formatLocalPostDate(post.event_end_at)}
                 </Text>
                 <View className="mt-3 flex-row items-center justify-between">
                   <Text className="text-[10px] text-[#7A847C]">{post.participant_count || 0} 位食友已参加</Text>
@@ -586,11 +566,9 @@ export default function PostDetailScreen() {
             {/* 发布时间与浏览量 */}
             <View className="flex-row items-center justify-between mt-5 pt-4 border-t border-background-secondary">
               <Text className="text-[11px] text-[#A09383]">
-                发布于 {post.created_at || "今天"} · {post.views_count || 0} 次浏览
+                发布于 {formatLocalDateTime(post.created_at)} · {post.views_count || 0} 次浏览
               </Text>
-              <Text className="text-[11px] text-brand font-bold">
-                IP: 极简生活馆
-              </Text>
+              <Text className="text-[11px] text-brand font-bold">IP: {post.ip_location || "属地未知"}</Text>
             </View>
           </View>
 
@@ -675,7 +653,7 @@ export default function PostDetailScreen() {
                   ) : null}
 
                   <Text className="text-[10px] text-[#B0A495] mt-1">
-                    {comment.created_at}
+                    {formatLocalDateTime(comment.created_at)}
                   </Text>
                   {post.category === "问答" && post.user_id === user?.id ? (
                     <TouchableOpacity
@@ -694,7 +672,10 @@ export default function PostDetailScreen() {
         </ScrollView>
 
         {/* 底部固定互动栏：输入入口保持轻量，点击后进入专注的评论面板。 */}
-        <View className="absolute bottom-0 left-0 right-0 bg-white border-t border-[#F0EAE1] px-4 py-2.5 flex-row items-center gap-3 shadow-lg">
+        <View
+          className="absolute bottom-0 left-0 right-0 bg-white border-t border-[#F0EAE1] px-4 pt-2.5 flex-row items-center gap-3 shadow-lg"
+          style={{ paddingBottom: Math.max(insets.bottom, 10) }}
+        >
           <TouchableOpacity
             onPress={openCommentComposer}
             className="flex-1 bg-background-secondary px-3.5 py-2.5 rounded-full flex-row items-center gap-2"
@@ -748,7 +729,8 @@ export default function PostDetailScreen() {
           onRequestClose={closeCommentComposer}
         >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={0}
             className="flex-1 justify-end"
           >
             <TouchableOpacity
@@ -771,7 +753,7 @@ export default function PostDetailScreen() {
                 </TouchableOpacity>
               </View>
 
-              <View className="min-h-28 rounded-2xl bg-[#F7F5F2] px-4 py-3 border border-[#F0EAE1]">
+              <View className="h-32 max-h-32 rounded-2xl bg-[#F7F5F2] px-4 py-3 border border-[#F0EAE1]">
                 <TextInput
                   ref={commentInputRef}
                   value={commentText}

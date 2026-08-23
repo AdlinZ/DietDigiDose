@@ -7,6 +7,8 @@ export type ShoppingItem = {
   createdAt: number;
   purchaseDate?: string;
   storageLocation?: string;
+  clientId?: string;
+  version?: number;
 };
 
 export function normalizeShoppingItems(value: unknown): ShoppingItem[] {
@@ -18,6 +20,8 @@ export function normalizeShoppingItems(value: unknown): ShoppingItem[] {
     if (!name) return [];
     const parsedCreatedAt = typeof item.createdAt === "number"
       ? item.createdAt
+      : typeof item.createdAt === "string"
+        ? Date.parse(item.createdAt)
       : typeof item.addedAt === "string"
         ? Date.parse(item.addedAt)
         : Number.NaN;
@@ -39,6 +43,8 @@ export function normalizeShoppingItems(value: unknown): ShoppingItem[] {
       createdAt: Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : Date.now(),
       purchaseDate,
       storageLocation,
+      clientId: typeof item.clientId === "string" ? item.clientId : undefined,
+      version: typeof item.version === "number" && Number.isFinite(item.version) ? item.version : undefined,
     }];
   });
 }

@@ -161,11 +161,42 @@ router.get("/", (req, res) => {
   const { category, search } = req.query;
   const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
   const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 24));
+  const requestedMaxCookTime = Number(req.query.maxCookTime);
+  const maxCookTime = Number.isFinite(requestedMaxCookTime) && requestedMaxCookTime > 0
+    ? Math.floor(requestedMaxCookTime)
+    : null;
   const cursor = req.query.cursor ? decodeCursor(req.query.cursor) : null;
   const cursorId = cursor ? Number(cursor.id) : null;
   if (req.query.cursor && (!cursor || cursor.v !== 1 || !Number.isInteger(cursorId) || cursorId! <= 0)) {
     return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
   }
+  const filters = [
+    "r.deleted_at IS NULL",
+    "r.status = 'approved'",
+    "COALESCE(r.quality_status, 'trusted') <> 'needs_review'",
+  ];
+  const filterParams: Array<string | number> = [];
+
+  if (typeof category === "string" && category !== "全部") {
+    filters.push("r.category = ?");
+    filterParams.push(category);
+  }
+  if (typeof search === "string" && search.trim()) {
+    filters.push("(r.title LIKE ? OR r.description LIKE ? OR r.tags LIKE ?)");
+    const term = `%${search.trim()}%`;
+    filterParams.push(term, term, term);
+  }
+  if (maxCookTime !== null) {
+    filters.push("r.cook_time <= ?");
+    filterParams.push(maxCookTime);
+  }
+
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM recipes r
+    WHERE ${filters.join(" AND ")}
+  `).get(...filterParams) as { total: number };
+
   let query = `
     SELECT
       r.*,
@@ -173,20 +204,9 @@ router.get("/", (req, res) => {
       u.avatar_url AS author_avatar_url
     FROM recipes r
     LEFT JOIN users u ON u.id = r.author_user_id
-    WHERE r.deleted_at IS NULL AND r.status = 'approved'
-      AND COALESCE(r.quality_status, 'trusted') <> 'needs_review'
+    WHERE ${filters.join(" AND ")}
   `;
-  const params: Array<string | number> = [];
-
-  if (typeof category === "string" && category !== "全部") {
-    query += " AND r.category = ?";
-    params.push(category);
-  }
-  if (typeof search === "string" && search.trim()) {
-    query += " AND (r.title LIKE ? OR r.description LIKE ? OR r.tags LIKE ?)";
-    const term = `%${search.trim()}%`;
-    params.push(term, term, term);
-  }
+  const params = [...filterParams];
   if (cursorMode && cursorId) {
     query += " AND r.id < ?";
     params.push(cursorId);
@@ -201,7 +221,11 @@ router.get("/", (req, res) => {
   const items = pageRows.map((recipe) => formatRecipe(recipe, req));
   if (!cursorMode) return res.json(items);
   const last = pageRows.at(-1) as { id?: number } | undefined;
-  return res.json({ items, nextCursor: hasMore && last?.id ? encodeCursor({ v: 1, id: last.id }) : null });
+  return res.json({
+    items,
+    total: Number(totalRow?.total || 0),
+    nextCursor: hasMore && last?.id ? encodeCursor({ v: 1, id: last.id }) : null,
+  });
 });
 
 // GET /api/v1/recipes/mine - 当前用户的全部投稿

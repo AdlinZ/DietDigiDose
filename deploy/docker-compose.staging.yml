@@ -16,6 +16,7 @@ services:
       TRUST_PROXY: "1"
       REQUIRE_HTTPS: "1"
       ENABLE_DEMO_SEED: "0"
+      MEDIA_LOCAL_ROOT: /data/media
     volumes:
       - staging_database:/data
     healthcheck:
@@ -56,4 +57,3 @@ volumes:
   staging_database:
   caddy_data:
   caddy_config:
-

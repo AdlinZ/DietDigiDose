@@ -24,7 +24,8 @@ import {
   type NotificationPreferences,
 } from "@/utils/notifications";
 import { APP_VERSION } from "@/utils/appVersion";
-import { purgeUserPrivateStorage } from "@/utils/userStorage";
+import { formatStorageBytes, getTotalClearableCacheSize, purgeClearableCache, purgeUserPrivateStorage } from "@/utils/userStorage";
+import { Image as ExpoImage } from "expo-image";
 
 export default function SettingsScreen() {
   const router = useSafeRouter();
@@ -88,6 +89,7 @@ export default function SettingsScreen() {
   // Logout confirmation modal
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [clearingCache, setClearingCache] = useState(false);
+  const [cacheSize, setCacheSize] = useState<number | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletePassword, setDeletePassword] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
@@ -113,14 +115,23 @@ export default function SettingsScreen() {
   const handleClearCache = async () => {
     setClearingCache(true);
     try {
-      await purgeUserPrivateStorage(user?.id);
-      Alert.alert("成功", "AI 对话、采购清单和未完成识别等本地缓存已清理");
+      await Promise.all([
+        purgeClearableCache(user?.id),
+        ExpoImage.clearDiskCache(),
+        ExpoImage.clearMemoryCache(),
+      ]);
+      setCacheSize(await getTotalClearableCacheSize(user?.id));
+      Alert.alert("成功", "本地数据缓存和图片缓存已清理；系统仍占用的临时缓存会按实际大小显示");
     } catch {
       Alert.alert("清理失败", "暂时无法清理本地缓存，请稍后重试");
     } finally {
       setClearingCache(false);
     }
   };
+
+  useEffect(() => {
+    void getTotalClearableCacheSize(user?.id).then(setCacheSize).catch(() => setCacheSize(null));
+  }, [user?.id]);
 
   const handleExportAIData = async () => {
     if (!token) return;
@@ -421,14 +432,16 @@ export default function SettingsScreen() {
                 </View>
                 <View>
                   <Text className="text-sm font-bold text-ink">清理本地缓存</Text>
-                  <Text className="text-[11px] text-copy-muted mt-0.5">释放临时数据与离线缓存资源</Text>
+                  <Text className="text-[11px] text-copy-muted mt-0.5">
+                    {cacheSize == null ? "正在统计缓存…" : `当前本地缓存 ${formatStorageBytes(cacheSize)}`}
+                  </Text>
                 </View>
               </View>
               {clearingCache ? (
                 <ActivityIndicator size="small" color="#2D6A4F" />
               ) : (
                 <Text className="text-xs font-bold text-brand bg-brand/10 px-2.5 py-1 rounded-full">
-                  清理
+                  {cacheSize === 0 ? "已清理" : "清理"}
                 </Text>
               )}
             </TouchableOpacity>

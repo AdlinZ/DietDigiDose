@@ -1800,7 +1800,6 @@ export default function InventoryScreen() {
                               uri={recipe.image_url}
                               className="h-32 w-full"
                               placeholderClassName="h-32 w-full items-center justify-center bg-[#EAF2EC]"
-                              iconSize={20}
                             />
                             {/* 卡路里胶囊 */}
                             <View className="absolute top-2 right-2 flex-row items-center gap-1 rounded-full bg-black/60 px-2 py-0.5">

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, ActivityIndicator } from 'react-native';
+import { ActivityIndicator, Image, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter, useSafeSearchParams } from '@/hooks/useSafeRouter';
@@ -15,28 +15,35 @@ export default function RegisterScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const { register } = useAuth();
+  const { register, pendingSmsRegistration, completeSmsRegistration, clearPendingSmsRegistration } = useAuth();
   const router = useSafeRouter();
-  const { returnTo: rawReturnTo } = useSafeSearchParams<{ returnTo?: unknown }>();
+  const { returnTo: rawReturnTo, mode } = useSafeSearchParams<{ returnTo?: unknown; mode?: unknown }>();
   const returnTo = validateAuthReturnTo(rawReturnTo);
-  const [brand, muted] = useCSSVariable([
+  const isSmsRegistration = mode === 'sms';
+  const [brand, muted, critical] = useCSSVariable([
     '--color-brand',
     '--color-copy-muted',
+    '--color-critical',
   ]) as string[];
 
   const handleRegister = async () => {
-    if (!identifier.trim() || !username.trim() || !password.trim()) {
-      setError('请输入用户名、邮箱或手机号和密码');
+    if ((!isSmsRegistration && !identifier.trim()) || !username.trim() || !password.trim()) {
+      setError(isSmsRegistration ? '请输入用户名和备用密码' : '请输入用户名、邮箱和密码');
+      return;
+    }
+    if (isSmsRegistration && !pendingSmsRegistration) {
+      setError('手机号验证已失效，请返回登录页重新验证');
       return;
     }
     if (username.trim().length < 2 || username.trim().length > 30) {
       setError('用户名需为 2～30 个字符');
       return;
     }
-    const isEmail = identifier.includes('@') && identifier.includes('.');
-    const isPhone = /^1[3-9]\d{9}$/.test(identifier.trim());
-    if (!isEmail && !isPhone) {
-      setError('请输入有效的邮箱或中国大陆手机号');
+    const normalizedIdentifier = identifier.trim();
+    const atIndex = normalizedIdentifier.indexOf('@');
+    const isEmail = atIndex > 0 && normalizedIdentifier.slice(atIndex + 1).includes('.') && !normalizedIdentifier.includes(' ');
+    if (!isSmsRegistration && !isEmail) {
+      setError('请输入有效的邮箱；手机号请在登录页使用验证码注册');
       return;
     }
     if (password.length < 6 || !/[a-z]/i.test(password) || !/\d/.test(password)) {
@@ -49,7 +56,9 @@ export default function RegisterScreen() {
     }
     setError('');
     setLoading(true);
-    const result = await register(identifier.trim(), username.trim(), password);
+    const result = isSmsRegistration
+      ? await completeSmsRegistration(username.trim(), password)
+      : await register(identifier.trim(), username.trim(), password);
     setLoading(false);
     if (result.success) {
       router.replace('/onboarding', returnTo ? { returnTo } : {});
@@ -58,129 +67,187 @@ export default function RegisterScreen() {
     }
   };
 
+  const handleBackToLogin = () => {
+    if (isSmsRegistration) clearPendingSmsRegistration();
+    if (router.canGoBack()) router.back();
+    else router.replace('/login');
+  };
+
+  const isRegisterDisabled = loading
+    || !username.trim()
+    || (!isSmsRegistration && !identifier.trim())
+    || !password
+    || !confirmPassword;
+
   return (
-    <Screen>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <KeyboardAvoidingView
-          className="flex-1"
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <View className="flex-1 justify-center px-8">
-            {/* Header */}
-            <View className="items-center mb-10">
-              <Text className="text-display font-bold text-brand-strong mb-2" accessibilityRole="header">创建账号</Text>
-              <Text className="text-body text-copy-muted">加入食光烙记，开启健康饮食之旅</Text>
-            </View>
+    <Screen backgroundColor="#FDF8F0">
+      <View className="flex-1 px-6 pb-5">
+        <View className="flex-row items-center justify-between pt-2">
+          <TouchableOpacity
+            onPress={handleBackToLogin}
+            accessibilityRole="button"
+            accessibilityLabel="返回登录"
+            className="h-10 w-10 items-center justify-center active:opacity-70"
+          >
+            <FontAwesome6 name="chevron-left" size={14} color={brand} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => router.push('/feedback', { category: 'support', page: '注册页' })}
+            accessibilityRole="link"
+            accessibilityLabel="帮助"
+            className="h-10 w-10 items-center justify-center active:opacity-70"
+          >
+            <FontAwesome6 name="circle-question" size={16} color={muted} />
+          </TouchableOpacity>
+        </View>
 
-            {/* Form */}
-            <View className="gap-3.5">
-              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
-                <FontAwesome6 name="user" size={18} color={brand} className="mr-3" />
-                <TextInput
-                  className="flex-1 text-base text-ink py-0"
-                  placeholder="用户名（公开显示）"
-                  placeholderTextColor={muted}
-                  value={username}
-                  onChangeText={setUsername}
-                  maxLength={30}
-                  autoComplete="username-new"
-                  textContentType="username"
-                  accessibilityLabel="用户名"
-                />
-              </View>
-              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
-                <FontAwesome6 name="envelope" size={18} color={brand} className="mr-3" />
-                <TextInput
-                  className="flex-1 text-base text-ink py-0"
-                  placeholder="邮箱或手机号"
-                  placeholderTextColor={muted}
-                  value={identifier}
-                  onChangeText={setIdentifier}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="email-address"
-                  autoComplete="username"
-                  textContentType="username"
-                  accessibilityLabel="邮箱或手机号"
-                />
-              </View>
-
-              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
-                <FontAwesome6 name="lock" size={18} color={brand} className="mr-3" />
-                <TextInput
-                  className="flex-1 text-base text-ink py-0"
-                  placeholder="密码（至少6位，含字母和数字）"
-                  placeholderTextColor={muted}
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPassword}
-                  autoComplete="new-password"
-                  textContentType="newPassword"
-                  accessibilityLabel="密码"
-                />
-                <TouchableOpacity
-                  onPress={() => setShowPassword(!showPassword)}
-                  className="min-w-touch min-h-touch items-center justify-center"
-                  accessibilityRole="button"
-                  accessibilityLabel={showPassword ? '隐藏密码' : '显示密码'}
-                >
-                  <FontAwesome6 name={showPassword ? 'eye-slash' : 'eye'} size={18} color={muted} />
-                </TouchableOpacity>
-              </View>
-
-              <View className="flex-row items-center bg-field rounded-control px-4 h-14">
-                <FontAwesome6 name="lock" size={18} color={brand} className="mr-3" />
-                <TextInput
-                  className="flex-1 text-base text-ink py-0"
-                  placeholder="确认密码"
-                  placeholderTextColor={muted}
-                  value={confirmPassword}
-                  onChangeText={setConfirmPassword}
-                  secureTextEntry={!showPassword}
-                  autoComplete="new-password"
-                  textContentType="newPassword"
-                  accessibilityLabel="确认密码"
-                />
-              </View>
-
-              {error ? (
-                <Text
-                  className="text-critical text-body text-center"
-                  accessibilityRole="alert"
-                  accessibilityLiveRegion="polite"
-                >
-                  {error}
-                </Text>
-              ) : null}
-
-              <TouchableOpacity
-                className={`bg-brand rounded-control h-14 items-center justify-center active:bg-accent-hover ${loading ? 'opacity-disabled' : ''}`}
-                onPress={handleRegister}
-                disabled={loading}
-                accessibilityRole="button"
-                accessibilityLabel="注册"
-                accessibilityState={{ disabled: loading, busy: loading }}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text className="text-white text-lg font-semibold">注册</Text>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                className="flex-row justify-center items-center mt-1 min-h-touch"
-                onPress={() => router.back()}
-                accessibilityRole="link"
-                accessibilityLabel="已有账号？返回登录"
-              >
-                <Text className="text-copy-muted text-body">已有账号？</Text>
-                <Text className="text-brand text-body font-semibold ml-1">返回登录</Text>
-              </TouchableOpacity>
-            </View>
+        <View className="mt-5 flex-row items-center gap-2.5">
+          <Image source={require('@/assets/logo.png')} style={{ width: 42, height: 42 }} resizeMode="contain" accessible={false} />
+          <View>
+            <Text className="text-base font-black text-brand-strong">食光烙记</Text>
+            <Text className="mt-0.5 text-[9px] font-bold tracking-[1.5px] text-copy-muted">DIET · MEMORY · LIFE</Text>
           </View>
-        </KeyboardAvoidingView>
-      </TouchableWithoutFeedback>
+        </View>
+
+        <View className="mt-10">
+          <Text className="max-w-[350px] text-[32px] font-black leading-[39px] text-ink" accessibilityRole="header">
+            {isSmsRegistration ? '完成你的账号设置' : '创建你的食光账号'}
+          </Text>
+          <Text className="mt-2 text-[12px] font-medium text-copy-muted">
+            {isSmsRegistration ? `手机号 ${pendingSmsRegistration?.phoneMasked || ''} 已验证` : '保存饮食记忆，从第一餐开始'}
+          </Text>
+        </View>
+
+        <View className="mt-auto pt-8">
+          <View className="overflow-hidden rounded-[24px] border border-line bg-white/90 shadow-2xs">
+            <View className="h-[62px] flex-row items-center px-5">
+              <FontAwesome6 name="user" size={18} color={brand} className="mr-3" />
+              <TextInput
+                className="flex-1 py-0 text-base text-ink"
+                placeholder="用户名（公开显示）"
+                placeholderTextColor={muted}
+                value={username}
+                onChangeText={setUsername}
+                maxLength={30}
+                autoComplete="username-new"
+                textContentType="username"
+                accessibilityLabel="用户名"
+              />
+            </View>
+            {!isSmsRegistration ? (
+              <>
+                <View className="mx-5 h-px bg-line" />
+                <View className="h-[62px] flex-row items-center px-5">
+                  <FontAwesome6 name="envelope" size={18} color={brand} className="mr-3" />
+                  <TextInput
+                    className="flex-1 py-0 text-base text-ink"
+                    placeholder="邮箱"
+                    placeholderTextColor={muted}
+                    value={identifier}
+                    onChangeText={setIdentifier}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                    autoComplete="email"
+                    textContentType="emailAddress"
+                    accessibilityLabel="邮箱"
+                  />
+                </View>
+              </>
+            ) : null}
+            <View className="mx-5 h-px bg-line" />
+            <View className="h-[62px] flex-row items-center px-5">
+              <FontAwesome6 name="lock" size={18} color={brand} className="mr-3" />
+              <TextInput
+                className="flex-1 py-0 text-base text-ink"
+                placeholder={isSmsRegistration ? '设置备用密码' : '设置密码'}
+                placeholderTextColor={muted}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoComplete="new-password"
+                textContentType="newPassword"
+                accessibilityLabel="密码"
+              />
+              <TouchableOpacity
+                onPress={() => setShowPassword((value) => !value)}
+                className="min-h-touch min-w-touch items-center justify-center"
+                accessibilityRole="button"
+                accessibilityLabel={showPassword ? '隐藏密码' : '显示密码'}
+              >
+                <FontAwesome6 name={showPassword ? 'eye-slash' : 'eye'} size={18} color={muted} />
+              </TouchableOpacity>
+            </View>
+            <View className="mx-5 h-px bg-line" />
+            <View className="h-[62px] flex-row items-center px-5">
+              <FontAwesome6 name="shield" size={18} color={brand} className="mr-3" />
+              <TextInput
+                className="flex-1 py-0 text-base text-ink"
+                placeholder="再次输入密码"
+                placeholderTextColor={muted}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry={!showPassword}
+                autoComplete="new-password"
+                textContentType="newPassword"
+                accessibilityLabel="确认密码"
+              />
+            </View>
+
+          {error ? (
+            <View className="mx-3 mt-3 flex-row items-center rounded-2xl bg-danger-soft px-4 py-2.5" accessibilityRole="alert">
+              <FontAwesome6 name="circle-exclamation" size={14} color={critical} style={{ marginRight: 6 }} />
+              <Text className="flex-shrink text-body font-medium text-critical">{error}</Text>
+            </View>
+          ) : null}
+
+          <TouchableOpacity
+            className={`mx-3 mb-3 mt-3 h-14 flex-row items-center justify-between rounded-full bg-brand py-1.5 pl-6 pr-1.5 shadow-xs ${isRegisterDisabled ? 'opacity-disabled' : ''}`}
+            onPress={handleRegister}
+            disabled={isRegisterDisabled}
+            accessibilityRole="button"
+            accessibilityLabel="创建账号"
+            accessibilityState={{ disabled: isRegisterDisabled, busy: loading }}
+          >
+            {loading ? (
+              <View className="flex-1 items-center"><ActivityIndicator color="#fff" /></View>
+            ) : (
+              <>
+                <Text className="text-[15px] font-black text-white">{isSmsRegistration ? '完成注册' : '创建账号'}</Text>
+                <View className="h-11 w-11 items-center justify-center rounded-full bg-white/20">
+                  <FontAwesome6 name="arrow-right" size={13} color="#FFFFFF" />
+                </View>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            className="mx-3 mb-3 h-14 flex-row items-center justify-between rounded-full bg-[#F1EBE2] py-1.5 pl-1.5 pr-6"
+            onPress={handleBackToLogin}
+            accessibilityRole="button"
+            accessibilityLabel="已有账号，返回登录"
+          >
+            <View className="h-11 w-11 items-center justify-center rounded-full bg-white/80">
+              <FontAwesome6 name="arrow-left" size={13} color={brand} />
+            </View>
+            <Text className="text-[15px] font-bold text-brand-strong">
+              {isSmsRegistration ? '暂不注册' : '已有账号'}
+            </Text>
+          </TouchableOpacity>
+
+          <View className="mb-3 flex-row flex-wrap items-center justify-center">
+            <Text className="text-[9px] text-copy-muted">创建账号即表示你已阅读并同意</Text>
+            <TouchableOpacity onPress={() => router.push('/legal', { type: 'terms' })} accessibilityRole="link">
+              <Text className="text-[9px] font-medium text-brand">服务协议</Text>
+            </TouchableOpacity>
+            <Text className="text-[9px] text-copy-muted">与</Text>
+            <TouchableOpacity onPress={() => router.push('/legal', { type: 'privacy' })} accessibilityRole="link">
+              <Text className="text-[9px] font-medium text-brand">隐私政策</Text>
+            </TouchableOpacity>
+          </View>
+          </View>
+        </View>
+      </View>
     </Screen>
   );
 }

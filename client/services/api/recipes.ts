@@ -3,7 +3,7 @@ import type { Recipe } from "./types";
 
 export const recipesApi = {
   list: <T = Recipe>(query = "") => requestJson<T[]>(publicFetch, `/api/v1/recipes${query}`),
-  listPage: <T = Recipe>(query = "") => requestJson<{ items: T[]; nextCursor: string | null }>(publicFetch, `/api/v1/recipes${query}`),
+  listPage: <T = Recipe>(query = "") => requestJson<{ items: T[]; total?: number; nextCursor: string | null }>(publicFetch, `/api/v1/recipes${query}`),
   detail: (id: number) => requestJson<Recipe>(publicFetch, `/api/v1/recipes/${id}`),
   mine: <T = Recipe>(apiFetch: ApiFetch) => requestJson<T[]>(apiFetch, "/api/v1/recipes/mine"),
   favorites: (apiFetch: ApiFetch) => requestJson<Recipe[]>(apiFetch, "/api/v1/recipes/favorites"),

@@ -1,17 +1,17 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { authApi } from "@/services/api";
+import {
+  type AppNotificationData,
+  getExpiringNotificationAction,
+  resolveNotificationDestination,
+} from "@/utils/notificationResponse";
 
-type NotificationData = {
-  type?: string;
-  kind?: "meal" | "water";
-  sourceId?: string;
-  notificationId?: number;
-  inventoryItemId?: number;
-};
+const LAST_HANDLED_NOTIFICATION_RESPONSE_KEY = "@last_handled_notification_response";
 
 export function NotificationLifecycle() {
   const { token } = useAuth();
@@ -21,7 +21,7 @@ export function NotificationLifecycle() {
     if (Platform.OS === "web" || !token) return;
 
     const recordRoutine = (notification: Notifications.Notification, event: "received" | "opened") => {
-      const data = notification.request.content.data as NotificationData;
+      const data = notification.request.content.data as AppNotificationData;
       if (data.type !== "routine_reminder" || (data.kind !== "meal" && data.kind !== "water")) return;
       void authApi.recordLocalNotificationEvent(token, {
         kind: data.kind,
@@ -34,35 +34,49 @@ export function NotificationLifecycle() {
 
     const handleResponse = (response: Notifications.NotificationResponse) => {
       const notification = response.notification;
-      const data = notification.request.content.data as NotificationData;
+      const data = notification.request.content.data as AppNotificationData;
       recordRoutine(notification, "opened");
       if (data.type === "expiring_inventory" && typeof data.notificationId === "number") {
-        const action = response.actionIdentifier === "COMPLETE"
-          ? "complete"
-          : response.actionIdentifier === "PLAN_RECIPE" ? "plan_recipe" : "open";
+        const action = getExpiringNotificationAction(response.actionIdentifier);
         void authApi.notificationAction(token, data.notificationId, action).catch(() => undefined);
-        if (action === "complete") return;
-        if (action === "plan_recipe") {
-          router.push("/ai-assistant", { prompt: "请用我即将到期的库存食材安排一份今天能完成的餐单。" });
-          return;
-        }
-        router.push("/(tabs)/inventory", { highlightItemId: data.inventoryItemId });
-        return;
       }
-      if (data.kind === "meal") router.push("/diet-record");
-      else router.push("/notifications");
+
+      const destination = resolveNotificationDestination(data, response.actionIdentifier);
+      if (destination) router.push(destination);
+    };
+
+    const handledInSession = new Set<string>();
+    const consumeResponse = async (response: Notifications.NotificationResponse) => {
+      const responseKey = [
+        response.notification.request.identifier,
+        response.notification.date,
+        response.actionIdentifier,
+      ].join(":");
+      if (handledInSession.has(responseKey)) return;
+      handledInSession.add(responseKey);
+
+      try {
+        const lastHandledResponse = await AsyncStorage.getItem(LAST_HANDLED_NOTIFICATION_RESPONSE_KEY)
+          .catch(() => null);
+        if (lastHandledResponse !== responseKey) {
+          handleResponse(response);
+          await AsyncStorage.setItem(LAST_HANDLED_NOTIFICATION_RESPONSE_KEY, responseKey)
+            .catch(() => undefined);
+        }
+      } finally {
+        await Notifications.clearLastNotificationResponseAsync().catch(() => undefined);
+      }
     };
 
     const receivedSubscription = Notifications.addNotificationReceivedListener((notification) => {
       recordRoutine(notification, "received");
     });
-    const responseSubscription = Notifications.addNotificationResponseReceivedListener(handleResponse);
-    void Notifications.getLastNotificationResponseAsync().then((response) => {
-      if (response) {
-        handleResponse(response);
-        void Notifications.clearLastNotificationResponseAsync();
-      }
+    const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      void consumeResponse(response);
     });
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) void consumeResponse(response);
+    }).catch(() => undefined);
     return () => {
       receivedSubscription.remove();
       responseSubscription.remove();

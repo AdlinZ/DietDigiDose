@@ -334,7 +334,7 @@ export default function HomeScreen() {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
       try {
-        const data = await aiApi.homeRecommendations<{ cards?: unknown[] }>(authFetch, period, controller.signal);
+        const data = await aiApi.homeRecommendations<{ cards?: unknown[] }>(authFetch, period, requestKey, controller.signal);
         const cards: RecommendationCard[] = Array.isArray(data.cards)
           ? data.cards
             .filter((card: unknown): card is Record<string, unknown> => !!card && typeof card === "object")

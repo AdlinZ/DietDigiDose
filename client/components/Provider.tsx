@@ -4,6 +4,7 @@ import { View } from 'react-native';
 import { WebOnlyColorSchemeUpdater } from './ColorSchemeUpdater';
 import { WebOnlyPrettyScrollbar } from './PrettyScrollbar'
 import { NotificationLifecycle } from './NotificationLifecycle';
+import { ShareLinkLifecycle } from './ShareLinkLifecycle';
 
 function Provider({ children }: { children: ReactNode }) {
   return <WebOnlyColorSchemeUpdater>
@@ -11,6 +12,7 @@ function Provider({ children }: { children: ReactNode }) {
       <AuthProvider>
         <View style={{ flex: 1 }}>
           <NotificationLifecycle />
+          <ShareLinkLifecycle />
           {children}
         </View>
       </AuthProvider>

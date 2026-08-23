@@ -16,7 +16,7 @@ import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { addLocalDays, parseDateKey, toLocalDateKey } from "@/utils/date";
-import { aiApi, ApiError, dietApi } from "@/services/api";
+import { aiApi, ApiError, dietApi, waitForAgentRun } from "@/services/api";
 
 import * as ImagePicker from "expo-image-picker";
 
@@ -275,17 +275,19 @@ export default function DietRecordScreen() {
       }
 
       setAiAnalyzing(true);
-      const json = await aiApi.visionFood<{ data?: Record<string, number | string>; rawText?: string }>(authFetch, asset.base64);
-      if (json.data) {
-          if (json.data.foodName) setFoodName(String(json.data.foodName));
-          if (json.data.estimatedWeightGrams) setAmount(`${json.data.estimatedWeightGrams}g`);
-          if (json.data.calories) setCalories(String(json.data.calories));
-          if (json.data.proteinGrams !== undefined) setProtein(String(json.data.proteinGrams));
-          if (json.data.carbsGrams !== undefined) setCarbs(String(json.data.carbsGrams));
-          if (json.data.fatGrams !== undefined) setFat(String(json.data.fatGrams));
-          Alert.alert("AI 识别成功", `已自动识别【${json.data.foodName}】并估算营养成分！`);
-      } else if (json.rawText) {
-        Alert.alert("AI 识别提示", json.rawText);
+      const json = await aiApi.visionFood<{ data?: Record<string, number | string>; rawText?: string; run: { id: string; status: string; artifacts?: Array<{ type: string; data: unknown }>; reply?: string; error?: { message?: string } } }>(authFetch, asset.base64);
+      const run = await waitForAgentRun(authFetch, json.run);
+      const data = json.data || run.artifacts?.find((artifact) => artifact.type === "vision")?.data as Record<string, number | string> | undefined;
+      if (data) {
+          if (data.foodName) setFoodName(String(data.foodName));
+          if (data.estimatedWeightGrams) setAmount(`${data.estimatedWeightGrams}g`);
+          if (data.calories) setCalories(String(data.calories));
+          if (data.proteinGrams !== undefined) setProtein(String(data.proteinGrams));
+          if (data.carbsGrams !== undefined) setCarbs(String(data.carbsGrams));
+          if (data.fatGrams !== undefined) setFat(String(data.fatGrams));
+          Alert.alert("AI 识别成功", `已自动识别【${data.foodName || "餐食"}】并估算营养成分！`);
+      } else if (json.rawText || run.reply) {
+        Alert.alert("AI 识别提示", json.rawText || run.reply);
       }
     } catch (e: any) {
       Alert.alert("错误", e.message || "识图出现异常");

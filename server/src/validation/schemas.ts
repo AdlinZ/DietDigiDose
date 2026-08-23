@@ -307,6 +307,7 @@ export const aiWriteConfirmationCommitSchema = z.object({
 
 export const aiHomeRecommendationsSchema = z.object({
   period: z.string().trim().max(40).optional(),
+  requestKey: z.string().trim().min(1).max(2000).optional(),
 }).strict();
 
 export const aiVisionSchema = z.object({
@@ -336,6 +337,51 @@ export const aiTranscribeSchema = z.object({
   ]).default("audio/m4a"),
 }).strict();
 
+const agentActionEditSchema = z.object({
+  id: z.string().uuid().optional(),
+  actionType: z.enum([
+    "create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item",
+    "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item",
+    "update_inventory_item", "consume_inventory_items", "add_kitchenware_item", "submit_recipe",
+    "record_health_log",
+  ]),
+  summary: z.string().trim().min(1).max(300),
+  payload: z.record(z.string(), z.unknown()),
+  riskLevel: z.enum(["low", "high", "forbidden"]).optional(),
+  version: z.number().int().positive().optional(),
+}).strict();
+
+export const agentRunResumeSchema = z.union([
+  z.object({ input: z.string().trim().min(1).max(4000) }).strict(),
+  z.object({
+    decision: z.enum(["approve", "reject", "edit"]),
+    actions: z.array(agentActionEditSchema).max(150).optional(),
+  }).strict().superRefine((value, context) => {
+    if (value.decision === "edit" && !value.actions?.length) {
+      context.addIssue({ code: "custom", path: ["actions"], message: "编辑批准包时必须提供操作" });
+    }
+  }),
+]);
+
+export const shoppingListItemCreateSchema = z.object({
+  clientId: z.string().trim().max(120).optional(),
+  name: trimmedString(1, 120, "采购项名称"),
+  amount: z.string().trim().min(1).max(80).default("适量"),
+  category: z.string().trim().min(1).max(40).default("其他"),
+  checked: z.boolean().default(false),
+  purchaseDate: isoDate.optional(),
+  storageLocation: z.string().trim().max(40).optional(),
+}).strict();
+
+export const shoppingListItemUpdateSchema = shoppingListItemCreateSchema.partial().extend({
+  version: z.number().int().positive(),
+}).strict().refine((value) => Object.keys(value).some((key) => key !== "version"), "至少提供一个需要更新的字段");
+
+export const shoppingListImportSchema = z.object({
+  importKey: z.string().trim().min(16).max(200),
+  items: z.array(shoppingListItemCreateSchema).max(500),
+}).strict();
+
 export const kitchenwareSchema = z.object({
   name: trimmedString(1, 80, "厨具名称"),
   category: z.enum(["小家电", "烹饪锅具", "刀具餐具", "烘焙工具", "其他"]).default("其他"),
@@ -352,6 +398,33 @@ export const adminLevelAdjustmentSchema = z.object({
   xp_delta: z.number().int().min(-10_000).max(10_000).refine((value) => value !== 0, "经验调整不能为 0"),
   reason: trimmedString(2, 200, "调整原因"),
 }).strict();
+export const adminUserLevelRuleSchema = z.object({
+  levels: z.array(z.object({
+    level: z.number().int().min(1).max(20),
+    title: trimmedString(1, 20, "等级称号"),
+    requiredXp: z.number().int().min(0).max(10_000_000),
+  }).strict()).min(2, "至少配置两个等级").max(20, "最多配置 20 个等级"),
+  xp: z.object({
+    dietRecord: z.number().int().min(0).max(10_000),
+    streakDay: z.number().int().min(0).max(10_000),
+    recipeFavorite: z.number().int().min(0).max(10_000),
+    communityPost: z.number().int().min(0).max(10_000),
+    follower: z.number().int().min(0).max(10_000),
+    dailyCheckIn: z.number().int().min(0).max(10_000),
+  }).strict(),
+}).strict().superRefine((value, context) => {
+  value.levels.forEach((item, index) => {
+    if (item.level !== index + 1) {
+      context.addIssue({ code: "custom", path: ["levels", index, "level"], message: "等级编号必须从 1 连续递增" });
+    }
+    if (index === 0 && item.requiredXp !== 0) {
+      context.addIssue({ code: "custom", path: ["levels", index, "requiredXp"], message: "第一级门槛必须为 0 XP" });
+    }
+    if (index > 0 && item.requiredXp <= value.levels[index - 1].requiredXp) {
+      context.addIssue({ code: "custom", path: ["levels", index, "requiredXp"], message: "升级门槛必须严格递增" });
+    }
+  });
+});
 export const adminUserCredentialsSchema = z.object({
   identifier: z.string().trim().min(1, "邮箱或手机号不能为空").max(254, "邮箱或手机号不能超过 254 个字符").optional(),
   newPassword: z.string()
@@ -403,6 +476,10 @@ export const adminAIConfigSchema = z.object({
   model: z.string().trim().min(1).max(200).optional(),
   visionModel: z.string().trim().min(1).max(200).optional(),
   asrModel: z.string().trim().min(1).max(200).optional(),
+  supervisorModel: z.string().trim().min(1).max(200).optional(),
+  nutritionModel: z.string().trim().min(1).max(200).optional(),
+  recipeModel: z.string().trim().min(1).max(200).optional(),
+  operationsModel: z.string().trim().min(1).max(200).optional(),
 
   chatApiKey: z.string().trim().max(1000).optional(),
   chatBaseUrl: optionalUrlSchema,

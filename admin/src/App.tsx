@@ -12,10 +12,14 @@ const Ingredients = lazy(() => import('./pages/Ingredients'));
 const AIConfig = lazy(() => import('./pages/AIConfig'));
 const AIUsage = lazy(() => import('./pages/AIUsage'));
 const AIConversations = lazy(() => import('./pages/AIConversations'));
+const AgentRuns = lazy(() => import('./pages/AgentRuns'));
 const ChangePassword = lazy(() => import('./pages/ChangePassword'));
 const SecurityAudit = lazy(() => import('./pages/SecurityAudit'));
 const Kitchenware = lazy(() => import('./pages/Kitchenware'));
 const Notifications = lazy(() => import('./pages/Notifications'));
+const AuthServiceSms = lazy(() => import('./pages/AuthServiceSms'));
+const AuthServicePlaceholder = lazy(() => import('./pages/AuthServicePlaceholder'));
+const UserLevelRule = lazy(() => import('./pages/UserLevelRule'));
 
 // Auth Guard
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -55,6 +59,7 @@ function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="users" element={<Users />} />
+        <Route path="user-level-rule" element={<UserLevelRule />} />
         <Route path="ingredients" element={<Ingredients />} />
         <Route path="kitchenware" element={<Kitchenware />} />
         <Route path="recipes" element={<Recipes />} />
@@ -62,8 +67,12 @@ function App() {
         <Route path="ai-config" element={<AIConfig />} />
         <Route path="ai-usage" element={<AIUsage />} />
         <Route path="ai-conversations" element={<AIConversations />} />
+        <Route path="agent-runs" element={<AgentRuns />} />
         <Route path="security" element={<SecurityAudit />} />
         <Route path="notifications" element={<Notifications />} />
+        <Route path="auth-services/sms" element={<AuthServiceSms />} />
+        <Route path="auth-services/captcha" element={<AuthServicePlaceholder />} />
+        <Route path="auth-services/phone" element={<AuthServicePlaceholder />} />
       </Route>
       </Routes>
     </Suspense>

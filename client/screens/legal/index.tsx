@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Image, Linking, ScrollView, Text, TouchableOpacity, View } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import { systemApi, type AIDataPolicy } from "@/services/api";
@@ -265,18 +265,18 @@ const policies: Record<"privacy" | "terms", LegalDocument> = {
 
 function HighlightCard({ items }: { items: readonly string[] }) {
   return (
-    <View className="mb-7 rounded-3xl border border-[#D7E6DB] bg-[#EEF6F0] p-5">
+    <View className="mb-7 rounded-3xl border border-brand bg-brand-soft p-5">
       <View className="mb-3 flex-row items-center gap-2">
-        <View className="h-7 w-7 items-center justify-center rounded-full bg-brand">
-          <FontAwesome6 name="shield-halved" size={12} color="#FFFFFF" />
+        <View className="h-7 w-7 items-center justify-center rounded-full bg-brand-fill">
+          <FontAwesome6 name="shield-halved" size={12} colorClassName="accent-on-brand" />
         </View>
-        <Text className="text-sm font-black text-[#254F3C]">请特别关注</Text>
+        <Text className="text-sm font-black text-brand">请特别关注</Text>
       </View>
       <View className="gap-3">
         {items.map((item) => (
           <View key={item} className="flex-row gap-2.5">
-            <View className="mt-2 h-1.5 w-1.5 rounded-full bg-brand" />
-            <Text className="flex-1 text-sm leading-6 text-[#456353]">{item}</Text>
+            <View className="mt-2 h-1.5 w-1.5 rounded-full bg-brand-fill" />
+            <Text className="flex-1 text-sm leading-6 text-brand">{item}</Text>
           </View>
         ))}
       </View>
@@ -288,15 +288,15 @@ function SectionBlock({ index, section }: { index: number; section: LegalSection
   return (
     <View className="mb-7">
       <View className="mb-3 flex-row items-start gap-3">
-        <View className="h-7 min-w-7 items-center justify-center rounded-lg bg-[#F1E8DA] px-1.5">
-          <Text className="text-xs font-black text-[#8A603E]">{index}</Text>
+        <View className="h-7 min-w-7 items-center justify-center rounded-lg bg-background-secondary px-1.5">
+          <Text className="text-xs font-black text-warm">{index}</Text>
         </View>
         <Text className="flex-1 pt-0.5 text-base font-black leading-6 text-ink">{section.title}</Text>
       </View>
 
       <View className="pl-10">
         {section.paragraphs.map((paragraph) => (
-          <Text key={paragraph} className="mb-3 text-sm leading-7 text-[#66594D]">
+          <Text key={paragraph} className="mb-3 text-sm leading-7 text-copy-muted">
             {paragraph}
           </Text>
         ))}
@@ -305,17 +305,17 @@ function SectionBlock({ index, section }: { index: number; section: LegalSection
           <View className="mb-3 gap-2.5">
             {section.bullets.map((item) => (
               <View key={item} className="flex-row gap-2.5">
-                <Text className="text-sm leading-7 text-[#A06A3B]">•</Text>
-                <Text className="flex-1 text-sm leading-7 text-[#66594D]">{item}</Text>
+                <Text className="text-sm leading-7 text-warm">•</Text>
+                <Text className="flex-1 text-sm leading-7 text-copy-muted">{item}</Text>
               </View>
             ))}
           </View>
         ) : null}
 
         {section.notice ? (
-          <View className="mt-1 flex-row gap-2.5 rounded-2xl border border-[#F0DFC1] bg-[#FFF9EE] p-3.5">
-            <FontAwesome6 name="circle-exclamation" size={13} color="#A76513" style={{ marginTop: 4 }} />
-            <Text className="flex-1 text-xs leading-5 text-[#815A25]">{section.notice}</Text>
+          <View className="mt-1 flex-row gap-2.5 rounded-2xl border border-warm bg-warm-soft p-3.5">
+            <FontAwesome6 name="circle-exclamation" size={13} colorClassName="accent-warm" style={{ marginTop: 4 }} />
+            <Text className="flex-1 text-xs leading-5 text-warm">{section.notice}</Text>
           </View>
         ) : null}
       </View>
@@ -336,15 +336,15 @@ export default function LegalScreen() {
   }, [selectedType]);
 
   return (
-    <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
+    <Screen safeAreaEdges={["top", "left", "right"]}>
       <View className="flex-row items-center border-b border-line bg-canvas px-5 py-3">
         <TouchableOpacity
           onPress={() => router.back()}
           accessibilityRole="button"
           accessibilityLabel="返回"
-          className="h-10 w-10 items-center justify-center rounded-full border border-line bg-white shadow-xs"
+          className="h-10 w-10 items-center justify-center rounded-full border border-line bg-surface shadow-xs"
         >
-          <FontAwesome6 name="chevron-left" size={14} color="#3D3229" />
+          <FontAwesome6 name="chevron-left" size={14} colorClassName="accent-ink" />
         </TouchableOpacity>
         <Text className="flex-1 text-center text-lg font-black text-ink">{policy.title}</Text>
         <View className="w-10" />
@@ -355,30 +355,30 @@ export default function LegalScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View className="mb-5 flex-row flex-wrap gap-2">
-          <View className="rounded-full bg-brand px-3 py-1.5">
+          <View className="rounded-full bg-brand-fill px-3 py-1.5">
             <Text className="text-[11px] font-black text-white">{policy.version}</Text>
           </View>
-          <View className="rounded-full border border-line bg-white px-3 py-1.5">
+          <View className="rounded-full border border-line bg-surface px-3 py-1.5">
             <Text className="text-[11px] font-bold text-copy-muted">{policy.updated}</Text>
           </View>
-          <View className="rounded-full border border-line bg-white px-3 py-1.5">
+          <View className="rounded-full border border-line bg-surface px-3 py-1.5">
             <Text className="text-[11px] font-bold text-copy-muted">{policy.effective}</Text>
           </View>
         </View>
 
-        <Text className="mb-6 text-sm leading-7 text-[#66594D]">{policy.introduction}</Text>
+        <Text className="mb-6 text-sm leading-7 text-copy-muted">{policy.introduction}</Text>
         <HighlightCard items={policy.highlights} />
 
         {selectedType === "privacy" && aiPolicy ? (
-          <View className="mb-7 rounded-3xl border border-[#D8D4EE] bg-[#F5F3FF] p-5">
-            <Text className="text-sm font-black text-[#43386B]">当前 AI 数据处理配置</Text>
-            <Text className="mt-2 text-sm leading-6 text-[#625788]">处理方：{aiPolicy.providerName}</Text>
-            <Text className="text-sm leading-6 text-[#625788]">处理地区：{aiPolicy.processingRegion}</Text>
-            <Text className="text-sm leading-6 text-[#625788]">服务端对话保留：最多 {aiPolicy.conversationRetentionDays} 天</Text>
-            <Text className="text-sm leading-6 text-[#625788]">数据请求联系：{aiPolicy.supportContact}</Text>
+          <View className="mb-7 rounded-3xl border border-line bg-info-soft p-5">
+            <Text className="text-sm font-black text-info">当前 AI 数据处理配置</Text>
+            <Text className="mt-2 text-sm leading-6 text-info">处理方：{aiPolicy.providerName}</Text>
+            <Text className="text-sm leading-6 text-info">处理地区：{aiPolicy.processingRegion}</Text>
+            <Text className="text-sm leading-6 text-info">服务端对话保留：最多 {aiPolicy.conversationRetentionDays} 天</Text>
+            <Text className="text-sm leading-6 text-info">数据请求联系：{aiPolicy.supportContact}</Text>
             {aiPolicy.providerPrivacyUrl ? (
               <TouchableOpacity onPress={() => void Linking.openURL(aiPolicy.providerPrivacyUrl!)} className="mt-2 self-start">
-                <Text className="text-xs font-bold text-[#5B4FB2] underline">查看处理方隐私说明</Text>
+                <Text className="text-xs font-bold text-info underline">查看处理方隐私说明</Text>
               </TouchableOpacity>
             ) : null}
           </View>
@@ -386,7 +386,7 @@ export default function LegalScreen() {
 
         <View className="mb-6 flex-row items-center gap-3">
           <View className="h-px flex-1 bg-line" />
-          <Text className="text-xs font-black tracking-widest text-[#9A8B78]">正文</Text>
+          <Text className="text-xs font-black tracking-widest text-copy-muted">正文</Text>
           <View className="h-px flex-1 bg-line" />
         </View>
 
@@ -394,7 +394,7 @@ export default function LegalScreen() {
           <SectionBlock key={section.title} index={index + 1} section={section} />
         ))}
 
-        <View className="mt-1 items-center rounded-3xl border border-line bg-white px-5 py-6">
+        <View className="mt-1 items-center rounded-3xl border border-line bg-surface px-5 py-6">
           <Image
             source={require("@/assets/logo.png")}
             style={{ width: 48, height: 48 }}

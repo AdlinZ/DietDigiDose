@@ -22,7 +22,7 @@ function isDefaultRecipeQuery(query: RecipeCatalogQuery) {
   return !query.category && !query.search && !query.maxCookTime;
 }
 
-function buildRecipePageQuery(query: RecipeCatalogQuery, cursor?: string | null) {
+export function buildRecipePageQuery(query: RecipeCatalogQuery, cursor?: string | null) {
   const params = new URLSearchParams({ pageSize: String(RECIPE_PAGE_SIZE) });
   if (query.category) params.set("category", query.category);
   if (query.search) params.set("search", query.search);

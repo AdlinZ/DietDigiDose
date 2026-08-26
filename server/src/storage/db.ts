@@ -39,6 +39,7 @@ export function initDatabase() {
       bio TEXT,
       role TEXT DEFAULT 'user',
       must_change_password INTEGER DEFAULT 0,
+      session_version INTEGER NOT NULL DEFAULT 1,
       daily_calories_target INTEGER DEFAULT 2000,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -594,6 +595,7 @@ export function initDatabase() {
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_community_posts_deleted_at ON community_posts(deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_community_posts_feed_page ON community_posts(deleted_at, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_community_comments_post_created ON community_comments(post_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_community_event_participants_post ON community_event_participants(post_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_recipes_deleted_at ON recipes(deleted_at);

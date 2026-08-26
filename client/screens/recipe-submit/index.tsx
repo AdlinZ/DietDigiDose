@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import * as ImagePicker from "expo-image-picker";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
@@ -210,10 +210,10 @@ export default function RecipeSubmitScreen() {
 
   if (!isAuthenticated) {
     return (
-      <Screen backgroundColor="#FDF8F0">
+      <Screen>
         <View className="flex-1 items-center justify-center px-8">
           <View className="h-16 w-16 items-center justify-center rounded-[24px] bg-brand/10">
-            <FontAwesome6 name="utensils" size={26} color="#2D6A4F" />
+            <FontAwesome6 name="utensils" size={26} colorClassName="accent-brand" />
           </View>
           <Text className="mt-5 text-xl font-black text-ink">登录后投稿食谱</Text>
           <Text className="mt-2 text-center text-sm leading-6 text-copy-muted">
@@ -221,7 +221,7 @@ export default function RecipeSubmitScreen() {
           </Text>
           <TouchableOpacity
             onPress={() => router.push("/login")}
-            className="mt-6 rounded-2xl bg-brand px-8 py-3"
+            className="mt-6 rounded-2xl bg-brand-fill px-8 py-3"
           >
             <Text className="font-bold text-white">前往登录</Text>
           </TouchableOpacity>
@@ -231,13 +231,13 @@ export default function RecipeSubmitScreen() {
   }
 
   return (
-    <Screen backgroundColor="#FDF8F0">
+    <Screen>
       <View className="flex-row items-center border-b border-line bg-canvas px-5 py-3">
         <TouchableOpacity
           onPress={() => router.back()}
-          className="h-10 w-10 items-center justify-center rounded-full bg-white"
+          className="h-10 w-10 items-center justify-center rounded-full bg-surface"
         >
-          <FontAwesome6 name="arrow-left" size={15} color="#3D3229" />
+          <FontAwesome6 name="arrow-left" size={15} colorClassName="accent-ink" />
         </TouchableOpacity>
         <View className="ml-3 flex-1">
           <Text className="text-lg font-black text-ink">食谱创作中心</Text>
@@ -245,7 +245,7 @@ export default function RecipeSubmitScreen() {
         </View>
       </View>
 
-      <View className="mx-5 my-3 flex-row rounded-2xl bg-[#F1EBE0] p-1">
+      <View className="mx-5 my-3 flex-row rounded-2xl bg-background-secondary p-1">
         <TabButton active={activeTab === "submit"} label={editingId ? "修改投稿" : "投稿食谱"} onPress={() => setActiveTab("submit")} />
         <TabButton active={activeTab === "mine"} label={`我的投稿 ${myRecipes.length}`} onPress={() => setActiveTab("mine")} />
       </View>
@@ -259,13 +259,13 @@ export default function RecipeSubmitScreen() {
           <Section title="封面与基本信息">
             <TouchableOpacity
               onPress={pickImage}
-              className="mb-4 h-44 overflow-hidden rounded-[24px] border border-dashed border-[#D4A276] bg-white"
+              className="mb-4 h-44 overflow-hidden rounded-[24px] border border-dashed border-warm bg-surface"
             >
               {form.imageUrl ? (
                 <Image source={{ uri: form.imageUrl }} className="h-full w-full" resizeMode="cover" />
               ) : (
                 <View className="flex-1 items-center justify-center">
-                  <FontAwesome6 name="image" size={28} color="#D4A276" />
+                  <FontAwesome6 name="image" size={28} colorClassName="accent-warm" />
                   <Text className="mt-2 text-sm font-bold text-copy-muted">选择食谱封面</Text>
                 </View>
               )}
@@ -316,16 +316,16 @@ export default function RecipeSubmitScreen() {
                 </View>
               ))}
             </View>
-            <View className="mt-1 border-t border-[#F0E8DC] pt-4">
+            <View className="mt-1 border-t border-line pt-4">
               <View className="mb-3 flex-row items-center justify-between">
                 <View>
                   <Text className="text-xs font-bold text-ink">更多营养数据</Text>
                   <Text className="mt-1 text-[10px] text-copy-muted">例如膳食纤维、糖、钠、胆固醇</Text>
                 </View>
-                <Text className="text-[10px] text-[#A09282]">最多 12 项</Text>
+                <Text className="text-[10px] text-copy-muted">最多 12 项</Text>
               </View>
               {form.nutritionExtras.map((item, index) => (
-                <View key={`${item.key || "new"}-${index}`} className="mb-3 rounded-2xl bg-[#F7F2EA] p-3">
+                <View key={`${item.key || "new"}-${index}`} className="mb-3 rounded-2xl bg-background-secondary p-3">
                   <View className="flex-row gap-2">
                     <View className="flex-1">
                       <Field
@@ -372,8 +372,8 @@ export default function RecipeSubmitScreen() {
                     })}
                     className="self-end flex-row items-center rounded-lg px-2 py-1"
                   >
-                    <FontAwesome6 name="trash" size={10} color="#C65D4B" />
-                    <Text className="ml-1.5 text-[10px] font-bold text-[#C65D4B]">删除此项</Text>
+                    <FontAwesome6 name="trash" size={10} colorClassName="accent-critical" />
+                    <Text className="ml-1.5 text-[10px] font-bold text-critical">删除此项</Text>
                   </TouchableOpacity>
                 </View>
               ))}
@@ -391,7 +391,7 @@ export default function RecipeSubmitScreen() {
 
           <Section title="食材清单">
             {form.ingredients.map((item, index) => (
-              <View key={index} className="mb-3 rounded-2xl bg-[#F7F2EA] p-3">
+              <View key={index} className="mb-3 rounded-2xl bg-background-secondary p-3">
                 <View className="flex-row items-end gap-2">
                   <View className="flex-1">
                     <Field
@@ -420,9 +420,9 @@ export default function RecipeSubmitScreen() {
                   <TouchableOpacity
                     onPress={() => setForm({ ...form, ingredients: form.ingredients.filter((_, itemIndex) => itemIndex !== index) })}
                     disabled={form.ingredients.length === 1}
-                    className="mb-4 h-11 w-11 items-center justify-center rounded-xl bg-red-50 disabled:opacity-30"
+                    className="mb-4 h-11 w-11 items-center justify-center rounded-xl bg-danger-soft disabled:opacity-30"
                   >
-                    <FontAwesome6 name="minus" size={13} color="#C65D4B" />
+                    <FontAwesome6 name="minus" size={13} colorClassName="accent-critical" />
                   </TouchableOpacity>
                 </View>
                 <View className="flex-row gap-2">
@@ -450,7 +450,7 @@ export default function RecipeSubmitScreen() {
           <Section title="烹饪步骤">
             {form.steps.map((step, index) => (
               <View key={index} className="mb-3 flex-row items-start gap-3">
-                <View className="mt-1 h-7 w-7 items-center justify-center rounded-full bg-brand">
+                <View className="mt-1 h-7 w-7 items-center justify-center rounded-full bg-brand-fill">
                   <Text className="text-xs font-black text-white">{index + 1}</Text>
                 </View>
                 <TextInput
@@ -462,14 +462,14 @@ export default function RecipeSubmitScreen() {
                   }}
                   placeholder="描述这一步的操作"
                   multiline
-                  className="min-h-20 flex-1 rounded-2xl border border-line bg-white px-4 py-3 text-sm text-ink"
+                  className="min-h-20 flex-1 rounded-2xl border border-line bg-surface px-4 py-3 text-sm text-ink"
                 />
                 <TouchableOpacity
                   onPress={() => setForm({ ...form, steps: form.steps.filter((_, stepIndex) => stepIndex !== index) })}
                   disabled={form.steps.length === 1}
-                  className="mt-1 h-9 w-9 items-center justify-center rounded-xl bg-red-50 disabled:opacity-30"
+                  className="mt-1 h-9 w-9 items-center justify-center rounded-xl bg-danger-soft disabled:opacity-30"
                 >
-                  <FontAwesome6 name="minus" size={12} color="#C65D4B" />
+                  <FontAwesome6 name="minus" size={12} colorClassName="accent-critical" />
                 </TouchableOpacity>
               </View>
             ))}
@@ -479,13 +479,13 @@ export default function RecipeSubmitScreen() {
           <TouchableOpacity
             onPress={submit}
             disabled={submitting}
-            className="mt-2 flex-row items-center justify-center rounded-2xl bg-brand py-4 disabled:opacity-50"
+            className="mt-2 flex-row items-center justify-center rounded-2xl bg-brand-fill py-4 disabled:opacity-50"
           >
             {submitting ? (
-              <ActivityIndicator color="#FFFFFF" />
+              <ActivityIndicator colorClassName="accent-on-brand" />
             ) : (
               <>
-                <FontAwesome6 name="paper-plane" size={14} color="#FFFFFF" />
+                <FontAwesome6 name="paper-plane" size={14} colorClassName="accent-on-brand" />
                 <Text className="ml-2 font-black text-white">{editingId ? "重新提交审核" : "提交食谱审核"}</Text>
               </>
             )}
@@ -509,26 +509,26 @@ export default function RecipeSubmitScreen() {
         >
           {loadingMine ? (
             <View className="items-center py-20">
-              <ActivityIndicator color="#2D6A4F" />
+              <ActivityIndicator colorClassName="accent-brand" />
             </View>
           ) : myRecipes.length === 0 ? (
-            <View className="items-center rounded-[28px] bg-white px-8 py-16">
-              <FontAwesome6 name="book-open" size={30} color="#D4A276" />
+            <View className="items-center rounded-[28px] bg-surface px-8 py-16">
+              <FontAwesome6 name="book-open" size={30} colorClassName="accent-warm" />
               <Text className="mt-4 text-base font-black text-ink">还没有投稿</Text>
               <Text className="mt-1 text-center text-xs text-copy-muted">整理你的拿手菜，分享给更多食友</Text>
-              <TouchableOpacity onPress={() => setActiveTab("submit")} className="mt-5 rounded-xl bg-brand px-5 py-2.5">
+              <TouchableOpacity onPress={() => setActiveTab("submit")} className="mt-5 rounded-xl bg-brand-fill px-5 py-2.5">
                 <Text className="font-bold text-white">开始投稿</Text>
               </TouchableOpacity>
             </View>
           ) : (
             myRecipes.map((recipe) => (
-              <View key={recipe.id} className="mb-4 overflow-hidden rounded-[24px] border border-line bg-white">
+              <View key={recipe.id} className="mb-4 overflow-hidden rounded-[24px] border border-line bg-surface">
                 <View className="flex-row">
                   {recipe.image_url ? (
                     <Image source={{ uri: recipe.image_url }} className="h-28 w-28" resizeMode="cover" />
                   ) : (
-                    <View className="h-28 w-28 items-center justify-center bg-[#F1EBE0]">
-                      <FontAwesome6 name="utensils" size={22} color="#D4A276" />
+                    <View className="h-28 w-28 items-center justify-center bg-background-secondary">
+                      <FontAwesome6 name="utensils" size={22} colorClassName="accent-warm" />
                     </View>
                   )}
                   <View className="flex-1 p-4">
@@ -541,8 +541,8 @@ export default function RecipeSubmitScreen() {
                   </View>
                 </View>
                 {recipe.status === "rejected" ? (
-                  <View className="mx-4 rounded-xl bg-red-50 px-3 py-2">
-                    <Text className="text-xs text-[#B24B3A]">驳回原因：{recipe.reject_reason || "请完善内容后重试"}</Text>
+                  <View className="mx-4 rounded-xl bg-danger-soft px-3 py-2">
+                    <Text className="text-xs text-critical">驳回原因：{recipe.reject_reason || "请完善内容后重试"}</Text>
                   </View>
                 ) : null}
                 <View className="flex-row gap-2 p-4">
@@ -558,16 +558,16 @@ export default function RecipeSubmitScreen() {
                       onPress={() => editRecipe(recipe)}
                       className="flex-1 flex-row items-center justify-center rounded-xl bg-brand/10 py-2.5"
                     >
-                      <FontAwesome6 name="pen" size={11} color="#2D6A4F" />
+                      <FontAwesome6 name="pen" size={11} colorClassName="accent-brand" />
                       <Text className="ml-1.5 text-xs font-black text-brand">修改投稿</Text>
                     </TouchableOpacity>
                   )}
                   <TouchableOpacity
                     onPress={() => withdrawRecipe(recipe)}
-                    className="flex-row items-center justify-center rounded-xl bg-red-50 px-4 py-2.5"
+                    className="flex-row items-center justify-center rounded-xl bg-danger-soft px-4 py-2.5"
                   >
-                    <FontAwesome6 name="trash" size={11} color="#C65D4B" />
-                    <Text className="ml-1.5 text-xs font-bold text-[#C65D4B]">撤回</Text>
+                    <FontAwesome6 name="trash" size={11} colorClassName="accent-critical" />
+                    <Text className="ml-1.5 text-xs font-bold text-critical">撤回</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -581,7 +581,7 @@ export default function RecipeSubmitScreen() {
 
 function TabButton({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
   return (
-    <TouchableOpacity onPress={onPress} className={`flex-1 items-center rounded-xl py-2.5 ${active ? "bg-white" : ""}`}>
+    <TouchableOpacity onPress={onPress} className={`flex-1 items-center rounded-xl py-2.5 ${active ? "bg-surface" : ""}`}>
       <Text className={`text-sm font-black ${active ? "text-brand" : "text-copy-muted"}`}>{label}</Text>
     </TouchableOpacity>
   );
@@ -589,7 +589,7 @@ function TabButton({ active, label, onPress }: { active: boolean; label: string;
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <View className="mb-4 rounded-[24px] border border-line bg-white p-4">
+    <View className="mb-4 rounded-[24px] border border-line bg-surface p-4">
       <Text className="mb-4 text-base font-black text-ink">{title}</Text>
       {children}
     </View>
@@ -630,7 +630,7 @@ function ChoiceChip({ active, label, onPress }: { active: boolean; label: string
   return (
     <TouchableOpacity
       onPress={onPress}
-      className={`rounded-full border px-3.5 py-2 ${active ? "border-brand bg-brand" : "border-line bg-white"}`}
+      className={`rounded-full border px-3.5 py-2 ${active ? "border-brand bg-brand-fill" : "border-line bg-surface"}`}
     >
       <Text className={`text-xs font-bold ${active ? "text-white" : "text-copy-muted"}`}>{label}</Text>
     </TouchableOpacity>
@@ -640,7 +640,7 @@ function ChoiceChip({ active, label, onPress }: { active: boolean; label: string
 function AddButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <TouchableOpacity onPress={onPress} className="flex-row items-center justify-center rounded-xl border border-dashed border-brand/40 py-3">
-      <FontAwesome6 name="plus" size={12} color="#2D6A4F" />
+      <FontAwesome6 name="plus" size={12} colorClassName="accent-brand" />
       <Text className="ml-2 text-xs font-black text-brand">{label}</Text>
     </TouchableOpacity>
   );
@@ -648,9 +648,9 @@ function AddButton({ label, onPress }: { label: string; onPress: () => void }) {
 
 function StatusBadge({ status }: { status: RecipeStatus }) {
   const config = {
-    pending: { label: "待审核", classes: "bg-amber-50 text-amber-700" },
-    approved: { label: "已通过", classes: "bg-emerald-50 text-emerald-700" },
-    rejected: { label: "已驳回", classes: "bg-red-50 text-red-700" },
+    pending: { label: "待审核", classes: "bg-warm-soft text-warm" },
+    approved: { label: "已通过", classes: "bg-success-soft text-success" },
+    rejected: { label: "已驳回", classes: "bg-danger-soft text-critical" },
   }[status];
   return (
     <View className={`rounded-full px-2.5 py-1 ${config.classes.split(" ")[0]}`}>

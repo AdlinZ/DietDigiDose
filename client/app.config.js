@@ -1,6 +1,6 @@
 /* global module, process, require */
 
-const rootPackage = require('../package.json');
+const release = require('../release.json');
 
 const appName = process.env.EXPO_PUBLIC_APP_NAME || '食光烙记';
 const appSlug = process.env.EXPO_PUBLIC_APP_SLUG || 'dietdigidose';
@@ -10,8 +10,8 @@ const easBuildProfile = process.env.EAS_BUILD_PROFILE;
 const insecureHttpBuildProfiles = new Set(['preview-http', 'simulator']);
 const allowInsecureHttp = (!easBuildProfile || insecureHttpBuildProfiles.has(easBuildProfile))
   && process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP === '1';
-const appVersion = process.env.EXPO_PUBLIC_APP_VERSION || rootPackage.version;
-const androidVersionCode = Number(process.env.EXPO_PUBLIC_ANDROID_VERSION_CODE || 5);
+const appVersion = release.productVersion;
+const buildNumber = release.buildNumber;
 const easProjectId = 'c89b45c8-5a27-4f6f-af05-4b656f534994';
 // Expo 会在打包时解析 app.config；未显式指定时，这里就是本次构建的时间。
 const buildTime = process.env.EXPO_PUBLIC_BUILD_TIME || new Date().toISOString();
@@ -28,8 +28,8 @@ module.exports = ({ config }) => ({
   orientation: 'portrait',
   icon: './assets/images/adaptive-icon-safe.png',
   scheme: 'dietdigidose',
-  // 正式深色设计完成前固定浅色，避免部分 Android 厂商对页面强制反色。
-  userInterfaceStyle: 'light',
+  // 由应用主题偏好决定；跟随系统时同步 Android/iOS 外观。
+  userInterfaceStyle: 'automatic',
   newArchEnabled: true,
   runtimeVersion: {
     policy: 'appVersion',
@@ -42,6 +42,8 @@ module.exports = ({ config }) => ({
   extra: {
     ...config.extra,
     appVersion,
+    releaseSnapshot: release.snapshot,
+    buildNumber,
     buildTime,
     eas: {
       ...config.extra?.eas,
@@ -51,7 +53,7 @@ module.exports = ({ config }) => ({
   ios: {
     ...config.ios,
     bundleIdentifier: iosBundleIdentifier,
-    buildNumber: '5',
+    buildNumber: String(buildNumber),
     supportsTablet: true,
     infoPlist: {
       ...config.ios?.infoPlist,
@@ -72,9 +74,9 @@ module.exports = ({ config }) => ({
       backgroundColor: '#ffffff',
     },
     package: androidPackage,
-    versionCode: androidVersionCode,
+    versionCode: buildNumber,
     softwareKeyboardLayoutMode: 'resize',
-    userInterfaceStyle: 'light',
+    userInterfaceStyle: 'automatic',
     permissions: ['android.permission.RECORD_AUDIO'],
   },
   web: {
@@ -96,6 +98,10 @@ module.exports = ({ config }) => ({
         imageWidth: 200,
         resizeMode: 'contain',
         backgroundColor: '#ffffff',
+        dark: {
+          image: './assets/images/splash-icon-safe.png',
+          backgroundColor: '#111713',
+        },
       },
     ],
     [
@@ -103,6 +109,12 @@ module.exports = ({ config }) => ({
       {
         photosPermission: `允许${appName}访问您的相册，以便您上传食材或餐食图片。`,
         cameraPermission: `允许${appName}使用您的相机，以便您拍摄食材或餐食图片。`,
+        microphonePermission: `允许${appName}访问您的麦克风，以便您使用语音录入功能。`,
+      },
+    ],
+    [
+      'expo-av',
+      {
         microphonePermission: `允许${appName}访问您的麦克风，以便您使用语音录入功能。`,
       },
     ],

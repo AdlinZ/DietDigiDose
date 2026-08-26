@@ -18,6 +18,10 @@ import { sharedRateLimit } from "../middleware/sharedRateLimit.js";
 import { startSupervisorRun, waitForSupervisorRunCompletion } from "../services/agent/runtime.js";
 import { getAgentRunRow, toAgentRunSummary } from "../services/agent/repository.js";
 import { buildAgentSolutionCards } from "../services/agent/cards.js";
+import { ensureUserInitialState } from "../services/userInitialization.js";
+import { aiErrorTypeForCode } from "../services/aiErrors.js";
+import { getChatConfig } from "../services/aiService.js";
+import { getRecipeRecommendationPage } from "../services/recipeRecommendations.js";
 
 const router = Router();
 router.param("jobId", uuidParam);
@@ -169,8 +173,9 @@ export const recordChatTurn = ({
  */
 router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) => {
   const requestStartedAt = Date.now();
-  const { messages = [], prompt, sessionId: requestedSessionId, source = "assistant" } = req.body;
+  const { messages = [], prompt, sessionId: requestedSessionId, source = "assistant", image, imageMimeType } = req.body;
   const userId = req.userId!;
+  ensureUserInitialState(userId);
   const sessionId = typeof requestedSessionId === "string" && requestedSessionId.trim()
     ? requestedSessionId.trim().slice(0, 120)
     : randomUUID();
@@ -180,11 +185,16 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
 
   try {
     const response = await startSupervisorRun(userId, {
-      modality: source === "cooking" ? "cooking" : "text",
+      modality: image ? "image" : source === "cooking" ? "cooking" : "text",
       source,
       prompt: requestedText,
       messages: clientMessages,
       sessionId,
+      ...(image ? {
+        image,
+        mimeType: imageMimeType,
+        metadata: { attachmentMode: "chat" },
+      } : {}),
     }, 0);
     const respondedAt = Date.now();
     const responseTimeMs = respondedAt - requestStartedAt;
@@ -208,12 +218,13 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
             solutionCards: buildAgentSolutionCards(completedRun.id, completedRun.artifacts),
             pendingApproval: completedRun.pendingApproval,
             errorCode: completedRun.error?.code,
-            errorType: "agent_run",
+            errorType: aiErrorTypeForCode(completedRun.error?.code),
             errorMessage: completedRun.error?.message,
             failureStage: "agent_execution",
             requestId: String(res.locals.requestId || ""),
             occurredAt: new Date(completedAt).toISOString(),
             source,
+            modelIdentifier: getChatConfig().model,
           },
           responseTimeMs: completedAt - requestStartedAt,
           requestedAt: requestStartedAt,
@@ -230,12 +241,13 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
           status: "failed", payload: {
             agentRunId: response.run.id,
             errorCode,
-            errorType: errorCode === "AI_NOT_CONFIGURED" ? "configuration" : "agent_run",
+            errorType: aiErrorTypeForCode(errorCode),
             errorMessage,
             failureStage: "agent_execution",
             requestId: String(res.locals.requestId || ""),
             occurredAt: new Date(respondedAt).toISOString(),
             source,
+            modelIdentifier: getChatConfig().model,
           }, responseTimeMs,
           requestedAt: requestStartedAt, respondedAt,
         });
@@ -275,6 +287,12 @@ router.delete("/chat-conversations/:sessionId", (req: AuthRequest, res) => {
     return res.status(400).json({ error: "会话参数无效" });
   }
   const deleted = db.transaction(() => {
+    db.prepare(`
+      DELETE FROM agent_run_media
+      WHERE user_id = ? AND run_id IN (
+        SELECT id FROM agent_runs WHERE user_id = ? AND session_id = ?
+      )
+    `).run(req.userId!, req.userId!, sessionId);
     const changes = db.prepare("DELETE FROM ai_chat_messages WHERE user_id = ? AND session_id = ?")
       .run(req.userId!, sessionId).changes;
     db.prepare(`
@@ -306,25 +324,30 @@ router.post("/write-confirmations/:confirmationId/commit", validateBody(aiWriteC
 /**
  * 首页时段推荐：模型读取用户库存、当天饮食及热量目标，返回可直接渲染的多张卡片。
  */
-router.post("/home-recommendations", validateBody(aiHomeRecommendationsSchema), async (req: AuthRequest, res) => {
+router.post("/home-recommendations", validateBody(aiHomeRecommendationsSchema), (req: AuthRequest, res) => {
   const userId = req.userId!;
   const period = typeof req.body?.period === "string" ? req.body.period.slice(0, 40) : "当前时段";
-  const requestKey = typeof req.body?.requestKey === "string" ? req.body.requestKey.trim().slice(0, 2000) : undefined;
   try {
-    const response = await startSupervisorRun(userId, {
-      modality: "home", source: "home", period,
-      idempotencyKey: requestKey ? `home:${requestKey}` : undefined,
-      prompt: `现在是${period}。结合库存、今日摄入、营养目标与临期食材生成 5 条明显不同的首页建议。每条需要 title、tag、desc、calories、prompt，并作为结构化 artifact 返回。`,
-    }, 0);
-    const artifactCards = (response.artifacts || []).flatMap((artifact) => {
-      const data = artifact.data as { cards?: unknown } | unknown[] | undefined;
-      return normalizeHomeRecommendations(Array.isArray(data) ? data : data?.cards);
+    const mealType = /早餐|早/.test(period) ? "breakfast" : /午餐|午/.test(period) ? "lunch" : /晚餐|晚/.test(period) ? "dinner" : "snack";
+    const recommendations = getRecipeRecommendationPage(userId, {
+      surface: "home", matchStatus: "all", mealType, pageSize: 12,
     });
-    const cards = artifactCards.length ? artifactCards.slice(0, 5) : response.reply ? parseHomeRecommendations(response.reply) : [];
-    return res.status(response.run.status === "queued" || response.run.status === "running" ? 202 : 200).json({ ...response, cards });
+    const cards = recommendations.items.slice(0, 5).map((item) => {
+      const recipe = item.recipe as Record<string, unknown>;
+      const reasons = item.reasons as string[];
+      return {
+        recipeId: item.recipeId,
+        title: String(recipe.title || "推荐菜谱"),
+        tag: reasons[0]?.includes("临期") ? "临期优先" : "食语推荐",
+        desc: reasons.slice(0, 2).join("；"),
+        calories: Number(recipe.calories || 0),
+        prompt: `请介绍平台菜谱 #${item.recipeId}「${String(recipe.title || "") }」的做法`,
+      };
+    });
+    return res.json({ cards, recommendations });
   } catch (error: any) {
-    console.error("[AI Home Recommendations Error]", error);
-    return res.status(500).json({ error: "首页 Agent 推荐失败", code: "HOME_AGENT_FAILED" });
+    console.error("[Home Recommendations Error]", error);
+    return res.status(500).json({ error: "首页推荐生成失败", code: "HOME_RECOMMENDATIONS_FAILED" });
   }
 });
 

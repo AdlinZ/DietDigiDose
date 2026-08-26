@@ -16,10 +16,12 @@ import {
   AI_DATA_CONSENT_STORAGE_KEY,
   CHAT_SESSIONS_STORAGE_KEY,
   INVENTORY_SCAN_JOB_STORAGE_KEY,
+  SEARCH_HISTORY_STORAGE_KEY,
   SHOPPING_LIST_STORAGE_KEY,
   getUserStorageKey,
   getClearableCacheSize,
   getTotalClearableCacheSize,
+  isClearableCacheKey,
   purgeClearableCache,
   purgeLegacyUnscopedPrivateStorage,
   purgeUserPrivateStorage,
@@ -38,7 +40,7 @@ describe("user-scoped private storage", () => {
     mockMultiGet.mockReset();
   });
 
-  it("includes shared offline recipe data in visible cache size and clearing", async () => {
+  it("clears only recomputable caches for the current user", async () => {
     mockGetAllKeys.mockResolvedValue([
       "offline_cache_recipes",
       "@shiyu_ai_chat_sessions:user:101",
@@ -47,7 +49,6 @@ describe("user-scoped private storage", () => {
     ]);
     mockMultiGet.mockResolvedValue([
       ["offline_cache_recipes", "recipes"],
-      ["@shiyu_ai_chat_sessions:user:101", "chat"],
     ]);
 
     const size = await getClearableCacheSize(101);
@@ -55,8 +56,17 @@ describe("user-scoped private storage", () => {
     await purgeClearableCache(101);
     expect(mockMultiRemove).toHaveBeenCalledWith([
       "offline_cache_recipes",
-      "@shiyu_ai_chat_sessions:user:101",
     ]);
+  });
+
+  it("keeps durable private data and another account's cache out of clear-cache", () => {
+    expect(isClearableCacheKey("offline_cache_recipes", 101)).toBe(true);
+    expect(isClearableCacheKey("offline_cache_inventory:user:101", 101)).toBe(true);
+    expect(isClearableCacheKey("offline_cache_inventory:user:202", 101)).toBe(false);
+    expect(isClearableCacheKey("@shiyu_ai_chat_sessions:user:101", 101)).toBe(false);
+    expect(isClearableCacheKey("@shiyu_shopping_list:user:101", 101)).toBe(false);
+    expect(isClearableCacheKey("@inventory_scan_job:user:101", 101)).toBe(false);
+    expect(isClearableCacheKey("@ai_data_consent_v1:user:101", 101)).toBe(false);
   });
 
   it("includes the native file cache in the displayed total", async () => {
@@ -84,6 +94,7 @@ describe("user-scoped private storage", () => {
       CHAT_SESSIONS_STORAGE_KEY,
       SHOPPING_LIST_STORAGE_KEY,
       INVENTORY_SCAN_JOB_STORAGE_KEY,
+      SEARCH_HISTORY_STORAGE_KEY,
     ]);
   });
 

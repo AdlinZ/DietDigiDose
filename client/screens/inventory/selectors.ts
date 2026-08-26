@@ -1,5 +1,6 @@
 import type { InventoryItem, KitchenwareItem, Recipe, StorageLocation } from "./types";
 import { daysUntilDateKey } from "@/utils/inventory";
+import { findRecipeAllergyRisks, type HealthProfile } from "@/utils/healthProfile";
 
 const STORAGE_FILTERS: Record<string, StorageLocation> = {
   冷藏库: "冷藏",
@@ -27,11 +28,33 @@ export interface RecipeInventoryAnalysis {
   matchedIngredients: Array<{ name: string; amount?: string }>;
   missingIngredients: Array<{ name: string; amount?: string }>;
   expiringIngredients: Array<{ name: string; daysLeft: number }>;
+  coveragePercent: number;
+  availableSubstitutes: Array<{ missing: string; substitute: string }>;
+  healthConflicts: Array<{ name: string; severity: "mild" | "moderate" | "severe" }>;
+  missingKitchenware: string[];
+  dataUpdatedAt: string | null;
+  blocked: boolean;
+}
+
+const SUBSTITUTE_GROUPS = [
+  ["牛奶", "豆浆", "燕麦奶"],
+  ["黄油", "橄榄油", "植物油"],
+  ["鸡蛋", "亚麻籽", "香蕉"],
+  ["米饭", "糙米", "藜麦"],
+  ["面粉", "燕麦粉", "米粉"],
+  ["生菜", "菠菜", "油麦菜"],
+  ["鸡胸肉", "豆腐", "鱼肉"],
+] as const;
+
+function findStockSubstitute(missing: string, stockNames: string[]) {
+  const group = SUBSTITUTE_GROUPS.find((items) => items.some((name) => missing.includes(name) || name.includes(missing)));
+  return group?.find((candidate) => stockNames.some((stock) => stock.includes(candidate) || candidate.includes(stock))) || null;
 }
 
 export function analyzeRecipeInventoryMatch(
   recipe: Recipe & { ingredients?: Array<{ name: string; amount?: string }> },
-  inventoryItems: InventoryItem[]
+  inventoryItems: InventoryItem[],
+  options: { healthProfile?: HealthProfile | null; kitchenware?: KitchenwareItem[] } = {},
 ): RecipeInventoryAnalysis {
   const activeInventory = inventoryItems.filter((i) => i.is_available !== false);
 
@@ -80,12 +103,32 @@ export function analyzeRecipeInventoryMatch(
     recipeIngredientList.length > 0
       ? (missingCount === 0 ? "full" : missingCount <= 2 ? "partial" : "low")
       : (matchedIngredients.length > 0 ? "full" : "low");
+  const stockNames = activeInventory.map((item) => item.food_name);
+  const availableSubstitutes = missingIngredients.flatMap((ingredient) => {
+    const substitute = findStockSubstitute(ingredient.name, stockNames);
+    return substitute ? [{ missing: ingredient.name, substitute }] : [];
+  });
+  const healthConflicts = findRecipeAllergyRisks(
+    recipeIngredientList.map((ingredient) => ingredient.name),
+    options.healthProfile?.allergies,
+  ).map((risk) => ({ name: risk.name, severity: risk.severity }));
+  const ownedKitchenware = new Set((options.kitchenware || []).map((item) => item.name));
+  const missingKitchenware = (recipe.required_kitchenware || []).filter((name) => !ownedKitchenware.has(name));
+  const totalIngredients = recipeIngredientList.length || matchedIngredients.length + missingIngredients.length;
+  const coveragePercent = totalIngredients ? Math.round(matchedIngredients.length / totalIngredients * 100) : 0;
+  const dataUpdatedAt = activeInventory.map((item) => item.updated_at).filter(Boolean).sort().at(-1) || null;
 
   return {
     matchStatus,
     matchedIngredients,
     missingIngredients,
     expiringIngredients,
+    coveragePercent,
+    availableSubstitutes,
+    healthConflicts,
+    missingKitchenware,
+    dataUpdatedAt,
+    blocked: healthConflicts.some((risk) => risk.severity === "severe") || missingKitchenware.length > 0,
   };
 }
 
@@ -148,6 +191,22 @@ export function filterAndRankRecipes(
     })
     .sort((left, right) => right.score - left.score)
     .map(({ recipe }) => recipe);
+}
+
+/** 保留已展示卡片的相对顺序，并把分页首次出现的食谱追加到末尾。 */
+export function preserveRecipePaginationOrder(
+  previousOrder: Recipe[],
+  rankedRecipes: Recipe[],
+) {
+  const rankedById = new Map(rankedRecipes.map((recipe) => [recipe.id, recipe]));
+  const retained = previousOrder
+    .map((recipe) => rankedById.get(recipe.id))
+    .filter((recipe): recipe is Recipe => Boolean(recipe));
+  const retainedIds = new Set(retained.map((recipe) => recipe.id));
+  return [
+    ...retained,
+    ...rankedRecipes.filter((recipe) => !retainedIds.has(recipe.id)),
+  ];
 }
 
 export function recipeMatchesInventory(recipe: Recipe, inventoryItems: InventoryItem[]) {

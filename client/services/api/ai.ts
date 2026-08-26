@@ -39,8 +39,39 @@ export const aiApi = {
   voiceCommand: <T>(apiFetch: ApiFetch, input: unknown) => requestJson<T>(apiFetch, "/api/v1/ai/voice-command", { method: "POST", body: JSON.stringify(input), timeoutMs: 60_000 }),
   transcribe: <T>(apiFetch: ApiFetch, audioBase64: string, mimeType: string) => requestJson<T>(apiFetch, "/api/v1/ai/transcribe", { method: "POST", body: JSON.stringify({ audioBase64, mimeType }), timeoutMs: 60_000 }),
   agentRun: <T>(apiFetch: ApiFetch, runId: string, afterSequence = 0) => requestJson<T>(apiFetch, `/api/v1/ai/agent-runs/${encodeURIComponent(runId)}?afterSequence=${afterSequence}`),
+  agentMedia: <T>(apiFetch: ApiFetch, runId: string) => requestJson<T>(apiFetch, `/api/v1/ai/agent-runs/${encodeURIComponent(runId)}/media`),
   resumeAgentRun: <T>(apiFetch: ApiFetch, runId: string, input: unknown) => requestJson<T>(apiFetch, `/api/v1/ai/agent-runs/${encodeURIComponent(runId)}/resume`, { method: "POST", body: JSON.stringify(input), timeoutMs: 60_000 }),
   cancelAgentRun: <T>(apiFetch: ApiFetch, runId: string) => requestJson<T>(apiFetch, `/api/v1/ai/agent-runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
   retryAgentRun: <T>(apiFetch: ApiFetch, runId: string) => requestJson<T>(apiFetch, `/api/v1/ai/agent-runs/${encodeURIComponent(runId)}/retry`, { method: "POST", timeoutMs: 60_000 }),
   undoAgentRun: <T>(apiFetch: ApiFetch, runId: string) => requestJson<T>(apiFetch, `/api/v1/ai/agent-runs/${encodeURIComponent(runId)}/undo`, { method: "POST" }),
+};
+
+export interface RealtimeVoiceSession {
+  id: string;
+  recipeId: number;
+  status: "active" | "muted" | "closed" | "expired" | "fallback";
+  platform: "android" | "ios" | "web";
+  version: number;
+  connectedAt: string;
+  expiresAt: string;
+  metrics: { firstTranscriptMs: number | null; firstResponseMs: number | null; interruptions: number; reconnects: number; fallbacks: number };
+}
+
+export type RealtimeVoiceEvent = { sequence: number; type: string; payload: Record<string, unknown>; createdAt: string };
+
+export const realtimeVoiceApi = {
+  create: (apiFetch: ApiFetch, input: unknown) => requestJson<{ session: RealtimeVoiceSession; repeated: boolean }>(apiFetch, "/api/v1/ai/realtime-voice/sessions", {
+    method: "POST", body: JSON.stringify(input),
+  }),
+  heartbeat: (apiFetch: ApiFetch, sessionId: string, input: unknown) => requestJson<{ session: RealtimeVoiceSession }>(apiFetch, `/api/v1/ai/realtime-voice/sessions/${sessionId}/heartbeat`, {
+    method: "POST", body: JSON.stringify(input),
+  }),
+  turn: (apiFetch: ApiFetch, sessionId: string, input: unknown) => requestJson<{
+    turnId: string;
+    intent: "control" | "confirmation_required" | "question";
+    action?: { action?: string; seconds?: number; requiresConfirmation?: boolean; message?: string };
+    repeated: boolean;
+  }>(apiFetch, `/api/v1/ai/realtime-voice/sessions/${sessionId}/turns`, { method: "POST", body: JSON.stringify(input), timeoutMs: 30_000 }),
+  events: (apiFetch: ApiFetch, sessionId: string, after: number) => requestJson<{ session: RealtimeVoiceSession; events: RealtimeVoiceEvent[] }>(apiFetch, `/api/v1/ai/realtime-voice/sessions/${sessionId}/events?after=${after}`),
+  close: (apiFetch: ApiFetch, sessionId: string) => requestJson<{ session: RealtimeVoiceSession }>(apiFetch, `/api/v1/ai/realtime-voice/sessions/${sessionId}`, { method: "DELETE" }),
 };

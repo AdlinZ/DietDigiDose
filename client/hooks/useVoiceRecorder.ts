@@ -134,7 +134,10 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
         console.error("[Native Recording Start Error]", error);
         setIsRecording(false);
         setStatusText("");
-        Alert.alert("无法开始录音", "请检查麦克风权限后重试。");
+        Alert.alert("无法开始录音", "请检查麦克风权限或系统录音限制后重试。", [
+          { text: "取消", style: "cancel" },
+          { text: "打开设置", onPress: () => void Linking.openSettings() },
+        ]);
         return;
       }
     }

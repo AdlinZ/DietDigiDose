@@ -15,7 +15,7 @@ import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { toLocalDateKey } from "@/utils/date";
 import { healthApi } from "@/services/api";
 
@@ -339,36 +339,36 @@ export default function HealthDataScreen() {
   const renderMetricGrid = () => (
     <>
       <View className="flex-row gap-3 mb-4">
-        <MetricCard icon="weight-scale" iconColor="#2D6A4F" label="当前体重" value={`${formatNumber(todayWeight)} kg`} />
-        <MetricCard icon="percent" iconColor="#D4A276" label="体脂率" value={`${formatNumber(todayBodyFat)} %`} />
+        <MetricCard icon="weight-scale" iconColorClass="accent-brand" label="当前体重" value={`${formatNumber(todayWeight)} kg`} />
+        <MetricCard icon="percent" iconColorClass="accent-warm" label="体脂率" value={`${formatNumber(todayBodyFat)} %`} />
       </View>
       <View className="flex-row gap-3 mb-4">
-        <MetricCard icon="user-check" iconColor="#2D6A4F" label="BMI" value={todayBmi ? `${todayBmi} kg/m²` : EMTPY_VALUE_PLACEHOLDER} />
-        <MetricCard icon="heart-pulse" iconColor="#E07A5F" label="静息心率" value={`${formatNumber(todayHeart)} bpm`} />
+        <MetricCard icon="user-check" iconColorClass="accent-brand" label="BMI" value={todayBmi ? `${todayBmi} kg/m²` : EMTPY_VALUE_PLACEHOLDER} />
+        <MetricCard icon="heart-pulse" iconColorClass="accent-critical" label="静息心率" value={`${formatNumber(todayHeart)} bpm`} />
       </View>
       <View className="flex-row gap-3 mb-4">
-        <MetricCard icon="chart-line" iconColor="#2D6A4F" label="腰围 / 臀围" value={`${formatNumber(todayWaist)} / ${formatNumber(todayHip)} cm`} />
-        <MetricCard icon="moon" iconColor="#D4A276" label="睡眠 / 血压" value={`${formatNumber(todaySleep)} h • ${formatNumber(todaySys)}/${formatNumber(todayDia)}`} />
+        <MetricCard icon="chart-line" iconColorClass="accent-brand" label="腰围 / 臀围" value={`${formatNumber(todayWaist)} / ${formatNumber(todayHip)} cm`} />
+        <MetricCard icon="moon" iconColorClass="accent-warm" label="睡眠 / 血压" value={`${formatNumber(todaySleep)} h • ${formatNumber(todaySys)}/${formatNumber(todayDia)}`} />
       </View>
       <View className="flex-row gap-3 mb-4">
-        <MetricCard icon="droplet" iconColor="#B64D36" label="血糖" value={formatMetric(todayBloodGlucose, "mmol/L")} />
-        <MetricCard icon="calendar-day" iconColor="#8B5E83" label="经期 / 孕哺状态" value={todayCycleStatus || EMTPY_VALUE_PLACEHOLDER} />
+        <MetricCard icon="droplet" iconColorClass="accent-critical" label="血糖" value={formatMetric(todayBloodGlucose, "mmol/L")} />
+        <MetricCard icon="calendar-day" iconColorClass="accent-info" label="经期 / 孕哺状态" value={todayCycleStatus || EMTPY_VALUE_PLACEHOLDER} />
       </View>
     </>
   );
 
   if (!isAuthenticated) {
     return (
-      <Screen backgroundColor="#FDF8F0">
+      <Screen>
         <View className="flex-1 items-center justify-center p-6">
-          <FontAwesome6 name="heart-pulse" size={36} color="#2D6A4F" />
+          <FontAwesome6 name="heart-pulse" size={36} colorClassName="accent-brand" />
           <Text className="text-xl font-bold text-ink mt-3">身体健康档案</Text>
           <Text className="text-sm text-copy-muted text-center mt-2 mb-6">
             登录后可记录体重、体脂、腰臀围、血压、心率与饮水数据。
           </Text>
           <TouchableOpacity
             onPress={() => router.push("/login")}
-            className="bg-brand px-8 py-3.5 rounded-2xl active:opacity-90"
+            className="bg-brand-fill px-8 py-3.5 rounded-2xl active:opacity-90"
           >
             <Text className="text-sm font-bold text-white">立即登录</Text>
           </TouchableOpacity>
@@ -378,7 +378,7 @@ export default function HealthDataScreen() {
   }
 
   return (
-    <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
+    <Screen safeAreaEdges={["top", "left", "right"]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120, paddingTop: 16 }}
@@ -390,29 +390,29 @@ export default function HealthDataScreen() {
           </View>
           <TouchableOpacity
             onPress={openEditorWithToday}
-            className="bg-brand px-3.5 py-2 rounded-2xl flex-row items-center gap-1.5 shadow-sm"
+            className="bg-brand-fill px-3.5 py-2 rounded-2xl flex-row items-center gap-1.5 shadow-sm"
           >
-            <FontAwesome6 name="pen" size={12} color="#FFF" />
+            <FontAwesome6 name="pen" size={12} colorClassName="accent-on-brand" />
             <Text className="text-xs font-bold text-white">测身体</Text>
           </TouchableOpacity>
         </View>
 
         {requestError ? (
-          <View className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-3">
-            <Text className="text-xs text-red-700">{requestError}</Text>
+          <View className="mb-4 rounded-2xl border border-critical/40 bg-danger-soft p-3">
+            <Text className="text-xs text-critical">{requestError}</Text>
           </View>
         ) : null}
 
-        <View className="mb-4 flex-row items-start rounded-2xl border border-[#D8E5DC] bg-[#F1F7F2] p-3">
-          <FontAwesome6 name="circle-info" size={13} color="#2D6A4F" />
-          <Text className="ml-2 flex-1 text-[11px] leading-4 text-[#52705D]">这些可选数据只用于展示个人趋势与辅助饮食建议，不作为疾病诊断。你可以在下方随时逐条删除。</Text>
+        <View className="mb-4 flex-row items-start rounded-2xl border border-line bg-background-secondary p-3">
+          <FontAwesome6 name="circle-info" size={13} colorClassName="accent-brand" />
+          <Text className="ml-2 flex-1 text-[11px] leading-4 text-copy-muted">这些可选数据只用于展示个人趋势与辅助饮食建议，不作为疾病诊断。你可以在下方随时逐条删除。</Text>
         </View>
 
-        <View className="bg-white p-5 rounded-[28px] border border-line shadow-sm mb-4">
+        <View className="bg-surface p-5 rounded-[28px] border border-line shadow-sm mb-4">
           <View className="flex-row items-center justify-between mb-3">
             <View className="flex-row items-center gap-2">
-              <View className="w-9 h-9 rounded-full bg-sky-500/15 items-center justify-center">
-                <FontAwesome6 name="droplet" size={16} color="#0EA5E9" />
+              <View className="w-9 h-9 rounded-full bg-info/15 items-center justify-center">
+                <FontAwesome6 name="droplet" size={16} colorClassName="accent-info" />
               </View>
               <View>
                 <Text className="text-base font-bold text-ink">今日水份补给</Text>
@@ -420,14 +420,14 @@ export default function HealthDataScreen() {
               </View>
             </View>
 
-            <Text className="text-xl font-black text-[#0EA5E9]">
+            <Text className="text-xl font-black text-info">
               {formatNumber(todayWater)} <Text className="text-xs font-normal text-copy-muted">ml</Text>
             </Text>
           </View>
 
           <View className="w-full bg-background-secondary h-3 rounded-full overflow-hidden my-2">
             <View
-              className="bg-sky-500 h-full rounded-full"
+              className="bg-info h-full rounded-full"
               style={{ width: `${waterPercent}%` }}
             />
           </View>
@@ -435,28 +435,28 @@ export default function HealthDataScreen() {
           <View className="flex-row gap-2 mt-3">
             <TouchableOpacity
               onPress={() => handleAddWater(250)}
-              className="flex-1 bg-sky-50 py-2.5 rounded-xl border border-sky-200 items-center flex-row justify-center gap-1.5 active:opacity-80"
+              className="flex-1 bg-info-soft py-2.5 rounded-xl border border-info/30 items-center flex-row justify-center gap-1.5 active:opacity-80"
             >
-              <FontAwesome6 name="glass-water" size={13} color="#0EA5E9" />
-              <Text className="text-xs font-bold text-[#0EA5E9]">+250ml</Text>
+              <FontAwesome6 name="glass-water" size={13} colorClassName="accent-info" />
+              <Text className="text-xs font-bold text-info">+250ml</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => handleAddWater(500)}
-              className="flex-1 bg-sky-50 py-2.5 rounded-xl border border-sky-200 items-center flex-row justify-center gap-1.5 active:opacity-80"
+              className="flex-1 bg-info-soft py-2.5 rounded-xl border border-info/30 items-center flex-row justify-center gap-1.5 active:opacity-80"
             >
-              <FontAwesome6 name="bottle-water" size={13} color="#0EA5E9" />
-              <Text className="text-xs font-bold text-[#0EA5E9]">+500ml</Text>
+              <FontAwesome6 name="bottle-water" size={13} colorClassName="accent-info" />
+              <Text className="text-xs font-bold text-info">+500ml</Text>
             </TouchableOpacity>
           </View>
         </View>
 
         {renderMetricGrid()}
 
-        <View className="bg-white p-5 rounded-[28px] border border-line shadow-sm">
+        <View className="bg-surface p-5 rounded-[28px] border border-line shadow-sm">
           <Text className="text-base font-bold text-ink mb-4">近 7 天体重趋势</Text>
           {loading ? (
-            <ActivityIndicator color="#2D6A4F" />
+            <ActivityIndicator colorClassName="accent-brand" />
           ) : latestWeightLogs.length === 0 ? (
             <Text className="text-sm text-copy-muted">暂无数据，先记录一次体重</Text>
           ) : (
@@ -471,7 +471,7 @@ export default function HealthDataScreen() {
                     <Text className="text-[10px] font-bold text-brand mb-1">{formatNumber(safeWeight)}</Text>
                     <View className="w-5 bg-background-secondary rounded-t-lg h-24 justify-end overflow-hidden">
                       <View
-                        className="bg-brand w-full rounded-t-lg"
+                        className="bg-brand-fill w-full rounded-t-lg"
                         style={{ height: `${safeWeight === null || safeWeight === undefined ? 12 : heightPercent}%` }}
                       />
                     </View>
@@ -483,10 +483,10 @@ export default function HealthDataScreen() {
           )}
         </View>
 
-        <View className="bg-white p-5 rounded-[28px] border border-line shadow-sm mt-4">
+        <View className="bg-surface p-5 rounded-[28px] border border-line shadow-sm mt-4">
           <Text className="text-base font-bold text-ink mb-4">详细记录列表</Text>
           {loading ? (
-            <ActivityIndicator color="#2D6A4F" />
+            <ActivityIndicator colorClassName="accent-brand" />
           ) : logs.length === 0 ? (
             <Text className="text-sm text-copy-muted">暂无历史数据，点击“测身体”开始记录</Text>
           ) : (
@@ -497,12 +497,12 @@ export default function HealthDataScreen() {
                 .map((log) => (
                   <View
                     key={log.id}
-                    className="border border-[#F0EADD] rounded-2xl p-3 bg-[#FAF8F4]"
+                    className="border border-line rounded-2xl p-3 bg-background-secondary"
                   >
                     <View className="flex-row justify-between items-center mb-2">
                       <Text className="font-black text-ink">{log.recorded_date}</Text>
-                      <TouchableOpacity onPress={() => handleDeleteLog(log)} accessibilityLabel={`删除 ${log.recorded_date} 的追踪数据`} className="h-8 w-8 items-center justify-center rounded-full bg-[#FFF0EC]">
-                        <FontAwesome6 name="trash-can" size={11} color="#B64D36" />
+                      <TouchableOpacity onPress={() => handleDeleteLog(log)} accessibilityLabel={`删除 ${log.recorded_date} 的追踪数据`} className="h-8 w-8 items-center justify-center rounded-full bg-danger-soft">
+                        <FontAwesome6 name="trash-can" size={11} colorClassName="accent-critical" />
                       </TouchableOpacity>
                     </View>
                     <View className="flex-row flex-wrap gap-2">
@@ -511,7 +511,7 @@ export default function HealthDataScreen() {
                         return (
                           <View
                             key={`${log.id}-${metric.key}`}
-                            className="rounded-xl border border-[#E9DDC7] bg-white px-2.5 py-1.5 min-w-[120px] flex-1"
+                            className="rounded-xl border border-warm bg-surface px-2.5 py-1.5 min-w-[120px] flex-1"
                           >
                             <Text className="text-[10px] text-copy-muted">{metric.label}</Text>
                             <Text className="text-sm font-bold text-ink">
@@ -520,7 +520,7 @@ export default function HealthDataScreen() {
                           </View>
                         );
                       })}
-                      {log.cycle_status ? <View className="min-w-[120px] flex-1 rounded-xl border border-[#E9DDC7] bg-white px-2.5 py-1.5"><Text className="text-[10px] text-copy-muted">经期 / 孕哺状态</Text><Text className="text-sm font-bold text-ink">{log.cycle_status}</Text></View> : null}
+                      {log.cycle_status ? <View className="min-w-[120px] flex-1 rounded-xl border border-warm bg-surface px-2.5 py-1.5"><Text className="text-[10px] text-copy-muted">经期 / 孕哺状态</Text><Text className="text-sm font-bold text-ink">{log.cycle_status}</Text></View> : null}
                     </View>
                   </View>
                 ))}
@@ -534,11 +534,11 @@ export default function HealthDataScreen() {
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           className="flex-1 bg-black/40 justify-end"
         >
-          <View className="bg-white rounded-t-[32px] p-6 max-h-[92%]">
+          <View className="bg-surface rounded-t-[32px] p-6 max-h-[92%]">
             <View className="flex-row items-center justify-between mb-4 border-b border-background-secondary pb-3">
               <Text className="text-lg font-black text-ink">更新身体数据</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
-                <FontAwesome6 name="xmark" size={18} color="#8B7D6B" />
+                <FontAwesome6 name="xmark" size={18} colorClassName="accent-copy-muted" />
               </TouchableOpacity>
             </View>
 
@@ -559,7 +559,7 @@ export default function HealthDataScreen() {
                     onChangeText={setSysBP}
                     keyboardType="numeric"
                     placeholder="收缩压"
-                    placeholderTextColor="#8B7D6B"
+                    placeholderTextColorClassName="accent-copy-muted"
                     className="flex-1 bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink"
                   />
                   <TextInput
@@ -567,7 +567,7 @@ export default function HealthDataScreen() {
                     onChangeText={setDiaBP}
                     keyboardType="numeric"
                     placeholder="舒张压"
-                    placeholderTextColor="#8B7D6B"
+                    placeholderTextColorClassName="accent-copy-muted"
                     className="flex-1 bg-canvas px-4 py-3 rounded-2xl border border-line text-sm text-ink"
                   />
                 </View>
@@ -578,17 +578,17 @@ export default function HealthDataScreen() {
               <View>
                 <Text className="mb-2 text-xs font-bold text-copy-muted">经期 / 孕哺状态（可选）</Text>
                 <View className="flex-row flex-wrap gap-2">
-                  {CYCLE_OPTIONS.map((item) => <TouchableOpacity key={item} onPress={() => setCycleStatus((current) => current === item ? null : item)} className={`rounded-full border px-3 py-2 ${cycleStatus === item ? "border-[#8B5E83] bg-[#F4EAF2]" : "border-line bg-canvas"}`}><Text className={`text-xs font-bold ${cycleStatus === item ? "text-[#75486F]" : "text-copy-muted"}`}>{item}</Text></TouchableOpacity>)}
+                  {CYCLE_OPTIONS.map((item) => <TouchableOpacity key={item} onPress={() => setCycleStatus((current) => current === item ? null : item)} className={`rounded-full border px-3 py-2 ${cycleStatus === item ? "border-info bg-info-soft" : "border-line bg-canvas"}`}><Text className={`text-xs font-bold ${cycleStatus === item ? "text-info" : "text-copy-muted"}`}>{item}</Text></TouchableOpacity>)}
                 </View>
               </View>
 
               <TouchableOpacity
                 onPress={handleSaveLog}
                 disabled={submitting}
-                className="bg-brand py-4 rounded-2xl items-center mt-4 shadow-sm"
+                className="bg-brand-fill py-4 rounded-2xl items-center mt-4 shadow-sm"
               >
                 {submitting ? (
-                  <ActivityIndicator color="#FFF" />
+                  <ActivityIndicator colorClassName="accent-on-brand" />
                 ) : (
                   <Text className="text-base font-bold text-white">打卡保存</Text>
                 )}
@@ -625,19 +625,19 @@ function TextInputBlock({
 
 function MetricCard({
   icon,
-  iconColor,
+  iconColorClass,
   label,
   value,
 }: {
   icon: string;
-  iconColor: string;
+  iconColorClass: string;
   label: string;
   value: string;
 }) {
   return (
-    <View className="flex-1 bg-white p-4.5 rounded-[24px] border border-line shadow-sm">
+    <View className="flex-1 bg-surface p-4.5 rounded-[24px] border border-line shadow-sm">
       <View className="flex-row items-center gap-2 mb-2">
-        <FontAwesome6 name={icon as any} size={14} color={iconColor} />
+        <FontAwesome6 name={icon as any} size={14} colorClassName={iconColorClass} />
         <Text className="text-xs font-bold text-copy-muted">{label}</Text>
       </View>
       <Text className="text-xl font-black text-ink">{value}</Text>

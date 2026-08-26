@@ -1,4 +1,4 @@
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
@@ -7,15 +7,20 @@ import { RecipeCover } from "@/components/RecipeCover";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
-import { inventoryApi, recipesApi, shoppingListApi, type InventoryItem } from "@/services/api";
 import {
-  clearCookingQueue,
+  cookingQueueApi,
+  inventoryApi,
+  shoppingListApi,
+  type CookingQueueItem as ServerCookingQueueItem,
+  type CookingQueueMealType,
+  type InventoryItem,
+} from "@/services/api";
+import {
   getCookingQueue,
-  moveCookingQueueItem,
-  removeFromCookingQueue,
+  markCookingQueueServerMigrated,
+  needsCookingQueueServerMigration,
   saveCookingQueue,
-  updateCookingQueueItem,
-  type CookingQueueItem,
+  type CookingQueueItem as LocalCookingQueueItem,
 } from "@/utils/cookingQueue";
 import {
   cancelCookingReminder,
@@ -26,6 +31,55 @@ import {
 import { inferCategoryByName, inferIngredientDefaults } from "@/utils/ingredientRules";
 import { ingredientNamesMatch, normalizeIngredientName } from "@/utils/ingredients";
 import { normalizeShoppingItems } from "@/utils/shoppingList";
+
+type CookingQueueItem = ServerCookingQueueItem & {
+  reminderAt?: number;
+  reminderNotificationId?: string;
+};
+
+const MEAL_TYPES: Array<{ value: CookingQueueMealType; label: string }> = [
+  { value: "breakfast", label: "早餐" },
+  { value: "lunch", label: "午餐" },
+  { value: "dinner", label: "晚餐" },
+  { value: "snack", label: "加餐" },
+];
+
+const STATUS_LABELS: Record<CookingQueueItem["status"], string> = {
+  waiting: "待安排",
+  preparing: "备料中",
+  ready: "可开火",
+  cooking: "烹饪中",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+
+function localShadow(item: CookingQueueItem): LocalCookingQueueItem {
+  return {
+    recipeId: item.recipeId,
+    title: item.title,
+    imageUrl: item.imageUrl,
+    cookTime: item.cookTime,
+    calories: item.calories,
+    difficulty: item.difficulty,
+    addedAt: Date.parse(item.createdAt) || Date.now(),
+    ingredients: item.ingredients.map(({ name, amount }) => ({ name, amount })),
+    reminderAt: item.reminderAt,
+    reminderNotificationId: item.reminderNotificationId,
+    shoppingListSyncedAt: item.shoppingListSyncedAt ? Date.parse(item.shoppingListSyncedAt) : undefined,
+    preparedIngredientNames: item.preparedIngredientNames,
+  };
+}
+
+function mergeLocalRuntime(items: ServerCookingQueueItem[], localItems: LocalCookingQueueItem[]): CookingQueueItem[] {
+  return items.map((item) => {
+    const local = localItems.find((candidate) => candidate.recipeId === item.recipeId);
+    return {
+      ...item,
+      reminderAt: item.plannedAt ? Date.parse(item.plannedAt) : undefined,
+      reminderNotificationId: local?.reminderNotificationId,
+    };
+  });
+}
 
 function getMissingIngredients(item: CookingQueueItem, inventory: InventoryItem[]) {
   return item.ingredients.filter((ingredient) => !inventory.some((stock) => (
@@ -58,40 +112,31 @@ export default function CookingQueueScreen() {
     }
     setLoading(true);
     try {
-      const [storedItems, inventoryItems] = await Promise.all([
+      const [localItems, inventoryItems] = await Promise.all([
         getCookingQueue(userId),
         inventoryApi.list(authFetch).catch(() => []),
       ]);
-      const hydratedItems = await Promise.all(storedItems.map(async (item) => {
-        if (item.ingredients.length) return item;
-        try {
-          const recipe = await recipesApi.detail(item.recipeId);
-          return {
-            ...item,
-            title: recipe.title || item.title,
-            imageUrl: recipe.image_url ?? item.imageUrl,
-            cookTime: recipe.cook_time || item.cookTime,
-            calories: recipe.calories || item.calories,
-            difficulty: recipe.difficulty || item.difficulty,
-            ingredients: (recipe.ingredients || []).map((ingredient) => ({
-              name: ingredient.name,
-              amount: ingredient.amount || "适量",
-            })),
-          };
-        } catch {
-          return item;
+      if (await needsCookingQueueServerMigration(userId)) {
+        for (const item of localItems) {
+          await cookingQueueApi.add(authFetch, {
+            recipeId: item.recipeId,
+            idempotencyKey: `legacy-queue-${userId}-${item.recipeId}`,
+            plannedAt: item.reminderAt ? new Date(item.reminderAt).toISOString() : null,
+          });
         }
-      }));
-      if (hydratedItems.some((item, index) => item !== storedItems[index])) {
-        await saveCookingQueue(userId, hydratedItems);
+        await markCookingQueueServerMigrated(userId);
       }
+      const serverItems = await cookingQueueApi.list(authFetch);
+      const hydratedItems = mergeLocalRuntime(serverItems, localItems);
+      await saveCookingQueue(userId, hydratedItems.map(localShadow));
       setItems(hydratedItems);
       setInventory(inventoryItems);
       if (!initializedExpansion.current && hydratedItems.length) {
         initializedExpansion.current = true;
         setExpandedRecipeIds(new Set([Number(highlightRecipeId) || hydratedItems[0].recipeId]));
       }
-
+    } catch (error) {
+      Alert.alert("队列同步失败", error instanceof Error ? error.message : "请检查网络后重试");
     } finally {
       setLoading(false);
     }
@@ -99,25 +144,62 @@ export default function CookingQueueScreen() {
 
   useFocusEffect(useCallback(() => { void loadQueue(); }, [loadQueue]));
 
-  useEffect(() => {
-    const dueItem = items.find((item) => item.reminderAt && item.reminderAt <= Date.now());
-    if (!dueItem || dueAlertedRecipeId.current === dueItem.recipeId) return;
-    dueAlertedRecipeId.current = dueItem.recipeId;
-    Alert.alert("烹饪提醒", `计划烹饪【${dueItem.title}】的时间到了，现在开始准备吗？`, [
-      { text: "稍后", style: "cancel" },
-      { text: "开始烹饪", onPress: () => router.push("/cooking-mode", { recipeId: dueItem.recipeId, fromQueue: true }) },
-    ]);
-  }, [items, router]);
-
   const removeItem = async (item: CookingQueueItem) => {
     if (!userId) return;
-    await cancelCookingReminder(item.reminderNotificationId);
-    setItems(await removeFromCookingQueue(userId, item.recipeId));
+    try {
+      await cookingQueueApi.remove(authFetch, item.id);
+      await cancelCookingReminder(item.reminderNotificationId);
+      const next = items.filter((candidate) => candidate.id !== item.id);
+      setItems(next);
+      await saveCookingQueue(userId, next.map(localShadow));
+    } catch (error) {
+      Alert.alert("移除失败", error instanceof Error ? error.message : "请刷新后重试");
+    }
   };
 
   const moveItem = async (item: CookingQueueItem, offset: -1 | 1) => {
     if (!userId) return;
-    setItems(await moveCookingQueueItem(userId, item.recipeId, offset));
+    const currentIndex = items.findIndex((candidate) => candidate.id === item.id);
+    const targetIndex = currentIndex + offset;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= items.length) return;
+    const reordered = [...items];
+    [reordered[currentIndex], reordered[targetIndex]] = [reordered[targetIndex], reordered[currentIndex]];
+    try {
+      const updated = mergeLocalRuntime(
+        await cookingQueueApi.reorder(authFetch, reordered.map(({ id, version }) => ({ id, version }))),
+        reordered.map(localShadow),
+      );
+      setItems(updated);
+      await saveCookingQueue(userId, updated.map(localShadow));
+    } catch (error) {
+      Alert.alert("顺序已变化", error instanceof Error ? error.message : "正在重新同步队列");
+      await loadQueue();
+    }
+  };
+
+  const updateItem = async (
+    item: CookingQueueItem,
+    updates: Parameters<typeof cookingQueueApi.update>[2],
+    localUpdates: Partial<Pick<CookingQueueItem, "reminderAt" | "reminderNotificationId">> = {},
+  ) => {
+    if (!userId) return null;
+    try {
+      const updated = await cookingQueueApi.update(authFetch, item.id, { ...updates, version: item.version });
+      const merged: CookingQueueItem = {
+        ...updated,
+        reminderAt: updated.plannedAt ? Date.parse(updated.plannedAt) : undefined,
+        reminderNotificationId: item.reminderNotificationId,
+        ...localUpdates,
+      };
+      const next = items.map((candidate) => candidate.id === item.id ? merged : candidate);
+      setItems(next);
+      await saveCookingQueue(userId, next.map(localShadow));
+      return merged;
+    } catch (error) {
+      Alert.alert("队列已变化", error instanceof Error ? error.message : "正在重新同步队列");
+      await loadQueue();
+      return null;
+    }
   };
 
   const toggleIngredientPrepared = async (item: CookingQueueItem, ingredientName: string) => {
@@ -129,7 +211,10 @@ export default function CookingQueueScreen() {
     const preparedIngredientNames = alreadyPrepared
       ? item.preparedIngredientNames.filter((name) => normalizeIngredientName(name) !== normalizedTarget)
       : [...item.preparedIngredientNames, ingredientName];
-    setItems(await updateCookingQueueItem(userId, item.recipeId, { preparedIngredientNames }));
+    const status = preparedIngredientNames.length === item.ingredients.length && item.ingredients.length
+      ? "ready"
+      : preparedIngredientNames.length ? "preparing" : "waiting";
+    await updateItem(item, { version: item.version, preparedIngredientNames, status });
   };
 
   const toggleExpanded = (recipeId: number) => {
@@ -143,14 +228,35 @@ export default function CookingQueueScreen() {
 
   const startCooking = async (item: CookingQueueItem) => {
     if (!userId) return;
-    await cancelCookingReminder(item.reminderNotificationId);
-    const nextItems = await updateCookingQueueItem(userId, item.recipeId, {
-      reminderAt: undefined,
-      reminderNotificationId: undefined,
-    });
-    setItems(nextItems);
-    router.push("/cooking-mode", { recipeId: item.recipeId, fromQueue: true });
+    try {
+      await cancelCookingReminder(item.reminderNotificationId);
+      const started = await cookingQueueApi.start(authFetch, item.id, item.version);
+      const next = items.map((candidate) => candidate.id === item.id
+        ? { ...started, reminderAt: undefined, reminderNotificationId: undefined }
+        : candidate);
+      setItems(next);
+      await saveCookingQueue(userId, next.map(localShadow));
+      router.push("/cooking-mode", {
+        recipeId: item.recipeId,
+        fromQueue: true,
+        queueItemId: started.id,
+        queueVersion: started.version,
+      });
+    } catch (error) {
+      Alert.alert("无法开始烹饪", error instanceof Error ? error.message : "请刷新队列后重试");
+      await loadQueue();
+    }
   };
+
+  useEffect(() => {
+    const dueItem = items.find((item) => item.reminderAt && item.reminderAt <= Date.now());
+    if (!dueItem || dueAlertedRecipeId.current === dueItem.recipeId) return;
+    dueAlertedRecipeId.current = dueItem.recipeId;
+    Alert.alert("烹饪提醒", `计划烹饪【${dueItem.title}】的时间到了，现在开始准备吗？`, [
+      { text: "稍后", style: "cancel" },
+      { text: "开始烹饪", onPress: () => void startCooking(dueItem) },
+    ]);
+  }, [items]); // startCooking intentionally uses the latest item version from this render.
 
   const addMissingToShoppingList = async (item: CookingQueueItem) => {
     if (!userId || shoppingSavingId) return;
@@ -173,8 +279,7 @@ export default function CookingQueueScreen() {
           storageLocation: defaults.storageLocation,
         });
       }));
-      const nextItems = await updateCookingQueueItem(userId, item.recipeId, { shoppingListSyncedAt: Date.now() });
-      setItems(nextItems);
+      await updateItem(item, { version: item.version, shoppingListSyncedAt: new Date().toISOString() });
       Alert.alert(
         additions.length ? "已补入采购清单" : "采购清单已有这些食材",
         additions.length ? `已添加 ${additions.length} 种缺少食材。` : "没有重复添加，可直接查看采购清单。",
@@ -201,11 +306,11 @@ export default function CookingQueueScreen() {
         userId,
         date,
       });
-      const nextItems = await updateCookingQueueItem(userId, item.recipeId, {
-        reminderAt: date.getTime(),
-        reminderNotificationId: scheduled.notificationId,
-      });
-      setItems(nextItems);
+      await updateItem(
+        item,
+        { version: item.version, plannedAt: date.toISOString(), mealType: item.mealType },
+        { reminderAt: date.getTime(), reminderNotificationId: scheduled.notificationId },
+      );
       setReminderItem(null);
       Alert.alert(
         "提醒已设置",
@@ -223,11 +328,11 @@ export default function CookingQueueScreen() {
   const clearReminder = async (item: CookingQueueItem) => {
     if (!userId) return;
     await cancelCookingReminder(item.reminderNotificationId);
-    const nextItems = await updateCookingQueueItem(userId, item.recipeId, {
-      reminderAt: undefined,
-      reminderNotificationId: undefined,
-    });
-    setItems(nextItems);
+    await updateItem(
+      item,
+      { version: item.version, plannedAt: null },
+      { reminderAt: undefined, reminderNotificationId: undefined },
+    );
     setReminderItem(null);
   };
 
@@ -239,8 +344,10 @@ export default function CookingQueueScreen() {
         text: "清空",
         style: "destructive",
         onPress: () => void Promise.all(items.map((item) => cancelCookingReminder(item.reminderNotificationId)))
-          .then(() => clearCookingQueue(userId))
-          .then(() => setItems([])),
+          .then(() => cookingQueueApi.clear(authFetch))
+          .then(() => saveCookingQueue(userId, []))
+          .then(() => setItems([]))
+          .catch((error) => Alert.alert("清空失败", error instanceof Error ? error.message : "请稍后重试")),
       },
     ]);
   };
@@ -250,30 +357,30 @@ export default function CookingQueueScreen() {
   const totalCookTime = items.reduce((total, item) => total + item.cookTime, 0);
 
   return (
-    <Screen backgroundColor="#F6F1E8" safeAreaEdges={["top", "bottom"]}>
-      <View className="flex-row items-center border-b border-[#E8DFD2] bg-[#FFFDF9] px-4 py-3">
-        <TouchableOpacity onPress={() => router.back()} accessibilityLabel="返回" className="h-10 w-10 items-center justify-center rounded-full bg-[#F2ECE3]">
-          <FontAwesome6 name="chevron-left" size={14} color="#304238" />
+    <Screen safeAreaEdges={["top", "bottom"]}>
+      <View className="flex-row items-center border-b border-line bg-surface px-4 py-3">
+        <TouchableOpacity onPress={() => router.back()} accessibilityLabel="返回" className="h-10 w-10 items-center justify-center rounded-full bg-background-secondary">
+          <FontAwesome6 name="chevron-left" size={14} colorClassName="accent-ink" />
         </TouchableOpacity>
         <View className="ml-3 flex-1">
-          <Text className="text-lg font-black text-[#273A2E]">烹饪队列</Text>
+          <Text className="text-lg font-black text-ink">烹饪队列</Text>
           <Text className="mt-0.5 text-[11px] text-copy-muted">备料、提醒、开火，在这里一次安排好</Text>
         </View>
-        {items.length ? <TouchableOpacity onPress={confirmClear} className="px-2 py-2"><Text className="text-xs font-bold text-[#A85A49]">清空</Text></TouchableOpacity> : null}
+        {items.length ? <TouchableOpacity onPress={confirmClear} className="px-2 py-2"><Text className="text-xs font-bold text-critical">清空</Text></TouchableOpacity> : null}
       </View>
 
       {loading ? (
-        <View className="flex-1 items-center justify-center"><ActivityIndicator color="#2D6A4F" /></View>
+        <View className="flex-1 items-center justify-center"><ActivityIndicator colorClassName="accent-brand" /></View>
       ) : items.length === 0 ? (
         <View className="flex-1 items-center justify-center px-8">
-          <View className="h-16 w-16 items-center justify-center rounded-[24px] bg-[#E5EFE7]"><FontAwesome6 name="list-check" size={24} color="#2D6A4F" /></View>
+          <View className="h-16 w-16 items-center justify-center rounded-[24px] bg-brand-soft"><FontAwesome6 name="list-check" size={24} colorClassName="accent-brand" /></View>
           <Text className="mt-5 text-lg font-black text-ink">队列还是空的</Text>
           <Text className="mt-2 text-center text-sm leading-6 text-copy-muted">在菜谱详情页加入想做的菜，之后可统一补齐食材、设置提醒并开始烹饪。</Text>
-          <TouchableOpacity onPress={() => router.replace("/")} className="mt-6 rounded-2xl bg-brand px-6 py-3"><Text className="font-bold text-white">去找菜谱</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => router.replace("/")} className="mt-6 rounded-2xl bg-brand-fill px-6 py-3"><Text className="font-bold text-white">去找菜谱</Text></TouchableOpacity>
         </View>
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 44 }}>
-          <View className="mb-4 w-full max-w-[760px] self-center flex-row rounded-[22px] bg-[#244D37] p-4">
+          <View className="mb-4 w-full max-w-[760px] self-center flex-row rounded-[22px] bg-brand-fill p-4">
             <QueueSummary value={items.length} label="待烹饪" />
             <QueueSummary value={totalCookTime} label="总分钟" />
             <QueueSummary value={readyCount} label="食材已齐" />
@@ -294,37 +401,38 @@ export default function CookingQueueScreen() {
                 ? item.reminderAt + item.cookTime * 60 * 1000
                 : null;
               return (
-                <View key={item.recipeId} className={`overflow-hidden rounded-[22px] border bg-[#FFFDF9] ${highlighted ? "border-[#D49A2A]" : "border-[#E8DFD2]"}`}>
+                <View key={item.recipeId} className={`overflow-hidden rounded-[22px] border bg-surface ${highlighted ? "border-warm" : "border-line"}`}>
                   <View className="flex-row">
                     <View className="relative h-32 w-32 shrink-0">
                       <RecipeCover uri={item.imageUrl} className="h-full w-full" placeholderClassName="h-full w-full" />
-                      <View className="absolute left-2 top-2 h-7 min-w-7 items-center justify-center rounded-full bg-brand px-2"><Text className="text-[10px] font-black text-white">{index + 1}</Text></View>
+                      <View className="absolute left-2 top-2 h-7 min-w-7 items-center justify-center rounded-full bg-brand-fill px-2"><Text className="text-[10px] font-black text-white">{index + 1}</Text></View>
                     </View>
                     <View className="min-w-0 flex-1 p-3.5">
                       <View className="flex-row items-start">
                         <Text className="min-w-0 flex-1 text-base font-black text-ink" numberOfLines={2}>{item.title}</Text>
                         {items.length > 1 ? (
                           <View className="ml-2 flex-row gap-1">
-                            <TouchableOpacity onPress={() => void moveItem(item, -1)} disabled={index === 0} accessibilityLabel={`将${item.title}上移`} className="h-7 w-7 items-center justify-center rounded-lg bg-[#F2ECE3] disabled:opacity-30">
-                              <FontAwesome6 name="arrow-up" size={9} color="#6E6256" />
+                            <TouchableOpacity onPress={() => void moveItem(item, -1)} disabled={index === 0} accessibilityLabel={`将${item.title}上移`} className="h-7 w-7 items-center justify-center rounded-lg bg-background-secondary disabled:opacity-30">
+                              <FontAwesome6 name="arrow-up" size={9} colorClassName="accent-copy-muted" />
                             </TouchableOpacity>
-                            <TouchableOpacity onPress={() => void moveItem(item, 1)} disabled={index === items.length - 1} accessibilityLabel={`将${item.title}下移`} className="h-7 w-7 items-center justify-center rounded-lg bg-[#F2ECE3] disabled:opacity-30">
-                              <FontAwesome6 name="arrow-down" size={9} color="#6E6256" />
+                            <TouchableOpacity onPress={() => void moveItem(item, 1)} disabled={index === items.length - 1} accessibilityLabel={`将${item.title}下移`} className="h-7 w-7 items-center justify-center rounded-lg bg-background-secondary disabled:opacity-30">
+                              <FontAwesome6 name="arrow-down" size={9} colorClassName="accent-copy-muted" />
                             </TouchableOpacity>
                           </View>
                         ) : null}
                       </View>
                       <View className="mt-2 flex-row flex-wrap gap-x-3 gap-y-1">
+                        <Text className="text-[10px] font-black text-brand">{STATUS_LABELS[item.status]}</Text>
                         <Text className="text-[10px] font-bold text-copy-muted">{item.cookTime} 分钟</Text>
-                        <Text className="text-[10px] font-bold text-[#C26A4C]">{item.calories} kcal</Text>
-                        <Text className={`text-[10px] font-black ${!ingredientDataReady || missing.length ? "text-[#A85A49]" : "text-brand"}`}>
+                        <Text className="text-[10px] font-bold text-critical">{item.calories} kcal</Text>
+                        <Text className={`text-[10px] font-black ${!ingredientDataReady || missing.length ? "text-critical" : "text-brand"}`}>
                           {!ingredientDataReady ? "食材待同步" : missing.length ? `缺 ${missing.length} 种食材` : "食材已齐"}
                         </Text>
                       </View>
                       {item.reminderAt ? (
                         <TouchableOpacity onPress={() => setReminderItem(item)} className={`mt-2 flex-row items-center ${reminderDue ? "opacity-100" : "opacity-80"}`}>
-                          <FontAwesome6 name={reminderDue ? "bell" : "clock"} size={10} color={reminderDue ? "#A63D2B" : "#6A765F"} />
-                          <Text className={`ml-1.5 text-[10px] font-bold ${reminderDue ? "text-[#A63D2B]" : "text-[#596A5C]"}`}>
+                          <FontAwesome6 name={reminderDue ? "bell" : "clock"} size={10} colorClassName={reminderDue ? "accent-critical" : "accent-copy-muted"} />
+                          <Text className={`ml-1.5 text-[10px] font-bold ${reminderDue ? "text-critical" : "text-copy-muted"}`}>
                             {reminderDue ? "计划时间已到" : formatCookingReminderTime(item.reminderAt)}
                           </Text>
                         </TouchableOpacity>
@@ -336,7 +444,22 @@ export default function CookingQueueScreen() {
                       </Text>
                     </View>
                   </View>
-                  <View className="border-t border-[#EFE7DC] px-3 py-3">
+                  <View className="border-t border-line px-3 py-3">
+                    <View className="mb-3 flex-row flex-wrap items-center gap-1.5">
+                      <Text className="mr-1 text-[10px] font-black text-copy-muted">安排到</Text>
+                      {MEAL_TYPES.map((meal) => (
+                        <TouchableOpacity
+                          key={meal.value}
+                          onPress={() => void updateItem(item, {
+                            version: item.version,
+                            mealType: item.mealType === meal.value ? null : meal.value,
+                          })}
+                          className={`rounded-full px-2.5 py-1.5 ${item.mealType === meal.value ? "bg-brand-fill" : "bg-background-secondary"}`}
+                        >
+                          <Text className={`text-[9px] font-black ${item.mealType === meal.value ? "text-white" : "text-copy-muted"}`}>{meal.label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
                     <View className="flex-row items-center justify-between">
                       <View>
                         <Text className="text-[10px] font-black text-ink">备料进度</Text>
@@ -345,8 +468,8 @@ export default function CookingQueueScreen() {
                         </Text>
                       </View>
                       <View className="flex-row items-center gap-1.5">
-                        <View className={`rounded-full px-2 py-1 ${missing.length ? "bg-[#F8E7DF]" : "bg-[#E4F0E7]"}`}>
-                          <Text className={`text-[9px] font-black ${missing.length ? "text-[#A85A49]" : "text-brand"}`}>
+                        <View className={`rounded-full px-2 py-1 ${missing.length ? "bg-danger-soft" : "bg-brand-soft"}`}>
+                          <Text className={`text-[9px] font-black ${missing.length ? "text-critical" : "text-brand"}`}>
                             {missing.length ? `采购 ${missing.length} 项` : "库存已齐"}
                           </Text>
                         </View>
@@ -354,19 +477,19 @@ export default function CookingQueueScreen() {
                       </View>
                     </View>
                     <View className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand/10">
-                      <View className="h-full rounded-full bg-brand" style={{ width: `${preparedPercent}%` }} />
+                      <View className="h-full rounded-full bg-brand-fill" style={{ width: `${preparedPercent}%` }} />
                     </View>
 
                     <TouchableOpacity onPress={() => toggleExpanded(item.recipeId)} className="mt-3 flex-row items-center justify-between rounded-xl bg-canvas px-3 py-2.5">
                       <View className="flex-row items-center">
-                        <FontAwesome6 name="clipboard-check" size={11} color="#2D6A4F" />
+                        <FontAwesome6 name="clipboard-check" size={11} colorClassName="accent-brand" />
                         <Text className="ml-2 text-[11px] font-black text-ink">备料清单与库存状态</Text>
                       </View>
-                      <FontAwesome6 name={expanded ? "chevron-up" : "chevron-down"} size={9} color="#776C60" />
+                      <FontAwesome6 name={expanded ? "chevron-up" : "chevron-down"} size={9} colorClassName="accent-copy-muted" />
                     </TouchableOpacity>
 
                     {expanded ? (
-                      <View className="mt-2 overflow-hidden rounded-2xl border border-[#E8DFD2] bg-white">
+                      <View className="mt-2 overflow-hidden rounded-2xl border border-line bg-surface">
                         {ingredientDataReady ? item.ingredients.map((ingredient, ingredientIndex) => {
                           const prepared = item.preparedIngredientNames.some((name) => (
                             normalizeIngredientName(name) === normalizeIngredientName(ingredient.name)
@@ -378,20 +501,20 @@ export default function CookingQueueScreen() {
                             <TouchableOpacity
                               key={`${ingredient.name}-${ingredientIndex}`}
                               onPress={() => void toggleIngredientPrepared(item, ingredient.name)}
-                              className={`flex-row items-center px-3 py-3 ${ingredientIndex < item.ingredients.length - 1 ? "border-b border-[#F1EDE6]" : ""}`}
+                              className={`flex-row items-center px-3 py-3 ${ingredientIndex < item.ingredients.length - 1 ? "border-b border-line" : ""}`}
                               accessibilityRole="checkbox"
                               accessibilityState={{ checked: prepared }}
                               accessibilityLabel={`${ingredient.name} ${ingredient.amount}`}
                             >
-                              <View className={`h-5 w-5 items-center justify-center rounded-md border ${prepared ? "border-brand bg-brand" : "border-[#CFC5B7] bg-white"}`}>
-                                {prepared ? <FontAwesome6 name="check" size={9} color="#FFFFFF" /> : null}
+                              <View className={`h-5 w-5 items-center justify-center rounded-md border ${prepared ? "border-brand bg-brand-fill" : "border-line bg-surface"}`}>
+                                {prepared ? <FontAwesome6 name="check" size={9} colorClassName="accent-on-brand" /> : null}
                               </View>
                               <View className="ml-2.5 min-w-0 flex-1">
                                 <Text className={`text-[11px] font-bold ${prepared ? "text-copy-muted line-through" : "text-ink"}`}>{ingredient.name}</Text>
                                 <Text className="mt-0.5 text-[9px] text-copy-muted">{ingredient.amount}</Text>
                               </View>
-                              <View className={`rounded-full px-2 py-1 ${inInventory ? "bg-[#E4F0E7]" : "bg-[#F8E7DF]"}`}>
-                                <Text className={`text-[9px] font-black ${inInventory ? "text-brand" : "text-[#A85A49]"}`}>
+                              <View className={`rounded-full px-2 py-1 ${inInventory ? "bg-brand-soft" : "bg-danger-soft"}`}>
+                                <Text className={`text-[9px] font-black ${inInventory ? "text-brand" : "text-critical"}`}>
                                   {inInventory ? "库存已有" : "仍需采购"}
                                 </Text>
                               </View>
@@ -405,27 +528,27 @@ export default function CookingQueueScreen() {
 
                     <View className="mt-3 flex-row gap-2">
                       {ingredientDataReady && missing.length ? (
-                        <TouchableOpacity onPress={() => void addMissingToShoppingList(item)} disabled={shoppingSavingId === item.recipeId} className="h-10 flex-1 flex-row items-center justify-center rounded-xl bg-[#F5EEDD] disabled:opacity-60">
-                          {shoppingSavingId === item.recipeId ? <ActivityIndicator size="small" color="#80682D" /> : <FontAwesome6 name="basket-shopping" size={11} color="#80682D" />}
-                          <Text className="ml-1.5 text-[11px] font-black text-[#80682D]">{item.shoppingListSyncedAt ? "核对采购" : "补齐采购"}</Text>
+                        <TouchableOpacity onPress={() => void addMissingToShoppingList(item)} disabled={shoppingSavingId === item.recipeId} className="h-10 flex-1 flex-row items-center justify-center rounded-xl bg-warm-soft disabled:opacity-60">
+                          {shoppingSavingId === item.recipeId ? <ActivityIndicator size="small" colorClassName="accent-warm" /> : <FontAwesome6 name="basket-shopping" size={11} colorClassName="accent-warm" />}
+                          <Text className="ml-1.5 text-[11px] font-black text-warm">{item.shoppingListSyncedAt ? "核对采购" : "补齐采购"}</Text>
                         </TouchableOpacity>
                       ) : null}
-                      <TouchableOpacity onPress={() => setReminderItem(item)} className="h-10 flex-1 flex-row items-center justify-center rounded-xl bg-[#E8F0E9]">
-                        <FontAwesome6 name="bell" size={11} color="#2D6A4F" />
+                      <TouchableOpacity onPress={() => setReminderItem(item)} className="h-10 flex-1 flex-row items-center justify-center rounded-xl bg-brand-soft">
+                        <FontAwesome6 name="bell" size={11} colorClassName="accent-brand" />
                         <Text className="ml-1.5 text-[11px] font-black text-brand">{item.reminderAt ? "调整提醒" : "提醒我"}</Text>
                       </TouchableOpacity>
                     </View>
                     <View className="mt-2 flex-row gap-2">
-                      <TouchableOpacity onPress={() => router.push("/recipe-detail", { id: item.recipeId })} className="h-10 flex-1 flex-row items-center justify-center rounded-xl border border-line bg-white">
-                        <FontAwesome6 name="book-open" size={11} color="#5D685F" />
-                        <Text className="ml-1.5 text-[11px] font-black text-[#5D685F]">查看菜谱</Text>
+                      <TouchableOpacity onPress={() => router.push("/recipe-detail", { id: item.recipeId })} className="h-10 flex-1 flex-row items-center justify-center rounded-xl border border-line bg-surface">
+                        <FontAwesome6 name="book-open" size={11} colorClassName="accent-copy-muted" />
+                        <Text className="ml-1.5 text-[11px] font-black text-copy-muted">查看菜谱</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity onPress={() => void startCooking(item)} className="h-10 flex-[1.4] flex-row items-center justify-center rounded-xl bg-brand">
-                        <FontAwesome6 name="kitchen-set" size={11} color="#FFFFFF" />
+                      <TouchableOpacity onPress={() => void startCooking(item)} className="h-10 flex-[1.4] flex-row items-center justify-center rounded-xl bg-brand-fill">
+                        <FontAwesome6 name="kitchen-set" size={11} colorClassName="accent-on-brand" />
                         <Text className="ml-1.5 text-[11px] font-black text-white">开始烹饪</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity onPress={() => void removeItem(item)} accessibilityLabel={`从队列移除${item.title}`} className="h-10 w-10 items-center justify-center rounded-xl bg-[#F2ECE3]">
-                        <FontAwesome6 name="trash-can" size={11} color="#8B6F63" />
+                      <TouchableOpacity onPress={() => void removeItem(item)} accessibilityLabel={`从队列移除${item.title}`} className="h-10 w-10 items-center justify-center rounded-xl bg-background-secondary">
+                        <FontAwesome6 name="trash-can" size={11} colorClassName="accent-copy-muted" />
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -438,25 +561,25 @@ export default function CookingQueueScreen() {
 
       <Modal visible={Boolean(reminderItem)} animationType="fade" transparent onRequestClose={() => setReminderItem(null)}>
         <View className="flex-1 justify-end bg-black/45">
-          <View className="rounded-t-[30px] bg-[#FFFDF9] px-5 pb-8 pt-5">
+          <View className="rounded-t-[30px] bg-surface px-5 pb-8 pt-5">
             <View className="mb-4 flex-row items-center justify-between">
               <View className="flex-1 pr-4">
                 <Text className="text-lg font-black text-ink">设置烹饪提醒</Text>
                 <Text className="mt-1 text-xs text-copy-muted" numberOfLines={1}>{reminderItem?.title}</Text>
               </View>
-              <TouchableOpacity onPress={() => setReminderItem(null)} className="h-9 w-9 items-center justify-center rounded-full bg-[#F2ECE3]"><FontAwesome6 name="xmark" size={14} color="#776C60" /></TouchableOpacity>
+              <TouchableOpacity onPress={() => setReminderItem(null)} className="h-9 w-9 items-center justify-center rounded-full bg-background-secondary"><FontAwesome6 name="xmark" size={14} colorClassName="accent-copy-muted" /></TouchableOpacity>
             </View>
             <View className="gap-2">
               {getCookingReminderPresets().map((preset) => (
-                <TouchableOpacity key={preset.key} onPress={() => reminderItem && void saveReminder(reminderItem, preset.date)} disabled={reminderSaving} className="flex-row items-center rounded-2xl border border-[#E8DFD2] bg-white px-4 py-3.5 disabled:opacity-60">
-                  <View className="h-9 w-9 items-center justify-center rounded-xl bg-[#E8F0E9]"><FontAwesome6 name="clock" size={13} color="#2D6A4F" /></View>
+                <TouchableOpacity key={preset.key} onPress={() => reminderItem && void saveReminder(reminderItem, preset.date)} disabled={reminderSaving} className="flex-row items-center rounded-2xl border border-line bg-surface px-4 py-3.5 disabled:opacity-60">
+                  <View className="h-9 w-9 items-center justify-center rounded-xl bg-brand-soft"><FontAwesome6 name="clock" size={13} colorClassName="accent-brand" /></View>
                   <Text className="ml-3 flex-1 text-sm font-black text-ink">{preset.label}</Text>
                   <Text className="text-xs font-bold text-copy-muted">{preset.detail}</Text>
                 </TouchableOpacity>
               ))}
             </View>
             {reminderItem?.reminderAt ? (
-              <TouchableOpacity onPress={() => void clearReminder(reminderItem)} disabled={reminderSaving} className="mt-3 items-center py-3"><Text className="text-xs font-bold text-[#A85A49]">取消当前提醒</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => void clearReminder(reminderItem)} disabled={reminderSaving} className="mt-3 items-center py-3"><Text className="text-xs font-bold text-critical">取消当前提醒</Text></TouchableOpacity>
             ) : null}
           </View>
         </View>

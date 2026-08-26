@@ -22,6 +22,8 @@ export interface Post {
   recommendation_score?: number;
   ip_location?: string | null;
   created_at: string;
+  linked_recipe?: import("@/components/LinkedRecipeCard").LinkedRecipeSummary | null;
+  linked_recipe_unavailable?: boolean;
 }
 
 export type ActivityStatus = "ongoing" | "upcoming" | "ended";

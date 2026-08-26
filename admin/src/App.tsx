@@ -1,5 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router';
-import React, { lazy, Suspense } from 'react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
+import api from './services/api';
+import { adminLoginPath, classifyAdminSession } from './services/adminSession';
 
 const AdminLayout = lazy(() => import('./layout/AdminLayout'));
 const Landing = lazy(() => import('./pages/Landing'));
@@ -24,8 +26,42 @@ const UserLevelRule = lazy(() => import('./pages/UserLevelRule'));
 // Auth Guard
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const token = localStorage.getItem('adminToken');
+  const [status, setStatus] = useState<'checking' | 'authorized' | 'unauthenticated' | 'insufficient-role'>(
+    token ? 'checking' : 'unauthenticated',
+  );
+
+  useEffect(() => {
+    let active = true;
+    if (!token) {
+      setStatus('unauthenticated');
+      return () => { active = false; };
+    }
+    void api.get('/auth/me').then(({ data }) => {
+      if (!active) return;
+      const failure = classifyAdminSession({ role: data.role });
+      if (failure) {
+        localStorage.removeItem('adminToken');
+        setStatus(failure);
+      } else {
+        setStatus('authorized');
+      }
+    }).catch((error) => {
+      if (!active) return;
+      const failure = classifyAdminSession({ status: error.response?.status, code: error.response?.data?.code });
+      localStorage.removeItem('adminToken');
+      setStatus(failure || 'unauthenticated');
+    });
+    return () => { active = false; };
+  }, [token]);
+
   if (!token) {
     return <Navigate to="/login" replace />;
+  }
+  if (status === 'checking') {
+    return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">正在验证管理权限…</div>;
+  }
+  if (status === 'unauthenticated' || status === 'insufficient-role') {
+    return <Navigate to={adminLoginPath(status)} replace />;
   }
   return children;
 };

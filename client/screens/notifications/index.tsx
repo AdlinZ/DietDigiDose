@@ -8,11 +8,12 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { authApi } from "@/services/api";
+import { useAppThemeColors } from "@/hooks/useAppThemeColors";
 
 type NotificationFilter = "all" | "pending" | "system";
 type NotificationItem = {
@@ -52,19 +53,21 @@ function itemVisual(item: NotificationItem) {
   if (item.type === "expiring_inventory") {
     return {
       icon: "clock" as const,
-      color: item.priority === "urgent" ? "#C2413A" : "#B7791F",
-      background: item.priority === "urgent" ? "bg-red-100" : "bg-highlight/25",
+      colorClass: item.priority === "urgent" ? "accent-critical" : "accent-warm",
+      textClass: item.priority === "urgent" ? "text-critical" : "text-warm",
+      background: item.priority === "urgent" ? "bg-danger-soft" : "bg-highlight/25",
       label: item.priority === "urgent" ? "今天到期" : item.priority === "high" ? "高优先级" : "临期任务",
     };
   }
-  if (item.type === "meal_reminder") return { icon: "utensils" as const, color: "#2D6A4F", background: "bg-brand/10", label: "用餐习惯" };
-  if (item.type === "water_reminder") return { icon: "droplet" as const, color: "#0EA5E9", background: "bg-sky-100", label: "饮水习惯" };
-  return { icon: "bullhorn" as const, color: "#2D6A4F", background: "bg-brand/10", label: "系统公告" };
+  if (item.type === "meal_reminder") return { icon: "utensils" as const, colorClass: "accent-brand", textClass: "text-brand", background: "bg-brand/10", label: "用餐习惯" };
+  if (item.type === "water_reminder") return { icon: "droplet" as const, colorClass: "accent-info", textClass: "text-info", background: "bg-info-soft", label: "饮水习惯" };
+  return { icon: "bullhorn" as const, colorClass: "accent-brand", textClass: "text-brand", background: "bg-brand/10", label: "系统公告" };
 }
 
 export default function NotificationsScreen() {
   const router = useSafeRouter();
   const { token, isAuthenticated } = useAuth();
+  const colors = useAppThemeColors();
   const [filter, setFilter] = useState<NotificationFilter>("all");
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
@@ -173,25 +176,25 @@ export default function NotificationsScreen() {
       <TouchableOpacity
         activeOpacity={0.86}
         onPress={() => void runAction(item, "open")}
-        className={`mx-5 mb-3 rounded-2xl border bg-white p-4 ${item.isRead ? "border-line" : "border-brand/30"}`}
+        className={`mx-5 mb-3 rounded-2xl border bg-surface p-4 ${item.isRead ? "border-line" : "border-brand/30"}`}
       >
         <View className="flex-row items-start gap-3">
           <View className={`mt-0.5 h-10 w-10 items-center justify-center rounded-xl ${visual.background}`}>
-            <FontAwesome6 name={visual.icon} size={15} color={visual.color} />
+            <FontAwesome6 name={visual.icon} size={15} colorClassName={visual.colorClass} />
           </View>
           <View className="flex-1">
             <View className="flex-row items-start justify-between gap-2">
               <Text className={`flex-1 text-sm text-ink ${item.isRead ? "font-bold" : "font-black"}`}>{item.title}</Text>
-              {!item.isRead && <View className="mt-1.5 h-2 w-2 rounded-full bg-brand" />}
+              {!item.isRead && <View className="mt-1.5 h-2 w-2 rounded-full bg-brand-fill" />}
             </View>
             <Text className="mt-1 text-xs leading-5 text-copy-muted">{item.body}</Text>
             <View className="mt-2 flex-row items-center justify-between">
-              <Text className="text-[10px] font-bold" style={{ color: visual.color }}>{visual.label}</Text>
-              <Text className="text-[10px] text-[#B0A495]">{new Date(item.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</Text>
+              <Text className={`text-[10px] font-bold ${visual.textClass}`}>{visual.label}</Text>
+              <Text className="text-[10px] text-copy-muted">{new Date(item.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</Text>
             </View>
             {item.type === "expiring_inventory" && item.actionStatus === "pending" && (
               <View className="mt-3 flex-row flex-wrap gap-2 border-t border-background-secondary pt-3">
-                <TouchableOpacity onPress={() => void runAction(item, "plan_recipe")} className="rounded-lg bg-brand px-3 py-2">
+                <TouchableOpacity onPress={() => void runAction(item, "plan_recipe")} className="rounded-lg bg-brand-fill px-3 py-2">
                   <Text className="text-[10px] font-black text-white">安排食谱</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -215,22 +218,22 @@ export default function NotificationsScreen() {
   };
 
   return (
-    <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
+    <Screen safeAreaEdges={["top", "left", "right"]}>
       <View className="flex-row items-center justify-between border-b border-line bg-canvas px-5 pb-3 pt-4">
-        <TouchableOpacity onPress={() => router.back()} className="h-10 w-10 items-center justify-center rounded-full border border-line bg-white">
-          <FontAwesome6 name="chevron-left" size={14} color="#3D3229" />
+        <TouchableOpacity onPress={() => router.back()} className="h-10 w-10 items-center justify-center rounded-full border border-line bg-surface">
+          <FontAwesome6 name="chevron-left" size={14} colorClassName="accent-ink" />
         </TouchableOpacity>
         <Text className="text-lg font-black text-ink">通知中心</Text>
         <TouchableOpacity onPress={() => router.push("/settings")} className="h-10 w-10 items-center justify-center">
-          <FontAwesome6 name="gear" size={16} color="#8B7D6B" />
+          <FontAwesome6 name="gear" size={16} colorClassName="accent-copy-muted" />
         </TouchableOpacity>
       </View>
 
       {!isAuthenticated ? (
         <View className="flex-1 items-center justify-center px-8">
-          <FontAwesome6 name="bell" size={28} color="#2D6A4F" />
+          <FontAwesome6 name="bell" size={28} colorClassName="accent-brand" />
           <Text className="mt-4 text-base font-black text-ink">登录后查看通知</Text>
-          <TouchableOpacity onPress={() => router.push("/login")} className="mt-4 rounded-xl bg-brand px-5 py-3">
+          <TouchableOpacity onPress={() => router.push("/login")} className="mt-4 rounded-xl bg-brand-fill px-5 py-3">
             <Text className="font-bold text-white">去登录</Text>
           </TouchableOpacity>
         </View>
@@ -241,7 +244,7 @@ export default function NotificationsScreen() {
               <TouchableOpacity
                 key={option.key}
                 onPress={() => setFilter(option.key)}
-                className={`rounded-full border px-3 py-2 ${filter === option.key ? "border-brand bg-brand" : "border-line bg-white"}`}
+                className={`rounded-full border px-3 py-2 ${filter === option.key ? "border-brand bg-brand-fill" : "border-line bg-surface"}`}
               >
                 <Text className={`text-xs font-black ${filter === option.key ? "text-white" : "text-copy-muted"}`}>{option.label}</Text>
               </TouchableOpacity>
@@ -253,12 +256,12 @@ export default function NotificationsScreen() {
           </View>
 
           {loading ? (
-            <View className="flex-1 items-center justify-center"><ActivityIndicator color="#2D6A4F" /></View>
+            <View className="flex-1 items-center justify-center"><ActivityIndicator colorClassName="accent-brand" /></View>
           ) : error && items.length === 0 ? (
             <View className="flex-1 items-center justify-center px-8">
-              <FontAwesome6 name="triangle-exclamation" size={26} color="#B7791F" />
+              <FontAwesome6 name="triangle-exclamation" size={26} colorClassName="accent-warm" />
               <Text className="mt-3 text-sm font-bold text-copy-muted">{error}</Text>
-              <TouchableOpacity onPress={() => void load("initial")} className="mt-4 rounded-xl bg-brand px-5 py-3"><Text className="text-xs font-black text-white">重新加载</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => void load("initial")} className="mt-4 rounded-xl bg-brand-fill px-5 py-3"><Text className="text-xs font-black text-white">重新加载</Text></TouchableOpacity>
             </View>
           ) : (
             <FlatList
@@ -266,15 +269,15 @@ export default function NotificationsScreen() {
               renderItem={renderItem}
               keyExtractor={(row) => row.id}
               contentContainerStyle={{ paddingBottom: 32, flexGrow: rows.length ? 0 : 1 }}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load("refresh")} tintColor="#2D6A4F" />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load("refresh")} tintColor={colors.brand} />}
               onEndReached={() => { if (hasMore && !loadingMore) void load("more"); }}
               onEndReachedThreshold={0.35}
-              ListFooterComponent={loadingMore ? <ActivityIndicator className="my-4" color="#2D6A4F" /> : null}
+              ListFooterComponent={loadingMore ? <ActivityIndicator className="my-4" colorClassName="accent-brand" /> : null}
               ListEmptyComponent={(
                 <View className="flex-1 items-center justify-center px-8">
-                  <FontAwesome6 name="bell-slash" size={28} color="#B0A495" />
+                  <FontAwesome6 name="bell-slash" size={28} colorClassName="accent-copy-muted" />
                   <Text className="mt-4 text-sm font-bold text-copy-muted">{filter === "pending" ? "没有待处理提醒" : "暂时没有新通知"}</Text>
-                  <Text className="mt-1 text-xs text-[#B0A495]">可以在设置中管理提醒偏好</Text>
+                  <Text className="mt-1 text-xs text-copy-muted">可以在设置中管理提醒偏好</Text>
                 </View>
               )}
             />

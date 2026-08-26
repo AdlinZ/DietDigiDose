@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { adminLoginPath, classifyAdminSession } from './adminSession';
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -21,9 +22,13 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && error.response.status === 401) {
+    const sessionFailure = classifyAdminSession({
+      status: error.response?.status,
+      code: error.response?.data?.code,
+    });
+    if (sessionFailure) {
       localStorage.removeItem('adminToken');
-      window.location.href = '/login';
+      if (window.location.pathname !== '/login') window.location.href = adminLoginPath(sessionFailure);
     }
     if (
       error.response?.status === 403

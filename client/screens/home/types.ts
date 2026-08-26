@@ -63,6 +63,7 @@ export interface HealthLog {
 }
 
 export interface RecommendationCard {
+  recipeId?: number;
   title: string;
   tag: string;
   desc: string;

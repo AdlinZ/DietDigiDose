@@ -16,6 +16,19 @@ const anonymousSearchRateLimit = sharedRateLimit({
   code: 'FOOD_SEARCH_RATE_LIMITED',
 });
 
+router.get('/barcode/:barcode', anonymousSearchRateLimit, (req, res) => {
+  const barcode = String(req.params.barcode || '').trim();
+  if (!/^\d{8,14}$/.test(barcode)) return res.status(400).json({ error: '条码格式无效', code: 'INVALID_BARCODE' });
+  const food = db.prepare(`
+    SELECT id, name, category, image_url, brands, barcode, original_name
+    FROM ingredients_library
+    WHERE barcode = ? AND deleted_at IS NULL
+    LIMIT 1
+  `).get(barcode);
+  if (!food) return res.status(404).json({ error: '食品库暂未收录该条码', code: 'BARCODE_NOT_FOUND' });
+  return res.json(food);
+});
+
 // GET /api/v1/foods/search?query=xxx
 router.get('/search', anonymousSearchRateLimit, async (req, res) => {
   try {

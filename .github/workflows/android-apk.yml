@@ -2,11 +2,6 @@ name: Android APK
 
 on:
   workflow_dispatch:
-    inputs:
-      version_code:
-        description: Android versionCode (must increase for upgrades)
-        required: true
-        default: '15'
 
 permissions:
   contents: read
@@ -21,10 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      EAS_BUILD_PROFILE: preview-http
-      EXPO_PUBLIC_BACKEND_BASE_URL: http://118.145.165.226:8088
-      EXPO_PUBLIC_ALLOW_INSECURE_HTTP: '1'
-      EXPO_PUBLIC_ANDROID_VERSION_CODE: ${{ inputs.version_code }}
+      EAS_BUILD_PROFILE: candidate
+      EXPO_PUBLIC_BACKEND_BASE_URL: ${{ vars.STAGING_BACKEND_BASE_URL }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -56,6 +49,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Load and validate release metadata
+        run: |
+          pnpm -w validate:release
+          node -e "const r=require('./release.json'); console.log('EXPO_PUBLIC_ANDROID_VERSION_CODE='+r.buildNumber); console.log('RELEASE_SNAPSHOT='+r.snapshot); console.log('PRODUCT_VERSION='+r.productVersion)" >> "$GITHUB_ENV"
+          node -e "if (!process.env.EXPO_PUBLIC_BACKEND_BASE_URL?.startsWith('https://')) process.exit(1)"
 
       - name: Restore release keystore
         env:
@@ -97,14 +96,14 @@ jobs:
         working-directory: client
         run: |
           mkdir -p artifact
-          cp android/app/build/outputs/apk/release/app-release.apk "artifact/DietDigiDose-${{ github.sha }}-v${EXPO_PUBLIC_ANDROID_VERSION_CODE}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "artifact/DietDigiDose-${PRODUCT_VERSION}-${RELEASE_SNAPSHOT}-build${EXPO_PUBLIC_ANDROID_VERSION_CODE}-${{ github.sha }}.apk"
           cd artifact
           sha256sum *.apk > SHA256SUMS.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DietDigiDose-Android-v${{ inputs.version_code }}
+          name: DietDigiDose-Android-candidate
           path: client/artifact/
           if-no-files-found: error
           retention-days: 14

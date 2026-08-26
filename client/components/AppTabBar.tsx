@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, Pressable, Platform, DeviceEventEmitter, Alert, StyleSheet } from "react-native";
 import { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { BlurView } from "expo-blur";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Animated, {
@@ -18,6 +18,8 @@ import { useCSSVariable } from "uniwind";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { createAuthReturnTo } from "@/utils/authReturnTo";
+import { useThemePreference } from "@/contexts/ThemeContext";
+import { useAppThemeColors } from "@/hooks/useAppThemeColors";
 
 const TAB_LAYOUT_TRANSITION = LinearTransition.duration(220).reduceMotion(ReduceMotion.System);
 const QUICK_ACTION_ENTERING = FadeIn.duration(150).reduceMotion(ReduceMotion.System);
@@ -26,6 +28,9 @@ const QUICK_ACTION_HINT_ENTERING = FadeInUp.duration(240).reduceMotion(ReduceMot
 const QUICK_ACTION_HINT_EXITING = FadeOutDown.duration(180).reduceMotion(ReduceMotion.System);
 
 function GlassBackdrop({ borderRadius }: { borderRadius: number }) {
+  const { resolvedTheme } = useThemePreference();
+  const colors = useAppThemeColors();
+
   return (
     <View
       pointerEvents="none"
@@ -35,13 +40,13 @@ function GlassBackdrop({ borderRadius }: { borderRadius: number }) {
           borderRadius,
           overflow: "hidden",
           borderWidth: 1,
-          borderColor: "rgba(255, 255, 255, 0.72)",
+          borderColor: colors.line,
         },
       ]}
     >
       <BlurView
         pointerEvents="none"
-        tint="systemMaterialLight"
+        tint={resolvedTheme === "dark" ? "systemMaterialDark" : "systemMaterialLight"}
         intensity={62}
         {...(Platform.OS === "android"
           ? { experimentalBlurMethod: "dimezisBlurView" as const }
@@ -52,7 +57,7 @@ function GlassBackdrop({ borderRadius }: { borderRadius: number }) {
         pointerEvents="none"
         style={[
           StyleSheet.absoluteFillObject,
-          { backgroundColor: "rgba(255, 255, 255, 0.12)" },
+          { backgroundColor: resolvedTheme === "dark" ? "rgba(17, 23, 19, 0.36)" : "rgba(255, 255, 255, 0.12)" },
         ]}
       />
     </View>
@@ -260,7 +265,7 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
                     className="h-[50px] flex-1 items-center justify-center"
                   >
                     <View className="h-7 w-7 items-center justify-center">
-                      <FontAwesome6 name={config.icon as any} size={16} color="#2D6A4F" />
+                      <FontAwesome6 name={config.icon as any} size={16} colorClassName="accent-brand" />
                     </View>
                     <Text numberOfLines={1} className="mt-1 text-[10.5px] font-black text-brand">
                       {config.label}
@@ -323,7 +328,7 @@ export function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps)
                     }}
                   />
                   {config.badge ? (
-                    <View accessibilityLiveRegion="polite" className="absolute -top-1 -right-1.5 bg-critical px-1 py-0.2 rounded-full min-w-3.5 items-center justify-center border border-white">
+                    <View accessibilityLiveRegion="polite" className="absolute -top-1 -right-1.5 bg-critical-fill px-1 py-0.2 rounded-full min-w-3.5 items-center justify-center border border-white">
                       <Text className="text-[8px] font-black text-white">
                         {config.badge}
                       </Text>

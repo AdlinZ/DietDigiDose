@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import jwt from "jsonwebtoken";
+import type { Express } from "express";
 
 const testDirectory = mkdtempSync(path.join(tmpdir(), "dietdigidose-api-"));
 process.env.NODE_ENV = "test";
@@ -23,6 +24,7 @@ process.env.COMMUNITY_SHARE_RATE_LIMIT = "1000";
 type JsonObject = Record<string, any>;
 
 let server: Server;
+let app: Express;
 let baseUrl = "";
 let db: typeof import("../src/storage/db.js").db;
 let first: JsonObject;
@@ -56,7 +58,7 @@ before(async () => {
     import("../src/storage/db.js"),
   ]);
   db = database.db;
-  const app = createApp();
+  app = createApp();
   await new Promise<void>((resolve, reject) => {
     server = app.listen(0, "127.0.0.1", (error?: Error) => error ? reject(error) : resolve());
   });
@@ -122,6 +124,8 @@ describe("API security baseline", () => {
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 48").get() as { name: string }).name, "traceable_inventory_outcomes");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 49").get() as { name: string }).name, "unified_recipe_recommendations");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 50").get() as { name: string }).name, "realtime_cooking_voice_sessions");
+    assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 51").get() as { name: string }).name, "content_governance_and_kitchenware_capabilities");
+    assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 52").get() as { name: string }).name, "content_import_failure_audit");
     const userColumns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
     assert.ok(userColumns.some((column) => column.name === "session_version"));
     const aiUsageColumns = db.prepare("PRAGMA table_info(ai_usage_logs)").all() as Array<{ name: string }>;
@@ -137,6 +141,30 @@ describe("API security baseline", () => {
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_chat_session_deletions'").get());
     const mealPlanColumns = db.prepare("PRAGMA table_info(meal_plans)").all() as Array<{ name: string }>;
     assert.ok(mealPlanColumns.some((column) => column.name === "version"));
+  });
+
+  test("login audits use Express trusted-proxy resolution instead of raw forwarding headers", async () => {
+    const account = await register("proxy-audit@example.com");
+    app.set("trust proxy", false);
+    const untrusted = await api("/api/v1/auth/login", {
+      method: "POST",
+      headers: { "x-forwarded-for": "203.0.113.91" },
+      body: JSON.stringify({ identifier: "proxy-audit@example.com", password: "Password1234" }),
+    });
+    assert.equal(untrusted.response.status, 200);
+    const untrustedIp = (db.prepare("SELECT last_login_ip FROM users WHERE id = ?").get(account.user.id) as { last_login_ip: string }).last_login_ip;
+    assert.notEqual(untrustedIp, "203.0.113.91");
+    assert.match(untrustedIp, /127\.0\.0\.1|::1|::ffff:127\.0\.0\.1/);
+
+    app.set("trust proxy", 1);
+    const trusted = await api("/api/v1/auth/login", {
+      method: "POST",
+      headers: { "x-forwarded-for": "198.51.100.42" },
+      body: JSON.stringify({ identifier: "proxy-audit@example.com", password: "Password1234" }),
+    });
+    assert.equal(trusted.response.status, 200);
+    assert.equal((db.prepare("SELECT last_login_ip FROM users WHERE id = ?").get(account.user.id) as { last_login_ip: string }).last_login_ip, "198.51.100.42");
+    app.set("trust proxy", false);
   });
 
   test("recipe quality migration backfills trusted sources and quarantines known fallback nutrition", async () => {
@@ -167,6 +195,30 @@ describe("API security baseline", () => {
       .get(official.lastInsertRowid) as JsonObject;
     assert.deepEqual(officialRow, { quality_status: "trusted", nutrition_basis: "source" });
     db.prepare("DELETE FROM recipes WHERE id IN (?, ?)").run(fallback.lastInsertRowid, official.lastInsertRowid);
+  });
+
+  test("governed import batches preserve audit history and rollback inserts and updates", async () => {
+    const governance = await import("../src/services/importGovernance.js");
+    const insertedBatch = governance.beginImportBatch("ingredient", { source: "test_source", revision: "v1", dataLicense: "test-license" });
+    const inserted = db.prepare(`INSERT INTO ingredients_library
+      (name, normalized_name, category, calories_100g, protein_100g, carbs_100g, fat_100g,
+       source, data_license, source_version, quality_status)
+      VALUES ('回滚测试食材', '回滚测试食材', '测试', 10, 1, 1, 0, 'test_source', 'test-license', 'v1', 'trusted')`).run();
+    const insertedId = Number(inserted.lastInsertRowid);
+    governance.trackImportMutation("ingredient", { batchId: insertedBatch, contentId: insertedId, action: "insert", before: null, after: governance.contentSnapshot("ingredient", insertedId)! });
+    governance.finishImportBatch("ingredient", insertedBatch, { status: "committed", stats: { inserted: 1 } });
+    assert.deepEqual(governance.rollbackImportBatch("ingredient", insertedBatch), { batchId: insertedBatch, repeated: false, restored: 0, withdrawn: 1 });
+    assert.ok((db.prepare("SELECT deleted_at FROM ingredients_library WHERE id = ?").get(insertedId) as { deleted_at: string }).deleted_at);
+    assert.equal((db.prepare("SELECT status FROM ingredient_import_batches WHERE id = ?").get(insertedBatch) as { status: string }).status, "rolled_back");
+
+    const existing = db.prepare("SELECT id, name FROM ingredients_library WHERE deleted_at IS NULL ORDER BY id LIMIT 1").get() as { id: number; name: string };
+    const before = governance.contentSnapshot("ingredient", existing.id)!;
+    const updatedBatch = governance.beginImportBatch("ingredient", { source: "test_source", revision: "v2", dataLicense: "test-license" });
+    db.prepare("UPDATE ingredients_library SET name = '被覆盖名称', source_version = 'v2' WHERE id = ?").run(existing.id);
+    governance.trackImportMutation("ingredient", { batchId: updatedBatch, contentId: existing.id, action: "update", before, after: governance.contentSnapshot("ingredient", existing.id)! });
+    governance.finishImportBatch("ingredient", updatedBatch, { status: "committed", stats: { updated: 1 } });
+    assert.equal(governance.rollbackImportBatch("ingredient", updatedBatch).restored, 1);
+    assert.equal((db.prepare("SELECT name FROM ingredients_library WHERE id = ?").get(existing.id) as { name: string }).name, existing.name);
   });
 
   test("public recipe pages exclude needs-review rows and admin review can restore one", async () => {
@@ -728,6 +780,71 @@ describe("user data isolation", () => {
   before(async () => {
     first = await register("first@example.com");
     second = await register("second@example.com");
+  });
+
+  test("kitchenware aliases resolve to governed capabilities and safe substitutions", async () => {
+    const catalog = await api("/api/v1/kitchenware/catalog?query=不粘锅", { token: first.token });
+    assert.equal(catalog.response.status, 200);
+    assert.equal((catalog.body as JsonObject[])[0].name, "平底锅");
+    assert.ok((catalog.body as JsonObject[])[0].capabilities.some((item: JsonObject) => item.code === "fry"));
+
+    const created = await api("/api/v1/kitchenware", {
+      method: "POST", token: first.token,
+      body: JSON.stringify({ name: "不粘锅", category: "烹饪锅具", status: "良好", note: "", image_url: "", purchase_date: "" }),
+    });
+    assert.equal(created.response.status, 201);
+    assert.equal((created.body as JsonObject).name, "平底锅");
+    assert.ok((created.body as JsonObject).catalog_id);
+
+    const recipe = db.prepare(`INSERT INTO recipes
+      (title, cook_time, steps_json, ingredients_json, source, status, quality_status, data_license,
+       source_revision, serving_size, required_kitchenware_json)
+      VALUES ('厨具替代测试菜', 20, '["烹饪测试"]', '[{"name":"番茄"}]', 'official', 'approved',
+        'trusted', 'DietDigiDose-Original', 'test-v1', 1, '["空气炸锅"]')`).run();
+    const recipeId = Number(recipe.lastInsertRowid);
+    const airFryer = db.prepare("SELECT id FROM kitchenware_catalog WHERE name = '空气炸锅'").get() as { id: number };
+    db.prepare(`INSERT INTO recipe_kitchenware_requirements
+      (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
+      VALUES (?, ?, NULL, 'required', 'test', 1, '空气炸锅测试')`).run(recipeId, airFryer.id);
+    await api("/api/v1/kitchenware", {
+      method: "POST", token: first.token,
+      body: JSON.stringify({ name: "烤箱", category: "小家电", status: "良好", note: "", image_url: "", purchase_date: "" }),
+    });
+    const compatibility = await api(`/api/v1/kitchenware/recipes/${recipeId}/compatibility`, { token: first.token });
+    assert.equal(compatibility.response.status, 200);
+    assert.equal((compatibility.body as JsonObject).blocking.length, 0);
+    assert.equal((compatibility.body as JsonObject).requirements[0].substitution.name, "烤箱");
+    assert.equal((compatibility.body as JsonObject).requirements[0].substitution.relationType, "conditional");
+    db.prepare("DELETE FROM recipes WHERE id = ?").run(recipeId);
+  });
+
+  test("recipe library scopes use the same total boundary as their cursor pages", async () => {
+    const userRecipeId = Number(db.prepare(`INSERT INTO recipes
+      (title, cook_time, steps_json, ingredients_json, author_user_id, source, status, quality_status,
+       data_license, source_revision, serving_size, required_kitchenware_json)
+      VALUES ('个人食谱库测试', 15, '["准备","完成"]', '[{"name":"番茄"}]', ?, 'user', 'approved',
+        'trusted', 'User-Submitted-Terms-v1', 'ugc-v1', 1, '["菜刀"]')`).run(first.user.id).lastInsertRowid);
+    const official = db.prepare("SELECT id FROM recipes WHERE source <> 'user' AND status = 'approved' AND deleted_at IS NULL ORDER BY id LIMIT 1").get() as { id: number };
+    db.prepare("INSERT OR IGNORE INTO recipe_favorites (user_id, recipe_id) VALUES (?, ?)").run(first.user.id, official.id);
+
+    const page = await api("/api/v1/recipes?scope=personal&pageSize=1", { token: first.token });
+    assert.equal(page.response.status, 200);
+    assert.equal((page.body as JsonObject).total, 2);
+    assert.equal((page.body as JsonObject).items.length, 1);
+    assert.equal(typeof (page.body as JsonObject).nextCursor, "string");
+    const secondPage = await api(`/api/v1/recipes?scope=personal&pageSize=1&cursor=${encodeURIComponent((page.body as JsonObject).nextCursor)}`, { token: first.token });
+    assert.equal((secondPage.body as JsonObject).total, 2);
+    assert.equal((secondPage.body as JsonObject).items.length, 1);
+    const summary = await api("/api/v1/recipes/library-summary", { token: first.token });
+    assert.equal((summary.body as JsonObject).personal, 2);
+    assert.equal((summary.body as JsonObject).favorites, 1);
+    const isolated = await api("/api/v1/recipes?scope=personal&pageSize=10", { token: second.token });
+    assert.equal((isolated.body as JsonObject).total, 0);
+    const officialPage = await api("/api/v1/recipes?scope=official&pageSize=100", { token: first.token });
+    assert.ok(!(officialPage.body as JsonObject).items.some((item: JsonObject) => item.id === userRecipeId));
+
+    db.prepare("DELETE FROM recipe_favorites WHERE user_id = ? AND recipe_id = ?").run(first.user.id, official.id);
+    db.prepare("DELETE FROM recipes WHERE id = ?").run(userRecipeId);
   });
 
   test("inventory CRUD is scoped to its owner", async () => {
@@ -1860,7 +1977,7 @@ describe("core business authorization", () => {
       category: "家常菜",
       tags: ["快手"],
       ingredients: [{ name: "番茄", amount: "2个", group: "主料" }],
-      steps: ["番茄切块并炒熟"],
+      steps: ["番茄切块", "下锅炒熟"],
     };
     const created = await api("/api/v1/recipes/submissions", {
       method: "POST",

@@ -85,6 +85,7 @@ module.exports = ({ config }) => ({
     favicon: './assets/images/favicon.png',
   },
   plugins: [
+    '@siteed/audio-studio',
     process.env.EXPO_PUBLIC_BACKEND_BASE_URL ? [
       'expo-router',
       {

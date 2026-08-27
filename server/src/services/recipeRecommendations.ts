@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { db } from "../storage/db.js";
 import { currentDateKey } from "../utils/date.js";
 import { decodeCursor, encodeCursor } from "../utils/cursor.js";
+import { evaluateKitchenwareRequirements, kitchenwareRequirementsForRecipe } from "./kitchenwareCapabilities.js";
 
 export const RECIPE_SCORING_VERSION = "rules-2026-08-26.1";
 export const RECIPE_CANDIDATE_VERSION = "sql-public-v1";
@@ -115,6 +116,7 @@ function daysUntil(dateKey: string) {
 }
 
 function recipeSummary(row: Row) {
+  const governedRequirements = kitchenwareRequirementsForRecipe(Number(row.id));
   return {
     id: Number(row.id),
     title: String(row.title),
@@ -133,7 +135,9 @@ function recipeSummary(row: Row) {
     quality_status: String(row.quality_status || "trusted"),
     nutrition_basis: String(row.nutrition_basis || "source"),
     nutrition_is_estimated: String(row.nutrition_basis || "source") !== "source",
-    required_kitchenware: requiredTools(row),
+    required_kitchenware: governedRequirements.length
+      ? governedRequirements.filter((item) => item.role === "required")
+      : requiredTools(row).map((name) => ({ role: "required", catalogName: name, capabilityCode: null })),
   };
 }
 
@@ -150,7 +154,7 @@ function getProfile(userId: number) {
   };
 }
 
-function hardConflict(recipe: Row, ingredients: Array<{ name: string }>, profile: ReturnType<typeof getProfile>, ownedTools: string[], timeBudget: number | null) {
+function hardConflict(recipe: Row, ingredients: Array<{ name: string }>, profile: ReturnType<typeof getProfile>, userId: number, ownedTools: string[], timeBudget: number | null) {
   const recipeText = normalizeRecommendationName(`${recipe.title || ""}${recipe.description || ""}${ingredients.map((item) => item.name).join("")}`);
   for (const allergy of profile.allergies) {
     const name = String(allergy.name || "").trim();
@@ -160,7 +164,10 @@ function hardConflict(recipe: Row, ingredients: Array<{ name: string }>, profile
   if (/素食|纯素/.test(restrictionText) && /(猪|牛|羊|鸡|鸭|鱼|虾|蟹|肉|蛋|奶)/.test(recipeText)) return { code: "dietary_restriction", label: "不符合素食限制" };
   if (/清真/.test(restrictionText) && /(猪|料酒|酒精)/.test(recipeText)) return { code: "dietary_restriction", label: "不符合清真限制" };
   if (timeBudget && Number(recipe.cook_time || 0) > timeBudget) return { code: "time", label: `预计时间超过 ${timeBudget} 分钟` };
-  const missingTools = requiredTools(recipe).filter((required) => !ownedTools.some((owned) => nameMatches(required, owned)));
+  const governed = evaluateKitchenwareRequirements(userId, Number(recipe.id));
+  const missingTools = governed.requirements.length
+    ? governed.blocking.map((required) => required.catalogName || required.capabilityCode || "未映射厨具能力")
+    : requiredTools(recipe).filter((required) => !ownedTools.some((owned) => nameMatches(required, owned)));
   if (missingTools.length) return { code: "kitchenware", label: `缺少必要厨具：${missingTools.join("、")}` };
   return null;
 }
@@ -205,7 +212,7 @@ export function computeRecipeRecommendations(userId: number, input: Omit<Recomme
 
   const results = recipes.flatMap((recipe) => {
     const ingredients = ingredientList(recipe);
-    const conflict = hardConflict(recipe, ingredients, profile, ownedTools, timeBudget);
+    const conflict = hardConflict(recipe, ingredients, profile, userId, ownedTools, timeBudget);
     if (conflict) return [];
     const matched = ingredients.filter((ingredient) => inventory.some((item) => nameMatches(ingredient.name, String(item.food_name))));
     const missing = ingredients.filter((ingredient) => !matched.some((item) => item.name === ingredient.name));

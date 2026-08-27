@@ -369,6 +369,16 @@ export const recipeSubmissionSchema = z.object({
   steps_json: recipeArrayOrJson.optional(),
   ingredients: recipeArrayOrJson.optional(),
   ingredients_json: recipeArrayOrJson.optional(),
+  serving_size: z.union([z.number(), z.string()]).optional(),
+  prep_time: z.union([z.number(), z.string()]).optional(),
+  cuisine: z.string().trim().max(80).optional(),
+  meal_types: recipeArrayOrJson.optional(),
+  required_kitchenware: recipeArrayOrJson.optional(),
+  optional_kitchenware: recipeArrayOrJson.optional(),
+  source_url: z.string().trim().url().max(2000).optional(),
+  data_license: z.string().trim().max(120).optional(),
+  source_revision: z.string().trim().max(120).optional(),
+  source_attribution: z.string().trim().max(300).optional(),
 }).strict().refine((value) => value.steps !== undefined || value.steps_json !== undefined, "请至少填写一个烹饪步骤")
   .refine((value) => value.ingredients !== undefined || value.ingredients_json !== undefined, "请至少填写一种食材");
 
@@ -720,6 +730,12 @@ export const adminQuestionSchema = z.object({
 export const adminIngredientSchema = customFoodSchema.extend({
   category: z.string().trim().max(80).nullable().optional(),
   source: z.string().trim().min(1).max(80).default("official"),
+  aliases: z.array(z.string().trim().min(1).max(80)).max(30).default([]),
+  search_keywords: z.string().trim().max(500).default(""),
+  preparation_state: z.string().trim().min(1).max(40).default("unspecified"),
+  source_version: z.string().trim().min(1).max(120).default("manual-v1"),
+  data_license: z.string().trim().min(1).max(120).default("DietDigiDose-Original"),
+  edible_ratio: z.number().positive().max(1).default(1),
 }).strict();
 const optionalUrlSchema = z.string().trim().max(2000).optional().refine(
   (val) => !val || /^https?:\/\/\S+/i.test(val),

@@ -4,7 +4,16 @@ import { Image } from "expo-image";
 
 export const recipesApi = {
   list: <T = Recipe>(query = "") => requestJson<T[]>(publicFetch, `/api/v1/recipes${query}`),
-  listPage: <T = Recipe>(query = "") => requestJson<{ items: T[]; total?: number; nextCursor: string | null }>(publicFetch, `/api/v1/recipes${query}`),
+  listPage: <T = Recipe>(query = "", apiFetch: ApiFetch = publicFetch) => requestJson<{ items: T[]; total?: number; nextCursor: string | null }>(apiFetch, `/api/v1/recipes${query}`),
+  librarySummary: (apiFetch: ApiFetch = publicFetch) => requestJson<{
+    official: number;
+    community: number;
+    personal: number;
+    favorites: number;
+    publicTotal: number;
+    scopeContract: string;
+    household: { supported: boolean; count: number };
+  }>(apiFetch, "/api/v1/recipes/library-summary"),
   detail: (id: number) => requestJson<Recipe>(publicFetch, `/api/v1/recipes/${id}`),
   prefetchPage: (query = "") => requestJson<{ items: Recipe[]; total?: number; nextCursor: string | null }>(publicFetch, `/api/v1/recipes${query}`).then(() => undefined),
   prefetchDetail: (id: number) => requestJson<Recipe>(publicFetch, `/api/v1/recipes/${id}`).then((recipe) => {

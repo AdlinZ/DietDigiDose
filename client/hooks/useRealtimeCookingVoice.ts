@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import * as Crypto from "expo-crypto";
+import { Audio } from "expo-av";
+import { useAudioRecorder, type AudioDataEvent, type AudioAnalysis } from "@siteed/audio-studio";
+import { Base64 } from "js-base64";
 
 import { useAuthFetch } from "@/contexts/AuthContext";
-import { realtimeVoiceApi, type RealtimeVoiceSession } from "@/services/api";
+import { aiApi, realtimeVoiceApi, waitForAgentRun, type RealtimeVoiceSession } from "@/services/api";
 
 type Options = {
   recipeId: number;
@@ -41,8 +44,29 @@ function recognitionConstructor() {
   return scope.SpeechRecognition || scope.webkitSpeechRecognition || null;
 }
 
+function pcm16WavBase64(chunks: string[], sampleRate = 16_000) {
+  const parts = chunks.map((chunk) => Base64.toUint8Array(chunk));
+  const pcmLength = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const output = new Uint8Array(44 + pcmLength);
+  const view = new DataView(output.buffer);
+  const write = (offset: number, value: string) => [...value].forEach((character, index) => view.setUint8(offset + index, character.charCodeAt(0)));
+  write(0, "RIFF"); view.setUint32(4, 36 + pcmLength, true); write(8, "WAVE"); write(12, "fmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  write(36, "data"); view.setUint32(40, pcmLength, true);
+  let offset = 44;
+  for (const part of parts) { output.set(part, offset); offset += part.byteLength; }
+  return Base64.fromUint8Array(output);
+}
+
 export function useRealtimeCookingVoice(options: Options) {
   const authFetch = useAuthFetch();
+  const {
+    startRecording: startNativeRecording,
+    stopRecording: stopNativeRecording,
+    pauseRecording: pauseNativeRecording,
+    resumeRecording: resumeNativeRecording,
+  } = useAudioRecorder();
   const optionsRef = useRef(options);
   const recognitionRef = useRef<Recognition | null>(null);
   const sessionRef = useRef<RealtimeVoiceSession | null>(null);
@@ -50,10 +74,17 @@ export function useRealtimeCookingVoice(options: Options) {
   const responseGeneration = useRef(0);
   const interruptedRef = useRef(false);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const nativeChunksRef = useRef<string[]>([]);
+  const nativePreRollRef = useRef<string[]>([]);
+  const nativeSpeakingRef = useRef(false);
+  const nativeSpeechStartedAtRef = useRef(0);
+  const nativeSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nativeTranscribingRef = useRef(false);
+  const mutedRef = useRef(false);
   const [session, setSession] = useState<RealtimeVoiceSession | null>(null);
-  const [state, setState] = useState<"off" | "connecting" | "listening" | "processing" | "reconnecting" | "fallback">("off");
+  const [state, setState] = useState<"off" | "connecting" | "listening" | "processing" | "reconnecting" | "muted" | "fallback">("off");
   const stateRef = useRef(state);
-  const supported = Boolean(recognitionConstructor());
+  const supported = Boolean(recognitionConstructor()) || Platform.OS === "android" || Platform.OS === "ios";
 
   useEffect(() => { optionsRef.current = options; }, [options]);
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -113,23 +144,112 @@ export function useRealtimeCookingVoice(options: Options) {
     }
   }, [authFetch, pollAnswer]);
 
+  const flushNativeUtterance = useCallback(async () => {
+    if (nativeTranscribingRef.current || !nativeChunksRef.current.length) return;
+    const chunks = nativeChunksRef.current.splice(0);
+    nativeSpeakingRef.current = false;
+    if (Date.now() - nativeSpeechStartedAtRef.current < 250 || chunks.length < 2) return;
+    nativeTranscribingRef.current = true;
+    setState("processing");
+    try {
+      const result = await aiApi.transcribe<{
+        transcript?: string;
+        text?: string;
+        run: { id: string; status: string; transcript?: string; error?: { message?: string } };
+      }>(authFetch, pcm16WavBase64(chunks), "audio/wav");
+      const completed = await waitForAgentRun(authFetch, result.run);
+      const transcript = String(result.transcript || result.text || completed.transcript || "").trim();
+      if (!transcript) throw new Error("没有识别到清晰语音");
+      optionsRef.current.onTranscript(transcript, true);
+      await submitTurn(transcript);
+    } catch (error) {
+      optionsRef.current.onError(error instanceof Error ? error.message : "连续语音转写失败");
+      if (activeRef.current) setState("listening");
+    } finally {
+      nativeTranscribingRef.current = false;
+    }
+  }, [authFetch, submitTurn]);
+
+  const handleNativeAudio = useCallback(async (event: AudioDataEvent) => {
+    if (!activeRef.current || typeof event.data !== "string") return;
+    nativePreRollRef.current.push(event.data);
+    nativePreRollRef.current = nativePreRollRef.current.slice(-3);
+    if (nativeSpeakingRef.current) nativeChunksRef.current.push(event.data);
+    if (nativeChunksRef.current.length > 160) void flushNativeUtterance();
+  }, [flushNativeUtterance]);
+
+  const handleNativeAnalysis = useCallback(async (event: AudioAnalysis) => {
+    if (!activeRef.current) return;
+    const speaking = event.dataPoints.some((point) => !point.silent && point.rms >= 0.018);
+    if (speaking) {
+      if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
+      nativeSilenceTimerRef.current = null;
+      if (!nativeSpeakingRef.current) {
+        nativeSpeakingRef.current = true;
+        nativeSpeechStartedAtRef.current = Date.now();
+        nativeChunksRef.current = [...nativePreRollRef.current];
+        if (stateRef.current === "processing") {
+          interruptedRef.current = true;
+          responseGeneration.current += 1;
+          optionsRef.current.onBargeIn();
+        }
+      }
+      setState("listening");
+      return;
+    }
+    if (nativeSpeakingRef.current && !nativeSilenceTimerRef.current) {
+      nativeSilenceTimerRef.current = setTimeout(() => {
+        nativeSilenceTimerRef.current = null;
+        void flushNativeUtterance();
+      }, 650);
+    }
+  }, [flushNativeUtterance]);
+
   const stop = useCallback(async () => {
     activeRef.current = false;
+    mutedRef.current = false;
     responseGeneration.current += 1;
     if (heartbeatRef.current) clearInterval(heartbeatRef.current);
     heartbeatRef.current = null;
     try { recognitionRef.current?.abort(); } catch {}
     recognitionRef.current = null;
+    if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
+    nativeSilenceTimerRef.current = null;
+    nativeSpeakingRef.current = false;
+    nativeChunksRef.current = [];
+    nativePreRollRef.current = [];
+    if (Platform.OS !== "web") await stopNativeRecording().catch(() => undefined);
     const current = sessionRef.current;
     sessionRef.current = null;
     setSession(null);
     setState("off");
     if (current) await realtimeVoiceApi.close(authFetch, current.id).catch(() => undefined);
-  }, [authFetch]);
+  }, [authFetch, stopNativeRecording]);
+
+  const toggleMute = useCallback(async () => {
+    const current = sessionRef.current;
+    if (!current || !activeRef.current) return false;
+    const nextMuted = !mutedRef.current;
+    mutedRef.current = nextMuted;
+    if (Platform.OS === "web") {
+      if (nextMuted) {
+        try { recognitionRef.current?.abort(); } catch {}
+      } else {
+        try { recognitionRef.current?.start(); } catch { setState("reconnecting"); }
+      }
+    } else if (nextMuted) await pauseNativeRecording();
+    else await resumeNativeRecording();
+    const result = await realtimeVoiceApi.heartbeat(authFetch, current.id, { version: current.version, muted: nextMuted, reconnect: false });
+    sessionRef.current = result.session;
+    setSession(result.session);
+    setState(nextMuted ? "muted" : "listening");
+    return nextMuted;
+  }, [authFetch, pauseNativeRecording, resumeNativeRecording]);
 
   const start = useCallback(async () => {
     const RecognitionConstructor = recognitionConstructor();
-    if (!RecognitionConstructor || !Number.isInteger(optionsRef.current.recipeId) || optionsRef.current.recipeId <= 0) {
+    const native = Platform.OS === "android" || Platform.OS === "ios";
+    if ((!RecognitionConstructor && !native) || !Number.isInteger(optionsRef.current.recipeId) || optionsRef.current.recipeId <= 0) {
       setState("fallback");
       return false;
     }
@@ -137,7 +257,7 @@ export function useRealtimeCookingVoice(options: Options) {
     try {
       const created = await realtimeVoiceApi.create(authFetch, {
         recipeId: optionsRef.current.recipeId,
-        platform: "web",
+        platform: Platform.OS,
         idempotencyKey: `realtime-cooking-${optionsRef.current.recipeId}-${Date.now()}`,
         currentStep: optionsRef.current.currentStep,
         recipeSteps: optionsRef.current.recipeSteps,
@@ -146,41 +266,60 @@ export function useRealtimeCookingVoice(options: Options) {
       sessionRef.current = created.session;
       setSession(created.session);
       activeRef.current = true;
-      const recognition = new RecognitionConstructor();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "zh-CN";
-      recognition.onstart = () => setState("listening");
-      recognition.onspeechstart = () => {
-        if (stateRef.current === "processing") {
-          interruptedRef.current = true;
-          responseGeneration.current += 1;
-          optionsRef.current.onBargeIn();
-        }
-      };
-      recognition.onresult = (event: any) => {
-        let interim = "";
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          const result = event.results[index];
-          const text = String(result[0]?.transcript || "").trim();
-          if (!text) continue;
-          optionsRef.current.onTranscript(text, Boolean(result.isFinal));
-          if (result.isFinal) void submitTurn(text);
-          else interim += text;
-        }
-        if (interim) optionsRef.current.onTranscript(interim, false);
-      };
-      recognition.onerror = () => setState("reconnecting");
-      recognition.onend = () => {
-        if (!activeRef.current) return;
-        setState("reconnecting");
-        setTimeout(() => {
-          if (!activeRef.current) return;
-          try { recognition.start(); } catch { setState("fallback"); }
-        }, 300);
-      };
-      recognitionRef.current = recognition;
-      recognition.start();
+      if (RecognitionConstructor) {
+        const recognition = new RecognitionConstructor();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = "zh-CN";
+        recognition.onstart = () => setState("listening");
+        recognition.onspeechstart = () => {
+          if (stateRef.current === "processing") {
+            interruptedRef.current = true;
+            responseGeneration.current += 1;
+            optionsRef.current.onBargeIn();
+          }
+        };
+        recognition.onresult = (event: any) => {
+          let interim = "";
+          for (let index = event.resultIndex; index < event.results.length; index += 1) {
+            const result = event.results[index];
+            const text = String(result[0]?.transcript || "").trim();
+            if (!text) continue;
+            optionsRef.current.onTranscript(text, Boolean(result.isFinal));
+            if (result.isFinal) void submitTurn(text);
+            else interim += text;
+          }
+          if (interim) optionsRef.current.onTranscript(interim, false);
+        };
+        recognition.onerror = () => setState("reconnecting");
+        recognition.onend = () => {
+          if (!activeRef.current || mutedRef.current) return;
+          setState("reconnecting");
+          setTimeout(() => {
+            if (!activeRef.current) return;
+            try { recognition.start(); } catch { setState("fallback"); }
+          }, 300);
+        };
+        recognitionRef.current = recognition;
+        recognition.start();
+      } else {
+        const permission = await Audio.requestPermissionsAsync();
+        if (!permission.granted) throw new Error("未获得麦克风权限，已保留文字和按轮录音");
+        await startNativeRecording({
+          sampleRate: 16_000, channels: 1, encoding: "pcm_16bit", interval: 100,
+          enableProcessing: true, keepFullAnalysis: false, intervalAnalysis: 100,
+          segmentDurationMs: 100, features: { rms: true }, output: { primary: { enabled: false } },
+          android: { audioFocusStrategy: "communication" }, autoResumeAfterInterruption: false,
+          onAudioStream: handleNativeAudio, onAudioAnalysis: handleNativeAnalysis,
+          onRecordingInterrupted: () => {
+            if (activeRef.current) {
+              setState("fallback");
+              optionsRef.current.onError("录音被系统中断，已停止持续监听");
+            }
+          },
+        });
+        setState("listening");
+      }
       heartbeatRef.current = setInterval(() => {
         const activeSession = sessionRef.current;
         if (!activeSession) return;
@@ -194,9 +333,15 @@ export function useRealtimeCookingVoice(options: Options) {
       optionsRef.current.onError(error instanceof Error ? error.message : "实时通道不可用，已切换按轮录音");
       return false;
     }
-  }, [authFetch, submitTurn]);
+  }, [authFetch, handleNativeAnalysis, handleNativeAudio, startNativeRecording, submitTurn]);
 
   useEffect(() => () => { void stop(); }, [stop]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (next !== "active" && activeRef.current) void stop();
+    });
+    return () => subscription.remove();
+  }, [stop]);
 
-  return { supported, session, state, active: !["off", "fallback"].includes(state), start, stop };
+  return { supported, session, state, active: !["off", "fallback"].includes(state), muted: state === "muted", start, stop, toggleMute };
 }

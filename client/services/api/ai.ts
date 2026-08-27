@@ -75,3 +75,39 @@ export const realtimeVoiceApi = {
   events: (apiFetch: ApiFetch, sessionId: string, after: number) => requestJson<{ session: RealtimeVoiceSession; events: RealtimeVoiceEvent[] }>(apiFetch, `/api/v1/ai/realtime-voice/sessions/${sessionId}/events?after=${after}`),
   close: (apiFetch: ApiFetch, sessionId: string) => requestJson<{ session: RealtimeVoiceSession }>(apiFetch, `/api/v1/ai/realtime-voice/sessions/${sessionId}`, { method: "DELETE" }),
 };
+
+export type VoicePackManifest = {
+  voiceId: string;
+  name: string;
+  version: string;
+  language: "zh-CN";
+  sampleRate: number;
+  outputFormat: "pcm-f32";
+  minimumAppVersion: string;
+  minimumMemoryMb: number;
+  license: { name: string; url: string; speakerAuthorization: string; modelNotice: string };
+  resources: Array<{ path: string; url: string; sha256: string; bytes: number }>;
+  model: {
+    path: string;
+    vocabularyPath: string;
+    inputNames: { tokens: string; lengths: string; scales?: string; speakerId?: string };
+    outputName?: string;
+    speakerId?: number;
+  };
+  previewUrl?: string;
+};
+
+export const voicePackApi = {
+  catalog: (apiFetch: ApiFetch) => requestJson<{
+    items: VoicePackManifest[];
+    revoked: Array<{ voiceId: string; version: string }>;
+    syntheticVoiceDisclosure: string;
+  }>(apiFetch, "/api/v1/ai/voice-packs"),
+  synthesize: (apiFetch: ApiFetch, text: string) => requestJson<{
+    audioBase64: string;
+    mimeType: "audio/mpeg";
+    source: "server";
+  }>(apiFetch, "/api/v1/ai/voice-packs/synthesize", {
+    method: "POST", body: JSON.stringify({ text }), timeoutMs: 35_000,
+  }),
+};

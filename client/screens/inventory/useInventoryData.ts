@@ -17,10 +17,11 @@ export interface RecipeCatalogQuery {
   category?: string;
   search?: string;
   maxCookTime?: number;
+  scope?: "official" | "personal";
 }
 
 function isDefaultRecipeQuery(query: RecipeCatalogQuery) {
-  return !query.category && !query.search && !query.maxCookTime;
+  return !query.category && !query.search && !query.maxCookTime && query.scope !== "personal";
 }
 
 export function buildRecipePageQuery(query: RecipeCatalogQuery, cursor?: string | null) {
@@ -28,6 +29,7 @@ export function buildRecipePageQuery(query: RecipeCatalogQuery, cursor?: string 
   if (query.category) params.set("category", query.category);
   if (query.search) params.set("search", query.search);
   if (query.maxCookTime) params.set("maxCookTime", String(query.maxCookTime));
+  if (query.scope) params.set("scope", query.scope);
   if (cursor) params.set("cursor", cursor);
   return `?${params.toString()}`;
 }
@@ -37,6 +39,7 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [recipeTotal, setRecipeTotal] = useState(0);
   const [recipeNextCursor, setRecipeNextCursor] = useState<string | null>(null);
+  const [recipeLibrarySummary, setRecipeLibrarySummary] = useState({ official: 0, community: 0, personal: 0, favorites: 0 });
   const [kitchenware, setKitchenware] = useState<KitchenwareItem[]>([]);
   const [kitchenwareCatalog, setKitchenwareCatalog] = useState<KitchenwareCatalogItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
@@ -56,6 +59,7 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
       category: query.category?.trim() || undefined,
       search: query.search?.trim() || undefined,
       maxCookTime: query.maxCookTime && query.maxCookTime > 0 ? query.maxCookTime : undefined,
+      scope: query.scope,
     };
     recipeQueryRef.current = normalizedQuery;
     const generation = recipeGenerationRef.current + 1;
@@ -66,7 +70,7 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
     setLoadingMoreRecipes(false);
     setLoadingRecipes(true);
     try {
-      const page = await recipesApi.listPage<Recipe>(buildRecipePageQuery(normalizedQuery));
+      const page = await recipesApi.listPage<Recipe>(buildRecipePageQuery(normalizedQuery), isAuthenticated ? authFetch : undefined);
       if (recipeGenerationRef.current !== generation) return;
       const validRecipes = Array.isArray(page.items) ? page.items : [];
       recipesRef.current = validRecipes;
@@ -103,7 +107,7 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
     } finally {
       if (recipeGenerationRef.current === generation) setLoadingRecipes(false);
     }
-  }, []);
+  }, [authFetch, isAuthenticated]);
 
   const loadMoreRecipes = useCallback(async () => {
     const cursor = recipeNextCursorRef.current;
@@ -112,7 +116,7 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
     loadingMoreRecipesRef.current = true;
     setLoadingMoreRecipes(true);
     try {
-      const page = await recipesApi.listPage<Recipe>(buildRecipePageQuery(recipeQueryRef.current, cursor));
+      const page = await recipesApi.listPage<Recipe>(buildRecipePageQuery(recipeQueryRef.current, cursor), isAuthenticated ? authFetch : undefined);
       if (recipeGenerationRef.current !== generation) return;
       const incoming = Array.isArray(page.items) ? page.items : [];
       const mergedRecipes = appendUniqueItemsByKey(recipesRef.current, incoming, (recipe) => recipe.id);
@@ -138,7 +142,7 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
         setLoadingMoreRecipes(false);
       }
     }
-  }, []);
+  }, [authFetch, isAuthenticated]);
 
   const refresh = useCallback(async () => {
     void reloadRecipes(recipeQueryRef.current);
@@ -155,11 +159,16 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
 
     setLoadingItems(true);
     setLoadingKitchenware(true);
-    const [inventoryResult, kitchenwareResult, catalogResult] = await Promise.allSettled([
+    const [inventoryResult, kitchenwareResult, catalogResult, librarySummaryResult] = await Promise.allSettled([
       inventoryApi.list(authFetch),
       kitchenwareApi.list<KitchenwareItem>(authFetch),
       kitchenwareApi.catalog<KitchenwareCatalogItem>(authFetch),
+      recipesApi.librarySummary(authFetch),
     ]);
+
+    if (librarySummaryResult.status === "fulfilled") {
+      setRecipeLibrarySummary(librarySummaryResult.value);
+    }
 
     if (inventoryResult.status === "fulfilled") {
       const validItems = Array.isArray(inventoryResult.value) ? inventoryResult.value : [];
@@ -207,6 +216,7 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
     setItems,
     recipes,
     recipeTotal,
+    recipeLibrarySummary,
     hasMoreRecipes: recipeNextCursor !== null,
     kitchenware,
     kitchenwareCatalog,

@@ -4,9 +4,15 @@ import { db } from "../storage/db.js";
 import { validateBody } from "../middleware/validate.js";
 import { kitchenwareSchema } from "../validation/schemas.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
+import {
+  enqueueKitchenwareMappingReview,
+  evaluateKitchenwareRequirements,
+  resolveKitchenwareCatalog,
+} from "../services/kitchenwareCapabilities.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
+router.param("recipeId", positiveIntegerParam);
 const CATEGORIES = new Set(["小家电", "烹饪锅具", "刀具餐具", "烘焙工具", "其他"]);
 const STATUSES = new Set(["常用", "良好", "需保养", "维修中", "闲置"]);
 
@@ -22,6 +28,38 @@ function normalizeInput(body: Record<string, unknown>) {
     note: String(body.note || "").trim(),
     imageUrl: String(body.image_url || "").trim(),
     purchaseDate: String(body.purchase_date || "").trim(),
+  };
+}
+
+function parseJson(value: unknown, fallback: unknown) {
+  if (typeof value !== "string") return fallback;
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+
+function formatCatalogItem(item: Record<string, unknown>) {
+  const capabilities = db.prepare(`SELECT c.code, c.name, c.description, c.safety_level, cc.constraints_json
+    FROM kitchenware_catalog_capabilities cc
+    JOIN kitchenware_capabilities c ON c.code = cc.capability_code
+    WHERE cc.catalog_id = ? ORDER BY c.code`).all(item.id) as Array<Record<string, unknown>>;
+  const substitutions = db.prepare(`SELECT c.id, c.name, s.relation_type, s.impact_json, s.safety_note
+    FROM kitchenware_substitutions s JOIN kitchenware_catalog c ON c.id = s.substitute_catalog_id
+    WHERE s.source_catalog_id = ? ORDER BY CASE s.relation_type WHEN 'equivalent' THEN 0 WHEN 'conditional' THEN 1 ELSE 2 END, c.name`)
+    .all(item.id) as Array<Record<string, unknown>>;
+  return {
+    ...item,
+    aliases: parseJson(item.aliases, []),
+    cooking_methods: parseJson(item.cooking_methods, []),
+    attributes: parseJson(item.attributes_json, {}),
+    capabilities: capabilities.map((capability) => ({
+      ...capability,
+      constraints: parseJson(capability.constraints_json, {}),
+      constraints_json: undefined,
+    })),
+    substitutions: substitutions.map((substitution) => ({
+      ...substitution,
+      impact: parseJson(substitution.impact_json, {}),
+      impact_json: undefined,
+    })),
   };
 }
 
@@ -47,9 +85,28 @@ router.get("/", (req: AuthRequest, res) => {
 });
 
 // GET /api/v1/kitchenware/catalog - 官方标准厨具类型库
-router.get("/catalog", (_req, res) => {
-  const items = db.prepare(`SELECT * FROM kitchenware_catalog ORDER BY category, name`).all();
-  return res.json(items);
+router.get("/catalog", (req, res) => {
+  const query = String(req.query.query || "").trim();
+  const items = db.prepare(`SELECT * FROM kitchenware_catalog
+    WHERE quality_status = 'trusted' ORDER BY category, name`).all() as Array<Record<string, unknown>>;
+  const filtered = query
+    ? items.filter((item) => {
+      const aliases = parseJson(item.aliases, []) as string[];
+      return resolveKitchenwareCatalog(query)?.id === Number(item.id)
+        || [String(item.name), ...aliases].some((name) => name.includes(query) || query.includes(name));
+    })
+    : items;
+  return res.json(filtered.map(formatCatalogItem));
+});
+
+router.get("/capabilities", (_req, res) => {
+  return res.json(db.prepare("SELECT * FROM kitchenware_capabilities ORDER BY code").all());
+});
+
+router.get("/recipes/:recipeId/compatibility", (req: AuthRequest, res) => {
+  const recipe = db.prepare("SELECT id FROM recipes WHERE id = ? AND deleted_at IS NULL AND status = 'approved'").get(req.params.recipeId);
+  if (!recipe) return res.status(404).json({ error: "菜谱不存在" });
+  return res.json(evaluateKitchenwareRequirements(req.userId!, Number(req.params.recipeId)));
 });
 
 // POST /api/v1/kitchenware
@@ -58,14 +115,18 @@ router.post("/", validateBody(kitchenwareSchema), (req: AuthRequest, res) => {
   const validationError = validateInput(input);
   if (validationError) return res.status(400).json({ error: validationError });
 
+  const catalog = resolveKitchenwareCatalog(input.name);
+  if (!catalog || catalog.confidence < 0.7) enqueueKitchenwareMappingReview(input.name, "user_kitchenware", req.userId, catalog?.confidence || 0);
   const result = db.prepare(`
     INSERT INTO kitchenware_items (
-      user_id, name, category, status, note, image_url, purchase_date
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      user_id, name, original_name, catalog_id, category, status, note, image_url, purchase_date
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     req.userId,
-    input.name,
-    input.category,
+    catalog?.name || input.name,
+    catalog && catalog.name !== input.name ? input.name : null,
+    catalog?.id || null,
+    catalog?.category || input.category,
     input.status,
     input.note || null,
     input.imageUrl || null,
@@ -89,14 +150,18 @@ router.put("/:id", validateBody(kitchenwareSchema), (req: AuthRequest, res) => {
   const validationError = validateInput(input);
   if (validationError) return res.status(400).json({ error: validationError });
 
+  const catalog = resolveKitchenwareCatalog(input.name);
+  if (!catalog || catalog.confidence < 0.7) enqueueKitchenwareMappingReview(input.name, "user_kitchenware", id, catalog?.confidence || 0);
   db.prepare(`
     UPDATE kitchenware_items
-    SET name = ?, category = ?, status = ?, note = ?, image_url = ?,
+    SET name = ?, original_name = ?, catalog_id = ?, category = ?, status = ?, note = ?, image_url = ?,
         purchase_date = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND user_id = ?
   `).run(
-    input.name,
-    input.category,
+    catalog?.name || input.name,
+    catalog && catalog.name !== input.name ? input.name : null,
+    catalog?.id || null,
+    catalog?.category || input.category,
     input.status,
     input.note || null,
     input.imageUrl || null,

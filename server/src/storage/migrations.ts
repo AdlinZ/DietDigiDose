@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import { assessRecipeQuality } from "../services/recipeQuality.js";
 
 type Migration = {
@@ -1463,6 +1464,365 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_realtime_voice_events_session_sequence
           ON realtime_voice_events(session_id, sequence);
       `);
+    },
+  },
+  {
+    version: 51,
+    name: "content_governance_and_kitchenware_capabilities",
+    up(database) {
+      for (const [column, definition] of [
+        ["normalized_name", "TEXT"],
+        ["aliases_json", "TEXT NOT NULL DEFAULT '[]'"],
+        ["search_keywords", "TEXT NOT NULL DEFAULT ''"],
+        ["preparation_state", "TEXT NOT NULL DEFAULT 'unspecified'"],
+        ["quality_status", "TEXT NOT NULL DEFAULT 'trusted'"],
+        ["source_version", "TEXT"],
+        ["source_updated_at", "DATETIME"],
+        ["nutrition_basis", "TEXT NOT NULL DEFAULT 'per_100g'"],
+        ["edible_ratio", "REAL NOT NULL DEFAULT 1"],
+        ["review_notes", "TEXT"],
+      ] as const) addColumn(database, "ingredients_library", column, definition);
+
+      for (const [column, definition] of [
+        ["canonical_key", "TEXT"],
+        ["source_content_hash", "TEXT"],
+        ["import_batch_id", "TEXT"],
+        ["serving_size", "INTEGER"],
+        ["prep_time", "INTEGER"],
+        ["cuisine", "TEXT"],
+        ["meal_types_json", "TEXT NOT NULL DEFAULT '[]'"],
+        ["required_kitchenware_json", "TEXT NOT NULL DEFAULT '[]'"],
+        ["optional_kitchenware_json", "TEXT NOT NULL DEFAULT '[]'"],
+        ["duplicate_of_recipe_id", "INTEGER"],
+        ["withdrawn_at", "DATETIME"],
+      ] as const) addColumn(database, "recipes", column, definition);
+
+      for (const [table, column, definition] of [
+        ["kitchenware_catalog", "attributes_json", "TEXT NOT NULL DEFAULT '{}'"],
+        ["kitchenware_catalog", "quality_status", "TEXT NOT NULL DEFAULT 'trusted'"],
+        ["kitchenware_catalog", "capability_version", "INTEGER NOT NULL DEFAULT 1"],
+        ["kitchenware_catalog", "updated_at", "DATETIME"],
+        ["kitchenware_items", "catalog_id", "INTEGER"],
+        ["kitchenware_items", "attributes_json", "TEXT NOT NULL DEFAULT '{}'"],
+      ] as const) addColumn(database, table, column, definition);
+      database.exec("UPDATE kitchenware_catalog SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)");
+
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS ingredient_aliases (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ingredient_id INTEGER NOT NULL,
+          alias TEXT NOT NULL,
+          normalized_alias TEXT NOT NULL,
+          locale TEXT NOT NULL DEFAULT 'zh-CN',
+          alias_type TEXT NOT NULL DEFAULT 'synonym',
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(ingredient_id, normalized_alias),
+          FOREIGN KEY (ingredient_id) REFERENCES ingredients_library(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_ingredient_aliases_lookup
+          ON ingredient_aliases(normalized_alias, ingredient_id);
+        CREATE TABLE IF NOT EXISTS ingredient_portions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ingredient_id INTEGER NOT NULL,
+          label TEXT NOT NULL,
+          grams REAL NOT NULL CHECK(grams > 0),
+          source TEXT NOT NULL,
+          source_version TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(ingredient_id, label),
+          FOREIGN KEY (ingredient_id) REFERENCES ingredients_library(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS ingredient_import_batches (
+          id TEXT PRIMARY KEY,
+          source TEXT NOT NULL,
+          source_version TEXT NOT NULL,
+          data_license TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('running', 'validated', 'committed', 'rolled_back', 'failed')),
+          stats_json TEXT NOT NULL DEFAULT '{}',
+          error_json TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at DATETIME,
+          rolled_back_at DATETIME
+        );
+        CREATE TABLE IF NOT EXISTS ingredient_import_batch_items (
+          batch_id TEXT NOT NULL,
+          ingredient_id INTEGER NOT NULL,
+          action TEXT NOT NULL CHECK(action IN ('insert', 'update')),
+          before_json TEXT,
+          after_json TEXT NOT NULL,
+          PRIMARY KEY (batch_id, ingredient_id),
+          FOREIGN KEY (batch_id) REFERENCES ingredient_import_batches(id) ON DELETE CASCADE,
+          FOREIGN KEY (ingredient_id) REFERENCES ingredients_library(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS ingredient_search_gaps (
+          normalized_query TEXT PRIMARY KEY,
+          sample_query TEXT NOT NULL,
+          hit_count INTEGER NOT NULL DEFAULT 1,
+          first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS recipe_import_batches (
+          id TEXT PRIMARY KEY,
+          source TEXT NOT NULL,
+          source_revision TEXT NOT NULL,
+          data_license TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('running', 'validated', 'committed', 'rolled_back', 'failed')),
+          stats_json TEXT NOT NULL DEFAULT '{}',
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at DATETIME,
+          rolled_back_at DATETIME
+        );
+        CREATE TABLE IF NOT EXISTS recipe_import_batch_items (
+          batch_id TEXT NOT NULL,
+          recipe_id INTEGER NOT NULL,
+          action TEXT NOT NULL CHECK(action IN ('insert', 'update')),
+          before_json TEXT,
+          after_json TEXT NOT NULL,
+          PRIMARY KEY (batch_id, recipe_id),
+          FOREIGN KEY (batch_id) REFERENCES recipe_import_batches(id) ON DELETE CASCADE,
+          FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS recipe_duplicate_candidates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recipe_id INTEGER NOT NULL,
+          candidate_recipe_id INTEGER NOT NULL,
+          similarity REAL NOT NULL CHECK(similarity >= 0 AND similarity <= 1),
+          reasons_json TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'merged', 'distinct', 'dismissed')),
+          reviewed_by INTEGER,
+          reviewed_at DATETIME,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(recipe_id, candidate_recipe_id),
+          CHECK(recipe_id < candidate_recipe_id),
+          FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE,
+          FOREIGN KEY (candidate_recipe_id) REFERENCES recipes(id) ON DELETE CASCADE,
+          FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE TABLE IF NOT EXISTS recipe_coverage_baselines (
+          dimension TEXT NOT NULL,
+          value TEXT NOT NULL,
+          minimum_candidates INTEGER NOT NULL CHECK(minimum_candidates >= 0),
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (dimension, value)
+        );
+
+        CREATE TABLE IF NOT EXISTS kitchenware_capabilities (
+          code TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT NOT NULL DEFAULT '',
+          safety_level TEXT NOT NULL DEFAULT 'normal' CHECK(safety_level IN ('normal', 'caution', 'restricted')),
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS kitchenware_catalog_capabilities (
+          catalog_id INTEGER NOT NULL,
+          capability_code TEXT NOT NULL,
+          constraints_json TEXT NOT NULL DEFAULT '{}',
+          PRIMARY KEY (catalog_id, capability_code),
+          FOREIGN KEY (catalog_id) REFERENCES kitchenware_catalog(id) ON DELETE CASCADE,
+          FOREIGN KEY (capability_code) REFERENCES kitchenware_capabilities(code) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS kitchenware_substitutions (
+          source_catalog_id INTEGER NOT NULL,
+          substitute_catalog_id INTEGER NOT NULL,
+          relation_type TEXT NOT NULL CHECK(relation_type IN ('equivalent', 'conditional', 'forbidden')),
+          impact_json TEXT NOT NULL DEFAULT '{}',
+          safety_note TEXT NOT NULL DEFAULT '',
+          PRIMARY KEY (source_catalog_id, substitute_catalog_id),
+          FOREIGN KEY (source_catalog_id) REFERENCES kitchenware_catalog(id) ON DELETE CASCADE,
+          FOREIGN KEY (substitute_catalog_id) REFERENCES kitchenware_catalog(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS recipe_kitchenware_requirements (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recipe_id INTEGER NOT NULL,
+          catalog_id INTEGER,
+          capability_code TEXT,
+          role TEXT NOT NULL CHECK(role IN ('required', 'optional', 'convenience')),
+          source TEXT NOT NULL DEFAULT 'curated',
+          confidence REAL NOT NULL DEFAULT 1 CHECK(confidence >= 0 AND confidence <= 1),
+          notes TEXT NOT NULL DEFAULT '',
+          UNIQUE(recipe_id, catalog_id, capability_code, role),
+          CHECK(catalog_id IS NOT NULL OR capability_code IS NOT NULL),
+          FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE,
+          FOREIGN KEY (catalog_id) REFERENCES kitchenware_catalog(id) ON DELETE CASCADE,
+          FOREIGN KEY (capability_code) REFERENCES kitchenware_capabilities(code) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS kitchenware_mapping_reviews (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          raw_name TEXT NOT NULL,
+          normalized_name TEXT NOT NULL,
+          source_type TEXT NOT NULL,
+          source_id TEXT,
+          confidence REAL NOT NULL DEFAULT 0,
+          suggested_catalog_id INTEGER,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          reviewed_at DATETIME,
+          UNIQUE(normalized_name, source_type, source_id),
+          FOREIGN KEY (suggested_catalog_id) REFERENCES kitchenware_catalog(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ingredients_normalized_quality
+          ON ingredients_library(normalized_name, quality_status) WHERE deleted_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_recipes_canonical_quality
+          ON recipes(canonical_key, quality_status) WHERE deleted_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_recipe_requirements_recipe_role
+          ON recipe_kitchenware_requirements(recipe_id, role);
+      `);
+
+      const normalize = (value: string) => value.toLocaleLowerCase()
+        .normalize("NFKC")
+        .replace(/[\s·、，,。()（）/\\_-]/g, "")
+        .trim();
+      const ingredientRows = database.prepare("SELECT id, name FROM ingredients_library").all() as Array<{ id: number; name: string }>;
+      const updateIngredient = database.prepare("UPDATE ingredients_library SET normalized_name = ? WHERE id = ?");
+      const insertAlias = database.prepare("INSERT OR IGNORE INTO ingredient_aliases (ingredient_id, alias, normalized_alias, alias_type) VALUES (?, ?, ?, ?)");
+      const seedAliases: Record<string, string[]> = {
+        "番茄": ["西红柿", "蕃茄", "小番茄", "圣女果"],
+        "土豆": ["马铃薯", "洋芋"],
+        "红薯": ["番薯", "地瓜"],
+        "西兰花": ["青花菜", "花椰菜"],
+        "鳄梨": ["牛油果"],
+      };
+      for (const ingredient of ingredientRows) {
+        updateIngredient.run(normalize(ingredient.name), ingredient.id);
+        insertAlias.run(ingredient.id, ingredient.name, normalize(ingredient.name), "canonical");
+        for (const alias of seedAliases[ingredient.name] || []) insertAlias.run(ingredient.id, alias, normalize(alias), "synonym");
+      }
+
+      const recipeRows = database.prepare("SELECT id, title, ingredients_json, steps_json, source_revision FROM recipes").all() as Array<Record<string, unknown>>;
+      const updateRecipe = database.prepare("UPDATE recipes SET canonical_key = ?, source_content_hash = ? WHERE id = ?");
+      for (const recipe of recipeRows) {
+        const canonical = normalize(String(recipe.title || ""));
+        const hash = createHash("sha256").update(JSON.stringify({
+          title: canonical,
+          ingredients: recipe.ingredients_json || "[]",
+          steps: recipe.steps_json || "[]",
+          revision: recipe.source_revision || "",
+        })).digest("hex");
+        updateRecipe.run(canonical, hash, recipe.id);
+      }
+
+      const capability = database.prepare("INSERT OR IGNORE INTO kitchenware_capabilities (code, name, description, safety_level) VALUES (?, ?, ?, ?)");
+      for (const [code, name, description, safety] of [
+        ["fry", "煎炒", "可进行煎、炒或翻炒", "normal"],
+        ["boil", "煮炖", "可进行煮、炖或煲汤", "normal"],
+        ["steam", "蒸制", "可安全产生并容纳蒸汽", "caution"],
+        ["bake", "烘烤", "可在受控腔体内持续干热烘烤", "caution"],
+        ["blend", "搅拌粉碎", "可搅拌、打浆或粉碎", "caution"],
+        ["weigh", "称量", "可进行重量测量", "normal"],
+        ["cut", "切配", "可安全切割或处理食材", "caution"],
+        ["temperature", "测温", "可测量食物中心温度", "normal"],
+      ]) capability.run(code, name, description, safety);
+      const methodCapability: Record<string, string> = {
+        "煎": "fry", "炒": "fry", "爆炒": "fry", "翻面": "fry",
+        "煮": "boil", "炖": "boil", "煲": "boil", "慢炖": "boil", "煲汤": "boil", "压煮": "boil",
+        "蒸": "steam", "蒸煮": "steam", "烘烤": "bake", "烘焙": "bake",
+        "搅拌": "blend", "打浆": "blend", "打泥": "blend", "粉碎": "blend",
+        "称量": "weigh", "切配": "cut", "测温": "temperature",
+      };
+      const catalogRows = database.prepare("SELECT id, cooking_methods FROM kitchenware_catalog").all() as Array<{ id: number; cooking_methods: string }>;
+      const linkCapability = database.prepare("INSERT OR IGNORE INTO kitchenware_catalog_capabilities (catalog_id, capability_code) VALUES (?, ?)");
+      for (const item of catalogRows) {
+        let methods: string[] = [];
+        try { methods = JSON.parse(item.cooking_methods || "[]"); } catch { methods = []; }
+        for (const method of methods) {
+          const code = methodCapability[method];
+          if (code) linkCapability.run(item.id, code);
+        }
+      }
+      const findCatalog = database.prepare("SELECT id FROM kitchenware_catalog WHERE name = ?");
+      const insertSubstitution = database.prepare(`INSERT OR IGNORE INTO kitchenware_substitutions
+        (source_catalog_id, substitute_catalog_id, relation_type, impact_json, safety_note) VALUES (?, ?, ?, ?, ?)`);
+      for (const [sourceName, substituteName, relation, impact, safety] of [
+        ["平底锅", "炒锅", "equivalent", { result: "锅体更深，翻炒空间更大" }, "使用与热源兼容的锅具"],
+        ["炒锅", "平底锅", "conditional", { portion: "减少单次份量", time: "可能需要分批烹饪" }, "避免食材堆叠导致受热不均"],
+        ["烤箱", "空气炸锅", "conditional", { portion: "减少份量", time: "缩短并分段检查" }, "不得使用不耐高温容器"],
+        ["空气炸锅", "烤箱", "conditional", { time: "适当延长预热和烘烤时间" }, "按烤箱说明设置温度"],
+      ] as const) {
+        const source = findCatalog.get(sourceName) as { id: number } | undefined;
+        const substitute = findCatalog.get(substituteName) as { id: number } | undefined;
+        if (source && substitute) insertSubstitution.run(source.id, substitute.id, relation, JSON.stringify(impact), safety);
+      }
+      const matchCatalog = database.prepare("SELECT id FROM kitchenware_catalog WHERE name = ?");
+      const insertRequirement = database.prepare(`INSERT OR IGNORE INTO recipe_kitchenware_requirements
+        (recipe_id, catalog_id, capability_code, role, source, confidence, notes) VALUES (?, ?, ?, 'required', 'migration', 0.9, ?)`);
+      const rules: Array<[RegExp, string, string]> = [
+        [/空气炸锅/, "空气炸锅", "bake"], [/微波炉/, "微波炉", "boil"],
+        [/(?:破壁机|料理机|搅拌机)/, "破壁机", "blend"], [/(?:烤箱|烘焙)/, "烤箱", "bake"],
+        [/(?:电饭煲|电饭锅)/, "电饭煲", "boil"], [/(?:蒸锅|蒸笼)/, "蒸锅", "steam"],
+      ];
+      for (const recipe of recipeRows) {
+        const text = `${recipe.title || ""} ${recipe.steps_json || ""}`;
+        for (const [pattern, catalogName, capabilityCode] of rules) {
+          if (!pattern.test(text)) continue;
+          const catalog = matchCatalog.get(catalogName) as { id: number } | undefined;
+          insertRequirement.run(recipe.id, catalog?.id || null, capabilityCode, `由菜名和步骤识别：${catalogName}`);
+        }
+      }
+    },
+  },
+  {
+    version: 52,
+    name: "content_import_failure_audit",
+    up(database) {
+      addColumn(database, "recipe_import_batches", "error_json", "TEXT");
+      database.exec(`
+        UPDATE ingredients_library SET
+          normalized_name = COALESCE(normalized_name, lower(replace(name, ' ', ''))),
+          data_license = COALESCE(data_license, CASE
+            WHEN source = 'usda_fdc_foundation' THEN 'US-Public-Domain'
+            WHEN source = 'open_food_facts' THEN 'ODbL-1.0'
+            ELSE 'DietDigiDose-Original'
+          END),
+          source_version = COALESCE(source_version, CASE
+            WHEN source = 'usda_fdc_foundation' THEN 'USDA-FDC-foundation-seed-v1'
+            WHEN source = 'open_food_facts' THEN 'OFF-imported-snapshot'
+            WHEN source = 'taiwan_fda' THEN 'Taiwan-FDA-imported-snapshot'
+            ELSE 'catalog-seed-v1'
+          END),
+          source_updated_at = COALESCE(source_updated_at, created_at),
+          nutrition_basis = COALESCE(nutrition_basis, 'per_100g'),
+          quality_status = COALESCE(quality_status, 'trusted');
+
+        UPDATE recipes SET
+          data_license = COALESCE(data_license, 'DietDigiDose-Original'),
+          source_revision = COALESCE(source_revision, 'catalog-seed-v1'),
+          source_attribution = COALESCE(source_attribution, 'DietDigiDose 编辑团队'),
+          serving_size = COALESCE(serving_size, 2),
+          prep_time = COALESCE(prep_time, 0),
+          required_kitchenware_json = CASE WHEN required_kitchenware_json IS NULL OR required_kitchenware_json = '[]' THEN '["菜刀"]' ELSE required_kitchenware_json END;
+
+        INSERT OR IGNORE INTO ingredient_portions (ingredient_id, label, grams, source, source_version)
+          SELECT id, '100克', 100, source, source_version FROM ingredients_library WHERE deleted_at IS NULL;
+
+        INSERT OR IGNORE INTO recipe_coverage_baselines (dimension, value, minimum_candidates) VALUES
+          ('time', '15分钟', 8), ('time', '30分钟', 12), ('time', '60分钟', 12),
+          ('difficulty', '简单', 20), ('difficulty', '中等', 10),
+          ('budget', '低预算', 10), ('meal_type', '单人餐', 10),
+          ('diet', '高蛋白', 10), ('diet', '素食', 10);
+      `);
+      const sources = database.prepare("SELECT DISTINCT source FROM recipes WHERE deleted_at IS NULL").all() as Array<{ source: string | null }>;
+      for (const row of sources) {
+        const source = row.source || "official";
+        const safeSource = source.replace(/[^a-z0-9_-]/gi, "-").slice(0, 50);
+        const batchId = `legacy-${safeSource}-v52`;
+        database.prepare(`INSERT OR IGNORE INTO recipe_import_batches
+          (id, source, source_revision, data_license, status, stats_json, completed_at)
+          VALUES (?, ?, 'legacy-governance-v52', ?, 'validated', '{}', CURRENT_TIMESTAMP)`)
+          .run(batchId, source, source === "wikibooks_zh" ? "CC-BY-SA-4.0" : "DietDigiDose-Original");
+        database.prepare("UPDATE recipes SET import_batch_id = COALESCE(import_batch_id, ?) WHERE source IS ? AND deleted_at IS NULL")
+          .run(batchId, row.source);
+      }
+      const knife = database.prepare("SELECT id FROM kitchenware_catalog WHERE name = '菜刀'").get() as { id: number } | undefined;
+      if (knife) {
+        database.prepare(`INSERT OR IGNORE INTO recipe_kitchenware_requirements
+          (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
+          SELECT r.id, ?, 'cut', 'required', 'migration-v52', 1, '基础切配'
+          FROM recipes r WHERE r.deleted_at IS NULL
+            AND NOT EXISTS(SELECT 1 FROM recipe_kitchenware_requirements k WHERE k.recipe_id = r.id AND k.role = 'required')`)
+          .run(knife.id);
+      }
     },
   },
 ];

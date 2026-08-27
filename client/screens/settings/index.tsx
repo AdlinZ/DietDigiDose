@@ -14,9 +14,9 @@ import {
 } from "react-native";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
-import { authApi } from "@/services/api";
+import { authApi, voicePackApi, type VoicePackManifest } from "@/services/api";
 import { useThemePreference, type ThemePreference } from "@/contexts/ThemeContext";
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
@@ -29,10 +29,22 @@ import { formatStorageBytes, getTotalClearableCacheSize, purgeClearableCache, pu
 import { Image as ExpoImage } from "expo-image";
 import { useAppThemeColors } from "@/hooks/useAppThemeColors";
 import { clearApiCacheScope, getApiCacheDiagnostics } from "@/services/api/cache";
+import {
+  deleteVoicePack,
+  getVoicePackState,
+  installVoicePack,
+  purgeVoiceAudioCache,
+  setVoicePreference,
+  speakWithVoiceFallback,
+  stopVoiceOutput,
+  type VoicePackState,
+  type VoiceSource,
+} from "@/services/voicePackManager";
 
 export default function SettingsScreen() {
   const router = useSafeRouter();
   const { user, token, isAuthenticated, logout, updateProfile, deleteAccount } = useAuth();
+  const authFetch = useAuthFetch();
   const { preference: themePreference, setPreference: setThemePreference } = useThemePreference();
   const colors = useAppThemeColors();
 
@@ -100,6 +112,44 @@ export default function SettingsScreen() {
   const [deletePassword, setDeletePassword] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [aiDataBusy, setAIDataBusy] = useState(false);
+  const [voiceState, setVoiceState] = useState<VoicePackState | null>(null);
+  const [voiceCatalog, setVoiceCatalog] = useState<VoicePackManifest[]>([]);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceProgress, setVoiceProgress] = useState(0);
+  const [lastVoiceSource, setLastVoiceSource] = useState<VoiceSource | null>(null);
+
+  useEffect(() => {
+    void getVoicePackState().then(setVoiceState);
+    if (!token) return;
+    void voicePackApi.catalog(authFetch).then(({ items, revoked }) => {
+      setVoiceCatalog(items);
+      setVoiceState((current) => {
+        const revokedInstalled = current?.installed && revoked.some((item) => item.voiceId === current.installed?.voiceId && item.version === current.installed?.version);
+        if (revokedInstalled) void deleteVoicePack(false).then(setVoiceState);
+        return current;
+      });
+    }).catch(() => setVoiceCatalog([]));
+  }, [authFetch, token]);
+
+  const installSelectedVoice = async (manifest: VoicePackManifest, allowCellular = false) => {
+    setVoiceBusy(true);
+    setVoiceProgress(0);
+    try {
+      await installVoicePack(manifest, { allowCellular, onProgress: setVoiceProgress });
+      setVoiceState(await getVoicePackState());
+      Alert.alert("音色包已安装", "这是合成语音。模型只负责朗读，不会替代 AI 权限和安全校验。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "音色包安装失败";
+      if (!allowCellular && message.includes("移动网络")) {
+        Alert.alert("使用移动网络下载？", message, [
+          { text: "取消", style: "cancel" },
+          { text: "继续下载", onPress: () => void installSelectedVoice(manifest, true) },
+        ]);
+      } else Alert.alert("安装失败", message);
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
 
   const handleSaveCalorie = async () => {
     const val = parseInt(calorieTarget);
@@ -123,6 +173,7 @@ export default function SettingsScreen() {
     try {
       await Promise.all([
         purgeClearableCache(user?.id),
+        purgeVoiceAudioCache(),
         clearApiCacheScope("public"),
         clearApiCacheScope(user?.id),
         ExpoImage.clearDiskCache(),
@@ -177,6 +228,7 @@ export default function SettingsScreen() {
 
   const confirmLogout = async () => {
     setLogoutModalOpen(false);
+    await stopVoiceOutput();
     await logout();
     router.replace("/login");
   };
@@ -260,6 +312,103 @@ export default function SettingsScreen() {
             <Text className="px-2 pb-1 pt-2.5 text-[10px] leading-4 text-copy-muted">
               跟随系统会在设备外观变化时自动切换，重启应用后仍会保留你的选择。
             </Text>
+          </View>
+        </View>
+
+        <View className="mb-6">
+          <Text className="mb-2.5 px-1 text-xs font-bold uppercase tracking-wider text-copy-muted">
+            做饭语音
+          </Text>
+          <View className="overflow-hidden rounded-3xl border border-line bg-surface shadow-xs">
+            <View className="border-b border-background-secondary p-4">
+              <View className="flex-row items-center justify-between gap-3">
+                <View className="flex-1 flex-row items-center gap-3.5">
+                  <View className="h-9 w-9 items-center justify-center rounded-2xl bg-info-soft">
+                    <FontAwesome6 name="wave-square" size={15} colorClassName="accent-info" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-sm font-bold text-ink">语音来源</Text>
+                    <Text className="mt-0.5 text-[11px] leading-4 text-copy-muted">
+                      {voiceState?.preference === "system-only"
+                        ? "仅系统语音"
+                        : voiceState?.installed
+                          ? `本地个人音色 · ${voiceState.installed.name} ${voiceState.installed.version}`
+                          : lastVoiceSource === "server" ? "云端语音" : "自动：云端 → 系统语音"}
+                    </Text>
+                  </View>
+                </View>
+                <Switch
+                  value={voiceState?.preference === "system-only"}
+                  onValueChange={(systemOnly) => void setVoicePreference(systemOnly ? "system-only" : "automatic")
+                    .then(setVoiceState)}
+                  trackColor={{ false: colors.line, true: colors["brand-fill"] }}
+                  thumbColor={colors["on-brand"]}
+                />
+              </View>
+              <Text className="mt-2 text-[10px] leading-4 text-copy-muted">
+                开关开启表示强制仅使用系统语音。本地模型是合成音色，下载后可能被设备使用者提取；敏感回答缓存按账号隔离。
+              </Text>
+              {voiceState?.benchmark ? (
+                <Text className={`mt-2 text-[10px] font-bold ${voiceState.benchmark.passed ? "text-brand" : "text-critical"}`}>
+                  设备基准：首段 {voiceState.benchmark.firstAudioMs}ms · 实时系数 {voiceState.benchmark.realtimeFactor.toFixed(2)} · {voiceState.benchmark.passed ? "可用" : "已自动降级"}
+                </Text>
+              ) : null}
+            </View>
+
+            {voiceState?.installed ? (
+              <View className="flex-row gap-2 p-4">
+                <TouchableOpacity
+                  disabled={voiceBusy}
+                  onPress={() => {
+                    setVoiceBusy(true);
+                    void speakWithVoiceFallback(authFetch, "水温八十五摄氏度，加入二百克番茄和十五毫升清水。", { userId: user?.id, sensitive: false })
+                      .then(setLastVoiceSource)
+                      .catch((error) => Alert.alert("试听失败", error instanceof Error ? error.message : "请稍后重试"))
+                      .finally(() => setVoiceBusy(false));
+                  }}
+                  className="flex-1 items-center rounded-xl bg-brand-fill py-3"
+                >
+                  <Text className="text-xs font-black text-white">试听固定回归句</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  disabled={voiceBusy}
+                  onPress={() => Alert.alert("删除本地音色包", "是否同时删除由该音色生成的音频缓存？", [
+                    { text: "取消", style: "cancel" },
+                    { text: "仅删除模型", onPress: () => void deleteVoicePack(false).then(setVoiceState) },
+                    { text: "模型与音频", style: "destructive", onPress: () => void deleteVoicePack(true).then(setVoiceState) },
+                  ])}
+                  className="items-center rounded-xl border border-critical/30 px-4 py-3"
+                >
+                  <Text className="text-xs font-black text-critical">删除</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View className="p-4">
+                {voiceCatalog.length ? voiceCatalog.map((manifest) => (
+                  <TouchableOpacity
+                    key={`${manifest.voiceId}@${manifest.version}`}
+                    disabled={voiceBusy || !isAuthenticated}
+                    onPress={() => void installSelectedVoice(manifest)}
+                    className="rounded-2xl border border-line bg-canvas p-3 active:bg-brand-soft"
+                  >
+                    <View className="flex-row items-center justify-between">
+                      <View className="flex-1">
+                        <Text className="text-sm font-black text-ink">{manifest.name}</Text>
+                        <Text className="mt-1 text-[10px] leading-4 text-copy-muted">
+                          {manifest.version} · {(manifest.resources.reduce((sum, resource) => sum + resource.bytes, 0) / 1024 / 1024).toFixed(1)} MB · {manifest.license.name}
+                        </Text>
+                      </View>
+                      {voiceBusy ? <ActivityIndicator size="small" colorClassName="accent-brand" /> : <Text className="text-xs font-bold text-brand">下载</Text>}
+                    </View>
+                    {voiceBusy ? <Text className="mt-2 text-[10px] font-bold text-brand">已下载 {Math.round(voiceProgress * 100)}%</Text> : null}
+                  </TouchableOpacity>
+                )) : (
+                  <Text className="text-[11px] leading-5 text-copy-muted">
+                    当前部署尚未发布通过许可与摘要审核的个人音色包；做饭模式会自动使用云端或系统语音。
+                  </Text>
+                )}
+              </View>
+            )}
           </View>
         </View>
 

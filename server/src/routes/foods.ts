@@ -5,6 +5,7 @@ import { validateBody } from '../middleware/validate.js';
 import { customFoodSchema } from '../validation/schemas.js';
 import { searchFoodUSDA } from '../services/foodApiAdapter.js';
 import { sharedRateLimit } from '../middleware/sharedRateLimit.js';
+import { normalizeContentTerm, recordIngredientSearchGap } from '../services/contentGovernance.js';
 
 const router = Router();
 const anonymousSearchRateLimit = sharedRateLimit({
@@ -37,45 +38,45 @@ router.get('/search', anonymousSearchRateLimit, async (req, res) => {
       return res.status(400).json({ error: '搜索词不能为空' });
     }
 
-    // 1. Search Local Database first
+    const normalizedQuery = normalizeContentTerm(query);
+    if (!normalizedQuery) return res.status(400).json({ error: '搜索词不能为空' });
+
+    // 1. Search governed local records and aliases first. Only trusted records
+    // are eligible for inventory/nutrition use.
     const localFoods = db.prepare(`
-      SELECT id, name, category, calories_100g, protein_100g, carbs_100g, fat_100g,
-        image_url, brands, barcode, micronutrients_json, source
-      FROM ingredients_library 
-      WHERE name LIKE ? AND deleted_at IS NULL
+      SELECT DISTINCT i.id, i.name, i.category, i.calories_100g, i.protein_100g, i.carbs_100g, i.fat_100g,
+        i.image_url, i.brands, i.barcode, i.micronutrients_json, i.source,
+        i.quality_status, i.source_version, i.data_license, i.preparation_state,
+        i.nutrition_basis, i.edible_ratio
+      FROM ingredients_library i
+      LEFT JOIN ingredient_aliases a ON a.ingredient_id = i.id
+      WHERE i.deleted_at IS NULL
+        AND i.quality_status = 'trusted'
+        AND (i.normalized_name LIKE ? OR a.normalized_alias LIKE ? OR i.search_keywords LIKE ?)
+      ORDER BY CASE WHEN i.normalized_name = ? THEN 0 WHEN a.normalized_alias = ? THEN 1 ELSE 2 END, i.id
       LIMIT 10
-    `).all(`%${query}%`) as any[];
+    `).all(`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`, normalizedQuery, normalizedQuery) as any[];
 
     // If we have enough local results, return them to be fast
     if (localFoods.length >= 5) {
       return res.json(localFoods);
     }
 
-    // 2. Fetch from USDA API if local results are insufficient
+    if (!localFoods.length) recordIngredientSearchGap(query);
+
+    // 2. Fetch from USDA if local results are insufficient. External rows are
+    // deliberately returned as unverified suggestions and never written into
+    // the canonical library until an audited import/review batch accepts them.
     const externalFoods = await searchFoodUSDA(query);
+    const suggestions = externalFoods.map((food) => ({
+      ...food,
+      id: null,
+      quality_status: 'external_unverified',
+      cacheable: false,
+      requires_review: true,
+    }));
 
-    // 3. Cache external results into local DB
-    const insert = db.prepare(`
-      INSERT INTO ingredients_library (name, calories_100g, protein_100g, carbs_100g, fat_100g, source)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-
-    const cachedResults = [];
-    for (const food of externalFoods) {
-      try {
-        // Simple deduplication logic: check if name exactly matches
-        const existing = db.prepare('SELECT id FROM ingredients_library WHERE name = ? AND deleted_at IS NULL').get(food.name);
-        if (!existing) {
-          const info = insert.run(food.name, food.calories_100g, food.protein_100g, food.carbs_100g, food.fat_100g, food.source);
-          cachedResults.push({ id: info.lastInsertRowid, ...food });
-        }
-      } catch (e) {
-        console.error('Error caching food:', e);
-      }
-    }
-
-    // Combine local + newly cached results
-    const combined = [...localFoods, ...cachedResults].slice(0, 15).map((food: any) => {
+    const combined = [...localFoods, ...suggestions].slice(0, 15).map((food: any) => {
       let micronutrients = null;
       try {
         micronutrients = food.micronutrients_json ? JSON.parse(food.micronutrients_json) : null;

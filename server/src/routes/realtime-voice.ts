@@ -5,7 +5,7 @@ import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { uuidParam } from "../middleware/validateParam.js";
 import { sharedRateLimit } from "../middleware/sharedRateLimit.js";
-import { startSupervisorRun, waitForSupervisorRunCompletion } from "../services/agent/runtime.js";
+import { cancelSupervisorRun, startSupervisorRun, waitForSupervisorRunCompletion } from "../services/agent/runtime.js";
 import { db } from "../storage/db.js";
 import { sendError } from "../utils/http.js";
 import { realtimeVoiceHeartbeatSchema, realtimeVoiceSessionSchema, realtimeVoiceTurnSchema } from "../validation/schemas.js";
@@ -125,7 +125,19 @@ router.post("/sessions/:sessionId/turns", validateBody(realtimeVoiceTurnSchema),
     first_transcript_ms = COALESCE(first_transcript_ms, ?),
     interruption_count = interruption_count + ?, last_heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?`)
     .run(Math.max(0, Date.now() - connectedAt), req.body.interruptedResponse ? 1 : 0, session.id);
-  if (req.body.interruptedResponse) emitEvent(String(session.id), "response.cancelled", { turnId: req.body.turnId, reason: "barge_in" });
+  if (req.body.interruptedResponse) {
+    const interrupted = db.prepare(`SELECT id, agent_run_id FROM realtime_voice_turns
+      WHERE session_id = ? AND user_id = ? AND intent = 'question' AND agent_run_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`).get(session.id, req.userId!) as { id: string; agent_run_id: string } | undefined;
+    if (interrupted?.agent_run_id) {
+      try { cancelSupervisorRun(req.userId!, interrupted.agent_run_id); } catch { /* The prior run may have just reached a terminal state. */ }
+    }
+    emitEvent(String(session.id), "response.cancelled", {
+      turnId: interrupted?.id || req.body.turnId,
+      interruptedByTurnId: req.body.turnId,
+      reason: "barge_in",
+    });
+  }
 
   if (parsed.intent !== "question") {
     const action = parsed.intent === "confirmation_required"
@@ -150,6 +162,7 @@ router.post("/sessions/:sessionId/turns", validateBody(realtimeVoiceTurnSchema),
   void waitForSupervisorRunCompletion(response.run.id).then((run) => {
     const active = ownedSession(String(session.id), req.userId!);
     if (!active || active.status === "closed") return;
+    if (run.status === "cancelled" || run.status === "expired") return;
     const reply = run.reply || run.error?.message || "暂时无法回答，请使用屏幕操作继续烹饪";
     const chunks = reply.split(/(?<=[。！？!?])/).filter(Boolean);
     chunks.forEach((delta, index) => emitEvent(String(session.id), "response.text.delta", { turnId: req.body.turnId, index, delta }));
@@ -187,6 +200,12 @@ router.delete("/sessions/:sessionId", (req: AuthRequest, res) => {
   const session = ownedSession(String(req.params.sessionId), req.userId!);
   if (!session) return sendError(res, 404, "实时语音会话不存在", "REALTIME_VOICE_SESSION_NOT_FOUND");
   if (session.status !== "closed") {
+    const pendingRuns = db.prepare(`SELECT agent_run_id FROM realtime_voice_turns
+      WHERE session_id = ? AND user_id = ? AND agent_run_id IS NOT NULL`)
+      .all(session.id, req.userId!) as Array<{ agent_run_id: string }>;
+    for (const pending of pendingRuns) {
+      try { cancelSupervisorRun(req.userId!, pending.agent_run_id); } catch { /* Terminal runs need no cancellation. */ }
+    }
     db.prepare("UPDATE realtime_voice_sessions SET status = 'closed', version = version + 1, closed_at = CURRENT_TIMESTAMP WHERE id = ?").run(session.id);
     emitEvent(String(session.id), "session.closed", { rawAudioRetained: false });
   }

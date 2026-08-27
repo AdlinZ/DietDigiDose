@@ -132,7 +132,10 @@ router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res
     ensureUserInitialState(user.id);
 
     clearLoginFailures(rawIdentifier);
-    const clientIp = (req.headers["x-forwarded-for"] as string || req.ip || req.socket.remoteAddress || "").split(",")[0].trim();
+    // Express resolves req.ip according to the configured trust-proxy hop count.
+    // Never read X-Forwarded-For directly: without a trusted proxy boundary it
+    // is attacker-controlled and would poison login/security audit records.
+    const clientIp = getRateLimitClientIp(req);
     const nowIso = new Date().toISOString();
     db.prepare("UPDATE users SET last_login_at = ?, last_login_ip = ? WHERE id = ?").run(nowIso, clientIp, user.id);
 

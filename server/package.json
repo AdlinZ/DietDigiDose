@@ -9,6 +9,7 @@
     "import:howtocook": "tsx scripts/import-howtocook.ts",
     "import:wikibooks-recipes": "tsx scripts/import-wikibooks-recipes.ts",
     "import:taiwan-fda": "tsx scripts/import-taiwan-fda.ts",
+    "import:rollback": "tsx scripts/rollback-content-import.ts",
     "backfill:ingredient-groups": "tsx scripts/backfill-ingredient-groups.ts",
     "localize:ingredient-names": "tsx scripts/localize-ingredient-names.ts",
     "db:backup": "tsx scripts/database-backup.ts backup",

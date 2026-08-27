@@ -45,3 +45,6 @@ overrides:
   "ws@7": 7.5.11
   "ws@8": 8.21.0
   yaml: 2.8.3
+
+patchedDependencies:
+  '@siteed/audio-studio@3.2.1': patches/@siteed__audio-studio@3.2.1.patch

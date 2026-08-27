@@ -16,9 +16,20 @@ import {
   recommendCommunityPosts,
   type CommunityRecommendationProfile,
 } from "../services/communityRecommendation.js";
+import { getRateLimitClientIp, sharedRateLimit } from "../middleware/sharedRateLimit.js";
 
 const router = Router();
 const RECOMMENDATION_CANDIDATE_LIMIT = 240;
+const DEFAULT_PUBLIC_POST_LIMIT = 12;
+const MAX_PUBLIC_POST_LIMIT = 30;
+const shareRateLimit = sharedRateLimit({
+  namespace: "community-share-ip",
+  limit: Math.max(1, Number(process.env.COMMUNITY_SHARE_RATE_LIMIT) || 20),
+  windowMs: Math.max(1_000, Number(process.env.COMMUNITY_SHARE_RATE_LIMIT_WINDOW_MS) || 60 * 60 * 1000),
+  key: getRateLimitClientIp,
+  message: "分享请求过于频繁，请稍后重试",
+  code: "COMMUNITY_SHARE_RATE_LIMITED",
+});
 router.param("id", positiveIntegerParam);
 router.param("postId", positiveIntegerParam);
 router.param("commentId", positiveIntegerParam);
@@ -300,10 +311,12 @@ router.get("/posts", (req: AuthRequest, res) => {
   const { category, sort } = req.query;
   const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 80) : "";
   const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
-  const pageSize = Math.min(30, Math.max(1, Number(req.query.pageSize) || 12));
+  const pageSize = Math.min(MAX_PUBLIC_POST_LIMIT, Math.max(1, Number(req.query.pageSize) || DEFAULT_PUBLIC_POST_LIMIT));
   const rawLimit = Number(req.query.limit);
   const rawOffset = Number(req.query.offset);
-  const limit = Number.isInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), 30) : null;
+  const limit = Number.isInteger(rawLimit)
+    ? Math.min(Math.max(rawLimit, 1), MAX_PUBLIC_POST_LIMIT)
+    : DEFAULT_PUBLIC_POST_LIMIT;
   const offset = Number.isInteger(rawOffset) ? Math.max(rawOffset, 0) : 0;
   const userId = req.userId ?? null;
   const requestedMode = sort === "recommended" ? "recommended" : "latest";
@@ -363,24 +376,22 @@ router.get("/posts", (req: AuthRequest, res) => {
     filterParams.push(snapshotMaxId!);
   }
 
-  let sqlLimit: number | null = null;
+  let sqlLimit = limit;
   let sqlOffset = 0;
   if (requestedMode === "recommended") {
     sqlLimit = RECOMMENDATION_CANDIDATE_LIMIT;
   } else if (cursorMode) {
     sqlLimit = pageSize + 1;
-  } else if (limit !== null) {
+  } else {
     sqlLimit = limit;
     sqlOffset = offset;
   }
   const posts = db.prepare(`
     ${postSelect(userId)} WHERE ${filters.join(" AND ")}
     ORDER BY p.created_at DESC, p.id DESC
-    ${sqlLimit === null ? "" : "LIMIT ? OFFSET ?"}
-  `).all(...filterParams, ...(sqlLimit === null ? [] : [sqlLimit, sqlOffset]));
-  if (cursorMode || requestedMode === "recommended") {
-    res.set("X-Pagination-Candidates", String(posts.length));
-  }
+    LIMIT ? OFFSET ?
+  `).all(...filterParams, sqlLimit, sqlOffset);
+  res.set("X-Pagination-Candidates", String(posts.length));
 
   const serialized = posts.map(serializePost);
   if (cursorMode) {
@@ -407,7 +418,7 @@ router.get("/posts", (req: AuthRequest, res) => {
   const ordered = requestedMode === "recommended"
     ? recommendCommunityPosts(serialized, getRecommendationProfile(userId))
     : serialized;
-  res.json(requestedMode === "latest" || limit === null ? ordered : ordered.slice(offset, offset + limit));
+  res.json(requestedMode === "latest" ? ordered : ordered.slice(offset, offset + limit));
 });
 
 // GET /api/v1/community/posts/:id
@@ -421,28 +432,44 @@ router.get("/posts/:id", (req: AuthRequest, res) => {
   res.json({ ...serializePost(post), views_count: (post.views_count || 0) + 1, is_liked: Boolean(post.is_liked) });
 });
 
-router.post("/posts/:id/share", (req: AuthRequest, res) => {
+router.post("/posts/:id/share", shareRateLimit, (req: AuthRequest, res) => {
   const post = db.prepare("SELECT id FROM community_posts WHERE id = ? AND deleted_at IS NULL").get(req.params.id);
   if (!post) return res.status(404).json({ error: "帖子不存在" });
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  let code = "";
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    code = randomBytes(5).toString("hex").toUpperCase();
-    try {
-      db.prepare("INSERT INTO community_share_codes (code, post_id, created_by, expires_at) VALUES (?, ?, ?, ?)")
-        .run(code, req.params.id, req.userId ?? null, expiresAt);
-      break;
-    } catch {
-      code = "";
+  const callerUserId = req.userId ?? null;
+  const share = db.transaction(() => {
+    db.prepare("DELETE FROM community_share_codes WHERE datetime(expires_at) <= CURRENT_TIMESTAMP").run();
+    const existing = db.prepare(`
+      SELECT code, expires_at
+      FROM community_share_codes
+      WHERE post_id = ?
+        AND ((created_by = ?) OR (created_by IS NULL AND ? IS NULL))
+        AND datetime(expires_at) > CURRENT_TIMESTAMP
+      ORDER BY datetime(expires_at) DESC
+      LIMIT 1
+    `).get(req.params.id, callerUserId, callerUserId) as { code: string; expires_at: string } | undefined;
+    if (existing) return { ...existing, created: false };
+
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      .toISOString().slice(0, 19).replace("T", " ");
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const code = randomBytes(5).toString("hex").toUpperCase();
+      try {
+        db.prepare("INSERT INTO community_share_codes (code, post_id, created_by, expires_at) VALUES (?, ?, ?, ?)")
+          .run(code, req.params.id, callerUserId, expiresAt);
+        return { code, expires_at: expiresAt, created: true };
+      } catch {
+        // Retry the extremely unlikely random-code collision.
+      }
     }
-  }
-  if (!code) return res.status(503).json({ error: "分享码生成失败，请稍后重试" });
+    return null;
+  })();
+  if (!share) return res.status(503).json({ error: "分享码生成失败，请稍后重试" });
   const baseUrl = String(process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
-  res.status(201).json({
-    code,
-    url: `${baseUrl}/share/posts/${code}`,
-    app_url: `dietdigidose://post-detail?id=${req.params.id}&shareCode=${code}`,
-    expires_at: expiresAt,
+  res.status(share.created ? 201 : 200).json({
+    code: share.code,
+    url: `${baseUrl}/share/posts/${share.code}`,
+    app_url: `dietdigidose://post-detail?id=${req.params.id}&shareCode=${share.code}`,
+    expires_at: share.expires_at,
   });
 });
 

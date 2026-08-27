@@ -104,6 +104,6 @@ pnpm -w audit:prod
 
 注册、登录、库存录入和完成烹饪会写入仅含 HMAC 匿名标识与事件名的漏斗事件，不附带登录标识、IP、食材、健康数据或 AI 文本。管理员可通过 `GET /api/v1/admin/funnel?days=30` 查看 1～90 天的聚合事件数与匿名用户数。
 
-登录失败、匿名外部食品查询与高成本 AI 请求的限流桶保存在主数据库中，不依赖单进程内存；共享同一数据库的服务实例会看到同一配额。默认 AI 与食品查询上限分别通过 `AI_RATE_LIMIT`、`FOOD_SEARCH_RATE_LIMIT` 配置，窗口均为 15 分钟。
+登录失败、邮箱注册、社区分享码、匿名外部食品查询与高成本 AI 请求的限流桶保存在主数据库中，不依赖单进程内存；共享同一数据库的服务实例会看到同一配额。默认 AI 与食品查询上限分别通过 `AI_RATE_LIMIT`、`FOOD_SEARCH_RATE_LIMIT` 配置，窗口均为 15 分钟。邮箱注册使用 `REGISTER_RATE_LIMIT`、`REGISTER_GLOBAL_RATE_LIMIT` 和 `REGISTER_RATE_LIMIT_WINDOW_MS`，社区分享使用 `COMMUNITY_SHARE_RATE_LIMIT` 与 `COMMUNITY_SHARE_RATE_LIMIT_WINDOW_MS`；生产环境启用 `TRUST_PROXY=1` 时，反向代理必须覆盖而不是透传客户端伪造的转发头。
 
 发生疑似越权、公开登录标识、健康数据泄露、批量重复写入或数据库损坏时：停止新候选分发和相关写入，保存日志与时间线，轮换受影响密钥，评估受影响用户与数据范围，从已验证备份恢复，并在恢复服务前完成根因和回归检查。

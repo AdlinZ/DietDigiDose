@@ -157,10 +157,13 @@ function formatRecipe(recipe: any, req?: { protocol: string; get(name: string): 
 }
 
 // GET /api/v1/recipes - 仅返回审核通过的公开食谱
+const DEFAULT_PUBLIC_RECIPE_LIMIT = 24;
+const MAX_PUBLIC_RECIPE_LIMIT = 100;
+
 router.get("/", (req, res) => {
   const { category, search } = req.query;
   const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
-  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 24));
+  const pageSize = Math.min(MAX_PUBLIC_RECIPE_LIMIT, Math.max(1, Number(req.query.pageSize) || DEFAULT_PUBLIC_RECIPE_LIMIT));
   const requestedMaxCookTime = Number(req.query.maxCookTime);
   const maxCookTime = Number.isFinite(requestedMaxCookTime) && requestedMaxCookTime > 0
     ? Math.floor(requestedMaxCookTime)
@@ -212,10 +215,9 @@ router.get("/", (req, res) => {
     params.push(cursorId);
   }
   query += " ORDER BY r.id DESC";
-  if (cursorMode) query += " LIMIT ?";
-  const rows = cursorMode
-    ? db.prepare(query).all(...params, pageSize + 1)
-    : db.prepare(query).all(...params);
+  query += " LIMIT ?";
+  const rows = db.prepare(query).all(...params, cursorMode ? pageSize + 1 : pageSize);
+  res.set("X-Pagination-Candidates", String(rows.length));
   const hasMore = cursorMode && rows.length > pageSize;
   const pageRows = cursorMode ? rows.slice(0, pageSize) : rows;
   const items = pageRows.map((recipe) => formatRecipe(recipe, req));

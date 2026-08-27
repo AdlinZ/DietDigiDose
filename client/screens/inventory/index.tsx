@@ -65,6 +65,7 @@ import {
 } from "@/utils/ingredientRules";
 import { parseStructuredQuantity } from "@/utils/structuredQuantity";
 import type { HealthProfile } from "@/utils/healthProfile";
+import { appendUniqueItemsByKey } from "@/utils/pagination";
 
 const KITCHENWARE_STARTER_KITS = [
   { name: "轻食减脂", items: ["空气炸锅", "平底锅", "电子秤", "玻璃保鲜盒"] },
@@ -1336,7 +1337,11 @@ export default function InventoryScreen() {
           : await recommendationsApi.recipes<Recipe>(authFetch, {
             surface: "inventory", pageSize: 24, cursor: recommendationCursor,
           });
-        setRecommendationItems((current) => [...current, ...page.items]);
+        setRecommendationItems((current) => appendUniqueItemsByKey(
+          current,
+          page.items,
+          (item) => item.recipeId,
+        ));
         setRecommendationCursor(page.nextCursor);
         setPrefetchedRecommendationPage(null);
         if (page.nextCursor) {

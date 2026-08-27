@@ -10,7 +10,7 @@ import {
   Dimensions,
   Platform,
   Easing,
-  type GestureResponderEvent,
+  PanResponder,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Screen } from "@/components/Screen";
@@ -29,6 +29,7 @@ import type { InventoryHighlight, RankedRecipe, RecommendationCard, Recipe } fro
 import { getRecommendationPeriod } from "./recommendations";
 import { useHomeData } from "./useHomeData";
 import { TodayRecordsModal } from "./TodayRecordsModal";
+import { getHorizontalSwipeDirection } from "./carousel";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const RECIPE_BATCH_SIZE = 3;
@@ -52,7 +53,7 @@ export default function HomeScreen() {
   const [activeRecommendationCard, setActiveRecommendationCard] = useState(0);
   const [smartFeedOffset] = useState(() => new Animated.Value(0));
   const [smartFeedOpacity] = useState(() => new Animated.Value(1));
-  const smartFeedTouchStart = useRef<{ x: number; y: number } | null>(null);
+  const smartFeedLastInteractionAt = useRef(0);
   const smartFeedAnimating = useRef(false);
   const [activeInventoryHighlight, setActiveInventoryHighlight] = useState(0);
   const [inventoryHighlightOffset] = useState(() => new Animated.Value(0));
@@ -210,28 +211,25 @@ export default function HomeScreen() {
     smartFeedAnimating.current = false;
     if (smartFeedCardCount < 2) return;
 
-    const intervalId = setInterval(() => changeSmartFeedCard("next"), 4500);
+    const intervalId = setInterval(() => {
+      if (Date.now() - smartFeedLastInteractionAt.current >= 3_200) {
+        changeSmartFeedCard("next");
+      }
+    }, 4500);
     return () => clearInterval(intervalId);
   }, [changeSmartFeedCard, smartFeedCardCount, smartFeedOffset, smartFeedOpacity]);
 
-  const handleSmartFeedTouchStart = useCallback((event: GestureResponderEvent) => {
-    smartFeedTouchStart.current = {
-      x: event.nativeEvent.pageX,
-      y: event.nativeEvent.pageY,
-    };
-  }, []);
-
-  const handleSmartFeedTouchEnd = useCallback((event: GestureResponderEvent) => {
-    const start = smartFeedTouchStart.current;
-    smartFeedTouchStart.current = null;
-    if (!start) return;
-
-    const deltaX = event.nativeEvent.pageX - start.x;
-    const deltaY = event.nativeEvent.pageY - start.y;
-    if (Math.abs(deltaX) < 44 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return;
-
-    changeSmartFeedCard(deltaX < 0 ? "next" : "prev");
-  }, [changeSmartFeedCard]);
+  const smartFeedPanResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_event, gesture) =>
+      getHorizontalSwipeDirection(gesture.dx, gesture.dy, 12) !== null,
+    onPanResponderRelease: (_event, gesture) => {
+      const direction = getHorizontalSwipeDirection(gesture.dx, gesture.dy);
+      if (!direction) return;
+      smartFeedLastInteractionAt.current = Date.now();
+      changeSmartFeedCard(direction);
+    },
+    onPanResponderTerminationRequest: () => true,
+  }), [changeSmartFeedCard]);
 
   useEffect(() => {
     Animated.timing(calorieProgress, {
@@ -680,11 +678,7 @@ export default function HomeScreen() {
             <View className="px-5 mt-3 mb-4">
               <Animated.View
                 accessibilityHint={smartCards.length > 1 ? "左右滑动可切换推荐卡片" : undefined}
-                onTouchStart={handleSmartFeedTouchStart}
-                onTouchEnd={handleSmartFeedTouchEnd}
-                onTouchCancel={() => {
-                  smartFeedTouchStart.current = null;
-                }}
+                {...smartFeedPanResponder.panHandlers}
                 style={{
                   minHeight: 184,
                   opacity: smartFeedOpacity,

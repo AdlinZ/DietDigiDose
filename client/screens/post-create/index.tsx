@@ -81,7 +81,12 @@ export default function PostCreateScreen() {
     if (!isAuthenticated) {
       Alert.alert("登录后发布", "登录后即可把你的美食分享给社区食友。", [
         { text: "取消", style: "cancel" },
-        { text: "去登录", onPress: () => router.push("/login") },
+        {
+          text: "去登录",
+          onPress: () => router.push("/login", {
+            returnTo: { pathname: "/post-create", params: { category } },
+          }),
+        },
       ]);
       return;
     }

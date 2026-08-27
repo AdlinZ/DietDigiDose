@@ -1,9 +1,11 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { purgeLegacyUnscopedPrivateStorage, purgeUserPrivateStorage } from '@/utils/userStorage';
 import { ApiError, authApi } from '@/services/api';
+import { clearApiCacheScope, registerApiFetchScope } from '@/services/api/cache';
 import { AUTH_USER_KEY, getStoredToken, removeStoredToken, setStoredToken } from '@/utils/authStorage';
-import { cancelCookingQueueRemindersForUser } from '@/utils/cookingReminders';
+import { AuthSessionCoordinator } from '@/utils/authSessionCoordinator';
+import { cancelAllLocalNotificationsForUser, cancelLegacyUnscopedLocalNotifications } from '@/utils/notifications';
 
 interface User {
   id: number;
@@ -29,11 +31,14 @@ interface AuthContextType {
   login: (identifier: string, password: string) => Promise<{ success: boolean; error?: string }>;
   register: (identifier: string, username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   pendingSmsRegistration: PendingSmsRegistration | null;
+  sessionMessage: string | null;
+  clearSessionMessage: () => void;
   sendSmsCode: (phone: string) => Promise<{ success: boolean; challengeId?: string; phoneMasked?: string; resendAfter?: number; error?: string }>;
   verifySmsCode: (challengeId: string, code: string) => Promise<{ success: boolean; registrationRequired?: boolean; error?: string }>;
   completeSmsRegistration: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   clearPendingSmsRegistration: () => void;
-  logout: () => void;
+  logout: (message?: string, expectedGeneration?: number) => Promise<void>;
+  sessionGeneration: number;
   updateProfile: (data: Partial<User>) => Promise<{ success: boolean; error?: string }>;
   deleteAccount: (password: string) => Promise<{ success: boolean; error?: string }>;
   refreshUser: () => Promise<void>;
@@ -46,37 +51,63 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [pendingSmsRegistration, setPendingSmsRegistration] = useState<PendingSmsRegistration | null>(null);
+  const [sessionMessage, setSessionMessage] = useState<string | null>(null);
+  const [sessionGeneration, setSessionGeneration] = useState(0);
+  const sessionCoordinator = useRef(new AuthSessionCoordinator());
 
   const applyAuthenticatedResult = useCallback(async (data: { token: string; user: User }) => {
     if (!data?.token || !data?.user) return false;
-    await setStoredToken(data.token);
-    await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
-    setToken(data.token);
-    setUser(data.user);
-    setPendingSmsRegistration(null);
+    const generation = await sessionCoordinator.current.authenticate(async () => {
+      await setStoredToken(data.token);
+      await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+      setToken(data.token);
+      setUser(data.user);
+      setPendingSmsRegistration(null);
+      setSessionMessage(null);
+    });
+    setSessionGeneration(generation);
     return true;
   }, []);
 
-  const clearAuthState = useCallback(async () => {
-    await Promise.all([removeStoredToken(), AsyncStorage.removeItem(AUTH_USER_KEY)]);
-    setToken(null);
-    setUser(null);
+  const clearAuthState = useCallback(async (
+    expectedGeneration: number,
+    userId?: number | null,
+    message?: string,
+  ) => {
+    const cleared = await sessionCoordinator.current.clearIfCurrent(expectedGeneration, async () => {
+      await cancelAllLocalNotificationsForUser(userId).catch(() => undefined);
+      await clearApiCacheScope(userId).catch(() => undefined);
+      await purgeUserPrivateStorage(userId).catch(() => undefined);
+      await Promise.all([removeStoredToken(), AsyncStorage.removeItem(AUTH_USER_KEY)]);
+      setToken(null);
+      setUser(null);
+      if (message) setSessionMessage(message);
+    });
+    if (cleared) setSessionGeneration(sessionCoordinator.current.currentGeneration());
+    return cleared;
   }, []);
 
   useEffect(() => {
     // Load saved auth state with offline resilience
     (async () => {
       try {
+        await cancelLegacyUnscopedLocalNotifications();
         await purgeLegacyUnscopedPrivateStorage();
         const savedToken = await getStoredToken();
         const savedUser = await AsyncStorage.getItem(AUTH_USER_KEY);
         if (savedToken && savedUser) {
-          setToken(savedToken);
+          let cachedUser: User;
           try {
-            setUser(JSON.parse(savedUser));
+            cachedUser = JSON.parse(savedUser) as User;
           } catch {
-            await AsyncStorage.removeItem(AUTH_USER_KEY);
+            await clearAuthState(sessionCoordinator.current.currentGeneration());
+            return;
           }
+          const restoredGeneration = await sessionCoordinator.current.authenticate(async () => {
+            setToken(savedToken);
+            setUser(cachedUser);
+          });
+          setSessionGeneration(restoredGeneration);
 
           // Verify token asynchronously with backend
           try {
@@ -84,12 +115,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(freshUser));
             setUser(freshUser);
           } catch (error) {
-            if (error instanceof ApiError && error.status === 401) await clearAuthState();
+            if (error instanceof ApiError && (error.status === 401 || error.code === 'ACCOUNT_DISABLED')) {
+              await clearAuthState(
+                restoredGeneration,
+                cachedUser.id,
+                error.code === 'ACCOUNT_DISABLED' ? '账号已停用，请联系管理员了解详情。' : '登录会话已失效，请重新登录。',
+              );
+            }
             // Network error/server down during verify: keep local cached auth state so user stays logged in offline
           }
         }
       } catch (e) {
-        await clearAuthState();
+        await clearAuthState(sessionCoordinator.current.currentGeneration());
       } finally {
         setIsLoading(false);
       }
@@ -98,6 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (identifier: string, password: string) => {
     try {
+      await cancelLegacyUnscopedLocalNotifications();
       await purgeLegacyUnscopedPrivateStorage();
       const data = await authApi.login<{ token: string; user: User }>(identifier, password);
       if (!await applyAuthenticatedResult(data)) {
@@ -111,6 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const register = useCallback(async (identifier: string, username: string, password: string) => {
     try {
+      await cancelLegacyUnscopedLocalNotifications();
       await purgeLegacyUnscopedPrivateStorage();
       const data = await authApi.register<{ token: string; user: User }>(identifier, username, password);
       if (!await applyAuthenticatedResult(data)) {
@@ -165,16 +204,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearPendingSmsRegistration = useCallback(() => setPendingSmsRegistration(null), []);
 
-  const logout = useCallback(() => {
-    void (async () => {
-      try {
-        await cancelCookingQueueRemindersForUser(user?.id).catch(() => undefined);
-        await purgeUserPrivateStorage(user?.id);
-      } finally {
-        await clearAuthState();
-      }
-    })();
-  }, [clearAuthState, user?.id]);
+  const logout = useCallback(async (message?: string, expectedGeneration = sessionGeneration) => {
+    await clearAuthState(expectedGeneration, user?.id, message);
+  }, [clearAuthState, sessionGeneration, user?.id]);
 
   const updateProfile = useCallback(async (profileData: Partial<User>) => {
     if (!token) return { success: false, error: '未登录' };
@@ -188,13 +220,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(updatedUser);
       return { success: true };
     } catch (e) {
-      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-        await clearAuthState();
-        return { success: false, error: '登录已过期，请重新登录' };
+      if (e instanceof ApiError && (e.status === 401 || e.code === 'ACCOUNT_DISABLED')) {
+        await logout(e.code === 'ACCOUNT_DISABLED' ? '账号已停用，请联系管理员了解详情。' : '登录会话已失效，请重新登录。');
+        return { success: false, error: e.code === 'ACCOUNT_DISABLED' ? '账号已停用' : '登录已过期，请重新登录' };
       }
       return { success: false, error: e instanceof Error ? e.message : '网络错误，请稍后重试' };
     }
-  }, [token, user, clearAuthState]);
+  }, [token, user, logout]);
 
   const refreshUser = useCallback(async () => {
     if (!token) return;
@@ -203,23 +235,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data));
       setUser(data);
     } catch (e) {
-      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) await clearAuthState();
+      if (e instanceof ApiError && (e.status === 401 || e.code === 'ACCOUNT_DISABLED')) {
+        await logout(e.code === 'ACCOUNT_DISABLED' ? '账号已停用，请联系管理员了解详情。' : '登录会话已失效，请重新登录。');
+      }
       // Ignore
     }
-  }, [token, clearAuthState]);
+  }, [token, logout]);
 
   const deleteAccount = useCallback(async (password: string) => {
     if (!token || !user) return { success: false, error: '请先登录' };
     try {
       await authApi.deleteAccount(token, password);
-      await cancelCookingQueueRemindersForUser(user.id).catch(() => undefined);
-      await purgeUserPrivateStorage(user.id);
-      await clearAuthState();
+      await clearAuthState(sessionGeneration, user.id);
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : '账号删除失败' };
     }
-  }, [clearAuthState, token, user]);
+  }, [clearAuthState, sessionGeneration, token, user]);
+
+  const clearSessionMessage = useCallback(() => setSessionMessage(null), []);
 
   const value = React.useMemo(
     () => ({
@@ -230,16 +264,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       login,
       register,
       pendingSmsRegistration,
+      sessionMessage,
+      clearSessionMessage,
       sendSmsCode,
       verifySmsCode,
       completeSmsRegistration,
       clearPendingSmsRegistration,
       logout,
+      sessionGeneration,
       updateProfile,
       deleteAccount,
       refreshUser,
     }),
-    [user, token, isLoading, login, register, pendingSmsRegistration, sendSmsCode, verifySmsCode, completeSmsRegistration, clearPendingSmsRegistration, logout, updateProfile, deleteAccount, refreshUser]
+    [user, token, isLoading, login, register, pendingSmsRegistration, sessionMessage, clearSessionMessage, sendSmsCode, verifySmsCode, completeSmsRegistration, clearPendingSmsRegistration, logout, sessionGeneration, updateProfile, deleteAccount, refreshUser]
   );
 
   return (
@@ -261,9 +298,9 @@ export function useAuth() {
  * Helper to make authenticated API calls
  */
 export function useAuthFetch() {
-  const { token, logout } = useAuth();
+  const { token, user, logout, sessionGeneration } = useAuth();
 
-  return useCallback(async (url: string, options: RequestInit = {}) => {
+  const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
     // requestJson 传入的是 Headers 实例。对象展开会丢失其中的
     // Content-Type，导致 Express 不解析 POST 的 JSON 正文。
     const headers = new Headers(options.headers);
@@ -272,8 +309,15 @@ export function useAuthFetch() {
     }
     const response = await fetch(url, { ...options, headers });
     if (response.status === 401) {
-      void logout();
+      await logout('登录会话已失效，请重新登录。', sessionGeneration);
+    } else if (response.status === 403) {
+      const body = await response.clone().json().catch(() => null) as { code?: string } | null;
+      if (body?.code === 'ACCOUNT_DISABLED') {
+        await logout('账号已停用，请联系管理员了解详情。', sessionGeneration);
+      }
     }
     return response;
-  }, [token, logout]);
+  }, [token, logout, sessionGeneration]);
+  registerApiFetchScope(authFetch, user?.id);
+  return authFetch;
 }

@@ -1,9 +1,7 @@
 import crypto from "node:crypto";
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { db } from "../storage/db.js";
-import { JWT_SECRET } from "../config/security.js";
 import { sendError } from "../utils/http.js";
 import { recordFunnelEvent } from "../services/funnelEvents.js";
 import {
@@ -22,6 +20,8 @@ import {
 } from "../services/authVerification.js";
 import { hashRegistrationToken } from "../services/authVerificationCrypto.js";
 import { getSmsProvider, smsCredentialsStatus } from "../services/smsVerificationProvider.js";
+import { signUserToken } from "../services/sessionTokens.js";
+import { ensureUserInitialState } from "../services/userInitialization.js";
 
 const router = Router();
 
@@ -297,7 +297,7 @@ router.post("/verify", async (req, res) => {
       recordFunnelEvent(user.id, "login_succeeded");
       return res.json({
         status: "authenticated",
-        token: jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "30d" }),
+        token: signUserToken(user.id),
         user: userResponse(user.id),
       });
     }
@@ -367,13 +367,14 @@ router.post("/register", (req, res) => {
         VALUES (?, NULL, ?, ?, NULL, ?)
       `).run(username, phone, bcrypt.hashSync(password, bcrypt.genSaltSync(12)), nowIso);
       newUserId = Number(result.lastInsertRowid);
+      ensureUserInitialState(newUserId);
       db.prepare("UPDATE auth_verification_subjects SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(newUserId, challenge.subject_id);
       db.prepare("UPDATE auth_verification_challenges SET status = 'consumed', consumed_at = ?, registration_token_hash = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(nowIso, challenge.id);
       recordVerificationEvent({ subjectId: challenge.subject_id, challengeId: challenge.id, eventType: "registration", outcome: "succeeded", sourceIp, userAgent });
     })();
     recordFunnelEvent(newUserId, "account_registered");
     return res.status(201).json({
-      token: jwt.sign({ userId: newUserId }, JWT_SECRET, { expiresIn: "30d" }),
+      token: signUserToken(newUserId),
       user: userResponse(newUserId),
     });
   } catch (error) {

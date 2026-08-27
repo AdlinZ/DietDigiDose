@@ -45,6 +45,7 @@ interface ConversationPayload {
   requestId?: string;
   occurredAt?: string;
   source?: string;
+  modelIdentifier?: string | null;
 }
 
 interface ScanJob {
@@ -200,7 +201,7 @@ function ConversationPayloadView({ payload, confirmationStatus }: { payload: Con
       {payload.solutionCards?.map((card, index) => <div key={card.id || `${card.title}-${index}`} className="rounded-xl border border-primary/15 bg-primary/5 p-3"><div className="flex items-center justify-between gap-2"><p className="font-bold text-primary">{card.schemeTag || `方案 ${index + 1}`} · {card.title}</p><span className="rounded-full bg-white px-2 py-0.5 text-[9px] text-text-muted">{card.source === 'local' ? '本地菜谱' : 'AI 方案'}</span></div><p className="mt-1 text-text-main">{card.ingredients}</p>{card.cookingTip ? <p className="text-text-muted">做法：{card.cookingTip}</p> : null}{card.macros ? <p className="font-medium text-primary">{card.macros}</p> : null}</div>)}
       {payload.legacyCardSummaries?.map((summary, index) => <div key={index} className="rounded-xl border border-slate-200 bg-slate-50 p-3"><p className="mb-1 font-bold text-slate-600">历史卡片摘要</p><p className="whitespace-pre-wrap text-slate-700">{summary}</p></div>)}
       {payload.writeConfirmation || confirmationStatus ? <div className="rounded-xl bg-background-alt p-2.5 text-text-muted">操作确认：{confirmationStatus === 'committed' ? '已确认执行' : confirmationStatus === 'expired' ? '已过期' : confirmationStatus === 'cancelled' ? '已取消' : '待用户确认'}</div> : null}
-      {payload.errorCode ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-red-800"><p className="font-bold">AI 调用失败详情</p><dl className="mt-1 grid grid-cols-[72px_1fr] gap-x-2 gap-y-1"><dt>错误代码</dt><dd className="break-all font-mono">{payload.errorCode}</dd>{payload.errorType ? <><dt>错误类型</dt><dd>{payload.errorType}</dd></> : null}{payload.failureStage ? <><dt>失败阶段</dt><dd>{payload.failureStage}</dd></> : null}{payload.errorMessage ? <><dt>错误信息</dt><dd className="break-words">{payload.errorMessage}</dd></> : null}{payload.requestId ? <><dt>追踪 ID</dt><dd className="break-all font-mono">{payload.requestId}</dd></> : null}{payload.occurredAt ? <><dt>发生时间</dt><dd>{new Date(payload.occurredAt).toLocaleString('zh-CN')}</dd></> : null}</dl></div> : null}
+      {payload.errorCode ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-red-800"><p className="font-bold">AI 调用失败详情</p><dl className="mt-1 grid grid-cols-[72px_1fr] gap-x-2 gap-y-1"><dt>错误代码</dt><dd className="break-all font-mono">{payload.errorCode}</dd>{payload.errorType ? <><dt>错误类型</dt><dd>{payload.errorType}</dd></> : null}{payload.failureStage ? <><dt>失败阶段</dt><dd>{payload.failureStage}</dd></> : null}{payload.modelIdentifier ? <><dt>模型标识</dt><dd className="break-all font-mono">{payload.modelIdentifier}</dd></> : null}{payload.errorMessage ? <><dt>错误信息</dt><dd className="break-words">{payload.errorMessage}</dd></> : null}{payload.requestId ? <><dt>追踪 ID</dt><dd className="break-all font-mono">{payload.requestId}</dd></> : null}{payload.occurredAt ? <><dt>发生时间</dt><dd>{new Date(payload.occurredAt).toLocaleString('zh-CN')}</dd></> : null}</dl></div> : null}
     </div>
   );
 }

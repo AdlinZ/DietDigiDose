@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Image, ScrollView, Text, TouchableOpacity, View } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { systemApi, type VersionInfo } from "@/services/api";
-import { APP_BUILD_TIME, APP_VERSION, formatBuildTime } from "@/utils/appVersion";
+import { APP_BUILD_TIME, APP_RELEASE_LABEL, formatBuildTime } from "@/utils/appVersion";
 
 function InfoRow({ label, value, last = false }: { label: string; value: string; last?: boolean }) {
   return (
@@ -28,10 +28,10 @@ export default function AboutScreen() {
   }, []);
 
   return (
-    <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
+    <Screen safeAreaEdges={["top", "left", "right"]}>
       <View className="px-5 pt-4 pb-3 flex-row items-center justify-between border-b border-line bg-canvas">
-        <TouchableOpacity onPress={() => router.back()} className="w-10 h-10 rounded-full bg-white border border-line items-center justify-center shadow-xs">
-          <FontAwesome6 name="chevron-left" size={14} color="#3D3229" />
+        <TouchableOpacity onPress={() => router.back()} className="w-10 h-10 rounded-full bg-surface border border-line items-center justify-center shadow-xs">
+          <FontAwesome6 name="chevron-left" size={14} colorClassName="accent-ink" />
         </TouchableOpacity>
         <Text className="text-lg font-black text-ink">关于食光烙记</Text>
         <View className="w-10" />
@@ -50,15 +50,15 @@ export default function AboutScreen() {
         </View>
 
         <Text className="text-xs font-bold text-copy-muted mb-2 px-1">客户端</Text>
-        <View className="bg-white rounded-2xl border border-line overflow-hidden shadow-xs mb-5">
-          <InfoRow label="应用版本" value={`v${APP_VERSION}`} />
+        <View className="bg-surface rounded-2xl border border-line overflow-hidden shadow-xs mb-5">
+          <InfoRow label="应用版本" value={APP_RELEASE_LABEL} />
           <InfoRow label="客户端打包时间" value={formatBuildTime(APP_BUILD_TIME)} last />
         </View>
 
         <Text className="text-xs font-bold text-copy-muted mb-2 px-1">服务状态</Text>
-        <View className="bg-white rounded-2xl border border-line overflow-hidden shadow-xs">
+        <View className="bg-surface rounded-2xl border border-line overflow-hidden shadow-xs">
           {loading ? (
-            <View className="py-6 items-center"><ActivityIndicator size="small" color="#2D6A4F" /></View>
+            <View className="py-6 items-center"><ActivityIndicator size="small" colorClassName="accent-brand" /></View>
           ) : serverInfo ? (
             <>
               <InfoRow label="服务端版本" value={`v${serverInfo.serverVersion}`} />

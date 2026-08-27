@@ -12,7 +12,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { useFocusEffect } from "expo-router";
 import { Screen } from "@/components/Screen";
 import { useAuthFetch } from "@/contexts/AuthContext";
@@ -92,20 +92,20 @@ export default function HealthProfileScreen() {
     if (!h || !w || h <= 0 || w <= 0) return null;
     const bmi = Number((w / (h * h)).toFixed(1));
     let status = "标准";
-    let badgeBg = "bg-[#E8F2EA]";
+    let badgeBg = "bg-brand-soft";
     let textColor = "text-brand";
     if (bmi < 18.5) {
       status = "偏瘦";
-      badgeBg = "bg-[#FEF3C7]";
-      textColor = "text-[#D97706]";
+      badgeBg = "bg-warm-soft";
+      textColor = "text-warm";
     } else if (bmi >= 24 && bmi < 28) {
       status = "偏重";
-      badgeBg = "bg-[#FFEDD5]";
-      textColor = "text-[#EA580C]";
+      badgeBg = "bg-warm-soft";
+      textColor = "text-critical";
     } else if (bmi >= 28) {
       status = "肥胖";
-      badgeBg = "bg-[#FEE2E2]";
-      textColor = "text-[#DC2626]";
+      badgeBg = "bg-danger-soft";
+      textColor = "text-critical";
     }
     return { bmi, status, badgeBg, textColor };
   }, [height, weight]);
@@ -268,16 +268,16 @@ export default function HealthProfileScreen() {
 
   if (loading) {
     return (
-      <Screen backgroundColor="#FDF8F0">
+      <Screen>
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color="#2D6A4F" />
+          <ActivityIndicator size="large" colorClassName="accent-brand" />
         </View>
       </Screen>
     );
   }
 
   return (
-    <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "left", "right"]}>
+    <Screen safeAreaEdges={["top", "left", "right"]}>
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <KeyboardAvoidingView className="flex-1" behavior={Platform.OS === "ios" ? "padding" : undefined}>
         {/* Dietdigidose Platform Top Navigation Header */}
@@ -286,9 +286,9 @@ export default function HealthProfileScreen() {
             <TouchableOpacity
               onPress={() => router.back()}
               accessibilityLabel="返回"
-              className="h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm border border-line"
+              className="h-10 w-10 items-center justify-center rounded-full bg-surface shadow-sm border border-line"
             >
-              <FontAwesome6 name="arrow-left" size={15} color="#3D3229" />
+              <FontAwesome6 name="arrow-left" size={15} colorClassName="accent-ink" />
             </TouchableOpacity>
 
             <View className="items-center">
@@ -299,9 +299,9 @@ export default function HealthProfileScreen() {
             <TouchableOpacity
               onPress={saveProfile}
               disabled={saving}
-              className="h-9 px-3.5 flex-row items-center justify-center rounded-full bg-brand shadow-sm"
+              className="h-9 px-3.5 flex-row items-center justify-center rounded-full bg-brand-fill shadow-sm"
             >
-              <FontAwesome6 name="check" size={12} color="white" />
+              <FontAwesome6 name="check" size={12} colorClassName="accent-on-brand" />
               <Text className="ml-1.5 text-xs font-bold text-white">{saving ? "保存中" : "保存"}</Text>
             </TouchableOpacity>
           </View>
@@ -315,24 +315,24 @@ export default function HealthProfileScreen() {
         >
           <View className="mx-auto w-full max-w-2xl gap-4">
             {/* Security Guarantee Banner */}
-            <View className="flex-row items-center rounded-2xl border border-[#E7DED2] bg-white p-3.5 shadow-sm">
-              <View className="h-9 w-9 items-center justify-center rounded-xl bg-[#E8F2EA]">
-                <FontAwesome6 name="shield-halved" size={14} color="#2D6A4F" />
+            <View className="flex-row items-center rounded-2xl border border-line bg-surface p-3.5 shadow-sm">
+              <View className="h-9 w-9 items-center justify-center rounded-xl bg-brand-soft">
+                <FontAwesome6 name="shield-halved" size={14} colorClassName="accent-brand" />
               </View>
               <View className="ml-3 flex-1">
                 <Text className="text-xs font-bold text-ink">食语安全防线保障</Text>
-                <Text className="mt-0.5 text-[11px] leading-4 text-[#786C60]">
+                <Text className="mt-0.5 text-[11px] leading-4 text-copy-muted">
                   档案数据用于全站菜谱风险检测与食材智能替换；不作为医学诊断，可随时修改。
                 </Text>
               </View>
             </View>
 
             {/* Smart Health Calculator Widget */}
-            <View className="rounded-3xl border border-line bg-white p-4 shadow-sm">
+            <View className="rounded-3xl border border-line bg-surface p-4 shadow-sm">
               <View className="flex-row items-center justify-between mb-3">
                 <View className="flex-row items-center gap-2">
-                  <View className="h-8 w-8 items-center justify-center rounded-xl bg-[#E8F2EA]">
-                    <FontAwesome6 name="heart-pulse" size={14} color="#2D6A4F" />
+                  <View className="h-8 w-8 items-center justify-center rounded-xl bg-brand-soft">
+                    <FontAwesome6 name="heart-pulse" size={14} colorClassName="accent-brand" />
                   </View>
                   <View>
                     <Text className="text-sm font-black text-ink">智能健康指标大盘</Text>
@@ -351,7 +351,7 @@ export default function HealthProfileScreen() {
                 )}
               </View>
 
-              <View className="flex-row divide-x divide-[#EBE3D5] border-t border-[#F3EDDF] pt-3">
+              <View className="flex-row divide-x divide-line border-t border-line pt-3">
                 <View className="flex-1 items-center">
                   <Text className="text-[10px] font-bold text-copy-muted">BMI 指数</Text>
                   <Text className="mt-0.5 text-base font-black text-ink">
@@ -383,13 +383,13 @@ export default function HealthProfileScreen() {
                     onPress={() => setGender(item)}
                     className={`flex-1 items-center rounded-xl border py-2.5 ${
                       gender === item
-                        ? "border-brand bg-[#E8F2EA]"
-                        : "border-[#E2D9CC] bg-[#FAF8F4]"
+                        ? "border-brand bg-brand-soft"
+                        : "border-line bg-background-secondary"
                     }`}
                   >
                     <Text
                       className={`text-xs font-bold ${
-                        gender === item ? "text-brand" : "text-[#766A5E]"
+                        gender === item ? "text-brand" : "text-copy-muted"
                       }`}
                     >
                       {item}
@@ -429,15 +429,15 @@ export default function HealthProfileScreen() {
 
               {/* Active Allergies List with Direct Severity Selectors */}
               {allergies.length > 0 && (
-                <View className="mt-4 gap-2 border-t border-[#F3EDDF] pt-3">
-                  <Text className="text-xs font-bold text-[#6E6256]">已选过敏/不耐受项目：</Text>
+                <View className="mt-4 gap-2 border-t border-line pt-3">
+                  <Text className="text-xs font-bold text-copy-muted">已选过敏/不耐受项目：</Text>
                   {allergies.map((item) => (
                     <View
                       key={item.name}
-                      className="flex-row flex-wrap items-center justify-between rounded-2xl border border-line bg-[#FAF8F4] p-3"
+                      className="flex-row flex-wrap items-center justify-between rounded-2xl border border-line bg-background-secondary p-3"
                     >
                       <View className="flex-row items-center">
-                        <View className="mr-2 h-2.5 w-2.5 rounded-full bg-[#B64D36]" />
+                        <View className="mr-2 h-2.5 w-2.5 rounded-full bg-critical-fill" />
                         <Text className="text-sm font-bold text-ink">{item.name}</Text>
                         <Text className="ml-1.5 text-[10px] text-copy-muted">
                           ({item.type === "allergy" ? "过敏" : "不耐受"})
@@ -454,14 +454,14 @@ export default function HealthProfileScreen() {
                               className={`rounded-lg px-2.5 py-1 ${
                                 active
                                   ? sev === "severe"
-                                    ? "bg-[#B42318]"
-                                    : "bg-brand"
-                                  : "bg-[#EAE3D7]"
+                                    ? "bg-critical-fill"
+                                    : "bg-brand-fill"
+                                  : "bg-background-secondary"
                               }`}
                             >
                               <Text
                                 className={`text-[10px] font-bold ${
-                                  active ? "text-white" : "text-[#6E6256]"
+                                  active ? "text-white" : "text-copy-muted"
                                 }`}
                               >
                                 {ALLERGY_LABELS[sev]}
@@ -472,9 +472,9 @@ export default function HealthProfileScreen() {
 
                         <TouchableOpacity
                           onPress={() => removeAllergy(item.name)}
-                          className="ml-1 h-7 w-7 items-center justify-center rounded-lg bg-white border border-[#E2D9CC]"
+                          className="ml-1 h-7 w-7 items-center justify-center rounded-lg bg-surface border border-line"
                         >
-                          <FontAwesome6 name="xmark" size={12} color="#8B7D6B" />
+                          <FontAwesome6 name="xmark" size={12} colorClassName="accent-copy-muted" />
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -488,14 +488,14 @@ export default function HealthProfileScreen() {
                   value={customAllergy}
                   onChangeText={setCustomAllergy}
                   placeholder="其他食物或成分 (如：花生、海鲜粉)"
-                  placeholderTextColor="#A39483"
-                  className="flex-1 rounded-2xl border border-line bg-[#FAF8F4] px-3.5 py-2.5 text-sm text-ink"
+                  placeholderTextColorClassName="accent-copy-muted"
+                  className="flex-1 rounded-2xl border border-line bg-background-secondary px-3.5 py-2.5 text-sm text-ink"
                 />
                 <TouchableOpacity
                   onPress={() =>
                     setCustomAllergyType((v) => (v === "allergy" ? "intolerance" : "allergy"))
                   }
-                  className="justify-center rounded-2xl border border-[#D8E5DC] bg-[#F1F7F2] px-3"
+                  className="justify-center rounded-2xl border border-line bg-background-secondary px-3"
                 >
                   <Text className="text-xs font-bold text-brand">
                     {customAllergyType === "allergy" ? "过敏" : "不耐受"}
@@ -503,9 +503,9 @@ export default function HealthProfileScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={addCustomAllergy}
-                  className="h-11 w-11 items-center justify-center rounded-2xl bg-brand"
+                  className="h-11 w-11 items-center justify-center rounded-2xl bg-brand-fill"
                 >
-                  <FontAwesome6 name="plus" size={14} color="white" />
+                  <FontAwesome6 name="plus" size={14} colorClassName="accent-on-brand" />
                 </TouchableOpacity>
               </View>
             </SectionCard>
@@ -542,9 +542,9 @@ export default function HealthProfileScreen() {
                 />
               </View>
 
-              <View className="mt-3 flex-row rounded-2xl bg-[#FFF3EF] border border-[#FADBD3] p-3">
-                <FontAwesome6 name="circle-info" size={13} color="#B64D36" style={{ marginTop: 1 }} />
-                <Text className="ml-2.5 flex-1 text-[11px] leading-4 text-[#9A4D3A]">
+              <View className="mt-3 flex-row rounded-2xl bg-danger-soft border border-critical p-3">
+                <FontAwesome6 name="circle-info" size={13} colorClassName="accent-critical" style={{ marginTop: 1 }} />
+                <Text className="ml-2.5 flex-1 text-[11px] leading-4 text-critical">
                   食语系统仅用于识别可能影响药效或引发冲突的特殊食材（如西柚与特定药物），绝不会建议停药或调整剂量。
                 </Text>
               </View>
@@ -553,20 +553,20 @@ export default function HealthProfileScreen() {
             {/* Dietdigidose AI Assistant Banner */}
             <TouchableOpacity
               onPress={() => router.push("/ai-assistant")}
-              className="flex-row items-center justify-between rounded-3xl border border-[#D8E5DC] bg-white p-4 shadow-sm"
+              className="flex-row items-center justify-between rounded-3xl border border-line bg-surface p-4 shadow-sm"
             >
               <View className="flex-row items-center gap-3 flex-1">
-                <View className="h-10 w-10 items-center justify-center rounded-2xl bg-[#E8F2EA]">
-                  <FontAwesome6 name="comments" size={16} color="#2D6A4F" />
+                <View className="h-10 w-10 items-center justify-center rounded-2xl bg-brand-soft">
+                  <FontAwesome6 name="comments" size={16} colorClassName="accent-brand" />
                 </View>
                 <View className="flex-1">
                   <Text className="text-sm font-black text-ink">遇到不确定的食材与禁忌？</Text>
                   <Text className="text-[11px] text-copy-muted mt-0.5">随时向【食语 AI 助手】发图或提问咨询</Text>
                 </View>
               </View>
-              <View className="flex-row items-center rounded-full bg-[#E8F2EA] px-3 py-1.5">
+              <View className="flex-row items-center rounded-full bg-brand-soft px-3 py-1.5">
                 <Text className="text-xs font-bold text-brand">去提问</Text>
-                <FontAwesome6 name="chevron-right" size={10} color="#2D6A4F" style={{ marginLeft: 4 }} />
+                <FontAwesome6 name="chevron-right" size={10} colorClassName="accent-brand" style={{ marginLeft: 4 }} />
               </View>
             </TouchableOpacity>
 
@@ -597,13 +597,13 @@ export default function HealthProfileScreen() {
             <SectionCard icon="bullseye" title="每日营养目标" subtitle="没有明确目标时可以留空，系统会自动按推荐标准匹配。">
               {/* Presets & TDEE Smart Calculator */}
               <View className="flex-row items-center justify-between gap-2 mb-3">
-                <Text className="text-xs font-bold text-[#6E6256]">快捷推荐：</Text>
+                <Text className="text-xs font-bold text-copy-muted">快捷推荐：</Text>
                 <View className="flex-row items-center gap-1.5 flex-wrap flex-1 justify-end">
                   {PRESETS.map((preset) => (
                     <TouchableOpacity
                       key={preset.label}
                       onPress={() => applyPreset(preset)}
-                      className="rounded-full border border-[#D8E5DC] bg-[#F1F7F2] px-2.5 py-1"
+                      className="rounded-full border border-line bg-background-secondary px-2.5 py-1"
                     >
                       <Text className="text-[11px] font-bold text-brand">{preset.label}</Text>
                     </TouchableOpacity>
@@ -621,9 +621,9 @@ export default function HealthProfileScreen() {
                       setWater("2200");
                       Alert.alert("TDEE 智能计算", `根据你的基础代谢 (${baseBmr} kcal) 与目标，已为你自动配置减脂期推荐每日热量 (${targetKcal} kcal) 与蛋白质 (${targetProtein}g)。`);
                     }}
-                    className="rounded-full border border-brand bg-brand px-3 py-1 flex-row items-center gap-1 active:opacity-80"
+                    className="rounded-full border border-brand bg-brand-fill px-3 py-1 flex-row items-center gap-1 active:opacity-80"
                   >
-                    <FontAwesome6 name="wand-magic-sparkles" size={10} color="#FFF" />
+                    <FontAwesome6 name="wand-magic-sparkles" size={10} colorClassName="accent-on-brand" />
                     <Text className="text-[11px] font-black text-white">根据 BMR 智能估算</Text>
                   </TouchableOpacity>
                 </View>
@@ -689,7 +689,7 @@ export default function HealthProfileScreen() {
             <SectionCard icon="chart-line" title="体征与健康中枢" subtitle="结合体重、血压、血糖等记录，为您生成长期健康趋势分析。">
               <TouchableOpacity
                 onPress={() => setTrackingEnabled((value) => !value)}
-                className="flex-row items-center justify-between rounded-2xl bg-[#F5F1E9] p-3.5 border border-[#EAE3D7]"
+                className="flex-row items-center justify-between rounded-2xl bg-background-secondary p-3.5 border border-line"
               >
                 <View className="mr-4 flex-1">
                   <Text className="text-sm font-bold text-ink">允许个性化趋势参考</Text>
@@ -699,11 +699,11 @@ export default function HealthProfileScreen() {
                 </View>
                 <View
                   className={`h-7 w-12 justify-center rounded-full px-1 ${
-                    trackingEnabled ? "bg-brand" : "bg-[#CFC6B9]"
+                    trackingEnabled ? "bg-brand-fill" : "bg-background-secondary"
                   }`}
                 >
                   <View
-                    className={`h-5 w-5 rounded-full bg-white shadow-sm ${
+                    className={`h-5 w-5 rounded-full bg-surface shadow-sm ${
                       trackingEnabled ? "self-end" : "self-start"
                     }`}
                   />
@@ -712,10 +712,10 @@ export default function HealthProfileScreen() {
 
               <TouchableOpacity
                 onPress={() => router.push("/health-data")}
-                className="mt-3 flex-row items-center justify-center rounded-2xl border border-[#D8E5DC] bg-white py-3 shadow-sm"
+                className="mt-3 flex-row items-center justify-center rounded-2xl border border-line bg-surface py-3 shadow-sm"
               >
                 <Text className="mr-2 text-xs font-black text-brand">管理体征追踪中枢</Text>
-                <FontAwesome6 name="arrow-right" size={11} color="#2D6A4F" />
+                <FontAwesome6 name="arrow-right" size={11} colorClassName="accent-brand" />
               </TouchableOpacity>
             </SectionCard>
 
@@ -723,10 +723,10 @@ export default function HealthProfileScreen() {
             <TouchableOpacity
               onPress={clearSensitiveProfile}
               disabled={saving}
-              className="mb-6 mt-4 flex-row items-center justify-center rounded-2xl border border-[#F5D4CB] bg-[#FFF8F6] py-3.5"
+              className="mb-6 mt-4 flex-row items-center justify-center rounded-2xl border border-critical bg-danger-soft py-3.5"
             >
-              <FontAwesome6 name="trash-can" size={13} color="#B64D36" />
-              <Text className="ml-2 text-xs font-bold text-[#B64D36]">清空安全与健康限制资料</Text>
+              <FontAwesome6 name="trash-can" size={13} colorClassName="accent-critical" />
+              <Text className="ml-2 text-xs font-bold text-critical">清空安全与健康限制资料</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -737,15 +737,15 @@ export default function HealthProfileScreen() {
             <TouchableOpacity
               onPress={saveProfile}
               disabled={saving}
-              className={`h-13 flex-row items-center justify-center rounded-2xl bg-brand py-3.5 shadow-md active:opacity-90 ${
+              className={`h-13 flex-row items-center justify-center rounded-2xl bg-brand-fill py-3.5 shadow-md active:opacity-90 ${
                 saving ? "opacity-60" : ""
               }`}
             >
               {saving ? (
-                <ActivityIndicator color="white" />
+                <ActivityIndicator colorClassName="accent-on-brand" />
               ) : (
                 <>
-                  <FontAwesome6 name="floppy-disk" size={16} color="white" />
+                  <FontAwesome6 name="floppy-disk" size={16} colorClassName="accent-on-brand" />
                   <Text className="ml-2 text-base font-black text-white">保存健康与饮食档案</Text>
                 </>
               )}
@@ -769,10 +769,10 @@ function SectionCard({
   children: ReactNode;
 }) {
   return (
-    <View className="rounded-3xl border border-line bg-white p-4.5 shadow-sm">
+    <View className="rounded-3xl border border-line bg-surface p-4.5 shadow-sm">
       <View className="mb-4 flex-row items-start">
-        <View className="h-10 w-10 items-center justify-center rounded-2xl bg-[#E8F2EA]">
-          <FontAwesome6 name={icon} size={15} color="#2D6A4F" />
+        <View className="h-10 w-10 items-center justify-center rounded-2xl bg-brand-soft">
+          <FontAwesome6 name={icon} size={15} colorClassName="accent-brand" />
         </View>
         <View className="ml-3 flex-1">
           <Text className="text-base font-black text-ink">{title}</Text>
@@ -785,7 +785,7 @@ function SectionCard({
 }
 
 function FieldLabel({ children }: { children: ReactNode }) {
-  return <Text className="mb-2 text-xs font-bold text-[#6E6256]">{children}</Text>;
+  return <Text className="mb-2 text-xs font-bold text-copy-muted">{children}</Text>;
 }
 
 function ChipGrid({ children }: { children: ReactNode }) {
@@ -807,14 +807,14 @@ function Chip({
     <TouchableOpacity
       onPress={onPress}
       className={`flex-row items-center rounded-full border px-3.5 py-2 ${
-        selected ? "border-brand bg-[#E8F2EA]" : "border-[#E2D9CC] bg-[#FAF8F4]"
+        selected ? "border-brand bg-brand-soft" : "border-line bg-background-secondary"
       }`}
     >
-      <Text className={`text-xs font-bold ${selected ? "text-brand" : "text-[#766A5E]"}`}>
+      <Text className={`text-xs font-bold ${selected ? "text-brand" : "text-copy-muted"}`}>
         {label}
       </Text>
       {badge && !selected && (
-        <Text className="ml-1 text-[9px] font-medium text-[#A39483]">({badge})</Text>
+        <Text className="ml-1 text-[9px] font-medium text-copy-muted">({badge})</Text>
       )}
     </TouchableOpacity>
   );
@@ -837,14 +837,14 @@ function Segment({
       className={`flex-1 items-center rounded-xl border py-2.5 ${
         selected
           ? danger
-            ? "border-[#B42318] bg-[#FFF0EE]"
-            : "border-brand bg-[#E8F2EA]"
-          : "border-[#E2D9CC] bg-[#FAF8F4]"
+            ? "border-critical bg-danger-soft"
+            : "border-brand bg-brand-soft"
+          : "border-line bg-background-secondary"
       }`}
     >
       <Text
         className={`text-xs font-bold ${
-          selected ? (danger ? "text-[#B42318]" : "text-brand") : "text-[#766A5E]"
+          selected ? (danger ? "text-critical" : "text-brand") : "text-copy-muted"
         }`}
       >
         {label}
@@ -867,10 +867,10 @@ function MultilineInput({
       value={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
-      placeholderTextColor="#A39483"
+      placeholderTextColorClassName="accent-copy-muted"
       multiline
       textAlignVertical="top"
-      className="min-h-20 rounded-2xl border border-line bg-[#FAF8F4] px-3.5 py-3 text-sm leading-5 text-ink"
+      className="min-h-20 rounded-2xl border border-line bg-background-secondary px-3.5 py-3 text-sm leading-5 text-ink"
     />
   );
 }
@@ -890,15 +890,15 @@ function NumberField({
 }) {
   return (
     <View className="flex-1 min-w-0">
-      <Text className="mb-1.5 text-xs font-bold text-[#6E6256]">{label}</Text>
-      <View className="flex-row items-center rounded-2xl border border-line bg-[#FAF8F4] px-3 py-1 overflow-hidden">
-        {icon && <FontAwesome6 name={icon} size={12} color="#8B7D6B" style={{ marginRight: 6 }} />}
+      <Text className="mb-1.5 text-xs font-bold text-copy-muted">{label}</Text>
+      <View className="flex-row items-center rounded-2xl border border-line bg-background-secondary px-3 py-1 overflow-hidden">
+        {icon && <FontAwesome6 name={icon} size={12} colorClassName="accent-copy-muted" style={{ marginRight: 6 }} />}
         <TextInput
           value={value}
           onChangeText={onChangeText}
           keyboardType="numeric"
           placeholder="0"
-          placeholderTextColor="#C5B8A8"
+          placeholderTextColorClassName="accent-copy-muted"
           className="flex-1 min-w-0 py-1.5 text-sm font-bold text-ink"
           style={Platform.OS === "web" ? ({ outlineStyle: "none", minWidth: 0 } as any) : undefined}
         />
@@ -921,7 +921,7 @@ function ChoiceRow<T extends string>({
 }) {
   return (
     <View className="mt-4">
-      <Text className="mb-2 text-xs font-bold text-[#6E6256]">{label}</Text>
+      <Text className="mb-2 text-xs font-bold text-copy-muted">{label}</Text>
       <View className="flex-row gap-2">
         {options.map((item) => (
           <Segment

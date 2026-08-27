@@ -7,6 +7,7 @@ import { sendError } from "../utils/http.js";
 import { currentDateKey, currentTimeKey } from "../utils/date.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
 import { recordFunnelEvent } from "../services/funnelEvents.js";
+import { applyInventoryConsumptions, InventoryQuantityError, type InventoryConsumption } from "../services/inventoryQuantity.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -14,34 +15,39 @@ router.use(authMiddleware);
 
 router.post("/cooking-completions", validateBody(cookingCompletionSchema), (req: AuthRequest, res) => {
   const userId = req.userId!;
-  const { idempotency_key: idempotencyKey, recipe_id: recipeId, inventory_item_ids: rawInventoryIds, diet_record: record } = req.body;
+  const {
+    idempotency_key: idempotencyKey,
+    recipe_id: recipeId,
+    inventory_item_ids: rawInventoryIds,
+    inventory_consumptions: structuredConsumptions,
+    diet_record: record,
+  } = req.body;
   const inventoryIds = [...new Set(rawInventoryIds as number[])];
   const existing = db.prepare(`
     SELECT result_json FROM cooking_completions WHERE user_id = ? AND idempotency_key = ?
   `).get(userId, idempotencyKey) as { result_json: string } | undefined;
   if (existing) return res.json({ ...JSON.parse(existing.result_json), repeated: true });
 
-  if (inventoryIds.length) {
-    const placeholders = inventoryIds.map(() => "?").join(",");
-    const available = db.prepare(`
-      SELECT id FROM inventory_items
-      WHERE user_id = ? AND is_available = 1 AND id IN (${placeholders})
-    `).all(userId, ...inventoryIds) as Array<{ id: number }>;
-    if (available.length !== inventoryIds.length) {
-      return sendError(res, 409, "部分库存食材不存在、已用完或不属于当前账号", "INVENTORY_CONFLICT");
-    }
-  }
-
   try {
     const result = db.transaction(() => {
-      if (inventoryIds.length) {
-        const placeholders = inventoryIds.map(() => "?").join(",");
-        const updated = db.prepare(`
-          UPDATE inventory_items SET is_available = 0
-          WHERE user_id = ? AND is_available = 1 AND id IN (${placeholders})
-        `).run(userId, ...inventoryIds);
-        if (updated.changes !== inventoryIds.length) throw new Error("INVENTORY_CONFLICT");
-      }
+      const legacyConsumptions = inventoryIds.map((id) => {
+        const item = db.prepare(`
+          SELECT id, version FROM inventory_items
+          WHERE id = ? AND user_id = ? AND is_available = 1 AND deleted_at IS NULL
+        `).get(id, userId) as { id: number; version: number } | undefined;
+        if (!item) throw new InventoryQuantityError("INVENTORY_CONFLICT", "部分库存食材不存在、已用完或不属于当前账号");
+        return { item_id: item.id, version: item.version, mode: "all" as const };
+      });
+      const consumptions = (structuredConsumptions.length
+        ? structuredConsumptions
+        : legacyConsumptions) as InventoryConsumption[];
+      const consumptionChanges = consumptions.length
+        ? applyInventoryConsumptions(db, userId, consumptions, {
+          idempotencyKey: `cooking:${idempotencyKey}`,
+          source: "cooking",
+          metadata: { recipeId: recipeId ?? null },
+        })
+        : [];
 
       const recordedAt = record.recorded_at || currentDateKey();
       const recordedTime = record.recorded_time ?? (recordedAt === currentDateKey() ? currentTimeKey() : null);
@@ -54,19 +60,26 @@ router.post("/cooking-completions", validateBody(cookingCompletionSchema), (req:
         recordedAt, recordedTime, record.image_url || null,
       );
       const dietRecord = db.prepare("SELECT * FROM diet_records WHERE id = ?").get(inserted.lastInsertRowid);
-      const response = { diet_record: dietRecord, consumed_inventory_item_ids: inventoryIds, repeated: false };
+      const consumedInventoryIds = consumptions.map((item) => item.item_id);
+      const response = {
+        diet_record: dietRecord,
+        consumed_inventory_item_ids: consumedInventoryIds,
+        inventory_consumption_changes: consumptionChanges,
+        repeated: false,
+      };
       db.prepare(`
         INSERT INTO cooking_completions (
           user_id, idempotency_key, recipe_id, diet_record_id, consumed_inventory_ids_json, result_json
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run(userId, idempotencyKey, recipeId ?? null, inserted.lastInsertRowid, JSON.stringify(inventoryIds), JSON.stringify(response));
+      `).run(userId, idempotencyKey, recipeId ?? null, inserted.lastInsertRowid, JSON.stringify(consumedInventoryIds), JSON.stringify(response));
       return response;
     })();
     recordFunnelEvent(userId, "cooking_completed");
     return res.status(201).json(result);
   } catch (error) {
-    if (error instanceof Error && error.message === "INVENTORY_CONFLICT") {
-      return sendError(res, 409, "库存状态已变化，请刷新后重试", "INVENTORY_CONFLICT");
+    if (error instanceof InventoryQuantityError) {
+      const status = ["INVENTORY_UNIT_MISMATCH", "STRUCTURED_QUANTITY_REQUIRED", "INVALID_CONSUMPTION_AMOUNT"].includes(error.code) ? 400 : 409;
+      return sendError(res, status, error.message, error.code);
     }
     throw error;
   }

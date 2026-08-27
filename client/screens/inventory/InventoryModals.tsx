@@ -1,10 +1,11 @@
-import { ActivityIndicator, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import { ActivityIndicator, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { useCSSVariable } from "uniwind";
 
 import type { DetectedFood, InventoryItem, KitchenwareCatalogItem } from "./types";
 import { COMMON_INGREDIENTS, type CommonIngredient } from "@/utils/ingredientRules";
 import type { InventoryLogEntry } from "@/utils/inventoryHistory";
+import { SmartDateInput } from "@/components/SmartDateInput";
 
 export type ExpiredCleanupResult = {
   succeeded: number;
@@ -38,11 +39,11 @@ export function ExpiredCleanupModal({
     <Modal visible={visible} animationType="fade" transparent onRequestClose={clearing ? undefined : onClose}>
       <View className="flex-1 items-center justify-center bg-black/45 px-5">
         <View className="w-full max-w-md rounded-[28px] bg-surface p-5 shadow-lg" accessibilityViewIsModal>
-          <View className={`h-12 w-12 items-center justify-center rounded-2xl ${result ? (fullyCleared ? "bg-brand/10" : "bg-amber-100") : "bg-rose-100"}`}>
+          <View className={`h-12 w-12 items-center justify-center rounded-2xl ${result ? (fullyCleared ? "bg-brand/10" : "bg-warm-soft") : "bg-danger-soft"}`}>
             <FontAwesome6
               name={result ? (fullyCleared ? "check" : "triangle-exclamation") : "trash-can"}
               size={17}
-              color={result ? (fullyCleared ? "#2D6A4F" : "#B7791F") : "#C2413A"}
+              colorClassName={result ? (fullyCleared ? "accent-brand" : "accent-warm") : "accent-critical"}
             />
           </View>
 
@@ -61,12 +62,12 @@ export function ExpiredCleanupModal({
                     <TouchableOpacity onPress={onClose} className="min-h-touch flex-1 items-center justify-center rounded-2xl border border-line bg-canvas">
                       <Text className="text-sm font-bold text-copy-muted">稍后处理</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={onRetry} className="min-h-touch flex-1 items-center justify-center rounded-2xl bg-brand">
+                    <TouchableOpacity onPress={onRetry} className="min-h-touch flex-1 items-center justify-center rounded-2xl bg-brand-fill">
                       <Text className="text-sm font-black text-white">重试 {result.failed} 种</Text>
                     </TouchableOpacity>
                   </>
                 ) : (
-                  <TouchableOpacity onPress={onClose} className="min-h-touch flex-1 items-center justify-center rounded-2xl bg-brand">
+                  <TouchableOpacity onPress={onClose} className="min-h-touch flex-1 items-center justify-center rounded-2xl bg-brand-fill">
                     <Text className="text-sm font-black text-white">完成</Text>
                   </TouchableOpacity>
                 )}
@@ -79,8 +80,8 @@ export function ExpiredCleanupModal({
                 将从保鲜库移除 {items.length} 种已过期食材，此操作会记入库存变动历史。
               </Text>
               {previewNames ? (
-                <View className="mt-3 rounded-2xl bg-rose-50 px-3.5 py-3">
-                  <Text className="text-xs font-bold leading-5 text-rose-800">
+                <View className="mt-3 rounded-2xl bg-danger-soft px-3.5 py-3">
+                  <Text className="text-xs font-bold leading-5 text-critical">
                     {previewNames}{remainingCount > 0 ? ` 等 ${items.length} 种` : ""}
                   </Text>
                 </View>
@@ -96,11 +97,11 @@ export function ExpiredCleanupModal({
                 <TouchableOpacity
                   onPress={onConfirm}
                   disabled={clearing || items.length === 0}
-                  className="min-h-touch flex-1 flex-row items-center justify-center rounded-2xl bg-rose-600 disabled:opacity-50"
+                  className="min-h-touch flex-1 flex-row items-center justify-center rounded-2xl bg-critical-fill disabled:opacity-50"
                 >
                   {clearing ? (
                     <>
-                      <ActivityIndicator size="small" color="#FFF" />
+                      <ActivityIndicator size="small" colorClassName="accent-on-brand" />
                       <Text className="ml-2 text-sm font-black text-white">正在清理</Text>
                     </>
                   ) : (
@@ -124,9 +125,10 @@ interface BatchReviewModalProps {
   onChange: (foods: DetectedFood[]) => void;
   onSave: () => void;
   onAddItem?: (item: CommonIngredient) => void;
+  onMergeDuplicates?: () => void;
 }
 
-export function BatchReviewModal({ visible, foods, saving, onClose, onChange, onSave, onAddItem }: BatchReviewModalProps) {
+export function BatchReviewModal({ visible, foods, saving, onClose, onChange, onSave, onAddItem, onMergeDuplicates }: BatchReviewModalProps) {
   const [brand, muted] = useCSSVariable(["--color-brand", "--color-copy-muted"]) as string[];
   const allSelected = foods.length > 0 && foods.every((food) => food.selected);
   const selectedCount = foods.filter((food) => food.selected).length;
@@ -156,7 +158,7 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
                     onPress={() => onAddItem(item)}
                     className="flex-row items-center gap-1.5 rounded-full border border-brand/30 bg-brand/5 px-3 py-1.5"
                   >
-                    <FontAwesome6 name="plus" size={10} color="#2D6A4F" />
+                    <FontAwesome6 name="plus" size={10} colorClassName="accent-brand" />
                     <Text className="text-xs font-bold text-brand">{item.name}</Text>
                   </TouchableOpacity>
                   ))}
@@ -164,25 +166,84 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
               </View>
             </View>
           )}
+          {onMergeDuplicates ? (
+            <TouchableOpacity onPress={onMergeDuplicates} className="mt-2 self-start rounded-full bg-background-secondary px-3 py-2">
+              <Text className="text-[10px] font-black text-copy-muted">合并同名项目</Text>
+            </TouchableOpacity>
+          ) : null}
 
           <ScrollView className="mt-3" showsVerticalScrollIndicator={false} contentContainerClassName="gap-2 pb-3" accessibilityLiveRegion="polite">
             {foods.map((item) => (
-              <TouchableOpacity
+              <View
                 key={item.id}
-                onPress={() => onChange(foods.map((food) => food.id === item.id ? { ...food, selected: !food.selected } : food))}
-                className={`flex-row items-center rounded-card border p-3.5 ${item.selected ? "border-brand/30 bg-brand-soft" : "border-line bg-canvas opacity-disabled"}`}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: item.selected }}
-                accessibilityLabel={`${item.foodName}，${item.quantity}，${item.suggestedStorageLocation}`}
+                className={`rounded-card border p-3.5 ${item.selected ? "border-brand/30 bg-brand-soft" : "border-line bg-canvas opacity-disabled"}`}
               >
-                <View className={`mr-3 h-6 w-6 items-center justify-center rounded-full ${item.selected ? "bg-brand" : "border border-line bg-surface"}`}>
-                  {item.selected && <FontAwesome6 name="check" size={11} color="#FFF" />}
+                <View className="flex-row items-center">
+                  <TouchableOpacity
+                    onPress={() => onChange(foods.map((food) => food.id === item.id ? { ...food, selected: !food.selected } : food))}
+                    className={`mr-3 h-6 w-6 items-center justify-center rounded-full ${item.selected ? "bg-brand-fill" : "border border-line bg-surface"}`}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: item.selected }}
+                  >
+                    {item.selected && <FontAwesome6 name="check" size={11} colorClassName="accent-on-brand" />}
+                  </TouchableOpacity>
+                  <TextInput
+                    value={item.foodName}
+                    onChangeText={(foodName) => onChange(foods.map((food) => food.id === item.id ? { ...food, foodName } : food))}
+                    editable={item.selected}
+                    className="h-10 min-w-0 flex-1 text-body font-black text-ink"
+                    accessibilityLabel="食材名称"
+                  />
+                  <TouchableOpacity onPress={() => onChange(foods.filter((food) => food.id !== item.id))} accessibilityLabel={`删除${item.foodName}`} className="h-9 w-9 items-center justify-center">
+                    <FontAwesome6 name="trash-can" size={11} colorClassName="accent-critical" />
+                  </TouchableOpacity>
                 </View>
-                <View className="flex-1">
-                  <Text className="text-body font-black text-ink">{item.foodName}</Text>
-                  <Text className="mt-1 text-caption text-copy-muted">{item.quantity} · {item.suggestedStorageLocation} · 建议 {item.estimatedExpireDays} 天内食用</Text>
-                </View>
-              </TouchableOpacity>
+                {item.selected ? (
+                  <View className="mt-2 gap-2">
+                    <View className="flex-row gap-2">
+                      <View className="flex-1 rounded-xl bg-surface px-3">
+                        <Text className="pt-2 text-[9px] font-bold text-copy-muted">数量与单位</Text>
+                        <TextInput
+                          value={item.quantity}
+                          onChangeText={(quantity) => onChange(foods.map((food) => food.id === item.id ? { ...food, quantity } : food))}
+                          placeholder="如 500g"
+                          placeholderTextColorClassName="accent-copy-muted"
+                          className="h-9 text-xs font-black text-ink"
+                        />
+                      </View>
+                      <View className="flex-1">
+                        <SmartDateInput
+                          label="到期日期"
+                          value={item.expirationDate || ""}
+                          onChange={(expirationDate) => onChange(foods.map((food) => food.id === item.id ? { ...food, expirationDate } : food))}
+                          placeholder="必须确认"
+                          labelStyle={{ fontSize: 9 }}
+                        />
+                      </View>
+                    </View>
+                    <View className="flex-row gap-1.5">
+                      {(["冷藏", "冷冻", "常温"] as const).map((location) => (
+                        <TouchableOpacity
+                          key={location}
+                          onPress={() => onChange(foods.map((food) => food.id === item.id ? { ...food, suggestedStorageLocation: location } : food))}
+                          className={`rounded-full px-3 py-1.5 ${item.suggestedStorageLocation === location ? "bg-brand-fill" : "bg-surface"}`}
+                        >
+                          <Text className={`text-[9px] font-black ${item.suggestedStorageLocation === location ? "text-white" : "text-copy-muted"}`}>{location}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <View className="flex-row items-center justify-between">
+                      <Text className="text-[9px] text-copy-muted">来源：{item.source === "barcode" ? "条码" : item.source === "receipt" ? "小票" : "图片"}</Text>
+                      <Text className={`text-[9px] font-black ${(item.confidence ?? 0) < 0.8 ? "text-critical" : "text-brand"}`}>
+                        {item.confidence == null ? "置信度待确认" : `置信度 ${Math.round(item.confidence * 100)}%`}
+                      </Text>
+                    </View>
+                    {item.missingFields?.length ? <Text className="text-[9px] font-bold text-critical">待确认：{item.missingFields.join("、")}</Text> : null}
+                  </View>
+                ) : (
+                  <Text className="mt-1 text-caption text-copy-muted">已排除，不会入库</Text>
+                )}
+              </View>
             ))}
           </ScrollView>
 
@@ -199,12 +260,12 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
             <TouchableOpacity
               onPress={onSave}
               disabled={saving || selectedCount === 0}
-              className="flex-1 min-h-touch items-center justify-center rounded-control bg-brand active:bg-accent-hover disabled:opacity-disabled"
+              className="flex-1 min-h-touch items-center justify-center rounded-control bg-brand-fill active:bg-accent-hover disabled:opacity-disabled"
               accessibilityRole="button"
               accessibilityLabel={`一键批量入库 ${selectedCount} 项`}
               accessibilityState={{ disabled: saving || selectedCount === 0, busy: saving }}
             >
-              {saving ? <ActivityIndicator color="#FFF" /> : <Text className="text-base font-black text-white">一键批量入库 {selectedCount} 项</Text>}
+              {saving ? <ActivityIndicator colorClassName="accent-on-brand" /> : <Text className="text-base font-black text-white">一键批量入库 {selectedCount} 项</Text>}
             </TouchableOpacity>
           </View>
         </View>
@@ -226,13 +287,13 @@ export function InventoryHistoryModal({ visible, logs, onClose, onClear }: Inven
   const getActionBadge = (action: InventoryLogEntry["action"]) => {
     switch (action) {
       case "add":
-        return { text: "录入", bg: "bg-emerald-100", textColor: "text-emerald-800" };
+        return { text: "录入", bg: "bg-success-soft", textColor: "text-success" };
       case "consume":
-        return { text: "用完", bg: "bg-amber-100", textColor: "text-amber-800" };
+        return { text: "用完", bg: "bg-warm-soft", textColor: "text-warm" };
       case "expire_clear":
-        return { text: "清理", bg: "bg-rose-100", textColor: "text-rose-800" };
+        return { text: "清理", bg: "bg-danger-soft", textColor: "text-critical" };
       default:
-        return { text: "修改", bg: "bg-blue-100", textColor: "text-blue-800" };
+        return { text: "修改", bg: "bg-info-soft", textColor: "text-info" };
     }
   };
 
@@ -268,7 +329,7 @@ export function InventoryHistoryModal({ visible, logs, onClose, onClear }: Inven
 
           {logs.length === 0 ? (
             <View className="py-12 items-center">
-              <FontAwesome6 name="clock-rotate-left" size={32} color="#D4A276" />
+              <FontAwesome6 name="clock-rotate-left" size={32} colorClassName="accent-warm" />
               <Text className="mt-3 text-xs font-bold text-copy-muted">暂无变动记录</Text>
               <Text className="mt-1 text-[11px] text-copy-muted">录入或扣减食材后会在此处自动记录</Text>
             </View>
@@ -332,7 +393,7 @@ export function CatalogDetailModal({ item, saving, owned, onClose, onAdd }: Cata
           <TouchableOpacity
             disabled={saving || owned}
             onPress={() => onAdd(item)}
-            className="mt-5 min-h-touch items-center justify-center rounded-control bg-brand disabled:opacity-disabled"
+            className="mt-5 min-h-touch items-center justify-center rounded-control bg-brand-fill disabled:opacity-disabled"
             accessibilityRole="button"
             accessibilityState={{ disabled: saving || owned, busy: saving }}
             accessibilityLabel={owned ? `${item.name}已在我的装备库` : `将${item.name}加入我的装备`}

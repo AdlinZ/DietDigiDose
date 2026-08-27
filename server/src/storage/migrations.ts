@@ -1039,6 +1039,432 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 39,
+    name: "user_session_version",
+    up(database) {
+      addColumn(database, "users", "session_version", "INTEGER NOT NULL DEFAULT 1");
+      database.exec("UPDATE users SET session_version = 1 WHERE session_version IS NULL OR session_version < 1");
+    },
+  },
+  {
+    version: 40,
+    name: "repair_public_usernames_from_login_identifiers",
+    up(database) {
+      const affected = database.prepare(`
+        SELECT id FROM users
+        WHERE role != 'admin'
+          AND ((email IS NOT NULL AND LOWER(username) = LOWER(email)) OR (phone IS NOT NULL AND username = phone))
+        ORDER BY id
+      `).all() as Array<{ id: number }>;
+      if (!affected.length) return;
+      const park = database.prepare("UPDATE users SET username = ? WHERE id = ?");
+      for (const user of affected) park.run(`__repair_user_${user.id}__`, user.id);
+      const reserved = new Set(
+        (database.prepare("SELECT LOWER(username) AS username FROM users").all() as Array<{ username: string }>)
+          .map((row) => row.username),
+      );
+      const update = database.prepare("UPDATE users SET username = ? WHERE id = ?");
+      for (const user of affected) {
+        let candidate = `食友${user.id}`;
+        let suffix = 1;
+        while (reserved.has(candidate.toLocaleLowerCase())) {
+          suffix += 1;
+          candidate = `食友${user.id}-${suffix}`;
+        }
+        reserved.add(candidate.toLocaleLowerCase());
+        update.run(candidate, user.id);
+      }
+      database.exec(`
+        UPDATE community_posts
+        SET username = COALESCE((SELECT username FROM users WHERE users.id = community_posts.user_id), '食友' || user_id)
+        WHERE user_id IN (
+          SELECT id FROM users
+          WHERE role != 'admin' AND username LIKE '食友%'
+        );
+        UPDATE community_comments
+        SET username = COALESCE((SELECT username FROM users WHERE users.id = community_comments.user_id), '食友' || user_id)
+        WHERE user_id IN (
+          SELECT id FROM users
+          WHERE role != 'admin' AND username LIKE '食友%'
+        );
+      `);
+    },
+  },
+  {
+    version: 41,
+    name: "community_feed_pagination_index",
+    up(database) {
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_community_posts_feed_page
+        ON community_posts(deleted_at, created_at DESC, id DESC)
+      `);
+    },
+  },
+  {
+    version: 42,
+    name: "server_cooking_queue",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS cooking_queue_items (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          recipe_id INTEGER NOT NULL,
+          position INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'waiting'
+            CHECK(status IN ('waiting', 'preparing', 'ready', 'cooking', 'completed', 'cancelled')),
+          meal_type TEXT
+            CHECK(meal_type IS NULL OR meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')),
+          planned_at DATETIME,
+          recipe_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          prepared_ingredients_json TEXT NOT NULL DEFAULT '[]',
+          shopping_list_synced_at DATETIME,
+          idempotency_key TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          completed_at DATETIME,
+          deleted_at DATETIME,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cooking_queue_active_recipe
+          ON cooking_queue_items(user_id, recipe_id)
+          WHERE deleted_at IS NULL AND status IN ('waiting', 'preparing', 'ready', 'cooking');
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cooking_queue_idempotency
+          ON cooking_queue_items(user_id, idempotency_key)
+          WHERE idempotency_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_cooking_queue_user_position
+          ON cooking_queue_items(user_id, position, created_at)
+          WHERE deleted_at IS NULL AND status IN ('waiting', 'preparing', 'ready', 'cooking');
+        CREATE INDEX IF NOT EXISTS idx_cooking_queue_user_history
+          ON cooking_queue_items(user_id, updated_at DESC);
+      `);
+    },
+  },
+  {
+    version: 43,
+    name: "community_linked_recipe",
+    up(database) {
+      addColumn(database, "community_posts", "linked_recipe_id", "INTEGER REFERENCES recipes(id) ON DELETE SET NULL");
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_community_posts_linked_recipe
+          ON community_posts(linked_recipe_id)
+          WHERE linked_recipe_id IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 44,
+    name: "structured_inventory_quantities",
+    up(database) {
+      for (const [column, definition] of [
+        ["quantity_value", "REAL"],
+        ["quantity_unit", "TEXT"],
+        ["package_size_value", "REAL"],
+        ["package_size_unit", "TEXT"],
+        ["batch_code", "TEXT"],
+        ["version", "INTEGER NOT NULL DEFAULT 1"],
+        ["deleted_at", "DATETIME"],
+        ["updated_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"],
+      ] as const) addColumn(database, "inventory_items", column, definition);
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS inventory_consumption_requests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, idempotency_key),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS inventory_change_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          inventory_item_id INTEGER NOT NULL,
+          action TEXT NOT NULL,
+          source TEXT NOT NULL,
+          quantity_before REAL,
+          quantity_after REAL,
+          quantity_unit TEXT,
+          delta_value REAL,
+          idempotency_key TEXT,
+          metadata_json TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, idempotency_key),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_inventory_batches_fefo
+          ON inventory_items(user_id, food_name, is_available, expiration_date, id);
+        CREATE INDEX IF NOT EXISTS idx_inventory_change_logs_item
+          ON inventory_change_logs(user_id, inventory_item_id, created_at DESC);
+      `);
+
+      const aliases: Record<string, string> = {
+        g: "g", "克": "g", kg: "kg", "千克": "kg", "公斤": "kg",
+        ml: "ml", "毫升": "ml", l: "l", "升": "l",
+        "个": "piece", "枚": "piece", "只": "piece", "片": "piece",
+        "份": "serving", "袋": "bag", "盒": "box", "瓶": "bottle", "罐": "can",
+      };
+      const rows = database.prepare(`
+        SELECT id, quantity FROM inventory_items
+        WHERE quantity_value IS NULL AND quantity IS NOT NULL
+      `).all() as Array<{ id: number; quantity: string }>;
+      const update = database.prepare("UPDATE inventory_items SET quantity_value = ?, quantity_unit = ? WHERE id = ?");
+      for (const row of rows) {
+        const match = String(row.quantity).trim().match(/^(\d+(?:\.\d+)?)\s*([^\d\s]+)$/i);
+        if (!match) continue;
+        const unit = aliases[match[2].toLocaleLowerCase()] || aliases[match[2]];
+        const value = Number(match[1]);
+        if (unit && Number.isFinite(value) && value >= 0) update.run(value, unit, row.id);
+      }
+    },
+  },
+  {
+    version: 45,
+    name: "unified_inventory_intake_batches",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS inventory_intake_batches (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          source TEXT NOT NULL CHECK(source IN ('barcode', 'receipt', 'image', 'manual', 'recent')),
+          source_reference TEXT,
+          confirmed_payload_json TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, idempotency_key),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_inventory_intake_batches_user_created
+          ON inventory_intake_batches(user_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    version: 46,
+    name: "meal_plan_execution_workbench",
+    up(database) {
+      for (const [column, definition] of [
+        ["version", "INTEGER NOT NULL DEFAULT 1"],
+        ["status", "TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned', 'queued', 'cooking', 'completed', 'skipped'))"],
+        ["diet_record_id", "INTEGER REFERENCES diet_records(id) ON DELETE SET NULL"],
+        ["queue_item_id", "TEXT REFERENCES cooking_queue_items(id) ON DELETE SET NULL"],
+        ["completed_at", "DATETIME"],
+        ["deleted_at", "DATETIME"],
+      ] as const) addColumn(database, "meal_plan_items", column, definition);
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS meal_plan_execution_requests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          action TEXT NOT NULL,
+          meal_plan_item_id TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, idempotency_key),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (meal_plan_item_id) REFERENCES meal_plan_items(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_meal_plan_items_execution
+          ON meal_plan_items(user_id, planned_date, status)
+          WHERE deleted_at IS NULL;
+      `);
+    },
+  },
+  {
+    version: 47,
+    name: "household_collaborative_shopping",
+    up(database) {
+      addColumn(database, "households", "version", "INTEGER NOT NULL DEFAULT 1");
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS household_shopping_items (
+          id TEXT PRIMARY KEY,
+          household_id INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          amount TEXT NOT NULL DEFAULT '适量',
+          category TEXT NOT NULL DEFAULT '其他',
+          checked INTEGER NOT NULL DEFAULT 0,
+          storage_location TEXT,
+          expiration_date TEXT,
+          created_by_user_id INTEGER NOT NULL,
+          updated_by_user_id INTEGER NOT NULL,
+          purchased_by_user_id INTEGER,
+          version INTEGER NOT NULL DEFAULT 1,
+          transferred_at DATETIME,
+          intake_batch_id TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          deleted_at DATETIME,
+          FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE,
+          FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (purchased_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE TABLE IF NOT EXISTS household_shopping_intake_batches (
+          id TEXT PRIMARY KEY,
+          household_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(household_id, idempotency_key),
+          FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_household_shopping_active
+          ON household_shopping_items(household_id, checked, updated_at DESC)
+          WHERE deleted_at IS NULL AND transferred_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_household_shopping_name
+          ON household_shopping_items(household_id, name)
+          WHERE deleted_at IS NULL AND transferred_at IS NULL;
+      `);
+    },
+  },
+  {
+    version: 48,
+    name: "traceable_inventory_outcomes",
+    up(database) {
+      addColumn(database, "household_inventory_items", "version", "INTEGER NOT NULL DEFAULT 1");
+      addColumn(database, "household_inventory_items", "updated_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP");
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS inventory_outcome_events (
+          id TEXT PRIMARY KEY,
+          scope TEXT NOT NULL CHECK(scope IN ('personal', 'household')),
+          user_id INTEGER,
+          household_id INTEGER,
+          inventory_item_id INTEGER,
+          household_inventory_item_id INTEGER,
+          outcome TEXT NOT NULL CHECK(outcome IN ('cooked', 'used', 'discarded', 'expired', 'gifted', 'transferred', 'unknown')),
+          source TEXT NOT NULL CHECK(source IN ('manual', 'cooking', 'reminder', 'recommendation', 'cleanup')),
+          quantity_value REAL,
+          quantity_unit TEXT,
+          quantity_text TEXT,
+          idempotency_key TEXT NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          occurred_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          created_by_user_id INTEGER NOT NULL,
+          updated_by_user_id INTEGER NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CHECK((scope = 'personal' AND user_id IS NOT NULL AND inventory_item_id IS NOT NULL AND household_id IS NULL AND household_inventory_item_id IS NULL)
+             OR (scope = 'household' AND household_id IS NOT NULL AND household_inventory_item_id IS NOT NULL AND user_id IS NULL AND inventory_item_id IS NULL)),
+          UNIQUE(created_by_user_id, idempotency_key),
+          UNIQUE(user_id, idempotency_key),
+          UNIQUE(household_id, idempotency_key),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (household_id) REFERENCES households(id) ON DELETE CASCADE,
+          FOREIGN KEY (inventory_item_id) REFERENCES inventory_items(id) ON DELETE CASCADE,
+          FOREIGN KEY (household_inventory_item_id) REFERENCES household_inventory_items(id) ON DELETE CASCADE,
+          FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_inventory_outcomes_personal_week
+          ON inventory_outcome_events(user_id, occurred_at) WHERE scope = 'personal';
+        CREATE INDEX IF NOT EXISTS idx_inventory_outcomes_household_week
+          ON inventory_outcome_events(household_id, occurred_at) WHERE scope = 'household';
+      `);
+    },
+  },
+  {
+    version: 49,
+    name: "unified_recipe_recommendations",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS recipe_recommendation_requests (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          surface TEXT NOT NULL,
+          scoring_version TEXT NOT NULL,
+          candidate_version TEXT NOT NULL,
+          input_hash TEXT NOT NULL,
+          input_snapshot_json TEXT NOT NULL,
+          results_json TEXT NOT NULL,
+          data_updated_at DATETIME,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          expires_at DATETIME NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_recipe_recommendation_requests_user_created
+          ON recipe_recommendation_requests(user_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS recipe_recommendation_events (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          request_id TEXT,
+          recipe_id INTEGER NOT NULL,
+          event_type TEXT NOT NULL CHECK(event_type IN ('exposure', 'view', 'favorite', 'skip', 'shopping', 'queue', 'start', 'complete', 'constraint_change')),
+          scoring_version TEXT NOT NULL,
+          surface TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          idempotency_key TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, idempotency_key),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (request_id) REFERENCES recipe_recommendation_requests(id) ON DELETE SET NULL,
+          FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_recipe_recommendation_events_user_recipe
+          ON recipe_recommendation_events(user_id, recipe_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    version: 50,
+    name: "realtime_cooking_voice_sessions",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS realtime_voice_sessions (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          recipe_id INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'muted', 'closed', 'expired', 'fallback')),
+          client_platform TEXT NOT NULL,
+          context_json TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          connected_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          last_heartbeat_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          closed_at DATETIME,
+          expires_at DATETIME NOT NULL,
+          first_transcript_ms INTEGER,
+          first_response_ms INTEGER,
+          interruption_count INTEGER NOT NULL DEFAULT 0,
+          reconnect_count INTEGER NOT NULL DEFAULT 0,
+          fallback_count INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(user_id, idempotency_key),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS realtime_voice_turns (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          transcript TEXT NOT NULL,
+          intent TEXT NOT NULL,
+          action_json TEXT NOT NULL DEFAULT '{}',
+          agent_run_id TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(session_id, id),
+          FOREIGN KEY (session_id) REFERENCES realtime_voice_sessions(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS realtime_voice_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(session_id, sequence),
+          FOREIGN KEY (session_id) REFERENCES realtime_voice_sessions(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_realtime_voice_events_session_sequence
+          ON realtime_voice_events(session_id, sequence);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(database: Database.Database) {

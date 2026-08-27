@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Platform,
 } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import * as Speech from "expo-speech";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useAuthFetch } from "@/contexts/AuthContext";
@@ -324,12 +324,12 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleCloseModal}>
       <View className="flex-1 bg-black/75 justify-end">
-        <View className="bg-[#FAF8F5] rounded-t-[36px] p-6 max-h-[85%] border-t border-line shadow-2xl flex-col">
+        <View className="bg-background-secondary rounded-t-[36px] p-6 max-h-[85%] border-t border-line shadow-2xl flex-col">
           {/* Top Bar Navigation */}
           <View className="flex-row items-center justify-between pb-4 border-b border-line">
             <View className="flex-row items-center gap-2">
-              <View className="w-8 h-8 rounded-full bg-brand items-center justify-center shadow-xs">
-                <FontAwesome6 name="microphone-lines" size={14} color="#FFF" />
+              <View className="w-8 h-8 rounded-full bg-brand-fill items-center justify-center shadow-xs">
+                <FontAwesome6 name="microphone-lines" size={14} colorClassName="accent-on-brand" />
               </View>
               <View>
                 <Text className="text-base font-black text-ink">TeleSpeechASR + LLM 实时语音 MVP</Text>
@@ -339,27 +339,27 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
 
             <TouchableOpacity
               onPress={handleCloseModal}
-              className="w-8 h-8 rounded-full bg-white items-center justify-center border border-line active:bg-line/40"
+              className="w-8 h-8 rounded-full bg-surface items-center justify-center border border-line active:bg-line/40"
             >
-              <FontAwesome6 name="xmark" size={14} color="#3D3229" />
+              <FontAwesome6 name="xmark" size={14} colorClassName="accent-ink" />
             </TouchableOpacity>
           </View>
 
           {/* Pipeline Benchmark Metrics Tag */}
-          <View className="bg-white my-3 p-2.5 rounded-2xl border border-line flex-row items-center justify-around shadow-2xs">
+          <View className="bg-surface my-3 p-2.5 rounded-2xl border border-line flex-row items-center justify-around shadow-2xs">
             <View className="items-center">
               <Text className="text-[9px] text-copy-muted font-bold">1. ASR 识别流</Text>
-              <Text className="text-xs font-black text-emerald-700">~{pipelineMetrics.asrMs || 180} ms</Text>
+              <Text className="text-xs font-black text-success">~{pipelineMetrics.asrMs || 180} ms</Text>
             </View>
             <Text className="text-xs text-line">➜</Text>
             <View className="items-center">
               <Text className="text-[9px] text-copy-muted font-bold">2. LLM 流式思考</Text>
-              <Text className="text-xs font-black text-amber-600">~{pipelineMetrics.llmMs || 340} ms</Text>
+              <Text className="text-xs font-black text-warm">~{pipelineMetrics.llmMs || 340} ms</Text>
             </View>
             <Text className="text-xs text-line">➜</Text>
             <View className="items-center">
               <Text className="text-[9px] text-copy-muted font-bold">3. TTS 语音播报</Text>
-              <Text className="text-xs font-black text-sky-600">~{pipelineMetrics.ttsMs || 90} ms</Text>
+              <Text className="text-xs font-black text-info">~{pipelineMetrics.ttsMs || 90} ms</Text>
             </View>
           </View>
 
@@ -370,8 +370,8 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
             contentContainerStyle={{ gap: 10, paddingVertical: 4 }}
           >
             {messages.length === 0 ? (
-              <View className="items-center py-8 bg-white/60 rounded-3xl border border-dashed border-line">
-                <FontAwesome6 name="headset" size={32} color="#D4A276" />
+              <View className="items-center py-8 bg-surface/60 rounded-3xl border border-dashed border-line">
+                <FontAwesome6 name="headset" size={32} colorClassName="accent-warm" />
                 <Text className="text-xs font-bold text-ink mt-3">按下下方麦克风，直接开口对答</Text>
                 <Text className="text-[10px] text-copy-muted mt-1">支持方言、普通话、英语自然语音混说交互</Text>
               </View>
@@ -384,8 +384,8 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
                   <View
                     className={`max-w-[82%] px-4 py-3 rounded-2xl shadow-2xs ${
                       msg.sender === "user"
-                        ? "bg-brand rounded-br-xs"
-                        : "bg-white border border-line rounded-bl-xs"
+                        ? "bg-brand-fill rounded-br-xs"
+                        : "bg-surface border border-line rounded-bl-xs"
                     }`}
                   >
                     <Text
@@ -404,7 +404,7 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
                             className="rounded-xl border border-brand/25 bg-brand/5 p-2.5 active:bg-brand/10"
                           >
                             <View className="flex-row items-center justify-between gap-2">
-                              <View className="rounded-full bg-brand px-2 py-0.5">
+                              <View className="rounded-full bg-brand-fill px-2 py-0.5">
                                 <Text className="text-[9px] font-black text-white">{card.schemeTag}</Text>
                               </View>
                               <Text className="flex-1 text-right text-[11px] font-black text-ink" numberOfLines={1}>
@@ -435,8 +435,8 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
 
             {/* Live Streaming Recognizing Text */}
             {currentRecognizedText ? (
-              <View className="bg-emerald-50 border border-emerald-200/80 p-3 rounded-2xl self-end max-w-[82%]">
-                <Text className="text-xs font-bold text-emerald-900">
+              <View className="bg-success-soft border border-success/30 p-3 rounded-2xl self-end max-w-[82%]">
+                <Text className="text-xs font-bold text-success">
                   正在听: “{currentRecognizedText}”
                 </Text>
               </View>
@@ -447,26 +447,26 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
           <View className="flex-row items-center gap-1.5 my-2 flex-wrap justify-center">
             <TouchableOpacity
               onPress={() => handleQuickPrompt("根据现有冰箱食材推荐一份健康晚餐")}
-              className="px-3 py-1.5 rounded-full bg-white border border-line flex-row items-center gap-1 active:bg-brand/10"
+              className="px-3 py-1.5 rounded-full bg-surface border border-line flex-row items-center gap-1 active:bg-brand/10"
             >
-              <FontAwesome6 name="utensils" size={10} color="#059669" />
+              <FontAwesome6 name="utensils" size={10} colorClassName="accent-success" />
               <Text className="text-[11px] font-bold text-brand">推荐晚餐</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => handleQuickPrompt("用四川话告诉我西红柿炒鸡蛋怎么做")}
-              className="px-3 py-1.5 rounded-full bg-white border border-line flex-row items-center gap-1 active:bg-brand/10"
+              className="px-3 py-1.5 rounded-full bg-surface border border-line flex-row items-center gap-1 active:bg-brand/10"
             >
-              <FontAwesome6 name="language" size={10} color="#D97706" />
-              <Text className="text-[11px] font-bold text-[#D97706]">方言食谱示范</Text>
+              <FontAwesome6 name="language" size={10} colorClassName="accent-warm" />
+              <Text className="text-[11px] font-bold text-warm">方言食谱示范</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => handleQuickPrompt("给5岁小朋友做一道不挑食的营养早餐")}
-              className="px-3 py-1.5 rounded-full bg-white border border-line flex-row items-center gap-1 active:bg-brand/10"
+              className="px-3 py-1.5 rounded-full bg-surface border border-line flex-row items-center gap-1 active:bg-brand/10"
             >
-                <FontAwesome6 name="child" size={10} color="#0284C7" />
-              <Text className="text-[11px] font-bold text-[#0284C7]">儿童餐推荐</Text>
+                <FontAwesome6 name="child" size={10} colorClassName="accent-info" />
+              <Text className="text-[11px] font-bold text-info">儿童餐推荐</Text>
             </TouchableOpacity>
           </View>
 
@@ -480,11 +480,11 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
                 }}
                 className={`w-24 h-24 rounded-full items-center justify-center border-2 transition-all ${
                   voiceState === "listening"
-                    ? "bg-red-500/20 border-red-500"
+                    ? "bg-critical/20 border-critical"
                     : voiceState === "speaking"
-                    ? "bg-sky-500/20 border-sky-500"
+                    ? "bg-info/20 border-info"
                     : voiceState === "thinking" || voiceState === "recognizing"
-                    ? "bg-amber-500/20 border-amber-500"
+                    ? "bg-warm/20 border-warm"
                     : "bg-brand/10 border-brand"
                 }`}
               />
@@ -495,16 +495,16 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
                 activeOpacity={0.8}
                 className={`absolute w-16 h-16 rounded-full items-center justify-center shadow-lg transition-all ${
                   voiceState === "listening"
-                    ? "bg-red-500"
+                    ? "bg-critical-fill"
                     : voiceState === "speaking"
-                    ? "bg-sky-600"
+                    ? "bg-info-fill"
                     : voiceState === "thinking" || voiceState === "recognizing"
-                    ? "bg-amber-500"
-                    : "bg-brand"
+                    ? "bg-warm-fill"
+                    : "bg-brand-fill"
                 }`}
               >
                 {voiceState === "thinking" ? (
-                  <ActivityIndicator color="#FFF" size="small" />
+                  <ActivityIndicator colorClassName="accent-on-brand" size="small" />
                 ) : (
                   <FontAwesome6
                     name={
@@ -515,7 +515,7 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
                         : "microphone"
                     }
                     size={22}
-                    color="#FFF"
+                    colorClassName="accent-on-brand"
                   />
                 )}
               </TouchableOpacity>
@@ -539,9 +539,9 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
             {voiceState === "listening" && (
               <TouchableOpacity
                 onPress={handleMicPress}
-                className="mt-2 rounded-full border border-red-200 bg-red-50 px-3 py-1.5 active:bg-red-100"
+                className="mt-2 rounded-full border border-critical/40 bg-danger-soft px-3 py-1.5 active:bg-danger-soft"
               >
-                <Text className="text-[10px] font-bold text-red-600">结束本轮</Text>
+                <Text className="text-[10px] font-bold text-critical">结束本轮</Text>
               </TouchableOpacity>
             )}
 
@@ -551,24 +551,24 @@ export function RealtimeVoiceMVPModal({ visible, onClose }: RealtimeVoiceMVPModa
                   stopTTS();
                   setVoiceState("idle");
                 }}
-                className="mt-2 bg-red-50 px-3 py-1 rounded-full border border-red-200 flex-row items-center gap-1 active:bg-red-100"
+                className="mt-2 bg-danger-soft px-3 py-1 rounded-full border border-critical/40 flex-row items-center gap-1 active:bg-danger-soft"
               >
-                <FontAwesome6 name="circle-stop" size={10} color="#EF4444" />
-                <Text className="text-[10px] font-bold text-red-600">全双工打断播报</Text>
+                <FontAwesome6 name="circle-stop" size={10} colorClassName="accent-critical" />
+                <Text className="text-[10px] font-bold text-critical">全双工打断播报</Text>
               </TouchableOpacity>
             )}
 
             {aiResponseText && voiceState !== "speaking" && (
               <TouchableOpacity
                 onPress={() => speakReply(aiResponseText)}
-                className="mt-2 flex-row items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 active:bg-sky-100"
+                className="mt-2 flex-row items-center gap-1 rounded-full border border-info/30 bg-info-soft px-3 py-1.5 active:bg-info-soft"
               >
-                <FontAwesome6 name="volume-high" size={10} color="#0284C7" />
-                <Text className="text-[10px] font-bold text-sky-700">重播回答</Text>
+                <FontAwesome6 name="volume-high" size={10} colorClassName="accent-info" />
+                <Text className="text-[10px] font-bold text-info">重播回答</Text>
               </TouchableOpacity>
             )}
 
-            {ttsError ? <Text className="mt-2 px-4 text-center text-[10px] text-red-600">{ttsError}</Text> : null}
+            {ttsError ? <Text className="mt-2 px-4 text-center text-[10px] text-critical">{ttsError}</Text> : null}
           </View>
         </View>
       </View>

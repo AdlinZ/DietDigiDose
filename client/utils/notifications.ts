@@ -3,7 +3,9 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import { cancelCookingQueueRemindersForUser } from "./cookingReminders";
 import { daysUntilDateKey } from "./inventory";
+import { getUserStorageKey } from "./userStorage";
 
 export type NotificationPreferences = {
   expiring_alert: boolean;
@@ -37,8 +39,8 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   weekends_enabled: true,
 };
 
-const SCHEDULE_IDS_KEY = "@notification_schedule_ids";
-const EXPIRING_STOCK_ALERT_IDS_KEY = "@expiring_stock_alert_ids";
+export const NOTIFICATION_SCHEDULE_IDS_KEY = "@notification_schedule_ids";
+export const EXPIRING_STOCK_ALERT_IDS_KEY = "@expiring_stock_alert_ids";
 
 if (Platform.OS !== "web") {
   Notifications.setNotificationHandler({
@@ -66,10 +68,34 @@ export async function getExpoPushToken() {
   return (await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined)).data;
 }
 
-async function clearScheduledNotifications() {
-  const saved = await AsyncStorage.getItem(SCHEDULE_IDS_KEY);
-  const ids: string[] = saved ? JSON.parse(saved) : [];
-  await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+function parseStoredNotificationIds(saved: string | null) {
+  if (!saved) return [];
+  try {
+    const value: unknown = JSON.parse(saved);
+    return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && Boolean(id)) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function clearScheduledNotifications(storageKey: string) {
+  const ids = parseStoredNotificationIds(await AsyncStorage.getItem(storageKey));
+  if (Platform.OS !== "web") {
+    await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+  }
+  await AsyncStorage.removeItem(storageKey);
+}
+
+function notificationStorageKey(baseKey: string, userId?: number | null) {
+  return getUserStorageKey(baseKey, userId);
+}
+
+/** Removes schedules created by older builds because their owner cannot be identified safely. */
+export async function cancelLegacyUnscopedLocalNotifications() {
+  await Promise.all([
+    clearScheduledNotifications(NOTIFICATION_SCHEDULE_IDS_KEY),
+    clearScheduledNotifications(EXPIRING_STOCK_ALERT_IDS_KEY),
+  ]);
 }
 
 function timeParts(value: string) {
@@ -118,14 +144,17 @@ async function scheduleDaily(title: string, body: string, hour: number) {
 }
 
 /** Keeps on-device meal and hydration reminders aligned with the saved preferences. */
-export async function syncLocalNotificationSchedules(preferences: NotificationPreferences) {
+export async function syncLocalNotificationSchedules(
+  preferences: NotificationPreferences,
+  userId?: number | null,
+) {
+  const storageKey = notificationStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, userId);
+  if (!storageKey) return;
+  await clearScheduledNotifications(storageKey);
+  if (!preferences.expiring_alert) await cancelExpiringStockAlerts(userId);
   if (Platform.OS === "web" || !Device.isDevice) return;
-  await clearScheduledNotifications();
   const permission = await Notifications.getPermissionsAsync();
-  if (permission.status !== "granted") {
-    await AsyncStorage.removeItem(SCHEDULE_IDS_KEY);
-    return;
-  }
+  if (permission.status !== "granted") return;
   const ids: string[] = [];
   const weekdays = enabledWeekdays(preferences);
   if (preferences.meal_reminder) {
@@ -136,7 +165,12 @@ export async function syncLocalNotificationSchedules(preferences: NotificationPr
     ] as const;
     for (const [title, body, time, meal] of meals) {
       if (!isQuietTime(timeParts(time).total, preferences)) {
-        ids.push(...await scheduleWeekly(title, body, time, weekdays, { type: "routine_reminder", kind: "meal", meal }));
+        ids.push(...await scheduleWeekly(title, body, time, weekdays, {
+          type: "routine_reminder",
+          kind: "meal",
+          meal,
+          userId: String(userId),
+        }));
       }
     }
   }
@@ -146,22 +180,39 @@ export async function syncLocalNotificationSchedules(preferences: NotificationPr
     for (let total = start; total <= end; total += preferences.water_interval_minutes) {
       if (!isQuietTime(total, preferences)) {
         const time = minutesToTime(total);
-        ids.push(...await scheduleWeekly("补充一杯水", "该补充约 250ml 水分了。", time, weekdays, { type: "routine_reminder", kind: "water" }));
+        ids.push(...await scheduleWeekly("补充一杯水", "该补充约 250ml 水分了。", time, weekdays, {
+          type: "routine_reminder",
+          kind: "water",
+          userId: String(userId),
+        }));
       }
     }
   }
-  await AsyncStorage.setItem(SCHEDULE_IDS_KEY, JSON.stringify(ids));
+  await AsyncStorage.setItem(storageKey, JSON.stringify(ids));
+}
+
+export async function cancelExpiringStockAlerts(userId?: number | null) {
+  const storageKey = notificationStorageKey(EXPIRING_STOCK_ALERT_IDS_KEY, userId);
+  if (storageKey) await clearScheduledNotifications(storageKey);
+}
+
+export function getNextExpiringAlertDate(now: Date = new Date()) {
+  const date = new Date(now);
+  date.setHours(9, 0, 0, 0);
+  if (date.getTime() <= now.getTime()) date.setDate(date.getDate() + 1);
+  return date;
 }
 
 export async function scheduleExpiringStockAlerts(
   inventoryItems: Array<{ food_name: string; expiration_date: string; is_available: boolean }>,
-  enabled: boolean = true
+  userId?: number | null,
+  enabled: boolean = true,
+  now: Date = new Date(),
 ) {
-  if (Platform.OS === "web" || !enabled) return;
-  const saved = await AsyncStorage.getItem(EXPIRING_STOCK_ALERT_IDS_KEY);
-  const previousIds: string[] = saved ? JSON.parse(saved) : [];
-  await Promise.all(previousIds.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
-  await AsyncStorage.removeItem(EXPIRING_STOCK_ALERT_IDS_KEY);
+  const storageKey = notificationStorageKey(EXPIRING_STOCK_ALERT_IDS_KEY, userId);
+  if (!storageKey) return;
+  await clearScheduledNotifications(storageKey);
+  if (Platform.OS === "web" || !Device.isDevice || !enabled) return;
 
   const permission = await Notifications.getPermissionsAsync();
   if (permission.status !== "granted") return;
@@ -179,10 +230,29 @@ export async function scheduleExpiringStockAlerts(
   const body = `你有【${itemNames}】等 ${urgentItems.length} 种食材将在 1-2 天内到期，建议今天优先烹饪！`;
 
   const id = await Notifications.scheduleNotificationAsync({
-    content: { title, body, sound: "default" },
-    trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour: 9, minute: 0 },
+    content: {
+      title,
+      body,
+      sound: "default",
+      categoryIdentifier: "inventory-expiring",
+      data: {
+        type: "inventory_expiring",
+        userId,
+        sourceId: `inventory:${userId}:${urgentItems.map((item) => item.expiration_date).sort()[0]}`,
+      },
+    },
+    trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: getNextExpiringAlertDate(now) },
   });
-  await AsyncStorage.setItem(EXPIRING_STOCK_ALERT_IDS_KEY, JSON.stringify([id]));
+  await AsyncStorage.setItem(storageKey, JSON.stringify([id]));
+}
+
+export async function cancelAllLocalNotificationsForUser(userId?: number | null) {
+  if (!Number.isInteger(userId) || Number(userId) <= 0) return;
+  await Promise.all([
+    clearScheduledNotifications(notificationStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, userId)!),
+    clearScheduledNotifications(notificationStorageKey(EXPIRING_STOCK_ALERT_IDS_KEY, userId)!),
+    cancelCookingQueueRemindersForUser(userId),
+  ]);
 }
 
 export async function sendImmediateTestNotification(

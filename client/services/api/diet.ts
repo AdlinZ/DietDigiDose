@@ -11,7 +11,14 @@ export const dietApi = {
   completeCooking: (apiFetch: ApiFetch, input: {
     idempotency_key: string;
     recipe_id?: number | null;
-    inventory_item_ids: number[];
+    inventory_item_ids?: number[];
+    inventory_consumptions?: Array<{
+      item_id: number;
+      version: number;
+      mode: "amount" | "all";
+      amount_value?: number;
+      unit?: string;
+    }>;
     diet_record: DietRecordInput;
   }) => requestJson<{ diet_record: DietRecord; consumed_inventory_item_ids: number[]; repeated: boolean }>(
     apiFetch,

@@ -1,7 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { communityApi, dietApi, healthApi, inventoryApi, recipesApi, type ApiFetch } from "@/services/api";
 import { getInventoryStatus } from "@/utils/inventory";
 import type { DietRecord, HealthLog, InventoryItem, Post, Recipe } from "./types";
+import { recordCacheRender } from "@/services/api/cache";
 
 export function useHomeData(authFetch: ApiFetch, isAuthenticated: boolean, today: string) {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
@@ -12,12 +13,14 @@ export function useHomeData(authFetch: ApiFetch, isAuthenticated: boolean, today
   const [healthLogs, setHealthLogs] = useState<HealthLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const hasRenderedData = useRef(false);
 
   const refresh = useCallback(async () => {
+    const renderStartedAt = Date.now();
     setLoading(true);
     setError(null);
     const results = await Promise.allSettled([
-      recipesApi.listPage("?pageSize=30").then((page) => page.items),
+      recipesApi.listPage("?pageSize=30"),
       communityApi.postPage("?pageSize=5").then((page) => page.items),
       isAuthenticated ? inventoryApi.list(authFetch) : Promise.resolve([]),
       isAuthenticated ? dietApi.list(authFetch, today) : Promise.resolve([]),
@@ -27,7 +30,13 @@ export function useHomeData(authFetch: ApiFetch, isAuthenticated: boolean, today
     const failedSections: string[] = [];
 
     if (recipesResult.status === "fulfilled") {
-      setRecipes(Array.isArray(recipesResult.value) ? recipesResult.value as Recipe[] : []);
+      const page = recipesResult.value as { items?: Recipe[]; nextCursor?: string | null };
+      const nextRecipes = Array.isArray(page.items) ? page.items : [];
+      setRecipes(nextRecipes);
+      void recipesApi.prefetchCovers(nextRecipes);
+      if (page.nextCursor) {
+        void recipesApi.prefetchPage(`?pageSize=30&cursor=${encodeURIComponent(page.nextCursor)}`).catch(() => undefined);
+      }
     } else failedSections.push("菜谱");
     if (postsResult.status === "fulfilled") {
       setPosts(Array.isArray(postsResult.value) ? postsResult.value as Post[] : []);
@@ -57,6 +66,8 @@ export function useHomeData(authFetch: ApiFetch, isAuthenticated: boolean, today
       setError(`${failedSections.join("、")}暂时无法加载，其他内容仍可使用`);
     }
     setLoading(false);
+    recordCacheRender(Date.now() - renderStartedAt, hasRenderedData.current);
+    hasRenderedData.current = true;
   }, [authFetch, isAuthenticated, today]);
 
   return { recipes, inventoryItems, expiringItems, todayRecords, posts, healthLogs, loading, error, refresh };

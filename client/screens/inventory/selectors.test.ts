@@ -1,4 +1,4 @@
-import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware } from "./selectors";
+import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, preserveRecipePaginationOrder } from "./selectors";
 import type { InventoryItem, KitchenwareItem, Recipe } from "./types";
 import { dateKeyAfterDays } from "@/utils/date";
 
@@ -33,6 +33,19 @@ test("never includes recipes marked as needs review in recommendations", () => {
   expect(filterAndRankRecipes([...recipes, unsafe], inventory, "全部", "").some((recipe) => recipe.id === 99)).toBe(false);
 });
 
+test("appends newly paged recipes without moving previously displayed cards", () => {
+  const firstPage = [recipes[1], recipes[0]];
+  const rerankedAfterNextPage = [recipes[2], recipes[0], recipes[1]];
+
+  expect(preserveRecipePaginationOrder(firstPage, rerankedAfterNextPage).map((recipe) => recipe.id))
+    .toEqual([2, 1, 3]);
+});
+
+test("drops filtered recipes while preserving the remaining order", () => {
+  expect(preserveRecipePaginationOrder(recipes, [recipes[2], recipes[0]]).map((recipe) => recipe.id))
+    .toEqual([1, 3]);
+});
+
 test("analyzeRecipeInventoryMatch detects expiring ingredients and calculates status", () => {
   const recipeWithDetails: Recipe & { ingredients?: Array<{ name: string; amount?: string }> } = {
     ...recipes[1],
@@ -48,6 +61,30 @@ test("analyzeRecipeInventoryMatch detects expiring ingredients and calculates st
   expect(analysis.matchedIngredients.map((i) => i.name)).toEqual(["番茄", "鸡蛋"]);
   expect(analysis.missingIngredients.map((i) => i.name)).toEqual(["牛肉"]);
   expect(analysis.expiringIngredients.map((i) => i.name)).toEqual(["番茄"]);
+  expect(analysis.coveragePercent).toBe(67);
+});
+
+test("explains substitutes and blocks severe allergy or missing required kitchenware", () => {
+  const stock = [
+    ...inventory,
+    { id: 3, food_name: "豆浆", category: "乳制品", storage_location: "冷藏", quantity: "500ml", expiration_date: dateKeyAfterDays(5), image_url: null, is_available: true, updated_at: "2026-08-26 10:00:00" },
+  ] satisfies InventoryItem[];
+  const recipe: Recipe = {
+    ...recipes[0],
+    ingredients: [{ name: "牛奶", amount: "200ml" }, { name: "鸡蛋", amount: "2个" }],
+    required_kitchenware: ["烤箱"],
+  };
+  const analysis = analyzeRecipeInventoryMatch(recipe, stock, {
+    healthProfile: { allergies: [{ name: "乳制品", type: "allergy", severity: "severe" }] },
+    kitchenware: [{ id: 1, name: "平底锅", category: "锅具", status: "良好", image_url: null }],
+  });
+
+  expect(analysis.coveragePercent).toBe(50);
+  expect(analysis.availableSubstitutes).toContainEqual({ missing: "牛奶", substitute: "豆浆" });
+  expect(analysis.healthConflicts).toContainEqual({ name: "乳制品", severity: "severe" });
+  expect(analysis.missingKitchenware).toEqual(["烤箱"]);
+  expect(analysis.dataUpdatedAt).toBe("2026-08-26 10:00:00");
+  expect(analysis.blocked).toBe(true);
 });
 
 test("filters kitchenware by category", () => {

@@ -1,13 +1,13 @@
 import { Stack } from "expo-router";
 import "../global.css";
-import { WebOnlyColorSchemeUpdater as ColorSchemeUpdater } from "@/components/ColorSchemeUpdater";
 import { Provider } from "@/components/Provider";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 
 export default function RootLayout() {
   return (
     <>
-      <ColorSchemeUpdater />
-      <Provider>
+      <ThemeProvider>
+        <Provider>
           <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="login" />
@@ -24,6 +24,8 @@ export default function RootLayout() {
             <Stack.Screen name="health-data" />
             <Stack.Screen name="health-profile" />
             <Stack.Screen name="cooking-queue" />
+            <Stack.Screen name="meal-plans" />
+            <Stack.Screen name="inventory-insights" />
             <Stack.Screen name="cooking-mode" />
             <Stack.Screen name="post-detail" />
             <Stack.Screen name="post-create" />
@@ -42,7 +44,8 @@ export default function RootLayout() {
             <Stack.Screen name="about" />
             <Stack.Screen name="feedback" />
           </Stack>
-      </Provider>
+        </Provider>
+      </ThemeProvider>
     </>
   );
 }

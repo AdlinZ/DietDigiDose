@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
+import FontAwesome6 from '@/components/ThemedFontAwesome6';
 import { useCSSVariable } from 'uniwind';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
@@ -24,7 +24,7 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const identifierWasEdited = useRef(false);
-  const { login, sendSmsCode, verifySmsCode } = useAuth();
+  const { login, sendSmsCode, verifySmsCode, sessionMessage } = useAuth();
   const router = useSafeRouter();
   const { returnTo: rawReturnTo } = useSafeSearchParams<{ returnTo?: unknown }>();
   const returnTo = validateAuthReturnTo(rawReturnTo);
@@ -102,7 +102,7 @@ export default function LoginScreen() {
     ? !identifier.trim() || !password
     : challengeId ? !/^\d{6}$/.test(code) : !phone.trim());
   return (
-    <Screen backgroundColor="#FDF8F0">
+    <Screen>
       <View className="flex-1 px-6 pb-5">
         <View className="flex-row items-center justify-between pt-2">
           <TouchableOpacity
@@ -139,7 +139,7 @@ export default function LoginScreen() {
         </View>
 
         <View className="mt-auto pt-8">
-        <View className="overflow-hidden rounded-[24px] border border-line bg-white/90 shadow-2xs">
+        <View className="overflow-hidden rounded-[24px] border border-line bg-surface/90 shadow-2xs">
           {mode === 'sms' ? (
             <>
               <View className="h-[62px] flex-row items-center px-5">
@@ -219,36 +219,36 @@ export default function LoginScreen() {
           <Text className="mt-2 px-1 text-caption text-copy-muted">验证码已发送至 {phoneMasked}，5 分钟内有效</Text>
         ) : null}
 
-        {error ? (
+        {error || sessionMessage ? (
           <View className="mt-3 flex-row items-center rounded-2xl bg-danger-soft px-4 py-2.5" accessibilityRole="alert">
             <FontAwesome6 name="circle-exclamation" size={14} color={critical} style={{ marginRight: 6 }} />
-            <Text className="flex-shrink text-body font-medium text-critical">{error}</Text>
+            <Text className="flex-shrink text-body font-medium text-critical">{error || sessionMessage}</Text>
           </View>
         ) : null}
 
         <TouchableOpacity
-          className={`mt-3 h-14 flex-row items-center justify-between rounded-full bg-brand py-1.5 pl-6 pr-1.5 shadow-xs ${disabled ? 'opacity-disabled' : ''}`}
+          className={`mt-3 h-14 flex-row items-center justify-between rounded-full bg-brand-fill py-1.5 pl-6 pr-1.5 shadow-xs ${disabled ? 'opacity-disabled' : ''}`}
           onPress={mode === 'password' ? handlePasswordLogin : handleVerifyCode}
           disabled={disabled}
           accessibilityRole="button"
           accessibilityState={{ disabled, busy: loading }}
         >
           {loading ? (
-            <View className="flex-1 items-center"><ActivityIndicator color="#fff" /></View>
+            <View className="flex-1 items-center"><ActivityIndicator colorClassName="accent-on-brand" /></View>
           ) : (
             <>
               <Text className="text-[15px] font-black text-white">
                 {mode === 'sms' ? (challengeId ? '验证并继续' : '获取验证码') : '登录并继续'}
               </Text>
-              <View className="h-11 w-11 items-center justify-center rounded-full bg-white/20">
-                <FontAwesome6 name="arrow-right" size={13} color="#FFFFFF" />
+              <View className="h-11 w-11 items-center justify-center rounded-full bg-surface/20">
+                <FontAwesome6 name="arrow-right" size={13} colorClassName="accent-on-brand" />
               </View>
             </>
           )}
         </TouchableOpacity>
 
         <View className="mt-2 h-14 flex-row gap-2">
-          <View className="flex-row rounded-full bg-[#F1EBE2] p-1" style={{ flex: 2 }}>
+          <View className="flex-row rounded-full bg-background-secondary p-1" style={{ flex: 2 }}>
             {(['sms', 'password'] as const).map((item) => {
               const selected = mode === item;
               return (
@@ -257,7 +257,7 @@ export default function LoginScreen() {
                   onPress={() => changeMode(item)}
                   accessibilityRole="tab"
                   accessibilityState={{ selected }}
-                  className={`flex-1 items-center justify-center rounded-full ${selected ? 'bg-white shadow-2xs' : ''}`}
+                  className={`flex-1 items-center justify-center rounded-full ${selected ? 'bg-surface shadow-2xs' : ''}`}
                 >
                   <Text className={`text-[11px] ${selected ? 'font-black text-brand-strong' : 'font-bold text-copy-muted'}`}>
                     {item === 'sms' ? '验证码登录' : '密码登录'}
@@ -267,13 +267,13 @@ export default function LoginScreen() {
             })}
           </View>
           <TouchableOpacity
-            className="flex-1 flex-row items-center justify-between rounded-full bg-[#F1EBE2] py-1 pl-4 pr-1"
+            className="flex-1 flex-row items-center justify-between rounded-full bg-background-secondary py-1 pl-4 pr-1"
             onPress={() => router.push('/register', returnTo ? { returnTo } : {})}
             accessibilityRole="button"
             accessibilityLabel="创建账号"
           >
             <Text className="text-[11px] font-bold text-brand-strong">创建账号</Text>
-            <View className="h-10 w-10 items-center justify-center rounded-full bg-white/80">
+            <View className="h-10 w-10 items-center justify-center rounded-full bg-surface/80">
               <FontAwesome6 name="arrow-right" size={11} color={brand} />
             </View>
           </TouchableOpacity>

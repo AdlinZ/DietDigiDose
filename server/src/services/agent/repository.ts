@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "../../storage/db.js";
+import { publicAIErrorMessage } from "../aiErrors.js";
 import type {
   AgentActionBundle,
   AgentActionProposal,
@@ -229,7 +230,9 @@ export function toAgentRunSummary(row: RunRow): AgentRunSummary {
     artifacts: result.artifacts || [],
     pendingApproval: parseJson<AgentActionBundle | undefined>(row.pending_approval_json, undefined),
     pendingInput: parseJson<{ question: string } | undefined>(row.pending_input_json, undefined),
-    error: row.error_code || row.error_message ? { code: row.error_code || "AGENT_FAILED", message: row.error_message || "Agent 执行失败" } : undefined,
+    error: row.error_code || row.error_message
+      ? { code: row.error_code || "AI_AGENT_FAILED", message: publicAIErrorMessage(row.error_code) }
+      : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     startedAt: row.started_at || undefined,

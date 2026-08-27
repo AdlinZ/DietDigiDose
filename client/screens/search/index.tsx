@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   ActivityIndicator,
@@ -13,13 +13,13 @@ import {
 
 import { RecipeCover } from "@/components/RecipeCover";
 import { Screen } from "@/components/Screen";
-import { useAuthFetch } from "@/contexts/AuthContext";
+import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import { communityApi, foodsApi, recipesApi, type CommunityPost, type Recipe } from "@/services/api";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { formatLocalPostDate } from "@/utils/postDate";
+import { getUserStorageKey, SEARCH_HISTORY_STORAGE_KEY } from "@/utils/userStorage";
 
-const SEARCH_HISTORY_KEY = "@dietdigidose:global-search-history";
 const MAX_HISTORY_ITEMS = 8;
 const POPULAR_SEARCHES = ["高蛋白早餐", "鸡胸肉", "15分钟晚餐", "减脂便当", "燕麦"];
 
@@ -76,7 +76,7 @@ function SectionHeader({
     <View className="mb-3 flex-row items-center justify-between">
       <View className="flex-row items-center gap-2">
         <View className="h-7 w-7 items-center justify-center rounded-lg bg-brand/10">
-          <FontAwesome6 name={icon} size={11} color="#2D6A4F" />
+          <FontAwesome6 name={icon} size={11} colorClassName="accent-brand" />
         </View>
         <Text className="text-sm font-black text-ink">{title}</Text>
         <Text className="text-[10px] font-bold text-copy-muted">{count}</Text>
@@ -84,7 +84,7 @@ function SectionHeader({
       {onSeeAll ? (
         <TouchableOpacity onPress={onSeeAll} className="flex-row items-center gap-1 px-1 py-2">
           <Text className="text-[11px] font-bold text-brand">查看全部</Text>
-          <FontAwesome6 name="chevron-right" size={8} color="#2D6A4F" />
+          <FontAwesome6 name="chevron-right" size={8} colorClassName="accent-brand" />
         </TouchableOpacity>
       ) : null}
     </View>
@@ -94,7 +94,9 @@ function SectionHeader({
 export default function SearchScreen() {
   const router = useSafeRouter();
   const params = useSafeSearchParams<{ initialQuery?: string }>();
+  const { user } = useAuth();
   const authFetch = useAuthFetch();
+  const historyStorageKey = getUserStorageKey(SEARCH_HISTORY_STORAGE_KEY, user?.id);
   const [query, setQuery] = useState(() => params.initialQuery?.trim() || "");
   const [activeCategory, setActiveCategory] = useState<SearchCategory>("all");
   const [results, setResults] = useState<SearchResults>(EMPTY_RESULTS);
@@ -104,26 +106,36 @@ export default function SearchScreen() {
   const requestSequence = useRef(0);
 
   useEffect(() => {
-    AsyncStorage.getItem(SEARCH_HISTORY_KEY)
-      .then((saved) => {
-        if (!saved) return;
-        const parsed = JSON.parse(saved) as unknown;
-        if (Array.isArray(parsed)) {
-          setHistory(parsed.filter((item): item is string => typeof item === "string").slice(0, MAX_HISTORY_ITEMS));
+    let active = true;
+    void (async () => {
+      if (!historyStorageKey) {
+        if (active) setHistory([]);
+        return;
+      }
+      try {
+        const saved = await AsyncStorage.getItem(historyStorageKey);
+        const parsed = saved ? JSON.parse(saved) as unknown : [];
+        if (active) {
+          setHistory(Array.isArray(parsed)
+            ? parsed.filter((item): item is string => typeof item === "string").slice(0, MAX_HISTORY_ITEMS)
+            : []);
         }
-      })
-      .catch(() => undefined);
-  }, []);
+      } catch {
+        if (active) setHistory([]);
+      }
+    })();
+    return () => { active = false; };
+  }, [historyStorageKey]);
 
   const commitHistory = useCallback((rawQuery: string) => {
     const value = rawQuery.trim();
     if (!value) return;
     setHistory((current) => {
       const next = [value, ...current.filter((item) => item !== value)].slice(0, MAX_HISTORY_ITEMS);
-      void AsyncStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next));
+      if (historyStorageKey) void AsyncStorage.setItem(historyStorageKey, JSON.stringify(next));
       return next;
     });
-  }, []);
+  }, [historyStorageKey]);
 
   const performSearch = useCallback(async (rawQuery: string) => {
     const value = rawQuery.trim();
@@ -226,7 +238,7 @@ export default function SearchScreen() {
       key={recipe.id}
       onPress={() => openRecipe(recipe)}
       accessibilityLabel={`查看菜谱${recipe.title}`}
-      className="mb-3 flex-row overflow-hidden rounded-[20px] border border-line bg-white active:opacity-85"
+      className="mb-3 flex-row overflow-hidden rounded-[20px] border border-line bg-surface active:opacity-85"
     >
       <RecipeCover
         uri={recipe.image_url}
@@ -242,7 +254,7 @@ export default function SearchScreen() {
         </View>
       </View>
       <View className="justify-center pr-3">
-        <FontAwesome6 name="chevron-right" size={10} color="#A89B8A" />
+        <FontAwesome6 name="chevron-right" size={10} colorClassName="accent-copy-muted" />
       </View>
     </TouchableOpacity>
   );
@@ -252,10 +264,10 @@ export default function SearchScreen() {
       key={`${food.id ?? food.name}-${index}`}
       onPress={() => openFood(food)}
       accessibilityLabel={`记录食材${food.name}`}
-      className="mb-3 flex-row items-center rounded-[20px] border border-line bg-white p-3.5 active:opacity-85"
+      className="mb-3 flex-row items-center rounded-[20px] border border-line bg-surface p-3.5 active:opacity-85"
     >
-      <View className="h-12 w-12 items-center justify-center rounded-2xl bg-[#FFF3D6]">
-        <FontAwesome6 name="leaf" size={17} color="#A66A18" />
+      <View className="h-12 w-12 items-center justify-center rounded-2xl bg-warm-soft">
+        <FontAwesome6 name="leaf" size={17} colorClassName="accent-warm" />
       </View>
       <View className="min-w-0 flex-1 px-3">
         <View className="flex-row items-center gap-2">
@@ -280,7 +292,7 @@ export default function SearchScreen() {
       key={post.id}
       onPress={() => openPost(post)}
       accessibilityLabel={`查看${post.username}的社区动态`}
-      className="mb-3 flex-row overflow-hidden rounded-[20px] border border-line bg-white p-3.5 active:opacity-85"
+      className="mb-3 flex-row overflow-hidden rounded-[20px] border border-line bg-surface p-3.5 active:opacity-85"
     >
       <Image source={getAvatarSource(post.avatar_url, post.user_id)} className="h-10 w-10 rounded-full" />
       <View className="min-w-0 flex-1 pl-3">
@@ -290,7 +302,7 @@ export default function SearchScreen() {
         </View>
         <Text className="mt-1.5 text-xs leading-5 text-ink" numberOfLines={2}>{post.content}</Text>
         <View className="mt-2 flex-row items-center gap-1.5">
-          <FontAwesome6 name="heart" size={9} color="#8B7D6B" />
+          <FontAwesome6 name="heart" size={9} colorClassName="accent-copy-muted" />
           <Text className="text-[9px] text-copy-muted">{post.likes_count} 赞</Text>
           {post.category ? <Text className="ml-2 text-[9px] font-bold text-brand">#{post.category}</Text> : null}
         </View>
@@ -303,7 +315,7 @@ export default function SearchScreen() {
       key={user.id}
       onPress={() => openUser(user)}
       accessibilityLabel={`查看用户${user.username}`}
-      className="mb-3 flex-row items-center rounded-[20px] border border-line bg-white p-3.5 active:opacity-85"
+      className="mb-3 flex-row items-center rounded-[20px] border border-line bg-surface p-3.5 active:opacity-85"
     >
       <Image source={getAvatarSource(user.avatar_url, user.id)} className="h-12 w-12 rounded-full" />
       <View className="min-w-0 flex-1 px-3">
@@ -349,7 +361,7 @@ export default function SearchScreen() {
   ];
 
   return (
-    <Screen backgroundColor="#FDF8F0" safeAreaEdges={["top", "bottom"]}>
+    <Screen safeAreaEdges={["top", "bottom"]}>
       <View className="border-b border-line bg-canvas px-4 pb-3 pt-2">
         <View className="flex-row items-center gap-2.5">
           <TouchableOpacity
@@ -357,16 +369,16 @@ export default function SearchScreen() {
             accessibilityLabel="返回"
             className="h-11 w-10 items-center justify-center rounded-full active:bg-brand/10"
           >
-            <FontAwesome6 name="arrow-left" size={17} color="#3D3229" />
+            <FontAwesome6 name="arrow-left" size={17} colorClassName="accent-ink" />
           </TouchableOpacity>
-          <View className="h-12 flex-1 flex-row items-center rounded-full border border-line bg-white px-4 shadow-2xs">
-            <FontAwesome6 name="magnifying-glass" size={14} color="#2D6A4F" />
+          <View className="h-12 flex-1 flex-row items-center rounded-full border border-line bg-surface px-4 shadow-2xs">
+            <FontAwesome6 name="magnifying-glass" size={14} colorClassName="accent-brand" />
             <TextInput
               value={query}
               onChangeText={updateQuery}
               onSubmitEditing={() => commitHistory(query)}
               placeholder="搜菜谱、食材、动态或食友"
-              placeholderTextColor="#A89B8A"
+              placeholderTextColorClassName="accent-copy-muted"
               autoFocus
               autoCorrect={false}
               returnKeyType="search"
@@ -374,7 +386,7 @@ export default function SearchScreen() {
             />
             {query ? (
               <TouchableOpacity onPress={() => updateQuery("")} accessibilityLabel="清空搜索">
-                <FontAwesome6 name="circle-xmark" size={15} color="#A89B8A" />
+                <FontAwesome6 name="circle-xmark" size={15} colorClassName="accent-copy-muted" />
               </TouchableOpacity>
             ) : null}
           </View>
@@ -397,10 +409,10 @@ export default function SearchScreen() {
                   accessibilityRole="tab"
                   accessibilityState={{ selected }}
                   className={`flex-row items-center gap-1.5 rounded-full border px-3 py-1.5 ${
-                    selected ? "border-brand bg-brand" : "border-line bg-white"
+                    selected ? "border-brand bg-brand-fill" : "border-line bg-surface"
                   } ${unavailable ? "opacity-40" : ""}`}
                 >
-                  <FontAwesome6 name={category.icon} size={9} color={selected ? "#FFFFFF" : "#8B7D6B"} />
+                  <FontAwesome6 name={category.icon} size={9} colorClassName={selected ? "accent-on-brand" : "accent-copy-muted"} />
                   <Text className={`text-[11px] font-bold ${selected ? "text-white" : "text-copy-muted"}`}>
                     {category.label}{counts[category.key] ? ` ${counts[category.key]}` : ""}
                   </Text>
@@ -426,7 +438,7 @@ export default function SearchScreen() {
                   <TouchableOpacity
                     onPress={() => {
                       setHistory([]);
-                      void AsyncStorage.removeItem(SEARCH_HISTORY_KEY);
+                      if (historyStorageKey) void AsyncStorage.removeItem(historyStorageKey);
                     }}
                     className="px-2 py-1"
                   >
@@ -438,9 +450,9 @@ export default function SearchScreen() {
                     <TouchableOpacity
                       key={item}
                       onPress={() => chooseSuggestion(item)}
-                      className="flex-row items-center gap-1.5 rounded-full border border-line bg-white px-3 py-2"
+                      className="flex-row items-center gap-1.5 rounded-full border border-line bg-surface px-3 py-2"
                     >
-                      <FontAwesome6 name="clock-rotate-left" size={9} color="#8B7D6B" />
+                      <FontAwesome6 name="clock-rotate-left" size={9} colorClassName="accent-copy-muted" />
                       <Text className="text-xs font-semibold text-ink">{item}</Text>
                     </TouchableOpacity>
                   ))}
@@ -457,16 +469,16 @@ export default function SearchScreen() {
                     onPress={() => chooseSuggestion(item)}
                     className="flex-row items-center gap-1.5 rounded-full bg-brand/10 px-3 py-2"
                   >
-                    {index < 3 ? <FontAwesome6 name="arrow-trend-up" size={9} color="#2D6A4F" /> : null}
+                    {index < 3 ? <FontAwesome6 name="arrow-trend-up" size={9} colorClassName="accent-brand" /> : null}
                     <Text className="text-xs font-bold text-brand">{item}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
             </View>
 
-            <View className="mt-4 overflow-hidden rounded-[26px] border border-brand/10 bg-brand p-5">
-              <View className="h-10 w-10 items-center justify-center rounded-2xl bg-white/15">
-                <FontAwesome6 name="wand-magic-sparkles" size={15} color="#FFFFFF" />
+            <View className="mt-4 overflow-hidden rounded-[26px] border border-brand/10 bg-brand-fill p-5">
+              <View className="h-10 w-10 items-center justify-center rounded-2xl bg-surface/15">
+                <FontAwesome6 name="wand-magic-sparkles" size={15} colorClassName="accent-on-brand" />
               </View>
               <Text className="mt-4 text-lg font-black text-white">一次搜索，找到完整答案</Text>
               <Text className="mt-2 text-xs leading-5 text-white/75">
@@ -476,19 +488,19 @@ export default function SearchScreen() {
           </View>
         ) : loading ? (
           <View className="items-center py-24">
-            <ActivityIndicator size="large" color="#2D6A4F" />
+            <ActivityIndicator size="large" colorClassName="accent-brand" />
             <Text className="mt-4 text-xs font-medium text-copy-muted">正在整理相关结果…</Text>
           </View>
         ) : error && counts.all === 0 ? (
           <View className="items-center py-20">
-            <View className="h-16 w-16 items-center justify-center rounded-full bg-amber-100">
-              <FontAwesome6 name="wifi" size={21} color="#A66A18" />
+            <View className="h-16 w-16 items-center justify-center rounded-full bg-warm-soft">
+              <FontAwesome6 name="wifi" size={21} colorClassName="accent-warm" />
             </View>
             <Text className="mt-5 text-base font-black text-ink">搜索暂时没有响应</Text>
             <Text className="mt-2 text-center text-xs leading-5 text-copy-muted">{error}</Text>
             <TouchableOpacity
               onPress={() => void performSearch(query)}
-              className="mt-6 rounded-full bg-brand px-5 py-3"
+              className="mt-6 rounded-full bg-brand-fill px-5 py-3"
             >
               <Text className="text-xs font-black text-white">重新搜索</Text>
             </TouchableOpacity>
@@ -496,7 +508,7 @@ export default function SearchScreen() {
         ) : counts.all === 0 ? (
           <View className="items-center py-20">
             <View className="h-16 w-16 items-center justify-center rounded-full bg-brand/10">
-              <FontAwesome6 name="magnifying-glass" size={22} color="#2D6A4F" />
+              <FontAwesome6 name="magnifying-glass" size={22} colorClassName="accent-brand" />
             </View>
             <Text className="mt-5 text-base font-black text-ink">没有找到“{query.trim()}”</Text>
             <Text className="mt-2 max-w-[280px] text-center text-xs leading-5 text-copy-muted">
@@ -504,9 +516,9 @@ export default function SearchScreen() {
             </Text>
             <TouchableOpacity
               onPress={() => router.push("/custom-food")}
-              className="mt-6 flex-row items-center gap-2 rounded-full bg-brand px-5 py-3"
+              className="mt-6 flex-row items-center gap-2 rounded-full bg-brand-fill px-5 py-3"
             >
-              <FontAwesome6 name="plus" size={11} color="#FFFFFF" />
+              <FontAwesome6 name="plus" size={11} colorClassName="accent-on-brand" />
               <Text className="text-xs font-black text-white">添加新食材</Text>
             </TouchableOpacity>
           </View>
@@ -515,9 +527,9 @@ export default function SearchScreen() {
             {error ? (
               <TouchableOpacity
                 onPress={() => void performSearch(query)}
-                className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-3"
+                className="mb-4 rounded-2xl border border-warm/30 bg-warm-soft p-3"
               >
-                <Text className="text-xs font-bold text-amber-800">{error} · 点击重试</Text>
+                <Text className="text-xs font-bold text-warm">{error} · 点击重试</Text>
               </TouchableOpacity>
             ) : null}
             <Text className="mb-5 text-xs text-copy-muted">

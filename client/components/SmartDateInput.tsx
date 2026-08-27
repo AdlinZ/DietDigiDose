@@ -11,7 +11,9 @@ import {
 } from 'react-native';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import dayjs from 'dayjs';
-import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
+import FontAwesome6 from '@/components/ThemedFontAwesome6';
+import { useAppThemeColors } from '@/hooks/useAppThemeColors';
+import { useThemePreference } from '@/contexts/ThemeContext';
 
 // --------------------------------------------------------
 // 1. 配置 Dayjs 
@@ -58,6 +60,9 @@ export const SmartDateInput = ({
   iconSize = 18
 }: SmartDateInputProps) => {
   const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
+  const colors = useAppThemeColors();
+  const { resolvedTheme } = useThemePreference();
+  const styles = createStyles(colors);
 
   // 默认展示格式
   const format = displayFormat || (mode === 'time' ? 'HH:mm' : 'YYYY-MM-DD');
@@ -149,14 +154,14 @@ export const SmartDateInput = ({
               outline: 'none',
               backgroundColor: 'transparent',
               fontSize: 16,
-              color: '#111827',
+              color: colors.ink,
               fontFamily: 'inherit',
             }
           })}
           <FontAwesome6 
             name={iconName} 
             size={iconSize} 
-            color={iconColor || (value ? '#4B5563' : '#9CA3AF')} 
+            color={iconColor || (value ? colors.ink : colors['copy-muted'])}
             style={styles.icon}
           />
         </View>
@@ -198,7 +203,7 @@ export const SmartDateInput = ({
         <FontAwesome6 
           name={iconName} 
           size={iconSize} 
-          color={iconColor || (value ? '#4B5563' : '#9CA3AF')} 
+          color={iconColor || (value ? colors.ink : colors['copy-muted'])}
           style={styles.icon}
         />
       </TouchableOpacity>
@@ -212,7 +217,7 @@ export const SmartDateInput = ({
             mode={mode}
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             locale="zh-CN"
-            themeVariant="light"
+            themeVariant={resolvedTheme}
             onChange={handleNativeChange}
           />
           {Platform.OS === 'ios' ? (
@@ -227,27 +232,27 @@ export const SmartDateInput = ({
 };
 
 // 设计样式
-const styles = StyleSheet.create({
+const createStyles = (colors: ReturnType<typeof useAppThemeColors>) => StyleSheet.create({
   container: {
     marginBottom: 20,
   },
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#374151', // Gray 700
+    color: colors.ink,
     marginBottom: 8,
     marginLeft: 2,
   },
   inputBox: {
     height: 52, // 增加高度提升触控体验
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 12, // 更圆润的角
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     borderWidth: 1,
-    borderColor: '#E5E7EB', // Gray 200
+    borderColor: colors.line,
     // 增加轻微阴影提升层次感 (iOS)
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -257,16 +262,16 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   inputBoxError: {
-    borderColor: '#EF4444', // Red 500
-    backgroundColor: '#FEF2F2', // Red 50
+    borderColor: colors.critical,
+    backgroundColor: colors['danger-soft'],
   },
   text: {
     fontSize: 16,
-    color: '#111827', // Gray 900
+    color: colors.ink,
     flex: 1,
   },
   placeholder: {
-    color: '#9CA3AF', // Gray 400 - 标准占位符颜色
+    color: colors['copy-muted'],
   },
   icon: {
     marginLeft: 12,
@@ -275,24 +280,24 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginLeft: 2,
     fontSize: 12,
-    color: '#EF4444',
+    color: colors.critical,
   },
   iosPicker: {
     marginTop: 8,
     overflow: 'hidden',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#FFFFFF',
+    borderColor: colors.line,
+    backgroundColor: colors.surface,
   },
   iosDoneButton: {
     alignItems: 'center',
     borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+    borderTopColor: colors.line,
     paddingVertical: 10,
   },
   iosDoneText: {
-    color: '#2D6A4F',
+    color: colors.brand,
     fontSize: 14,
     fontWeight: '700',
   },

@@ -15,7 +15,7 @@
     "db:restore": "tsx scripts/database-backup.ts restore",
     "media:migrate": "tsx scripts/migrate-community-media.ts",
     "preinstall": "npx only-allow pnpm",
-    "start": "NODE_ENV=production PORT=${PORT:-9090} node dist/index.js",
+    "start": "node scripts/start-production.mjs",
     "lint": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 test/**/*.test.ts"
   },

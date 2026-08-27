@@ -12,16 +12,15 @@ import { useFocusEffect } from "expo-router";
 import { inferCategoryByName } from "@/utils/ingredientRules";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { healthApi, inventoryApi, recipesApi, shoppingListApi, type InventoryItem } from "@/services/api";
+import { cookingQueueApi, healthApi, inventoryApi, recipesApi, shoppingListApi, type InventoryItem } from "@/services/api";
 import { ingredientNamesMatch } from "@/utils/ingredients";
 import { getInventoryStatus } from "@/utils/inventory";
 import { ALLERGY_LABELS, findRecipeAllergyRisks, hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/healthProfile";
 import { getRecipeNutritionPresentation } from "@/utils/recipeQuality";
-import { addToCookingQueue, getCookingQueue } from "@/utils/cookingQueue";
 
 type IconName = ComponentProps<typeof FontAwesome6>["name"];
 
@@ -62,8 +61,7 @@ interface Recipe {
 export default function RecipeDetailScreen() {
   const router = useSafeRouter();
   const { id, pendingAction } = useSafeSearchParams<{ id: number; pendingAction?: "favorite" | "shopping-list" | "queue" }>();
-  const { isAuthenticated, user } = useAuth();
-  const userId = user?.id;
+  const { isAuthenticated } = useAuth();
   const authFetch = useAuthFetch();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
@@ -133,12 +131,12 @@ export default function RecipeDetailScreen() {
   }, [isAuthenticated, pendingAction, showFavoriteNotice]);
 
   useFocusEffect(useCallback(() => {
-    if (!userId || !id) {
+    if (!isAuthenticated || !id) {
       setIsQueued(false);
       return;
     }
     let active = true;
-    void getCookingQueue(userId)
+    void cookingQueueApi.list(authFetch)
       .then((items) => {
         if (active) setIsQueued(items.some((item) => item.recipeId === Number(id)));
       })
@@ -148,7 +146,7 @@ export default function RecipeDetailScreen() {
     return () => {
       active = false;
     };
-  }, [id, userId]));
+  }, [authFetch, id, isAuthenticated]));
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -167,10 +165,10 @@ export default function RecipeDetailScreen() {
 
   if (loading) {
     return (
-      <Screen backgroundColor="#F6F1E8">
+      <Screen>
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color="#2D6A4F" />
-          <Text className="mt-3 text-sm text-[#7A7165]">正在准备菜谱…</Text>
+          <ActivityIndicator size="large" colorClassName="accent-brand" />
+          <Text className="mt-3 text-sm text-copy-muted">正在准备菜谱…</Text>
         </View>
       </Screen>
     );
@@ -178,13 +176,13 @@ export default function RecipeDetailScreen() {
 
   if (!recipe) {
     return (
-      <Screen backgroundColor="#F6F1E8">
+      <Screen>
         <View className="flex-1 items-center justify-center px-6">
-          <View className="h-14 w-14 items-center justify-center rounded-full bg-[#E4EEE7]">
-            <FontAwesome6 name="utensils" size={22} color="#2D6A4F" />
+          <View className="h-14 w-14 items-center justify-center rounded-full bg-brand-soft">
+            <FontAwesome6 name="utensils" size={22} colorClassName="accent-brand" />
           </View>
-          <Text className="mt-4 text-base font-bold text-[#27352D]">菜谱暂时找不到</Text>
-          <TouchableOpacity onPress={() => router.back()} className="mt-5 rounded-full bg-brand px-6 py-3">
+          <Text className="mt-4 text-base font-bold text-ink">菜谱暂时找不到</Text>
+          <TouchableOpacity onPress={() => router.back()} className="mt-5 rounded-full bg-brand-fill px-6 py-3">
             <Text className="font-bold text-white">返回上一页</Text>
           </TouchableOpacity>
         </View>
@@ -301,7 +299,7 @@ export default function RecipeDetailScreen() {
       requestSafeReplacement();
       return;
     }
-    if (!isAuthenticated || !userId) {
+    if (!isAuthenticated) {
       router.push("/login", {
         returnTo: { pathname: "/recipe-detail", params: { id: recipe.id, pendingAction: "queue" } },
       });
@@ -315,20 +313,7 @@ export default function RecipeDetailScreen() {
 
     setQueueSaving(true);
     try {
-      const result = await addToCookingQueue(userId, {
-        recipeId: recipe.id,
-        title: recipe.title,
-        imageUrl: recipe.image_url,
-        cookTime: recipe.cook_time,
-        calories: recipe.calories,
-        difficulty: recipe.difficulty,
-        addedAt: Date.now(),
-        ingredients: (recipe.ingredients || []).map((ingredient) => ({
-          name: ingredient.name,
-          amount: ingredient.amount || "适量",
-        })),
-        preparedIngredientNames: [],
-      });
+      const result = await cookingQueueApi.add(authFetch, { recipeId: recipe.id });
       setIsQueued(true);
       if (!result.added) {
         router.push("/cooking-queue");
@@ -346,22 +331,22 @@ export default function RecipeDetailScreen() {
   };
 
   return (
-    <Screen backgroundColor="#F6F1E8">
+    <Screen>
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
         <View className="w-full max-w-[960px] self-center">
           <View className="relative overflow-hidden md:mt-5 md:rounded-[28px]">
             <RecipeCover
               uri={recipe.image_url}
               className="h-[300px] w-full md:h-[420px]"
-              placeholderClassName="h-[300px] w-full items-center justify-center bg-[#DDE8DF] md:h-[420px]"
+              placeholderClassName="h-[300px] w-full items-center justify-center bg-brand-soft md:h-[420px]"
             />
             <View className="absolute inset-0 bg-black/10" />
             <TouchableOpacity
               onPress={() => router.back()}
               accessibilityLabel="返回"
-              className="absolute left-4 top-4 h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/90 shadow-sm active:opacity-80"
+              className="absolute left-4 top-4 h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-surface/90 shadow-sm active:opacity-80"
             >
-              <FontAwesome6 name="chevron-left" size={16} color="#23382B" />
+              <FontAwesome6 name="chevron-left" size={16} colorClassName="accent-ink" />
             </TouchableOpacity>
             <View className="absolute right-4 top-4 flex-row gap-2">
               <TouchableOpacity
@@ -370,20 +355,20 @@ export default function RecipeDetailScreen() {
                   params: { category: "issue", page: "食谱详情", recipeId: String(recipe.id), recipeTitle: recipe.title },
                 })}
                 accessibilityLabel="反馈此食谱"
-                className="h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/90 shadow-sm active:opacity-80"
+                className="h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-surface/90 shadow-sm active:opacity-80"
               >
-                <FontAwesome6 name="flag" size={15} color="#7A6F63" />
+                <FontAwesome6 name="flag" size={15} colorClassName="accent-copy-muted" />
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={toggleFavorite}
                 disabled={favoriteLoading}
                 accessibilityLabel={isFavorited ? "取消收藏菜谱" : "收藏菜谱"}
-                className="h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/90 shadow-sm active:opacity-80 disabled:opacity-60"
+                className="h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-surface/90 shadow-sm active:opacity-80 disabled:opacity-60"
               >
                 <FontAwesome6
                   name="bookmark"
                   size={18}
-                  color={isFavorited ? "#D49A2A" : "#3E4B42"}
+                  colorClassName={isFavorited ? "accent-warm" : "accent-ink"}
                   solid={isFavorited}
                 />
               </TouchableOpacity>
@@ -391,50 +376,50 @@ export default function RecipeDetailScreen() {
             {favoriteNotice ? (
               <View
                 accessibilityLiveRegion="polite"
-                className="absolute right-4 top-[68px] rounded-full bg-[#20362A]/90 px-3 py-2 shadow-sm"
+                className="absolute right-4 top-[68px] rounded-full bg-brand-fill/90 px-3 py-2 shadow-sm"
               >
                 <Text className="text-xs font-bold text-white">{favoriteNotice}</Text>
               </View>
             ) : null}
             <View className="absolute bottom-4 left-4 flex-row gap-2">
-              <View className="rounded-full bg-[#1F5038]/90 px-3 py-1.5">
+              <View className="rounded-full bg-brand-fill/90 px-3 py-1.5">
                 <Text className="text-xs font-bold text-white">{recipe.category}</Text>
               </View>
-              <View className="rounded-full bg-white/90 px-3 py-1.5">
+              <View className="rounded-full bg-surface/90 px-3 py-1.5">
                 <Text className="text-xs font-bold text-ink">{recipe.difficulty}难度</Text>
               </View>
             </View>
           </View>
 
-          <View className="z-10 mx-4 -mt-2 rounded-[26px] border border-[#E8DFD2] bg-[#FFFDF9] p-5 shadow-sm md:mx-8 md:-mt-8 md:p-7">
+          <View className="z-10 mx-4 -mt-2 rounded-[26px] border border-line bg-surface p-5 shadow-sm md:mx-8 md:-mt-8 md:p-7">
             <View className="flex-row items-start justify-between gap-4">
               <View className="flex-1">
-                <Text className="text-[10px] font-bold tracking-[2px] text-[#8B765D]">今日推荐菜谱</Text>
-                <Text className="mt-1 text-[26px] font-bold leading-8 text-[#20362A] md:text-[32px] md:leading-10">
+                <Text className="text-[10px] font-bold tracking-[2px] text-copy-muted">今日推荐菜谱</Text>
+                <Text className="mt-1 text-[26px] font-bold leading-8 text-ink md:text-[32px] md:leading-10">
                   {recipe.title}
                 </Text>
               </View>
-              <View className="h-12 w-12 items-center justify-center rounded-2xl bg-[#E5F0E8]">
-                <FontAwesome6 name="leaf" size={19} color="#2D6A4F" />
+              <View className="h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft">
+                <FontAwesome6 name="leaf" size={19} colorClassName="accent-brand" />
               </View>
             </View>
 
-            <Text className="mt-3 text-sm leading-6 text-[#6C6258] md:text-[15px]">
+            <Text className="mt-3 text-sm leading-6 text-copy-muted md:text-[15px]">
               {recipe.description}
             </Text>
 
             {tags.length > 0 ? (
               <View className="mt-4 flex-row flex-wrap gap-2">
                 {tags.map((tag) => (
-                  <View key={tag} className="rounded-full bg-[#F2ECE3] px-3 py-1.5">
-                    <Text className="text-[11px] font-semibold text-[#746555]">#{tag}</Text>
+                  <View key={tag} className="rounded-full bg-background-secondary px-3 py-1.5">
+                    <Text className="text-[11px] font-semibold text-copy-muted">#{tag}</Text>
                   </View>
                 ))}
               </View>
             ) : null}
 
             {recipe.source === "user" ? (
-              <View className="mt-4 flex-row items-center border-t border-[#EEE6DA] pt-4">
+              <View className="mt-4 flex-row items-center border-t border-line pt-4">
                 <Image
                   source={getAvatarSource(recipe.author_avatar_url, recipe.author_username ?? recipe.id)}
                   className="h-9 w-9 rounded-full"
@@ -448,28 +433,28 @@ export default function RecipeDetailScreen() {
               </View>
             ) : null}
 
-            <View className="mt-5 flex-row rounded-2xl bg-[#F6F2EA] px-2 py-4">
-              <QuickInfo icon="clock" label="用时" value={`${nutritionPresentation.prefix}${recipe.cook_time}分钟`} color="#2D6A4F" />
-              <View className="w-px bg-[#E3D9CA]" />
-              <QuickInfo icon="fire" label="热量" value={`${nutritionPresentation.prefix}${recipe.calories} kcal`} color="#D4674F" />
-              <View className="w-px bg-[#E3D9CA]" />
-              <QuickInfo icon="signal" label="难度" value={recipe.difficulty} color="#B47B39" />
-              <View className="w-px bg-[#E3D9CA]" />
-              <QuickInfo icon="bowl-food" label="食材" value={`${recipe.ingredients?.length || 0}种`} color="#667B52" />
+            <View className="mt-5 flex-row rounded-2xl bg-background-secondary px-2 py-4">
+              <QuickInfo icon="clock" label="用时" value={`${nutritionPresentation.prefix}${recipe.cook_time}分钟`} colorClass="accent-brand" />
+              <View className="w-px bg-background-secondary" />
+              <QuickInfo icon="fire" label="热量" value={`${nutritionPresentation.prefix}${recipe.calories} kcal`} colorClass="accent-critical" />
+              <View className="w-px bg-background-secondary" />
+              <QuickInfo icon="signal" label="难度" value={recipe.difficulty} colorClass="accent-warm" />
+              <View className="w-px bg-background-secondary" />
+              <QuickInfo icon="bowl-food" label="食材" value={`${recipe.ingredients?.length || 0}种`} colorClass="accent-brand" />
             </View>
           </View>
 
           {hasSafetyProfile(healthProfile) ? (
-            <View className={`mx-4 mt-4 rounded-[24px] border p-5 md:mx-8 ${hasAllergyRisk ? "border-[#E7A594] bg-[#FFF0EC]" : "border-[#E8D49B] bg-[#FFF9E8]"}`}>
+            <View className={`mx-4 mt-4 rounded-[24px] border p-5 md:mx-8 ${hasAllergyRisk ? "border-critical bg-danger-soft" : "border-warm bg-warm-soft"}`}>
               <View className="flex-row items-start">
-                <View className={`h-10 w-10 items-center justify-center rounded-2xl ${hasAllergyRisk ? "bg-[#F8D4CB]" : "bg-[#F5E8B9]"}`}>
-                  <FontAwesome6 name={hasAllergyRisk ? "triangle-exclamation" : "shield-halved"} size={16} color={hasAllergyRisk ? "#B42318" : "#8A6818"} />
+                <View className={`h-10 w-10 items-center justify-center rounded-2xl ${hasAllergyRisk ? "bg-danger-soft" : "bg-warm-soft"}`}>
+                  <FontAwesome6 name={hasAllergyRisk ? "triangle-exclamation" : "shield-halved"} size={16} colorClassName={hasAllergyRisk ? "accent-critical" : "accent-warm"} />
                 </View>
                 <View className="ml-3 flex-1">
-                  <Text className={`text-base font-black ${hasAllergyRisk ? "text-[#8E2F20]" : "text-[#735817]"}`}>
+                  <Text className={`text-base font-black ${hasAllergyRisk ? "text-critical" : "text-warm"}`}>
                     {hasSevereRisk ? "已拦截：包含重度风险食材" : hasAllergyRisk ? "检测到已标记的饮食风险" : "安全档案已应用"}
                   </Text>
-                  <Text className={`mt-1 text-xs leading-5 ${hasAllergyRisk ? "text-[#984838]" : "text-[#806C37]"}`}>
+                  <Text className={`mt-1 text-xs leading-5 ${hasAllergyRisk ? "text-critical" : "text-warm"}`}>
                     {hasAllergyRisk
                       ? `菜谱食材可能涉及：${allergyRisks.map((item) => `${item.name}（${ALLERGY_LABELS[item.severity]}）`).join("、")}。配方与交叉污染信息仍需以包装和餐厅说明为准。`
                       : safetyNotes.slice(0, 2).join("；")}
@@ -477,16 +462,16 @@ export default function RecipeDetailScreen() {
                 </View>
               </View>
               <View className="mt-4 flex-row gap-2">
-                <TouchableOpacity onPress={() => router.push("/health-profile")} className="flex-1 items-center rounded-2xl border border-[#CBAE78] bg-white/70 py-3"><Text className="text-xs font-black text-[#6E5623]">核对安全档案</Text></TouchableOpacity>
-                <TouchableOpacity onPress={requestSafeReplacement} className={`flex-1 items-center rounded-2xl py-3 ${hasAllergyRisk ? "bg-[#A63D2B]" : "bg-[#8A6C22]"}`}><Text className="text-xs font-black text-white">获取安全替换</Text></TouchableOpacity>
+                <TouchableOpacity onPress={() => router.push("/health-profile")} className="flex-1 items-center rounded-2xl border border-warm bg-surface/70 py-3"><Text className="text-xs font-black text-warm">核对安全档案</Text></TouchableOpacity>
+                <TouchableOpacity onPress={requestSafeReplacement} className={`flex-1 items-center rounded-2xl py-3 ${hasAllergyRisk ? "bg-critical-fill" : "bg-warm-fill"}`}><Text className="text-xs font-black text-white">获取安全替换</Text></TouchableOpacity>
               </View>
             </View>
           ) : null}
 
-          <View className="mx-4 mt-4 rounded-[24px] border border-[#E8DFD2] bg-[#FFFDF9] p-5 md:mx-8 md:p-6">
+          <View className="mx-4 mt-4 rounded-[24px] border border-line bg-surface p-5 md:mx-8 md:p-6">
             <SectionTitle icon="chart-pie" eyebrow="每份参考" title={nutritionPresentation.title} />
             {nutritionPresentation.disclosure ? (
-              <Text testID="nutrition-estimate-label" className="mt-3 rounded-xl bg-[#FFF4D8] px-3 py-2 text-xs font-bold leading-5 text-[#7B5B16]">
+              <Text testID="nutrition-estimate-label" className="mt-3 rounded-xl bg-warm-soft px-3 py-2 text-xs font-bold leading-5 text-warm">
                 {nutritionPresentation.disclosure}
               </Text>
             ) : null}
@@ -512,51 +497,51 @@ export default function RecipeDetailScreen() {
               <TouchableOpacity
                 accessibilityLabel={nutritionExpanded ? "收起营养数据" : `查看全部 ${nutrition.length} 项`}
                 onPress={() => setNutritionExpanded((current) => !current)}
-                className="mt-3 flex-row items-center justify-center rounded-xl bg-[#F4EFE7] py-2.5 active:opacity-80"
+                className="mt-3 flex-row items-center justify-center rounded-xl bg-background-secondary py-2.5 active:opacity-80"
               >
-                <Text className="mr-2 text-xs font-bold text-[#5F6E61]">
+                <Text className="mr-2 text-xs font-bold text-copy-muted">
                   {nutritionExpanded ? "收起营养数据" : `查看全部 ${nutrition.length} 项`}
                 </Text>
-                <FontAwesome6 name={nutritionExpanded ? "chevron-up" : "chevron-down"} size={10} color="#5F6E61" />
+                <FontAwesome6 name={nutritionExpanded ? "chevron-up" : "chevron-down"} size={10} colorClassName="accent-copy-muted" />
               </TouchableOpacity>
             ) : null}
           </View>
 
           <View className="mx-4 mt-4 gap-4 md:mx-8 md:flex-row md:items-start">
-            <View className="rounded-[24px] border border-[#E8DFD2] bg-[#FFFDF9] p-5 md:w-[38%] md:p-6">
+            <View className="rounded-[24px] border border-line bg-surface p-5 md:w-[38%] md:p-6">
               <SectionTitle icon="basket-shopping" eyebrow="准备工作" title="备料清单" />
               {isAuthenticated ? (
-                <View className="mt-4 rounded-2xl border border-[#DDE8DF] bg-[#F4F8F5] p-3">
+                <View className="mt-4 rounded-2xl border border-line bg-brand-soft p-3">
                   <Text className="text-xs font-black text-brand">
                     库存匹配 {matchedIngredients.length} 种 · 缺少 {missingIngredients.length} 种
                   </Text>
                   {expiringIngredients.length ? (
-                    <Text className="mt-1 text-[11px] font-bold text-[#A8663F]">
+                    <Text className="mt-1 text-[11px] font-bold text-warm">
                       临期优先：{expiringIngredients.map((item) => item.name).join("、")}
                     </Text>
                   ) : null}
                   {missingIngredients.length ? (
                     <View className="mt-1">
-                      <Text className="text-[11px] text-[#7A6F63]">
+                      <Text className="text-[11px] text-copy-muted">
                         需要补充：{missingIngredients.map((item) => item.name).join("、")}
                       </Text>
                       <TouchableOpacity
                         onPress={handleAddMissingToShoppingList}
-                        className="mt-2.5 flex-row items-center justify-center gap-1.5 rounded-xl bg-brand py-2 px-3 active:opacity-90"
+                        className="mt-2.5 flex-row items-center justify-center gap-1.5 rounded-xl bg-brand-fill py-2 px-3 active:opacity-90"
                       >
-                        <FontAwesome6 name="cart-plus" size={11} color="#FFF" />
+                        <FontAwesome6 name="cart-plus" size={11} colorClassName="accent-on-brand" />
                         <Text className="text-xs font-bold text-white">一键将 {missingIngredients.length} 种缺少食材加入采购清单</Text>
                       </TouchableOpacity>
                     </View>
                   ) : null}
                 </View>
               ) : (
-                <TouchableOpacity onPress={() => router.push("/login")} className="mt-4 rounded-2xl bg-[#F5F1E9] p-3">
-                  <Text className="text-[11px] font-bold text-[#6C6258]">登录后查看库存匹配、缺少和临期食材</Text>
+                <TouchableOpacity onPress={() => router.push("/login")} className="mt-4 rounded-2xl bg-background-secondary p-3">
+                  <Text className="text-[11px] font-bold text-copy-muted">登录后查看库存匹配、缺少和临期食材</Text>
                 </TouchableOpacity>
               )}
-              <View className="mt-4 flex-row items-center justify-between rounded-2xl bg-[#F5F1E9] px-3 py-2.5">
-                <Text className="text-[11px] text-[#7A6F63]">点击食材，标记已经备好</Text>
+              <View className="mt-4 flex-row items-center justify-between rounded-2xl bg-background-secondary px-3 py-2.5">
+                <Text className="text-[11px] text-copy-muted">点击食材，标记已经备好</Text>
                 <Text className="text-sm font-black text-brand">
                   {preparedIngredients.size}/{recipe.ingredients?.length || 0}
                 </Text>
@@ -574,36 +559,36 @@ export default function RecipeDetailScreen() {
               </View>
             </View>
 
-            <View className="rounded-[24px] border border-[#E8DFD2] bg-[#FFFDF9] p-5 md:flex-1 md:p-6">
+            <View className="rounded-[24px] border border-line bg-surface p-5 md:flex-1 md:p-6">
               <SectionTitle icon="list-check" eyebrow="跟着步骤做" title="烹饪步骤" />
               <View className="mt-5">
                 {(recipe.steps || []).map((step, index) => (
                   <View key={`${index}-${step.slice(0, 12)}`} className="flex-row">
                     <View className="w-10 items-center">
-                      <View className="h-9 w-9 items-center justify-center rounded-full bg-brand shadow-sm">
+                      <View className="h-9 w-9 items-center justify-center rounded-full bg-brand-fill shadow-sm">
                         <Text className="text-xs font-bold text-white">{index + 1}</Text>
                       </View>
-                      {index < recipe.steps.length - 1 ? <View className="my-1 w-px flex-1 bg-[#D9E6DD]" /> : null}
+                      {index < recipe.steps.length - 1 ? <View className="my-1 w-px flex-1 bg-brand-soft" /> : null}
                     </View>
                     <View className="ml-3 flex-1 pb-5">
-                      <Text className="text-[10px] font-bold tracking-[1.5px] text-[#9A8B78]">
+                      <Text className="text-[10px] font-bold tracking-[1.5px] text-copy-muted">
                         步骤 {String(index + 1).padStart(2, "0")}
                       </Text>
-                      <Text className="mt-1.5 text-sm leading-6 text-[#3F493F]">{step}</Text>
+                      <Text className="mt-1.5 text-sm leading-6 text-ink">{step}</Text>
                     </View>
                   </View>
                 ))}
               </View>
             </View>
 
-            <View className="rounded-[24px] border border-[#D9E6DD] bg-[#F3F8F4] p-5 md:flex-1 md:p-6">
+            <View className="rounded-[24px] border border-brand bg-brand-soft p-5 md:flex-1 md:p-6">
               <SectionTitle icon="kitchen-set" eyebrow="装备适配" title="用现有厨具完成这道菜" />
-              <Text className="mt-3 text-xs leading-5 text-[#58705D]">AI 会优先匹配你装备库中状态可用的厨具；缺少时会给出替代做法与建议添置的官方厨具。</Text>
+              <Text className="mt-3 text-xs leading-5 text-copy-muted">AI 会优先匹配你装备库中状态可用的厨具；缺少时会给出替代做法与建议添置的官方厨具。</Text>
               <TouchableOpacity
                 onPress={() => router.push({ pathname: "/ai-assistant", params: { prompt: `我要做【${recipe.title}】。请优先使用我已录入且可用的厨具；若缺少关键设备，请给出可替代的烹饪方法，并说明推荐从官方厨具库添加什么。` } })}
-                className="mt-4 flex-row items-center justify-center rounded-2xl bg-brand py-3 active:opacity-85"
+                className="mt-4 flex-row items-center justify-center rounded-2xl bg-brand-fill py-3 active:opacity-85"
               >
-                <FontAwesome6 name="wand-magic-sparkles" size={13} color="white" />
+                <FontAwesome6 name="wand-magic-sparkles" size={13} colorClassName="accent-on-brand" />
                 <Text className="ml-2 text-xs font-black text-white">按我的厨具适配</Text>
               </TouchableOpacity>
             </View>
@@ -613,10 +598,10 @@ export default function RecipeDetailScreen() {
         </View>
       </ScrollView>
 
-      <View className="border-t border-[#E4DBCE] bg-[#FFFDF9] px-4 py-3">
+      <View className="border-t border-line bg-surface px-4 py-3">
         <View className="w-full max-w-[896px] self-center flex-row items-center">
           <View className="mr-4 flex-1">
-            <Text className="text-sm font-bold text-[#273A2E]">
+            <Text className="text-sm font-bold text-ink">
               {hasAllergyRisk ? "需要先确认食材安全吗？" : isQueued ? "已加入烹饪队列" : "想稍后再做这道菜？"}
             </Text>
             <Text className="mt-0.5 text-[10px] text-copy-muted">
@@ -626,9 +611,9 @@ export default function RecipeDetailScreen() {
           <TouchableOpacity
             onPress={() => void handleQueueAction()}
             disabled={queueSaving}
-            className={`flex-row items-center justify-center rounded-2xl px-5 py-3.5 shadow-sm active:opacity-85 disabled:opacity-60 md:px-8 ${hasAllergyRisk ? "bg-[#A63D2B]" : "bg-brand"}`}
+            className={`flex-row items-center justify-center rounded-2xl px-5 py-3.5 shadow-sm active:opacity-85 disabled:opacity-60 md:px-8 ${hasAllergyRisk ? "bg-critical-fill" : "bg-brand-fill"}`}
           >
-            <FontAwesome6 name={hasAllergyRisk ? "shield-halved" : isQueued ? "list-check" : "plus"} size={17} color="white" />
+            <FontAwesome6 name={hasAllergyRisk ? "shield-halved" : isQueued ? "list-check" : "plus"} size={17} colorClassName="accent-on-brand" />
             <Text className="ml-2 text-sm font-bold text-white">
               {hasAllergyRisk ? "先获取安全替换" : queueSaving ? "加入中…" : isQueued ? "查看队列" : "加入队列"}
             </Text>
@@ -642,23 +627,23 @@ export default function RecipeDetailScreen() {
 function SectionTitle({ icon, eyebrow, title }: { icon: IconName; eyebrow: string; title: string }) {
   return (
     <View className="flex-row items-center">
-      <View className="mr-3 h-10 w-10 items-center justify-center rounded-2xl bg-[#E6F0E8]">
-        <FontAwesome6 name={icon} size={15} color="#2D6A4F" />
+      <View className="mr-3 h-10 w-10 items-center justify-center rounded-2xl bg-brand-soft">
+        <FontAwesome6 name={icon} size={15} colorClassName="accent-brand" />
       </View>
       <View>
-        <Text className="text-[9px] font-bold tracking-[1.5px] text-[#9A8A77]">{eyebrow}</Text>
-        <Text className="mt-0.5 text-base font-bold text-[#22382A]">{title}</Text>
+        <Text className="text-[9px] font-bold tracking-[1.5px] text-copy-muted">{eyebrow}</Text>
+        <Text className="mt-0.5 text-base font-bold text-ink">{title}</Text>
       </View>
     </View>
   );
 }
 
-function QuickInfo({ icon, label, value, color }: { icon: IconName; label: string; value: string; color: string }) {
+function QuickInfo({ icon, label, value, colorClass }: { icon: IconName; label: string; value: string; colorClass: string }) {
   return (
     <View className="flex-1 items-center px-1">
-      <FontAwesome6 name={icon} size={13} color={color} />
-      <Text className="mt-1.5 text-[9px] text-[#9B8E80]">{label}</Text>
-      <Text className="mt-0.5 text-[11px] font-bold text-[#263A2E]" numberOfLines={1}>{value}</Text>
+      <FontAwesome6 name={icon} size={13} colorClassName={colorClass} />
+      <Text className="mt-1.5 text-[9px] text-copy-muted">{label}</Text>
+      <Text className="mt-0.5 text-[11px] font-bold text-ink" numberOfLines={1}>{value}</Text>
     </View>
   );
 }
@@ -667,13 +652,14 @@ type IndexedIngredient = { ingredient: RecipeIngredient; index: number; key: str
 
 const INGREDIENT_GROUP_STYLES: Record<IngredientGroup, {
   icon: IconName;
-  color: string;
-  background: string;
+  colorClass: string;
+  textClass: string;
+  backgroundClass: string;
   testID: string;
 }> = {
-  主料: { icon: "bowl-rice", color: "#2D6A4F", background: "#E8F2EA", testID: "ingredient-group-primary" },
-  辅料: { icon: "seedling", color: "#9A7624", background: "#F7EFCF", testID: "ingredient-group-auxiliary" },
-  调味料: { icon: "spoon", color: "#A8663F", background: "#F4E4D7", testID: "ingredient-group-seasoning" },
+  主料: { icon: "bowl-rice", colorClass: "accent-brand", textClass: "text-brand", backgroundClass: "bg-brand-soft", testID: "ingredient-group-primary" },
+  辅料: { icon: "seedling", colorClass: "accent-warm", textClass: "text-warm", backgroundClass: "bg-warm-soft", testID: "ingredient-group-auxiliary" },
+  调味料: { icon: "spoon", colorClass: "accent-critical", textClass: "text-critical", backgroundClass: "bg-danger-soft", testID: "ingredient-group-seasoning" },
 };
 
 function ingredientRows(items: IndexedIngredient[]): IndexedIngredient[][] {
@@ -713,12 +699,12 @@ function IngredientGroupSection({
   return (
     <View testID={style.testID}>
       <View className="mb-2.5 flex-row items-center">
-        <View className="mr-2 h-7 w-7 items-center justify-center rounded-xl" style={{ backgroundColor: style.background }}>
-          <FontAwesome6 name={style.icon} size={11} color={style.color} />
+        <View className={`mr-2 h-7 w-7 items-center justify-center rounded-xl ${style.backgroundClass}`}>
+          <FontAwesome6 name={style.icon} size={11} colorClassName={style.colorClass} />
         </View>
-        <Text className="text-sm font-bold text-[#344238]">{group}</Text>
-        <Text className="ml-1.5 text-xs font-semibold text-[#9A8D7E]">{items.length} 项</Text>
-        <View className="ml-3 h-px flex-1 bg-[#EEE6DA]" />
+        <Text className="text-sm font-bold text-ink">{group}</Text>
+        <Text className="ml-1.5 text-xs font-semibold text-copy-muted">{items.length} 项</Text>
+        <View className="ml-3 h-px flex-1 bg-background-secondary" />
       </View>
       <View className="gap-2.5">
         {rows.map((row, rowIndex) => {
@@ -735,27 +721,22 @@ function IngredientGroupSection({
                     accessibilityState={{ checked: prepared }}
                     accessibilityLabel={`${ingredient.name}，${ingredient.amount || "适量"}`}
                     onPress={() => onToggle(key)}
-                    className="min-h-20 flex-1 justify-between rounded-2xl border p-3 active:opacity-80"
-                    style={{
-                      backgroundColor: prepared ? "#EDF5EF" : "#FAF7F1",
-                      borderColor: prepared ? "#B9D4C0" : "#EDE4D7",
-                    }}
+                    className={`min-h-20 flex-1 justify-between rounded-2xl border p-3 active:opacity-80 ${prepared ? "border-brand bg-brand-soft" : "border-line bg-surface"}`}
                   >
                     <View className="flex-row items-start">
                       <View
-                        className="mr-2 h-5 w-5 items-center justify-center rounded-full border"
-                        style={{ backgroundColor: prepared ? style.color : "transparent", borderColor: prepared ? style.color : "#CFC4B6" }}
+                        className={`mr-2 h-5 w-5 items-center justify-center rounded-full border ${prepared ? "border-brand bg-brand-fill" : "border-line bg-transparent"}`}
                       >
-                        {prepared ? <FontAwesome6 name="check" size={9} color="#FFFFFF" /> : null}
+                        {prepared ? <FontAwesome6 name="check" size={9} colorClassName="accent-on-brand" /> : null}
                       </View>
                       <Text
-                        className={`flex-1 text-sm font-bold leading-5 ${prepared ? "text-[#7E897F] line-through" : "text-[#344238]"}`}
+                        className={`flex-1 text-sm font-bold leading-5 ${prepared ? "text-copy-muted line-through" : "text-ink"}`}
                         numberOfLines={2}
                       >
                         {ingredient.name}
                       </Text>
                     </View>
-                    <Text className="mt-2 self-end text-sm font-black" style={{ color: style.color }}>
+                    <Text className={`mt-2 self-end text-sm font-black ${style.textClass}`}>
                       {ingredient.amount || "适量"}
                     </Text>
                   </TouchableOpacity>
@@ -771,12 +752,12 @@ function IngredientGroupSection({
 }
 
 const NUTRIENT_PALETTES = [
-  { color: "#2D6A4F", background: "#E7F1E9" },
-  { color: "#9A7624", background: "#F7EFCF" },
-  { color: "#A8663F", background: "#F4E4D7" },
-  { color: "#496A84", background: "#E7EEF3" },
-  { color: "#7C5C8E", background: "#EEE7F2" },
-  { color: "#7A6A3D", background: "#F0EDDF" },
+  { colorClass: "text-brand", backgroundClass: "bg-brand-soft" },
+  { colorClass: "text-warm", backgroundClass: "bg-warm-soft" },
+  { colorClass: "text-critical", backgroundClass: "bg-danger-soft" },
+  { colorClass: "text-info", backgroundClass: "bg-info-soft" },
+  { colorClass: "text-info", backgroundClass: "bg-info-soft" },
+  { colorClass: "text-warm", backgroundClass: "bg-warm-soft" },
 ];
 
 function NutrientCard({
@@ -794,11 +775,11 @@ function NutrientCard({
   const numericValue = Number(value || 0);
   const formattedValue = Number.isInteger(numericValue) ? String(numericValue) : numericValue.toFixed(1);
   return (
-    <View testID="nutrient-card" className="flex-1 items-center rounded-2xl px-2 py-4" style={{ backgroundColor: palette.background }}>
-      <Text className="text-lg font-bold" style={{ color: palette.color }} numberOfLines={1}>
+    <View testID="nutrient-card" className={`flex-1 items-center rounded-2xl px-2 py-4 ${palette.backgroundClass}`}>
+      <Text className={`text-lg font-bold ${palette.colorClass}`} numberOfLines={1}>
         {formattedValue}{unit}
       </Text>
-      <Text className="mt-1 text-[11px] font-medium text-[#71685E]">{label}</Text>
+      <Text className="mt-1 text-[11px] font-medium text-copy-muted">{label}</Text>
     </View>
   );
 }

@@ -2,6 +2,15 @@ name: Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      build_profile:
+        description: Build profile
+        required: true
+        default: preview-http
+        type: choice
+        options:
+          - preview-http
+          - candidate
 
 permissions:
   contents: read
@@ -16,8 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      EAS_BUILD_PROFILE: candidate
-      EXPO_PUBLIC_BACKEND_BASE_URL: ${{ vars.STAGING_BACKEND_BASE_URL }}
+      EAS_BUILD_PROFILE: ${{ inputs.build_profile }}
+      STAGING_BACKEND_BASE_URL: ${{ vars.STAGING_BACKEND_BASE_URL }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -50,11 +59,25 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Configure build backend
+        run: |
+          if [ "$EAS_BUILD_PROFILE" = "preview-http" ]; then
+            echo "EXPO_PUBLIC_BACKEND_BASE_URL=http://118.145.165.226:8088" >> "$GITHUB_ENV"
+            echo "EXPO_PUBLIC_ALLOW_INSECURE_HTTP=1" >> "$GITHUB_ENV"
+          else
+            test -n "$STAGING_BACKEND_BASE_URL"
+            case "$STAGING_BACKEND_BASE_URL" in
+              https://*) ;;
+              *) exit 1 ;;
+            esac
+            echo "EXPO_PUBLIC_BACKEND_BASE_URL=$STAGING_BACKEND_BASE_URL" >> "$GITHUB_ENV"
+          fi
+
       - name: Load and validate release metadata
         run: |
           pnpm -w validate:release
           node -e "const r=require('./release.json'); console.log('EXPO_PUBLIC_ANDROID_VERSION_CODE='+r.buildNumber); console.log('RELEASE_SNAPSHOT='+r.snapshot); console.log('PRODUCT_VERSION='+r.productVersion)" >> "$GITHUB_ENV"
-          node -e "if (!process.env.EXPO_PUBLIC_BACKEND_BASE_URL?.startsWith('https://')) process.exit(1)"
+          node -e "const p=process.env.EAS_BUILD_PROFILE; const u=process.env.EXPO_PUBLIC_BACKEND_BASE_URL; if (p==='preview-http' ? u!=='http://118.145.165.226:8088' : !u?.startsWith('https://')) process.exit(1)"
 
       - name: Restore release keystore
         env:
@@ -96,15 +119,16 @@ jobs:
         working-directory: client
         run: |
           mkdir -p artifact
-          cp android/app/build/outputs/apk/release/app-release.apk "artifact/DietDigiDose-${PRODUCT_VERSION}-${RELEASE_SNAPSHOT}-build${EXPO_PUBLIC_ANDROID_VERSION_CODE}-${{ github.sha }}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "artifact/DietDigiDose-${PRODUCT_VERSION}-${RELEASE_SNAPSHOT}-build${EXPO_PUBLIC_ANDROID_VERSION_CODE}-${EAS_BUILD_PROFILE}-${{ github.sha }}.apk"
           cd artifact
           sha256sum *.apk > SHA256SUMS.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DietDigiDose-Android-candidate
+          name: DietDigiDose-Android-${{ inputs.build_profile }}
           path: client/artifact/
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+

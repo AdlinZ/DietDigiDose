@@ -12,7 +12,7 @@ export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction
       | { role: string; must_change_password: number }
       | undefined;
     if (!user || user.role !== 'admin') {
-      return res.status(403).json({ error: "无权限：需要管理员角色" });
+      return res.status(403).json({ error: "无权限：需要管理员角色", code: "ADMIN_ROLE_REQUIRED" });
     }
     if (user.must_change_password) {
       return res.status(403).json({

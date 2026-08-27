@@ -1,9 +1,7 @@
 import { Router } from "express";
 import { deleteUserAgentData } from "../services/agent/repository.js";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { db, logAdminAction } from "../storage/db.js";
-import { JWT_SECRET } from "../config/security.js";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { changePasswordSchema, deleteAccountSchema, loginSchema, profileSchema, registerSchema } from "../validation/schemas.js";
@@ -16,6 +14,8 @@ import {
 import { deleteFunnelEvents, recordFunnelEvent } from "../services/funnelEvents.js";
 import { deleteStoredMediaUrls } from "../services/mediaStorage.js";
 import smsAuthRoutes from "./auth-sms.js";
+import { signUserToken } from "../services/sessionTokens.js";
+import { ensureUserInitialState } from "../services/userInitialization.js";
 
 const router = Router();
 router.use("/sms", smsAuthRoutes);
@@ -52,15 +52,18 @@ router.post("/register", validateBody(registerSchema), async (req, res) => {
     const salt = bcrypt.genSaltSync(10);
     const passwordHash = bcrypt.hashSync(password, salt);
 
-    const result = db.prepare(`
-      INSERT INTO users (username, email, phone, password_hash, avatar_url)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(username, loginIdentifier.email, loginIdentifier.phone, passwordHash, null);
-
-    const userId = Number(result.lastInsertRowid);
+    const userId = db.transaction(() => {
+      const result = db.prepare(`
+        INSERT INTO users (username, email, phone, password_hash, avatar_url)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(username, loginIdentifier.email, loginIdentifier.phone, passwordHash, null);
+      const createdUserId = Number(result.lastInsertRowid);
+      ensureUserInitialState(createdUserId);
+      return createdUserId;
+    })();
     const user = db.prepare("SELECT id, username, email, phone, avatar_url, bio, daily_calories_target FROM users WHERE id = ?").get(userId);
 
-    const token = jwt.sign({ userId }, JWT_SECRET, { expiresIn: "30d" });
+    const token = signUserToken(userId);
     recordFunnelEvent(userId, "account_registered");
 
     return res.status(201).json({ token, user });
@@ -113,7 +116,7 @@ router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res
     const nowIso = new Date().toISOString();
     db.prepare("UPDATE users SET last_login_at = ?, last_login_ip = ? WHERE id = ?").run(nowIso, clientIp, user.id);
 
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: "30d" });
+    const token = signUserToken(user.id);
     if (user.role !== "admin") recordFunnelEvent(user.id, "login_succeeded");
     if (user.role === "admin") {
       logAdminAction({
@@ -171,7 +174,7 @@ router.post("/change-password", authMiddleware, validateBody(changePasswordSchem
     const passwordHash = bcrypt.hashSync(newPassword, bcrypt.genSaltSync(12));
     db.prepare(`
       UPDATE users
-      SET password_hash = ?, must_change_password = 0
+      SET password_hash = ?, must_change_password = 0, session_version = session_version + 1
       WHERE id = ?
     `).run(passwordHash, req.userId);
     if (user.role === "admin" && req.userId) {

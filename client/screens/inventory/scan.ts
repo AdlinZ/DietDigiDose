@@ -14,12 +14,38 @@ export function normalizeDetectedFoods(items: unknown): DetectedFood[] {
   return (Array.isArray(items) ? items : [])
     .filter((item: { foodName?: unknown }) => typeof item.foodName === "string" && item.foodName.trim())
     .slice(0, 30)
-    .map((item: { foodName: string; quantity?: string; suggestedStorageLocation?: string; estimatedExpireDays?: number }, index: number) => ({
+    .map((item: { foodName: string; quantity?: string; suggestedStorageLocation?: string; estimatedExpireDays?: number; confidence?: number }, index: number) => ({
       id: `${Date.now()}-${index}`,
       foodName: item.foodName.trim(),
       quantity: item.quantity || "1份",
       suggestedStorageLocation: ["冷藏", "冷冻", "常温"].includes(item.suggestedStorageLocation || "") ? item.suggestedStorageLocation! : "冷藏",
       estimatedExpireDays: Math.max(1, Math.min(Number(item.estimatedExpireDays) || 7, 365)),
       selected: true,
+      source: "image" as const,
+      confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : null,
+      missingFields: [
+        ...(!item.quantity ? ["数量"] : []),
+        ...(!item.suggestedStorageLocation ? ["存放位置"] : []),
+        ...(!item.estimatedExpireDays ? ["保质期"] : []),
+      ],
     }));
+}
+
+export function mergeDetectedFoods(items: DetectedFood[]) {
+  const merged = new Map<string, DetectedFood>();
+  for (const item of items) {
+    const key = item.foodName.trim().toLocaleLowerCase();
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, item);
+      continue;
+    }
+    merged.set(key, {
+      ...existing,
+      quantity: existing.quantity === item.quantity ? existing.quantity : `${existing.quantity} + ${item.quantity}`,
+      confidence: Math.min(existing.confidence ?? 1, item.confidence ?? 1),
+      missingFields: [...new Set([...(existing.missingFields || []), ...(item.missingFields || [])])],
+    });
+  }
+  return [...merged.values()];
 }

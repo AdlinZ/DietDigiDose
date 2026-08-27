@@ -14,7 +14,7 @@ import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { addLocalDays, parseDateKey, toLocalDateKey } from "@/utils/date";
 import { aiApi, ApiError, dietApi, waitForAgentRun } from "@/services/api";
 
@@ -401,10 +401,10 @@ export default function DietRecordScreen() {
 
   if (!isAuthenticated) {
     return (
-      <Screen backgroundColor="#FDF8F0">
+      <Screen>
         <View className="flex-1 items-center justify-center p-6">
           <View className="w-16 h-16 rounded-full bg-brand/10 items-center justify-center mb-4">
-            <FontAwesome6 name="utensils" size={28} color="#2D6A4F" />
+            <FontAwesome6 name="utensils" size={28} colorClassName="accent-brand" />
           </View>
           <Text className="text-xl font-bold text-ink">饮食打卡日志</Text>
           <Text className="text-sm text-copy-muted text-center mt-2 mb-6 px-4 leading-5">
@@ -412,7 +412,7 @@ export default function DietRecordScreen() {
           </Text>
           <TouchableOpacity
             onPress={() => router.push("/login")}
-            className="bg-brand px-8 py-3.5 rounded-2xl active:opacity-90 shadow-sm"
+            className="bg-brand-fill px-8 py-3.5 rounded-2xl active:opacity-90 shadow-sm"
           >
             <Text className="text-sm font-bold text-white">立即登录</Text>
           </TouchableOpacity>
@@ -422,7 +422,7 @@ export default function DietRecordScreen() {
   }
 
   return (
-    <Screen backgroundColor="#FDF8F0">
+    <Screen>
       <View className="flex-1">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
           {/* 顶部 Header */}
@@ -431,9 +431,9 @@ export default function DietRecordScreen() {
               onPress={handleBack}
               accessibilityRole="button"
               accessibilityLabel="返回"
-              className="h-10 w-10 items-center justify-center rounded-full border border-line bg-white"
+              className="h-10 w-10 items-center justify-center rounded-full border border-line bg-surface"
             >
-              <FontAwesome6 name="chevron-left" size={13} color="#3D3229" />
+              <FontAwesome6 name="chevron-left" size={13} colorClassName="accent-ink" />
             </TouchableOpacity>
             <View className="ml-3 flex-1">
               <Text className="text-lg font-black text-ink">饮食记录</Text>
@@ -448,18 +448,18 @@ export default function DietRecordScreen() {
               onPress={() => openAddModal()}
               accessibilityRole="button"
               accessibilityLabel="记录一餐"
-              className="flex-row items-center gap-1.5 rounded-full bg-brand px-3.5 py-2.5 active:opacity-90"
+              className="flex-row items-center gap-1.5 rounded-full bg-brand-fill px-3.5 py-2.5 active:opacity-90"
             >
-              <FontAwesome6 name="plus" size={11} color="#FFF" />
+              <FontAwesome6 name="plus" size={11} colorClassName="accent-on-brand" />
               <Text className="text-xs font-bold text-white">记一餐</Text>
             </TouchableOpacity>
           </View>
 
           {!loading && sortedRecords.length === 0 ? (
-            <View className="mx-5 mt-2 rounded-[24px] border border-line bg-white p-4">
+            <View className="mx-5 mt-2 rounded-[24px] border border-line bg-surface p-4">
               <View className="flex-row items-center">
                 <View className="mr-3.5 h-11 w-11 items-center justify-center rounded-2xl bg-brand/10">
-                  <FontAwesome6 name="utensils" size={16} color="#2D6A4F" />
+                  <FontAwesome6 name="utensils" size={16} colorClassName="accent-brand" />
                 </View>
                 <View className="flex-1">
                   <Text className="text-sm font-black text-ink">还没有饮食记录</Text>
@@ -471,9 +471,9 @@ export default function DietRecordScreen() {
                   onPress={() => openAddModal()}
                   accessibilityRole="button"
                   accessibilityLabel="手动记录第一餐"
-                  className="flex-1 flex-row items-center justify-center gap-2 rounded-2xl bg-brand py-3 active:opacity-90"
+                  className="flex-1 flex-row items-center justify-center gap-2 rounded-2xl bg-brand-fill py-3 active:opacity-90"
                 >
-                  <FontAwesome6 name="plus" size={11} color="#FFF" />
+                  <FontAwesome6 name="plus" size={11} colorClassName="accent-on-brand" />
                   <Text className="text-xs font-bold text-white">手动记录</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -482,7 +482,7 @@ export default function DietRecordScreen() {
                   accessibilityLabel="拍照识别第一餐"
                   className="flex-1 flex-row items-center justify-center gap-2 rounded-2xl border border-brand/20 bg-brand/10 py-3 active:opacity-80"
                 >
-                  <FontAwesome6 name="camera" size={11} color="#2D6A4F" />
+                  <FontAwesome6 name="camera" size={11} colorClassName="accent-brand" />
                   <Text className="text-xs font-bold text-brand">拍照识别</Text>
                 </TouchableOpacity>
               </View>
@@ -490,7 +490,7 @@ export default function DietRecordScreen() {
           ) : null}
 
           {/* 日期与 24 小时饮食时间图 */}
-          <View className="mx-5 mt-2 overflow-hidden rounded-[24px] border border-line bg-white">
+          <View className="mx-5 mt-2 overflow-hidden rounded-[24px] border border-line bg-surface">
             <View className="flex-row items-center justify-between border-b border-line/70 px-3 py-2">
               <TouchableOpacity
                 onPress={() => changeWeek(-1)}
@@ -498,7 +498,7 @@ export default function DietRecordScreen() {
                 accessibilityLabel="查看更早七天"
                 className="h-8 w-8 items-center justify-center rounded-xl bg-canvas active:opacity-70"
               >
-                <FontAwesome6 name="chevron-left" size={11} color="#3D3229" />
+                <FontAwesome6 name="chevron-left" size={11} colorClassName="accent-ink" />
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={openCalendar}
@@ -506,7 +506,7 @@ export default function DietRecordScreen() {
                 accessibilityLabel="打开月历选择日期"
                 className="flex-row items-center gap-1.5 px-3 py-1 active:opacity-70"
               >
-                <FontAwesome6 name="calendar-days" size={11} color="#2D6A4F" />
+                <FontAwesome6 name="calendar-days" size={11} colorClassName="accent-brand" />
                 <Text className="text-[11px] font-black text-ink">{formattedWeekRangeText()}</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -519,7 +519,7 @@ export default function DietRecordScreen() {
                   weekOffset === 0 ? "bg-background-secondary opacity-35" : "bg-background-secondary active:opacity-70"
                 }`}
               >
-                <FontAwesome6 name="chevron-right" size={11} color="#3D3229" />
+                <FontAwesome6 name="chevron-right" size={11} colorClassName="accent-ink" />
               </TouchableOpacity>
             </View>
             <View className="flex-row p-1.5">
@@ -533,7 +533,7 @@ export default function DietRecordScreen() {
                     accessibilityRole="button"
                     accessibilityState={{ selected: isSelected }}
                     accessibilityLabel={`${item.isToday ? "今天" : `周${item.dayName}`} ${item.dayNum}日`}
-                    className={`h-13 flex-1 items-center justify-center rounded-2xl border ${isSelected ? "border-brand/20 bg-brand/10" : "border-transparent bg-white"}`}
+                    className={`h-13 flex-1 items-center justify-center rounded-2xl border ${isSelected ? "border-brand/20 bg-brand/10" : "border-transparent bg-surface"}`}
                   >
                     <Text
                       className={`text-[10px] ${
@@ -561,8 +561,8 @@ export default function DietRecordScreen() {
                       className={`absolute bottom-1 w-1 h-1 rounded-full ${
                         hasRecord
                           ? isSelected
-                            ? "bg-brand"
-                            : "bg-brand"
+                            ? "bg-brand-fill"
+                            : "bg-brand-fill"
                           : "bg-transparent"
                       }`}
                     />
@@ -592,7 +592,7 @@ export default function DietRecordScreen() {
                 ].map((period) => (
                   <View
                     key={period.label}
-                    className="absolute left-12 right-0 rounded-xl bg-[#F7FAF8] px-2 py-1"
+                    className="absolute left-12 right-0 rounded-xl bg-background-secondary px-2 py-1"
                     style={{
                       top: (period.start / 24) * DAY_TIMELINE_HEIGHT,
                       height: ((period.end - period.start) / 24) * DAY_TIMELINE_HEIGHT,
@@ -619,7 +619,7 @@ export default function DietRecordScreen() {
                   >
                     <View className="h-2 w-2 rounded-full bg-highlight" />
                     <View className="h-px flex-1 bg-highlight/70" />
-                    <Text className="ml-1 text-[9px] font-black text-[#A66F13]">现在</Text>
+                    <Text className="ml-1 text-[9px] font-black text-warm">现在</Text>
                   </View>
                 ) : null}
 
@@ -629,9 +629,9 @@ export default function DietRecordScreen() {
                     className="absolute left-12 right-0 flex-row items-center"
                     style={{ top: timePosition(record.recorded_time) }}
                   >
-                    <View className="h-2.5 w-2.5 rounded-full border-2 border-white bg-brand" />
+                    <View className="h-2.5 w-2.5 rounded-full border-2 border-white bg-brand-fill" />
                     <View className="h-px w-3 bg-brand/40" />
-                    <View className="min-w-0 flex-1 rounded-full bg-brand px-2.5 py-1.5">
+                    <View className="min-w-0 flex-1 rounded-full bg-brand-fill px-2.5 py-1.5">
                       <Text className="text-[9px] font-bold text-white" numberOfLines={1}>
                         {record.recorded_time} · {record.food_name}
                       </Text>
@@ -646,7 +646,7 @@ export default function DietRecordScreen() {
           <View className={loading || sortedRecords.length > 0 ? "px-5 pb-6 pt-4" : ""}>
           {loading ? (
             <View className="py-12 items-center justify-center">
-              <ActivityIndicator size="large" color="#2D6A4F" />
+              <ActivityIndicator size="large" colorClassName="accent-brand" />
               <Text className="text-xs text-copy-muted mt-2">读取饮食记录中...</Text>
             </View>
           ) : sortedRecords.length > 0 ? (
@@ -660,14 +660,14 @@ export default function DietRecordScreen() {
                 </View>
                 {sortedRecords.length > 0 ? (
                   <TouchableOpacity onPress={openPhotoRecord} className="flex-row items-center gap-1.5 rounded-full bg-brand/10 px-3 py-2 active:opacity-80">
-                    <FontAwesome6 name="camera" size={10} color="#2D6A4F" />
+                    <FontAwesome6 name="camera" size={10} colorClassName="accent-brand" />
                     <Text className="text-[10px] font-bold text-brand">拍照记餐</Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
               <View className="gap-2.5">
                   {sortedRecords.map((record) => (
-                    <View key={record.id} className="flex-row items-center rounded-[22px] border border-line bg-white p-3">
+                    <View key={record.id} className="flex-row items-center rounded-[22px] border border-line bg-surface p-3">
                       <View className="mr-2.5 w-11 items-center rounded-xl bg-brand/10 px-1 py-2">
                         <Text className="text-[11px] font-black text-brand">{record.recorded_time || "—"}</Text>
                       </View>
@@ -675,7 +675,7 @@ export default function DietRecordScreen() {
                         <Image source={{ uri: record.image_url }} className="mr-2.5 h-11 w-11 rounded-xl" />
                       ) : (
                         <View className="mr-2.5 h-11 w-11 items-center justify-center rounded-xl bg-canvas">
-                          <FontAwesome6 name="utensils" size={13} color="#2D6A4F" />
+                          <FontAwesome6 name="utensils" size={13} colorClassName="accent-brand" />
                         </View>
                       )}
                       <View className="min-w-0 flex-1">
@@ -698,7 +698,7 @@ export default function DietRecordScreen() {
                           accessibilityLabel={`删除${record.food_name}`}
                           className="mt-1 h-7 w-7 items-center justify-center"
                         >
-                          <FontAwesome6 name="trash-can" size={10} color="#B0A495" />
+                          <FontAwesome6 name="trash-can" size={10} colorClassName="accent-copy-muted" />
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -709,7 +709,7 @@ export default function DietRecordScreen() {
           </View>
 
           {!loading && sortedRecords.length > 0 ? (
-            <View className="mx-5 mb-6 rounded-[28px] border border-[#DCE8DE] bg-[#F2F7F3] p-4">
+            <View className="mx-5 mb-6 rounded-[28px] border border-line bg-brand-soft p-4">
               <View className="flex-row items-start justify-between">
                 <View>
                   <Text className="text-[11px] font-bold text-brand">{isSelectedToday ? "今日营养汇总" : "当日营养汇总"}</Text>
@@ -718,7 +718,7 @@ export default function DietRecordScreen() {
                     <Text className="text-xs font-medium text-copy-muted">/ {targetCal} kcal</Text>
                   </View>
                 </View>
-                <View className="rounded-full bg-white px-3 py-2">
+                <View className="rounded-full bg-surface px-3 py-2">
                   <Text className="text-[10px] font-medium text-copy-muted">{remainingCal > 0 ? "剩余可摄入" : "今日状态"}</Text>
                   <Text className="mt-0.5 text-xs font-black text-brand">
                     {remainingCal > 0 ? `${remainingCal} kcal` : "目标已达成"}
@@ -727,7 +727,7 @@ export default function DietRecordScreen() {
               </View>
 
               <View className="mt-3 h-2 overflow-hidden rounded-full bg-brand/10">
-                <View className="h-full rounded-full bg-brand" style={{ width: `${progressPercent}%` }} />
+                <View className="h-full rounded-full bg-brand-fill" style={{ width: `${progressPercent}%` }} />
               </View>
 
               <View className="mt-4 flex-row border-t border-brand/10 pt-3">
@@ -754,7 +754,7 @@ export default function DietRecordScreen() {
           onRequestClose={() => setCalendarVisible(false)}
         >
           <View className="flex-1 bg-black/40 justify-center px-5">
-            <View className="bg-white rounded-[28px] p-5 shadow-xl">
+            <View className="bg-surface rounded-[28px] p-5 shadow-xl">
               <View className="flex-row items-center justify-between mb-4">
                 <View>
                   <Text className="text-lg font-black text-ink">选择日期</Text>
@@ -766,7 +766,7 @@ export default function DietRecordScreen() {
                   accessibilityLabel="关闭月历"
                   className="w-9 h-9 rounded-full bg-background-secondary items-center justify-center"
                 >
-                  <FontAwesome6 name="xmark" size={15} color="#8B7D6B" />
+                  <FontAwesome6 name="xmark" size={15} colorClassName="accent-copy-muted" />
                 </TouchableOpacity>
               </View>
 
@@ -777,7 +777,7 @@ export default function DietRecordScreen() {
                   accessibilityLabel="上一个月"
                   className="w-10 h-10 rounded-xl bg-background-secondary items-center justify-center active:opacity-70"
                 >
-                  <FontAwesome6 name="chevron-left" size={12} color="#3D3229" />
+                  <FontAwesome6 name="chevron-left" size={12} colorClassName="accent-ink" />
                 </TouchableOpacity>
                 <Text className="text-base font-black text-ink">
                   {calendarMonth.getFullYear()}年{calendarMonth.getMonth() + 1}月
@@ -792,7 +792,7 @@ export default function DietRecordScreen() {
                     isCalendarCurrentMonth ? "opacity-35" : "active:opacity-70"
                   }`}
                 >
-                  <FontAwesome6 name="chevron-right" size={12} color="#3D3229" />
+                  <FontAwesome6 name="chevron-right" size={12} colorClassName="accent-ink" />
                 </TouchableOpacity>
               </View>
 
@@ -819,7 +819,7 @@ export default function DietRecordScreen() {
                     <View
                       className={`w-9 h-9 rounded-full items-center justify-center ${
                         item.isSelected
-                          ? "bg-brand"
+                          ? "bg-brand-fill"
                           : item.isToday
                           ? "bg-brand/10 border border-brand"
                           : "bg-transparent"
@@ -860,12 +860,12 @@ export default function DietRecordScreen() {
         {/* 打卡 Bottom Sheet Modal */}
         <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={handleCloseModal}>
           <View className="flex-1 bg-black/40 justify-end">
-            <View className="max-h-[90%] rounded-t-[32px] bg-white px-5 pb-6 pt-5 shadow-xl">
+            <View className="max-h-[90%] rounded-t-[32px] bg-surface px-5 pb-6 pt-5 shadow-xl">
               {/* Modal Header */}
               <View className="mb-4 flex-row items-center justify-between border-b border-background-secondary pb-3">
                 <View className="flex-row items-center gap-2.5">
                   <View className="h-9 w-9 items-center justify-center rounded-2xl bg-brand/10">
-                    <FontAwesome6 name="utensils" size={14} color="#2D6A4F" />
+                    <FontAwesome6 name="utensils" size={14} colorClassName="accent-brand" />
                   </View>
                   <View>
                     <Text className="text-lg font-black text-ink">记一餐</Text>
@@ -878,7 +878,7 @@ export default function DietRecordScreen() {
                   accessibilityLabel="关闭记餐弹层"
                   className="w-8 h-8 rounded-full bg-background-secondary items-center justify-center"
                 >
-                  <FontAwesome6 name="xmark" size={16} color="#8B7D6B" />
+                  <FontAwesome6 name="xmark" size={16} colorClassName="accent-copy-muted" />
                 </TouchableOpacity>
               </View>
 
@@ -900,7 +900,7 @@ export default function DietRecordScreen() {
                       <TouchableOpacity
                         key={option}
                         onPress={() => setMealType(option)}
-                        className={`flex-1 items-center rounded-xl border py-2 ${selected ? "border-brand bg-brand/10" : "border-line bg-white"}`}
+                        className={`flex-1 items-center rounded-xl border py-2 ${selected ? "border-brand bg-brand/10" : "border-line bg-surface"}`}
                       >
                         <Text className={`text-[11px] font-bold ${selected ? "text-brand" : "text-copy-muted"}`}>{option}</Text>
                       </TouchableOpacity>
@@ -914,8 +914,8 @@ export default function DietRecordScreen() {
                   className="bg-brand/10 border border-brand/30 p-3.5 rounded-2xl flex-row items-center justify-between active:bg-brand/20"
                 >
                   <View className="flex-row items-center gap-3">
-                    <View className="w-9 h-9 rounded-xl bg-brand items-center justify-center shadow-xs">
-                      <FontAwesome6 name="camera" size={15} color="#FFF" />
+                    <View className="w-9 h-9 rounded-xl bg-brand-fill items-center justify-center shadow-xs">
+                      <FontAwesome6 name="camera" size={15} colorClassName="accent-on-brand" />
                     </View>
                     <View>
                       <View className="flex-row items-center gap-1.5">
@@ -930,9 +930,9 @@ export default function DietRecordScreen() {
                     </View>
                   </View>
                   {aiAnalyzing ? (
-                    <ActivityIndicator size="small" color="#2D6A4F" />
+                    <ActivityIndicator size="small" colorClassName="accent-brand" />
                   ) : (
-                    <FontAwesome6 name="wand-magic-sparkles" size={15} color="#2D6A4F" />
+                    <FontAwesome6 name="wand-magic-sparkles" size={15} colorClassName="accent-brand" />
                   )}
                 </TouchableOpacity>
 
@@ -1032,10 +1032,10 @@ export default function DietRecordScreen() {
                 <TouchableOpacity
                   onPress={handleSave}
                   disabled={saving}
-                  className="mt-3 items-center rounded-2xl bg-brand py-3.5 active:opacity-90"
+                  className="mt-3 items-center rounded-2xl bg-brand-fill py-3.5 active:opacity-90"
                 >
                   {saving ? (
-                    <ActivityIndicator color="#FFF" />
+                    <ActivityIndicator colorClassName="accent-on-brand" />
                   ) : (
                     <Text className="text-base font-bold text-white">保存这餐</Text>
                   )}

@@ -13,14 +13,15 @@ import {
 import { Screen } from "@/components/Screen";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSafeSearchParams, useSafeRouter } from "@/hooks/useSafeRouter";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import * as Speech from "expo-speech";
 import * as Haptics from "expo-haptics";
-import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
+import { useAuthFetch } from "@/contexts/AuthContext";
 import { toLocalDateKey, toLocalTimeKey } from "@/utils/date";
-import { aiApi, dietApi, inventoryApi, recipesApi, waitForAgentRun, type Recipe } from "@/services/api";
+import { aiApi, cookingQueueApi, dietApi, inventoryApi, recipesApi, waitForAgentRun, type Recipe } from "@/services/api";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
-import { removeFromCookingQueue } from "@/utils/cookingQueue";
+import { useRealtimeCookingVoice } from "@/hooks/useRealtimeCookingVoice";
+import { parseStructuredQuantity, structuredUnitLabel, type StructuredUnit } from "@/utils/structuredQuantity";
 
 interface CookingStep {
   text: string;
@@ -51,11 +52,14 @@ type CookingAgentRun = {
 
 export default function CookingModeScreen() {
   const insets = useSafeAreaInsets();
-  const { recipeId, fromQueue } = useSafeSearchParams<{ recipeId: number; fromQueue?: boolean }>();
+  const { recipeId, fromQueue, queueItemId, queueVersion } = useSafeSearchParams<{
+    recipeId: number;
+    fromQueue?: boolean;
+    queueItemId?: string;
+    queueVersion?: number;
+  }>();
 
   const router = useSafeRouter();
-  const { user } = useAuth();
-  const userId = user?.id;
   const authFetch = useAuthFetch();
   const [cookingChatSessionId] = useState(() => `cooking-${Date.now()}`);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
@@ -85,6 +89,8 @@ export default function CookingModeScreen() {
   const [viewMode, setViewMode] = useState<"hero" | "timeline">("hero");
   const [showIngredientsDrawer, setShowIngredientsDrawer] = useState(false);
   const [showFinishModal, setShowFinishModal] = useState(false);
+  const [inventoryConsumptionMode, setInventoryConsumptionMode] = useState<"estimated" | "actual" | "all">("estimated");
+  const [actualConsumptionAmounts, setActualConsumptionAmounts] = useState<Record<string, string>>({});
 
   // AI & Voice State
   const [showAIChat, setShowAIChat] = useState(false);
@@ -123,7 +129,7 @@ export default function CookingModeScreen() {
   // Step Action Tag Classifier
   const getStepActionTag = (stepText: string) => {
     if (!stepText)
-      return { label: "烹饪步骤", icon: "utensils", bg: "bg-[#E8F2EA]", text: "text-[#2D6A4F]" };
+      return { label: "烹饪步骤", icon: "utensils", bg: "bg-brand-soft", text: "text-brand" };
     const lower = stepText.toLowerCase();
     if (
       lower.includes("切") ||
@@ -134,7 +140,7 @@ export default function CookingModeScreen() {
       lower.includes("刨") ||
       lower.includes("撕")
     ) {
-      return { label: "切配准备", icon: "kitchen-set", bg: "bg-[#FFF4E5]", text: "text-[#D97706]" };
+      return { label: "切配准备", icon: "kitchen-set", bg: "bg-warm-soft", text: "text-warm" };
     }
     if (
       lower.includes("炒") ||
@@ -143,7 +149,7 @@ export default function CookingModeScreen() {
       lower.includes("炸") ||
       lower.includes("煸")
     ) {
-      return { label: "火候烹炒", icon: "fire", bg: "bg-[#FEE2E2]", text: "text-[#DC2626]" };
+      return { label: "火候烹炒", icon: "fire", bg: "bg-danger-soft", text: "text-critical" };
     }
     if (
       lower.includes("炖") ||
@@ -152,10 +158,10 @@ export default function CookingModeScreen() {
       lower.includes("焖") ||
       lower.includes("收汁")
     ) {
-      return { label: "慢炖文火", icon: "whiskey-glass", bg: "bg-[#E8F2EA]", text: "text-[#1B4332]" };
+      return { label: "慢炖文火", icon: "whiskey-glass", bg: "bg-brand-soft", text: "text-brand-strong" };
     }
     if (lower.includes("蒸") || lower.includes("焯")) {
-      return { label: "水蒸焯水", icon: "cloud", bg: "bg-[#E0F2FE]", text: "text-[#0284C7]" };
+      return { label: "水蒸焯水", icon: "cloud", bg: "bg-info-soft", text: "text-info" };
     }
     if (
       lower.includes("调") ||
@@ -164,9 +170,9 @@ export default function CookingModeScreen() {
       lower.includes("淋") ||
       lower.includes("勾芡")
     ) {
-      return { label: "调味腌制", icon: "bowl-rice", bg: "bg-[#F3E8FF]", text: "text-[#7E22CE]" };
+      return { label: "调味腌制", icon: "bowl-rice", bg: "bg-info-soft", text: "text-info" };
     }
-    return { label: "精细烹饪", icon: "utensils", bg: "bg-[#E8F2EA]", text: "text-[#2D6A4F]" };
+    return { label: "精细烹饪", icon: "utensils", bg: "bg-brand-soft", text: "text-brand" };
   };
 
   // Step Context AI Tip
@@ -399,12 +405,64 @@ export default function CookingModeScreen() {
     },
   });
 
+  const realtimeVoice = useRealtimeCookingVoice({
+    recipeId: Number(recipeId) || 0,
+    currentStep,
+    timerSeconds,
+    timerRunning: isTimerRunning,
+    recipeSteps: cookingSteps.map((step) => step.text),
+    recipeIngredients: ingredients.map((ingredient) => `${ingredient.name} ${ingredient.amount}`),
+    onTranscript: (text) => setVoiceHudState({ visible: true, type: "listening", userText: text }),
+    onBargeIn: () => {
+      void Speech.stop();
+      setVoiceHudState((previous) => ({ ...previous, visible: true, type: "listening", aiText: undefined }));
+    },
+    onControl: (action, seconds) => {
+      let message = "已完成语音控制";
+      if (action === "NEXT_STEP") {
+        setCookingSteps((steps) => steps.map((step, index) => index === currentStep ? { ...step, completed: true } : step));
+        setCurrentStep((step) => Math.min(step + 1, Math.max(0, cookingSteps.length - 1)));
+        message = currentStep < cookingSteps.length - 1 ? "已切换至下一步" : "已经是最后一步";
+      } else if (action === "PREV_STEP") {
+        setCurrentStep((step) => Math.max(0, step - 1));
+        message = currentStep > 0 ? "已返回上一步" : "已经是第一步";
+      } else if (action === "PAUSE_TIMER") {
+        setIsTimerRunning(false);
+        message = "计时已暂停";
+      } else if (action === "START_TIMER") {
+        setIsTimerRunning(true);
+        message = "计时已开始";
+      } else if (action === "ADD_TIMER") {
+        setTimerSeconds((value) => value + seconds);
+        message = `已增加 ${Math.round(seconds / 60)} 分钟`;
+      }
+      setVoiceHudState({ visible: true, type: "result", actionDoneText: message });
+      if (autoSpeechEnabled) Speech.speak(message, { language: "zh-CN", rate: 1 });
+    },
+    onAnswerDelta: (text) => setVoiceHudState((previous) => ({ ...previous, visible: true, type: "result", aiText: text })),
+    onAnswer: (text) => {
+      setVoiceHudState((previous) => ({ ...previous, visible: true, type: "result", aiText: text }));
+      if (autoSpeechEnabled) Speech.speak(text, { language: "zh-CN", rate: 1 });
+    },
+    onConfirmationRequired: (message) => {
+      void Speech.stop();
+      Alert.alert("需要屏幕确认", message);
+      setVoiceHudState({ visible: true, type: "result", aiText: message });
+    },
+    onError: (message) => setVoiceHudState({ visible: true, type: "result", aiText: message }),
+  });
+
   // 🎙️ Direct Voice Mic Handler (点击底栏麦克风直接唤起/停止半透明 HUD 卡片与麦克风)
   const handleToggleDirectMic = () => {
     try {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch {}
 
+    if (realtimeVoice.active) {
+      void realtimeVoice.stop();
+      void Speech.stop();
+      return;
+    }
     if (isVoiceRecording) {
       stopVoiceRecording();
       return;
@@ -415,6 +473,18 @@ export default function CookingModeScreen() {
       visible: true,
       type: "listening",
     });
+    if (realtimeVoice.supported) {
+      const disclosure = "持续语音仅在本次做饭页面前台监听；退出、静音或关闭页面会立即停止。原始音频不长期保存。是否开启？";
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        if (window.confirm(disclosure)) void realtimeVoice.start();
+      } else {
+        Alert.alert("开启连续语音", disclosure, [
+          { text: "取消", style: "cancel" },
+          { text: "开启", onPress: () => void realtimeVoice.start() },
+        ]);
+      }
+      return;
+    }
     toggleVoiceRecording();
   };
 
@@ -540,14 +610,92 @@ export default function CookingModeScreen() {
     return matches.map((item: { id: number }) => item.id);
   };
 
+  type ConsumptionPreview = {
+    items: Array<{
+      food_name: string;
+      fully_covered: boolean;
+      missing_value: number;
+      unit: StructuredUnit;
+      deductions: Array<{
+        item_id: number;
+        version: number;
+        mode: "amount" | "all";
+        amount_value: number;
+        unit: StructuredUnit;
+      }>;
+    }>;
+  };
+
+  const buildInventoryConsumptions = async () => {
+    const inventory = await inventoryApi.list(authFetch);
+    if (inventoryConsumptionMode === "all") {
+      const ids = new Set(await findMatchedInventoryIds());
+      return inventory
+        .filter((item) => ids.has(item.id))
+        .map((item) => ({ item_id: item.id, version: item.version || 1, mode: "all" as const }));
+    }
+
+    const requests = ingredients.flatMap((ingredient) => {
+      if (!ingredient.checked) return [];
+      const input = inventoryConsumptionMode === "actual"
+        ? actualConsumptionAmounts[ingredient.name] || ingredient.amount
+        : ingredient.amount;
+      const parsed = parseStructuredQuantity(input);
+      return parsed ? [{ food_name: ingredient.name, amount_value: parsed.amount, unit: parsed.unit }] : [];
+    });
+    if (!requests.length) throw new Error("菜谱用量缺少可换算的数值和单位，请选择“整项用完”或先修改实际用量。");
+    const preview = await inventoryApi.consumptionPreview<ConsumptionPreview>(authFetch, requests);
+    const uncovered = preview.items.filter((item) => !item.fully_covered);
+    if (uncovered.length) {
+      const description = uncovered.slice(0, 3).map((item) => (
+        `${item.food_name}缺 ${item.missing_value}${structuredUnitLabel(item.unit)}`
+      )).join("、");
+      throw new Error(`库存不足或单位不可换算：${description}`);
+    }
+    const combined = new Map<number, {
+      item_id: number;
+      version: number;
+      mode: "amount" | "all";
+      amount_value?: number;
+      unit?: StructuredUnit;
+    }>();
+    for (const deduction of preview.items.flatMap((item) => item.deductions)) {
+      const existing = combined.get(deduction.item_id);
+      if (!existing || deduction.mode === "all") {
+        combined.set(deduction.item_id, deduction.mode === "all"
+          ? { item_id: deduction.item_id, version: deduction.version, mode: "all" }
+          : { ...deduction });
+      } else if (existing.mode === "amount" && existing.unit === deduction.unit) {
+        existing.amount_value = (existing.amount_value || 0) + deduction.amount_value;
+      }
+    }
+    return [...combined.values()];
+  };
+
+  const completeQueueItem = async () => {
+    if (!fromQueue || !queueItemId) return;
+    const version = Number(queueVersion);
+    try {
+      await cookingQueueApi.complete(authFetch, queueItemId, version);
+    } catch (error) {
+      const latest = (await cookingQueueApi.list(authFetch, true)).find((item) => item.id === queueItemId);
+      if (latest?.status === "completed") return;
+      if (latest?.status === "cooking") {
+        await cookingQueueApi.complete(authFetch, latest.id, latest.version);
+        return;
+      }
+      throw error;
+    }
+  };
+
   const finishCooking = async (consumeInventory: boolean) => {
     if (isCompleting) return;
     try {
       setIsCompleting(true);
-      let inventoryItemIds: number[] = [];
+      let inventoryConsumptions: Awaited<ReturnType<typeof buildInventoryConsumptions>> = [];
       if (consumeInventory) {
-        inventoryItemIds = await findMatchedInventoryIds();
-        if (inventoryItemIds.length === 0) {
+        inventoryConsumptions = await buildInventoryConsumptions();
+        if (inventoryConsumptions.length === 0) {
           Alert.alert(
             "未匹配到库存",
             "没有找到已勾选且名称匹配的库存食材，仍可继续记录这餐。",
@@ -567,7 +715,8 @@ export default function CookingModeScreen() {
           Number.isInteger(Number(recipeId)) && Number(recipeId) > 0
             ? Number(recipeId)
             : null,
-        inventory_item_ids: inventoryItemIds,
+        inventory_item_ids: [],
+        inventory_consumptions: inventoryConsumptions,
         diet_record: {
           meal_type: getMealType(),
           food_name: title || "自制餐食",
@@ -582,7 +731,7 @@ export default function CookingModeScreen() {
         },
       });
 
-      if (fromQueue && userId) await removeFromCookingQueue(userId, Number(recipeId));
+      await completeQueueItem();
 
       setShowFinishModal(false);
       Alert.alert(
@@ -669,23 +818,26 @@ export default function CookingModeScreen() {
   const targetStepDuration = cookingSteps[currentStep]?.duration || 180;
 
   if (recipeLoading) {
-    return <Screen><View className="flex-1 items-center justify-center"><ActivityIndicator size="large" color="#2D6A4F" /><Text className="mt-3 text-sm text-copy-muted">正在读取最新菜谱…</Text></View></Screen>;
+    return <Screen><View className="flex-1 items-center justify-center"><ActivityIndicator size="large" colorClassName="accent-brand" /><Text className="mt-3 text-sm text-copy-muted">正在读取最新菜谱…</Text></View></Screen>;
   }
   if (!recipe || recipeError) {
-    return <Screen><View className="flex-1 items-center justify-center px-8"><FontAwesome6 name="triangle-exclamation" size={28} color="#A63D2B" /><Text className="mt-4 text-center text-base font-black text-ink">无法开始烹饪</Text><Text className="mt-2 text-center text-sm leading-6 text-copy-muted">{recipeError || "菜谱暂不可用"}</Text><TouchableOpacity onPress={() => router.back()} className="mt-5 rounded-2xl bg-brand px-6 py-3"><Text className="font-bold text-white">返回菜谱</Text></TouchableOpacity></View></Screen>;
+    return <Screen><View className="flex-1 items-center justify-center px-8"><FontAwesome6 name="triangle-exclamation" size={28} colorClassName="accent-critical" /><Text className="mt-4 text-center text-base font-black text-ink">无法开始烹饪</Text><Text className="mt-2 text-center text-sm leading-6 text-copy-muted">{recipeError || "菜谱暂不可用"}</Text><TouchableOpacity onPress={() => router.back()} className="mt-5 rounded-2xl bg-brand-fill px-6 py-3"><Text className="font-bold text-white">返回菜谱</Text></TouchableOpacity></View></Screen>;
   }
 
   return (
-    <Screen safeAreaEdges={['left', 'right', 'bottom']} className="flex-1 bg-[#F7F5F0] relative">
+    <Screen safeAreaEdges={['left', 'right', 'bottom']} className="flex-1 bg-background-secondary relative">
       {/* 🌿 Minimalist Ultra-Clean Top Header (极致清爽顶栏) */}
       <View
         style={{ paddingTop: Math.max(insets.top, 12) + 4 }}
-        className="bg-white pb-3 px-5 border-b border-[#EBE3D5] shadow-xs relative flex-row items-center justify-between"
+        className="bg-surface pb-3 px-5 border-b border-line shadow-xs relative flex-row items-center justify-between"
       >
         {/* Back Button */}
         <TouchableOpacity
           onPress={() => {
             const doExit = () => {
+              void realtimeVoice.stop();
+              stopVoiceRecording();
+              void Speech.stop();
               if (router.canGoBack()) {
                 router.back();
               } else {
@@ -704,17 +856,17 @@ export default function CookingModeScreen() {
               ]);
             }
           }}
-          className="w-9 h-9 rounded-full bg-[#F8F5F0] border border-[#EBE3D5] items-center justify-center active:bg-[#EBE3D5]"
+          className="w-9 h-9 rounded-full bg-background-secondary border border-line items-center justify-center active:bg-background-secondary"
         >
-          <FontAwesome6 name="chevron-left" size={14} color="#3D3229" />
+          <FontAwesome6 name="chevron-left" size={14} colorClassName="accent-ink" />
         </TouchableOpacity>
 
         {/* Center: Title + Step Badge */}
         <View className="flex-1 items-center mx-3">
-          <Text className="text-[#1B4332] text-base font-black tracking-wide" numberOfLines={1}>
+          <Text className="text-brand-strong text-base font-black tracking-wide" numberOfLines={1}>
             {title || "做饭模式"}
           </Text>
-          <Text className="text-[#2D6A4F] text-[11px] font-bold mt-0.5">
+          <Text className="text-brand text-[11px] font-bold mt-0.5">
             第 {currentStep + 1}/{cookingSteps.length || 1} 步 ({Math.round(progressPercent)}%)
           </Text>
         </View>
@@ -732,14 +884,14 @@ export default function CookingModeScreen() {
             }}
             className={`w-9 h-9 rounded-full items-center justify-center border ${
               autoSpeechEnabled
-                ? "bg-[#E8F2EA] border-[#2D6A4F]/20"
-                : "bg-[#F8F5F0] border-[#EBE3D5]"
+                ? "bg-brand-soft border-brand/20"
+                : "bg-background-secondary border-line"
             }`}
           >
             <FontAwesome6
               name={autoSpeechEnabled ? "volume-high" : "volume-xmark"}
               size={13}
-              color={autoSpeechEnabled ? "#2D6A4F" : "#8B7D6B"}
+              colorClassName={autoSpeechEnabled ? "accent-brand" : "accent-copy-muted"}
             />
           </TouchableOpacity>
 
@@ -748,22 +900,22 @@ export default function CookingModeScreen() {
             onPress={() => setViewMode((prev) => (prev === "hero" ? "timeline" : "hero"))}
             className={`w-9 h-9 rounded-full items-center justify-center border ${
               viewMode === "timeline"
-                ? "bg-[#2D6A4F] border-[#2D6A4F]"
-                : "bg-[#F8F5F0] border-[#EBE3D5]"
+                ? "bg-brand-fill border-brand"
+                : "bg-background-secondary border-line"
             }`}
           >
             <FontAwesome6
               name={viewMode === "hero" ? "list-ul" : "layer-group"}
               size={13}
-              color={viewMode === "timeline" ? "white" : "#3D3229"}
+              colorClassName={viewMode === "timeline" ? "accent-on-brand" : "accent-ink"}
             />
           </TouchableOpacity>
         </View>
 
         {/* Flush 3px Progress Line attached to header bottom */}
-        <View className="absolute bottom-0 left-0 right-0 h-[3px] bg-[#EBE3D5]">
+        <View className="absolute bottom-0 left-0 right-0 h-[3px] bg-background-secondary">
           <View
-            className="h-full bg-[#2D6A4F]"
+            className="h-full bg-brand-fill"
             style={{ width: `${progressPercent}%` }}
           />
         </View>
@@ -774,18 +926,18 @@ export default function CookingModeScreen() {
         <View className="px-5 pt-3 pb-1">
           <TouchableOpacity
             onPress={() => setShowIngredientsDrawer(true)}
-            className="bg-white border border-[#EBE3D5] rounded-2xl px-4 py-2.5 flex-row items-center justify-between shadow-sm active:bg-[#F8F5F0]"
+            className="bg-surface border border-line rounded-2xl px-4 py-2.5 flex-row items-center justify-between shadow-sm active:bg-background-secondary"
           >
             <View className="flex-row items-center gap-2.5">
-              <View className="w-6 h-6 rounded-full bg-[#E8F2EA] items-center justify-center">
-                <FontAwesome6 name="basket-shopping" size={12} color="#2D6A4F" />
+              <View className="w-6 h-6 rounded-full bg-brand-soft items-center justify-center">
+                <FontAwesome6 name="basket-shopping" size={12} colorClassName="accent-brand" />
               </View>
-              <Text className="text-xs font-bold text-[#3D3229]">
+              <Text className="text-xs font-bold text-ink">
                 食材准备清单 ({checkedIngredientsCount}/{ingredients.length})
               </Text>
             </View>
             <View className="flex-row items-center gap-1">
-              <Text className="text-xs font-bold text-[#2D6A4F]">
+              <Text className="text-xs font-bold text-brand">
                 {checkedIngredientsCount === ingredients.length ? "已全部备齐" : "查看/勾选 ▸"}
               </Text>
             </View>
@@ -800,11 +952,11 @@ export default function CookingModeScreen() {
           <View className="pb-44">
             {cookingSteps.length > 0 && (
               <View className="gap-3">
-                <View className="bg-white rounded-[24px] p-6 border border-[#EBE3D5] shadow-sm">
+                <View className="bg-surface rounded-[24px] p-6 border border-line shadow-sm">
                 {/* Step Action Tag & Header */}
                 <View className="flex-row items-center justify-between mb-4">
                   <View className="flex-row items-center gap-2.5">
-                    <View className="w-11 h-11 rounded-2xl bg-[#1B4332] items-center justify-center shadow-md">
+                    <View className="w-11 h-11 rounded-2xl bg-brand-fill items-center justify-center shadow-md">
                       <Text className="text-white text-lg font-black">
                         {currentStep + 1}
                       </Text>
@@ -820,18 +972,18 @@ export default function CookingModeScreen() {
                     onPress={() => setShowTimerModal(true)}
                     className={`px-3.5 py-2 rounded-full flex-row items-center gap-1.5 border ${
                       isTimerRunning
-                        ? "bg-[#E76F51] border-[#E76F51] shadow-sm"
-                        : "bg-[#F8F5F0] border-[#EBE3D5]"
+                        ? "bg-critical-fill border-critical shadow-sm"
+                        : "bg-background-secondary border-line"
                     }`}
                   >
                     <FontAwesome6
                       name={isTimerRunning ? "clock" : "stopwatch"}
                       size={12}
-                      color={isTimerRunning ? "white" : "#2D6A4F"}
+                      colorClassName={isTimerRunning ? "accent-on-brand" : "accent-brand"}
                     />
                     <Text
                       className={`text-xs font-bold ${
-                        isTimerRunning ? "text-white" : "text-[#2D6A4F]"
+                        isTimerRunning ? "text-white" : "text-brand"
                       }`}
                     >
                       {isTimerRunning
@@ -842,34 +994,34 @@ export default function CookingModeScreen() {
                 </View>
 
                 {/* Main High-Readability Step Text */}
-                <Text className="text-2xl font-black text-[#1B4332] leading-9 tracking-wide mb-6">
+                <Text className="text-2xl font-black text-brand-strong leading-9 tracking-wide mb-6">
                   {cookingSteps[currentStep]?.text}
                 </Text>
 
                 {/* AI Context Tip Pill */}
                 {contextTip && (
-                  <View className="bg-[#E8F2EA] border border-[#2D6A4F]/20 rounded-2xl p-4 mb-4">
-                    <Text className="text-xs font-bold text-[#1B4332] leading-5">
+                  <View className="bg-brand-soft border border-brand/20 rounded-2xl p-4 mb-4">
+                    <Text className="text-xs font-bold text-brand-strong leading-5">
                       {contextTip}
                     </Text>
                   </View>
                 )}
 
                 {/* ⏱️ Inline Compact Quick Timer Bar */}
-                <View className="bg-[#F8F5F0] rounded-2xl p-3.5 border border-[#EBE3D5] flex-row items-center justify-between">
+                <View className="bg-background-secondary rounded-2xl p-3.5 border border-line flex-row items-center justify-between">
                   <View className="flex-row items-center gap-2.5">
                     <View
                       className={`w-9 h-9 rounded-xl items-center justify-center ${
-                        isTimerRunning ? "bg-[#E76F51]" : "bg-[#2D6A4F]"
+                        isTimerRunning ? "bg-critical-fill" : "bg-brand-fill"
                       }`}
                     >
-                      <FontAwesome6 name="clock" size={15} color="white" />
+                      <FontAwesome6 name="clock" size={15} colorClassName="accent-on-brand" />
                     </View>
                     <View>
-                      <Text className="text-[10px] font-bold text-[#8B7D6B]">
+                      <Text className="text-[10px] font-bold text-copy-muted">
                         {timerMode === "countdown" ? "倒计时" : "正计时"} ({formatDurationText(targetStepDuration)})
                       </Text>
-                      <Text className="text-xl font-black text-[#1B4332] tracking-wider">
+                      <Text className="text-xl font-black text-brand-strong tracking-wider">
                         {formatTime(timerSeconds)}
                       </Text>
                     </View>
@@ -880,13 +1032,13 @@ export default function CookingModeScreen() {
                     <TouchableOpacity
                       onPress={handleStartPauseTimer}
                       className={`px-4 py-2.5 rounded-xl flex-row items-center gap-1.5 shadow-sm ${
-                        isTimerRunning ? "bg-[#E76F51]" : "bg-[#2D6A4F]"
+                        isTimerRunning ? "bg-critical-fill" : "bg-brand-fill"
                       }`}
                     >
                       <FontAwesome6
                         name={isTimerRunning ? "pause" : "play"}
                         size={12}
-                        color="white"
+                        colorClassName="accent-on-brand"
                       />
                       <Text className="text-white text-xs font-bold">
                         {isTimerRunning ? "暂停" : "开始"}
@@ -896,9 +1048,9 @@ export default function CookingModeScreen() {
                     {/* Open Full Timer Controls Modal */}
                     <TouchableOpacity
                       onPress={() => setShowTimerModal(true)}
-                      className="bg-white p-2.5 rounded-xl border border-[#EBE3D5] active:bg-[#EBE3D5]"
+                      className="bg-surface p-2.5 rounded-xl border border-line active:bg-background-secondary"
                     >
-                      <FontAwesome6 name="ellipsis" size={14} color="#3D3229" />
+                      <FontAwesome6 name="ellipsis" size={14} colorClassName="accent-ink" />
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -910,10 +1062,10 @@ export default function CookingModeScreen() {
         ) : (
           /* 📋 FULL TIMELINE OVERVIEW (全部步骤总览视图) */
           <View className="pb-44 pt-2">
-            <View className="bg-white rounded-[24px] p-5 border border-[#EBE3D5] shadow-sm">
+            <View className="bg-surface rounded-[24px] p-5 border border-line shadow-sm">
               <View className="flex-row items-center justify-between mb-4">
-                <Text className="text-base font-bold text-[#1B4332]">全部烹饪步骤</Text>
-                <Text className="text-xs text-[#8B7D6B]">点击可直接跳转对应步骤</Text>
+                <Text className="text-base font-bold text-brand-strong">全部烹饪步骤</Text>
+                <Text className="text-xs text-copy-muted">点击可直接跳转对应步骤</Text>
               </View>
 
               <View className="gap-3">
@@ -928,27 +1080,27 @@ export default function CookingModeScreen() {
                       }}
                       className={`flex-row items-start p-4 rounded-2xl border ${
                         isCurrent
-                          ? "bg-[#E8F2EA] border-[#2D6A4F]"
+                          ? "bg-brand-soft border-brand"
                           : step.completed
-                          ? "bg-[#F8F5F0] border-transparent opacity-60"
-                          : "bg-white border-[#EBE3D5]"
+                          ? "bg-background-secondary border-transparent opacity-60"
+                          : "bg-surface border-line"
                       }`}
                     >
                       <View
                         className={`w-7 h-7 rounded-full items-center justify-center mr-3 mt-0.5 ${
                           step.completed
-                            ? "bg-[#2D6A4F]"
+                            ? "bg-brand-fill"
                             : isCurrent
-                            ? "bg-[#E9C46A]"
-                            : "bg-[#EBE3D5]"
+                            ? "bg-highlight"
+                            : "bg-background-secondary"
                         }`}
                       >
                         {step.completed ? (
-                          <FontAwesome6 name="check" size={12} color="white" />
+                          <FontAwesome6 name="check" size={12} colorClassName="accent-on-brand" />
                         ) : (
                           <Text
                             className={`text-xs font-bold ${
-                              isCurrent ? "text-[#3D3229]" : "text-[#8B7D6B]"
+                              isCurrent ? "text-ink" : "text-copy-muted"
                             }`}
                           >
                             {idx + 1}
@@ -959,16 +1111,16 @@ export default function CookingModeScreen() {
                         <Text
                           className={`text-sm leading-6 font-bold ${
                             step.completed
-                              ? "text-[#8B7D6B] line-through"
+                              ? "text-copy-muted line-through"
                               : isCurrent
-                              ? "text-[#1B4332]"
-                              : "text-[#3D3229]"
+                              ? "text-brand-strong"
+                              : "text-ink"
                           }`}
                         >
                           {step.text}
                         </Text>
                         {step.duration ? (
-                          <Text className="text-[11px] text-[#8B7D6B] mt-1">
+                          <Text className="text-[11px] text-copy-muted mt-1">
                             建议耗时: {formatDurationText(step.duration)}
                           </Text>
                         ) : null}
@@ -984,30 +1136,34 @@ export default function CookingModeScreen() {
 
       {/* LIVE SEMI-TRANSPARENT FROSTED GLASS VOICE HUD TOAST */}
       {voiceHudState.visible && (
-        <View className="absolute bottom-24 left-4 right-4 z-50 bg-white/95 backdrop-blur-md rounded-2xl p-4 border border-[#EBE3D5] shadow-2xl">
-          <View className="flex-row items-center justify-between mb-2 pb-1.5 border-b border-[#EBE3D5]">
+        <View className="absolute bottom-24 left-4 right-4 z-50 bg-surface/95 backdrop-blur-md rounded-2xl p-4 border border-line shadow-2xl">
+          <View className="flex-row items-center justify-between mb-2 pb-1.5 border-b border-line">
             <View className="flex-row items-center gap-2">
               <View
                 className={`w-2.5 h-2.5 rounded-full ${
-                  isVoiceRecording ? "bg-[#E76F51]" : "bg-[#2D6A4F]"
+                  realtimeVoice.active || isVoiceRecording ? "bg-critical-fill" : "bg-brand-fill"
                 }`}
               />
-              <Text className="text-xs font-black text-[#1B4332] tracking-wide">
-                {isVoiceRecording
-                  ? "正在实时倾听中，请说话..."
+              <Text className="text-xs font-black text-brand-strong tracking-wide">
+                {realtimeVoice.active
+                  ? realtimeVoice.state === "reconnecting" ? "连接较弱，正在恢复连续语音..." : "连续语音已开启，可直接说话或插话"
+                  : isVoiceRecording
+                  ? "正在录制本轮语音，请说话..."
                   : isVoiceTranscribing || voiceHudState.type === "processing"
                   ? "正在调用 AI 大模型解答中..."
-                  : "AI 厨艺实时解答"}
+                  : "AI 厨艺语音解答"}
               </Text>
             </View>
             <TouchableOpacity
               onPress={() => {
                 if (isVoiceRecording) stopVoiceRecording();
+                if (realtimeVoice.active) void realtimeVoice.stop();
+                void Speech.stop();
                 setVoiceHudState((prev) => ({ ...prev, visible: false }));
               }}
-              className="w-6 h-6 rounded-full bg-[#F8F5F0] border border-[#EBE3D5] items-center justify-center active:bg-[#EBE3D5]"
+              className="w-6 h-6 rounded-full bg-background-secondary border border-line items-center justify-center active:bg-background-secondary"
             >
-              <FontAwesome6 name="xmark" size={11} color="#3D3229" />
+              <FontAwesome6 name="xmark" size={11} colorClassName="accent-ink" />
             </TouchableOpacity>
           </View>
 
@@ -1015,12 +1171,12 @@ export default function CookingModeScreen() {
           {voiceHudState.type === "listening" ? (
             <View className="gap-2">
               {voiceHudState.userText ? (
-                <View className="flex-row items-start gap-1.5 bg-[#E8F2EA] p-2.5 rounded-xl border border-[#2D6A4F]/20">
-                  <Text className="text-xs font-bold text-[#2D6A4F]">识别中:</Text>
-                  <Text className="text-xs font-bold text-[#1B4332] flex-1">{voiceHudState.userText}</Text>
+                <View className="flex-row items-start gap-1.5 bg-brand-soft p-2.5 rounded-xl border border-brand/20">
+                  <Text className="text-xs font-bold text-brand">识别中:</Text>
+                  <Text className="text-xs font-bold text-brand-strong flex-1">{voiceHudState.userText}</Text>
                 </View>
               ) : (
-                <Text className="text-xs font-bold text-[#8B7D6B]">
+                <Text className="text-xs font-bold text-copy-muted">
                   请直接说出问题，或点击下方常用指令：
                 </Text>
               )}
@@ -1033,42 +1189,42 @@ export default function CookingModeScreen() {
                       if (isVoiceRecording) stopVoiceRecording();
                       void executeDirectVoiceCommand(cmd);
                     }}
-                    className="bg-[#F8F5F0] px-3 py-1.5 rounded-full border border-[#EBE3D5] active:bg-[#E8F2EA]"
+                    className="bg-background-secondary px-3 py-1.5 rounded-full border border-line active:bg-brand-soft"
                   >
-                    <Text className="text-xs font-bold text-[#2D6A4F]">“{cmd}”</Text>
+                    <Text className="text-xs font-bold text-brand">“{cmd}”</Text>
                   </TouchableOpacity>
                 ))}
               </View>
             </View>
           ) : voiceHudState.type === "processing" || isVoiceTranscribing ? (
             <View className="flex-row items-center gap-2.5 py-1.5">
-              <ActivityIndicator size="small" color="#2D6A4F" />
-              <Text className="text-xs text-[#1B4332] font-bold">正在为您识别语音并检索烹饪数据库...</Text>
+              <ActivityIndicator size="small" colorClassName="accent-brand" />
+              <Text className="text-xs text-brand-strong font-bold">正在为您识别语音并检索烹饪数据库...</Text>
             </View>
           ) : (
             /* Result Toast Mode */
             <View className="gap-2">
               {voiceHudState.userText ? (
                 <View className="flex-row items-start gap-1.5">
-                  <Text className="text-xs font-bold text-[#D97706]">你问:</Text>
-                  <Text className="text-xs font-bold text-[#1B4332] flex-1">{voiceHudState.userText}</Text>
+                  <Text className="text-xs font-bold text-warm">你问:</Text>
+                  <Text className="text-xs font-bold text-brand-strong flex-1">{voiceHudState.userText}</Text>
                 </View>
               ) : null}
 
               {voiceHudState.actionDoneText ? (
-                <View className="bg-[#E8F2EA] p-2.5 rounded-xl border border-[#2D6A4F]/20 flex-row items-center gap-2">
-                  <FontAwesome6 name="circle-check" size={13} color="#2D6A4F" />
-                  <Text className="text-xs font-bold text-[#1B4332]">{voiceHudState.actionDoneText}</Text>
+                <View className="bg-brand-soft p-2.5 rounded-xl border border-brand/20 flex-row items-center gap-2">
+                  <FontAwesome6 name="circle-check" size={13} colorClassName="accent-brand" />
+                  <Text className="text-xs font-bold text-brand-strong">{voiceHudState.actionDoneText}</Text>
                 </View>
               ) : null}
 
               {voiceHudState.aiText ? (
-                <View className="bg-[#E8F2EA]/90 p-3 rounded-xl border border-[#2D6A4F]/20 gap-1 mt-1">
+                <View className="bg-brand-soft/90 p-3 rounded-xl border border-brand/20 gap-1 mt-1">
                   <View className="flex-row items-center gap-1.5">
-                    <FontAwesome6 name="robot" size={12} color="#2D6A4F" />
-                    <Text className="text-xs font-black text-[#2D6A4F]">AI 大厨解答</Text>
+                    <FontAwesome6 name="robot" size={12} colorClassName="accent-brand" />
+                    <Text className="text-xs font-black text-brand">AI 大厨解答</Text>
                   </View>
-                  <Text className="text-xs leading-5 font-bold text-[#1B4332] mt-0.5" numberOfLines={4}>
+                  <Text className="text-xs leading-5 font-bold text-brand-strong mt-0.5" numberOfLines={4}>
                     {voiceHudState.aiText}
                   </Text>
                 </View>
@@ -1080,48 +1236,48 @@ export default function CookingModeScreen() {
       )}
 
       {/* 🛠️ UNIFIED BOTTOM CONTROL CAPSULE DOCK (全合一底栏控制胶囊) */}
-      <View className="absolute bottom-6 left-4 right-4 bg-white/95 backdrop-blur-md rounded-full p-2 flex-row items-center gap-2 shadow-2xl border border-[#EBE3D5]">
+      <View className="absolute bottom-6 left-4 right-4 bg-surface/95 backdrop-blur-md rounded-full p-2 flex-row items-center gap-2 shadow-2xl border border-line">
         {/* Prev Step Button */}
         <TouchableOpacity
           onPress={handlePrevStep}
           disabled={currentStep === 0}
           className={`w-10 h-10 rounded-full items-center justify-center border ${
             currentStep === 0
-              ? "bg-[#F8F5F0] border-[#EBE3D5] opacity-30"
-              : "bg-[#F8F5F0] border-[#EBE3D5] active:bg-[#EBE3D5]"
+              ? "bg-background-secondary border-line opacity-30"
+              : "bg-background-secondary border-line active:bg-background-secondary"
           }`}
         >
-          <FontAwesome6 name="chevron-left" size={14} color="#3D3229" />
+          <FontAwesome6 name="chevron-left" size={14} colorClassName="accent-ink" />
         </TouchableOpacity>
 
         {/* Direct Voice Mic Button (Tap to trigger direct recording HUD) */}
         <TouchableOpacity
           onPress={handleToggleDirectMic}
           className={`w-10 h-10 rounded-full items-center justify-center shadow-xs active:scale-95 ${
-            isVoiceRecording
-              ? "bg-[#E76F51]"
-              : "bg-[#E9C46A]"
+            realtimeVoice.active || isVoiceRecording
+              ? "bg-critical-fill"
+              : "bg-highlight"
           }`}
         >
           <FontAwesome6
-            name={isVoiceRecording ? "square" : "microphone"}
-            size={isVoiceRecording ? 12 : 14}
-            color={isVoiceRecording ? "white" : "#3D3229"}
+            name={realtimeVoice.active || isVoiceRecording ? "square" : "microphone"}
+            size={realtimeVoice.active || isVoiceRecording ? 12 : 14}
+            colorClassName={realtimeVoice.active || isVoiceRecording ? "accent-on-brand" : "accent-ink"}
           />
         </TouchableOpacity>
 
         {/* AI Kitchen Mentor Q&A Button (Soft Mint Green) */}
         <TouchableOpacity
           onPress={() => setShowAIChat(true)}
-          className="w-10 h-10 rounded-full bg-[#E8F2EA] border border-[#2D6A4F]/20 items-center justify-center active:bg-[#D8E8DC] shadow-xs"
+          className="w-10 h-10 rounded-full bg-brand-soft border border-brand/20 items-center justify-center active:bg-brand-soft shadow-xs"
         >
-          <FontAwesome6 name="robot" size={14} color="#2D6A4F" />
+          <FontAwesome6 name="robot" size={14} colorClassName="accent-brand" />
         </TouchableOpacity>
 
         {/* Primary Step Action Button */}
         <TouchableOpacity
           onPress={handleNextStep}
-          className="flex-1 h-10 rounded-full bg-[#2D6A4F] items-center justify-center flex-row gap-2 shadow-md active:bg-[#1B4332]"
+          className="flex-1 h-10 rounded-full bg-brand-fill items-center justify-center flex-row gap-2 shadow-md active:bg-brand-fill"
         >
           <Text className="text-white font-black text-sm tracking-wide" numberOfLines={1}>
             {currentStep < cookingSteps.length - 1 ? "完成此步，下一步" : "完成烹饪!"}
@@ -1129,7 +1285,7 @@ export default function CookingModeScreen() {
           <FontAwesome6
             name={currentStep < cookingSteps.length - 1 ? "arrow-right" : "check"}
             size={12}
-            color="white"
+            colorClassName="accent-on-brand"
           />
         </TouchableOpacity>
       </View>
@@ -1142,30 +1298,30 @@ export default function CookingModeScreen() {
         onRequestClose={() => setShowTimerModal(false)}
       >
         <View className="flex-1 bg-black/60 justify-center px-6">
-          <View className="bg-white rounded-[32px] p-6 items-center shadow-2xl border border-[#EBE3D5]">
+          <View className="bg-surface rounded-[32px] p-6 items-center shadow-2xl border border-line">
             <View className="flex-row items-center justify-between w-full mb-4">
               <View className="flex-row items-center gap-2">
-                <View className="w-8 h-8 rounded-full bg-[#E8F2EA] items-center justify-center">
-                  <FontAwesome6 name="clock" size={14} color="#2D6A4F" />
+                <View className="w-8 h-8 rounded-full bg-brand-soft items-center justify-center">
+                  <FontAwesome6 name="clock" size={14} colorClassName="accent-brand" />
                 </View>
-                <Text className="text-base font-bold text-[#1B4332]">厨房智能计时器</Text>
+                <Text className="text-base font-bold text-brand-strong">厨房智能计时器</Text>
               </View>
               <TouchableOpacity onPress={() => setShowTimerModal(false)} className="p-1">
-                <FontAwesome6 name="xmark" size={18} color="#8B7D6B" />
+                <FontAwesome6 name="xmark" size={18} colorClassName="accent-copy-muted" />
               </TouchableOpacity>
             </View>
 
             {/* Huge Time Display */}
-            <Text className="text-6xl font-black text-[#1B4332] tracking-wider my-3">
+            <Text className="text-6xl font-black text-brand-strong tracking-wider my-3">
               {formatTime(timerSeconds)}
             </Text>
 
             {/* Mode Switcher */}
             <TouchableOpacity
               onPress={toggleTimerMode}
-              className="bg-[#F8F5F0] px-4 py-2 rounded-full border border-[#EBE3D5] mb-5"
+              className="bg-background-secondary px-4 py-2 rounded-full border border-line mb-5"
             >
-              <Text className="text-xs font-bold text-[#2D6A4F]">
+              <Text className="text-xs font-bold text-brand">
                 当前为{timerMode === "countdown" ? "【倒计时模式】点击切为正计时" : "【正计时模式】点击切为倒计时"}
               </Text>
             </TouchableOpacity>
@@ -1174,21 +1330,21 @@ export default function CookingModeScreen() {
             <View className="flex-row gap-3 mb-6">
               <TouchableOpacity
                 onPress={() => handleAddMinutes(1)}
-                className="bg-[#F8F5F0] px-5 py-2.5 rounded-full border border-[#EBE3D5] active:bg-[#E9C46A]"
+                className="bg-background-secondary px-5 py-2.5 rounded-full border border-line active:bg-highlight"
               >
-                <Text className="text-xs font-bold text-[#3D3229]">+1 分钟</Text>
+                <Text className="text-xs font-bold text-ink">+1 分钟</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => handleAddMinutes(5)}
-                className="bg-[#F8F5F0] px-5 py-2.5 rounded-full border border-[#EBE3D5] active:bg-[#E9C46A]"
+                className="bg-background-secondary px-5 py-2.5 rounded-full border border-line active:bg-highlight"
               >
-                <Text className="text-xs font-bold text-[#3D3229]">+5 分钟</Text>
+                <Text className="text-xs font-bold text-ink">+5 分钟</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handleResetTimer}
-                className="bg-[#F8F5F0] px-5 py-2.5 rounded-full border border-[#EBE3D5] active:bg-[#EBE3D5]"
+                className="bg-background-secondary px-5 py-2.5 rounded-full border border-line active:bg-background-secondary"
               >
-                <Text className="text-xs font-bold text-[#8B7D6B]">重置</Text>
+                <Text className="text-xs font-bold text-copy-muted">重置</Text>
               </TouchableOpacity>
             </View>
 
@@ -1199,13 +1355,13 @@ export default function CookingModeScreen() {
                 setShowTimerModal(false);
               }}
               className={`w-full py-4 rounded-2xl flex-row items-center justify-center gap-2 shadow-md active:opacity-90 ${
-                isTimerRunning ? "bg-[#E76F51]" : "bg-[#2D6A4F]"
+                isTimerRunning ? "bg-critical-fill" : "bg-brand-fill"
               }`}
             >
               <FontAwesome6
                 name={isTimerRunning ? "pause" : "play"}
                 size={16}
-                color="white"
+                colorClassName="accent-on-brand"
               />
               <Text className="text-white font-black text-sm">
                 {isTimerRunning ? "暂停计时" : "开始计时"}
@@ -1223,26 +1379,26 @@ export default function CookingModeScreen() {
         onRequestClose={() => setShowIngredientsDrawer(false)}
       >
         <View className="flex-1 bg-black/60 justify-end">
-          <View className="bg-white rounded-t-[32px] p-6 max-h-[75%]">
-            <View className="flex-row items-center justify-between mb-4 border-b border-[#EBE3D5] pb-3">
+          <View className="bg-surface rounded-t-[32px] p-6 max-h-[75%]">
+            <View className="flex-row items-center justify-between mb-4 border-b border-line pb-3">
               <View className="flex-row items-center gap-2">
-                <View className="w-8 h-8 rounded-full bg-[#E8F2EA] items-center justify-center">
-                  <FontAwesome6 name="basket-shopping" size={14} color="#2D6A4F" />
+                <View className="w-8 h-8 rounded-full bg-brand-soft items-center justify-center">
+                  <FontAwesome6 name="basket-shopping" size={14} colorClassName="accent-brand" />
                 </View>
-                <Text className="text-lg font-bold text-[#1B4332]">食材备料打勾清单</Text>
-                <Text className="text-xs text-[#8B7D6B]">
+                <Text className="text-lg font-bold text-brand-strong">食材备料打勾清单</Text>
+                <Text className="text-xs text-copy-muted">
                   ({checkedIngredientsCount}/{ingredients.length})
                 </Text>
               </View>
 
               <View className="flex-row items-center gap-3">
                 <TouchableOpacity onPress={handleToggleSelectAllIngredients}>
-                  <Text className="text-xs font-bold text-[#2D6A4F]">
+                  <Text className="text-xs font-bold text-brand">
                     {checkedIngredientsCount === ingredients.length ? "取消全选" : "全选"}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setShowIngredientsDrawer(false)} className="p-1">
-                  <FontAwesome6 name="xmark" size={20} color="#8B7D6B" />
+                  <FontAwesome6 name="xmark" size={20} colorClassName="accent-copy-muted" />
                 </TouchableOpacity>
               </View>
             </View>
@@ -1255,22 +1411,22 @@ export default function CookingModeScreen() {
                     onPress={() => handleCheckIngredient(idx)}
                     className={`px-4 py-3 rounded-2xl border flex-row items-center gap-2.5 ${
                       ing.checked
-                        ? "bg-[#E8F2EA] border-[#2D6A4F]"
-                        : "bg-[#F8F5F0] border-[#EBE3D5]"
+                        ? "bg-brand-soft border-brand"
+                        : "bg-background-secondary border-line"
                     }`}
                   >
                     <View
                       className={`w-5 h-5 rounded-md items-center justify-center border ${
                         ing.checked
-                          ? "bg-[#2D6A4F] border-[#2D6A4F]"
-                          : "border-[#8B7D6B]"
+                          ? "bg-brand-fill border-brand"
+                          : "border-line"
                       }`}
                     >
-                      {ing.checked && <FontAwesome6 name="check" size={10} color="white" />}
+                      {ing.checked && <FontAwesome6 name="check" size={10} colorClassName="accent-on-brand" />}
                     </View>
                     <Text
                       className={`text-xs font-bold ${
-                        ing.checked ? "text-[#2D6A4F] line-through" : "text-[#3D3229]"
+                        ing.checked ? "text-brand line-through" : "text-ink"
                       }`}
                     >
                       {ing.name} {ing.amount}
@@ -1282,7 +1438,7 @@ export default function CookingModeScreen() {
 
             <TouchableOpacity
               onPress={() => setShowIngredientsDrawer(false)}
-              className="bg-[#2D6A4F] py-4 rounded-2xl items-center justify-center mt-2 shadow-md active:bg-[#1B4332]"
+              className="bg-brand-fill py-4 rounded-2xl items-center justify-center mt-2 shadow-md active:bg-brand-fill"
             >
               <Text className="text-white font-bold text-sm">完成备料确认</Text>
             </TouchableOpacity>
@@ -1298,45 +1454,45 @@ export default function CookingModeScreen() {
         onRequestClose={() => setShowFinishModal(false)}
       >
         <View className="flex-1 bg-black/70 justify-center px-6">
-          <View className="bg-white rounded-[32px] p-6 items-center shadow-2xl">
-            <View className="w-20 h-20 rounded-full bg-[#E9C46A] items-center justify-center mb-4 shadow-amber-glow">
-              <FontAwesome6 name="trophy" size={36} color="#3D3229" />
+          <View className="bg-surface rounded-[32px] p-6 items-center shadow-2xl">
+            <View className="w-20 h-20 rounded-full bg-highlight items-center justify-center mb-4 shadow-amber-glow">
+              <FontAwesome6 name="trophy" size={36} colorClassName="accent-ink" />
             </View>
 
-            <Text className="text-2xl font-black text-[#1B4332] text-center">烹饪圆满完成！</Text>
-            <Text className="text-xs text-[#8B7D6B] mt-1 mb-5 text-center leading-5">
+            <Text className="text-2xl font-black text-brand-strong text-center">烹饪圆满完成！</Text>
+            <Text className="text-xs text-copy-muted mt-1 mb-5 text-center leading-5">
               您已成功完成了【{title || "自制菜品"}】的全部 {cookingSteps.length} 个步骤！
             </Text>
 
             {/* Nutrition Cards Preview */}
             {(calories || protein || carbs || fat) ? (
-              <View className="w-full bg-[#F8F5F0] rounded-2xl p-4 border border-[#EBE3D5] mb-5">
-                <Text className="text-xs font-bold text-[#1B4332] mb-3 text-center">
+              <View className="w-full bg-background-secondary rounded-2xl p-4 border border-line mb-5">
+                <Text className="text-xs font-bold text-brand-strong mb-3 text-center">
                   预计摄入营养成分总览
                 </Text>
                 <View className="flex-row justify-around">
                   {calories ? (
                     <View className="items-center">
-                      <Text className="text-base font-black text-[#2D6A4F]">{calories}</Text>
-                      <Text className="text-[10px] font-bold text-[#8B7D6B]">热量 kcal</Text>
+                      <Text className="text-base font-black text-brand">{calories}</Text>
+                      <Text className="text-[10px] font-bold text-copy-muted">热量 kcal</Text>
                     </View>
                   ) : null}
                   {protein ? (
                     <View className="items-center">
-                      <Text className="text-base font-black text-[#2D6A4F]">{protein}g</Text>
-                      <Text className="text-[10px] font-bold text-[#8B7D6B]">蛋白质</Text>
+                      <Text className="text-base font-black text-brand">{protein}g</Text>
+                      <Text className="text-[10px] font-bold text-copy-muted">蛋白质</Text>
                     </View>
                   ) : null}
                   {carbs ? (
                     <View className="items-center">
-                      <Text className="text-base font-black text-[#2D6A4F]">{carbs}g</Text>
-                      <Text className="text-[10px] font-bold text-[#8B7D6B]">碳水</Text>
+                      <Text className="text-base font-black text-brand">{carbs}g</Text>
+                      <Text className="text-[10px] font-bold text-copy-muted">碳水</Text>
                     </View>
                   ) : null}
                   {fat ? (
                     <View className="items-center">
-                      <Text className="text-base font-black text-[#2D6A4F]">{fat}g</Text>
-                      <Text className="text-[10px] font-bold text-[#8B7D6B]">脂肪</Text>
+                      <Text className="text-base font-black text-brand">{fat}g</Text>
+                      <Text className="text-[10px] font-bold text-copy-muted">脂肪</Text>
                     </View>
                   ) : null}
                 </View>
@@ -1345,18 +1501,56 @@ export default function CookingModeScreen() {
 
             {/* Actions */}
             <View className="w-full gap-3">
+              <View className="rounded-2xl border border-line bg-background-secondary p-3">
+                <Text className="text-[10px] font-black text-ink">库存扣减方式</Text>
+                <View className="mt-2 flex-row gap-1.5">
+                  {([
+                    ["estimated", "按菜谱预计"],
+                    ["actual", "修改实际用量"],
+                    ["all", "整项用完"],
+                  ] as const).map(([value, label]) => (
+                    <TouchableOpacity
+                      key={value}
+                      onPress={() => setInventoryConsumptionMode(value)}
+                      className={`flex-1 items-center rounded-xl px-1 py-2 ${inventoryConsumptionMode === value ? "bg-brand-fill" : "bg-surface"}`}
+                    >
+                      <Text className={`text-[9px] font-black ${inventoryConsumptionMode === value ? "text-white" : "text-copy-muted"}`}>{label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                {inventoryConsumptionMode === "actual" ? (
+                  <View className="mt-2 gap-1.5">
+                    {ingredients.filter((ingredient) => ingredient.checked).slice(0, 5).map((ingredient) => (
+                      <View key={ingredient.name} className="flex-row items-center rounded-xl bg-surface px-3">
+                        <Text className="min-w-0 flex-1 text-[10px] font-bold text-ink" numberOfLines={1}>{ingredient.name}</Text>
+                        <TextInput
+                          value={actualConsumptionAmounts[ingredient.name] ?? ingredient.amount}
+                          onChangeText={(value) => setActualConsumptionAmounts((current) => ({ ...current, [ingredient.name]: value }))}
+                          placeholder="如 200g"
+                          placeholderTextColorClassName="accent-copy-muted"
+                          className="h-9 w-24 text-right text-[10px] font-black text-brand"
+                        />
+                      </View>
+                    ))}
+                    {ingredients.filter((ingredient) => ingredient.checked).length > 5 ? (
+                      <Text className="text-[9px] text-copy-muted">其余食材沿用菜谱预计用量</Text>
+                    ) : null}
+                  </View>
+                ) : null}
+                <Text className="mt-2 text-[9px] leading-4 text-copy-muted">优先扣减更早到期批次；不可换算单位不会被强行扣减。</Text>
+              </View>
               <TouchableOpacity
                 onPress={() => finishCooking(true)}
                 disabled={isCompleting}
-                className="bg-[#E9C46A] py-4 rounded-2xl items-center justify-center flex-row gap-2 shadow-md active:opacity-90"
+                className="bg-highlight py-4 rounded-2xl items-center justify-center flex-row gap-2 shadow-md active:opacity-90"
               >
                 {isCompleting ? (
-                  <ActivityIndicator size="small" color="#3D3229" />
+                  <ActivityIndicator size="small" colorClassName="accent-ink" />
                 ) : (
                   <>
-                    <FontAwesome6 name="boxes-packing" size={15} color="#3D3229" />
-                    <Text className="text-[#3D3229] font-black text-sm">
-                      扣减已勾选食材并记录本餐
+                    <FontAwesome6 name="boxes-packing" size={15} colorClassName="accent-ink" />
+                    <Text className="text-ink font-black text-sm">
+                      {inventoryConsumptionMode === "estimated" ? "按预计扣减并记录本餐" : inventoryConsumptionMode === "actual" ? "按实际用量扣减并记录" : "整项用完并记录本餐"}
                     </Text>
                   </>
                 )}
@@ -1365,15 +1559,15 @@ export default function CookingModeScreen() {
               <TouchableOpacity
                 onPress={() => finishCooking(false)}
                 disabled={isCompleting}
-                className="bg-[#2D6A4F] py-3.5 rounded-2xl items-center justify-center flex-row gap-2 shadow-md active:opacity-90"
+                className="bg-brand-fill py-3.5 rounded-2xl items-center justify-center flex-row gap-2 shadow-md active:opacity-90"
               >
-                <FontAwesome6 name="utensils" size={14} color="white" />
+                <FontAwesome6 name="utensils" size={14} colorClassName="accent-on-brand" />
                 <Text className="text-white font-bold text-sm">仅记录本餐饮食</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={() => void (async () => {
-                  if (fromQueue && userId) await removeFromCookingQueue(userId, Number(recipeId));
+                  await completeQueueItem();
                   setShowFinishModal(false);
                   if (fromQueue) {
                     router.replace("/cooking-queue");
@@ -1386,7 +1580,7 @@ export default function CookingModeScreen() {
                 disabled={isCompleting}
                 className="py-2.5 items-center justify-center active:opacity-70"
               >
-                <Text className="text-[#8B7D6B] text-xs font-semibold">{fromQueue ? "不记录，完成并返回队列" : "不记录，直接退出"}</Text>
+                <Text className="text-copy-muted text-xs font-semibold">{fromQueue ? "不记录，完成并返回队列" : "不记录，直接退出"}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1401,20 +1595,20 @@ export default function CookingModeScreen() {
         onRequestClose={() => setShowAIChat(false)}
       >
         <View className="flex-1 bg-black/60 justify-end">
-          <View className="bg-white rounded-t-[32px] max-h-[80%]">
+          <View className="bg-surface rounded-t-[32px] max-h-[80%]">
             {/* Header */}
-            <View className="flex-row items-center justify-between p-4 border-b border-[#EBE3D5]">
+            <View className="flex-row items-center justify-between p-4 border-b border-line">
               <View className="flex-row items-center">
-                <View className="w-10 h-10 rounded-full bg-[#2D6A4F] items-center justify-center">
-                  <FontAwesome6 name="robot" size={18} color="white" />
+                <View className="w-10 h-10 rounded-full bg-brand-fill items-center justify-center">
+                  <FontAwesome6 name="robot" size={18} colorClassName="accent-on-brand" />
                 </View>
                 <View className="ml-3">
-                  <Text className="text-base font-bold text-[#1B4332]">AI 烹饪导师</Text>
-                  <Text className="text-xs text-[#8B7D6B]">有任何烹饪疑问随问随答</Text>
+                  <Text className="text-base font-bold text-brand-strong">AI 烹饪导师</Text>
+                  <Text className="text-xs text-copy-muted">有任何烹饪疑问随问随答</Text>
                 </View>
               </View>
               <TouchableOpacity onPress={() => setShowAIChat(false)} className="p-2">
-                <FontAwesome6 name="xmark" size={20} color="#8B7D6B" />
+                <FontAwesome6 name="xmark" size={20} colorClassName="accent-copy-muted" />
               </TouchableOpacity>
             </View>
 
@@ -1426,8 +1620,8 @@ export default function CookingModeScreen() {
             >
               {chatMessages.length === 0 && (
                 <View className="items-center py-6">
-                  <FontAwesome6 name="utensils" size={36} color="#2D6A4F" />
-                  <Text className="text-[#8B7D6B] text-xs mt-3 text-center leading-5">
+                  <FontAwesome6 name="utensils" size={36} colorClassName="accent-brand" />
+                  <Text className="text-copy-muted text-xs mt-3 text-center leading-5">
                     正在烹饪【{title || "菜品"}】第 {currentStep + 1} 步{"\n"}
                     遇到调料放多少、火候问题？随时向我提问！
                   </Text>
@@ -1440,9 +1634,9 @@ export default function CookingModeScreen() {
                       <TouchableOpacity
                         key={i}
                         onPress={() => setChatInput(q)}
-                        className="bg-[#F8F5F0] px-4 py-2.5 rounded-full border border-[#EBE3D5] active:bg-[#E8F2EA]"
+                        className="bg-background-secondary px-4 py-2.5 rounded-full border border-line active:bg-brand-soft"
                       >
-                        <Text className="text-xs font-semibold text-[#2D6A4F]">{q}</Text>
+                        <Text className="text-xs font-semibold text-brand">{q}</Text>
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -1456,19 +1650,19 @@ export default function CookingModeScreen() {
                   <View
                     className={`max-w-[80%] px-4 py-3 rounded-2xl ${
                       msg.role === "user"
-                        ? "bg-[#2D6A4F]"
-                        : "bg-[#F8F5F0] border border-[#EBE3D5]"
+                        ? "bg-brand-fill"
+                        : "bg-background-secondary border border-line"
                     }`}
                   >
                     <Text
                       className={`text-sm leading-6 ${
-                        msg.role === "user" ? "text-white" : "text-[#3D3229]"
+                        msg.role === "user" ? "text-white" : "text-ink"
                       }`}
                     >
                       {msg.content}
                     </Text>
                     {msg.role === "assistant" && typeof msg.responseTimeMs === "number" ? (
-                      <Text className="mt-1 text-[10px] text-[#8B7D6B]">
+                      <Text className="mt-1 text-[10px] text-copy-muted">
                         回复耗时 {msg.responseTimeMs < 1000 ? `${Math.round(msg.responseTimeMs)} ms` : `${(msg.responseTimeMs / 1000).toFixed(2)} 秒`}
                       </Text>
                     ) : null}
@@ -1477,20 +1671,20 @@ export default function CookingModeScreen() {
               ))}
               {isAILoading && (
                 <View className="items-start mb-3">
-                  <View className="bg-[#F8F5F0] px-4 py-3 rounded-2xl border border-[#EBE3D5]">
-                    <Text className="text-xs text-[#8B7D6B]">思考中...</Text>
+                  <View className="bg-background-secondary px-4 py-3 rounded-2xl border border-line">
+                    <Text className="text-xs text-copy-muted">思考中...</Text>
                   </View>
                 </View>
               )}
             </ScrollView>
 
             {/* Input */}
-            <View className="p-4 border-t border-[#EBE3D5]">
-              <View className="flex-row items-center bg-[#F8F5F0] rounded-full px-4 py-2 border border-[#EBE3D5]">
+            <View className="p-4 border-t border-line">
+              <View className="flex-row items-center bg-background-secondary rounded-full px-4 py-2 border border-line">
                 <TextInput
-                  className="flex-1 text-sm text-[#3D3229] px-2"
+                  className="flex-1 text-sm text-ink px-2"
                   placeholder="问点什么..."
-                  placeholderTextColor="#8B7D6B"
+                  placeholderTextColorClassName="accent-copy-muted"
                   value={chatInput}
                   onChangeText={setChatInput}
                   onSubmitEditing={handleSendChat}
@@ -1500,13 +1694,13 @@ export default function CookingModeScreen() {
                   onPress={handleSendChat}
                   disabled={!chatInput.trim() || isAILoading}
                   className={`w-8 h-8 rounded-full items-center justify-center ${
-                    chatInput.trim() && !isAILoading ? "bg-[#2D6A4F]" : "bg-[#EBE3D5]"
+                    chatInput.trim() && !isAILoading ? "bg-brand-fill" : "bg-background-secondary"
                   }`}
                 >
                   <FontAwesome6
                     name="paper-plane"
                     size={12}
-                    color={chatInput.trim() && !isAILoading ? "white" : "#8B7D6B"}
+                    colorClassName={chatInput.trim() && !isAILoading ? "accent-on-brand" : "accent-copy-muted"}
                   />
                 </TouchableOpacity>
               </View>

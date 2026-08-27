@@ -8,6 +8,13 @@ export interface InventoryItem {
   image_url: string | null;
   is_available: boolean;
   scope?: "personal" | "shared";
+  quantity_value?: number | null;
+  quantity_unit?: "g" | "kg" | "ml" | "l" | "piece" | "serving" | "bag" | "box" | "bottle" | "can" | null;
+  package_size_value?: number | null;
+  package_size_unit?: "g" | "kg" | "ml" | "l" | "piece" | "serving" | "bag" | "box" | "bottle" | "can" | null;
+  batch_code?: string | null;
+  version?: number;
+  updated_at?: string;
 }
 
 export type StorageLocation = "冷藏" | "冷冻" | "常温";
@@ -27,6 +34,9 @@ export interface Recipe {
   tags: string[];
   quality_status?: "trusted" | "estimated" | "needs_review";
   nutrition_is_estimated?: boolean;
+  ingredients?: Array<{ name: string; amount?: string }>;
+  required_kitchenware?: string[];
+  optional_kitchenware?: string[];
 }
 
 export interface KitchenwareItem {
@@ -56,4 +66,9 @@ export interface DetectedFood {
   suggestedStorageLocation: string;
   estimatedExpireDays: number;
   selected: boolean;
+  source?: "barcode" | "receipt" | "image" | "manual" | "recent";
+  confidence?: number | null;
+  barcode?: string | null;
+  expirationDate?: string;
+  missingFields?: string[];
 }

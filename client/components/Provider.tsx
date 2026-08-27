@@ -1,14 +1,12 @@
 import { AuthProvider } from '@/contexts/AuthContext';
 import { type ReactNode } from 'react';
 import { View } from 'react-native';
-import { WebOnlyColorSchemeUpdater } from './ColorSchemeUpdater';
 import { WebOnlyPrettyScrollbar } from './PrettyScrollbar'
 import { NotificationLifecycle } from './NotificationLifecycle';
 import { ShareLinkLifecycle } from './ShareLinkLifecycle';
 
 function Provider({ children }: { children: ReactNode }) {
-  return <WebOnlyColorSchemeUpdater>
-    <WebOnlyPrettyScrollbar>
+  return <WebOnlyPrettyScrollbar>
       <AuthProvider>
         <View style={{ flex: 1 }}>
           <NotificationLifecycle />
@@ -17,7 +15,6 @@ function Provider({ children }: { children: ReactNode }) {
         </View>
       </AuthProvider>
     </WebOnlyPrettyScrollbar>
-  </WebOnlyColorSchemeUpdater>
 }
 
 export {

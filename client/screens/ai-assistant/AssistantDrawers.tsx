@@ -1,5 +1,5 @@
 import { FlatList, Modal, Text, TouchableOpacity, View } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { useCSSVariable } from "uniwind";
 
 import type { ShoppingItem } from "@/utils/shoppingList";
@@ -37,11 +37,11 @@ export function HistoryDrawer({
           <DrawerHeader icon="clock-rotate-left" iconColor={brand} title="历史对话记录" onClose={onClose} closeColor={ink} />
           <TouchableOpacity
             onPress={onNewChat}
-            className="my-3 bg-brand min-h-touch px-4 rounded-control flex-row items-center justify-center gap-2 active:bg-accent-hover"
+            className="my-3 bg-brand-fill min-h-touch px-4 rounded-control flex-row items-center justify-center gap-2 active:bg-accent-hover"
             accessibilityRole="button"
             accessibilityLabel="开启新的对话"
           >
-            <FontAwesome6 name="plus" size={14} color="#FFF" />
+            <FontAwesome6 name="plus" size={14} colorClassName="accent-on-brand" />
             <Text className="text-body font-bold text-white">开启新的对话</Text>
           </TouchableOpacity>
 

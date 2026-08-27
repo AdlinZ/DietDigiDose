@@ -1,5 +1,5 @@
 import { Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { useCSSVariable } from "uniwind";
 
 import type { DietRecord } from "./types";
@@ -47,7 +47,7 @@ export function TodayRecordsModal({ visible, records, onClose, onAddRecord }: To
               >
                 <View className="flex-1 mr-3">
                   <View className="flex-row items-center gap-2 mb-1">
-                    <View className="bg-brand px-2 py-0.5 rounded-pill">
+                    <View className="bg-brand-fill px-2 py-0.5 rounded-pill">
                       <Text className="text-caption font-bold text-white">{item.meal_type}</Text>
                     </View>
                     <Text className="text-body font-black text-ink">{item.food_name}</Text>
@@ -66,7 +66,7 @@ export function TodayRecordsModal({ visible, records, onClose, onAddRecord }: To
 
           <TouchableOpacity
             onPress={onAddRecord}
-            className="bg-brand min-h-touch rounded-control items-center justify-center active:bg-accent-hover mt-1"
+            className="bg-brand-fill min-h-touch rounded-control items-center justify-center active:bg-accent-hover mt-1"
             accessibilityRole="button"
             accessibilityLabel="继续添加今日餐食"
           >

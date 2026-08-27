@@ -56,11 +56,11 @@ import {
  */
 interface ScreenProps {
   children: React.ReactNode;
-  /** 背景色，默认 #fff */
+  /** 背景色，默认使用当前主题的 background token */
   backgroundColor?: string;
   /**
    * 状态栏样式
-   * - 'dark': 黑色文字 (默认)
+   * - 'auto': 根据当前主题自动选择（默认）
    * - 'light': 白色文字 (深色背景时用)
    */
   statusBarStyle?: 'auto' | 'inverted' | 'light' | 'dark';
@@ -145,7 +145,7 @@ const KeyboardAwareScrollable = ({
 const RawScreen = ({
   children,
   backgroundColor = 'var(--background)',
-  statusBarStyle = 'dark',
+  statusBarStyle = 'auto',
   statusBarColor = 'transparent',
   safeAreaEdges = ['top', 'left', 'right', 'bottom'],
   style,

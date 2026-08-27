@@ -4,7 +4,7 @@ import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter, useSafeSearchParams } from '@/hooks/useSafeRouter';
 import { validateAuthReturnTo } from '@/utils/authReturnTo';
-import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
+import FontAwesome6 from '@/components/ThemedFontAwesome6';
 import { useCSSVariable } from 'uniwind';
 
 export default function RegisterScreen() {
@@ -80,7 +80,7 @@ export default function RegisterScreen() {
     || !confirmPassword;
 
   return (
-    <Screen backgroundColor="#FDF8F0">
+    <Screen>
       <View className="flex-1 px-6 pb-5">
         <View className="flex-row items-center justify-between pt-2">
           <TouchableOpacity
@@ -119,7 +119,7 @@ export default function RegisterScreen() {
         </View>
 
         <View className="mt-auto pt-8">
-          <View className="overflow-hidden rounded-[24px] border border-line bg-white/90 shadow-2xs">
+          <View className="overflow-hidden rounded-[24px] border border-line bg-surface/90 shadow-2xs">
             <View className="h-[62px] flex-row items-center px-5">
               <FontAwesome6 name="user" size={18} color={brand} className="mr-3" />
               <TextInput
@@ -202,7 +202,7 @@ export default function RegisterScreen() {
           ) : null}
 
           <TouchableOpacity
-            className={`mx-3 mb-3 mt-3 h-14 flex-row items-center justify-between rounded-full bg-brand py-1.5 pl-6 pr-1.5 shadow-xs ${isRegisterDisabled ? 'opacity-disabled' : ''}`}
+            className={`mx-3 mb-3 mt-3 h-14 flex-row items-center justify-between rounded-full bg-brand-fill py-1.5 pl-6 pr-1.5 shadow-xs ${isRegisterDisabled ? 'opacity-disabled' : ''}`}
             onPress={handleRegister}
             disabled={isRegisterDisabled}
             accessibilityRole="button"
@@ -210,24 +210,24 @@ export default function RegisterScreen() {
             accessibilityState={{ disabled: isRegisterDisabled, busy: loading }}
           >
             {loading ? (
-              <View className="flex-1 items-center"><ActivityIndicator color="#fff" /></View>
+              <View className="flex-1 items-center"><ActivityIndicator colorClassName="accent-on-brand" /></View>
             ) : (
               <>
                 <Text className="text-[15px] font-black text-white">{isSmsRegistration ? '完成注册' : '创建账号'}</Text>
-                <View className="h-11 w-11 items-center justify-center rounded-full bg-white/20">
-                  <FontAwesome6 name="arrow-right" size={13} color="#FFFFFF" />
+                <View className="h-11 w-11 items-center justify-center rounded-full bg-surface/20">
+                  <FontAwesome6 name="arrow-right" size={13} colorClassName="accent-on-brand" />
                 </View>
               </>
             )}
           </TouchableOpacity>
 
           <TouchableOpacity
-            className="mx-3 mb-3 h-14 flex-row items-center justify-between rounded-full bg-[#F1EBE2] py-1.5 pl-1.5 pr-6"
+            className="mx-3 mb-3 h-14 flex-row items-center justify-between rounded-full bg-background-secondary py-1.5 pl-1.5 pr-6"
             onPress={handleBackToLogin}
             accessibilityRole="button"
             accessibilityLabel="已有账号，返回登录"
           >
-            <View className="h-11 w-11 items-center justify-center rounded-full bg-white/80">
+            <View className="h-11 w-11 items-center justify-center rounded-full bg-surface/80">
               <FontAwesome6 name="arrow-left" size={13} color={brand} />
             </View>
             <Text className="text-[15px] font-bold text-brand-strong">

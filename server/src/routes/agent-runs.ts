@@ -3,7 +3,7 @@ import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { uuidParam } from "../middleware/validateParam.js";
 import { agentRunResumeSchema } from "../validation/schemas.js";
-import { getAgentRunRow, listAgentEvents, toAgentRunSummary } from "../services/agent/repository.js";
+import { getAgentRunMedia, getAgentRunRow, listAgentEvents, toAgentRunSummary } from "../services/agent/repository.js";
 import { cancelSupervisorRun, resumeSupervisorRun, retrySupervisorRun, undoSupervisorRun } from "../services/agent/runtime.js";
 import { buildAgentSolutionCards } from "../services/agent/cards.js";
 
@@ -17,6 +17,22 @@ router.get("/agent-runs/:runId", (req: AuthRequest, res) => {
   const afterSequence = Math.max(0, Number(req.query.afterSequence) || 0);
   const run = toAgentRunSummary(row);
   return res.json({ run, events: listAgentEvents(row.id, req.userId!, afterSequence), solutionCards: buildAgentSolutionCards(run.id, run.artifacts) });
+});
+
+router.get("/agent-runs/:runId/media", (req: AuthRequest, res) => {
+  const runId = String(req.params.runId);
+  const row = getAgentRunRow(runId, req.userId!);
+  if (!row) return res.status(404).json({ error: "Agent Run 不存在或无权访问", code: "AGENT_RUN_NOT_FOUND" });
+  const media = getAgentRunMedia(runId, req.userId!);
+  if (!media || media.kind !== "image") {
+    return res.status(404).json({ error: "图片附件不存在", code: "AGENT_MEDIA_NOT_FOUND" });
+  }
+  const mimeType = media.mime_type || "image/jpeg";
+  const dataUrl = media.data_base64.startsWith("data:")
+    ? media.data_base64
+    : `data:${mimeType};base64,${media.data_base64}`;
+  res.setHeader("Cache-Control", "private, no-store");
+  return res.json({ kind: "image", mimeType, dataUrl });
 });
 
 router.post("/agent-runs/:runId/resume", validateBody(agentRunResumeSchema), async (req: AuthRequest, res) => {

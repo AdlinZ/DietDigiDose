@@ -17,6 +17,27 @@ export interface Household {
   created_at: string;
   my_role: "owner" | "admin" | "member";
   members: HouseholdMember[];
+  version: number;
+}
+
+export interface HouseholdShoppingItem {
+  id: string;
+  householdId: number;
+  name: string;
+  amount: string;
+  category: string;
+  checked: boolean;
+  storageLocation: string | null;
+  expirationDate: string | null;
+  createdByUserId: number;
+  updatedByUserId: number;
+  purchasedByUserId: number | null;
+  creatorName: string;
+  updaterName: string;
+  purchaserName: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface HouseholdInventoryItem {
@@ -32,6 +53,7 @@ export interface HouseholdInventoryItem {
   image_url?: string | null;
   is_available: boolean;
   created_at: string;
+  version: number;
 }
 
 export interface HouseholdActivityLog {
@@ -65,6 +87,35 @@ export const householdApi = {
   leave: (apiFetch: ApiFetch, householdId: number) =>
     requestJson<{ message: string }>(apiFetch, `/api/v1/households/${householdId}/leave`, {
       method: "POST",
+    }),
+
+  transferOwner: (apiFetch: ApiFetch, householdId: number, newOwnerUserId: number, version: number) =>
+    requestJson<{ transferred: true; new_owner_user_id: number; version: number }>(apiFetch, `/api/v1/households/${householdId}/transfer-owner`, {
+      method: "POST",
+      body: JSON.stringify({ newOwnerUserId, version }),
+    }),
+
+  shoppingList: (apiFetch: ApiFetch, householdId: number) =>
+    requestJson<HouseholdShoppingItem[]>(apiFetch, `/api/v1/households/${householdId}/shopping-list`),
+
+  shoppingCreate: (apiFetch: ApiFetch, householdId: number, input: unknown) =>
+    requestJson<{ item: HouseholdShoppingItem; mergeCandidates: Array<{ id: string; name: string; amount: string; category: string }> }>(apiFetch, `/api/v1/households/${householdId}/shopping-list`, {
+      method: "POST", body: JSON.stringify(input),
+    }),
+
+  shoppingUpdate: (apiFetch: ApiFetch, householdId: number, itemId: string, input: unknown) =>
+    requestJson<HouseholdShoppingItem>(apiFetch, `/api/v1/households/${householdId}/shopping-list/${encodeURIComponent(itemId)}`, {
+      method: "PATCH", body: JSON.stringify(input),
+    }),
+
+  shoppingRemove: (apiFetch: ApiFetch, householdId: number, itemId: string, version: number) =>
+    requestJson<{ deleted: true }>(apiFetch, `/api/v1/households/${householdId}/shopping-list/${encodeURIComponent(itemId)}?version=${version}`, {
+      method: "DELETE",
+    }),
+
+  shoppingIntake: (apiFetch: ApiFetch, householdId: number, input: unknown) =>
+    requestJson<{ batchId: string; inventoryIds: number[]; count: number; repeated: boolean }>(apiFetch, `/api/v1/households/${householdId}/shopping-list/intake`, {
+      method: "POST", body: JSON.stringify(input),
     }),
 
   inventoryList: (apiFetch: ApiFetch, householdId: number) =>

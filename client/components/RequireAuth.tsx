@@ -2,7 +2,7 @@ import type { ComponentType } from "react";
 import { useEffect } from "react";
 import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
 import { usePathname } from "expo-router";
-import { FontAwesome6 } from "@expo/vector-icons";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
@@ -23,7 +23,7 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
     return (
       <Screen>
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color="#2D6A4F" />
+          <ActivityIndicator size="large" colorClassName="accent-brand" />
           <Text accessibilityLiveRegion="polite" className="mt-3 text-sm text-copy-muted">正在确认登录状态…</Text>
         </View>
       </Screen>
@@ -34,12 +34,12 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
     return (
       <Screen>
         <View className="flex-1 items-center justify-center px-8">
-          <FontAwesome6 name="lock" size={28} color="#2D6A4F" />
+          <FontAwesome6 name="lock" size={28} colorClassName="accent-brand" />
           <Text accessibilityRole="header" className="mt-4 text-base font-black text-ink">此页面需要登录</Text>
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel="去登录"
-            className="mt-5 min-h-11 justify-center rounded-2xl bg-brand px-7 py-3"
+            className="mt-5 min-h-11 justify-center rounded-2xl bg-brand-fill px-7 py-3"
             onPress={() => router.replace("/login", returnTo ? { returnTo } : {})}
           >
             <Text className="font-bold text-white">去登录</Text>

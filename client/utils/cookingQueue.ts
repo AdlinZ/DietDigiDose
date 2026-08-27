@@ -3,6 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getUserStorageKey } from "./userStorage";
 
 export const COOKING_QUEUE_STORAGE_KEY = "@dietdigidose:cooking_queue";
+const COOKING_QUEUE_MIGRATION_KEY = "@dietdigidose:cooking_queue_server_migrated";
 const MAX_QUEUE_ITEMS = 30;
 
 export type CookingQueueItem = {
@@ -74,6 +75,20 @@ export function normalizeCookingQueue(value: unknown): CookingQueueItem[] {
 
 function queueStorageKey(userId?: number | null) {
   return getUserStorageKey(COOKING_QUEUE_STORAGE_KEY, userId);
+}
+
+function queueMigrationKey(userId?: number | null) {
+  return getUserStorageKey(COOKING_QUEUE_MIGRATION_KEY, userId);
+}
+
+export async function needsCookingQueueServerMigration(userId?: number | null) {
+  const key = queueMigrationKey(userId);
+  return key ? (await AsyncStorage.getItem(key)) !== "1" : false;
+}
+
+export async function markCookingQueueServerMigrated(userId?: number | null) {
+  const key = queueMigrationKey(userId);
+  if (key) await AsyncStorage.setItem(key, "1");
 }
 
 export async function getCookingQueue(userId?: number | null) {

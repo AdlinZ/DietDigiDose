@@ -129,6 +129,7 @@ export interface Message {
   sender: "ai" | "user";
   text: string;
   imageUri?: string;
+  imageRunId?: string;
   actionCard?: DietRecordActionCard;
   writeConfirmation?: AIWriteConfirmation;
   missingCard?: DietRecordMissingCard;

@@ -18,6 +18,7 @@ import {
 } from "../services/communityRecommendation.js";
 
 const router = Router();
+const RECOMMENDATION_CANDIDATE_LIMIT = 240;
 router.param("id", positiveIntegerParam);
 router.param("postId", positiveIntegerParam);
 router.param("commentId", positiveIntegerParam);
@@ -86,14 +87,34 @@ function postSelect(userId: number | null) {
       (SELECT COUNT(*) FROM community_event_participants ep WHERE ep.post_id = p.id) AS participant_count,
       EXISTS(SELECT 1 FROM community_event_participants ep WHERE ep.post_id = p.id AND ep.user_id = ${userId ?? -1}) AS is_joined
       , EXISTS(SELECT 1 FROM user_follows uf WHERE uf.follower_id = ${userId ?? -1} AND uf.following_id = p.user_id) AS author_is_followed
+      , lr.id AS linked_recipe_valid_id
+      , lr.title AS linked_recipe_title
+      , lr.image_url AS linked_recipe_image_url
+      , lr.cook_time AS linked_recipe_cook_time
+      , lr.difficulty AS linked_recipe_difficulty
+      , lr.calories AS linked_recipe_calories
     FROM community_posts p
     LEFT JOIN users u ON u.id = p.user_id
+    LEFT JOIN recipes lr ON lr.id = p.linked_recipe_id
+      AND lr.deleted_at IS NULL
+      AND lr.status = 'approved'
+      AND COALESCE(lr.quality_status, 'trusted') <> 'needs_review'
   `;
 }
 
 function serializePost(post: any) {
   if (!post) return post;
-  const { actual_comment_count: actualCommentCount, nickname: _legacyNickname, ...serializedPost } = post;
+  const {
+    actual_comment_count: actualCommentCount,
+    nickname: _legacyNickname,
+    linked_recipe_valid_id: linkedRecipeValidId,
+    linked_recipe_title: linkedRecipeTitle,
+    linked_recipe_image_url: linkedRecipeImageUrl,
+    linked_recipe_cook_time: linkedRecipeCookTime,
+    linked_recipe_difficulty: linkedRecipeDifficulty,
+    linked_recipe_calories: linkedRecipeCalories,
+    ...serializedPost
+  } = post;
   let imageUrls: string[] = [];
   try {
     const parsed = typeof post.image_urls === "string" ? JSON.parse(post.image_urls) : post.image_urls;
@@ -111,6 +132,15 @@ function serializePost(post: any) {
     author_is_followed: Boolean(post.author_is_followed),
     author_is_expert: Boolean(post.author_is_expert),
     comment_count: Number(actualCommentCount ?? post.comment_count) || 0,
+    linked_recipe: linkedRecipeValidId ? {
+      id: Number(linkedRecipeValidId),
+      title: String(linkedRecipeTitle),
+      image_url: linkedRecipeImageUrl ? String(linkedRecipeImageUrl) : null,
+      cook_time: Number(linkedRecipeCookTime) || 0,
+      difficulty: String(linkedRecipeDifficulty || "难度未知"),
+      calories: Number(linkedRecipeCalories) || 0,
+    } : null,
+    linked_recipe_unavailable: Boolean(post.linked_recipe_id && !linkedRecipeValidId),
   };
 }
 
@@ -276,76 +306,108 @@ router.get("/posts", (req: AuthRequest, res) => {
   const limit = Number.isInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), 30) : null;
   const offset = Number.isInteger(rawOffset) ? Math.max(rawOffset, 0) : 0;
   const userId = req.userId ?? null;
+  const requestedMode = sort === "recommended" ? "recommended" : "latest";
+  const rawCursor = req.query.cursor;
+  const cursor = rawCursor ? decodeCursor(rawCursor) : null;
+  if (rawCursor && !cursor) {
+    return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+  }
+  const cursorId = cursor ? Number(cursor.id) : null;
+  const cursorCategory = typeof cursor?.category === "string" ? cursor.category : "";
+  const validCursorVersion = requestedMode === "recommended"
+    ? cursor?.v === 2 || cursor?.v === 3 || cursor?.v === 4
+    : cursor?.v === 2;
+  if (cursor && (
+    !validCursorVersion
+    || cursor.mode !== requestedMode
+    || cursorCategory !== (typeof category === "string" ? category : "")
+    || !Number.isInteger(cursorId)
+    || cursorId! <= 0
+  )) {
+    return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+  }
+  const cursorCreatedAt = typeof cursor?.createdAt === "string" ? cursor.createdAt : "";
+  if (cursor && requestedMode === "latest" && !cursorCreatedAt) {
+    return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+  }
+  const snapshotNow = requestedMode === "recommended" && cursor ? Number(cursor.at) : Date.now();
+  if (requestedMode === "recommended" && !Number.isFinite(snapshotNow)) {
+    return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+  }
+  const encodedSnapshotMaxId = cursor ? Number(cursor.maxId) : null;
+  if (cursor?.v === 4 && (!Number.isInteger(encodedSnapshotMaxId) || encodedSnapshotMaxId! < 0)) {
+    return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+  }
+  const snapshotMaxId = requestedMode === "recommended"
+    ? (cursor?.v === 4
+      ? encodedSnapshotMaxId!
+      : Number((db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM community_posts").get() as { id: number }).id))
+    : null;
   const filters = ["p.deleted_at IS NULL"];
-  const filterParams: string[] = [];
+  const filterParams: Array<string | number> = [];
   if (typeof category === "string" && category) {
     filters.push("p.category = ?");
     filterParams.push(category);
   }
   if (search) {
-    filters.push("(p.content LIKE ? OR p.category LIKE ? OR u.username LIKE ?)");
+    filters.push("(p.content LIKE ? OR p.category LIKE ? OR u.username LIKE ? OR lr.title LIKE ?)");
     const pattern = `%${search}%`;
-    filterParams.push(pattern, pattern, pattern);
+    filterParams.push(pattern, pattern, pattern, pattern);
+  }
+  if (requestedMode === "latest" && cursor) {
+    filters.push("(p.created_at < ? OR (p.created_at = ? AND p.id < ?))");
+    filterParams.push(cursorCreatedAt, cursorCreatedAt, cursorId!);
+  }
+  if (requestedMode === "recommended") {
+    filters.push("p.id <= ?");
+    filterParams.push(snapshotMaxId!);
+  }
+
+  let sqlLimit: number | null = null;
+  let sqlOffset = 0;
+  if (requestedMode === "recommended") {
+    sqlLimit = RECOMMENDATION_CANDIDATE_LIMIT;
+  } else if (cursorMode) {
+    sqlLimit = pageSize + 1;
+  } else if (limit !== null) {
+    sqlLimit = limit;
+    sqlOffset = offset;
   }
   const posts = db.prepare(`
     ${postSelect(userId)} WHERE ${filters.join(" AND ")}
     ORDER BY p.created_at DESC, p.id DESC
-  `).all(...filterParams);
+    ${sqlLimit === null ? "" : "LIMIT ? OFFSET ?"}
+  `).all(...filterParams, ...(sqlLimit === null ? [] : [sqlLimit, sqlOffset]));
+  if (cursorMode || requestedMode === "recommended") {
+    res.set("X-Pagination-Candidates", String(posts.length));
+  }
 
-  const requestedMode = sort === "recommended" ? "recommended" : "latest";
+  const serialized = posts.map(serializePost);
   if (cursorMode) {
-    const cursor = req.query.cursor ? decodeCursor(req.query.cursor) : null;
-    const cursorId = cursor ? Number(cursor.id) : null;
-    const cursorCategory = typeof cursor?.category === "string" ? cursor.category : "";
-    const validCursorVersion = requestedMode === "recommended"
-      ? cursor?.v === 2 || cursor?.v === 3
-      : cursor?.v === 2;
-    if (cursor && (
-      !validCursorVersion
-      || cursor.mode !== requestedMode
-      || cursorCategory !== (typeof category === "string" ? category : "")
-      || !Number.isInteger(cursorId)
-      || cursorId! <= 0
-    )) {
-      return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
-    }
-    const snapshotNow = requestedMode === "recommended" && cursor ? Number(cursor.at) : Date.now();
-    const serialized = posts.map(serializePost);
     let ordered = requestedMode === "recommended"
-      ? recommendCommunityPosts(
-        serialized,
-        getRecommendationProfile(userId),
-        Number.isFinite(snapshotNow) ? snapshotNow : Date.now(),
-      )
+      ? recommendCommunityPosts(serialized, getRecommendationProfile(userId), snapshotNow)
       : serialized;
-    if (cursor) {
-      if (requestedMode === "latest") {
-        const cursorCreatedAt = typeof cursor.createdAt === "string" ? cursor.createdAt : "";
-        if (!cursorCreatedAt) return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
-        ordered = ordered.filter((post) => post.created_at < cursorCreatedAt || (post.created_at === cursorCreatedAt && post.id < cursorId!));
-      } else {
-        const cursorIndex = ordered.findIndex((post) => post.id === cursorId);
-        if (cursorIndex === -1) return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
-        ordered = ordered.slice(cursorIndex + 1);
-      }
+    if (cursor && requestedMode === "recommended") {
+      const cursorIndex = ordered.findIndex((post) => post.id === cursorId);
+      if (cursorIndex === -1) return res.status(400).json({ error: "分页游标无效", code: "INVALID_CURSOR" });
+      ordered = ordered.slice(cursorIndex + 1);
     }
     const items = ordered.slice(0, pageSize);
     const last = items.at(-1);
     const nextCursor = items.length === pageSize && last && ordered.length > pageSize
       ? encodeCursor(requestedMode === "latest"
         ? { v: 2, mode: requestedMode, category: typeof category === "string" ? category : "", createdAt: last.created_at, id: last.id }
-        : { v: 3, mode: requestedMode, category: typeof category === "string" ? category : "", at: snapshotNow, id: last.id })
+        : { v: 4, mode: requestedMode, category: typeof category === "string" ? category : "", at: snapshotNow, maxId: snapshotMaxId, id: last.id })
       : null;
     return res.json({
       items,
       nextCursor,
     });
   }
-  const serialized = posts.map(serializePost);
   const ordered = requestedMode === "recommended"
     ? recommendCommunityPosts(serialized, getRecommendationProfile(userId))
     : serialized;
-  res.json(limit === null ? ordered : ordered.slice(offset, offset + limit));
+  res.json(requestedMode === "latest" || limit === null ? ordered : ordered.slice(offset, offset + limit));
 });
 
 // GET /api/v1/community/posts/:id
@@ -403,19 +465,31 @@ router.post("/posts", authMiddleware, validateBody(communityPostSchema), (req: A
     return res.status(401).json({ error: "未登录" });
   }
 
-  const { content, image_url, image_urls, category, event_start_at, event_end_at } = req.body;
+  const { content, image_url, image_urls, category, event_start_at, event_end_at, linked_recipe_id } = req.body;
   const imageUrls = Array.isArray(image_urls)
     ? image_urls.filter((item): item is string => typeof item === "string").slice(0, 9)
     : [];
   if (typeof image_url === "string" && !imageUrls.length) imageUrls.push(image_url);
   const normalizedContent = String(content || "").trim();
-  if (!normalizedContent && !imageUrls.length) {
-    return res.status(400).json({ error: "动态内容或图片不能为空" });
+  if (!normalizedContent && !imageUrls.length && !linked_recipe_id) {
+    return res.status(400).json({ error: "动态内容、图片或关联菜谱不能为空" });
   }
   if (imageUrls.some((url) => !isStoredMediaUrlForUser(url, auth.userId))) {
     return res.status(400).json({ error: "图片必须先通过当前账号上传" });
   }
   const normalizedCategory = ["寻味", "榜单", "活动", "问答"].includes(category) ? category : "寻味";
+  let linkedRecipeId: number | null = null;
+  if (linked_recipe_id) {
+    const linkedRecipe = db.prepare(`
+      SELECT id FROM recipes
+      WHERE id = ? AND deleted_at IS NULL AND status = 'approved'
+        AND COALESCE(quality_status, 'trusted') <> 'needs_review'
+    `).get(linked_recipe_id) as { id: number } | undefined;
+    if (!linkedRecipe) {
+      return res.status(400).json({ error: "关联菜谱不存在、尚未公开或需要复核", code: "LINKED_RECIPE_NOT_PUBLIC" });
+    }
+    linkedRecipeId = linkedRecipe.id;
+  }
   let eventStartAt: string | null = null;
   let eventEndAt: string | null = null;
   if (normalizedCategory === "活动") {
@@ -431,9 +505,9 @@ router.post("/posts", authMiddleware, validateBody(communityPostSchema), (req: A
   const result = db.prepare(`
     INSERT INTO community_posts (
       user_id, username, avatar_url, category, content, image_url, image_urls,
-      event_start_at, event_end_at, question_status, ip_location, likes_count
+      event_start_at, event_end_at, question_status, ip_location, linked_recipe_id, likes_count
     )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
   `).run(
     auth.userId,
     auth.user.username || `食友${auth.userId}`,
@@ -446,9 +520,10 @@ router.post("/posts", authMiddleware, validateBody(communityPostSchema), (req: A
     eventEndAt,
     normalizedCategory === "问答" ? "open" : null,
     getRequestLocation(req),
+    linkedRecipeId,
   );
 
-  const newPost = db.prepare("SELECT * FROM community_posts WHERE id = ?").get(result.lastInsertRowid);
+  const newPost = db.prepare(`${postSelect(auth.userId)} WHERE p.id = ?`).get(result.lastInsertRowid);
   res.status(201).json(serializePost(newPost));
 });
 
@@ -522,7 +597,7 @@ router.get("/posts/:id/comments", (req: AuthRequest, res) => {
     FROM community_comments c
     JOIN community_posts p ON p.id = c.post_id
     LEFT JOIN users u ON u.id = c.user_id
-    WHERE c.post_id = ?
+    WHERE c.post_id = ? AND p.deleted_at IS NULL
     ORDER BY is_accepted DESC, c.likes_count DESC, c.created_at DESC
   `).all(userId, req.params.id);
   res.json(comments.map((comment: any) => {
@@ -592,7 +667,12 @@ router.post("/posts/:postId/comments/:commentId/accept", authMiddleware, (req: A
 router.post("/comments/:id/like", authMiddleware, (req: AuthRequest, res) => {
   const auth = getAuthenticatedUser(req);
   if (!auth) return res.status(401).json({ error: "未登录" });
-  const comment = db.prepare("SELECT id FROM community_comments WHERE id = ?").get(req.params.id);
+  const comment = db.prepare(`
+    SELECT c.id
+    FROM community_comments c
+    JOIN community_posts p ON p.id = c.post_id
+    WHERE c.id = ? AND p.deleted_at IS NULL
+  `).get(req.params.id);
   if (!comment) return res.status(404).json({ error: "评论不存在" });
   const liked = db.prepare("SELECT 1 FROM community_comment_likes WHERE comment_id = ? AND user_id = ?").get(req.params.id, auth.userId);
   const transaction = db.transaction(() => {

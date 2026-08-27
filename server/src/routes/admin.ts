@@ -11,6 +11,7 @@ import { createAdminAssetsRouter } from "./admin/assets.js";
 import { createAdminNotificationsRouter } from "./admin/notifications.js";
 import { createAdminAgentRunsRouter } from "./admin/agent-runs.js";
 import { auditAdminAction as audit } from "./admin/shared.js";
+import { aiErrorTypeForCode, sanitizeAIErrorMessage } from "../services/aiErrors.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -226,10 +227,29 @@ router.get("/chat-conversations/:userId/:sessionId", (req, res) => {
       WHERE m.user_id = ? AND m.session_id = ?
       ORDER BY m.id ASC
     `).all(userId, req.params.sessionId) as Array<Record<string, unknown>>;
+    const findRunFailure = db.prepare("SELECT error_code AS errorCode, error_message AS errorMessage FROM agent_runs WHERE id = ? AND user_id = ?");
+    const findRunModel = db.prepare("SELECT model FROM ai_usage_logs WHERE run_id = ? ORDER BY id DESC LIMIT 1");
     const messages = rows.map(({ payloadJson, ...message }) => {
       let payload: unknown = null;
       if (typeof payloadJson === "string" && payloadJson) {
         try { payload = JSON.parse(payloadJson); } catch { payload = { legacyCardSummaries: [payloadJson] }; }
+      }
+      if (message.status === "failed" && payload && typeof payload === "object") {
+        const details = payload as Record<string, unknown>;
+        const agentRunId = typeof details.agentRunId === "string" ? details.agentRunId : "";
+        if (agentRunId) {
+          const runFailure = findRunFailure.get(agentRunId, userId) as { errorCode: string | null; errorMessage: string | null } | undefined;
+          const usage = findRunModel.get(agentRunId) as { model: string } | undefined;
+          const errorCode = runFailure?.errorCode || (typeof details.errorCode === "string" ? details.errorCode : "AI_AGENT_FAILED");
+          payload = {
+            ...details,
+            errorCode,
+            errorType: typeof details.errorType === "string" ? details.errorType : aiErrorTypeForCode(errorCode),
+            errorMessage: sanitizeAIErrorMessage(runFailure?.errorMessage || details.errorMessage),
+            failureStage: typeof details.failureStage === "string" ? details.failureStage : "agent_execution",
+            modelIdentifier: usage?.model || details.modelIdentifier || null,
+          };
+        }
       }
       return { ...message, payload };
     });

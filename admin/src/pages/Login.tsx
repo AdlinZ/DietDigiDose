@@ -1,13 +1,21 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import api from '../services/api';
 import logoUrl from '../../../client/assets/logo.png';
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const reason = new URLSearchParams(location.search).get('reason');
+  const [error, setError] = useState(
+    reason === 'insufficient-role'
+      ? '当前账号已无管理权限，请使用管理员账号登录'
+      : reason === 'unauthenticated'
+        ? '登录会话已失效，请重新登录'
+        : '',
+  );
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {

@@ -37,9 +37,14 @@ export default function AdminLayout() {
 
   useEffect(() => {
     api.get('/auth/me').then(({ data }) => {
+      if (data.role !== 'admin') {
+        localStorage.removeItem('adminToken');
+        navigate('/login?reason=insufficient-role', { replace: true });
+        return;
+      }
       setAdminName(data.username || '管理员');
-    }).catch(() => {});
-  }, []);
+    }).catch(() => undefined);
+  }, [navigate]);
 
   useEffect(() => {
     if (assetSectionActive) setAssetSectionOpen(true);

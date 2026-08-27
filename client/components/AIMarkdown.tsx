@@ -132,9 +132,9 @@ export const AIMarkdown: React.FC<AIMarkdownProps> = ({ content }) => {
           const bodyRows = block.data.slice(1);
 
           return (
-            <View key={i} className="my-2 rounded-2xl overflow-hidden border border-line shadow-xs bg-white">
+            <View key={i} className="my-2 rounded-2xl overflow-hidden border border-line shadow-xs bg-surface">
               {/* 表头 */}
-              <View className="flex-row bg-brand px-3 py-2">
+              <View className="flex-row bg-brand-fill px-3 py-2">
                 {headerRow.map((col: string, colIdx: number) => (
                   <View key={colIdx} className="flex-1 items-center justify-center px-1">
                     <Text className="text-[11px] font-black text-white text-center">{col}</Text>
@@ -147,7 +147,7 @@ export const AIMarkdown: React.FC<AIMarkdownProps> = ({ content }) => {
                 <View
                   key={rowIdx}
                   className={`flex-row px-3 py-2 border-t border-line/60 ${
-                    rowIdx % 2 === 1 ? "bg-canvas" : "bg-white"
+                    rowIdx % 2 === 1 ? "bg-canvas" : "bg-surface"
                   }`}
                 >
                   {row.map((colText: string, colIdx: number) => (

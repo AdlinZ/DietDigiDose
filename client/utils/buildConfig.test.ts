@@ -17,6 +17,13 @@ afterEach(() => {
 });
 
 describe("candidate build transport policy", () => {
+  it("declares and configures microphone access for native voice recording", () => {
+    const config = loadExpoConfig("preview", "https://api.example.test");
+    expect(config.android.permissions).toContain("android.permission.RECORD_AUDIO");
+    const avPlugin = config.plugins.find((plugin: unknown) => Array.isArray(plugin) && plugin[0] === "expo-av");
+    expect(avPlugin?.[1]?.microphonePermission).toMatch(/麦克风/);
+  });
+
   it("does not commit a backend URL or insecure flag in candidate profiles", () => {
     const preview = easConfig.build.preview as Record<string, unknown>;
     const production = easConfig.build.production as Record<string, unknown>;

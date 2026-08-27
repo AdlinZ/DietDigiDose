@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { Animated, Easing, TouchableOpacity, ActivityIndicator } from "react-native";
-import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import FontAwesome6 from "@/components/ThemedFontAwesome6";
 
 export type VoiceState =
   | "idle"
@@ -65,12 +65,12 @@ export function VoiceWaveform({
   const getBorderColor = () => {
     switch (voiceState) {
       case "listening":
-        return "border-red-500 bg-red-500/20";
+        return "border-critical bg-critical/20";
       case "speaking":
-        return "border-sky-500 bg-sky-500/20";
+        return "border-info bg-info/20";
       case "thinking":
       case "recognizing":
-        return "border-amber-500 bg-amber-500/20";
+        return "border-warm bg-warm/20";
       default:
         return "border-brand bg-brand/10";
     }
@@ -79,14 +79,14 @@ export function VoiceWaveform({
   const getBtnColor = () => {
     switch (voiceState) {
       case "listening":
-        return "bg-red-500";
+        return "bg-critical-fill";
       case "speaking":
-        return "bg-sky-600";
+        return "bg-info-fill";
       case "thinking":
       case "recognizing":
-        return "bg-amber-500";
+        return "bg-warm-fill";
       default:
-        return "bg-brand";
+        return "bg-brand-fill";
     }
   };
 
@@ -114,12 +114,12 @@ export function VoiceWaveform({
         className={`rounded-full items-center justify-center shadow ${getBtnColor()}`}
       >
         {voiceState === "thinking" ? (
-          <ActivityIndicator color="#FFF" size={isSm ? "small" : "small"} />
+          <ActivityIndicator colorClassName="accent-on-brand" size={isSm ? "small" : "small"} />
         ) : (
           <FontAwesome6
             name={getIconName()!}
             size={iconSize}
-            color="#FFF"
+            colorClassName="accent-on-brand"
           />
         )}
       </TouchableOpacity>

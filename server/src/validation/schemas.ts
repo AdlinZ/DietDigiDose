@@ -104,23 +104,97 @@ export const feedbackCreateSchema = z.object({
   }).strict().optional(),
 }).strict();
 
-export const inventoryCreateSchema = z.object({
+const inventoryUnit = z.enum(["g", "kg", "ml", "l", "piece", "serving", "bag", "box", "bottle", "can"]);
+
+const inventoryCreateObject = z.object({
   food_name: trimmedString(1, 100, "食材名称"),
   category: trimmedString(1, 40, "分类"),
   quantity: trimmedString(1, 40, "数量").default("1份"),
   expiration_date: isoDate,
   storage_location: z.enum(["冷藏", "冷冻", "常温"]).default("冷藏"),
   image_url: optionalImage,
+  quantity_value: z.number().finite().positive().max(1_000_000).nullable().optional(),
+  quantity_unit: inventoryUnit.nullable().optional(),
+  package_size_value: z.number().finite().positive().max(1_000_000).nullable().optional(),
+  package_size_unit: inventoryUnit.nullable().optional(),
+  batch_code: z.string().trim().max(80).nullable().optional(),
 }).strict();
 
-export const inventoryUpdateSchema = inventoryCreateSchema.partial().extend({
+export const inventoryCreateSchema = inventoryCreateObject.superRefine((value, context) => {
+  if ((value.quantity_value == null) !== (value.quantity_unit == null)) {
+    context.addIssue({ code: "custom", path: ["quantity_unit"], message: "结构化数量和单位必须同时填写" });
+  }
+  if ((value.package_size_value == null) !== (value.package_size_unit == null)) {
+    context.addIssue({ code: "custom", path: ["package_size_unit"], message: "包装规格数值和单位必须同时填写" });
+  }
+});
+
+export const inventoryUpdateSchema = inventoryCreateObject.partial().extend({
   is_available: z.boolean().optional(),
+  version: z.number().int().positive().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个需要更新的字段");
+
+const inventoryConsumptionItemSchema = z.object({
+  item_id: z.number().int().positive(),
+  version: z.number().int().positive(),
+  mode: z.enum(["amount", "all"]),
+  amount_value: z.number().finite().positive().max(1_000_000).optional(),
+  unit: inventoryUnit.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.mode === "amount" && (value.amount_value === undefined || value.unit === undefined)) {
+    context.addIssue({ code: "custom", path: ["amount_value"], message: "部分扣减需要填写数量和单位" });
+  }
+});
+
+export const inventoryConsumptionSchema = z.object({
+  idempotency_key: z.string().trim().min(16).max(200),
+  source: z.enum(["manual", "cooking", "ai"]).default("manual"),
+  items: z.array(inventoryConsumptionItemSchema).min(1).max(100),
+}).strict().superRefine((value, context) => {
+  if (new Set(value.items.map((item) => item.item_id)).size !== value.items.length) {
+    context.addIssue({ code: "custom", path: ["items"], message: "同一库存批次不能重复扣减" });
+  }
+});
+
+export const inventoryConsumptionPreviewSchema = z.object({
+  items: z.array(z.object({
+    food_name: trimmedString(1, 100, "食材名称"),
+    amount_value: z.number().finite().positive().max(1_000_000),
+    unit: inventoryUnit,
+  }).strict()).min(1).max(100),
+}).strict();
 
 export const shoppingInventoryImportSchema = z.object({
   idempotency_key: z.string().trim().min(16, "幂等键格式无效").max(200, "幂等键过长"),
   items: z.array(inventoryCreateSchema).min(1, "至少选择一项食材").max(100),
 }).strict();
+
+const inventoryIntakeItemSchema = inventoryCreateObject.extend({
+  confidence: z.number().finite().min(0).max(1).nullable().optional(),
+  confirmed: z.boolean(),
+  source: z.enum(["barcode", "receipt", "image", "manual", "recent"]),
+  barcode: z.string().trim().max(64).nullable().optional(),
+}).strict().superRefine((value, context) => {
+  if ((value.quantity_value == null) !== (value.quantity_unit == null)) {
+    context.addIssue({ code: "custom", path: ["quantity_unit"], message: "结构化数量和单位必须同时填写" });
+  }
+});
+
+export const inventoryBulkIntakeSchema = z.object({
+  idempotency_key: z.string().trim().min(16).max(200),
+  source: z.enum(["barcode", "receipt", "image", "manual", "recent"]),
+  source_reference: z.string().trim().max(200).nullable().optional(),
+  items: z.array(inventoryIntakeItemSchema).min(1).max(100),
+}).strict().superRefine((value, context) => {
+  value.items.forEach((item, index) => {
+    if (!item.confirmed) {
+      context.addIssue({ code: "custom", path: ["items", index, "confirmed"], message: "每项都必须由用户确认后才能入库" });
+    }
+    if (item.confidence !== null && item.confidence !== undefined && item.confidence < 0.8 && !item.confirmed) {
+      context.addIssue({ code: "custom", path: ["items", index, "confidence"], message: "低置信度项目不能静默入库" });
+    }
+  });
+});
 
 export const dietRecordCreateSchema = z.object({
   meal_type: z.string().trim().max(30, "餐别标签不能超过 30 个字符").default(""),
@@ -139,8 +213,48 @@ export const cookingCompletionSchema = z.object({
   idempotency_key: z.string().trim().min(16, "幂等键格式无效").max(200, "幂等键过长"),
   recipe_id: z.number().int().positive().nullable().optional(),
   inventory_item_ids: z.array(z.number().int().positive()).max(100).default([]),
+  inventory_consumptions: z.array(inventoryConsumptionItemSchema).max(100).default([]),
   diet_record: dietRecordCreateSchema,
+}).strict().superRefine((value, context) => {
+  if (value.inventory_item_ids.length && value.inventory_consumptions.length) {
+    context.addIssue({ code: "custom", path: ["inventory_consumptions"], message: "不能同时使用旧版整项扣减和结构化扣减" });
+  }
+});
+
+const cookingQueueStatus = z.enum(["waiting", "preparing", "ready", "cooking", "completed", "cancelled"]);
+const cookingQueueMealType = z.enum(["breakfast", "lunch", "dinner", "snack"]);
+const nullableDateTime = z.string().datetime({ offset: true, message: "计划时间必须是包含时区的 ISO 时间" }).nullable();
+
+export const cookingQueueCreateSchema = z.object({
+  recipeId: z.number().int().positive(),
+  idempotencyKey: z.string().trim().min(8).max(200).optional(),
+  plannedAt: nullableDateTime.optional(),
+  mealType: cookingQueueMealType.nullable().optional(),
 }).strict();
+
+export const cookingQueueUpdateSchema = z.object({
+  version: z.number().int().positive(),
+  status: cookingQueueStatus.optional(),
+  plannedAt: nullableDateTime.optional(),
+  mealType: cookingQueueMealType.nullable().optional(),
+  preparedIngredientNames: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
+  shoppingListSyncedAt: nullableDateTime.optional(),
+}).strict().refine((value) => Object.keys(value).some((key) => key !== "version"), "至少提供一个需要更新的字段");
+
+export const cookingQueueVersionSchema = z.object({
+  version: z.number().int().positive(),
+}).strict();
+
+export const cookingQueueReorderSchema = z.object({
+  items: z.array(z.object({
+    id: z.string().uuid(),
+    version: z.number().int().positive(),
+  }).strict()).min(1).max(30),
+}).strict().superRefine((value, context) => {
+  if (new Set(value.items.map((item) => item.id)).size !== value.items.length) {
+    context.addIssue({ code: "custom", path: ["items"], message: "队列项不能重复" });
+  }
+});
 
 export const healthLogSchema = z.object({
   weight: z.number().finite().min(20).max(500).nullable().optional(),
@@ -214,10 +328,11 @@ export const communityPostSchema = z.object({
   category: z.enum(["寻味", "榜单", "活动", "问答"]).default("寻味"),
   event_start_at: z.string().trim().nullable().optional(),
   event_end_at: z.string().trim().nullable().optional(),
+  linked_recipe_id: z.number().int().positive().nullable().optional(),
 }).strict().superRefine((value, context) => {
   const images = value.image_urls?.length || (value.image_url ? 1 : 0);
-  if (!value.content && !images) {
-    context.addIssue({ code: "custom", path: ["content"], message: "动态内容或图片不能为空" });
+  if (!value.content && !images && !value.linked_recipe_id) {
+    context.addIssue({ code: "custom", path: ["content"], message: "动态内容、图片或关联菜谱不能为空" });
   }
   if (value.category === "活动") {
     const start = value.event_start_at ? Date.parse(value.event_start_at) : Number.NaN;
@@ -286,10 +401,14 @@ const normalizeAIChatPayload = (input: unknown) => {
   const prompt = typeof raw.prompt === "string" ? raw.prompt.trim().slice(0, 12_000) : undefined;
   const sessionId = typeof raw.sessionId === "string" ? raw.sessionId.trim().slice(0, 120) : undefined;
   const source = raw.source === "voice" || raw.source === "cooking" ? raw.source : "assistant";
+  const image = typeof raw.image === "string" ? raw.image.trim() : undefined;
+  const imageMimeType = typeof raw.imageMimeType === "string" ? raw.imageMimeType.trim().toLowerCase() : undefined;
   return {
     ...(messages.length ? { messages } : {}),
     ...(prompt ? { prompt } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(image ? { image } : {}),
+    ...(imageMimeType ? { imageMimeType } : {}),
     source,
   };
 };
@@ -298,8 +417,10 @@ export const aiChatSchema = z.preprocess(normalizeAIChatPayload, z.object({
   messages: z.array(aiChatMessageSchema).max(50).optional(),
   prompt: z.string().min(1).max(12_000).optional(),
   sessionId: z.string().max(120).optional(),
+  image: imagePayload.optional(),
+  imageMimeType: z.enum(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]).optional(),
   source: z.enum(["assistant", "voice", "cooking"]).default("assistant"),
-}).strict().refine((value) => value.prompt || value.messages?.length, "必须提供 prompt 或 messages"));
+}).strict().refine((value) => value.prompt || value.messages?.length || value.image, "必须提供 prompt、messages 或图片"));
 
 export const aiWriteConfirmationCommitSchema = z.object({
   idempotencyKey: z.string().trim().min(16, "幂等键格式无效").max(200, "幂等键过长"),
@@ -335,6 +456,30 @@ export const aiTranscribeSchema = z.object({
   mimeType: z.enum([
     "audio/m4a", "audio/mp4", "audio/mpeg", "audio/wav", "audio/webm", "audio/x-m4a",
   ]).default("audio/m4a"),
+}).strict();
+
+export const realtimeVoiceSessionSchema = z.object({
+  recipeId: z.number().int().positive(),
+  platform: z.enum(["android", "ios", "web"]),
+  idempotencyKey: z.string().trim().min(16).max(200),
+  currentStep: z.number().int().min(0).max(1000).default(0),
+  recipeSteps: z.array(z.string().trim().min(1).max(2000)).max(100).default([]),
+  recipeIngredients: z.array(z.string().trim().min(1).max(500)).max(100).default([]),
+}).strict();
+
+export const realtimeVoiceHeartbeatSchema = z.object({
+  version: z.number().int().positive(),
+  muted: z.boolean().optional(),
+  reconnect: z.boolean().default(false),
+}).strict();
+
+export const realtimeVoiceTurnSchema = z.object({
+  turnId: z.string().uuid(),
+  transcript: z.string().trim().min(1).max(1000),
+  currentStep: z.number().int().min(0).max(1000),
+  timerSeconds: z.number().int().min(0).max(86_400),
+  timerRunning: z.boolean(),
+  interruptedResponse: z.boolean().default(false),
 }).strict();
 
 const agentActionEditSchema = z.object({
@@ -380,6 +525,117 @@ export const shoppingListItemUpdateSchema = shoppingListItemCreateSchema.partial
 export const shoppingListImportSchema = z.object({
   importKey: z.string().trim().min(16).max(200),
   items: z.array(shoppingListItemCreateSchema).max(500),
+}).strict();
+
+export const mealPlanUpdateSchema = z.object({
+  version: z.number().int().positive(),
+  title: trimmedString(1, 120, "餐单标题").optional(),
+  startDate: isoDate.optional(),
+  endDate: isoDate.optional(),
+  status: z.enum(["draft", "active", "completed", "cancelled"]).optional(),
+}).strict().superRefine((value, context) => {
+  if (Object.keys(value).every((key) => key === "version")) {
+    context.addIssue({ code: "custom", message: "至少提供一个需要更新的字段" });
+  }
+  if (value.startDate && value.endDate && value.startDate > value.endDate) {
+    context.addIssue({ code: "custom", path: ["endDate"], message: "结束日期不能早于开始日期" });
+  }
+});
+
+export const mealPlanVersionSchema = z.object({
+  version: z.number().int().positive(),
+}).strict();
+
+export const mealPlanItemUpdateSchema = z.object({
+  version: z.number().int().positive(),
+  plannedDate: isoDate.optional(),
+  mealType: trimmedString(1, 30, "餐次").optional(),
+  recipeId: z.number().int().positive().nullable().optional(),
+  status: z.enum(["planned", "skipped"]).optional(),
+}).strict().refine((value) => Object.keys(value).some((key) => key !== "version"), "至少提供一个需要更新的字段");
+
+const mealPlanExecutionBaseSchema = z.object({
+  version: z.number().int().positive(),
+  idempotencyKey: z.string().trim().min(16).max(200),
+}).strict();
+
+export const mealPlanShoppingSchema = mealPlanExecutionBaseSchema;
+export const mealPlanQueueSchema = mealPlanExecutionBaseSchema;
+export const mealPlanCompleteSchema = mealPlanExecutionBaseSchema.extend({
+  dietRecordId: z.number().int().positive().optional(),
+}).strict();
+
+export const householdShoppingCreateSchema = z.object({
+  name: trimmedString(1, 120, "采购项名称"),
+  amount: z.string().trim().min(1).max(80).default("适量"),
+  category: z.string().trim().min(1).max(40).default("其他"),
+  storageLocation: z.string().trim().max(40).optional(),
+  expirationDate: isoDate.optional(),
+}).strict();
+
+export const householdShoppingUpdateSchema = householdShoppingCreateSchema.partial().extend({
+  version: z.number().int().positive(),
+  checked: z.boolean().optional(),
+}).strict().refine((value) => Object.keys(value).some((key) => key !== "version"), "至少提供一个需要更新的字段");
+
+export const householdShoppingIntakeSchema = z.object({
+  idempotencyKey: z.string().trim().min(16).max(200),
+  items: z.array(z.object({
+    id: z.string().uuid(),
+    version: z.number().int().positive(),
+    quantity: z.string().trim().min(1).max(80),
+    expirationDate: isoDate,
+    storageLocation: z.string().trim().min(1).max(40),
+  }).strict()).min(1).max(200),
+}).strict();
+
+export const householdTransferOwnerSchema = z.object({
+  newOwnerUserId: z.number().int().positive(),
+  version: z.number().int().positive(),
+}).strict();
+
+const inventoryOutcome = z.enum(["cooked", "used", "discarded", "expired", "gifted", "transferred", "unknown"]);
+const inventoryOutcomeSource = z.enum(["manual", "cooking", "reminder", "recommendation", "cleanup"]);
+
+export const inventoryOutcomeCreateSchema = z.object({
+  scope: z.enum(["personal", "household"]),
+  itemId: z.number().int().positive(),
+  householdId: z.number().int().positive().optional(),
+  itemVersion: z.number().int().positive().optional(),
+  outcome: inventoryOutcome,
+  source: inventoryOutcomeSource.default("manual"),
+  idempotencyKey: z.string().trim().min(16).max(200),
+  occurredAt: z.string().datetime({ offset: true }).optional(),
+  closeItem: z.boolean().default(true),
+}).strict().superRefine((value, context) => {
+  if (value.scope === "household" && !value.householdId) context.addIssue({ code: "custom", path: ["householdId"], message: "家庭结果必须指定家庭空间" });
+  if (value.scope === "personal" && value.householdId) context.addIssue({ code: "custom", path: ["householdId"], message: "个人结果不能指定家庭空间" });
+});
+
+export const inventoryOutcomeUpdateSchema = z.object({
+  version: z.number().int().positive(),
+  outcome: inventoryOutcome,
+}).strict();
+
+export const recipeRecommendationSchema = z.object({
+  surface: z.enum(["home", "inventory", "ai", "meal_plan"]).default("inventory"),
+  category: z.string().trim().max(40).optional(),
+  search: z.string().trim().max(120).optional(),
+  maxCookTime: z.number().int().min(1).max(480).optional(),
+  matchStatus: z.enum(["all", "full", "missing_few", "expiring"]).default("all"),
+  mealType: z.enum(["breakfast", "lunch", "dinner", "snack"]).optional(),
+  pageSize: z.number().int().min(1).max(50).default(12),
+  cursor: z.string().trim().max(1000).optional(),
+}).strict();
+
+export const recipeRecommendationEventSchema = z.object({
+  requestId: z.string().uuid().optional(),
+  recipeId: z.number().int().positive(),
+  eventType: z.enum(["exposure", "view", "favorite", "skip", "shopping", "queue", "start", "complete", "constraint_change"]),
+  scoringVersion: z.string().trim().min(1).max(80),
+  surface: z.enum(["home", "inventory", "ai", "meal_plan"]),
+  idempotencyKey: z.string().trim().min(16).max(200),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
 export const kitchenwareSchema = z.object({

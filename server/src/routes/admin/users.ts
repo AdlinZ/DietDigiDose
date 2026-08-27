@@ -140,29 +140,29 @@ router.put("/users/:id/credentials", validateBody(adminUserCredentialsSchema), (
     }
 
     const { identifier, newPassword } = req.body;
-    let nextIdentifier: { username: string; email: string | null; phone: string | null } | undefined;
+    let nextIdentifier: { email: string | null; phone: string | null } | undefined;
     if (identifier !== undefined) {
       const normalized = identifier.trim().toLowerCase();
       if (emailPattern.test(normalized)) {
-        nextIdentifier = { username: normalized, email: normalized, phone: null };
+        nextIdentifier = { email: normalized, phone: null };
       } else if (phonePattern.test(normalized)) {
-        nextIdentifier = { username: normalized, email: null, phone: normalized };
+        nextIdentifier = { email: null, phone: normalized };
       } else {
         return res.status(400).json({ error: "账号必须是有效的邮箱或中国大陆手机号" });
       }
-      const existing = db.prepare("SELECT id FROM users WHERE (username = ? OR email = ? OR phone = ?) AND id != ?")
-        .get(nextIdentifier.username, nextIdentifier.email, nextIdentifier.phone, userId);
+      const existing = db.prepare("SELECT id FROM users WHERE (email = ? OR phone = ?) AND id != ?")
+        .get(nextIdentifier.email, nextIdentifier.phone, userId);
       if (existing) return res.status(409).json({ error: "该邮箱或手机号已被其他账号使用" });
     }
 
     const updates: string[] = [];
     const params: unknown[] = [];
     if (nextIdentifier) {
-      updates.push("username = ?", "email = ?", "phone = ?");
-      params.push(nextIdentifier.username, nextIdentifier.email, nextIdentifier.phone);
+      updates.push("email = ?", "phone = ?");
+      params.push(nextIdentifier.email, nextIdentifier.phone);
     }
     if (newPassword !== undefined) {
-      updates.push("password_hash = ?", "must_change_password = 0");
+      updates.push("password_hash = ?", "must_change_password = 0", "session_version = session_version + 1");
       params.push(bcrypt.hashSync(newPassword, bcrypt.genSaltSync(12)));
     }
     params.push(userId);

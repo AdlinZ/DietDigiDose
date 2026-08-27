@@ -7,6 +7,7 @@ import { analyzeImage, getChatConfig, transcribeAudio } from "../aiService.js";
 import { buildAIPromptMessages, buildUserContext } from "../contextBuilder.js";
 import { executeAIQueryTool } from "../aiTools.js";
 import { db, getSystemSetting, logAIUsage } from "../../storage/db.js";
+import { classifyAIError } from "../aiErrors.js";
 import {
   appendAgentEvent,
   createAgentRun,
@@ -373,6 +374,13 @@ const visionFoodResultSchema = z.object({
   confidence: z.coerce.number().finite().min(0).max(1),
 }).strict();
 
+const visionChatResultSchema = z.object({
+  summary: z.string().trim().min(1).max(4000),
+  observations: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
+  warnings: z.array(z.string().trim().min(1).max(500)).max(10).default([]),
+  confidence: z.coerce.number().finite().min(0).max(1),
+}).strict();
+
 async function runNutritionAgent(state: SupervisorGraphState): Promise<SpecialistOutput> {
   appendAgentEvent(state.runId, state.userId, "NutritionPlanningAgent", "agent_started", "营养规划 Agent 正在分析约束");
   const agent = createAgent({
@@ -413,11 +421,14 @@ async function runVisionAgent(state: SupervisorGraphState): Promise<SpecialistOu
   const media = getAgentRunMedia(state.runId, state.userId);
   if (!media || media.kind !== "image") throw new Error("VisionAgent 缺少图片输入");
   appendAgentEvent(state.runId, state.userId, "VisionAgent", "agent_started", "视觉 Agent 正在识别图片");
+  const isChatAttachment = state.input.metadata?.attachmentMode === "chat";
   const modalityPrompt = state.input.modality === "receipt"
     ? "识别小票中的食品项目、数量、价格；仅返回 JSON，格式为 {items:[{name,quantity,price,category}],confidence,warnings}。"
     : state.input.modality === "inventory_scan"
       ? "识别图片中的食材；仅返回 JSON，格式为 {items:[{foodName,quantity,suggestedStorageLocation,estimatedExpireDays}],confidence,warnings}。"
-      : `${state.input.prompt || "识别食物与分量并估算营养"}。只返回严格 JSON，不要使用 Markdown 或附加说明。输出必须符合以下 JSON Schema：${JSON.stringify(z.toJSONSchema(visionFoodResultSchema))}`;
+      : isChatAttachment
+        ? `用户问题：${state.input.prompt || "请描述并分析这张图片"}。先客观观察图片，再提取回答问题所需的信息；不确定的内容必须标注。只返回严格 JSON，不要使用 Markdown。输出必须符合以下 JSON Schema：${JSON.stringify(z.toJSONSchema(visionChatResultSchema))}`
+        : `${state.input.prompt || "识别食物与分量并估算营养"}。只返回严格 JSON，不要使用 Markdown 或附加说明。输出必须符合以下 JSON Schema：${JSON.stringify(z.toJSONSchema(visionFoodResultSchema))}`;
   const raw = await withTransientRetries(() => analyzeImage(media.data_base64, modalityPrompt, {
     userId: state.userId,
     endpoint: "agent:VisionAgent",
@@ -428,7 +439,7 @@ async function runVisionAgent(state: SupervisorGraphState): Promise<SpecialistOu
   let data: unknown = raw;
   try { data = JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, "")); } catch { /* keep text */ }
   if (state.input.modality === "image") {
-    data = visionFoodResultSchema.parse(data);
+    data = isChatAttachment ? visionChatResultSchema.parse(data) : visionFoodResultSchema.parse(data);
   }
   const output = { summary: typeof data === "string" ? data : JSON.stringify(data), artifacts: [{ type: "vision" as const, title: "视觉识别", data }] };
   appendAgentEvent(state.runId, state.userId, "VisionAgent", "agent_completed", "视觉识别完成", {
@@ -749,10 +760,16 @@ function kickOff(runId: string, resume?: AgentResumePayload) {
   const promise = invokeRun(runId, resume).catch((error: unknown) => {
     const current = getAgentRunRow(runId);
     if (current?.status === "cancelled") return;
-    const message = error instanceof Error ? error.message : "Agent 执行失败";
-    setAgentRunStatus(runId, "failed", { errorCode: message === "AGENT_RUN_CANCELLED" ? "AGENT_RUN_CANCELLED" : "AGENT_RUN_FAILED", errorMessage: message });
+    const classified = classifyAIError(error);
+    setAgentRunStatus(runId, "failed", {
+      errorCode: classified.code,
+      errorMessage: classified.adminMessage,
+    });
     const stored = getAgentRunInput(runId);
-    if (stored) appendAgentEvent(runId, stored.userId, "Supervisor", "run_failed", message);
+    if (stored) appendAgentEvent(runId, stored.userId, "Supervisor", "run_failed", classified.adminMessage, {
+      errorCode: classified.code,
+      errorType: classified.type,
+    });
   }).finally(() => {
     activeRuns.delete(runId);
     const stored = getAgentRunInput(runId);

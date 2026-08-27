@@ -4,6 +4,7 @@ import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { healthLogSchema, healthProfileSchema } from "../validation/schemas.js";
 import { currentDateKey } from "../utils/date.js";
+import { ensureUserInitialState } from "../services/userInitialization.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -121,6 +122,7 @@ function serializeProfile(profile: any) {
 }
 // GET /api/v1/health-data/profile
 router.get("/profile", (req: AuthRequest, res) => {
+  ensureUserInitialState(req.userId!);
   const profile = db.prepare(`
     SELECT * FROM user_health_profiles
     WHERE user_id = ?

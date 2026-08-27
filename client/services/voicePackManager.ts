@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio } from "expo-av";
 import * as Crypto from "expo-crypto";
-import { File, Paths } from "expo-file-system";
+import { File } from "expo-file-system";
 import * as FileSystem from "expo-file-system/src/legacy";
 import * as Network from "expo-network";
 import * as Speech from "expo-speech";
@@ -11,8 +11,12 @@ import { Platform } from "react-native";
 import type { ApiFetch } from "@/services/api/client";
 import { voicePackApi, type VoicePackManifest } from "@/services/api/ai";
 
-const PACK_ROOT = `${Paths.document.uri}voice-packs-v1/`;
-const AUDIO_CACHE_ROOT = `${Paths.cache.uri}voice-output-v1/`;
+const PACK_ROOT = Platform.OS === "web" || !FileSystem.documentDirectory
+  ? null
+  : `${FileSystem.documentDirectory}voice-packs-v1/`;
+const AUDIO_CACHE_ROOT = Platform.OS === "web" || !FileSystem.cacheDirectory
+  ? null
+  : `${FileSystem.cacheDirectory}voice-output-v1/`;
 const STATE_KEY = "voice-pack-state-v1";
 const CACHE_INDEX_KEY = "voice-audio-cache-index-v1";
 const MAX_AUDIO_CACHE_BYTES = 80 * 1024 * 1024;
@@ -38,6 +42,11 @@ let localSession: null | { key: string; session: any; vocabulary: Record<string,
 async function ensureDirectory(uri: string) {
   const info = await FileSystem.getInfoAsync(uri);
   if (!info.exists) await FileSystem.makeDirectoryAsync(uri, { intermediates: true });
+}
+
+function requireNativeRoot(root: string | null) {
+  if (!root) throw new Error("当前平台不支持本地音色文件存储");
+  return root;
 }
 
 export async function getVoicePackState(): Promise<VoicePackState> {
@@ -78,12 +87,13 @@ export async function installVoicePack(
   options: { allowCellular?: boolean; onProgress?: (progress: number) => void } = {},
 ) {
   if (Platform.OS === "web") throw new Error("Web 暂不支持本地 ONNX 音色包，请使用云端或系统语音");
+  const packRoot = requireNativeRoot(PACK_ROOT);
   const network = await Network.getNetworkStateAsync();
   if (network.isConnected === false || network.isInternetReachable === false) throw new Error("当前没有可用网络");
   if (!options.allowCellular && network.type === Network.NetworkStateType.CELLULAR) throw new Error("默认仅允许 Wi-Fi 下载；确认使用移动网络后再试");
-  await ensureDirectory(PACK_ROOT);
-  const staging = `${PACK_ROOT}.staging-${manifest.voiceId}-${manifest.version}/`;
-  const finalDirectory = `${PACK_ROOT}${manifest.voiceId}/${manifest.version}/`;
+  await ensureDirectory(packRoot);
+  const staging = `${packRoot}.staging-${manifest.voiceId}-${manifest.version}/`;
+  const finalDirectory = `${packRoot}${manifest.voiceId}/${manifest.version}/`;
   const priorState = await getVoicePackState();
   const resume = priorState.pausedDownload?.manifest.voiceId === manifest.voiceId
     && priorState.pausedDownload.manifest.version === manifest.version
@@ -118,14 +128,14 @@ export async function installVoicePack(
       options.onProgress?.(Math.min(1, completedBytes / Math.max(1, totalBytes)));
     }
     await FileSystem.writeAsStringAsync(`${staging}manifest.json`, JSON.stringify(manifest));
-    await ensureDirectory(`${PACK_ROOT}${manifest.voiceId}/`);
+    await ensureDirectory(`${packRoot}${manifest.voiceId}/`);
     await FileSystem.deleteAsync(finalDirectory, { idempotent: true });
     await FileSystem.moveAsync({ from: staging, to: finalDirectory });
     const previous = await getVoicePackState();
     await saveState({ installed: manifest, preference: previous.preference, benchmark: null, pausedDownload: null });
     localSession = null;
     if (previous.installed && (previous.installed.voiceId !== manifest.voiceId || previous.installed.version !== manifest.version)) {
-      await FileSystem.deleteAsync(`${PACK_ROOT}${previous.installed.voiceId}/${previous.installed.version}/`, { idempotent: true });
+      await FileSystem.deleteAsync(`${packRoot}${previous.installed.voiceId}/${previous.installed.version}/`, { idempotent: true });
     }
     return manifest;
   } catch (error) {
@@ -158,7 +168,7 @@ export async function resumeVoicePackDownload(options: { allowCellular?: boolean
 export async function deleteVoicePack(deleteGeneratedAudio = false) {
   const state = await getVoicePackState();
   await stopVoiceOutput();
-  if (state.installed) await FileSystem.deleteAsync(`${PACK_ROOT}${state.installed.voiceId}/`, { idempotent: true });
+  if (state.installed && PACK_ROOT) await FileSystem.deleteAsync(`${PACK_ROOT}${state.installed.voiceId}/`, { idempotent: true });
   localSession = null;
   if (deleteGeneratedAudio) await purgeVoiceAudioCache();
   return saveState({ ...state, installed: null, benchmark: null, pausedDownload: null });
@@ -180,9 +190,10 @@ async function localEngine() {
   const state = await getVoicePackState();
   const manifest = state.installed;
   if (!manifest || Platform.OS === "web") throw new Error("本地音色包未安装");
+  const packRoot = requireNativeRoot(PACK_ROOT);
   const key = `${manifest.voiceId}@${manifest.version}`;
   if (localSession?.key === key) return localSession;
-  const directory = `${PACK_ROOT}${manifest.voiceId}/${manifest.version}/`;
+  const directory = `${packRoot}${manifest.voiceId}/${manifest.version}/`;
   const [{ InferenceSession }, vocabularyText] = await Promise.all([
     import("onnxruntime-react-native"),
     FileSystem.readAsStringAsync(`${directory}${safeResourcePath(manifest.model.vocabularyPath)}`),
@@ -252,7 +263,8 @@ async function trimAudioCache(index: Record<string, AudioCacheRow>) {
 }
 
 async function cachedAudio(text: string, userId: number | undefined, sensitive: boolean, producer: () => Promise<{ bytes: Uint8Array; extension: string }>) {
-  await ensureDirectory(AUDIO_CACHE_ROOT);
+  const audioCacheRoot = requireNativeRoot(AUDIO_CACHE_ROOT);
+  await ensureDirectory(audioCacheRoot);
   const state = await getVoicePackState();
   const scope = sensitive ? `user:${userId || "anonymous"}` : "public";
   const key = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,
@@ -265,7 +277,7 @@ async function cachedAudio(text: string, userId: number | undefined, sensitive: 
     return existing.uri;
   }
   const output = await producer();
-  const uri = `${AUDIO_CACHE_ROOT}${key}.${output.extension}`;
+  const uri = `${audioCacheRoot}${key}.${output.extension}`;
   await FileSystem.writeAsStringAsync(uri, Base64.fromUint8Array(output.bytes), { encoding: "base64" });
   index[key] = { uri, bytes: output.bytes.byteLength, accessedAt: Date.now(), sensitive, userScope: scope };
   await trimAudioCache(index);
@@ -306,10 +318,12 @@ export async function speakWithVoiceFallback(apiFetch: ApiFetch, text: string, o
   }
   if (state.preference !== "system-only") {
     try {
-      const uri = await cachedAudio(text, options.userId, Boolean(options.sensitive), async () => {
-        const response = await voicePackApi.synthesize(apiFetch, text);
-        return { bytes: Base64.toUint8Array(response.audioBase64), extension: "mp3" };
-      });
+      const response = await voicePackApi.synthesize(apiFetch, text);
+      const uri = Platform.OS === "web"
+        ? `data:${response.mimeType || "audio/mpeg"};base64,${response.audioBase64}`
+        : await cachedAudio(text, options.userId, Boolean(options.sensitive), async () => ({
+          bytes: Base64.toUint8Array(response.audioBase64), extension: "mp3",
+        }));
       await playUri(uri, generation);
       return "server";
     } catch {
@@ -335,6 +349,6 @@ export async function stopVoiceOutput() {
 }
 
 export async function purgeVoiceAudioCache() {
-  await FileSystem.deleteAsync(AUDIO_CACHE_ROOT, { idempotent: true });
+  if (AUDIO_CACHE_ROOT) await FileSystem.deleteAsync(AUDIO_CACHE_ROOT, { idempotent: true });
   await AsyncStorage.removeItem(CACHE_INDEX_KEY);
 }

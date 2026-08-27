@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { inventoryApi, kitchenwareApi, recipesApi } from "@/services/api";
 import type { ApiFetch } from "@/services/api/client";
 import { getUserStorageKey } from "@/utils/userStorage";
+import { appendUniqueItemsByKey } from "@/utils/pagination";
 import type { InventoryItem, KitchenwareCatalogItem, KitchenwareItem, Recipe } from "./types";
 
 type InventorySection = "inventory" | "recipes" | "kitchenware";
@@ -114,11 +115,7 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
       const page = await recipesApi.listPage<Recipe>(buildRecipePageQuery(recipeQueryRef.current, cursor));
       if (recipeGenerationRef.current !== generation) return;
       const incoming = Array.isArray(page.items) ? page.items : [];
-      const existingIds = new Set(recipesRef.current.map((recipe) => recipe.id));
-      const mergedRecipes = [
-        ...recipesRef.current,
-        ...incoming.filter((recipe) => !existingIds.has(recipe.id)),
-      ];
+      const mergedRecipes = appendUniqueItemsByKey(recipesRef.current, incoming, (recipe) => recipe.id);
       recipesRef.current = mergedRecipes;
       setRecipes(mergedRecipes);
       setRecipeTotal((current) => Number.isFinite(Number(page.total))

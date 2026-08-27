@@ -509,6 +509,14 @@ export default function PostDetailScreen() {
                 >
                   {post.username}
                 </Text>
+                <Text
+                  className="mt-0.5 text-[9px] text-copy-muted"
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  maxFontSizeMultiplier={1.2}
+                >
+                  {formatLocalPostDate(post.created_at)}发布
+                </Text>
               </View>
             </TouchableOpacity>
 
@@ -973,7 +981,7 @@ export default function PostDetailScreen() {
               {!isAuthenticated ? (
                 <View className="mt-3 flex-row items-center justify-between rounded-xl bg-warm-soft px-3 py-2.5">
                   <Text className="text-xs text-warm">登录后才能发布评论和 @ 食友</Text>
-                  <TouchableOpacity onPress={() => { closeCommentComposer(); router.push("/login"); }}>
+                  <TouchableOpacity onPress={() => { closeCommentComposer(); goToLogin("comment"); }}>
                     <Text className="text-xs font-bold text-brand">去登录</Text>
                   </TouchableOpacity>
                 </View>

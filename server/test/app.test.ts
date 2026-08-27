@@ -16,6 +16,9 @@ process.env.ENABLE_DEMO_SEED = "1";
 process.env.DEMO_USER_PASSWORD = "DemoPassword1234";
 process.env.AI_RATE_LIMIT = "3";
 process.env.FOOD_SEARCH_RATE_LIMIT = "2";
+process.env.REGISTER_RATE_LIMIT = "1000";
+process.env.REGISTER_GLOBAL_RATE_LIMIT = "5000";
+process.env.COMMUNITY_SHARE_RATE_LIMIT = "1000";
 
 type JsonObject = Record<string, any>;
 

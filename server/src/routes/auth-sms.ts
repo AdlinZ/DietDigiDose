@@ -294,6 +294,7 @@ router.post("/verify", async (req, res) => {
         recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "login", outcome: user.is_disabled ? "account_disabled" : "succeeded", sourceIp, userAgent });
       })();
       if (user.is_disabled === 1) return sendError(res, 403, "账号已被停用", "ACCOUNT_DISABLED");
+      ensureUserInitialState(user.id);
       recordFunnelEvent(user.id, "login_succeeded");
       return res.json({
         status: "authenticated",

@@ -21,6 +21,10 @@ export function hashRateLimitKey(namespace: string, value: string) {
   return `${namespace}:${createHash("sha256").update(value).digest("hex")}`;
 }
 
+export function getRateLimitClientIp(req: Request) {
+  return String(req.ip || req.socket.remoteAddress || "unknown").trim() || "unknown";
+}
+
 function consume(bucketKey: string, limit: number, windowMs: number, now: number) {
   return db.transaction(() => {
     const row = db.prepare(`

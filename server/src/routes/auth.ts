@@ -16,9 +16,28 @@ import { deleteStoredMediaUrls } from "../services/mediaStorage.js";
 import smsAuthRoutes from "./auth-sms.js";
 import { signUserToken } from "../services/sessionTokens.js";
 import { ensureUserInitialState } from "../services/userInitialization.js";
+import { getRateLimitClientIp, sharedRateLimit } from "../middleware/sharedRateLimit.js";
 
 const router = Router();
 router.use("/sms", smsAuthRoutes);
+
+const registrationWindowMs = Math.max(1_000, Number(process.env.REGISTER_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000);
+const registrationIpRateLimit = sharedRateLimit({
+  namespace: "registration-ip",
+  limit: Math.max(1, Number(process.env.REGISTER_RATE_LIMIT) || 12),
+  windowMs: registrationWindowMs,
+  key: getRateLimitClientIp,
+  message: "注册请求过于频繁，请稍后重试",
+  code: "REGISTER_RATE_LIMITED",
+});
+const registrationGlobalRateLimit = sharedRateLimit({
+  namespace: "registration-global",
+  limit: Math.max(1, Number(process.env.REGISTER_GLOBAL_RATE_LIMIT) || 500),
+  windowMs: registrationWindowMs,
+  key: () => "all",
+  message: "注册服务当前请求过多，请稍后重试",
+  code: "REGISTER_RATE_LIMITED",
+});
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phonePattern = /^1[3-9]\d{9}$/;
@@ -31,7 +50,7 @@ function parseLoginIdentifier(value: unknown) {
 }
 
 // POST /api/v1/auth/register
-router.post("/register", validateBody(registerSchema), async (req, res) => {
+router.post("/register", registrationIpRateLimit, registrationGlobalRateLimit, validateBody(registerSchema), async (req, res) => {
   try {
     const { identifier, username, password } = req.body;
     const loginIdentifier = parseLoginIdentifier(identifier);
@@ -49,8 +68,7 @@ router.post("/register", validateBody(registerSchema), async (req, res) => {
     if (usernameTaken) return sendError(res, 409, "该用户名已被使用", "USERNAME_EXISTS");
 
     // Hash password
-    const salt = bcrypt.genSaltSync(10);
-    const passwordHash = bcrypt.hashSync(password, salt);
+    const passwordHash = await bcrypt.hash(password, 10);
 
     const userId = db.transaction(() => {
       const result = db.prepare(`
@@ -110,6 +128,8 @@ router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res
     if (user.is_disabled === 1) {
       return sendError(res, 403, "账号已被停用", "ACCOUNT_DISABLED");
     }
+
+    ensureUserInitialState(user.id);
 
     clearLoginFailures(rawIdentifier);
     const clientIp = (req.headers["x-forwarded-for"] as string || req.ip || req.socket.remoteAddress || "").split(",")[0].trim();
@@ -281,6 +301,7 @@ router.delete("/account", authMiddleware, validateBody(deleteAccountSchema), asy
     await deleteStoredMediaUrls(req.userId!, mediaUrls);
 
     const result = db.transaction(() => {
+      prepareHouseholdsForAccountDeletion(req.userId!);
       deleteFunnelEvents(req.userId!);
       return db.prepare("DELETE FROM users WHERE id = ?").run(req.userId);
     })();
@@ -299,6 +320,67 @@ function parseStoredUrlList(value: string | null) {
     return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
   } catch {
     return [];
+  }
+}
+
+function prepareHouseholdsForAccountDeletion(userId: number) {
+  const ownedHouseholds = db.prepare(`
+    SELECT h.id
+    FROM households h
+    WHERE h.owner_id = ?
+    ORDER BY h.id
+  `).all(userId) as Array<{ id: number }>;
+
+  for (const household of ownedHouseholds) {
+    const successor = db.prepare(`
+      SELECT hm.user_id
+      FROM household_members hm
+      WHERE hm.household_id = ? AND hm.user_id <> ?
+      ORDER BY hm.joined_at ASC, hm.id ASC
+      LIMIT 1
+    `).get(household.id, userId) as { user_id: number } | undefined;
+
+    if (!successor) {
+      db.prepare("DELETE FROM households WHERE id = ?").run(household.id);
+      continue;
+    }
+
+    db.prepare("UPDATE households SET owner_id = ?, version = version + 1 WHERE id = ?")
+      .run(successor.user_id, household.id);
+    db.prepare("UPDATE household_members SET role = CASE WHEN user_id = ? THEN 'owner' ELSE 'member' END WHERE household_id = ?")
+      .run(successor.user_id, household.id);
+  }
+
+  const retainedHouseholds = db.prepare(`
+    SELECT hm.household_id, h.owner_id AS replacement_user_id
+    FROM household_members hm
+    JOIN households h ON h.id = hm.household_id
+    WHERE hm.user_id = ?
+  `).all(userId) as Array<{ household_id: number; replacement_user_id: number }>;
+
+  for (const household of retainedHouseholds) {
+    const { household_id: householdId, replacement_user_id: replacementUserId } = household;
+    db.prepare("UPDATE household_inventory_items SET created_by_user_id = ? WHERE household_id = ? AND created_by_user_id = ?")
+      .run(replacementUserId, householdId, userId);
+    db.prepare("UPDATE household_activity_logs SET operator_user_id = ? WHERE household_id = ? AND operator_user_id = ?")
+      .run(replacementUserId, householdId, userId);
+    db.prepare("UPDATE household_shopping_items SET created_by_user_id = ? WHERE household_id = ? AND created_by_user_id = ?")
+      .run(replacementUserId, householdId, userId);
+    db.prepare("UPDATE household_shopping_items SET updated_by_user_id = ? WHERE household_id = ? AND updated_by_user_id = ?")
+      .run(replacementUserId, householdId, userId);
+    db.prepare("UPDATE household_shopping_intake_batches SET user_id = ? WHERE household_id = ? AND user_id = ?")
+      .run(replacementUserId, householdId, userId);
+    db.prepare(`
+      UPDATE inventory_outcome_events
+      SET idempotency_key = 'deleted-account:' || ? || ':' || id
+      WHERE household_id = ? AND created_by_user_id = ?
+    `).run(userId, householdId, userId);
+    db.prepare("UPDATE inventory_outcome_events SET created_by_user_id = ? WHERE household_id = ? AND created_by_user_id = ?")
+      .run(replacementUserId, householdId, userId);
+    db.prepare("UPDATE inventory_outcome_events SET updated_by_user_id = ? WHERE household_id = ? AND updated_by_user_id = ?")
+      .run(replacementUserId, householdId, userId);
+    db.prepare("DELETE FROM household_members WHERE household_id = ? AND user_id = ?")
+      .run(householdId, userId);
   }
 }
 

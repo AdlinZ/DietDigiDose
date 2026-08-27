@@ -14,6 +14,9 @@
 import { Converter } from 'opencc-js';
 import { db, initDatabase } from '../src/storage/db.js';
 import { assessRecipeQuality, type NutritionBasis, type RecipeQualityIssue, type RecipeQualityStatus } from '../src/services/recipeQuality.js';
+import { findRecipeDuplicateCandidates, recipeContentFingerprint, validateRecipePublication } from '../src/services/contentGovernance.js';
+import { beginImportBatch, contentSnapshot, finishImportBatch, trackImportMutation } from '../src/services/importGovernance.js';
+import { setRecipeKitchenwareRequirements } from '../src/services/kitchenwareCapabilities.js';
 import { ensureIngredientGroups, type IngredientGroup } from '../src/utils/ingredientGroups.js';
 
 const API_URL = 'https://zh.wikibooks.org/w/api.php';
@@ -23,6 +26,7 @@ const CATEGORY = 'Category:食譜';
 const USER_AGENT = 'DietDigiDose/1.0 (Chinese Wikibooks recipe importer)';
 const dryRun = process.argv.includes('--dry-run');
 const toSimplified = Converter({ from: 'tw', to: 'cn' });
+let batchId: string | null = null;
 
 type CategoryMember = { pageid: number; ns: number; title: string };
 type WikiRevision = {
@@ -65,6 +69,19 @@ type ParsedRecipe = {
   nutritionBasis: NutritionBasis;
   qualityIssues: RecipeQualityIssue[];
 };
+
+function requiredKitchenwareFor(recipe: Pick<ParsedRecipe, 'title' | 'steps'>) {
+  const text = `${recipe.title} ${recipe.steps.join(' ')}`;
+  const names = [
+    ...(/空气炸锅/.test(text) ? ['空气炸锅'] : []),
+    ...(/烤箱|烘烤|烘焙/.test(text) ? ['烤箱'] : []),
+    ...(/蒸|蒸制/.test(text) ? ['蒸锅'] : []),
+    ...(/炖|煮|汤|焯/.test(text) ? ['汤锅'] : []),
+    ...(/炒|煎|爆/.test(text) ? ['炒锅'] : []),
+    '菜刀',
+  ];
+  return [...new Set(names)];
+}
 
 const INGREDIENT_HEADINGS = [
   '食材', '材料', '原料', '用料', '配料', '所需材料', '使用材料', '必备原料', '主料',
@@ -508,6 +525,8 @@ async function main() {
   const parsed = pages
     .map((page) => parseRecipe(page, foods))
     .filter((recipe): recipe is ParsedRecipe => Boolean(recipe));
+  const sourceRevision = parsed.map((recipe) => Number(recipe.revision) || 0).sort((left, right) => right - left)[0]?.toString() || 'unknown';
+  batchId = beginImportBatch('recipe', { source: SOURCE, revision: sourceRevision, dataLicense: LICENSE, dryRun });
 
   const existingByExternalId = db.prepare('SELECT id FROM recipes WHERE source = ? AND external_id = ?');
   const existingTitles = new Map(
@@ -519,8 +538,9 @@ async function main() {
       title, description, image_url, cook_time, difficulty, calories, protein, carbs, fat,
       category, tags, steps_json, ingredients_json, source, status, external_id, source_url,
       data_license, source_revision, source_attribution, quality_status, nutrition_basis,
-      quality_issues_json, updated_at
-    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      quality_issues_json, canonical_key, source_content_hash, import_batch_id, serving_size,
+      prep_time, required_kitchenware_json, meal_types_json, updated_at
+    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `);
   const update = db.prepare(`
     UPDATE recipes SET
@@ -528,6 +548,8 @@ async function main() {
       carbs = ?, fat = ?, category = ?, tags = ?, steps_json = ?, ingredients_json = ?,
       status = 'approved', source_url = ?, data_license = ?, source_revision = ?,
       source_attribution = ?, quality_status = ?, nutrition_basis = ?, quality_issues_json = ?,
+      canonical_key = ?, source_content_hash = ?, import_batch_id = ?, serving_size = ?, prep_time = ?,
+      required_kitchenware_json = ?, meal_types_json = ?,
       deleted_at = NULL, deleted_by = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `);
@@ -535,9 +557,22 @@ async function main() {
   let inserted = 0;
   let updated = 0;
   let duplicateTitles = 0;
+  let rejectedByGovernance = 0;
   const transaction = db.transaction(() => {
     for (const recipe of parsed) {
+      const requiredKitchenware = requiredKitchenwareFor(recipe);
+      const governanceIssues = validateRecipePublication({
+        title: recipe.title, source: SOURCE, sourceUrl: recipe.sourceUrl, dataLicense: LICENSE,
+        sourceAttribution: recipe.attribution, servingSize: 2, prepTime: 0, cookTime: recipe.cookTime,
+        ingredients: recipe.ingredients, steps: recipe.steps, requiredKitchenware,
+      });
+      if (governanceIssues.length) {
+        rejectedByGovernance += 1;
+        continue;
+      }
       const existing = existingByExternalId.get(SOURCE, recipe.externalId) as { id: number } | undefined;
+      const canonicalKey = normalizeTitle(recipe.title);
+      const fingerprint = recipeContentFingerprint({ title: recipe.title, ingredients: recipe.ingredients, steps: recipe.steps });
       const values = [
         recipe.title, recipe.description, recipe.cookTime, recipe.difficulty, recipe.calories,
         recipe.protein, recipe.carbs, recipe.fat, recipe.category, JSON.stringify(recipe.tags),
@@ -545,10 +580,15 @@ async function main() {
       ] as const;
       if (existing) {
         if (!dryRun) {
+          const before = contentSnapshot('recipe', existing.id) || null;
           update.run(
             ...values, recipe.sourceUrl, LICENSE, recipe.revision, recipe.attribution,
-            recipe.qualityStatus, recipe.nutritionBasis, JSON.stringify(recipe.qualityIssues), existing.id,
+            recipe.qualityStatus, recipe.nutritionBasis, JSON.stringify(recipe.qualityIssues),
+            canonicalKey, fingerprint, batchId, 2, 0, JSON.stringify(requiredKitchenware), JSON.stringify([]), existing.id,
           );
+          setRecipeKitchenwareRequirements(existing.id, requiredKitchenware, { source: SOURCE });
+          findRecipeDuplicateCandidates(existing.id);
+          trackImportMutation('recipe', { batchId: batchId!, contentId: existing.id, action: 'update', before, after: contentSnapshot('recipe', existing.id)! });
         }
         updated += 1;
         continue;
@@ -558,11 +598,16 @@ async function main() {
         continue;
       }
       if (!dryRun) {
-        insert.run(
+        const result = insert.run(
           ...values, SOURCE, recipe.externalId, recipe.sourceUrl, LICENSE,
           recipe.revision, recipe.attribution, recipe.qualityStatus, recipe.nutritionBasis,
-          JSON.stringify(recipe.qualityIssues),
+          JSON.stringify(recipe.qualityIssues), canonicalKey, fingerprint, batchId, 2, 0,
+          JSON.stringify(requiredKitchenware), JSON.stringify([]),
         );
+        const recipeId = Number(result.lastInsertRowid);
+        setRecipeKitchenwareRequirements(recipeId, requiredKitchenware, { source: SOURCE });
+        findRecipeDuplicateCandidates(recipeId);
+        trackImportMutation('recipe', { batchId: batchId!, contentId: recipeId, action: 'insert', before: null, after: contentSnapshot('recipe', recipeId)! });
       }
       existingTitles.set(normalizeTitle(recipe.title), { id: -1, title: recipe.title, source: SOURCE });
       inserted += 1;
@@ -570,20 +615,24 @@ async function main() {
   });
   transaction();
 
-  console.log(JSON.stringify({
+  const stats = {
     categoryPages: pages.length,
     structurallyValid: parsed.length,
     inserted,
     updated,
     duplicateTitles,
+    rejectedByGovernance,
     skippedIncomplete: pages.length - parsed.length,
     dryRun,
-  }, null, 2));
+  };
+  finishImportBatch('recipe', batchId, { status: dryRun ? 'validated' : 'committed', stats });
+  console.log(JSON.stringify({ batchId, ...stats }, null, 2));
 }
 
 main()
   .catch((error) => {
     console.error(error);
+    if (batchId && !dryRun) finishImportBatch('recipe', batchId, { status: 'failed', stats: {}, errors: [error instanceof Error ? error.message : String(error)] });
     process.exitCode = 1;
   })
   .finally(() => db.close());

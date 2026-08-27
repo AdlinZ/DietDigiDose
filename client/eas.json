@@ -1,12 +1,12 @@
 {
   "cli": {
-    "appVersionSource": "remote"
+    "appVersionSource": "local"
   },
   "build": {
     "preview": {
       "channel": "preview",
       "environment": "preview",
-      "autoIncrement": true,
+      "autoIncrement": false,
       "distribution": "internal",
       "android": {
         "buildType": "apk"
@@ -33,7 +33,16 @@
     "production": {
       "channel": "production",
       "environment": "production",
-      "autoIncrement": true
+      "autoIncrement": false
+    },
+    "candidate": {
+      "channel": "candidate",
+      "environment": "preview",
+      "autoIncrement": false,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
     }
   }
 }

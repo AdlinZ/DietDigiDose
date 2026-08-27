@@ -14,14 +14,14 @@ import { Screen } from "@/components/Screen";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSafeSearchParams, useSafeRouter } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
-import * as Speech from "expo-speech";
 import * as Haptics from "expo-haptics";
-import { useAuthFetch } from "@/contexts/AuthContext";
+import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { toLocalDateKey, toLocalTimeKey } from "@/utils/date";
 import { aiApi, cookingQueueApi, dietApi, inventoryApi, recipesApi, waitForAgentRun, type Recipe } from "@/services/api";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useRealtimeCookingVoice } from "@/hooks/useRealtimeCookingVoice";
 import { parseStructuredQuantity, structuredUnitLabel, type StructuredUnit } from "@/utils/structuredQuantity";
+import { speakWithVoiceFallback, stopVoiceOutput, type VoiceSource } from "@/services/voicePackManager";
 
 interface CookingStep {
   text: string;
@@ -61,6 +61,7 @@ export default function CookingModeScreen() {
 
   const router = useSafeRouter();
   const authFetch = useAuthFetch();
+  const { user } = useAuth();
   const [cookingChatSessionId] = useState(() => `cooking-${Date.now()}`);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [recipeLoading, setRecipeLoading] = useState(true);
@@ -99,6 +100,7 @@ export default function CookingModeScreen() {
   const [isAILoading, setIsAILoading] = useState(false);
 
   const [autoSpeechEnabled, setAutoSpeechEnabled] = useState(true);
+  const [voiceSource, setVoiceSource] = useState<VoiceSource | null>(null);
   const [isCompleting, setIsCompleting] = useState(false);
 
   // 🎙️ Live Direct Voice HUD Toast State (底栏上方半透明 HUD 悬浮卡片状态)
@@ -113,6 +115,14 @@ export default function CookingModeScreen() {
 
   const voiceHudTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completionKeyRef = useRef(`cook-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+  useEffect(() => () => { void stopVoiceOutput(); }, []);
+
+  const speak = useCallback((text: string, sensitive = false) => {
+    void speakWithVoiceFallback(authFetch, text, { userId: user?.id, sensitive })
+      .then(setVoiceSource)
+      .catch(() => setVoiceSource("system"));
+  }, [authFetch, user?.id]);
 
   // Step duration estimation
   const estimateStepDuration = (step: string): number => {
@@ -199,13 +209,12 @@ export default function CookingModeScreen() {
 
   const speakStep = useCallback((stepText: string, stepIndex: number) => {
     try {
-      Speech.stop();
       const contentToSpeak = `第 ${stepIndex + 1} 步：${stepText}`;
-      Speech.speak(contentToSpeak, { language: "zh-CN", rate: 0.95 });
+      speak(contentToSpeak);
     } catch (e) {
       console.error("Speech error", e);
     }
-  }, []);
+  }, [speak]);
 
   useEffect(() => {
     const id = Number(recipeId);
@@ -273,7 +282,7 @@ export default function CookingModeScreen() {
               setIsTimerRunning(false);
               try {
                 void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                Speech.speak("当前步骤倒计时结束！", { language: "zh-CN" });
+                speak("当前步骤倒计时结束！");
               } catch {}
               return 0;
             }
@@ -289,7 +298,7 @@ export default function CookingModeScreen() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isTimerRunning, timerMode]);
+  }, [isTimerRunning, speak, timerMode]);
 
   // 🎙️ Execute Direct Voice Command from HUD
   const executeDirectVoiceCommand = async (commandText: string) => {
@@ -343,7 +352,7 @@ export default function CookingModeScreen() {
           actionDoneText,
         });
 
-        Speech.speak(actionDoneText, { language: "zh-CN", rate: 1.0 });
+        speak(actionDoneText);
       } else {
         const completedRun = data.run ? await waitForAgentRun(authFetch, data.run) : undefined;
         const reply = completedRun?.reply || data.answerText || completedRun?.error?.message || "已为您提供下厨解答";
@@ -358,7 +367,7 @@ export default function CookingModeScreen() {
           aiText: reply,
         });
 
-        Speech.speak(reply, { language: "zh-CN", rate: 1.0 });
+        speak(reply, true);
       }
 
       // Keep the floating answer available while the user is cooking, then dismiss it.
@@ -414,7 +423,7 @@ export default function CookingModeScreen() {
     recipeIngredients: ingredients.map((ingredient) => `${ingredient.name} ${ingredient.amount}`),
     onTranscript: (text) => setVoiceHudState({ visible: true, type: "listening", userText: text }),
     onBargeIn: () => {
-      void Speech.stop();
+      void stopVoiceOutput();
       setVoiceHudState((previous) => ({ ...previous, visible: true, type: "listening", aiText: undefined }));
     },
     onControl: (action, seconds) => {
@@ -437,15 +446,15 @@ export default function CookingModeScreen() {
         message = `已增加 ${Math.round(seconds / 60)} 分钟`;
       }
       setVoiceHudState({ visible: true, type: "result", actionDoneText: message });
-      if (autoSpeechEnabled) Speech.speak(message, { language: "zh-CN", rate: 1 });
+      if (autoSpeechEnabled) speak(message);
     },
     onAnswerDelta: (text) => setVoiceHudState((previous) => ({ ...previous, visible: true, type: "result", aiText: text })),
     onAnswer: (text) => {
       setVoiceHudState((previous) => ({ ...previous, visible: true, type: "result", aiText: text }));
-      if (autoSpeechEnabled) Speech.speak(text, { language: "zh-CN", rate: 1 });
+      if (autoSpeechEnabled) speak(text, true);
     },
     onConfirmationRequired: (message) => {
-      void Speech.stop();
+      void stopVoiceOutput();
       Alert.alert("需要屏幕确认", message);
       setVoiceHudState({ visible: true, type: "result", aiText: message });
     },
@@ -460,7 +469,7 @@ export default function CookingModeScreen() {
 
     if (realtimeVoice.active) {
       void realtimeVoice.stop();
-      void Speech.stop();
+      void stopVoiceOutput();
       return;
     }
     if (isVoiceRecording) {
@@ -837,7 +846,7 @@ export default function CookingModeScreen() {
             const doExit = () => {
               void realtimeVoice.stop();
               stopVoiceRecording();
-              void Speech.stop();
+              void stopVoiceOutput();
               if (router.canGoBack()) {
                 router.back();
               } else {
@@ -1141,12 +1150,12 @@ export default function CookingModeScreen() {
             <View className="flex-row items-center gap-2">
               <View
                 className={`w-2.5 h-2.5 rounded-full ${
-                  realtimeVoice.active || isVoiceRecording ? "bg-critical-fill" : "bg-brand-fill"
+                  realtimeVoice.muted ? "bg-copy-muted" : realtimeVoice.active || isVoiceRecording ? "bg-critical-fill" : "bg-brand-fill"
                 }`}
               />
               <Text className="text-xs font-black text-brand-strong tracking-wide">
                 {realtimeVoice.active
-                  ? realtimeVoice.state === "reconnecting" ? "连接较弱，正在恢复连续语音..." : "连续语音已开启，可直接说话或插话"
+                  ? realtimeVoice.muted ? "持续监听已静音，点麦克风恢复" : realtimeVoice.state === "reconnecting" ? "连接较弱，正在恢复连续语音..." : "连续语音已开启，可直接说话或插话"
                   : isVoiceRecording
                   ? "正在录制本轮语音，请说话..."
                   : isVoiceTranscribing || voiceHudState.type === "processing"
@@ -1154,11 +1163,26 @@ export default function CookingModeScreen() {
                   : "AI 厨艺语音解答"}
               </Text>
             </View>
+            {realtimeVoice.active ? (
+              <TouchableOpacity
+                onPress={() => void realtimeVoice.toggleMute()}
+                accessibilityRole="button"
+                accessibilityLabel={realtimeVoice.muted ? "恢复持续监听" : "静音持续监听"}
+                className="ml-auto mr-2 h-7 w-7 items-center justify-center rounded-full bg-background-secondary"
+              >
+                <FontAwesome6 name={realtimeVoice.muted ? "microphone-slash" : "microphone"} size={10} colorClassName="accent-copy-muted" />
+              </TouchableOpacity>
+            ) : null}
+            {voiceSource ? (
+              <Text className="mr-2 rounded-full bg-background-secondary px-2 py-1 text-[9px] font-black text-copy-muted">
+                {voiceSource === "local" ? "本地音色" : voiceSource === "server" ? "云端语音" : "系统语音"}
+              </Text>
+            ) : null}
             <TouchableOpacity
               onPress={() => {
                 if (isVoiceRecording) stopVoiceRecording();
                 if (realtimeVoice.active) void realtimeVoice.stop();
-                void Speech.stop();
+                void stopVoiceOutput();
                 setVoiceHudState((prev) => ({ ...prev, visible: false }));
               }}
               className="w-6 h-6 rounded-full bg-background-secondary border border-line items-center justify-center active:bg-background-secondary"

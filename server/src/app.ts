@@ -18,6 +18,7 @@ import mealPlanRoutes from "./routes/meal-plans.js";
 import insightsRoutes from "./routes/insights.js";
 import recommendationRoutes from "./routes/recommendations.js";
 import realtimeVoiceRoutes from "./routes/realtime-voice.js";
+import voicePackRoutes from "./routes/voice-packs.js";
 import kitchenwareRoutes from "./routes/kitchenware.js";
 import notificationsRoutes from "./routes/notifications.js";
 import mediaRoutes from "./routes/media.js";
@@ -104,6 +105,7 @@ export function createApp() {
   app.use("/api/v1/community", communityRoutes);
   app.use("/api/v1/admin", adminRoutes);
   app.use("/api/v1/ai/realtime-voice", realtimeVoiceRoutes);
+  app.use("/api/v1/ai/voice-packs", voicePackRoutes);
   app.use("/api/v1/ai", aiRoutes);
   app.use("/api/v1/ai", agentRunRoutes);
   app.use("/api/v1/shopping-list", shoppingListRoutes);

@@ -1,0 +1,187 @@
+import { createHash } from "node:crypto";
+import { Converter } from "opencc-js";
+
+import { db } from "../storage/db.js";
+
+const TRADITIONAL_TO_SIMPLIFIED: Record<string, string> = {
+  "蕃": "番", "馬": "马", "鈴": "铃", "薯": "薯", "雞": "鸡", "魚": "鱼",
+  "蝦": "虾", "豬": "猪", "蔥": "葱", "薑": "姜", "蒜": "蒜", "蘿": "萝",
+  "蔔": "卜", "麵": "面", "飯": "饭", "湯": "汤", "醬": "酱", "鹽": "盐",
+};
+const toSimplified = Converter({ from: "tw", to: "cn" });
+
+export function normalizeContentTerm(value: string) {
+  return toSimplified(value.normalize("NFKC").toLocaleLowerCase()).split("")
+    .map((character) => TRADITIONAL_TO_SIMPLIFIED[character] || character)
+    .join("")
+    .replace(/\([^)]*\)|（[^）]*）/g, "")
+    .replace(/[\s·、，,。()（）/\\_-]/g, "")
+    .trim();
+}
+
+export type IngredientQualityIssue =
+  | "missing_source"
+  | "missing_license"
+  | "invalid_calories"
+  | "invalid_macronutrient"
+  | "implausible_macronutrient_total"
+  | "invalid_edible_ratio"
+  | "missing_source_version";
+
+export function validateIngredientQuality(input: {
+  calories100g: number;
+  protein100g?: number | null;
+  carbs100g?: number | null;
+  fat100g?: number | null;
+  edibleRatio?: number | null;
+  source?: string | null;
+  dataLicense?: string | null;
+  sourceVersion?: string | null;
+}) {
+  const issues = new Set<IngredientQualityIssue>();
+  if (!input.source?.trim()) issues.add("missing_source");
+  if (!input.dataLicense?.trim()) issues.add("missing_license");
+  if (!input.sourceVersion?.trim()) issues.add("missing_source_version");
+  if (!Number.isFinite(input.calories100g) || input.calories100g < 0 || input.calories100g > 1_000) issues.add("invalid_calories");
+  const macros = [input.protein100g, input.carbs100g, input.fat100g]
+    .map((value) => Number(value || 0));
+  if (macros.some((value) => !Number.isFinite(value) || value < 0 || value > 100)) issues.add("invalid_macronutrient");
+  if (macros.reduce((sum, value) => sum + value, 0) > 105) issues.add("implausible_macronutrient_total");
+  const edibleRatio = Number(input.edibleRatio ?? 1);
+  if (!Number.isFinite(edibleRatio) || edibleRatio <= 0 || edibleRatio > 1) issues.add("invalid_edible_ratio");
+  return [...issues];
+}
+
+function parseList(value: unknown) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function stringSet(value: unknown) {
+  return new Set(parseList(value).flatMap((item) => {
+    if (typeof item === "string") return normalizeContentTerm(item) ? [normalizeContentTerm(item)] : [];
+    if (!item || typeof item !== "object") return [];
+    const name = normalizeContentTerm(String((item as Record<string, unknown>).name || ""));
+    return name ? [name] : [];
+  }));
+}
+
+function jaccard(left: Set<string>, right: Set<string>) {
+  if (!left.size && !right.size) return 1;
+  const intersection = [...left].filter((value) => right.has(value)).length;
+  return intersection / Math.max(1, new Set([...left, ...right]).size);
+}
+
+export function recipeContentFingerprint(input: { title: string; ingredients: unknown; steps: unknown }) {
+  const payload = {
+    title: normalizeContentTerm(input.title),
+    ingredients: [...stringSet(input.ingredients)].sort(),
+    steps: parseList(input.steps).map((step) => normalizeContentTerm(String(step))).filter(Boolean),
+  };
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+export function recipeSimilarity(left: { title: string; ingredients: unknown; steps: unknown }, right: { title: string; ingredients: unknown; steps: unknown }) {
+  const titleLeft = normalizeContentTerm(left.title);
+  const titleRight = normalizeContentTerm(right.title);
+  const titleScore = titleLeft === titleRight ? 1 : titleLeft.includes(titleRight) || titleRight.includes(titleLeft) ? 0.75 : 0;
+  const ingredientScore = jaccard(stringSet(left.ingredients), stringSet(right.ingredients));
+  const stepScore = jaccard(stringSet(left.steps), stringSet(right.steps));
+  const score = Math.round((titleScore * 0.45 + ingredientScore * 0.4 + stepScore * 0.15) * 10_000) / 10_000;
+  const reasons = [
+    ...(titleScore >= 0.75 ? ["title"] : []),
+    ...(ingredientScore >= 0.7 ? ["ingredients"] : []),
+    ...(stepScore >= 0.7 ? ["steps"] : []),
+  ];
+  return { score, reasons };
+}
+
+export type RecipePublicationIssue =
+  | "missing_title"
+  | "missing_source_url"
+  | "missing_license"
+  | "missing_attribution"
+  | "missing_serving_size"
+  | "missing_time"
+  | "missing_ingredients"
+  | "missing_steps"
+  | "missing_kitchenware_mapping";
+
+export function validateRecipePublication(input: {
+  title?: string | null;
+  source?: string | null;
+  sourceUrl?: string | null;
+  dataLicense?: string | null;
+  sourceAttribution?: string | null;
+  servingSize?: number | null;
+  prepTime?: number | null;
+  cookTime?: number | null;
+  ingredients?: unknown;
+  steps?: unknown;
+  requiredKitchenware?: unknown;
+}) {
+  const issues = new Set<RecipePublicationIssue>();
+  if (!input.title?.trim()) issues.add("missing_title");
+  const imported = !["official", "user"].includes(String(input.source || ""));
+  if (imported && !input.sourceUrl?.trim()) issues.add("missing_source_url");
+  if (!input.dataLicense?.trim()) issues.add("missing_license");
+  if (imported && !input.sourceAttribution?.trim()) issues.add("missing_attribution");
+  if (!Number.isInteger(Number(input.servingSize)) || Number(input.servingSize) <= 0) issues.add("missing_serving_size");
+  if (Number(input.prepTime || 0) + Number(input.cookTime || 0) <= 0) issues.add("missing_time");
+  if (!parseList(input.ingredients).length) issues.add("missing_ingredients");
+  if (parseList(input.steps).length < 2) issues.add("missing_steps");
+  if (!parseList(input.requiredKitchenware).length) issues.add("missing_kitchenware_mapping");
+  return [...issues];
+}
+
+export function recordIngredientSearchGap(query: string) {
+  const normalized = normalizeContentTerm(query);
+  if (!normalized) return;
+  db.prepare(`
+    INSERT INTO ingredient_search_gaps (normalized_query, sample_query)
+    VALUES (?, ?)
+    ON CONFLICT(normalized_query) DO UPDATE SET
+      hit_count = hit_count + 1,
+      sample_query = excluded.sample_query,
+      last_seen_at = CURRENT_TIMESTAMP
+  `).run(normalized, query.trim().slice(0, 80));
+}
+
+export function ingredientPortionGrams(ingredientId: number, label: string, quantity = 1) {
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("份量必须大于 0");
+  const normalized = normalizeContentTerm(label);
+  const portion = (db.prepare("SELECT label, grams FROM ingredient_portions WHERE ingredient_id = ?").all(ingredientId) as Array<{ label: string; grams: number }>)
+    .find((row) => normalizeContentTerm(row.label) === normalized);
+  if (!portion) return null;
+  return Math.round(portion.grams * quantity * 1000) / 1000;
+}
+
+export function findRecipeDuplicateCandidates(recipeId: number) {
+  const recipe = db.prepare(`SELECT id, title, ingredients_json, steps_json FROM recipes WHERE id = ? AND deleted_at IS NULL`)
+    .get(recipeId) as Record<string, unknown> | undefined;
+  if (!recipe) return [];
+  const candidates = db.prepare(`SELECT id, title, ingredients_json, steps_json FROM recipes WHERE id <> ? AND deleted_at IS NULL`)
+    .all(recipeId) as Array<Record<string, unknown>>;
+  return candidates.flatMap((candidate) => {
+    const comparison = recipeSimilarity({
+      title: String(recipe.title), ingredients: recipe.ingredients_json, steps: recipe.steps_json,
+    }, {
+      title: String(candidate.title), ingredients: candidate.ingredients_json, steps: candidate.steps_json,
+    });
+    if (comparison.score < 0.72) return [];
+    const firstId = Math.min(recipeId, Number(candidate.id));
+    const secondId = Math.max(recipeId, Number(candidate.id));
+    db.prepare(`INSERT INTO recipe_duplicate_candidates
+      (recipe_id, candidate_recipe_id, similarity, reasons_json)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(recipe_id, candidate_recipe_id) DO UPDATE SET similarity = excluded.similarity, reasons_json = excluded.reasons_json`)
+      .run(firstId, secondId, comparison.score, JSON.stringify(comparison.reasons));
+    return [{ recipeId: Number(candidate.id), ...comparison }];
+  }).sort((left, right) => right.score - left.score);
+}

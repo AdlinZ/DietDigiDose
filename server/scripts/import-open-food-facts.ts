@@ -5,6 +5,8 @@
  * 用法：pnpm --dir server import:open-food-facts -- --limit=1200 --page-start=1
  */
 import { db, initDatabase } from '../src/storage/db.js';
+import { beginImportBatch, contentSnapshot, finishImportBatch, trackImportMutation } from '../src/services/importGovernance.js';
+import { normalizeContentTerm, validateIngredientQuality } from '../src/services/contentGovernance.js';
 
 type OffProduct = {
   code?: string;
@@ -28,6 +30,8 @@ const fields = [
   'code', 'product_name', 'product_name_zh', 'product_name_zh_cn', 'brands', 'categories_tags',
   'image_front_url', 'image_url', 'nutriments', 'nutrition_data_per',
 ].join(',');
+const sourceRevision = `off-live-${new Date().toISOString().slice(0, 10)}`;
+let batchId: string | null = null;
 
 function categoryFor(tags: string[] = []): string {
   const text = tags.join(' ').toLowerCase();
@@ -87,17 +91,22 @@ async function fetchPage(page: number): Promise<OffProduct[]> {
 
 async function main() {
   initDatabase();
+  batchId = beginImportBatch('ingredient', { source: 'open_food_facts', revision: sourceRevision, dataLicense: 'ODbL-1.0' });
   const existing = db.prepare('SELECT id FROM ingredients_library WHERE barcode = ? AND deleted_at IS NULL LIMIT 1');
   const insert = db.prepare(`
     INSERT INTO ingredients_library (
       name, category, calories_100g, protein_100g, carbs_100g, fat_100g, image_url,
-      source, barcode, brands, micronutrients_json, data_license
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open_food_facts', ?, ?, ?, 'ODbL-1.0')
+      source, barcode, brands, micronutrients_json, data_license, normalized_name,
+      quality_status, source_version, source_updated_at, nutrition_basis
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open_food_facts', ?, ?, ?, 'ODbL-1.0', ?,
+      'trusted', ?, CURRENT_TIMESTAMP, 'per_100g')
   `);
   const update = db.prepare(`
     UPDATE ingredients_library SET
       calories_100g = ?, protein_100g = ?, carbs_100g = ?, fat_100g = ?, image_url = COALESCE(?, image_url),
-      brands = COALESCE(?, brands), micronutrients_json = ?, data_license = 'ODbL-1.0'
+      brands = COALESCE(?, brands), micronutrients_json = ?, data_license = 'ODbL-1.0',
+      quality_status = 'trusted', source_version = ?, source_updated_at = CURRENT_TIMESTAMP,
+      nutrition_basis = 'per_100g', deleted_at = NULL
     WHERE id = ?
   `);
 
@@ -122,12 +131,21 @@ async function main() {
           numberAt(nutrients, 'fat'), product.image_front_url || product.image_url || null, brand,
           JSON.stringify(micronutrients(nutrients)),
         ] as const;
+        const qualityIssues = validateIngredientQuality({
+          calories100g: values[0], protein100g: values[1], carbs100g: values[2], fat100g: values[3],
+          edibleRatio: 1, source: 'open_food_facts', dataLicense: 'ODbL-1.0', sourceVersion: sourceRevision,
+        });
+        if (qualityIssues.length) continue;
         const row = existing.get(barcode) as { id: number } | undefined;
         if (row) {
-          update.run(...values, row.id);
+          const before = contentSnapshot('ingredient', row.id) || null;
+          update.run(...values, sourceRevision, row.id);
+          trackImportMutation('ingredient', { batchId: batchId!, contentId: row.id, action: 'update', before, after: contentSnapshot('ingredient', row.id)! });
           updated += 1;
         } else if (inserted < limit) {
-          insert.run(name, categoryFor(product.categories_tags), values[0], values[1], values[2], values[3], values[4], barcode, brand, values[6]);
+          const result = insert.run(name, categoryFor(product.categories_tags), values[0], values[1], values[2], values[3], values[4], barcode, brand, values[6], normalizeContentTerm(name), sourceRevision);
+          const ingredientId = Number(result.lastInsertRowid);
+          trackImportMutation('ingredient', { batchId: batchId!, contentId: ingredientId, action: 'insert', before: null, after: contentSnapshot('ingredient', ingredientId)! });
           inserted += 1;
         }
       }
@@ -136,12 +154,15 @@ async function main() {
     console.log(`已处理第 ${page} 页；新增 ${inserted}，更新 ${updated}`);
     if (page < pageStart + maxPages - 1) await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  console.log(JSON.stringify({ scanned, inserted, updated, total: (db.prepare('SELECT COUNT(*) AS count FROM ingredients_library WHERE deleted_at IS NULL').get() as { count: number }).count }));
+  const stats = { scanned, inserted, updated, total: (db.prepare('SELECT COUNT(*) AS count FROM ingredients_library WHERE deleted_at IS NULL').get() as { count: number }).count };
+  finishImportBatch('ingredient', batchId, { status: 'committed', stats });
+  console.log(JSON.stringify({ batchId, ...stats }));
   db.close();
 }
 
 main().catch((error) => {
   console.error(error);
+  if (batchId) finishImportBatch('ingredient', batchId, { status: 'failed', stats: {}, errors: [error instanceof Error ? error.message : String(error)] });
   db.close();
   process.exitCode = 1;
 });

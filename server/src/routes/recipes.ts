@@ -1,11 +1,14 @@
 import { Router } from "express";
-import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
+import { authMiddleware, optionalAuthMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { db } from "../storage/db.js";
 import { ensureIngredientGroups, normalizeIngredientGroup, type IngredientGroup } from "../utils/ingredientGroups.js";
 import { validateBody } from "../middleware/validate.js";
 import { recipeSubmissionSchema } from "../validation/schemas.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
 import { decodeCursor, encodeCursor } from "../utils/cursor.js";
+import { kitchenwareRequirementsForRecipe } from "../services/kitchenwareCapabilities.js";
+import { setRecipeKitchenwareRequirements } from "../services/kitchenwareCapabilities.js";
+import { normalizeContentTerm, recipeContentFingerprint } from "../services/contentGovernance.js";
 
 const router = Router();
 router.param("id", positiveIntegerParam);
@@ -116,6 +119,17 @@ function validateRecipe(input: RecipeInput): string | null {
   return null;
 }
 
+function inferredKitchenware(steps: string[], explicit: unknown) {
+  if (Array.isArray(explicit) && explicit.length) return explicit.map((item) => String(item).trim()).filter(Boolean);
+  const text = steps.join(" ");
+  const names = [
+    ...(/空气炸锅/.test(text) ? ["空气炸锅"] : []), ...(/烤箱|烘焙|烘烤/.test(text) ? ["烤箱"] : []),
+    ...(/蒸/.test(text) ? ["蒸锅"] : []), ...(/煮|炖|汤|焯/.test(text) ? ["汤锅"] : []),
+    ...(/炒|煎|爆/.test(text) ? ["炒锅"] : []), "菜刀",
+  ];
+  return [...new Set(names)];
+}
+
 function formatRecipe(recipe: any, req?: { protocol: string; get(name: string): string | undefined }) {
   const {
     quality_issues_json: _qualityIssues,
@@ -153,6 +167,8 @@ function formatRecipe(recipe: any, req?: { protocol: string; get(name: string): 
       String(recipe.title || ""),
     ),
     nutrition: [...legacyNutrition, ...parseNutrition(recipe.nutrition_json)],
+    required_kitchenware: kitchenwareRequirementsForRecipe(Number(recipe.id)).filter((item) => item.role === "required"),
+    optional_kitchenware: kitchenwareRequirementsForRecipe(Number(recipe.id)).filter((item) => item.role !== "required"),
   };
 }
 
@@ -160,8 +176,8 @@ function formatRecipe(recipe: any, req?: { protocol: string; get(name: string): 
 const DEFAULT_PUBLIC_RECIPE_LIMIT = 24;
 const MAX_PUBLIC_RECIPE_LIMIT = 100;
 
-router.get("/", (req, res) => {
-  const { category, search } = req.query;
+router.get("/", optionalAuthMiddleware, (req: AuthRequest, res) => {
+  const { category, search, scope } = req.query;
   const cursorMode = req.query.pageSize !== undefined || req.query.cursor !== undefined;
   const pageSize = Math.min(MAX_PUBLIC_RECIPE_LIMIT, Math.max(1, Number(req.query.pageSize) || DEFAULT_PUBLIC_RECIPE_LIMIT));
   const requestedMaxCookTime = Number(req.query.maxCookTime);
@@ -179,6 +195,16 @@ router.get("/", (req, res) => {
     "COALESCE(r.quality_status, 'trusted') <> 'needs_review'",
   ];
   const filterParams: Array<string | number> = [];
+
+  if (scope === "official") {
+    filters.push("r.source <> 'user'");
+  } else if (scope === "community") {
+    filters.push("r.source = 'user'");
+  } else if (scope === "personal") {
+    if (!req.userId) return res.status(401).json({ error: "登录后查看个人食谱库" });
+    filters.push("(r.author_user_id = ? OR EXISTS(SELECT 1 FROM recipe_favorites f WHERE f.recipe_id = r.id AND f.user_id = ?))");
+    filterParams.push(req.userId, req.userId);
+  }
 
   if (typeof category === "string" && category !== "全部") {
     filters.push("r.category = ?");
@@ -227,6 +253,34 @@ router.get("/", (req, res) => {
     items,
     total: Number(totalRow?.total || 0),
     nextCursor: hasMore && last?.id ? encodeCursor({ v: 1, id: last.id }) : null,
+  });
+});
+
+// Counts use the same public quality boundary as the list route. Personal and
+// favorite counts are returned only when a valid account is present.
+router.get("/library-summary", optionalAuthMiddleware, (req: AuthRequest, res) => {
+  const publicBoundary = "deleted_at IS NULL AND status = 'approved' AND COALESCE(quality_status, 'trusted') <> 'needs_review'";
+  const official = (db.prepare(`SELECT COUNT(*) AS count FROM recipes WHERE ${publicBoundary} AND source <> 'user'`).get() as { count: number }).count;
+  const community = (db.prepare(`SELECT COUNT(*) AS count FROM recipes WHERE ${publicBoundary} AND source = 'user'`).get() as { count: number }).count;
+  const personal = req.userId
+    ? (db.prepare(`SELECT COUNT(*) AS count FROM recipes r WHERE ${publicBoundary}
+        AND (r.author_user_id = ? OR EXISTS(SELECT 1 FROM recipe_favorites f WHERE f.recipe_id = r.id AND f.user_id = ?))`)
+      .get(req.userId, req.userId) as { count: number }).count
+    : 0;
+  const favorites = req.userId
+    ? (db.prepare(`SELECT COUNT(*) AS count FROM recipe_favorites f JOIN recipes r ON r.id = f.recipe_id
+        WHERE f.user_id = ? AND r.deleted_at IS NULL AND r.status = 'approved'
+          AND COALESCE(r.quality_status, 'trusted') <> 'needs_review'`)
+      .get(req.userId) as { count: number }).count
+    : 0;
+  return res.json({
+    official,
+    community,
+    personal,
+    favorites,
+    publicTotal: official + community,
+    scopeContract: "approved_non_deleted_quality_checked_v1",
+    household: { supported: false, count: 0 },
   });
 });
 
@@ -279,13 +333,21 @@ router.post("/submissions", authMiddleware, validateBody(recipeSubmissionSchema)
     const validationError = validateRecipe(input);
     if (validationError) return res.status(400).json({ error: validationError });
 
+    const requiredKitchenware = inferredKitchenware(input.steps, req.body.required_kitchenware);
+    const optionalKitchenware = Array.isArray(req.body.optional_kitchenware) ? req.body.optional_kitchenware : [];
+    const servingSize = Number(req.body.serving_size) || 2;
+    const prepTime = Number(req.body.prep_time) || 0;
     const result = db.prepare(`
       INSERT INTO recipes (
         title, description, image_url, cook_time, difficulty,
         calories, protein, carbs, fat, nutrition_json, category, tags,
-        steps_json, ingredients_json, author_user_id, source, status, updated_at
+        steps_json, ingredients_json, author_user_id, source, status, quality_status, nutrition_basis,
+        canonical_key, source_content_hash, serving_size, prep_time, cuisine, meal_types_json,
+        required_kitchenware_json, optional_kitchenware_json, data_license, source_revision,
+        source_attribution, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', 'pending', CURRENT_TIMESTAMP)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', 'pending', 'needs_review', 'user_declared',
+        ?, ?, ?, ?, ?, ?, ?, ?, 'User-Submitted-Terms-v1', 'ugc-v1', ?, CURRENT_TIMESTAMP)
     `).run(
       input.title,
       input.description,
@@ -302,11 +364,23 @@ router.post("/submissions", authMiddleware, validateBody(recipeSubmissionSchema)
       JSON.stringify(input.steps),
       JSON.stringify(input.ingredients),
       req.userId,
+      normalizeContentTerm(input.title),
+      recipeContentFingerprint({ title: input.title, ingredients: input.ingredients, steps: input.steps }),
+      servingSize,
+      prepTime,
+      req.body.cuisine || null,
+      JSON.stringify(Array.isArray(req.body.meal_types) ? req.body.meal_types : []),
+      JSON.stringify(requiredKitchenware),
+      JSON.stringify(optionalKitchenware),
+      `用户 ${req.userId} 投稿`,
     );
+    const recipeId = Number(result.lastInsertRowid);
+    setRecipeKitchenwareRequirements(recipeId, requiredKitchenware, { source: "user_submission" });
+    setRecipeKitchenwareRequirements(recipeId, optionalKitchenware.map(String), { role: "optional", source: "user_submission" });
 
     return res.status(201).json({
       success: true,
-      id: Number(result.lastInsertRowid),
+      id: recipeId,
       status: "pending",
       message: "食谱投稿成功，等待管理员审核",
     });
@@ -334,12 +408,17 @@ router.put("/submissions/:id", authMiddleware, validateBody(recipeSubmissionSche
     const validationError = validateRecipe(input);
     if (validationError) return res.status(400).json({ error: validationError });
 
+    const requiredKitchenware = inferredKitchenware(input.steps, req.body.required_kitchenware);
+    const optionalKitchenware = Array.isArray(req.body.optional_kitchenware) ? req.body.optional_kitchenware.map(String) : [];
     db.prepare(`
       UPDATE recipes
       SET
         title = ?, description = ?, image_url = ?, cook_time = ?, difficulty = ?,
         calories = ?, protein = ?, carbs = ?, fat = ?, nutrition_json = ?, category = ?, tags = ?,
-        steps_json = ?, ingredients_json = ?, status = 'pending',
+        steps_json = ?, ingredients_json = ?, status = 'pending', quality_status = 'needs_review',
+        canonical_key = ?, source_content_hash = ?, serving_size = ?, prep_time = ?, cuisine = ?,
+        meal_types_json = ?, required_kitchenware_json = ?, optional_kitchenware_json = ?,
+        data_license = 'User-Submitted-Terms-v1', source_revision = 'ugc-v1', source_attribution = ?,
         reject_reason = NULL, reviewed_by = NULL, reviewed_at = NULL,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND author_user_id = ?
@@ -358,9 +437,20 @@ router.put("/submissions/:id", authMiddleware, validateBody(recipeSubmissionSche
       JSON.stringify(input.tags),
       JSON.stringify(input.steps),
       JSON.stringify(input.ingredients),
+      normalizeContentTerm(input.title),
+      recipeContentFingerprint({ title: input.title, ingredients: input.ingredients, steps: input.steps }),
+      Number(req.body.serving_size) || 2,
+      Number(req.body.prep_time) || 0,
+      req.body.cuisine || null,
+      JSON.stringify(Array.isArray(req.body.meal_types) ? req.body.meal_types : []),
+      JSON.stringify(requiredKitchenware),
+      JSON.stringify(optionalKitchenware),
+      `用户 ${req.userId} 投稿`,
       id,
       req.userId,
     );
+    setRecipeKitchenwareRequirements(id, requiredKitchenware, { source: "user_submission" });
+    setRecipeKitchenwareRequirements(id, optionalKitchenware, { role: "optional", source: "user_submission" });
 
     return res.json({ success: true, status: "pending", message: "投稿已更新并重新进入审核" });
   } catch (error) {

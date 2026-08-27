@@ -106,6 +106,7 @@ export default function InventoryScreen() {
     setItems,
     recipes,
     recipeTotal,
+    recipeLibrarySummary,
     hasMoreRecipes: hasMoreRecipePages,
     kitchenware,
     kitchenwareCatalog,
@@ -959,6 +960,7 @@ export default function InventoryScreen() {
 
   // Recipe State
   const [activeRecipeCategory, setActiveRecipeCategory] = useState("全部");
+  const [activeRecipeLibrary, setActiveRecipeLibrary] = useState<"official" | "personal">("official");
   const [recipeSearchQuery, setRecipeSearchQuery] = useState("");
   const [visibleRecipeCount, setVisibleRecipeCount] = useState(12);
   const [recommendationItems, setRecommendationItems] = useState<Array<RecipeRecommendationItem<Recipe>>>([]);
@@ -975,16 +977,17 @@ export default function InventoryScreen() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (!isAuthenticated) void reloadRecipes({
+      void reloadRecipes({
         category: activeRecipeCategory === "全部" || activeRecipeCategory === "冰箱可做"
           ? undefined
           : activeRecipeCategory,
         search: recipeSearchQuery,
         maxCookTime: cookTimeLimit,
+        scope: isAuthenticated ? activeRecipeLibrary : "official",
       });
     }, 300);
     return () => clearTimeout(timer);
-  }, [activeRecipeCategory, cookTimeLimit, isAuthenticated, recipeSearchQuery, reloadRecipes]);
+  }, [activeRecipeCategory, activeRecipeLibrary, cookTimeLimit, isAuthenticated, recipeSearchQuery, reloadRecipes]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -1321,38 +1324,13 @@ export default function InventoryScreen() {
   const filteredItems = filterInventoryItems(items, activeInventoryCategory);
   const expiredItemsForCleanup = getExpiredItems();
 
-  const filteredRecipes = isAuthenticated
-    ? recommendationItems.map((item) => item.recipe)
-    : filterAndRankRecipes(recipes, items, activeRecipeCategory, recipeSearchQuery, cookTimeLimit, matchStatusFilter);
+  const filteredRecipes = filterAndRankRecipes(recipes, items, activeRecipeCategory, recipeSearchQuery, cookTimeLimit, matchStatusFilter);
   const filteredKitchenware = filterKitchenware(kitchenware, activeKitchenwareCategory);
   const visibleRecipes = filteredRecipes.slice(0, visibleRecipeCount);
   const hasMoreVisibleRecipes = visibleRecipeCount < filteredRecipes.length;
 
   const handleShowMoreRecipes = async () => {
-    if (!hasMoreVisibleRecipes && isAuthenticated && recommendationCursor) {
-      try {
-        setLoadingRecommendations(true);
-        const page = prefetchedRecommendationPage?.requestId === recommendationRequestId
-          ? prefetchedRecommendationPage
-          : await recommendationsApi.recipes<Recipe>(authFetch, {
-            surface: "inventory", pageSize: 24, cursor: recommendationCursor,
-          });
-        setRecommendationItems((current) => appendUniqueItemsByKey(
-          current,
-          page.items,
-          (item) => item.recipeId,
-        ));
-        setRecommendationCursor(page.nextCursor);
-        setPrefetchedRecommendationPage(null);
-        if (page.nextCursor) {
-          void recommendationsApi.recipes<Recipe>(authFetch, {
-            surface: "inventory", pageSize: 24, cursor: page.nextCursor,
-          }).then(setPrefetchedRecommendationPage).catch(() => undefined);
-        }
-      } finally {
-        setLoadingRecommendations(false);
-      }
-    } else if (!hasMoreVisibleRecipes && hasMoreRecipePages) await loadMoreRecipes();
+    if (!hasMoreVisibleRecipes && hasMoreRecipePages) await loadMoreRecipes();
     setVisibleRecipeCount((count) => count + 12);
   };
 
@@ -1369,7 +1347,7 @@ export default function InventoryScreen() {
           <View className="h-11 flex-row items-center gap-1">
             {[
               { key: "inventory" as const, label: "食材", count: items.length, icon: "boxes-stacked" },
-              { key: "recipes" as const, label: "食谱", count: isAuthenticated ? recommendationTotal : recipeTotal, icon: "utensils" },
+              { key: "recipes" as const, label: "食谱", count: recipeTotal, icon: "utensils" },
               { key: "kitchenware" as const, label: "厨具", count: kitchenware.length, icon: "fire-burner" },
             ].map((segment) => {
               const isActive = activeSegment === segment.key;
@@ -1933,10 +1911,32 @@ export default function InventoryScreen() {
                 </TouchableOpacity>
               </View>
 
+              <View className="mb-2 flex-row rounded-xl bg-background-secondary p-1">
+                {([
+                  { key: "official" as const, label: "官方库", count: isAuthenticated ? recipeLibrarySummary.official : recipeTotal },
+                  { key: "personal" as const, label: "我的食谱", count: recipeLibrarySummary.personal },
+                ]).map((library) => (
+                  <TouchableOpacity
+                    key={library.key}
+                    disabled={!isAuthenticated && library.key === "personal"}
+                    onPress={() => setActiveRecipeLibrary(library.key)}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: activeRecipeLibrary === library.key, disabled: !isAuthenticated && library.key === "personal" }}
+                    className={`flex-1 flex-row items-center justify-center rounded-lg px-2 py-2 ${
+                      activeRecipeLibrary === library.key ? "bg-surface shadow-xs" : "bg-transparent"
+                    } ${!isAuthenticated && library.key === "personal" ? "opacity-45" : ""}`}
+                  >
+                    <Text className={`text-[11px] ${activeRecipeLibrary === library.key ? "font-black text-brand" : "font-bold text-copy-muted"}`}>
+                      {library.label} · {library.count}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
               <View className="mb-3 flex-row items-center justify-between rounded-xl bg-background-secondary px-3 py-2">
-                <Text className="text-[11px] font-bold text-ink">公共食谱库</Text>
+                <Text className="text-[11px] font-bold text-ink">{activeRecipeLibrary === "official" ? "平台审核食谱" : "投稿与收藏"}</Text>
                 <Text className="text-[10px] text-copy-muted">
-                  已加载 {isAuthenticated ? recommendationItems.length : recipes.length} / 共 {isAuthenticated ? recommendationTotal : recipeTotal} 道
+                  已加载 {recipes.length} / 共 {recipeTotal} 道
                 </Text>
               </View>
 
@@ -2068,7 +2068,7 @@ export default function InventoryScreen() {
 
             {/* Recipe List: 2-Column Waterfall Bento Cards */}
             <View className="px-4 pb-4 pt-1">
-              {loadingRecipes || (isAuthenticated && loadingRecommendations && recommendationItems.length === 0) ? (
+              {loadingRecipes ? (
                 <View className="py-16 items-center">
                   <ActivityIndicator size="large" colorClassName="accent-brand" />
                 </View>
@@ -2248,7 +2248,7 @@ export default function InventoryScreen() {
                       </View>
                     );
                   })}
-                  {(hasMoreVisibleRecipes || (isAuthenticated ? Boolean(recommendationCursor) : hasMoreRecipePages)) && (
+                  {(hasMoreVisibleRecipes || hasMoreRecipePages) && (
                     <View className="w-full items-center pt-1">
                       <TouchableOpacity
                         onPress={() => void handleShowMoreRecipes()}
@@ -2262,7 +2262,7 @@ export default function InventoryScreen() {
                         {!loadingMoreRecipes && !loadingRecommendations ? <FontAwesome6 name="chevron-down" size={9} colorClassName="accent-copy-muted" /> : null}
                       </TouchableOpacity>
                       <Text className="mt-2 text-[10px] text-copy-muted">
-                        当前筛选展示 {visibleRecipes.length} 道 · 推荐候选共 {isAuthenticated ? recommendationTotal : recipeTotal} 道
+                        当前筛选展示 {visibleRecipes.length} 道 · 当前库共 {recipeTotal} 道
                       </Text>
                     </View>
                   )}

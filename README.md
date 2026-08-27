@@ -40,13 +40,13 @@
 ## 当前版本与完成度
 
 - **产品版本：** `1.0.5`
-- **候选快照：** `26w35a`
+- **候选快照：** `26w37a`
 - **阶段：** 可信 Beta 收口
 - **最近更新：** 2026-08-27
 
 三端代码、自动化测试、构建、版本元数据校验和生产依赖审计均已纳入 CI。仓库内候选基线已经通过；正式进入外部内测前，仍需完成 HTTPS staging 验收、同一提交的 iOS/Android 候选包、双端真机闭环及隔离备份恢复演练。
 
-详见 [1.0.5 候选验收记录](docs/release-candidate-26w35a.md) 与 [真机验收清单](docs/device-beta-checklist.md)。
+详见 [1.0.5 · 26w37a 候选验收记录](docs/release-candidate-26w37a.md)、[上一候选记录](docs/release-candidate-26w35a.md) 与 [真机验收清单](docs/device-beta-checklist.md)。
 
 ## 技术架构
 

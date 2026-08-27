@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const release = JSON.parse(await readFile(new URL("../release.json", import.meta.url), "utf8"));
+const eas = JSON.parse(await readFile(new URL("../client/eas.json", import.meta.url), "utf8"));
 const configureExpo = require("../client/app.config.js");
 const expo = configureExpo({ config: { extra: {}, ios: {}, android: {} } });
 
@@ -19,5 +20,7 @@ assert.equal(expo.ios.buildNumber, String(release.buildNumber), "iOS buildNumber
 assert.equal(expo.android.versionCode, release.buildNumber, "Android versionCode diverged");
 assert.equal(expo.extra.releaseSnapshot, release.snapshot, "Expo snapshot metadata diverged");
 assert.equal(expo.extra.buildNumber, release.buildNumber, "Expo extra build metadata diverged");
+assert.equal(eas.cli?.appVersionSource, "local", "EAS must use release.json through the local Expo config");
+assert.equal(eas.build?.candidate?.autoIncrement, false, "candidate builds must not mutate the shared build number");
 
 console.log(`${release.productVersion} (${release.snapshot} · build ${release.buildNumber})`);

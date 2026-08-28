@@ -22,6 +22,7 @@ const Notifications = lazy(() => import('./pages/Notifications'));
 const AuthServiceSms = lazy(() => import('./pages/AuthServiceSms'));
 const AuthServicePlaceholder = lazy(() => import('./pages/AuthServicePlaceholder'));
 const UserLevelRule = lazy(() => import('./pages/UserLevelRule'));
+const MediaCleanup = lazy(() => import('./pages/MediaCleanup'));
 
 // Auth Guard
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -106,6 +107,7 @@ function App() {
         <Route path="agent-runs" element={<AgentRuns />} />
         <Route path="security" element={<SecurityAudit />} />
         <Route path="notifications" element={<Notifications />} />
+        <Route path="media-cleanup" element={<MediaCleanup />} />
         <Route path="auth-services/sms" element={<AuthServiceSms />} />
         <Route path="auth-services/captcha" element={<AuthServicePlaceholder />} />
         <Route path="auth-services/phone" element={<AuthServicePlaceholder />} />

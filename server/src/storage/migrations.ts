@@ -1847,6 +1847,23 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 54,
+    name: "media_cleanup_job_leases",
+    up(database) {
+      const columns = database.prepare("PRAGMA table_info(media_cleanup_jobs)").all() as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === "claim_token")) {
+        database.exec("ALTER TABLE media_cleanup_jobs ADD COLUMN claim_token TEXT");
+      }
+      if (!columns.some((column) => column.name === "claimed_at")) {
+        database.exec("ALTER TABLE media_cleanup_jobs ADD COLUMN claimed_at DATETIME");
+      }
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_media_cleanup_jobs_claim
+          ON media_cleanup_jobs(status, claimed_at, created_at, id);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(database: Database.Database) {

@@ -17,6 +17,7 @@ import {
   SlidersHorizontal,
   Bell,
   Workflow,
+  DatabaseZap,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -88,6 +89,7 @@ export default function AdminLayout() {
   ];
   const finalNavItems = [
     { to: '/admin/notifications', icon: Bell, label: '通知中心' },
+    { to: '/admin/media-cleanup', icon: DatabaseZap, label: '媒体清理' },
     { to: '/admin/security', icon: ShieldCheck, label: '安全审计' },
   ];
 

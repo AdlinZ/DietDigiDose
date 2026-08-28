@@ -52,6 +52,16 @@ async function register(identifier: string) {
   return result.body as JsonObject;
 }
 
+async function loginAdmin() {
+  db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+  const result = await api("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+  });
+  assert.equal(result.response.status, 200);
+  return (result.body as JsonObject).token as string;
+}
+
 before(async () => {
   const [{ createApp }, database] = await Promise.all([
     import("../src/app.js"),
@@ -127,7 +137,11 @@ describe("API security baseline", () => {
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 51").get() as { name: string }).name, "content_governance_and_kitchenware_capabilities");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 52").get() as { name: string }).name, "content_import_failure_audit");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 53").get() as { name: string }).name, "durable_media_cleanup_jobs");
+    assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 54").get() as { name: string }).name, "media_cleanup_job_leases");
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'media_cleanup_jobs'").get());
+    const mediaCleanupColumns = db.prepare("PRAGMA table_info(media_cleanup_jobs)").all() as Array<{ name: string }>;
+    assert.ok(mediaCleanupColumns.some((column) => column.name === "claim_token"));
+    assert.ok(mediaCleanupColumns.some((column) => column.name === "claimed_at"));
     const userColumns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
     assert.ok(userColumns.some((column) => column.name === "session_version"));
     const aiUsageColumns = db.prepare("PRAGMA table_info(ai_usage_logs)").all() as Array<{ name: string }>;
@@ -2464,6 +2478,110 @@ describe("core business authorization", () => {
       `).get(account.user.id) as { status: string; attempts: number };
       assert.deepEqual(cleanupJob, { status: "completed", attempts: 1 });
     } finally {
+      if (previousMediaRoot === undefined) delete process.env.MEDIA_LOCAL_ROOT;
+      else process.env.MEDIA_LOCAL_ROOT = previousMediaRoot;
+    }
+  });
+
+  test("admin media cleanup operations are private, observable, auditable and atomically retryable", async () => {
+    const regular = await register("cleanup-guard@example.com");
+    const forbidden = await api("/api/v1/admin/media-cleanup-jobs", { token: regular.token });
+    assert.equal(forbidden.response.status, 403);
+
+    const adminToken = await loginAdmin();
+    const previousMediaRoot = process.env.MEDIA_LOCAL_ROOT;
+    const mediaRoot = path.join(testDirectory, "admin-media-cleanup");
+    process.env.MEDIA_LOCAL_ROOT = mediaRoot;
+    const ownerBase = 98_000;
+
+    try {
+      const successUrl = `/media/uploads/community/${ownerBase}/2026-08-28/retry.png`;
+      const successPath = path.join(mediaRoot, "uploads", "community", String(ownerBase), "2026-08-28", "retry.png");
+      mkdirSync(path.dirname(successPath), { recursive: true });
+      writeFileSync(successPath, "retry-image");
+      const successJobId = Number(db.prepare(`
+        INSERT INTO media_cleanup_jobs (owner_user_id, urls_json) VALUES (?, ?)
+      `).run(ownerBase, JSON.stringify([successUrl])).lastInsertRowid);
+
+      const privateUrl = `https://private.example/media/uploads/community/${ownerBase + 1}/secret.png`;
+      const failingJobId = Number(db.prepare(`
+        INSERT INTO media_cleanup_jobs (
+          owner_user_id, urls_json, status, attempts, last_error, created_at, updated_at
+        ) VALUES (?, ?, 'pending', 3, ?, datetime('now', '-3 hours'), datetime('now', '-2 hours'))
+      `).run(ownerBase + 1, JSON.stringify([privateUrl]), `failed to remove ${privateUrl} at community/${ownerBase + 1}/secret.png`).lastInsertRowid);
+      const staleJobId = Number(db.prepare(`
+        INSERT INTO media_cleanup_jobs (
+          owner_user_id, urls_json, status, attempts, claim_token, claimed_at, created_at, updated_at
+        ) VALUES (?, '[]', 'processing', 1, 'stale-test-claim', datetime('now', '-2 hours'), datetime('now', '-3 hours'), datetime('now', '-2 hours'))
+      `).run(ownerBase + 2).lastInsertRowid);
+      db.prepare(`
+        INSERT INTO media_cleanup_jobs (
+          owner_user_id, urls_json, status, attempts, completed_at
+        ) VALUES (?, '[]', 'completed', 1, CURRENT_TIMESTAMP)
+      `).run(ownerBase + 3);
+
+      const failingList = await api("/api/v1/admin/media-cleanup-jobs?status=failing&olderThanHours=1&page=1&pageSize=10", { token: adminToken });
+      assert.equal(failingList.response.status, 200);
+      const failingBody = failingList.body as JsonObject;
+      assert.equal(failingBody.items.some((job: JsonObject) => job.id === failingJobId), true);
+      assert.equal(failingBody.items.every((job: JsonObject) => job.status === "pending" && job.attempts >= 3), true);
+      assert.equal(JSON.stringify(failingBody).includes("urls_json"), false);
+      assert.equal(JSON.stringify(failingBody).includes("private.example"), false);
+      assert.equal(JSON.stringify(failingBody).includes(`community/${ownerBase + 1}/secret.png`), false);
+      assert.ok(failingBody.summary.pending >= 2);
+      assert.ok(failingBody.summary.stale >= 1);
+
+      const staleList = await api("/api/v1/admin/media-cleanup-jobs?status=stale", { token: adminToken });
+      assert.equal(staleList.response.status, 200);
+      const staleItem = (staleList.body as JsonObject).items.find((job: JsonObject) => job.id === staleJobId);
+      assert.equal(staleItem.stale, true);
+      assert.equal(staleItem.eligibleForRetry, true);
+
+      const { claimMediaCleanupJob } = await import("../src/services/mediaCleanup.js");
+      const concurrencyJobId = Number(db.prepare(`
+        INSERT INTO media_cleanup_jobs (owner_user_id, urls_json) VALUES (?, '[]')
+      `).run(ownerBase + 4).lastInsertRowid);
+      const firstClaim = claimMediaCleanupJob(concurrencyJobId);
+      const duplicateClaim = claimMediaCleanupJob(concurrencyJobId);
+      assert.ok(firstClaim?.claim_token);
+      assert.equal(duplicateClaim, null);
+      const busyRetry = await api(`/api/v1/admin/media-cleanup-jobs/${concurrencyJobId}/retry`, { method: "POST", token: adminToken });
+      assert.equal(busyRetry.response.status, 409);
+      assert.equal((busyRetry.body as JsonObject).code, "MEDIA_CLEANUP_JOB_BUSY");
+
+      const successfulRetry = await api(`/api/v1/admin/media-cleanup-jobs/${successJobId}/retry`, { method: "POST", token: adminToken });
+      assert.equal(successfulRetry.response.status, 200);
+      assert.equal((successfulRetry.body as JsonObject).job.status, "completed");
+      assert.equal(existsSync(successPath), false);
+
+      const invalidPayload = `https://secret.example/media/uploads/community/${ownerBase + 5}/private.png`;
+      const failedJobId = Number(db.prepare(`
+        INSERT INTO media_cleanup_jobs (owner_user_id, urls_json) VALUES (?, ?)
+      `).run(ownerBase + 5, invalidPayload).lastInsertRowid);
+      const failedRetry = await api(`/api/v1/admin/media-cleanup-jobs/${failedJobId}/retry`, { method: "POST", token: adminToken });
+      assert.equal(failedRetry.response.status, 502);
+      assert.equal((failedRetry.body as JsonObject).code, "MEDIA_CLEANUP_RETRY_FAILED");
+      assert.equal(JSON.stringify(failedRetry.body).includes("secret.example"), false);
+      const failedRow = db.prepare(`
+        SELECT status, attempts, last_error AS lastError, claim_token AS claimToken
+        FROM media_cleanup_jobs WHERE id = ?
+      `).get(failedJobId) as JsonObject;
+      assert.equal(failedRow.status, "pending");
+      assert.equal(failedRow.attempts, 1);
+      assert.equal(failedRow.claimToken, null);
+      assert.equal(String(failedRow.lastError).includes("secret.example"), false);
+
+      const auditRows = db.prepare(`
+        SELECT summary, details_json AS detailsJson FROM admin_audit_logs
+        WHERE action = 'media_cleanup.retry' AND resource_id IN (?, ?)
+        ORDER BY id
+      `).all(String(successJobId), String(failedJobId)) as JsonObject[];
+      assert.equal(auditRows.length, 2);
+      assert.equal(auditRows.some((row) => row.summary.includes("成功")), true);
+      assert.equal(auditRows.some((row) => row.summary.includes("失败")), true);
+      assert.equal(JSON.stringify(auditRows).includes("secret.example"), false);
+    } finally {
+      db.prepare("DELETE FROM media_cleanup_jobs WHERE owner_user_id BETWEEN ? AND ?").run(ownerBase, ownerBase + 10);
       if (previousMediaRoot === undefined) delete process.env.MEDIA_LOCAL_ROOT;
       else process.env.MEDIA_LOCAL_ROOT = previousMediaRoot;
     }

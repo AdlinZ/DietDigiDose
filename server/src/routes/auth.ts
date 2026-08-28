@@ -12,7 +12,7 @@ import {
   recordLoginFailure,
 } from "../middleware/loginRateLimit.js";
 import { deleteFunnelEvents, recordFunnelEvent } from "../services/funnelEvents.js";
-import { deleteStoredMediaUrls } from "../services/mediaStorage.js";
+import { enqueueMediaCleanup, processMediaCleanupJob } from "../services/mediaCleanup.js";
 import smsAuthRoutes from "./auth-sms.js";
 import { signUserToken } from "../services/sessionTokens.js";
 import { ensureUserInitialState } from "../services/userInitialization.js";
@@ -301,14 +301,21 @@ router.delete("/account", authMiddleware, validateBody(deleteAccountSchema), asy
       ...postMedia.flatMap((post) => [post.image_url, ...parseStoredUrlList(post.image_urls)]),
       ...commentMedia.map((comment) => comment.image_url),
     ];
-    await deleteStoredMediaUrls(req.userId!, mediaUrls);
-
     const result = db.transaction(() => {
       prepareHouseholdsForAccountDeletion(req.userId!);
       deleteFunnelEvents(req.userId!);
-      return db.prepare("DELETE FROM users WHERE id = ?").run(req.userId);
+      const cleanupJobId = enqueueMediaCleanup(req.userId!, mediaUrls);
+      const deleted = db.prepare("DELETE FROM users WHERE id = ?").run(req.userId);
+      return { deleted, cleanupJobId };
     })();
-    if (!result.changes) return sendError(res, 404, "用户不存在", "USER_NOT_FOUND");
+    if (!result.deleted.changes) return sendError(res, 404, "用户不存在", "USER_NOT_FOUND");
+    if (result.cleanupJobId) {
+      try {
+        await processMediaCleanupJob(result.cleanupJobId);
+      } catch (error) {
+        console.error(`Media cleanup job ${result.cleanupJobId} will be retried:`, error);
+      }
+    }
     return res.json({ success: true, message: "账号及关联数据已永久删除" });
   } catch (error) {
     console.error("Delete account error:", error);

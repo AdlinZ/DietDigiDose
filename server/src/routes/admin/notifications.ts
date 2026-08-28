@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type NextFunction } from "express";
 import { db, logAdminAction } from "../../storage/db.js";
 import type { AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
@@ -54,7 +54,7 @@ export function createAdminNotificationsRouter() {
     return res.json({ activeDevices, enabledUsers, campaigns, automatic, metrics });
   });
 
-  router.post("/notifications/campaigns", validateBody(notificationCampaignSchema), async (req: AuthRequest, res) => {
+  router.post("/notifications/campaigns", validateBody(notificationCampaignSchema), async (req: AuthRequest, res, next: NextFunction) => {
     const { title, body } = req.body;
     const devices = db.prepare(`
       SELECT d.id, d.user_id, d.expo_push_token FROM push_devices d
@@ -102,7 +102,7 @@ export function createAdminNotificationsRouter() {
     } catch (error) {
       db.prepare("UPDATE notification_campaigns SET status = 'failed', failure_count = ?, sent_at = CURRENT_TIMESTAMP WHERE id = ?")
         .run(devices.length, campaignId);
-      throw error;
+      return next(error);
     }
   });
 

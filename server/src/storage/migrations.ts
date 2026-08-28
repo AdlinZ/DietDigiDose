@@ -1825,6 +1825,28 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 53,
+    name: "durable_media_cleanup_jobs",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS media_cleanup_jobs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          owner_user_id INTEGER NOT NULL,
+          urls_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'processing', 'completed')),
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at DATETIME
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_media_cleanup_jobs_status_created
+          ON media_cleanup_jobs(status, created_at, id);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(database: Database.Database) {

@@ -68,23 +68,44 @@ function getPublicObjectPrefix() {
   return `${baseUrl.replace(/\/$/, "")}/storage/v1/object/public/${encodeURIComponent(bucket)}/`;
 }
 
-export function isStoredMediaUrlForUser(url: string, userId: number, scope: "community" = "community") {
-  const prefix = getPublicObjectPrefix();
+function getLocalMediaPathForUser(url: string, userId: number, scope: "community") {
   const localPrefix = `/media/uploads/${scope}/${userId}/`;
-  let pathname = url;
-  try { pathname = new URL(url).pathname; } catch { /* relative media URL */ }
-  return pathname.startsWith(localPrefix) || Boolean(prefix && url.startsWith(`${prefix}${scope}/${userId}/`));
+  if (!url.startsWith(localPrefix)) return null;
+  try {
+    const localOrigin = "http://local-media.invalid";
+    const parsed = new URL(url, localOrigin);
+    return parsed.origin === localOrigin && parsed.pathname.startsWith(localPrefix) ? parsed.pathname : null;
+  } catch {
+    return null;
+  }
+}
+
+function getPublicObjectPathForUser(url: string, userId: number, scope: "community") {
+  const prefix = getPublicObjectPrefix();
+  if (!prefix) return null;
+  try {
+    const publicPrefix = new URL(prefix);
+    const candidate = new URL(url);
+    const userPathPrefix = `${publicPrefix.pathname}${scope}/${userId}/`;
+    if (candidate.origin !== publicPrefix.origin || !candidate.pathname.startsWith(userPathPrefix)) return null;
+    return decodeURIComponent(candidate.pathname.slice(publicPrefix.pathname.length));
+  } catch {
+    return null;
+  }
+}
+
+export function isStoredMediaUrlForUser(url: string, userId: number, scope: "community" = "community") {
+  return Boolean(
+    getLocalMediaPathForUser(url, userId, scope)
+    || getPublicObjectPathForUser(url, userId, scope),
+  );
 }
 
 export async function deleteStoredMediaUrls(userId: number, urls: Array<string | null | undefined>) {
   const localUrls = urls.flatMap((url) => {
     if (typeof url !== "string") return [];
-    try {
-      const pathname = new URL(url).pathname;
-      return pathname.startsWith(`/media/uploads/community/${userId}/`) ? [pathname] : [];
-    } catch {
-      return url.startsWith(`/media/uploads/community/${userId}/`) ? [url] : [];
-    }
+    const pathname = getLocalMediaPathForUser(url, userId, "community");
+    return pathname ? [pathname] : [];
   });
   const publicMediaRoot = getPublicMediaRoot();
   await Promise.all(localUrls.map(async (url) => {
@@ -93,12 +114,13 @@ export async function deleteStoredMediaUrls(userId: number, urls: Array<string |
     if (destination.startsWith(`${publicMediaRoot}${path.sep}`)) await rm(destination, { force: true });
   }));
   const bucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
-  const prefix = getPublicObjectPrefix();
-  if (!bucket || !prefix || !getSupabaseServiceRoleKey()) return;
+  if (!bucket || !getSupabaseServiceRoleKey()) return;
   const objectPaths = [...new Set(urls
-    .filter((url): url is string => typeof url === "string" && isStoredMediaUrlForUser(url, userId))
-    .map((url) => decodeURIComponent(url.slice(prefix.length)))
-    .filter(Boolean))];
+    .flatMap((url) => {
+      if (typeof url !== "string") return [];
+      const objectPath = getPublicObjectPathForUser(url, userId, "community");
+      return objectPath ? [objectPath] : [];
+    }))];
   if (!objectPaths.length) return;
   const client = getSupabaseClient();
   if (!client) throw new MediaStorageUnavailableError("媒体对象存储尚未配置");

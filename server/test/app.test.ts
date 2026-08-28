@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
@@ -126,6 +126,8 @@ describe("API security baseline", () => {
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 50").get() as { name: string }).name, "realtime_cooking_voice_sessions");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 51").get() as { name: string }).name, "content_governance_and_kitchenware_capabilities");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 52").get() as { name: string }).name, "content_import_failure_audit");
+    assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 53").get() as { name: string }).name, "durable_media_cleanup_jobs");
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'media_cleanup_jobs'").get());
     const userColumns = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
     assert.ok(userColumns.some((column) => column.name === "session_version"));
     const aiUsageColumns = db.prepare("PRAGMA table_info(ai_usage_logs)").all() as Array<{ name: string }>;
@@ -2406,6 +2408,108 @@ describe("core business authorization", () => {
     const remainingInventory = db.prepare("SELECT COUNT(*) AS count FROM inventory_items WHERE user_id = ?").get(account.user.id) as { count: number };
     assert.equal(remainingUser.count, 0);
     assert.equal(remainingInventory.count, 0);
+  });
+
+  test("account deletion keeps media intact on database failure and cleans it after commit", async () => {
+    const account = await register("delete-media-order@example.com");
+    const previousMediaRoot = process.env.MEDIA_LOCAL_ROOT;
+    const mediaRoot = path.join(testDirectory, "account-delete-media");
+    const relativeUrl = `/media/uploads/community/${account.user.id}/2026-08-28/photo.png`;
+    const mediaPath = path.join(mediaRoot, "uploads", "community", String(account.user.id), "2026-08-28", "photo.png");
+    mkdirSync(path.dirname(mediaPath), { recursive: true });
+    writeFileSync(mediaPath, "test-image");
+    process.env.MEDIA_LOCAL_ROOT = mediaRoot;
+
+    try {
+      const post = await api("/api/v1/community/posts", {
+        method: "POST",
+        token: account.token,
+        body: JSON.stringify({ content: "账号删除媒体顺序测试", category: "寻味", image_urls: [relativeUrl] }),
+      });
+      assert.equal(post.response.status, 201);
+
+      db.exec(`
+        CREATE TEMP TRIGGER fail_account_delete_media_test
+        BEFORE DELETE ON users WHEN OLD.id = ${Number(account.user.id)}
+        BEGIN
+          SELECT RAISE(ABORT, 'injected account deletion failure');
+        END;
+      `);
+      try {
+        const failed = await api("/api/v1/auth/account", {
+          method: "DELETE",
+          token: account.token,
+          body: JSON.stringify({ password: "Password1234", confirmation: "DELETE" }),
+        });
+        assert.equal(failed.response.status, 500);
+        assert.equal(existsSync(mediaPath), true);
+        assert.ok(db.prepare("SELECT id FROM users WHERE id = ?").get(account.user.id));
+        assert.equal(
+          (db.prepare("SELECT COUNT(*) AS count FROM media_cleanup_jobs WHERE owner_user_id = ?").get(account.user.id) as { count: number }).count,
+          0,
+        );
+      } finally {
+        db.exec("DROP TRIGGER IF EXISTS fail_account_delete_media_test");
+      }
+
+      const removed = await api("/api/v1/auth/account", {
+        method: "DELETE",
+        token: account.token,
+        body: JSON.stringify({ password: "Password1234", confirmation: "DELETE" }),
+      });
+      assert.equal(removed.response.status, 200);
+      assert.equal(existsSync(mediaPath), false);
+      const cleanupJob = db.prepare(`
+        SELECT status, attempts FROM media_cleanup_jobs WHERE owner_user_id = ? ORDER BY id DESC LIMIT 1
+      `).get(account.user.id) as { status: string; attempts: number };
+      assert.deepEqual(cleanupJob, { status: "completed", attempts: 1 });
+    } finally {
+      if (previousMediaRoot === undefined) delete process.env.MEDIA_LOCAL_ROOT;
+      else process.env.MEDIA_LOCAL_ROOT = previousMediaRoot;
+    }
+  });
+
+  test("admin push failures use the Express error response and leave the server available", async () => {
+    const recipient = await register("push-failure-recipient@example.com");
+    db.prepare(`
+      INSERT INTO push_devices (user_id, expo_push_token, platform)
+      VALUES (?, 'ExpoPushToken[push-failure-test]', 'ios')
+    `).run(recipient.user.id);
+    db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+    const adminLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+    });
+    assert.equal(adminLogin.response.status, 200);
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith("https://exp.host/--/api/v2/push/send")) {
+        throw new Error("injected Expo outage");
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const failed = await api("/api/v1/admin/notifications/campaigns", {
+        method: "POST",
+        token: (adminLogin.body as JsonObject).token,
+        body: JSON.stringify({ title: "推送故障测试", body: "验证异步异常由 Express 返回" }),
+      });
+      assert.equal(failed.response.status, 500);
+      assert.equal((failed.body as JsonObject).code, "INTERNAL_ERROR");
+      const campaign = db.prepare(`
+        SELECT status, failure_count AS failureCount
+        FROM notification_campaigns WHERE title = '推送故障测试' ORDER BY id DESC LIMIT 1
+      `).get() as { status: string; failureCount: number };
+      assert.equal(campaign.status, "failed");
+      assert.ok(campaign.failureCount >= 1);
+
+      const health = await api("/api/v1/health");
+      assert.equal(health.response.status, 200);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("chat immediately returns a durable run and never presents a local AI fallback as success", async () => {

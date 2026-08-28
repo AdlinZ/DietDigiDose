@@ -320,7 +320,10 @@ export const customFoodSchema = z.object({
   fat_100g: z.number().finite().min(0).max(1000).default(0),
 }).strict();
 
-const communityImage = z.string().trim().url("图片必须来自受控对象存储").max(2048, "图片 URL 过长");
+const communityImage = z.string().trim().max(2048, "图片 URL 过长").refine(
+  (value) => value.startsWith("/media/uploads/") || URL.canParse(value),
+  "图片必须来自受控对象存储",
+);
 export const communityPostSchema = z.object({
   content: z.string().trim().max(5000, "动态内容不能超过 5000 个字符").default(""),
   image_url: communityImage.nullable().optional(),

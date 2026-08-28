@@ -23,8 +23,14 @@ describe("media storage validation", () => {
     process.env.SUPABASE_URL = "https://project.supabase.co";
     process.env.SUPABASE_MEDIA_BUCKET = "community-media";
     try {
+      assert.equal(isStoredMediaUrlForUser("/media/uploads/community/42/2026-08-28/a.png", 42), true);
+      assert.equal(isStoredMediaUrlForUser("/media/uploads/community/43/2026-08-28/a.png", 42), false);
+      assert.equal(isStoredMediaUrlForUser("https://attacker.example/media/uploads/community/42/a.png", 42), false);
+      assert.equal(isStoredMediaUrlForUser("//attacker.example/media/uploads/community/42/a.png", 42), false);
+      assert.equal(isStoredMediaUrlForUser("/media/uploads/community/42/../43/a.png", 42), false);
       assert.equal(isStoredMediaUrlForUser("https://project.supabase.co/storage/v1/object/public/community-media/community/42/a.png", 42), true);
       assert.equal(isStoredMediaUrlForUser("https://project.supabase.co/storage/v1/object/public/community-media/community/43/a.png", 42), false);
+      assert.equal(isStoredMediaUrlForUser("https://attacker.example/storage/v1/object/public/community-media/community/42/a.png", 42), false);
       assert.equal(isStoredMediaUrlForUser("https://example.test/a.png", 42), false);
     } finally {
       if (previousUrl === undefined) delete process.env.SUPABASE_URL;

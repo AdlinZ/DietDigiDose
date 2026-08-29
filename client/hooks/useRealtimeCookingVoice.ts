@@ -80,6 +80,10 @@ export function useRealtimeCookingVoice(options: Options) {
   const nativeSpeechStartedAtRef = useRef(0);
   const nativeSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nativeTranscribingRef = useRef(false);
+  const nativeTurnIdRef = useRef("");
+  const nativeSequenceRef = useRef(0);
+  const nativePartialSentLengthRef = useRef(0);
+  const nativePartialInFlightRef = useRef(false);
   const mutedRef = useRef(false);
   const [session, setSession] = useState<RealtimeVoiceSession | null>(null);
   const [state, setState] = useState<"off" | "connecting" | "listening" | "processing" | "reconnecting" | "muted" | "fallback">("off");
@@ -147,19 +151,33 @@ export function useRealtimeCookingVoice(options: Options) {
   const flushNativeUtterance = useCallback(async () => {
     if (nativeTranscribingRef.current || !nativeChunksRef.current.length) return;
     const chunks = nativeChunksRef.current.splice(0);
+    const turnId = nativeTurnIdRef.current || Crypto.randomUUID();
+    const sequence = nativeSequenceRef.current + 1;
+    const currentSession = sessionRef.current;
+    nativeTurnIdRef.current = "";
+    nativeSequenceRef.current = sequence;
     nativeSpeakingRef.current = false;
-    if (Date.now() - nativeSpeechStartedAtRef.current < 250 || chunks.length < 2) return;
+    if (!currentSession || !activeRef.current || Date.now() - nativeSpeechStartedAtRef.current < 250 || chunks.length < 2) return;
     nativeTranscribingRef.current = true;
     setState("processing");
     try {
-      const result = await aiApi.transcribe<{
-        transcript?: string;
-        text?: string;
-        run: { id: string; status: string; transcript?: string; error?: { message?: string } };
-      }>(authFetch, pcm16WavBase64(chunks), "audio/wav");
-      const completed = await waitForAgentRun(authFetch, result.run);
-      const transcript = String(result.transcript || result.text || completed.transcript || "").trim();
+      let transcript = "";
+      try {
+        const partial = await realtimeVoiceApi.audioChunk(authFetch, currentSession.id, {
+          turnId, sequence, audioBase64: pcm16WavBase64(chunks), mimeType: "audio/wav", final: true,
+        });
+        transcript = partial.transcript.trim();
+      } catch {
+        const result = await aiApi.transcribe<{
+          transcript?: string;
+          text?: string;
+          run: { id: string; status: string; transcript?: string; error?: { message?: string } };
+        }>(authFetch, pcm16WavBase64(chunks), "audio/wav");
+        const completed = await waitForAgentRun(authFetch, result.run);
+        transcript = String(result.transcript || result.text || completed.transcript || "").trim();
+      }
       if (!transcript) throw new Error("没有识别到清晰语音");
+      if (!activeRef.current) return;
       optionsRef.current.onTranscript(transcript, true);
       await submitTurn(transcript);
     } catch (error) {
@@ -174,9 +192,28 @@ export function useRealtimeCookingVoice(options: Options) {
     if (!activeRef.current || typeof event.data !== "string") return;
     nativePreRollRef.current.push(event.data);
     nativePreRollRef.current = nativePreRollRef.current.slice(-3);
-    if (nativeSpeakingRef.current) nativeChunksRef.current.push(event.data);
+    if (nativeSpeakingRef.current) {
+      nativeChunksRef.current.push(event.data);
+      const shouldSendPartial = nativeChunksRef.current.length - nativePartialSentLengthRef.current >= 10;
+      const currentSession = sessionRef.current;
+      if (shouldSendPartial && currentSession && !nativePartialInFlightRef.current && nativeTurnIdRef.current) {
+        const chunks = [...nativeChunksRef.current];
+        const turnId = nativeTurnIdRef.current;
+        const sequence = nativeSequenceRef.current + 1;
+        nativeSequenceRef.current = sequence;
+        nativePartialSentLengthRef.current = chunks.length;
+        nativePartialInFlightRef.current = true;
+        void realtimeVoiceApi.audioChunk(authFetch, currentSession.id, {
+          turnId, sequence, audioBase64: pcm16WavBase64(chunks), mimeType: "audio/wav", final: false,
+        }).then((result) => {
+          if (turnId === nativeTurnIdRef.current && result.transcript.trim()) {
+            optionsRef.current.onTranscript(result.transcript.trim(), false);
+          }
+        }).catch(() => undefined).finally(() => { nativePartialInFlightRef.current = false; });
+      }
+    }
     if (nativeChunksRef.current.length > 160) void flushNativeUtterance();
-  }, [flushNativeUtterance]);
+  }, [authFetch, flushNativeUtterance]);
 
   const handleNativeAnalysis = useCallback(async (event: AudioAnalysis) => {
     if (!activeRef.current) return;
@@ -188,6 +225,9 @@ export function useRealtimeCookingVoice(options: Options) {
         nativeSpeakingRef.current = true;
         nativeSpeechStartedAtRef.current = Date.now();
         nativeChunksRef.current = [...nativePreRollRef.current];
+        nativeTurnIdRef.current = Crypto.randomUUID();
+        nativeSequenceRef.current = 0;
+        nativePartialSentLengthRef.current = 0;
         if (stateRef.current === "processing") {
           interruptedRef.current = true;
           responseGeneration.current += 1;
@@ -218,6 +258,10 @@ export function useRealtimeCookingVoice(options: Options) {
     nativeSpeakingRef.current = false;
     nativeChunksRef.current = [];
     nativePreRollRef.current = [];
+    nativeTurnIdRef.current = "";
+    nativeSequenceRef.current = 0;
+    nativePartialSentLengthRef.current = 0;
+    nativePartialInFlightRef.current = false;
     if (Platform.OS !== "web") await stopNativeRecording().catch(() => undefined);
     const current = sessionRef.current;
     sessionRef.current = null;

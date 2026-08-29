@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { InvalidMediaError, isStoredMediaUrlForUser, parseImageDataUrl } from "../src/services/mediaStorage.js";
+import {
+  deleteStoredMediaReferences,
+  InvalidMediaError,
+  isStoredMediaUrlForUser,
+  MediaStorageUnavailableError,
+  parseImageDataUrl,
+  type StoredMediaReference,
+} from "../src/services/mediaStorage.js";
 
 describe("media storage validation", () => {
   it("accepts a PNG only when its signature matches", () => {
@@ -37,6 +44,47 @@ describe("media storage validation", () => {
       else process.env.SUPABASE_URL = previousUrl;
       if (previousBucket === undefined) delete process.env.SUPABASE_MEDIA_BUCKET;
       else process.env.SUPABASE_MEDIA_BUCKET = previousBucket;
+    }
+  });
+
+  it("fails closed for every unavailable remote-storage state", async () => {
+    const keys = ["SUPABASE_URL", "SUPABASE_MEDIA_BUCKET", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY"] as const;
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    const previousFetch = globalThis.fetch;
+    const references: StoredMediaReference[] = [{
+      backend: "supabase",
+      origin: "https://storage.example",
+      bucket: "community-media",
+      objectPath: "community/42/2026-08-28/a.png",
+    }];
+    try {
+      process.env.SUPABASE_URL = "https://storage.example";
+      process.env.SUPABASE_MEDIA_BUCKET = "";
+      process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
+      process.env.SUPABASE_ANON_KEY = "anon-key";
+      await assert.rejects(() => deleteStoredMediaReferences(references), MediaStorageUnavailableError);
+
+      process.env.SUPABASE_MEDIA_BUCKET = "community-media";
+      process.env.SUPABASE_SERVICE_ROLE_KEY = "";
+      await assert.rejects(() => deleteStoredMediaReferences(references), MediaStorageUnavailableError);
+
+      process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
+      process.env.SUPABASE_ANON_KEY = "";
+      await assert.rejects(() => deleteStoredMediaReferences(references), MediaStorageUnavailableError);
+
+      process.env.SUPABASE_ANON_KEY = "anon-key";
+      globalThis.fetch = async () => new Response(JSON.stringify({ message: "storage outage" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      });
+      await assert.rejects(() => deleteStoredMediaReferences(references), /媒体删除失败/);
+    } finally {
+      globalThis.fetch = previousFetch;
+      for (const key of keys) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 });

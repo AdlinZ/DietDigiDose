@@ -1864,6 +1864,105 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 55,
+    name: "media_cleanup_stable_object_references",
+    up(database) {
+      addColumn(database, "media_cleanup_jobs", "objects_json", "TEXT");
+    },
+  },
+  {
+    version: 56,
+    name: "governed_voice_pack_catalog",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS voice_pack_versions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          voice_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          version TEXT NOT NULL,
+          language TEXT NOT NULL DEFAULT 'zh-CN',
+          style_tags_json TEXT NOT NULL DEFAULT '[]',
+          manifest_json TEXT NOT NULL,
+          resource_fingerprint TEXT NOT NULL UNIQUE,
+          provider_voice TEXT,
+          status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'published', 'disabled', 'revoked')),
+          revision INTEGER NOT NULL DEFAULT 1,
+          created_by INTEGER,
+          reviewed_by INTEGER,
+          published_at DATETIME,
+          revoked_at DATETIME,
+          revoke_reason TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(voice_id, version),
+          FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+          FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS voice_pack_status_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          voice_pack_version_id INTEGER NOT NULL,
+          actor_user_id INTEGER,
+          from_status TEXT,
+          to_status TEXT NOT NULL,
+          reason TEXT,
+          revision INTEGER NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (voice_pack_version_id) REFERENCES voice_pack_versions(id) ON DELETE CASCADE,
+          FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_voice_pack_versions_status_voice
+          ON voice_pack_versions(status, voice_id, version);
+        CREATE INDEX IF NOT EXISTS idx_voice_pack_history_version_created
+          ON voice_pack_status_history(voice_pack_version_id, created_at DESC, id DESC);
+      `);
+    },
+  },
+  {
+    version: 57,
+    name: "account_scoped_voice_preferences",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS user_voice_preferences (
+          user_id INTEGER PRIMARY KEY,
+          selected_voice_id TEXT,
+          selected_version TEXT,
+          preference TEXT NOT NULL DEFAULT 'automatic' CHECK(preference IN ('automatic', 'system-only')),
+          version INTEGER NOT NULL DEFAULT 1,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+      `);
+    },
+  },
+  {
+    version: 58,
+    name: "realtime_voice_incremental_transcripts",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS realtime_voice_transcript_chunks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          turn_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          sequence INTEGER NOT NULL,
+          transcript TEXT NOT NULL DEFAULT '',
+          is_final INTEGER NOT NULL DEFAULT 0,
+          audio_bytes INTEGER NOT NULL DEFAULT 0,
+          latency_ms INTEGER NOT NULL DEFAULT 0,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(session_id, turn_id, sequence),
+          FOREIGN KEY (session_id) REFERENCES realtime_voice_sessions(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_realtime_voice_chunks_turn_sequence
+          ON realtime_voice_transcript_chunks(session_id, turn_id, sequence);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(database: Database.Database) {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "../storage/db.js";
-import { deleteStoredMediaUrls } from "./mediaStorage.js";
+import { deleteStoredMediaReferences, describeStoredMediaUrls, type StoredMediaReference } from "./mediaStorage.js";
 
 export const MEDIA_CLEANUP_STALE_MINUTES = 30;
 
@@ -8,6 +8,7 @@ export type MediaCleanupJob = {
   id: number;
   owner_user_id: number;
   urls_json: string;
+  objects_json: string | null;
   status: "pending" | "processing" | "completed";
   attempts: number;
   last_error: string | null;
@@ -31,11 +32,12 @@ export function sanitizeMediaCleanupError(error: unknown) {
 
 export function enqueueMediaCleanup(userId: number, urls: Array<string | null | undefined>) {
   const storedUrls = [...new Set(urls.filter((url): url is string => typeof url === "string" && url.length > 0))];
-  if (!storedUrls.length) return null;
+  const references = describeStoredMediaUrls(userId, storedUrls);
+  if (!references.length) return null;
   const result = db.prepare(`
-    INSERT INTO media_cleanup_jobs (owner_user_id, urls_json)
-    VALUES (?, ?)
-  `).run(userId, JSON.stringify(storedUrls));
+    INSERT INTO media_cleanup_jobs (owner_user_id, urls_json, objects_json)
+    VALUES (?, ?, ?)
+  `).run(userId, JSON.stringify(storedUrls), JSON.stringify(references));
   return Number(result.lastInsertRowid);
 }
 
@@ -56,7 +58,7 @@ export function claimMediaCleanupJob(jobId: number, staleMinutes = MEDIA_CLEANUP
   `).run(claimToken, jobId, staleModifier);
   if (!claimed.changes) return null;
   return db.prepare(`
-    SELECT id, owner_user_id, urls_json, status, attempts, last_error,
+    SELECT id, owner_user_id, urls_json, objects_json, status, attempts, last_error,
       created_at, updated_at, completed_at, claim_token, claimed_at
     FROM media_cleanup_jobs WHERE id = ? AND claim_token = ?
   `).get(jobId, claimToken) as MediaCleanupJob | undefined || null;
@@ -71,7 +73,15 @@ export async function processMediaCleanupJob(jobId: number) {
     if (!Array.isArray(parsed) || parsed.some((url) => typeof url !== "string")) {
       throw new Error(`媒体清理任务 ${jobId} 的 URL 数据无效`);
     }
-    await deleteStoredMediaUrls(job.owner_user_id, parsed);
+    let references: StoredMediaReference[];
+    if (job.objects_json) {
+      const stored: unknown = JSON.parse(job.objects_json);
+      if (!Array.isArray(stored)) throw new Error(`媒体清理任务 ${jobId} 的对象定位数据无效`);
+      references = stored as StoredMediaReference[];
+    } else {
+      references = describeStoredMediaUrls(job.owner_user_id, parsed);
+    }
+    await deleteStoredMediaReferences(references);
     const completed = db.prepare(`
       UPDATE media_cleanup_jobs
       SET status = 'completed', last_error = NULL, claim_token = NULL, claimed_at = NULL,

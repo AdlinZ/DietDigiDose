@@ -495,6 +495,15 @@ export const realtimeVoiceTurnSchema = z.object({
   interruptedResponse: z.boolean().default(false),
 }).strict();
 
+export const realtimeVoiceAudioChunkSchema = z.object({
+  turnId: z.string().uuid(),
+  sequence: z.number().int().min(1).max(1000),
+  audioBase64: z.string().trim().min(1).max(7_500_000)
+    .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, "音频分段不是有效 Base64"),
+  mimeType: z.enum(["audio/wav", "audio/webm"]),
+  final: z.boolean().default(false),
+}).strict();
+
 const agentActionEditSchema = z.object({
   id: z.string().uuid().optional(),
   actionType: z.enum([

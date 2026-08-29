@@ -6,9 +6,10 @@ import { validateBody } from "../middleware/validate.js";
 import { uuidParam } from "../middleware/validateParam.js";
 import { sharedRateLimit } from "../middleware/sharedRateLimit.js";
 import { cancelSupervisorRun, startSupervisorRun, waitForSupervisorRunCompletion } from "../services/agent/runtime.js";
+import { transcribeAudio } from "../services/aiService.js";
 import { db } from "../storage/db.js";
 import { sendError } from "../utils/http.js";
-import { realtimeVoiceHeartbeatSchema, realtimeVoiceSessionSchema, realtimeVoiceTurnSchema } from "../validation/schemas.js";
+import { realtimeVoiceAudioChunkSchema, realtimeVoiceHeartbeatSchema, realtimeVoiceSessionSchema, realtimeVoiceTurnSchema } from "../validation/schemas.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -20,9 +21,19 @@ const realtimeTurnRateLimit = sharedRateLimit({
   message: "实时语音请求过于频繁，请稍后重试",
   code: "REALTIME_VOICE_RATE_LIMITED",
 });
+const realtimeAudioRateLimit = sharedRateLimit({
+  namespace: "realtime-voice-audio-user",
+  limit: Math.max(30, Number(process.env.REALTIME_VOICE_AUDIO_RATE_LIMIT) || 300),
+  windowMs: 15 * 60 * 1000,
+  key: (req) => String((req as AuthRequest).userId || "unknown"),
+  message: "实时语音分段过于频繁，请稍后重试",
+  code: "REALTIME_VOICE_AUDIO_RATE_LIMITED",
+});
 router.use((req, res, next) => req.method === "POST" && req.path.endsWith("/turns")
   ? realtimeTurnRateLimit(req, res, next)
-  : next());
+  : req.method === "POST" && req.path.endsWith("/audio-chunks")
+    ? realtimeAudioRateLimit(req, res, next)
+    : next());
 router.param("sessionId", uuidParam);
 
 type Row = Record<string, unknown>;
@@ -108,6 +119,50 @@ router.post("/sessions/:sessionId/heartbeat", validateBody(realtimeVoiceHeartbea
     reconnect_count = reconnect_count + ?, last_heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?`)
     .run(status, req.body.reconnect ? 1 : 0, session.id);
   return res.json({ session: formatSession(ownedSession(String(session.id), req.userId!)!) });
+});
+
+router.post("/sessions/:sessionId/audio-chunks", validateBody(realtimeVoiceAudioChunkSchema), async (req: AuthRequest, res) => {
+  const session = ownedSession(String(req.params.sessionId), req.userId!);
+  if (!session) return sendError(res, 404, "实时语音会话不存在", "REALTIME_VOICE_SESSION_NOT_FOUND");
+  if (!["active", "muted"].includes(String(session.status))
+    || Date.parse(String(session.expires_at).replace(" ", "T") + "Z") <= Date.now()) {
+    return sendError(res, 410, "实时语音会话已结束", "REALTIME_VOICE_SESSION_EXPIRED");
+  }
+  const prior = db.prepare(`SELECT transcript, is_final, latency_ms FROM realtime_voice_transcript_chunks
+    WHERE session_id = ? AND turn_id = ? AND sequence = ?`)
+    .get(session.id, req.body.turnId, req.body.sequence) as { transcript: string; is_final: number; latency_ms: number } | undefined;
+  if (prior) return res.json({
+    turnId: req.body.turnId,
+    sequence: req.body.sequence,
+    transcript: prior.transcript,
+    final: Boolean(prior.is_final),
+    latencyMs: prior.latency_ms,
+    repeated: true,
+  });
+  const startedAt = Date.now();
+  try {
+    const result = await transcribeAudio(req.body.audioBase64, {
+      userId: req.userId!, mimeType: req.body.mimeType,
+      agentName: "RealtimeVoiceAgent", phase: req.body.final ? "final-transcript" : "partial-transcript",
+    });
+    const transcript = result.text.trim();
+    const latencyMs = Date.now() - startedAt;
+    const audioBytes = Math.floor(String(req.body.audioBase64).replace(/^data:[^,]+,/, "").length * 0.75);
+    db.prepare(`INSERT INTO realtime_voice_transcript_chunks
+      (session_id, turn_id, user_id, sequence, transcript, is_final, audio_bytes, latency_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(session.id, req.body.turnId, req.userId!, req.body.sequence, transcript, req.body.final ? 1 : 0, audioBytes, latencyMs);
+    const connectedAt = Date.parse(String(session.connected_at).replace(" ", "T") + "Z");
+    if (transcript) db.prepare(`UPDATE realtime_voice_sessions SET
+      first_transcript_ms = COALESCE(first_transcript_ms, ?), last_heartbeat_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .run(Math.max(0, Date.now() - connectedAt), session.id);
+    emitEvent(String(session.id), req.body.final ? "transcript.completed" : "transcript.delta", {
+      turnId: req.body.turnId, sequence: req.body.sequence, transcript, latencyMs,
+    });
+    return res.status(201).json({ turnId: req.body.turnId, sequence: req.body.sequence, transcript, final: req.body.final, latencyMs, repeated: false });
+  } catch {
+    return sendError(res, 503, "增量语音识别暂不可用", "REALTIME_TRANSCRIPTION_UNAVAILABLE");
+  }
 });
 
 router.post("/sessions/:sessionId/turns", validateBody(realtimeVoiceTurnSchema), async (req: AuthRequest, res) => {

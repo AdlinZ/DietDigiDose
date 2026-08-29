@@ -15,6 +15,10 @@ const MIME_EXTENSIONS: Record<string, string> = {
 export class MediaStorageUnavailableError extends Error {}
 export class InvalidMediaError extends Error {}
 
+export type StoredMediaReference =
+  | { backend: "local"; path: string }
+  | { backend: "supabase"; origin: string; bucket: string; objectPath: string };
+
 export async function uploadImageDataUrl(dataUrl: string, userId: number, scope: "community") {
   const parsed = parseImageDataUrl(dataUrl);
   const bucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
@@ -94,6 +98,44 @@ function getPublicObjectPathForUser(url: string, userId: number, scope: "communi
   }
 }
 
+function getSupabaseReferenceForUser(url: string, userId: number, scope: "community"): StoredMediaReference | null {
+  try {
+    const candidate = new URL(url);
+    if (candidate.protocol !== "https:") return null;
+    const marker = "/storage/v1/object/public/";
+    const markerIndex = candidate.pathname.indexOf(marker);
+    if (markerIndex < 0) return null;
+    const configuredOrigin = process.env.SUPABASE_URL?.trim();
+    if (configuredOrigin && candidate.origin !== new URL(configuredOrigin).origin) return null;
+    const remainder = candidate.pathname.slice(markerIndex + marker.length);
+    const slash = remainder.indexOf("/");
+    if (slash <= 0) return null;
+    const bucket = decodeURIComponent(remainder.slice(0, slash));
+    const objectPath = decodeURIComponent(remainder.slice(slash + 1));
+    if (!bucket || !objectPath.startsWith(`${scope}/${userId}/`) || objectPath.includes("..")) return null;
+    return { backend: "supabase", origin: candidate.origin, bucket, objectPath };
+  } catch {
+    return null;
+  }
+}
+
+export function describeStoredMediaUrls(userId: number, urls: Array<string | null | undefined>): StoredMediaReference[] {
+  const references = urls.flatMap((url): StoredMediaReference[] => {
+    if (typeof url !== "string") return [];
+    const localPath = getLocalMediaPathForUser(url, userId, "community");
+    if (localPath) return [{ backend: "local", path: localPath }];
+    const remote = getSupabaseReferenceForUser(url, userId, "community");
+    return remote ? [remote] : [];
+  });
+  const seen = new Set<string>();
+  return references.filter((reference) => {
+    const key = JSON.stringify(reference);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function isStoredMediaUrlForUser(url: string, userId: number, scope: "community" = "community") {
   return Boolean(
     getLocalMediaPathForUser(url, userId, scope)
@@ -102,29 +144,32 @@ export function isStoredMediaUrlForUser(url: string, userId: number, scope: "com
 }
 
 export async function deleteStoredMediaUrls(userId: number, urls: Array<string | null | undefined>) {
-  const localUrls = urls.flatMap((url) => {
-    if (typeof url !== "string") return [];
-    const pathname = getLocalMediaPathForUser(url, userId, "community");
-    return pathname ? [pathname] : [];
-  });
+  return deleteStoredMediaReferences(describeStoredMediaUrls(userId, urls));
+}
+
+export async function deleteStoredMediaReferences(references: StoredMediaReference[]) {
+  const localUrls = references.flatMap((reference) => reference.backend === "local" ? [reference.path] : []);
   const publicMediaRoot = getPublicMediaRoot();
   await Promise.all(localUrls.map(async (url) => {
     const relativePath = url.slice("/media/".length);
     const destination = path.resolve(publicMediaRoot, relativePath);
     if (destination.startsWith(`${publicMediaRoot}${path.sep}`)) await rm(destination, { force: true });
   }));
-  const bucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
-  if (!bucket || !getSupabaseServiceRoleKey()) return;
-  const objectPaths = [...new Set(urls
-    .flatMap((url) => {
-      if (typeof url !== "string") return [];
-      const objectPath = getPublicObjectPathForUser(url, userId, "community");
-      return objectPath ? [objectPath] : [];
-    }))];
-  if (!objectPaths.length) return;
+  const remoteReferences = references.filter((reference): reference is Extract<StoredMediaReference, { backend: "supabase" }> => reference.backend === "supabase");
+  if (!remoteReferences.length) return;
+  const configuredBucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
+  const configuredUrl = process.env.SUPABASE_URL?.trim();
+  const configuredOrigin = configuredUrl ? new URL(configuredUrl).origin : null;
+  if (!configuredBucket || !configuredOrigin || !getSupabaseServiceRoleKey()) {
+    throw new MediaStorageUnavailableError("媒体对象存储配置不可用，任务将保留等待重试");
+  }
+  if (remoteReferences.some((reference) => reference.bucket !== configuredBucket || reference.origin !== configuredOrigin)) {
+    throw new MediaStorageUnavailableError("媒体对象存储定位与当前配置不一致，任务将保留等待重试");
+  }
   const client = getSupabaseClient();
   if (!client) throw new MediaStorageUnavailableError("媒体对象存储尚未配置");
-  const { error } = await client.storage.from(bucket).remove(objectPaths);
+  const objectPaths = [...new Set(remoteReferences.map((reference) => reference.objectPath))];
+  const { error } = await client.storage.from(configuredBucket).remove(objectPaths);
   if (error) throw new Error(`媒体删除失败: ${error.message}`);
 }
 

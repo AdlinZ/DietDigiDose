@@ -3,25 +3,15 @@ import { Router } from "express";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { sharedRateLimit } from "../middleware/sharedRateLimit.js";
 import { getChatConfig } from "../services/aiService.js";
+import { db } from "../storage/db.js";
+import {
+  findPublishedVoicePack,
+  parseVoicePackCatalog,
+  publicVoicePackCatalog,
+  safeHttpsUrl,
+} from "../services/voicePacks.js";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout.js";
 import { sendError } from "../utils/http.js";
-
-type VoicePackResource = { path: string; url: string; sha256: string; bytes: number };
-type VoicePackManifest = {
-  voiceId: string;
-  name: string;
-  version: string;
-  language: string;
-  sampleRate: number;
-  outputFormat: "pcm-f32";
-  minimumAppVersion: string;
-  minimumMemoryMb: number;
-  license: { name: string; url: string; speakerAuthorization: string; modelNotice: string };
-  resources: VoicePackResource[];
-  model: { path: string; vocabularyPath: string; inputNames: { tokens: string; lengths: string; scales?: string; speakerId?: string }; outputName?: string; speakerId?: number };
-  previewUrl?: string;
-  revoked?: boolean;
-};
 
 const router = Router();
 router.use(authMiddleware);
@@ -34,47 +24,48 @@ const ttsRateLimit = sharedRateLimit({
   code: "TTS_RATE_LIMITED",
 });
 
-function isHexSha256(value: unknown): value is string {
-  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value);
-}
+export { parseVoicePackCatalog };
 
-function safeHttpsUrl(value: unknown) {
-  if (typeof value !== "string") return false;
-  try { return new URL(value).protocol === "https:"; } catch { return false; }
-}
-
-export function parseVoicePackCatalog(raw = process.env.VOICE_PACK_CATALOG_JSON || "[]") {
-  let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return []; }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.flatMap((candidate): VoicePackManifest[] => {
-    if (!candidate || typeof candidate !== "object") return [];
-    const item = candidate as VoicePackManifest;
-    if (!/^[a-z0-9][a-z0-9._-]{1,79}$/i.test(String(item.voiceId || ""))) return [];
-    if (!/^\d+\.\d+\.\d+$/.test(String(item.version || ""))) return [];
-    if (!item.name || item.language !== "zh-CN" || item.outputFormat !== "pcm-f32") return [];
-    if (!Number.isInteger(item.sampleRate) || item.sampleRate < 8_000 || item.sampleRate > 48_000) return [];
-    if (!item.license?.name || !safeHttpsUrl(item.license.url) || !item.license.speakerAuthorization || !item.license.modelNotice) return [];
-    if (!Array.isArray(item.resources) || !item.resources.length || item.resources.some((resource) =>
-      !/^[a-z0-9][a-z0-9._/-]{0,199}$/i.test(resource.path)
-      || resource.path.includes("..") || !safeHttpsUrl(resource.url) || !isHexSha256(resource.sha256)
-      || !Number.isInteger(resource.bytes) || resource.bytes <= 0)) return [];
-    if (!item.model?.path || !item.model.vocabularyPath || !item.model.inputNames?.tokens || !item.model.inputNames.lengths) return [];
-    const resourcePaths = new Set(item.resources.map((resource) => resource.path));
-    if (resourcePaths.size !== item.resources.length || !resourcePaths.has(item.model.path) || !resourcePaths.has(item.model.vocabularyPath)) return [];
-    if (!item.minimumAppVersion || !Number.isInteger(item.minimumMemoryMb) || item.minimumMemoryMb < 128) return [];
-    if (item.previewUrl && !safeHttpsUrl(item.previewUrl)) return [];
-    return [{ ...item, revoked: Boolean(item.revoked) }];
-  });
-}
-
-router.get("/", (_req, res) => {
-  const catalog = parseVoicePackCatalog();
+router.get("/", (req, res) => {
+  const catalog = publicVoicePackCatalog(String(req.get("x-client-version") || "0.0.0"));
+  res.set("ETag", `W/\"voice-catalog-${catalog.catalogVersion}\"`);
   return res.json({
-    items: catalog.filter((item) => !item.revoked),
-    revoked: catalog.filter((item) => item.revoked).map((item) => ({ voiceId: item.voiceId, version: item.version })),
+    ...catalog,
     syntheticVoiceDisclosure: "音色包生成的内容属于合成语音；模型文件安装到设备后可能被提取。",
   });
+});
+
+router.get("/preference", (req: AuthRequest, res) => {
+  const row = db.prepare("SELECT selected_voice_id, selected_version, preference, version, updated_at FROM user_voice_preferences WHERE user_id = ?")
+    .get(req.userId!) as Record<string, unknown> | undefined;
+  return res.json(row ? {
+    selectedVoiceId: row.selected_voice_id,
+    selectedVersion: row.selected_version,
+    preference: row.preference,
+    version: Number(row.version),
+    updatedAt: row.updated_at,
+  } : { selectedVoiceId: null, selectedVersion: null, preference: "automatic", version: 0, updatedAt: null });
+});
+
+router.put("/preference", (req: AuthRequest, res) => {
+  const preference = req.body?.preference;
+  const selectedVoiceId = req.body?.selectedVoiceId == null ? null : String(req.body.selectedVoiceId);
+  const selectedVersion = req.body?.selectedVersion == null ? null : String(req.body.selectedVersion);
+  const expectedVersion = Number(req.body?.version ?? 0);
+  if (!["automatic", "system-only"].includes(preference)) return sendError(res, 400, "语音偏好无效", "INVALID_VOICE_PREFERENCE");
+  if ((selectedVoiceId || selectedVersion) && (!selectedVoiceId || !selectedVersion || !findPublishedVoicePack(selectedVoiceId, selectedVersion))) {
+    return sendError(res, 400, "所选音色未发布或已撤销", "VOICE_PACK_NOT_AVAILABLE");
+  }
+  const existing = db.prepare("SELECT version FROM user_voice_preferences WHERE user_id = ?").get(req.userId!) as { version: number } | undefined;
+  if (existing && expectedVersion !== existing.version) return sendError(res, 409, "语音偏好已在其他设备更新", "VOICE_PREFERENCE_VERSION_CONFLICT");
+  if (!existing && expectedVersion !== 0) return sendError(res, 409, "语音偏好版本无效", "VOICE_PREFERENCE_VERSION_CONFLICT");
+  db.prepare(`INSERT INTO user_voice_preferences (user_id, selected_voice_id, selected_version, preference)
+    VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
+      selected_voice_id = excluded.selected_voice_id, selected_version = excluded.selected_version,
+      preference = excluded.preference, version = user_voice_preferences.version + 1, updated_at = CURRENT_TIMESTAMP`)
+    .run(req.userId!, selectedVoiceId, selectedVersion, preference);
+  const row = db.prepare("SELECT selected_voice_id, selected_version, preference, version, updated_at FROM user_voice_preferences WHERE user_id = ?").get(req.userId!) as Record<string, unknown>;
+  return res.json({ selectedVoiceId: row.selected_voice_id, selectedVersion: row.selected_version, preference: row.preference, version: Number(row.version), updatedAt: row.updated_at });
 });
 
 router.post("/synthesize", ttsRateLimit, async (req: AuthRequest, res) => {
@@ -82,6 +73,10 @@ router.post("/synthesize", ttsRateLimit, async (req: AuthRequest, res) => {
   if (!text || text.length > 600) return sendError(res, 400, "朗读文本需为 1-600 个字符", "INVALID_TTS_TEXT");
   const configuredBase = String(process.env.TTS_BASE_URL || "").trim().replace(/\/$/, "");
   const configuredKey = String(process.env.TTS_API_KEY || "").trim();
+  const requestedVoiceId = req.body?.voiceId == null ? null : String(req.body.voiceId);
+  const requestedVersion = req.body?.version == null ? null : String(req.body.version);
+  const selectedPack = requestedVoiceId ? findPublishedVoicePack(requestedVoiceId, requestedVersion) : null;
+  if (requestedVoiceId && !selectedPack) return sendError(res, 400, "音色未发布或已撤销", "VOICE_PACK_NOT_AVAILABLE");
   const chat = getChatConfig();
   const baseUrl = configuredBase || chat.baseUrl;
   const apiKey = configuredKey || chat.apiKey;
@@ -92,7 +87,7 @@ router.post("/synthesize", ttsRateLimit, async (req: AuthRequest, res) => {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
         model: process.env.TTS_MODEL || "gpt-4o-mini-tts",
-        voice: process.env.TTS_VOICE || "alloy",
+        voice: selectedPack?.provider_voice || process.env.TTS_VOICE || "alloy",
         input: text,
         response_format: "mp3",
       }),

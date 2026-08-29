@@ -18,6 +18,28 @@ export type MediaCleanupJob = {
   eligibleForRetry: boolean;
 };
 
+export function createLatestMediaCleanupRequest() {
+  let generation = 0;
+  let activeController: AbortController | null = null;
+  return {
+    begin() {
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
+      const requestGeneration = ++generation;
+      return {
+        signal: controller.signal,
+        isLatest: () => requestGeneration === generation && !controller.signal.aborted,
+      };
+    },
+    cancel() {
+      generation += 1;
+      activeController?.abort();
+      activeController = null;
+    },
+  };
+}
+
 export function mediaCleanupViewState(loading: boolean, error: string, itemCount: number) {
   if (loading) return 'loading' as const;
   if (error) return 'error' as const;

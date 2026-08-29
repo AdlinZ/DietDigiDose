@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import axios from 'axios';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -11,6 +12,7 @@ import {
 import api from '../services/api';
 import {
   canRetryMediaCleanupJob,
+  createLatestMediaCleanupRequest,
   mediaCleanupErrorMessage,
   mediaCleanupRetryConfirmation,
   mediaCleanupRetryFeedback,
@@ -42,23 +44,32 @@ export default function MediaCleanup() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [retryingId, setRetryingId] = useState<number | null>(null);
+  const requestGuardRef = useRef(createLatestMediaCleanupRequest());
+  const queryRef = useRef({ page, status, olderThanHours });
+  queryRef.current = { page, status, olderThanHours };
 
   const load = useCallback(async (quiet = false) => {
+    const request = requestGuardRef.current.begin();
+    const query = queryRef.current;
     if (!quiet) setLoading(true);
     setError('');
     try {
       const response = await api.get<Overview>('/admin/media-cleanup-jobs', {
-        params: { page, pageSize: 25, status, olderThanHours },
+        params: { page: query.page, pageSize: 25, status: query.status, olderThanHours: query.olderThanHours },
+        signal: request.signal,
       });
-      setData(response.data);
+      if (request.isLatest()) setData(response.data);
     } catch (requestError) {
-      setError(mediaCleanupErrorMessage(requestError, '加载媒体清理任务失败'));
+      if (request.isLatest() && !axios.isCancel(requestError)) {
+        setError(mediaCleanupErrorMessage(requestError, '加载媒体清理任务失败'));
+      }
     } finally {
-      if (!quiet) setLoading(false);
+      if (!quiet && request.isLatest()) setLoading(false);
     }
-  }, [olderThanHours, page, status]);
+  }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, olderThanHours, page, status]);
+  useEffect(() => () => requestGuardRef.current.cancel(), []);
 
   const retry = async (job: MediaCleanupJob) => {
     if (!canRetryMediaCleanupJob(job) || retryingId !== null) return;

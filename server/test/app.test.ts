@@ -1591,6 +1591,11 @@ describe("user data isolation", () => {
     assert.ok((events.body as JsonObject).events.some((event: JsonObject) => event.type === "confirmation.required"));
     assert.equal((events.body as JsonObject).session.metrics.interruptions, 1);
     assert.equal((await api(`/api/v1/ai/realtime-voice/sessions/${session.id}/events`, { token: second.token })).response.status, 404);
+    const foreignAudio = await api(`/api/v1/ai/realtime-voice/sessions/${session.id}/audio-chunks`, {
+      method: "POST", token: second.token,
+      body: JSON.stringify({ turnId: "00000000-0000-4000-8000-000000000110", sequence: 1, audioBase64: "AAAA", mimeType: "audio/wav", final: false }),
+    });
+    assert.equal(foreignAudio.response.status, 404);
 
     const heartbeat = await api(`/api/v1/ai/realtime-voice/sessions/${session.id}/heartbeat`, {
       method: "POST", token: first.token, body: JSON.stringify({ version: session.version, muted: true, reconnect: true }),
@@ -1605,6 +1610,82 @@ describe("user data isolation", () => {
       body: JSON.stringify({ turnId: "00000000-0000-4000-8000-000000000100", transcript: "下一步", currentStep: 0, timerSeconds: 0, timerRunning: false }),
     });
     assert.equal(afterClose.response.status, 410);
+  });
+
+  test("voice packs use an audited database catalog and account-scoped preferences", async () => {
+    const manifest = {
+      voiceId: "licensed-test-zh", name: "授权测试音色", version: "1.0.0", language: "zh-CN",
+      sampleRate: 22050, outputFormat: "pcm-f32", minimumAppVersion: "1.0.5", minimumMemoryMb: 512,
+      license: { name: "Apache-2.0", url: "https://example.com/license", speakerAuthorization: "authorization-record-1", modelNotice: "extractable-model" },
+      resources: [
+        { path: "model.onnx", url: "https://cdn.example.com/voice/model.onnx", sha256: "a".repeat(64), bytes: 1024 },
+        { path: "tokens.json", url: "https://cdn.example.com/voice/tokens.json", sha256: "b".repeat(64), bytes: 512 },
+      ],
+      model: { path: "model.onnx", vocabularyPath: "tokens.json", inputNames: { tokens: "input", lengths: "input_lengths" } },
+    };
+    const forbidden = await api("/api/v1/admin/voice-packs", { method: "POST", token: first.token, body: JSON.stringify({ manifest }) });
+    assert.equal(forbidden.response.status, 403);
+    const adminToken = await loginAdmin();
+    const created = await api("/api/v1/admin/voice-packs", {
+      method: "POST", token: adminToken,
+      body: JSON.stringify({ manifest, styleTags: ["温和", "做饭"], providerVoice: "alloy" }),
+    });
+    assert.equal(created.response.status, 201);
+    const draft = (created.body as JsonObject).item;
+    const hidden = await api("/api/v1/ai/voice-packs", { token: first.token, headers: { "x-client-version": "1.0.5" } });
+    assert.equal((hidden.body as JsonObject).items.some((item: JsonObject) => item.voiceId === manifest.voiceId), false);
+
+    const published = await api(`/api/v1/admin/voice-packs/${draft.id}/publish`, {
+      method: "POST", token: adminToken, body: JSON.stringify({ revision: draft.revision, reason: "授权与摘要校验通过" }),
+    });
+    assert.equal(published.response.status, 200);
+    const publishedItem = (published.body as JsonObject).item;
+    assert.equal(publishedItem.status, "published");
+    const catalog = await api("/api/v1/ai/voice-packs", { token: first.token, headers: { "x-client-version": "1.0.5" } });
+    assert.equal(catalog.response.status, 200);
+    assert.equal((catalog.body as JsonObject).authority, "database");
+    assert.equal((catalog.body as JsonObject).items.some((item: JsonObject) => item.voiceId === manifest.voiceId), true);
+    assert.equal(JSON.stringify(catalog.body).includes("providerVoice"), false);
+    assert.ok(catalog.response.headers.get("etag"));
+
+    const firstPreference = await api("/api/v1/ai/voice-packs/preference", {
+      method: "PUT", token: first.token,
+      body: JSON.stringify({ selectedVoiceId: manifest.voiceId, selectedVersion: manifest.version, preference: "automatic", version: 0 }),
+    });
+    assert.equal(firstPreference.response.status, 200);
+    assert.equal((firstPreference.body as JsonObject).version, 1);
+    const stalePreference = await api("/api/v1/ai/voice-packs/preference", {
+      method: "PUT", token: first.token,
+      body: JSON.stringify({ selectedVoiceId: null, selectedVersion: null, preference: "system-only", version: 0 }),
+    });
+    assert.equal(stalePreference.response.status, 409);
+    const secondPreference = await api("/api/v1/ai/voice-packs/preference", { token: second.token });
+    assert.equal((secondPreference.body as JsonObject).selectedVoiceId, null);
+    assert.equal((secondPreference.body as JsonObject).preference, "automatic");
+    const forged = await api("/api/v1/ai/voice-packs/preference", {
+      method: "PUT", token: second.token,
+      body: JSON.stringify({ selectedVoiceId: "forged", selectedVersion: "1.0.0", preference: "automatic", version: 0 }),
+    });
+    assert.equal(forged.response.status, 400);
+
+    const immutable = await api(`/api/v1/admin/voice-packs/${draft.id}`, {
+      method: "PUT", token: adminToken,
+      body: JSON.stringify({ manifest: { ...manifest, name: "静默覆盖" }, revision: publishedItem.revision }),
+    });
+    assert.equal(immutable.response.status, 409);
+    const revoked = await api(`/api/v1/admin/voice-packs/${draft.id}/revoke`, {
+      method: "POST", token: adminToken,
+      body: JSON.stringify({ revision: publishedItem.revision, reason: "紧急撤销测试模型" }),
+    });
+    assert.equal(revoked.response.status, 200);
+    const revokedCatalog = await api("/api/v1/ai/voice-packs", { token: first.token, headers: { "x-client-version": "1.0.5" } });
+    assert.equal((revokedCatalog.body as JsonObject).items.some((item: JsonObject) => item.voiceId === manifest.voiceId), false);
+    assert.equal((revokedCatalog.body as JsonObject).revoked.some((item: JsonObject) => item.voiceId === manifest.voiceId), true);
+    const preferenceAfterRevoke = await api("/api/v1/ai/voice-packs/preference", { token: first.token });
+    assert.equal((preferenceAfterRevoke.body as JsonObject).selectedVoiceId, null);
+    assert.equal((preferenceAfterRevoke.body as JsonObject).version, 2);
+    const history = await api(`/api/v1/admin/voice-packs/${draft.id}/history`, { token: adminToken });
+    assert.equal((history.body as JsonObject).items.length, 3);
   });
 
   test("community posts expose only a controlled public linked-recipe summary", async () => {
@@ -2480,6 +2561,49 @@ describe("core business authorization", () => {
     } finally {
       if (previousMediaRoot === undefined) delete process.env.MEDIA_LOCAL_ROOT;
       else process.env.MEDIA_LOCAL_ROOT = previousMediaRoot;
+    }
+  });
+
+  test("remote media cleanup stays pending when object storage credentials are unavailable", async () => {
+    const prior = {
+      url: process.env.SUPABASE_URL,
+      bucket: process.env.SUPABASE_MEDIA_BUCKET,
+      key: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      anonKey: process.env.SUPABASE_ANON_KEY,
+    };
+    const priorFetch = globalThis.fetch;
+    process.env.SUPABASE_URL = "https://project.example";
+    process.env.SUPABASE_MEDIA_BUCKET = "community-media";
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    try {
+      const { enqueueMediaCleanup, processMediaCleanupJob } = await import("../src/services/mediaCleanup.js");
+      const ownerId = 97_501;
+      const url = `https://project.example/storage/v1/object/public/community-media/community/${ownerId}/2026-08-28/photo.png`;
+      const jobId = enqueueMediaCleanup(ownerId, [url]);
+      assert.ok(jobId);
+      await assert.rejects(() => processMediaCleanupJob(jobId!));
+      const row = db.prepare("SELECT status, attempts, last_error, objects_json FROM media_cleanup_jobs WHERE id = ?")
+        .get(jobId) as { status: string; attempts: number; last_error: string; objects_json: string };
+      assert.equal(row.status, "pending");
+      assert.equal(row.attempts, 1);
+      assert.match(row.last_error, /配置不可用/);
+      assert.match(row.objects_json, /community-media/);
+      process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role";
+      process.env.SUPABASE_ANON_KEY = "test-anon-key";
+      globalThis.fetch = async () => new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+      assert.equal(await processMediaCleanupJob(jobId!), true);
+      const recovered = db.prepare("SELECT status, attempts, last_error FROM media_cleanup_jobs WHERE id = ?")
+        .get(jobId) as { status: string; attempts: number; last_error: string | null };
+      assert.deepEqual(recovered, { status: "completed", attempts: 2, last_error: null });
+    } finally {
+      globalThis.fetch = priorFetch;
+      if (prior.url === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = prior.url;
+      if (prior.bucket === undefined) delete process.env.SUPABASE_MEDIA_BUCKET; else process.env.SUPABASE_MEDIA_BUCKET = prior.bucket;
+      if (prior.key === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = prior.key;
+      if (prior.anonKey === undefined) delete process.env.SUPABASE_ANON_KEY; else process.env.SUPABASE_ANON_KEY = prior.anonKey;
     }
   });
 

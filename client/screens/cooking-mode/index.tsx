@@ -21,7 +21,7 @@ import { aiApi, cookingQueueApi, dietApi, inventoryApi, recipesApi, waitForAgent
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useRealtimeCookingVoice } from "@/hooks/useRealtimeCookingVoice";
 import { parseStructuredQuantity, structuredUnitLabel, type StructuredUnit } from "@/utils/structuredQuantity";
-import { speakWithVoiceFallback, stopVoiceOutput, type VoiceSource } from "@/services/voicePackManager";
+import { prefetchVoiceText, prewarmVoicePack, speakWithVoiceFallback, stopVoiceOutput, type VoiceSource } from "@/services/voicePackManager";
 
 interface CookingStep {
   text: string;
@@ -123,6 +123,12 @@ export default function CookingModeScreen() {
       .then(setVoiceSource)
       .catch(() => setVoiceSource("system"));
   }, [authFetch, user?.id]);
+
+  useEffect(() => {
+    void prewarmVoicePack(user?.id);
+    const upcoming = cookingSteps.slice(currentStep, currentStep + 2).map((step) => step.text).filter(Boolean);
+    void Promise.all(upcoming.map((text) => prefetchVoiceText(text, user?.id)));
+  }, [cookingSteps, currentStep, user?.id]);
 
   // Step duration estimation
   const estimateStepDuration = (step: string): number => {

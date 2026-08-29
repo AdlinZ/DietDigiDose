@@ -23,6 +23,135 @@ export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+function tableExists(name: string) {
+  return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+}
+
+function tableHasColumn(table: string, column: string) {
+  if (!tableExists(table)) return false;
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+    .some((row) => row.name === column);
+}
+
+function ensureColumn(table: string, column: string, definition: string) {
+  if (tableHasColumn(table, column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  } catch {
+    // 保持幂等。线上旧库偶发 schema 交叉重建时，该错误会是 harmless 的。
+  }
+}
+
+function ensureSchemaCompatibility() {
+  // 与 recommendations 与 inventory 路由强绑定的核心能力表。
+  if (!tableExists('recipe_recommendation_requests')) {
+    db.exec(`
+      CREATE TABLE recipe_recommendation_requests (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        surface TEXT NOT NULL,
+        scoring_version TEXT NOT NULL,
+        candidate_version TEXT NOT NULL,
+        input_hash TEXT,
+        input_snapshot_json TEXT,
+        results_json TEXT NOT NULL,
+        data_updated_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        expires_at DATETIME NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_recipe_recommendation_requests_user_created ON recipe_recommendation_requests(user_id, created_at DESC)`);
+  }
+  if (!tableExists('recipe_recommendation_events')) {
+    db.exec(`
+      CREATE TABLE recipe_recommendation_events (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        request_id TEXT,
+        recipe_id INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        scoring_version TEXT NOT NULL,
+        surface TEXT NOT NULL,
+        metadata_json TEXT,
+        idempotency_key TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (request_id) REFERENCES recipe_recommendation_requests(id) ON DELETE SET NULL,
+        FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
+      )
+    `);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_recipe_recommendation_events_user_recipe ON recipe_recommendation_events(user_id, recipe_id, created_at DESC)`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_recipe_recommendation_events_idempotency ON recipe_recommendation_events(idempotency_key) WHERE idempotency_key IS NOT NULL`);
+  }
+
+  // 与食谱-厨具映射强绑定的兼容字段。
+  if (!tableExists('recipe_kitchenware_requirements')) {
+    db.exec(`
+      CREATE TABLE recipe_kitchenware_requirements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recipe_id INTEGER NOT NULL,
+        catalog_id INTEGER,
+        capability_code TEXT,
+        role TEXT NOT NULL DEFAULT 'required',
+        source TEXT,
+        confidence REAL DEFAULT 0.9,
+        notes TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE,
+        FOREIGN KEY (catalog_id) REFERENCES kitchenware_catalog(id) ON DELETE SET NULL
+      )
+    `);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_recipe_kitchenware_requirements_recipe_role ON recipe_kitchenware_requirements(recipe_id, role)`);
+  }
+
+  if (!tableExists('kitchenware_mapping_reviews')) {
+    db.exec(`
+      CREATE TABLE kitchenware_mapping_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        raw_name TEXT NOT NULL,
+        normalized_name TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        confidence REAL DEFAULT 0,
+        suggested_catalog_id INTEGER,
+        reviewed_at DATETIME,
+        reviewed_by INTEGER,
+        reviewed_notes TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(normalized_name, source_type, source_id)
+      )
+    `);
+  }
+
+  // 旧库存表缺失新字段时补齐。
+  ensureColumn('inventory_items', 'quantity_value', 'REAL');
+  ensureColumn('inventory_items', 'quantity_unit', 'TEXT');
+  ensureColumn('inventory_items', 'package_size_value', 'REAL');
+  ensureColumn('inventory_items', 'package_size_unit', 'TEXT');
+  ensureColumn('inventory_items', 'batch_code', 'TEXT');
+  ensureColumn('inventory_items', 'version', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn('inventory_items', 'updated_at', 'DATETIME');
+  ensureColumn('inventory_items', 'deleted_at', 'DATETIME');
+
+  // 旧食谱表缺失新字段时补齐。
+  ensureColumn('recipes', 'quality_status', "TEXT NOT NULL DEFAULT 'trusted'");
+  ensureColumn('recipes', 'quality_issues_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('recipes', 'quality_reviewed_by', 'INTEGER');
+  ensureColumn('recipes', 'quality_reviewed_at', 'DATETIME');
+  ensureColumn('recipes', 'quality_review_reason', 'TEXT');
+  ensureColumn('recipes', 'nutrition_basis', "TEXT NOT NULL DEFAULT 'source'");
+
+  db.prepare("UPDATE inventory_items SET version = COALESCE(version, 1)").run();
+  db.prepare("UPDATE inventory_items SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)").run();
+  db.prepare("UPDATE recipes SET quality_status = COALESCE(quality_status, 'trusted')").run();
+  db.prepare("UPDATE recipes SET nutrition_basis = COALESCE(nutrition_basis, 'source')").run();
+  db.prepare("UPDATE recipes SET quality_issues_json = COALESCE(quality_issues_json, '[]')").run();
+}
+
 export function initDatabase() {
   console.log('Initializing SQLite Database at:', dbPath);
 
@@ -572,6 +701,7 @@ export function initDatabase() {
     .run(`-${aiRetentionDays} days`);
 
   runMigrations(db);
+  ensureSchemaCompatibility();
   db.prepare("DELETE FROM ai_chat_session_deletions WHERE deleted_at < datetime('now', ?)")
     .run(`-${aiRetentionDays} days`);
   const expiredAgentThreads = db.prepare("SELECT checkpoint_thread_id FROM agent_runs WHERE created_at < datetime('now', ?)")

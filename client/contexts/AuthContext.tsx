@@ -6,6 +6,7 @@ import { clearApiCacheScope, registerApiFetchScope } from '@/services/api/cache'
 import { AUTH_USER_KEY, getStoredToken, removeStoredToken, setStoredToken } from '@/utils/authStorage';
 import { AuthSessionCoordinator } from '@/utils/authSessionCoordinator';
 import { cancelAllLocalNotificationsForUser, cancelLegacyUnscopedLocalNotifications } from '@/utils/notifications';
+import { purgeVoiceAudioCacheForUser, stopVoiceOutput } from '@/services/voicePackManager';
 
 interface User {
   id: number;
@@ -58,6 +59,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const applyAuthenticatedResult = useCallback(async (data: { token: string; user: User }) => {
     if (!data?.token || !data?.user) return false;
     const generation = await sessionCoordinator.current.authenticate(async () => {
+      let previousUser: User | null = null;
+      try {
+        previousUser = JSON.parse(await AsyncStorage.getItem(AUTH_USER_KEY) || 'null') as User | null;
+      } catch {
+        previousUser = null;
+      }
+      await stopVoiceOutput().catch(() => undefined);
+      if (previousUser?.id && previousUser.id !== data.user.id) {
+        await purgeVoiceAudioCacheForUser(previousUser.id).catch(() => undefined);
+        await purgeUserPrivateStorage(previousUser.id).catch(() => undefined);
+      }
       await setStoredToken(data.token);
       await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
       setToken(data.token);
@@ -75,6 +87,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     message?: string,
   ) => {
     const cleared = await sessionCoordinator.current.clearIfCurrent(expectedGeneration, async () => {
+      await stopVoiceOutput().catch(() => undefined);
+      await purgeVoiceAudioCacheForUser(userId).catch(() => undefined);
       await cancelAllLocalNotificationsForUser(userId).catch(() => undefined);
       await clearApiCacheScope(userId).catch(() => undefined);
       await purgeUserPrivateStorage(userId).catch(() => undefined);

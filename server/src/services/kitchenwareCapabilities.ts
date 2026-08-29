@@ -14,10 +14,47 @@ function parseObject(value: unknown) {
   }
 }
 
+function isSchemaDriftError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes("no such table") || message.includes("no such column");
+}
+
+function tableExists(table: string) {
+  try {
+    return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(table));
+  } catch {
+    return false;
+  }
+}
+
+function tableHasColumn(table: string, column: string) {
+  try {
+    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+      .some((row) => row.name === column);
+  } catch {
+    return false;
+  }
+}
+
 export function resolveKitchenwareCatalog(rawName: string) {
   const normalized = normalizeContentTerm(rawName);
   if (!normalized) return null;
-  const rows = db.prepare("SELECT * FROM kitchenware_catalog WHERE quality_status = 'trusted'").all() as Row[];
+
+  const rows = (() => {
+    try {
+      if (tableHasColumn("kitchenware_catalog", "quality_status")) {
+        return db.prepare("SELECT * FROM kitchenware_catalog WHERE quality_status = 'trusted'").all() as Row[];
+      }
+      return db.prepare("SELECT * FROM kitchenware_catalog").all() as Row[];
+    } catch (error) {
+      if (isSchemaDriftError(error)) {
+        return [];
+      }
+      throw error;
+    }
+  })();
+
   let best: { row: Row; score: number } | null = null;
   for (const row of rows) {
     let aliases: string[] = [];
@@ -31,10 +68,23 @@ export function resolveKitchenwareCatalog(rawName: string) {
     const score = exact ? 1 : partial ? 0.72 : 0;
     if (score && (!best || score > best.score)) best = { row, score };
   }
+
   if (!best) return null;
-  const capabilities = db.prepare(`SELECT c.code, c.name, c.description, c.safety_level, cc.constraints_json
-    FROM kitchenware_catalog_capabilities cc JOIN kitchenware_capabilities c ON c.code = cc.capability_code
-    WHERE cc.catalog_id = ? ORDER BY c.code`).all(best.row.id) as Row[];
+
+  const capabilities = (() => {
+    if (!tableExists("kitchenware_catalog_capabilities") || !tableExists("kitchenware_capabilities")) {
+      return [] as Row[];
+    }
+    try {
+      return db.prepare(`SELECT c.code, c.name, c.description, c.safety_level, cc.constraints_json
+        FROM kitchenware_catalog_capabilities cc JOIN kitchenware_capabilities c ON c.code = cc.capability_code
+        WHERE cc.catalog_id = ? ORDER BY c.code`).all(best.row.id) as Row[];
+    } catch (error) {
+      if (isSchemaDriftError(error)) return [] as Row[];
+      throw error;
+    }
+  })();
+
   return {
     id: Number(best.row.id),
     name: String(best.row.name),
@@ -52,29 +102,42 @@ export function enqueueKitchenwareMappingReview(rawName: string, sourceType: str
   const normalized = normalizeContentTerm(rawName);
   if (!normalized) return;
   const suggestion = resolveKitchenwareCatalog(rawName);
-  db.prepare(`INSERT INTO kitchenware_mapping_reviews
-    (raw_name, normalized_name, source_type, source_id, confidence, suggested_catalog_id)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(normalized_name, source_type, source_id) DO UPDATE SET
-      raw_name = excluded.raw_name, confidence = excluded.confidence,
-      suggested_catalog_id = excluded.suggested_catalog_id, status = 'pending', reviewed_at = NULL`)
-    .run(rawName.trim(), normalized, sourceType, sourceId == null ? null : String(sourceId), confidence, suggestion?.id || null);
+  if (!tableExists("kitchenware_mapping_reviews")) return;
+  try {
+    db.prepare(`INSERT INTO kitchenware_mapping_reviews
+      (raw_name, normalized_name, source_type, source_id, confidence, suggested_catalog_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(normalized_name, source_type, source_id) DO UPDATE SET
+        raw_name = excluded.raw_name, confidence = excluded.confidence,
+        suggested_catalog_id = excluded.suggested_catalog_id, status = 'pending', reviewed_at = NULL`)
+      .run(rawName.trim(), normalized, sourceType, sourceId == null ? null : String(sourceId), confidence, suggestion?.id || null);
+  } catch (error) {
+    if (!isSchemaDriftError(error)) {
+      throw error;
+    }
+  }
 }
 
 export function kitchenwareRequirementsForRecipe(recipeId: number) {
-  return (db.prepare(`SELECT r.role, r.notes, r.confidence, r.capability_code,
-      c.id AS catalog_id, c.name AS catalog_name
-    FROM recipe_kitchenware_requirements r
-    LEFT JOIN kitchenware_catalog c ON c.id = r.catalog_id
-    WHERE r.recipe_id = ? ORDER BY CASE r.role WHEN 'required' THEN 0 WHEN 'optional' THEN 1 ELSE 2 END, r.id`)
-    .all(recipeId) as Row[]).map((row) => ({
-      role: String(row.role),
-      catalogId: row.catalog_id == null ? null : Number(row.catalog_id),
-      catalogName: row.catalog_name == null ? null : String(row.catalog_name),
-      capabilityCode: row.capability_code == null ? null : String(row.capability_code),
-      confidence: Number(row.confidence),
-      notes: String(row.notes || ""),
-    }));
+  if (!tableExists("recipe_kitchenware_requirements")) return [];
+  try {
+    return (db.prepare(`SELECT r.role, r.notes, r.confidence, r.capability_code,
+        c.id AS catalog_id, c.name AS catalog_name
+      FROM recipe_kitchenware_requirements r
+      LEFT JOIN kitchenware_catalog c ON c.id = r.catalog_id
+      WHERE r.recipe_id = ? ORDER BY CASE r.role WHEN 'required' THEN 0 WHEN 'optional' THEN 1 ELSE 2 END, r.id`)
+      .all(recipeId) as Row[]).map((row) => ({
+        role: String(row.role),
+        catalogId: row.catalog_id == null ? null : Number(row.catalog_id),
+        catalogName: row.catalog_name == null ? null : String(row.catalog_name),
+        capabilityCode: row.capability_code == null ? null : String(row.capability_code),
+        confidence: Number(row.confidence),
+        notes: String(row.notes || ""),
+      }));
+  } catch (error) {
+    if (isSchemaDriftError(error)) return [];
+    throw error;
+  }
 }
 
 export function setRecipeKitchenwareRequirements(recipeId: number, names: string[], input: {
@@ -83,20 +146,44 @@ export function setRecipeKitchenwareRequirements(recipeId: number, names: string
   replace?: boolean;
 } = {}) {
   const role = input.role || "required";
-  if (input.replace !== false) db.prepare("DELETE FROM recipe_kitchenware_requirements WHERE recipe_id = ? AND role = ?").run(recipeId, role);
+  const normalizedNames = [...new Set(names.map((name) => name.trim()).filter(Boolean))];
   const mapped: Array<{ rawName: string; catalogId: number; catalogName: string; confidence: number }> = [];
   const unresolved: string[] = [];
-  const insert = db.prepare(`INSERT OR IGNORE INTO recipe_kitchenware_requirements
-    (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
-    VALUES (?, ?, NULL, ?, ?, ?, ?)`);
-  for (const rawName of [...new Set(names.map((name) => name.trim()).filter(Boolean))]) {
+
+  if (!tableExists("recipe_kitchenware_requirements")) {
+    return { mapped, unresolved: normalizedNames };
+  }
+
+  try {
+    if (input.replace !== false) {
+      db.prepare("DELETE FROM recipe_kitchenware_requirements WHERE recipe_id = ? AND role = ?").run(recipeId, role);
+    }
+  } catch (error) {
+    if (!isSchemaDriftError(error)) throw error;
+    return { mapped, unresolved: normalizedNames };
+  }
+
+  const insert = (() => {
+    try {
+      return db.prepare(`INSERT OR IGNORE INTO recipe_kitchenware_requirements
+        (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
+        VALUES (?, ?, NULL, ?, ?, ?, ?)`) ;
+    } catch (error) {
+      if (!isSchemaDriftError(error)) throw error;
+      return null;
+    }
+  })();
+
+  for (const rawName of normalizedNames) {
     const resolved = resolveKitchenwareCatalog(rawName);
     if (!resolved || resolved.confidence < 0.7) {
       enqueueKitchenwareMappingReview(rawName, "recipe", recipeId, resolved?.confidence || 0);
       unresolved.push(rawName);
       continue;
     }
-    insert.run(recipeId, resolved.id, role, input.source || "curated", resolved.confidence, `映射自：${rawName}`);
+    if (insert) {
+      insert.run(recipeId, resolved.id, role, input.source || "curated", resolved.confidence, `映射自：${rawName}`);
+    }
     mapped.push({ rawName, catalogId: resolved.id, catalogName: resolved.name, confidence: resolved.confidence });
   }
   return { mapped, unresolved };
@@ -104,28 +191,67 @@ export function setRecipeKitchenwareRequirements(recipeId: number, names: string
 
 export function evaluateKitchenwareRequirements(userId: number, recipeId: number) {
   const requirements = kitchenwareRequirementsForRecipe(recipeId);
-  const owned = db.prepare(`SELECT i.id, i.name, i.catalog_id
-    FROM kitchenware_items i WHERE i.user_id = ? AND i.deleted_at IS NULL AND i.status <> '维修中'`).all(userId) as Row[];
+
+  const owned = (() => {
+    const hasCatalogId = tableHasColumn("kitchenware_items", "catalog_id");
+    try {
+      return hasCatalogId
+        ? db.prepare(`SELECT i.id, i.name, i.catalog_id
+            FROM kitchenware_items i WHERE i.user_id = ? AND i.deleted_at IS NULL AND i.status <> '维修中'`).all(userId) as Row[]
+        : db.prepare(`SELECT i.id, i.name
+            FROM kitchenware_items i WHERE i.user_id = ? AND i.deleted_at IS NULL AND i.status <> '维修中'`).all(userId) as Row[];
+    } catch (error) {
+      if (!isSchemaDriftError(error)) throw error;
+      return [];
+    }
+  })();
+
   const ownedCatalogIds = new Set<number>();
   const ownedCapabilities = new Set<string>();
+
   for (const item of owned) {
-    const resolved = item.catalog_id ? { id: Number(item.catalog_id) } : resolveKitchenwareCatalog(String(item.name));
+    const maybeCatalogId = (item as Row & { catalog_id?: unknown }).catalog_id;
+    const resolved = maybeCatalogId ? { id: Number(maybeCatalogId) } : resolveKitchenwareCatalog(String(item.name));
     if (!resolved) continue;
     ownedCatalogIds.add(resolved.id);
-    const rows = db.prepare("SELECT capability_code FROM kitchenware_catalog_capabilities WHERE catalog_id = ?").all(resolved.id) as Array<{ capability_code: string }>;
+
+    let rows: Array<{ capability_code: string }> = [];
+    if (tableExists("kitchenware_catalog_capabilities")) {
+      try {
+        rows = db.prepare("SELECT capability_code FROM kitchenware_catalog_capabilities WHERE catalog_id = ?").all(resolved.id) as Array<{ capability_code: string }>;
+      } catch (error) {
+        if (!isSchemaDriftError(error)) {
+          throw error;
+        }
+      }
+    }
     rows.forEach((row) => ownedCapabilities.add(row.capability_code));
   }
+
   const evaluated = requirements.map((requirement) => {
     const exact = Boolean(requirement.catalogId && ownedCatalogIds.has(requirement.catalogId));
     const capability = Boolean(requirement.capabilityCode && ownedCapabilities.has(requirement.capabilityCode));
     if (exact || capability) return { ...requirement, satisfied: true, substitution: null };
     if (!requirement.catalogId) return { ...requirement, satisfied: false, substitution: null };
-    const substitution = db.prepare(`SELECT s.relation_type, s.impact_json, s.safety_note, c.name
-      FROM kitchenware_substitutions s JOIN kitchenware_catalog c ON c.id = s.substitute_catalog_id
-      WHERE s.source_catalog_id = ? AND s.substitute_catalog_id IN (${[...ownedCatalogIds].map(() => "?").join(",") || "NULL"})
-        AND s.relation_type <> 'forbidden'
-      ORDER BY CASE s.relation_type WHEN 'equivalent' THEN 0 ELSE 1 END LIMIT 1`)
-      .get(requirement.catalogId, ...ownedCatalogIds) as Row | undefined;
+    if (!tableExists("kitchenware_substitutions") || ownedCatalogIds.size === 0) {
+      return { ...requirement, satisfied: false, substitution: null };
+    }
+
+    const substitution = (() => {
+      const inClause = [...ownedCatalogIds].map(() => "?").join(",") || "NULL";
+      try {
+        return db.prepare(`SELECT s.relation_type, s.impact_json, s.safety_note, c.name
+          FROM kitchenware_substitutions s JOIN kitchenware_catalog c ON c.id = s.substitute_catalog_id
+          WHERE s.source_catalog_id = ? AND s.substitute_catalog_id IN (${inClause})
+            AND s.relation_type <> 'forbidden'
+          ORDER BY CASE s.relation_type WHEN 'equivalent' THEN 0 ELSE 1 END LIMIT 1`)
+          .get(requirement.catalogId, ...ownedCatalogIds) as Row | undefined;
+      } catch (error) {
+        if (isSchemaDriftError(error)) return undefined;
+        throw error;
+      }
+    })();
+
     return {
       ...requirement,
       satisfied: Boolean(substitution),
@@ -135,6 +261,7 @@ export function evaluateKitchenwareRequirements(userId: number, recipeId: number
       } : null,
     };
   });
+
   return {
     requirements: evaluated,
     blocking: evaluated.filter((requirement) => requirement.role === "required" && !requirement.satisfied),

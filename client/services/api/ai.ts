@@ -1,4 +1,5 @@
 import { requestJson, type ApiFetch } from "./client";
+import { APP_VERSION } from "@/utils/appVersion";
 
 type PollableAgentRun = {
   id: string;
@@ -66,6 +67,11 @@ export const realtimeVoiceApi = {
   heartbeat: (apiFetch: ApiFetch, sessionId: string, input: unknown) => requestJson<{ session: RealtimeVoiceSession }>(apiFetch, `/api/v1/ai/realtime-voice/sessions/${sessionId}/heartbeat`, {
     method: "POST", body: JSON.stringify(input),
   }),
+  audioChunk: (apiFetch: ApiFetch, sessionId: string, input: unknown) => requestJson<{
+    turnId: string; sequence: number; transcript: string; final: boolean; latencyMs: number; repeated: boolean;
+  }>(apiFetch, `/api/v1/ai/realtime-voice/sessions/${sessionId}/audio-chunks`, {
+    method: "POST", body: JSON.stringify(input), timeoutMs: 35_000,
+  }),
   turn: (apiFetch: ApiFetch, sessionId: string, input: unknown) => requestJson<{
     turnId: string;
     intent: "control" | "confirmation_required" | "question";
@@ -81,6 +87,8 @@ export type VoicePackManifest = {
   name: string;
   version: string;
   language: "zh-CN";
+  gender?: "male" | "female" | "neutral" | "unspecified";
+  deviceRequirements?: string[];
   sampleRate: number;
   outputFormat: "pcm-f32";
   minimumAppVersion: string;
@@ -101,13 +109,27 @@ export const voicePackApi = {
   catalog: (apiFetch: ApiFetch) => requestJson<{
     items: VoicePackManifest[];
     revoked: Array<{ voiceId: string; version: string }>;
+    catalogVersion: string;
+    authority: "database";
     syntheticVoiceDisclosure: string;
-  }>(apiFetch, "/api/v1/ai/voice-packs"),
-  synthesize: (apiFetch: ApiFetch, text: string) => requestJson<{
+  }>(apiFetch, "/api/v1/ai/voice-packs", { headers: { "x-client-version": APP_VERSION } }),
+  preference: (apiFetch: ApiFetch) => requestJson<VoicePreferenceRecord>(apiFetch, "/api/v1/ai/voice-packs/preference"),
+  updatePreference: (apiFetch: ApiFetch, input: VoicePreferenceRecord) => requestJson<VoicePreferenceRecord>(apiFetch, "/api/v1/ai/voice-packs/preference", {
+    method: "PUT", body: JSON.stringify(input),
+  }),
+  synthesize: (apiFetch: ApiFetch, text: string, selection?: { voiceId: string; version: string }) => requestJson<{
     audioBase64: string;
     mimeType: "audio/mpeg";
     source: "server";
   }>(apiFetch, "/api/v1/ai/voice-packs/synthesize", {
-    method: "POST", body: JSON.stringify({ text }), timeoutMs: 35_000,
+    method: "POST", body: JSON.stringify({ text, ...selection }), timeoutMs: 35_000,
   }),
+};
+
+export type VoicePreferenceRecord = {
+  selectedVoiceId: string | null;
+  selectedVersion: string | null;
+  preference: "automatic" | "system-only";
+  version: number;
+  updatedAt?: string | null;
 };

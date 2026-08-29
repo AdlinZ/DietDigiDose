@@ -18,6 +18,7 @@ import {
   Bell,
   Workflow,
   DatabaseZap,
+  AudioLines,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -32,7 +33,7 @@ export default function AdminLayout() {
   const assetRoutes = ['/admin/ingredients', '/admin/recipes', '/admin/kitchenware'];
   const assetSectionActive = assetRoutes.some((route) => location.pathname.startsWith(route));
   const [assetSectionOpen, setAssetSectionOpen] = useState(assetSectionActive);
-  const aiRoutes = ['/admin/ai-config', '/admin/ai-usage', '/admin/ai-conversations', '/admin/agent-runs'];
+  const aiRoutes = ['/admin/ai-config', '/admin/ai-usage', '/admin/ai-conversations', '/admin/agent-runs', '/admin/voice-packs'];
   const aiSectionActive = aiRoutes.some((route) => location.pathname.startsWith(route));
   const [aiSectionOpen, setAiSectionOpen] = useState(aiSectionActive);
 
@@ -83,6 +84,7 @@ export default function AdminLayout() {
     { to: '/admin/ai-usage', icon: ChartNoAxesCombined, label: '模型用量' },
     { to: '/admin/ai-conversations', icon: MessageSquare, label: '对话记录' },
     { to: '/admin/agent-runs', icon: Workflow, label: 'Agent 运行' },
+    { to: '/admin/voice-packs', icon: AudioLines, label: '音色目录' },
   ];
   const secondaryNavItems = [
     { to: '/admin/community', icon: MessageSquare, label: '社区审核' },

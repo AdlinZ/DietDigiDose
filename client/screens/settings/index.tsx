@@ -30,11 +30,14 @@ import { Image as ExpoImage } from "expo-image";
 import { useAppThemeColors } from "@/hooks/useAppThemeColors";
 import { clearApiCacheScope, getApiCacheDiagnostics } from "@/services/api/cache";
 import {
+  applyVoicePreference,
   deleteVoicePack,
   getVoicePackState,
   installVoicePack,
+  pauseVoicePackDownload,
   purgeVoiceAudioCache,
-  setVoicePreference,
+  removeRevokedVoicePacks,
+  resumeVoicePackDownload,
   speakWithVoiceFallback,
   stopVoiceOutput,
   type VoicePackState,
@@ -115,32 +118,73 @@ export default function SettingsScreen() {
   const [voiceState, setVoiceState] = useState<VoicePackState | null>(null);
   const [voiceCatalog, setVoiceCatalog] = useState<VoicePackManifest[]>([]);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceDownloading, setVoiceDownloading] = useState(false);
   const [voiceProgress, setVoiceProgress] = useState(0);
   const [lastVoiceSource, setLastVoiceSource] = useState<VoiceSource | null>(null);
 
   useEffect(() => {
-    void getVoicePackState().then(setVoiceState);
-    if (!token) return;
-    void voicePackApi.catalog(authFetch).then(({ items, revoked }) => {
-      setVoiceCatalog(items);
-      setVoiceState((current) => {
-        const revokedInstalled = current?.installed && revoked.some((item) => item.voiceId === current.installed?.voiceId && item.version === current.installed?.version);
-        if (revokedInstalled) void deleteVoicePack(false).then(setVoiceState);
-        return current;
-      });
-    }).catch(() => setVoiceCatalog([]));
-  }, [authFetch, token]);
+    let active = true;
+    void (async () => {
+      const local = await getVoicePackState(user?.id);
+      if (active) setVoiceState(local);
+      if (!token || !user) {
+        if (active) setVoiceCatalog([]);
+        return;
+      }
+      try {
+        const [{ items, revoked }, remotePreference] = await Promise.all([
+          voicePackApi.catalog(authFetch),
+          voicePackApi.preference(authFetch),
+        ]);
+        if (!active) return;
+        setVoiceCatalog(items);
+        const remoteSelectionRevoked = revoked.some((item) => (
+          item.voiceId === remotePreference.selectedVoiceId && item.version === remotePreference.selectedVersion
+        ));
+        const nextPreference = remoteSelectionRevoked
+          ? await voicePackApi.updatePreference(authFetch, {
+            ...remotePreference,
+            selectedVoiceId: null,
+            selectedVersion: null,
+          })
+          : remotePreference;
+        await removeRevokedVoicePacks(revoked);
+        if (active) setVoiceState(await applyVoicePreference(user.id, nextPreference));
+      } catch {
+        if (active) setVoiceCatalog([]);
+      }
+    })();
+    return () => { active = false; };
+  }, [authFetch, token, user]);
+
+  const persistVoicePreference = async (input: {
+    selectedVoiceId: string | null;
+    selectedVersion: string | null;
+    preference: "automatic" | "system-only";
+  }) => {
+    if (!user) throw new Error("请先登录后保存音色偏好");
+    const remote = await voicePackApi.preference(authFetch);
+    const updated = await voicePackApi.updatePreference(authFetch, { ...remote, ...input });
+    return applyVoicePreference(user.id, updated);
+  };
 
   const installSelectedVoice = async (manifest: VoicePackManifest, allowCellular = false) => {
     setVoiceBusy(true);
+    setVoiceDownloading(true);
     setVoiceProgress(0);
     try {
-      await installVoicePack(manifest, { allowCellular, onProgress: setVoiceProgress });
-      setVoiceState(await getVoicePackState());
+      await installVoicePack(manifest, { allowCellular, onProgress: setVoiceProgress, userId: user?.id });
+      setVoiceState(await persistVoicePreference({
+        selectedVoiceId: manifest.voiceId,
+        selectedVersion: manifest.version,
+        preference: voiceState?.preference || "automatic",
+      }));
       Alert.alert("音色包已安装", "这是合成语音。模型只负责朗读，不会替代 AI 权限和安全校验。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "音色包安装失败";
-      if (!allowCellular && message.includes("移动网络")) {
+      if (message === "下载已暂停") {
+        // The paused state is rendered below and can be resumed safely.
+      } else if (!allowCellular && message.includes("移动网络")) {
         Alert.alert("使用移动网络下载？", message, [
           { text: "取消", style: "cancel" },
           { text: "继续下载", onPress: () => void installSelectedVoice(manifest, true) },
@@ -148,6 +192,31 @@ export default function SettingsScreen() {
       } else Alert.alert("安装失败", message);
     } finally {
       setVoiceBusy(false);
+      setVoiceDownloading(false);
+      setVoiceState(await getVoicePackState(user?.id));
+    }
+  };
+
+  const resumeSelectedVoice = async () => {
+    const paused = voiceState?.pausedDownload;
+    if (!paused) return;
+    setVoiceBusy(true);
+    setVoiceDownloading(true);
+    setVoiceProgress(paused.completedBytes / Math.max(1, paused.manifest.resources.reduce((sum, item) => sum + item.bytes, 0)));
+    try {
+      await resumeVoicePackDownload({ onProgress: setVoiceProgress, userId: user?.id });
+      setVoiceState(await persistVoicePreference({
+        selectedVoiceId: paused.manifest.voiceId,
+        selectedVersion: paused.manifest.version,
+        preference: voiceState?.preference || "automatic",
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "恢复下载失败";
+      if (message !== "下载已暂停") Alert.alert("恢复失败", message);
+    } finally {
+      setVoiceBusy(false);
+      setVoiceDownloading(false);
+      setVoiceState(await getVoicePackState(user?.id));
     }
   };
 
@@ -339,8 +408,17 @@ export default function SettingsScreen() {
                 </View>
                 <Switch
                   value={voiceState?.preference === "system-only"}
-                  onValueChange={(systemOnly) => void setVoicePreference(systemOnly ? "system-only" : "automatic")
-                    .then(setVoiceState)}
+                  disabled={voiceBusy || !isAuthenticated}
+                  onValueChange={(systemOnly) => {
+                    setVoiceBusy(true);
+                    void persistVoicePreference({
+                      selectedVoiceId: voiceState?.selectedVoiceId || null,
+                      selectedVersion: voiceState?.selectedVersion || null,
+                      preference: systemOnly ? "system-only" : "automatic",
+                    }).then(setVoiceState)
+                      .catch((error) => Alert.alert("保存失败", error instanceof Error ? error.message : "请稍后重试"))
+                      .finally(() => setVoiceBusy(false));
+                  }}
                   trackColor={{ false: colors.line, true: colors["brand-fill"] }}
                   thumbColor={colors["on-brand"]}
                 />
@@ -372,24 +450,75 @@ export default function SettingsScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   disabled={voiceBusy}
+                  onPress={() => void installSelectedVoice(voiceState.installed!)}
+                  className="items-center rounded-xl border border-line px-3 py-3"
+                >
+                  <Text className="text-xs font-black text-ink">重装</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  disabled={voiceBusy}
                   onPress={() => Alert.alert("删除本地音色包", "是否同时删除由该音色生成的音频缓存？", [
                     { text: "取消", style: "cancel" },
-                    { text: "仅删除模型", onPress: () => void deleteVoicePack(false).then(setVoiceState) },
-                    { text: "模型与音频", style: "destructive", onPress: () => void deleteVoicePack(true).then(setVoiceState) },
+                    {
+                      text: "仅删除模型",
+                      onPress: () => void deleteVoicePack(user?.id, false)
+                        .then(() => persistVoicePreference({ selectedVoiceId: null, selectedVersion: null, preference: voiceState.preference })).then(setVoiceState)
+                        .catch((error) => Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试")),
+                    },
+                    {
+                      text: "模型与音频",
+                      style: "destructive",
+                      onPress: () => void deleteVoicePack(user?.id, true)
+                        .then(() => persistVoicePreference({ selectedVoiceId: null, selectedVersion: null, preference: voiceState.preference })).then(setVoiceState)
+                        .catch((error) => Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试")),
+                    },
                   ])}
                   className="items-center rounded-xl border border-critical/30 px-4 py-3"
                 >
                   <Text className="text-xs font-black text-critical">删除</Text>
                 </TouchableOpacity>
               </View>
-            ) : (
-              <View className="p-4">
-                {voiceCatalog.length ? voiceCatalog.map((manifest) => (
+            ) : null}
+            {voiceDownloading ? (
+              <TouchableOpacity
+                onPress={() => void pauseVoicePackDownload().then(async (paused) => {
+                  if (paused) setVoiceState(await getVoicePackState(user?.id));
+                })}
+                className="mx-4 mb-3 items-center rounded-xl border border-warning/30 bg-warning-soft py-2.5"
+              >
+                <Text className="text-xs font-black text-warning">暂停下载</Text>
+              </TouchableOpacity>
+            ) : voiceState?.pausedDownload ? (
+              <TouchableOpacity
+                onPress={() => void resumeSelectedVoice()}
+                className="mx-4 mb-3 items-center rounded-xl border border-brand/30 bg-brand-soft py-2.5"
+              >
+                <Text className="text-xs font-black text-brand">继续下载 {voiceState.pausedDownload.manifest.name}</Text>
+              </TouchableOpacity>
+            ) : null}
+            <View className="gap-2 border-t border-background-secondary p-4">
+              {voiceCatalog.length ? voiceCatalog.map((manifest) => {
+                const installedOnDevice = voiceState?.installedPacks.some((item) => item.voiceId === manifest.voiceId && item.version === manifest.version);
+                const selected = voiceState?.selectedVoiceId === manifest.voiceId && voiceState.selectedVersion === manifest.version;
+                return (
                   <TouchableOpacity
                     key={`${manifest.voiceId}@${manifest.version}`}
-                    disabled={voiceBusy || !isAuthenticated}
-                    onPress={() => void installSelectedVoice(manifest)}
-                    className="rounded-2xl border border-line bg-canvas p-3 active:bg-brand-soft"
+                    disabled={voiceBusy || !isAuthenticated || selected}
+                    onPress={() => {
+                      if (!installedOnDevice) {
+                        void installSelectedVoice(manifest);
+                        return;
+                      }
+                      setVoiceBusy(true);
+                      void persistVoicePreference({
+                        selectedVoiceId: manifest.voiceId,
+                        selectedVersion: manifest.version,
+                        preference: voiceState?.preference || "automatic",
+                      }).then(setVoiceState)
+                        .catch((error) => Alert.alert("选择失败", error instanceof Error ? error.message : "请稍后重试"))
+                        .finally(() => setVoiceBusy(false));
+                    }}
+                    className={`rounded-2xl border p-3 active:bg-brand-soft ${selected ? "border-brand bg-brand-soft" : "border-line bg-canvas"}`}
                   >
                     <View className="flex-row items-center justify-between">
                       <View className="flex-1">
@@ -398,17 +527,17 @@ export default function SettingsScreen() {
                           {manifest.version} · {(manifest.resources.reduce((sum, resource) => sum + resource.bytes, 0) / 1024 / 1024).toFixed(1)} MB · {manifest.license.name}
                         </Text>
                       </View>
-                      {voiceBusy ? <ActivityIndicator size="small" colorClassName="accent-brand" /> : <Text className="text-xs font-bold text-brand">下载</Text>}
+                      {voiceDownloading ? <ActivityIndicator size="small" colorClassName="accent-brand" /> : <Text className="text-xs font-bold text-brand">{selected ? "已选择" : installedOnDevice ? "选择" : "下载"}</Text>}
                     </View>
-                    {voiceBusy ? <Text className="mt-2 text-[10px] font-bold text-brand">已下载 {Math.round(voiceProgress * 100)}%</Text> : null}
+                    {voiceDownloading && !installedOnDevice ? <Text className="mt-2 text-[10px] font-bold text-brand">已下载 {Math.round(voiceProgress * 100)}%</Text> : null}
                   </TouchableOpacity>
-                )) : (
+                );
+              }) : (
                   <Text className="text-[11px] leading-5 text-copy-muted">
                     当前部署尚未发布通过许可与摘要审核的个人音色包；做饭模式会自动使用云端或系统语音。
                   </Text>
-                )}
-              </View>
-            )}
+              )}
+            </View>
           </View>
         </View>
 

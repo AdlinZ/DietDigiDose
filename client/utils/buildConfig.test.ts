@@ -1,4 +1,6 @@
 import easConfig from "../eas.json";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const originalEnvironment = { ...process.env };
 
@@ -50,12 +52,33 @@ describe("candidate build transport policy", () => {
       httpPreview.env!.EXPO_PUBLIC_ALLOW_INSECURE_HTTP,
     );
     expect(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsArbitraryLoads).toBe(true);
+    expect(config.name).toContain("HTTP测试");
+    expect(config.android.package).toBe("com.dietdigidose.app.previewhttp");
+    expect(config.ios.bundleIdentifier).toBe("com.dietdigidose.app.previewhttp");
+    expect(config.extra.buildFlavor).toBe("preview-http");
     const buildProperties = config.plugins.find((plugin: unknown) => Array.isArray(plugin) && plugin[0] === "expo-build-properties");
     expect(buildProperties[1].android.usesCleartextTraffic).toBe(true);
+  });
+
+  it.each(["preview", "candidate", "production"])("keeps the formal package identity for %s", (profile) => {
+    const config = loadExpoConfig(profile, "https://api.example.test");
+    expect(config.name).toBe("食光烙记");
+    expect(config.android.package).toBe("com.dietdigidose.app");
+    expect(config.extra.buildFlavor).toBe("standard");
   });
 
   it("allows explicit insecure HTTP only for the local simulator profile", () => {
     const config = loadExpoConfig("simulator", "http://127.0.0.1:9090", "1");
     expect(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsArbitraryLoads).toBe(true);
+  });
+
+  it("verifies main ancestry before signing and isolates HTTP preview signing", () => {
+    const workflow = readFileSync(path.resolve(__dirname, "../../.github/workflows/android-apk.yml"), "utf8");
+    expect(workflow.indexOf("git merge-base --is-ancestor")).toBeGreaterThan(0);
+    expect(workflow.indexOf("git merge-base --is-ancestor")).toBeLessThan(workflow.indexOf("Restore release keystore"));
+    expect(workflow).toContain("Verified source revision $GITHUB_SHA is reachable from origin/main");
+    expect(workflow).toContain("Generate isolated preview signing key");
+    expect(workflow).toContain("com.dietdigidose.app.previewhttp");
+    expect(workflow).toContain("if: env.EAS_BUILD_PROFILE != 'preview-http'");
   });
 });

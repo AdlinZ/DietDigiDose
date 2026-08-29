@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canRetryMediaCleanupJob,
+  createLatestMediaCleanupRequest,
   mediaCleanupErrorMessage,
   mediaCleanupRetryConfirmation,
   mediaCleanupRetryFeedback,
@@ -34,5 +35,18 @@ describe('media cleanup admin model', () => {
   it('uses sanitized server errors for failed retries', () => {
     const error = { isAxiosError: true, response: { data: { error: '媒体清理重试失败', details: '对象存储不可用' } } };
     expect(mediaCleanupErrorMessage(error)).toBe('媒体清理重试失败：对象存储不可用');
+  });
+
+  it('rejects stale responses and aborts requests on replacement or unmount', () => {
+    const requests = createLatestMediaCleanupRequest();
+    const first = requests.begin();
+    expect(first.isLatest()).toBe(true);
+    const second = requests.begin();
+    expect(first.signal.aborted).toBe(true);
+    expect(first.isLatest()).toBe(false);
+    expect(second.isLatest()).toBe(true);
+    requests.cancel();
+    expect(second.signal.aborted).toBe(true);
+    expect(second.isLatest()).toBe(false);
   });
 });

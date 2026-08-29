@@ -10,6 +10,11 @@ import { Platform } from "react-native";
 
 import type { ApiFetch } from "@/services/api/client";
 import { voicePackApi, type VoicePackManifest } from "@/services/api/ai";
+import {
+  isVoicePackSelected,
+  voicePreferenceStorageKey,
+  VOICE_PREFERENCE_STORAGE_PREFIX,
+} from "@/services/voicePreferenceScope";
 
 const PACK_ROOT = Platform.OS === "web" || !FileSystem.documentDirectory
   ? null
@@ -17,22 +22,39 @@ const PACK_ROOT = Platform.OS === "web" || !FileSystem.documentDirectory
 const AUDIO_CACHE_ROOT = Platform.OS === "web" || !FileSystem.cacheDirectory
   ? null
   : `${FileSystem.cacheDirectory}voice-output-v1/`;
-const STATE_KEY = "voice-pack-state-v1";
+const LEGACY_STATE_KEY = "voice-pack-state-v1";
+const DEVICE_STATE_KEY = "voice-pack-device-state-v2";
 const CACHE_INDEX_KEY = "voice-audio-cache-index-v1";
 const MAX_AUDIO_CACHE_BYTES = 80 * 1024 * 1024;
-const VOICE_CACHE_SCHEMA = 1;
+const VOICE_CACHE_SCHEMA = 2;
 
 export type VoiceSource = "local" | "server" | "system";
 export type VoicePreference = "automatic" | "system-only";
 export type VoicePackState = {
   installed: VoicePackManifest | null;
+  installedPacks: VoicePackManifest[];
+  selectedVoiceId: string | null;
+  selectedVersion: string | null;
   preference: VoicePreference;
+  preferenceVersion: number;
   benchmark: null | { modelLoadMs: number; firstAudioMs: number; realtimeFactor: number; peakMemoryMb: number | null; passed: boolean; measuredAt: string };
   pausedDownload: null | { manifest: VoicePackManifest; resourcePath: string; completedBytes: number; resumeData: string };
 };
-type AudioCacheRow = { uri: string; bytes: number; accessedAt: number; sensitive: boolean; userScope: string };
+type DeviceVoicePackState = {
+  installedPacks: VoicePackManifest[];
+  benchmarks: Record<string, NonNullable<VoicePackState["benchmark"]>>;
+  pausedDownload: VoicePackState["pausedDownload"];
+};
+type UserVoicePreference = {
+  selectedVoiceId: string | null;
+  selectedVersion: string | null;
+  preference: VoicePreference;
+  version: number;
+};
+type AudioCacheRow = { uri: string; bytes: number; accessedAt: number; expiresAt?: number; sensitive: boolean; userScope: string; voiceKey?: string };
 
-const defaultState: VoicePackState = { installed: null, preference: "automatic", benchmark: null, pausedDownload: null };
+const defaultDeviceState: DeviceVoicePackState = { installedPacks: [], benchmarks: {}, pausedDownload: null };
+const defaultPreference: UserVoicePreference = { selectedVoiceId: null, selectedVersion: null, preference: "automatic", version: 0 };
 let activeDownload: FileSystem.DownloadResumable | null = null;
 let activeDownloadContext: VoicePackState["pausedDownload"] = null;
 let activeSound: Audio.Sound | null = null;
@@ -49,22 +71,67 @@ function requireNativeRoot(root: string | null) {
   return root;
 }
 
-export async function getVoicePackState(): Promise<VoicePackState> {
+function preferenceKey(userId?: number) {
+  return voicePreferenceStorageKey(userId);
+}
+
+async function getDeviceState(): Promise<DeviceVoicePackState> {
   try {
-    const stored = JSON.parse(await AsyncStorage.getItem(STATE_KEY) || "null") as VoicePackState | null;
-    return stored ? { ...defaultState, ...stored } : defaultState;
+    const stored = JSON.parse(await AsyncStorage.getItem(DEVICE_STATE_KEY) || "null") as DeviceVoicePackState | null;
+    if (stored) return { ...defaultDeviceState, ...stored };
+    const legacy = JSON.parse(await AsyncStorage.getItem(LEGACY_STATE_KEY) || "null") as VoicePackState | null;
+    const migrated = { ...defaultDeviceState, installedPacks: legacy?.installed ? [legacy.installed] : [] };
+    await AsyncStorage.setItem(DEVICE_STATE_KEY, JSON.stringify(migrated));
+    await AsyncStorage.removeItem(LEGACY_STATE_KEY);
+    return migrated;
   } catch {
-    return defaultState;
+    return defaultDeviceState;
   }
 }
 
-async function saveState(state: VoicePackState) {
-  await AsyncStorage.setItem(STATE_KEY, JSON.stringify(state));
+async function saveDeviceState(state: DeviceVoicePackState) {
+  await AsyncStorage.setItem(DEVICE_STATE_KEY, JSON.stringify(state));
   return state;
 }
 
-export async function setVoicePreference(preference: VoicePreference) {
-  return saveState({ ...await getVoicePackState(), preference });
+async function getUserPreference(userId?: number): Promise<UserVoicePreference> {
+  try {
+    const stored = JSON.parse(await AsyncStorage.getItem(preferenceKey(userId)) || "null") as UserVoicePreference | null;
+    return stored ? { ...defaultPreference, ...stored } : defaultPreference;
+  } catch {
+    return defaultPreference;
+  }
+}
+
+async function saveUserPreference(userId: number | undefined, preference: UserVoicePreference) {
+  await AsyncStorage.setItem(preferenceKey(userId), JSON.stringify(preference));
+  return preference;
+}
+
+export async function getVoicePackState(userId?: number): Promise<VoicePackState> {
+  const [device, preference] = await Promise.all([getDeviceState(), getUserPreference(userId)]);
+  const installed = device.installedPacks.find((manifest) => manifest.voiceId === preference.selectedVoiceId && manifest.version === preference.selectedVersion) || null;
+  return {
+    installed,
+    installedPacks: device.installedPacks,
+    selectedVoiceId: preference.selectedVoiceId,
+    selectedVersion: preference.selectedVersion,
+    preference: preference.preference,
+    preferenceVersion: preference.version,
+    benchmark: installed ? device.benchmarks[`${installed.voiceId}@${installed.version}`] || null : null,
+    pausedDownload: device.pausedDownload,
+  };
+}
+
+export async function applyVoicePreference(userId: number | undefined, input: UserVoicePreference) {
+  await saveUserPreference(userId, input);
+  return getVoicePackState(userId);
+}
+
+export async function setVoicePreference(preference: VoicePreference, userId?: number) {
+  const current = await getUserPreference(userId);
+  await saveUserPreference(userId, { ...current, preference });
+  return getVoicePackState(userId);
 }
 
 function bytesToHex(bytes: Uint8Array) {
@@ -84,7 +151,7 @@ function safeResourcePath(path: string) {
 
 export async function installVoicePack(
   manifest: VoicePackManifest,
-  options: { allowCellular?: boolean; onProgress?: (progress: number) => void } = {},
+  options: { allowCellular?: boolean; onProgress?: (progress: number) => void; userId?: number } = {},
 ) {
   if (Platform.OS === "web") throw new Error("Web 暂不支持本地 ONNX 音色包，请使用云端或系统语音");
   const packRoot = requireNativeRoot(PACK_ROOT);
@@ -94,10 +161,10 @@ export async function installVoicePack(
   await ensureDirectory(packRoot);
   const staging = `${packRoot}.staging-${manifest.voiceId}-${manifest.version}/`;
   const finalDirectory = `${packRoot}${manifest.voiceId}/${manifest.version}/`;
-  const priorState = await getVoicePackState();
-  const resume = priorState.pausedDownload?.manifest.voiceId === manifest.voiceId
-    && priorState.pausedDownload.manifest.version === manifest.version
-    ? priorState.pausedDownload
+  const priorDevice = await getDeviceState();
+  const resume = priorDevice.pausedDownload?.manifest.voiceId === manifest.voiceId
+    && priorDevice.pausedDownload.manifest.version === manifest.version
+    ? priorDevice.pausedDownload
     : null;
   if (!resume) await FileSystem.deleteAsync(staging, { idempotent: true });
   await ensureDirectory(staging);
@@ -121,7 +188,13 @@ export async function installVoicePack(
       const result = await activeDownload.downloadAsync();
       activeDownload = null;
       activeDownloadContext = null;
-      if (!result?.uri) throw new Error(`下载失败：${resource.path}`);
+      if (!result?.uri) {
+        const pausedState = (await getDeviceState()).pausedDownload;
+        if (pausedState?.manifest.voiceId === manifest.voiceId && pausedState.manifest.version === manifest.version) {
+          throw new Error("下载已暂停");
+        }
+        throw new Error(`下载失败：${resource.path}`);
+      }
       const actualSha256 = await sha256File(result.uri);
       if (actualSha256.toLowerCase() !== resource.sha256.toLowerCase()) throw new Error(`摘要校验失败：${resource.path}`);
       completedBytes += resource.bytes;
@@ -131,15 +204,15 @@ export async function installVoicePack(
     await ensureDirectory(`${packRoot}${manifest.voiceId}/`);
     await FileSystem.deleteAsync(finalDirectory, { idempotent: true });
     await FileSystem.moveAsync({ from: staging, to: finalDirectory });
-    const previous = await getVoicePackState();
-    await saveState({ installed: manifest, preference: previous.preference, benchmark: null, pausedDownload: null });
+    const latestDevice = await getDeviceState();
+    const installedPacks = [...latestDevice.installedPacks.filter((item) => !(item.voiceId === manifest.voiceId && item.version === manifest.version)), manifest];
+    await saveDeviceState({ ...latestDevice, installedPacks, pausedDownload: null });
+    const preference = await getUserPreference(options.userId);
+    await saveUserPreference(options.userId, { ...preference, selectedVoiceId: manifest.voiceId, selectedVersion: manifest.version });
     localSession = null;
-    if (previous.installed && (previous.installed.voiceId !== manifest.voiceId || previous.installed.version !== manifest.version)) {
-      await FileSystem.deleteAsync(`${packRoot}${previous.installed.voiceId}/${previous.installed.version}/`, { idempotent: true });
-    }
     return manifest;
   } catch (error) {
-    const paused = (await getVoicePackState()).pausedDownload;
+    const paused = (await getDeviceState()).pausedDownload;
     if (paused?.manifest.voiceId !== manifest.voiceId || paused.manifest.version !== manifest.version) {
       await FileSystem.deleteAsync(staging, { idempotent: true });
     }
@@ -152,26 +225,80 @@ export async function installVoicePack(
 export async function pauseVoicePackDownload() {
   if (!activeDownload || !activeDownloadContext) return false;
   const paused = await activeDownload.pauseAsync();
-  const state = await getVoicePackState();
-  await saveState({ ...state, pausedDownload: { ...activeDownloadContext, resumeData: paused.resumeData || "" } });
+  const state = await getDeviceState();
+  await saveDeviceState({ ...state, pausedDownload: { ...activeDownloadContext, resumeData: paused.resumeData || "" } });
   activeDownload = null;
   activeDownloadContext = null;
   return true;
 }
 
-export async function resumeVoicePackDownload(options: { allowCellular?: boolean; onProgress?: (progress: number) => void } = {}) {
-  const paused = (await getVoicePackState()).pausedDownload;
+export async function resumeVoicePackDownload(options: { allowCellular?: boolean; onProgress?: (progress: number) => void; userId?: number } = {}) {
+  const paused = (await getDeviceState()).pausedDownload;
   if (!paused) throw new Error("没有可恢复的音色包下载");
   return installVoicePack(paused.manifest, options);
 }
 
-export async function deleteVoicePack(deleteGeneratedAudio = false) {
-  const state = await getVoicePackState();
+export async function deleteVoicePack(userId?: number, deleteGeneratedAudio = false) {
+  const state = await getVoicePackState(userId);
   await stopVoiceOutput();
-  if (state.installed && PACK_ROOT) await FileSystem.deleteAsync(`${PACK_ROOT}${state.installed.voiceId}/`, { idempotent: true });
+  const preference = await getUserPreference(userId);
+  await saveUserPreference(userId, { ...preference, selectedVoiceId: null, selectedVersion: null });
+  const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(`${VOICE_PREFERENCE_STORAGE_PREFIX}:`));
+  const preferences = await AsyncStorage.multiGet(keys);
+  const stillReferenced = state.installed && preferences.some(([, value]) => {
+    try {
+      const other = JSON.parse(value || "null") as UserVoicePreference | null;
+      return state.installed ? isVoicePackSelected(other, state.installed.voiceId, state.installed.version) : false;
+    } catch { return false; }
+  });
+  if (state.installed && !stillReferenced && PACK_ROOT) {
+    await FileSystem.deleteAsync(`${PACK_ROOT}${state.installed.voiceId}/${state.installed.version}/`, { idempotent: true });
+    const device = await getDeviceState();
+    await saveDeviceState({ ...device, installedPacks: device.installedPacks.filter((item) => !(item.voiceId === state.installed?.voiceId && item.version === state.installed?.version)) });
+  }
   localSession = null;
-  if (deleteGeneratedAudio) await purgeVoiceAudioCache();
-  return saveState({ ...state, installed: null, benchmark: null, pausedDownload: null });
+  if (deleteGeneratedAudio && state.installed) {
+    await purgeVoiceAudioCacheForPack(
+      state.installed.voiceId,
+      state.installed.version,
+      userId,
+      !stillReferenced,
+    );
+  }
+  return getVoicePackState(userId);
+}
+
+export async function removeRevokedVoicePacks(revoked: Array<{ voiceId: string; version: string }>) {
+  if (!revoked.length) return;
+  await stopVoiceOutput();
+  const revokedKeys = new Set(revoked.map((item) => `${item.voiceId}@${item.version}`));
+  const device = await getDeviceState();
+  const removed = device.installedPacks.filter((item) => revokedKeys.has(`${item.voiceId}@${item.version}`));
+  if (PACK_ROOT) {
+    await Promise.all(removed.map((item) => FileSystem.deleteAsync(
+      `${PACK_ROOT}${item.voiceId}/${item.version}/`,
+      { idempotent: true },
+    )));
+  }
+  if (removed.length) {
+    await saveDeviceState({
+      ...device,
+      installedPacks: device.installedPacks.filter((item) => !revokedKeys.has(`${item.voiceId}@${item.version}`)),
+      benchmarks: Object.fromEntries(Object.entries(device.benchmarks).filter(([key]) => !revokedKeys.has(key))),
+    });
+  }
+  const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(`${VOICE_PREFERENCE_STORAGE_PREFIX}:`));
+  await Promise.all(keys.map(async (key) => {
+    try {
+      const preference = JSON.parse(await AsyncStorage.getItem(key) || "null") as UserVoicePreference | null;
+      if (preference && revokedKeys.has(`${preference.selectedVoiceId}@${preference.selectedVersion}`)) {
+        await AsyncStorage.setItem(key, JSON.stringify({ ...preference, selectedVoiceId: null, selectedVersion: null }));
+      }
+    } catch {
+      await AsyncStorage.removeItem(key);
+    }
+  }));
+  if (localSession && revokedKeys.has(localSession.key)) localSession = null;
 }
 
 function encodePcmWav(samples: Float32Array, sampleRate: number) {
@@ -186,8 +313,8 @@ function encodePcmWav(samples: Float32Array, sampleRate: number) {
   return bytes;
 }
 
-async function localEngine() {
-  const state = await getVoicePackState();
+async function localEngine(userId?: number) {
+  const state = await getVoicePackState(userId);
   const manifest = state.installed;
   if (!manifest || Platform.OS === "web") throw new Error("本地音色包未安装");
   const packRoot = requireNativeRoot(PACK_ROOT);
@@ -201,10 +328,10 @@ async function localEngine() {
   const started = Date.now();
   const session = await InferenceSession.create(`${directory}${safeResourcePath(manifest.model.path)}`);
   localSession = { key, session, vocabulary: JSON.parse(vocabularyText), manifest };
-  const current = await getVoicePackState();
-  if (!current.benchmark) await saveState({ ...current, benchmark: {
+  const device = await getDeviceState();
+  if (!device.benchmarks[key]) await saveDeviceState({ ...device, benchmarks: { ...device.benchmarks, [key]: {
     modelLoadMs: Date.now() - started, firstAudioMs: 0, realtimeFactor: 0, peakMemoryMb: null, passed: true, measuredAt: new Date().toISOString(),
-  } });
+  } } });
   return localSession;
 }
 
@@ -219,8 +346,8 @@ function tokenize(text: string, vocabulary: Record<string, number>) {
   ];
 }
 
-async function synthesizeLocal(text: string) {
-  const engine = await localEngine();
+async function synthesizeLocal(text: string, userId?: number) {
+  const engine = await localEngine(userId);
   const { Tensor } = await import("onnxruntime-react-native");
   const ids = tokenize(text, engine.vocabulary);
   const names = engine.manifest.model.inputNames;
@@ -237,14 +364,40 @@ async function synthesizeLocal(text: string) {
   const samples = output.data as Float32Array;
   const firstAudioMs = Date.now() - started;
   const durationMs = samples.length / engine.manifest.sampleRate * 1_000;
-  const state = await getVoicePackState();
+  const device = await getDeviceState();
+  const benchmarkKey = `${engine.manifest.voiceId}@${engine.manifest.version}`;
+  const previousBenchmark = device.benchmarks[benchmarkKey];
   const realtimeFactor = firstAudioMs / Math.max(1, durationMs);
-  await saveState({ ...state, benchmark: {
-    modelLoadMs: state.benchmark?.modelLoadMs || 0, firstAudioMs, realtimeFactor,
+  await saveDeviceState({ ...device, benchmarks: { ...device.benchmarks, [benchmarkKey]: {
+    modelLoadMs: previousBenchmark?.modelLoadMs || 0, firstAudioMs, realtimeFactor,
     peakMemoryMb: null, passed: firstAudioMs <= 2_500 && realtimeFactor <= 1.2, measuredAt: new Date().toISOString(),
-  } });
+  } } });
   if (firstAudioMs > 5_000 || realtimeFactor > 1.5) throw new Error("设备本地语音性能不足");
   return encodePcmWav(samples, engine.manifest.sampleRate);
+}
+
+export async function prewarmVoicePack(userId?: number) {
+  const state = await getVoicePackState(userId);
+  if (state.preference === "system-only" || !state.installed || Platform.OS === "web") return false;
+  try {
+    await localEngine(userId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function prefetchVoiceText(text: string, userId?: number) {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  const state = await getVoicePackState(userId);
+  if (state.preference === "system-only" || !state.installed || state.benchmark?.passed === false || Platform.OS === "web") return false;
+  try {
+    await cachedAudio(normalized, userId, false, async () => ({ bytes: await synthesizeLocal(normalized, userId), extension: "wav" }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function cacheIndex(): Promise<Record<string, AudioCacheRow>> {
@@ -265,13 +418,21 @@ async function trimAudioCache(index: Record<string, AudioCacheRow>) {
 async function cachedAudio(text: string, userId: number | undefined, sensitive: boolean, producer: () => Promise<{ bytes: Uint8Array; extension: string }>) {
   const audioCacheRoot = requireNativeRoot(AUDIO_CACHE_ROOT);
   await ensureDirectory(audioCacheRoot);
-  const state = await getVoicePackState();
+  const state = await getVoicePackState(userId);
   const scope = sensitive ? `user:${userId || "anonymous"}` : "public";
+  const voiceKey = state.installed
+    ? `${state.installed.voiceId}@${state.installed.version}`
+    : state.selectedVoiceId && state.selectedVersion
+      ? `${state.selectedVoiceId}@${state.selectedVersion}`
+      : "server";
   const key = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,
-    JSON.stringify({ schema: VOICE_CACHE_SCHEMA, voice: state.installed ? `${state.installed.voiceId}@${state.installed.version}` : "server", text, rate: 1, style: "default", scope }));
+    JSON.stringify({ schema: VOICE_CACHE_SCHEMA, voice: voiceKey, text, rate: 1, style: "default", format: "audio", scope }));
   const index = await cacheIndex();
   const existing = index[key];
-  if (existing && (await FileSystem.getInfoAsync(existing.uri)).exists) {
+  if (existing?.expiresAt && existing.expiresAt <= Date.now()) {
+    await FileSystem.deleteAsync(existing.uri, { idempotent: true }).catch(() => undefined);
+    delete index[key];
+  } else if (existing && (await FileSystem.getInfoAsync(existing.uri)).exists) {
     existing.accessedAt = Date.now();
     await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
     return existing.uri;
@@ -279,7 +440,15 @@ async function cachedAudio(text: string, userId: number | undefined, sensitive: 
   const output = await producer();
   const uri = `${audioCacheRoot}${key}.${output.extension}`;
   await FileSystem.writeAsStringAsync(uri, Base64.fromUint8Array(output.bytes), { encoding: "base64" });
-  index[key] = { uri, bytes: output.bytes.byteLength, accessedAt: Date.now(), sensitive, userScope: scope };
+  index[key] = {
+    uri,
+    bytes: output.bytes.byteLength,
+    accessedAt: Date.now(),
+    expiresAt: sensitive ? Date.now() + 24 * 60 * 60 * 1000 : undefined,
+    sensitive,
+    userScope: scope,
+    voiceKey,
+  };
   await trimAudioCache(index);
   return uri;
 }
@@ -303,12 +472,12 @@ function sentences(text: string) {
 export async function speakWithVoiceFallback(apiFetch: ApiFetch, text: string, options: { userId?: number; sensitive?: boolean } = {}): Promise<VoiceSource> {
   const generation = ++playbackGeneration;
   await stopActiveSoundOnly();
-  const state = await getVoicePackState();
+  const state = await getVoicePackState(options.userId);
   if (state.preference !== "system-only" && state.installed && state.benchmark?.passed !== false) {
     try {
       for (const sentence of sentences(text)) {
         if (generation !== playbackGeneration) return "local";
-        const uri = await cachedAudio(sentence, options.userId, Boolean(options.sensitive), async () => ({ bytes: await synthesizeLocal(sentence), extension: "wav" }));
+        const uri = await cachedAudio(sentence, options.userId, Boolean(options.sensitive), async () => ({ bytes: await synthesizeLocal(sentence, options.userId), extension: "wav" }));
         await playUri(uri, generation);
       }
       return "local";
@@ -318,7 +487,9 @@ export async function speakWithVoiceFallback(apiFetch: ApiFetch, text: string, o
   }
   if (state.preference !== "system-only") {
     try {
-      const response = await voicePackApi.synthesize(apiFetch, text);
+      const response = await voicePackApi.synthesize(apiFetch, text, state.selectedVoiceId && state.selectedVersion
+        ? { voiceId: state.selectedVoiceId, version: state.selectedVersion }
+        : undefined);
       const uri = Platform.OS === "web"
         ? `data:${response.mimeType || "audio/mpeg"};base64,${response.audioBase64}`
         : await cachedAudio(text, options.userId, Boolean(options.sensitive), async () => ({
@@ -351,4 +522,33 @@ export async function stopVoiceOutput() {
 export async function purgeVoiceAudioCache() {
   if (AUDIO_CACHE_ROOT) await FileSystem.deleteAsync(AUDIO_CACHE_ROOT, { idempotent: true });
   await AsyncStorage.removeItem(CACHE_INDEX_KEY);
+}
+
+export async function purgeVoiceAudioCacheForUser(userId?: number | null) {
+  if (!userId) return;
+  const index = await cacheIndex();
+  const scope = `user:${userId}`;
+  for (const [key, row] of Object.entries(index)) {
+    if (row.userScope !== scope) continue;
+    await FileSystem.deleteAsync(row.uri, { idempotent: true }).catch(() => undefined);
+    delete index[key];
+  }
+  await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
+}
+
+async function purgeVoiceAudioCacheForPack(
+  voiceId: string,
+  version: string,
+  userId: number | undefined,
+  includeShared: boolean,
+) {
+  const index = await cacheIndex();
+  const voiceKey = `${voiceId}@${version}`;
+  const userScope = `user:${userId || "anonymous"}`;
+  for (const [key, row] of Object.entries(index)) {
+    if (row.voiceKey !== voiceKey || (!includeShared && row.userScope !== userScope)) continue;
+    await FileSystem.deleteAsync(row.uri, { idempotent: true }).catch(() => undefined);
+    delete index[key];
+  }
+  await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
 }

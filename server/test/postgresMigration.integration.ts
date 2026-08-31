@@ -10,6 +10,8 @@ import { Pool } from "pg";
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
 import { PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
+import { PostgresWorkerRepository } from "../src/modules/worker/postgresRepository.js";
+import { WorkerRuntime } from "../src/modules/worker/service.js";
 import {
   exportMigrationArchive,
   importMigrationArchive,
@@ -201,6 +203,32 @@ try {
   const customFood = await pool.query("SELECT user_id, name, status FROM user_custom_foods WHERE id = $1", [customFoodId]);
   assert.deepEqual(customFood.rows[0], { user_id: user.id, name: "Postgres 家庭豆浆", status: "pending" });
 
+  const workerRepository = new PostgresWorkerRepository(pool);
+  assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
+  assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
+  await pool.query(`
+    UPDATE worker_task_leases SET lease_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second'
+    WHERE task_name = 'media-cleanup'
+  `);
+  assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), true);
+  assert.equal(await workerRepository.releaseLease("media-cleanup", "postgres-worker-b"), true);
+  const workerRuntime = new WorkerRuntime(workerRepository);
+  const workerResult = await workerRuntime.run({
+    taskName: "media-cleanup",
+    workerId: "postgres-worker-runtime",
+    run: async () => ({ processed: 3, succeeded: 3, failed: 0, details: { source: "postgres-integration" } }),
+  });
+  assert.equal(workerResult.status, "completed");
+  const workerPage = await workerRepository.listRuns({
+    taskName: "media-cleanup",
+    status: "completed",
+    page: 1,
+    pageSize: 10,
+  });
+  const workerRun = workerPage.items.find((item) => item.id === workerResult.runId);
+  assert.deepEqual(workerRun?.result, { source: "postgres-integration" });
+  assert.equal(workerRun?.processed, 3);
+
   await pool.query(`DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dietdigidose_app_test') THEN
       CREATE ROLE dietdigidose_app_test NOLOGIN;
@@ -237,6 +265,7 @@ try {
     postgresInventoryRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
+    postgresWorkerRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,
   }, null, 2));

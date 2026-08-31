@@ -10,6 +10,8 @@
 
 - [ ] `pnpm -w lint:all`
 - [ ] `pnpm -w test:all`
+- [ ] `pnpm -w quality:test-quarantine`
+- [ ] 覆盖率/产物预算相关改动已按 `docs/testing.md` 验证并说明
 - [ ] 相关客户端、服务端或管理端构建通过
 - [ ] 已完成受影响平台的手动验证
 

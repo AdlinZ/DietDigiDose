@@ -27,6 +27,7 @@ server/backups/
 .parcel-cache
 .cache
 coverage
+artifacts/quality/
 storybook-static
 
 # Package manager artifacts

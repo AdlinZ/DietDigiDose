@@ -24,10 +24,59 @@ jobs:
       - run: pnpm -w validate:toolchain
       - run: pnpm install --frozen-lockfile
       - run: pnpm -w validate:release
+      - run: pnpm -w quality:test-quarantine
       - run: pnpm -w lint:all
       - run: pnpm -w test:all
+      - run: pnpm -w test:coverage
       - run: pnpm -w build:client
       - run: pnpm -w build:server
       - run: pnpm --dir server db:rehearse -- --owner=GitHub-Actions
       - run: pnpm -w build:admin
+      - run: pnpm -w quality:build-budgets
+      - run: pnpm -w audit:prod
+
+  stability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.18.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.2
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -w test:stability
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-stability-${{ github.sha }}
+          path: artifacts/quality/test-stability.json
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-compatibility:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.18.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.2
+          cache: pnpm
+      - run: pnpm -w validate:toolchain
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -w validate:release
+      - run: pnpm -w quality:test-quarantine
+      - run: pnpm -w lint:all
+      - run: pnpm -w test:all
+      - run: pnpm -w build:client
+      - run: pnpm -w build:server
+      - run: pnpm -w build:admin
+      - run: pnpm -w quality:build-budgets
       - run: pnpm -w audit:prod

@@ -14,7 +14,7 @@ import aiRoutes from "./routes/ai.js";
 import agentRunRoutes from "./routes/agent-runs.js";
 import shoppingListRoutes from "./modules/shopping/index.js";
 import cookingQueueRoutes from "./modules/cookingQueue/index.js";
-import mealPlanRoutes from "./routes/meal-plans.js";
+import mealPlanRoutes from "./modules/mealPlans/index.js";
 import insightsRoutes from "./modules/insights/index.js";
 import recommendationRoutes from "./routes/recommendations.js";
 import realtimeVoiceRoutes from "./routes/realtime-voice.js";

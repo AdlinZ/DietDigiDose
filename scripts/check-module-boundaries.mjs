@@ -7,6 +7,13 @@ const moduleSpecs = [
   { name: "inventory", concreteRepository: /sqliteRepository|SqliteInventoryRepository/ },
   { name: "feedback", concreteRepository: /sqliteRepository|SqliteFeedbackRepository/ },
   { name: "foods", concreteRepository: /sqliteRepository|SqliteFoodRepository/ },
+  {
+    name: "worker",
+    concreteRepository: /sqliteRepository|SqliteWorkerRepository/,
+    compositionFile: "server/src/routes/admin.ts",
+    compositionImport: "../modules/worker/index.js",
+    legacyFile: "server/src/routes/admin/worker-runs.ts",
+  },
 ];
 
 function walk(directory) {
@@ -33,7 +40,6 @@ const persistencePatterns = [
   ["raw SQL execution", /\.prepare\s*\(|\b(?:SELECT|INSERT|UPDATE|DELETE)\s+(?:FROM|INTO|SET)/i],
 ];
 
-const appSource = fs.readFileSync(path.join(root, "server", "src", "app.ts"), "utf8");
 for (const spec of moduleSpecs) {
   reject(spec.name, "route.ts", [
     ...persistencePatterns,
@@ -44,10 +50,14 @@ for (const spec of moduleSpecs) {
     ["a concrete repository", spec.concreteRepository],
   ]);
   reject(spec.name, "repository.ts", persistencePatterns);
-  if (!appSource.includes(`./modules/${spec.name}/index.js`)) {
-    failures.push(`app.ts must compose the ${spec.name} module entry point`);
+  const compositionFile = spec.compositionFile || "server/src/app.ts";
+  const compositionImport = spec.compositionImport || `./modules/${spec.name}/index.js`;
+  const compositionSource = fs.readFileSync(path.join(root, compositionFile), "utf8");
+  if (!compositionSource.includes(compositionImport)) {
+    failures.push(`${compositionFile} must compose the ${spec.name} module entry point`);
   }
-  if (fs.existsSync(path.join(root, "server", "src", "routes", `${spec.name}.ts`))) {
+  const legacyFile = spec.legacyFile || `server/src/routes/${spec.name}.ts`;
+  if (fs.existsSync(path.join(root, legacyFile))) {
     failures.push(`legacy ${spec.name} route must stay removed`);
   }
 }

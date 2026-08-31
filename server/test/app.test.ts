@@ -164,12 +164,12 @@ describe("API security baseline", () => {
   });
 
   test("worker task leases prevent concurrent owners and persist batch outcomes", async () => {
-    const runtime = await import("../src/services/workerRuntime.js");
-    assert.equal(runtime.acquireWorkerTaskLease("media-cleanup", "worker-a", 60_000), true);
-    assert.equal(runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), false);
+    const runtime = await import("../src/modules/worker/index.js");
+    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-a", 60_000), true);
+    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), false);
     db.prepare("UPDATE worker_task_leases SET lease_expires_at = datetime('now', '-1 second') WHERE task_name = 'media-cleanup'").run();
-    assert.equal(runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), true);
-    assert.equal(runtime.releaseWorkerTaskLease("media-cleanup", "worker-b"), true);
+    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), true);
+    assert.equal(await runtime.releaseWorkerTaskLease("media-cleanup", "worker-b"), true);
 
     const completed = await runtime.runManagedWorkerTask({
       taskName: "media-cleanup",

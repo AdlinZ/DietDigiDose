@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { initDatabase } from "./storage/db.js";
 import { checkExpoPushReceipts, sendExpiringInventoryNotifications } from "./services/notifications.js";
 import { processPendingMediaCleanupJobs } from "./services/mediaCleanup.js";
-import { runManagedWorkerTask, type WorkerTaskName, type WorkerTaskRunResult } from "./services/workerRuntime.js";
+import { runManagedWorkerTask, type WorkerTaskName, type WorkerTaskRunResult } from "./modules/worker/index.js";
 import { logger } from "./utils/logger.js";
 
 const supportedTasks: WorkerTaskName[] = ["notifications", "media-cleanup"];

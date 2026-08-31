@@ -18,6 +18,8 @@ import { consumeInventoryWithPostgresClient, PostgresInventoryRepository } from 
 import { PostgresKitchenwareRepository } from "../src/modules/kitchenware/postgresRepository.js";
 import { KitchenwareService } from "../src/modules/kitchenware/service.js";
 import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
+import { PostgresRecommendationsRepository } from "../src/modules/recommendations/postgresRepository.js";
+import { RecommendationsService } from "../src/modules/recommendations/service.js";
 import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
 import { PostgresVoicePacksRepository } from "../src/modules/voicePacks/postgresRepository.js";
 import { VoicePacksService } from "../src/modules/voicePacks/service.js";
@@ -513,6 +515,38 @@ try {
   assert.equal(await kitchenwareRepository.removeItem(user.id + 1, Number(postgresPan.id)), false);
   assert.equal(await kitchenwareRepository.removeItem(user.id, Number(postgresPan.id)), true);
 
+  const recommendationsRepository = new PostgresRecommendationsRepository(pool);
+  const recommendationsService = new RecommendationsService(recommendationsRepository, kitchenwareService);
+  const recommendationPage = await recommendationsService.page(user.id, {
+    surface: "home", matchStatus: "all", pageSize: 1,
+  });
+  assert(recommendationPage.total > 0);
+  assert.equal(recommendationPage.items.length, 1);
+  const recommendationSnapshot = await pool.query(`SELECT input_snapshot_json, results_json FROM recipe_recommendation_requests
+    WHERE id = $1 AND user_id = $2`, [recommendationPage.requestId, user.id]);
+  assert.equal(Array.isArray(recommendationSnapshot.rows[0]?.results_json), true);
+  assert.equal(recommendationSnapshot.rows[0]?.input_snapshot_json.surface, "home");
+  if (recommendationPage.nextCursor) {
+    const nextRecommendationPage = await recommendationsService.page(user.id, {
+      surface: "home", matchStatus: "all", pageSize: 1, cursor: recommendationPage.nextCursor,
+    });
+    assert.equal(nextRecommendationPage.requestId, recommendationPage.requestId);
+  }
+  const recommendedRecipeId = Number(recommendationPage.items[0]!.recipeId);
+  const recommendationEventInput = {
+    requestId: recommendationPage.requestId, recipeId: recommendedRecipeId, eventType: "view",
+    scoringVersion: recommendationPage.scoringVersion, surface: "home", metadata: { source: "postgres-integration" },
+    idempotencyKey: "postgres-recommendation-event-0001",
+  };
+  const recommendationEvents = await Promise.all([
+    recommendationsService.event(user.id, recommendationEventInput),
+    recommendationsService.event(user.id, recommendationEventInput),
+  ]);
+  assert.deepEqual(recommendationEvents.map((result) => result.repeated).sort(), [false, true]);
+  assert.equal(recommendationEvents[0]!.eventId, recommendationEvents[1]!.eventId);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_recommendation_events
+    WHERE user_id = $1 AND idempotency_key = $2`, [user.id, recommendationEventInput.idempotencyKey])).rows[0]?.count), 1);
+
   const healthRepository = new PostgresHealthRepository(pool);
   const healthUpserts = await Promise.all([
     healthRepository.upsertLog(user.id, "2026-09-02", { weight: 63.2 }),
@@ -628,6 +662,7 @@ try {
     postgresMealPlansRepositoryVerified: true,
     postgresVoicePacksRepositoryVerified: true,
     postgresKitchenwareRepositoryVerified: true,
+    postgresRecommendationsRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
     postgresHealthRepositoryVerified: true,

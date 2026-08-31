@@ -4,12 +4,20 @@ import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import {
   inventoryBulkIntakeSchema,
+  inventoryBulkIntakeResponseSchema,
   inventoryConsumptionPreviewSchema,
+  inventoryConsumptionPreviewResponseSchema,
   inventoryConsumptionSchema,
+  inventoryConsumptionResponseSchema,
   inventoryCreateSchema,
+  inventoryDeleteResponseSchema,
+  inventoryHistoryResponseSchema,
+  inventoryImportResponseSchema,
+  inventoryItemSchema,
+  inventoryListResponseSchema,
   inventoryUpdateSchema,
   shoppingInventoryImportSchema,
-} from "../validation/schemas.js";
+} from "@dietdigidose/contracts";
 import { randomUUID } from "node:crypto";
 import { sendError } from "../utils/http.js";
 import { positiveIntegerParam } from "../middleware/validateParam.js";
@@ -54,7 +62,7 @@ router.post("/import-shopping-list", validateBody(shoppingInventoryImportSchema)
   const existing = db.prepare(`
     SELECT result_json FROM shopping_inventory_imports WHERE user_id = ? AND idempotency_key = ?
   `).get(userId, idempotencyKey) as { result_json: string } | undefined;
-  if (existing) return res.json({ items: JSON.parse(existing.result_json), repeated: true });
+  if (existing) return res.json(inventoryImportResponseSchema.parse({ items: JSON.parse(existing.result_json), repeated: true }));
 
   const imported = db.transaction(() => {
     const result = items.map((item: any) => {
@@ -66,7 +74,7 @@ router.post("/import-shopping-list", validateBody(shoppingInventoryImportSchema)
     return result;
   })();
   if (imported.length > 0) recordFunnelEvent(userId, "inventory_added");
-  return res.status(201).json({ items: imported, repeated: false });
+  return res.status(201).json(inventoryImportResponseSchema.parse({ items: imported, repeated: false }));
 });
 
 router.post("/bulk-intake", validateBody(inventoryBulkIntakeSchema), (req: AuthRequest, res) => {
@@ -75,7 +83,7 @@ router.post("/bulk-intake", validateBody(inventoryBulkIntakeSchema), (req: AuthR
     SELECT result_json FROM inventory_intake_batches
     WHERE user_id = ? AND idempotency_key = ?
   `).get(userId, req.body.idempotency_key) as { result_json: string } | undefined;
-  if (existing) return res.json({ ...JSON.parse(existing.result_json), repeated: true });
+  if (existing) return res.json(inventoryBulkIntakeResponseSchema.parse({ ...JSON.parse(existing.result_json), repeated: true }));
   const response = db.transaction(() => {
     const items = req.body.items.map((item: Record<string, any>) => formatInventoryItem(insertInventoryItem(userId, item)));
     const result = { batch_id: randomUUID(), items, repeated: false };
@@ -90,7 +98,7 @@ router.post("/bulk-intake", validateBody(inventoryBulkIntakeSchema), (req: AuthR
     return result;
   })();
   recordFunnelEvent(userId, "inventory_added");
-  return res.status(201).json(response);
+  return res.status(201).json(inventoryBulkIntakeResponseSchema.parse(response));
 });
 
 // GET /api/v1/inventory
@@ -104,7 +112,7 @@ router.get("/", (req: AuthRequest, res) => {
   // Convert SQLite 1/0 integer to boolean for JS
   const formatted = (items as Array<Record<string, unknown>>).map(formatInventoryItem);
 
-  res.json(formatted);
+  res.json(inventoryListResponseSchema.parse(formatted));
 });
 
 // POST /api/v1/inventory
@@ -119,11 +127,13 @@ router.post("/", validateBody(inventoryCreateSchema), (req: AuthRequest, res) =>
     newItem.quantity_value ?? null, `create:${newItem.id}`,
   );
   recordFunnelEvent(req.userId!, "inventory_added");
-  res.status(201).json(formatInventoryItem(newItem));
+  res.status(201).json(inventoryItemSchema.parse(formatInventoryItem(newItem)));
 });
 
 router.post("/consumption-preview", validateBody(inventoryConsumptionPreviewSchema), (req: AuthRequest, res) => {
-  return res.json({ items: buildFefoConsumptionPreview(db, req.userId!, req.body.items) });
+  return res.json(inventoryConsumptionPreviewResponseSchema.parse({
+    items: buildFefoConsumptionPreview(db, req.userId!, req.body.items),
+  }));
 });
 
 router.post("/consume", validateBody(inventoryConsumptionSchema), (req: AuthRequest, res) => {
@@ -132,7 +142,7 @@ router.post("/consume", validateBody(inventoryConsumptionSchema), (req: AuthRequ
     SELECT result_json FROM inventory_consumption_requests
     WHERE user_id = ? AND idempotency_key = ?
   `).get(userId, req.body.idempotency_key) as { result_json: string } | undefined;
-  if (existing) return res.json({ ...JSON.parse(existing.result_json), repeated: true });
+  if (existing) return res.json(inventoryConsumptionResponseSchema.parse({ ...JSON.parse(existing.result_json), repeated: true }));
   try {
     const result = db.transaction(() => {
       const changes = applyInventoryConsumptions(db, userId, req.body.items as InventoryConsumption[], {
@@ -152,7 +162,7 @@ router.post("/consume", validateBody(inventoryConsumptionSchema), (req: AuthRequ
       `).run(userId, req.body.idempotency_key, JSON.stringify(response));
       return response;
     })();
-    return res.status(201).json(result);
+    return res.status(201).json(inventoryConsumptionResponseSchema.parse(result));
   } catch (error) {
     if (error instanceof InventoryQuantityError) {
       const status = ["INVENTORY_UNIT_MISMATCH", "STRUCTURED_QUANTITY_REQUIRED", "INVALID_CONSUMPTION_AMOUNT"].includes(error.code) ? 400 : 409;
@@ -171,10 +181,12 @@ router.get("/:id/history", (req: AuthRequest, res) => {
     WHERE user_id = ? AND inventory_item_id = ?
     ORDER BY created_at DESC, id DESC
   `).all(req.userId!, req.params.id) as Array<Record<string, unknown>>;
-  return res.json(rows.map((row) => ({
-    ...row,
-    metadata: typeof row.metadata_json === "string" ? JSON.parse(row.metadata_json) : {},
-    metadata_json: undefined,
+  return res.json(inventoryHistoryResponseSchema.parse(rows.map((row) => {
+    const { metadata_json: metadataJson, ...historyItem } = row;
+    return {
+      ...historyItem,
+      metadata: typeof metadataJson === "string" ? JSON.parse(metadataJson) : {},
+    };
   })));
 });
 
@@ -243,7 +255,7 @@ router.put("/:id", validateBody(inventoryUpdateSchema), (req: AuthRequest, res) 
       `manual-update:${itemId}:${item.version}`,
     );
   }
-  res.json(formatInventoryItem(updated));
+  res.json(inventoryItemSchema.parse(formatInventoryItem(updated)));
 
 });
 
@@ -265,7 +277,7 @@ router.delete("/:id", (req: AuthRequest, res) => {
       (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key)
     VALUES (?, ?, 'removed', 'manual', ?, ?, ?, 0, ?)
   `).run(req.userId!, req.params.id, item.quantity_value ?? null, item.quantity_value ?? null, item.quantity_unit ?? null, `remove:${req.params.id}:${item.version}`);
-  res.json({ message: "删除成功" });
+  res.json(inventoryDeleteResponseSchema.parse({ message: "删除成功" }));
 });
 
 export default router;

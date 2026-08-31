@@ -2,6 +2,7 @@ packages:
   - client
   - server
   - admin
+  - packages/*
 
 allowBuilds:
   '@alicloud/openapi-core': true

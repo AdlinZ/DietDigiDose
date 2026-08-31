@@ -683,6 +683,7 @@ describe("new user MVP journey", () => {
     assert.equal(inventoryList.response.status, 200);
     assert.equal((inventoryList.body as JsonObject[]).length, 1);
     assert.equal((inventoryList.body as JsonObject[])[0].food_name, "番茄");
+    assert.equal("user_id" in (inventoryList.body as JsonObject[])[0], false);
 
     const recipes = await api("/api/v1/recipes");
     assert.equal(recipes.response.status, 200);

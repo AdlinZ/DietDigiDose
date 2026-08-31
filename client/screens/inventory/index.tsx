@@ -861,7 +861,7 @@ export default function InventoryScreen() {
           category: defaults.category,
           quantity,
           expiration_date: item.expirationDate!,
-          storage_location: item.suggestedStorageLocation || defaults.storageLocation,
+          storage_location: (item.suggestedStorageLocation || defaults.storageLocation) as StorageLocation,
           image_url: null,
           ...(parsedQuantity ? { quantity_value: parsedQuantity.amount, quantity_unit: parsedQuantity.unit } : {}),
           confidence: item.confidence ?? null,
@@ -1129,7 +1129,7 @@ export default function InventoryScreen() {
         category,
         quantity,
         expiration_date: expirationDate,
-        storage_location: storageLocation,
+        storage_location: storageLocation as StorageLocation,
         image_url: imageUrl.trim() || null,
         ...(!activeHousehold && parsedQuantity ? {
           quantity_value: parsedQuantity.amount,

@@ -32,6 +32,7 @@
     "@alicloud/dypnsapi20170525": "2.0.0",
     "@alicloud/openapi-core": "1.0.8",
     "@darabonba/typescript": "1.0.5",
+    "@dietdigidose/contracts": "workspace:*",
     "@ip-location-db/geolite2-country-mmdb": "2.3.2026061719",
     "@langchain/core": "^1.2.5",
     "@langchain/langgraph": "^1.4.9",

@@ -78,16 +78,20 @@ Dietdigidose/
 
 ### 环境要求
 
-- Node.js 20 或更新版本（CI 使用 Node.js 22）
+- Node.js 22.23.2（以 `.nvmrc` 和 `.node-version` 为准）
 - pnpm 10.18.0
 
 ### 安装与配置
 
 ```bash
+corepack enable
+corepack prepare pnpm@10.18.0 --activate
 pnpm install --frozen-lockfile
 cp client/.env.example client/.env
 cp server/.env.example server/.env
 ```
+
+使用 nvm、fnm、mise 或 asdf 时，请先让版本管理器读取仓库中的 Node 版本文件。普通 CI、Android 构建和本地推荐环境必须使用同一 Node 版本；升级时应在一个 PR 中同步更新版本文件、根包 `engines` 与全部工作流。
 
 客户端至少需要指向本地 API：
 
@@ -134,6 +138,7 @@ pnpm dev:admin
 | `pnpm build:client` | 导出 Expo Web 构建 |
 | `pnpm build:server` | 构建 Express 服务端 |
 | `pnpm build:admin` | 构建管理后台 |
+| `pnpm validate:toolchain` | 校验 Node/pnpm 与 CI 声明一致 |
 | `pnpm validate:release` | 校验版本、快照和双端构建号 |
 | `pnpm audit:prod` | 审计生产依赖 |
 

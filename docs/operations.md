@@ -78,6 +78,10 @@ pnpm --dir server db:restore /secure-backups/dietdigidose.db --force
 记录提交 SHA、client/server/admin 版本、数据库版本、构建号、后端域名和备份编号，然后执行：
 
 ```bash
+node --version  # 必须为 v22.23.2
+corepack enable
+corepack prepare pnpm@10.18.0 --activate
+pnpm -w validate:toolchain
 pnpm install --frozen-lockfile
 pnpm -w lint:all
 pnpm -w test:all

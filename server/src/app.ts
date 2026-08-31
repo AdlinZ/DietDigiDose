@@ -18,7 +18,7 @@ import mealPlanRoutes from "./modules/mealPlans/index.js";
 import insightsRoutes from "./modules/insights/index.js";
 import recommendationRoutes from "./routes/recommendations.js";
 import realtimeVoiceRoutes from "./routes/realtime-voice.js";
-import voicePackRoutes from "./routes/voice-packs.js";
+import voicePackRoutes from "./modules/voicePacks/index.js";
 import kitchenwareRoutes from "./routes/kitchenware.js";
 import notificationsRoutes from "./routes/notifications.js";
 import mediaRoutes from "./routes/media.js";

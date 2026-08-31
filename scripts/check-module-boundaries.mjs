@@ -15,6 +15,11 @@ const moduleSpecs = [
     legacyFile: "server/src/routes/diet-records.ts",
   },
   { name: "inventory", concreteRepository: /sqliteRepository|SqliteInventoryRepository/ },
+  {
+    name: "insights",
+    concreteRepository: /sqliteRepository|SqliteInsightsRepository/,
+    legacyFile: "server/src/routes/insights.ts",
+  },
   { name: "feedback", concreteRepository: /sqliteRepository|SqliteFeedbackRepository/ },
   { name: "foods", concreteRepository: /sqliteRepository|SqliteFoodRepository/ },
   {

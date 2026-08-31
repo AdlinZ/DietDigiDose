@@ -12,6 +12,8 @@ import { PostgresDietRecordsRepository } from "../src/modules/dietRecords/postgr
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
 import { PostgresHealthRepository } from "../src/modules/health/postgresRepository.js";
+import { PostgresInsightsRepository } from "../src/modules/insights/postgresRepository.js";
+import { InsightsService } from "../src/modules/insights/service.js";
 import { consumeInventoryWithPostgresClient, PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
 import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
 import { PostgresWorkerRepository } from "../src/modules/worker/postgresRepository.js";
@@ -205,6 +207,62 @@ try {
   });
   assert.equal(await dietRepository.remove(user.id + 1, Number(manualDietRecord.id)), false);
   assert.equal(await dietRepository.remove(user.id, Number(manualDietRecord.id)), true);
+
+  const insightInventory = await inventoryRepository.create(user.id, {
+    food_name: "Postgres 周报菠菜",
+    category: "蔬菜",
+    quantity: "500g",
+    expiration_date: "2026-09-03",
+    storage_location: "冷藏",
+    quantity_value: 500,
+    quantity_unit: "g",
+  });
+  await inventoryRepository.create(user.id, {
+    food_name: "Postgres 临期西兰花",
+    category: "蔬菜",
+    quantity: "1个",
+    expiration_date: "2026-09-02",
+    storage_location: "冷藏",
+    quantity_value: 1,
+    quantity_unit: "piece",
+  });
+  const insightsRepository = new PostgresInsightsRepository(pool);
+  const outcomeInput = {
+    scope: "personal" as const,
+    itemId: insightInventory.id,
+    itemVersion: insightInventory.version,
+    outcome: "used" as const,
+    source: "reminder",
+    idempotencyKey: "postgres-insights-outcome-0001",
+    occurredAt: "2026-09-01T10:00:00.000Z",
+    closeItem: true,
+  };
+  const outcomeResults = await Promise.all([
+    insightsRepository.createOutcome(user.id, outcomeInput),
+    insightsRepository.createOutcome(user.id, outcomeInput),
+  ]);
+  assert.deepEqual(outcomeResults.map((result) => result.kind).sort(), ["created", "repeated"]);
+  const createdOutcome = outcomeResults.find((result) => result.kind === "created");
+  if (!createdOutcome || createdOutcome.kind !== "created") throw new Error("PostgreSQL outcome was not created");
+  const closedInsightInventory = await pool.query(
+    "SELECT is_available, version, deleted_at FROM inventory_items WHERE id = $1",
+    [insightInventory.id],
+  );
+  assert.equal(closedInsightInventory.rows[0]?.is_available, false);
+  assert.equal(Number(closedInsightInventory.rows[0]?.version), insightInventory.version + 1);
+  assert(closedInsightInventory.rows[0]?.deleted_at);
+  assert.equal((await insightsRepository.updateOutcome(user.id + 1, createdOutcome.event.id, { version: 1, outcome: "gifted" })).kind, "not_found");
+  assert.equal((await insightsRepository.updateOutcome(user.id, createdOutcome.event.id, { version: 1, outcome: "gifted" })).kind, "updated");
+  assert.equal((await insightsRepository.updateOutcome(user.id, createdOutcome.event.id, { version: 1, outcome: "expired" })).kind, "conflict");
+  const insightsService = new InsightsService(insightsRepository);
+  const weeklyInsights = await insightsService.weekly(user.id, {
+    weekStart: "2026-08-31",
+    timezoneOffsetMinutes: 0,
+    scope: "personal",
+  });
+  assert.equal(weeklyInsights.summary.giftedOrTransferredCount, 1);
+  assert.equal(weeklyInsights.dataQuality, "structured");
+  assert.match(weeklyInsights.advice, /蔬菜库存到期/);
 
   const feedbackRepository = new PostgresFeedbackRepository(pool);
   const feedbackId = await feedbackRepository.create(user.id, {
@@ -413,6 +471,7 @@ try {
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
     postgresDietRecordsRepositoryVerified: true,
+    postgresInsightsRepositoryVerified: true,
     postgresCookingQueueRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,

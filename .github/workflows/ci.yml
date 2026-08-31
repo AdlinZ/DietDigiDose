@@ -27,6 +27,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -w validate:release
       - run: pnpm -w contracts:check
+      - run: pnpm -w architecture:check
       - run: pnpm -w quality:test-quarantine
       - run: pnpm -w lint:all
       - run: pnpm -w test:all

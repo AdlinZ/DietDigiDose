@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { PostgresCookingQueueRepository } from "../src/modules/cookingQueue/postgresRepository.js";
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
 import { PostgresHealthRepository } from "../src/modules/health/postgresRepository.js";
@@ -205,6 +206,50 @@ try {
   const customFood = await pool.query("SELECT user_id, name, status FROM user_custom_foods WHERE id = $1", [customFoodId]);
   assert.deepEqual(customFood.rows[0], { user_id: user.id, name: "Postgres 家庭豆浆", status: "pending" });
 
+  const cookingQueueRepository = new PostgresCookingQueueRepository(pool);
+  await pool.query("DELETE FROM cooking_queue_items WHERE user_id = $1", [user.id]);
+  const queueRecipes = await pool.query(`SELECT id, title, image_url, cook_time, calories, difficulty, ingredients_json
+    FROM recipes WHERE deleted_at IS NULL AND status = 'approved' ORDER BY id LIMIT 2`);
+  assert.equal(queueRecipes.rows.length, 2);
+  const queueRecipe = queueRecipes.rows[0]!;
+  const queueInput = {
+    userId: user.id,
+    recipeId: Number(queueRecipe.id),
+    idempotencyKey: "postgres-queue-idempotency-0001",
+    snapshot: { title: queueRecipe.title, ingredients: queueRecipe.ingredients_json },
+  };
+  const queued = await Promise.all([
+    cookingQueueRepository.enqueue({ ...queueInput, id: "44444444-4444-4444-8444-444444444444" }, 30),
+    cookingQueueRepository.enqueue({ ...queueInput, id: "55555555-5555-4555-8555-555555555555" }, 30),
+  ]);
+  assert.deepEqual(queued.map((result) => result.kind).sort(), ["created", "existing"]);
+  if (queued[0]!.kind === "full" || queued[1]!.kind === "full") throw new Error("queue unexpectedly full");
+  assert.equal(queued[0]!.row.id, queued[1]!.row.id);
+  const firstQueueId = String(queued[0]!.row.id);
+  const updatedQueue = await cookingQueueRepository.update(firstQueueId, user.id, 1, {
+    status: "preparing", mealType: "dinner", plannedAt: null, preparedIngredients: ["番茄"],
+    shoppingListSyncedAt: null, completedAt: null,
+  });
+  assert.equal(updatedQueue?.version, 2);
+  assert.equal(await cookingQueueRepository.update(firstQueueId, user.id, 1, {
+    status: "ready", mealType: null, plannedAt: null, preparedIngredients: [], shoppingListSyncedAt: null, completedAt: null,
+  }), null);
+  const secondRecipe = queueRecipes.rows[1]!;
+  const secondQueued = await cookingQueueRepository.enqueue({
+    id: "66666666-6666-4666-8666-666666666666", userId: user.id, recipeId: Number(secondRecipe.id),
+    snapshot: { title: secondRecipe.title, ingredients: secondRecipe.ingredients_json },
+  }, 30);
+  assert.equal(secondQueued.kind, "created");
+  const activeQueue = await cookingQueueRepository.list(user.id, false);
+  const reorderedQueue = await cookingQueueRepository.reorder(user.id,
+    [...activeQueue].reverse().map((item) => ({ id: String(item.id), version: Number(item.version) })));
+  assert.equal(reorderedQueue?.[0]?.id, "66666666-6666-4666-8666-666666666666");
+  const reorderedFirst = reorderedQueue!.find((item) => item.id === firstQueueId)!;
+  const startedQueue = await cookingQueueRepository.transition(firstQueueId, user.id, Number(reorderedFirst.version), "cooking");
+  const completedQueue = await cookingQueueRepository.transition(firstQueueId, user.id, Number(startedQueue!.version), "completed");
+  assert.equal(completedQueue?.status, "completed");
+  assert.equal(await cookingQueueRepository.cancel("66666666-6666-4666-8666-666666666666", user.id), true);
+
   const healthRepository = new PostgresHealthRepository(pool);
   const healthUpserts = await Promise.all([
     healthRepository.upsertLog(user.id, "2026-09-02", { weight: 63.2 }),
@@ -314,6 +359,7 @@ try {
     schema: archive.baselineSchemaSha256,
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
+    postgresCookingQueueRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
     postgresHealthRepositoryVerified: true,

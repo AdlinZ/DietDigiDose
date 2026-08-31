@@ -210,6 +210,61 @@ describe("API security baseline", () => {
     db.prepare("DELETE FROM worker_task_runs WHERE id = 'worker-visible-run'").run();
   });
 
+  test("personal shopping items preserve ownership, optimistic versions, and idempotent imports", async () => {
+    const owner = await register("shopping-owner@example.com");
+    const intruder = await register("shopping-intruder@example.com");
+    const created = await api("/api/v1/shopping-list", {
+      method: "POST",
+      token: owner.token,
+      body: JSON.stringify({ name: "番茄", amount: "2个", category: "蔬菜" }),
+    });
+    assert.equal(created.response.status, 201);
+    const shoppingItem = created.body as JsonObject;
+    assert.match(shoppingItem.id, /^[0-9a-f-]{36}$/);
+    assert.equal(shoppingItem.checked, false);
+
+    const stale = await api(`/api/v1/shopping-list/${shoppingItem.id}`, {
+      method: "PATCH",
+      token: owner.token,
+      body: JSON.stringify({ version: shoppingItem.version + 1, checked: true }),
+    });
+    assert.equal(stale.response.status, 409);
+    assert.equal((stale.body as JsonObject).code, "SHOPPING_ITEM_VERSION_CONFLICT");
+
+    const updated = await api(`/api/v1/shopping-list/${shoppingItem.id}`, {
+      method: "PATCH",
+      token: owner.token,
+      body: JSON.stringify({ version: shoppingItem.version, checked: true }),
+    });
+    assert.equal(updated.response.status, 200);
+    assert.equal((updated.body as JsonObject).version, shoppingItem.version + 1);
+    assert.equal((updated.body as JsonObject).checked, true);
+
+    const importPayload = {
+      importKey: "shopping-contract-import-0001",
+      items: [{ name: "牛奶", amount: "1盒", category: "乳制品" }],
+    };
+    const firstImport = await api("/api/v1/shopping-list/import", {
+      method: "POST", token: owner.token, body: JSON.stringify(importPayload),
+    });
+    const repeatedImport = await api("/api/v1/shopping-list/import", {
+      method: "POST", token: owner.token, body: JSON.stringify(importPayload),
+    });
+    assert.equal(firstImport.response.status, 200);
+    assert.equal(repeatedImport.response.status, 200);
+    assert.equal((repeatedImport.body as JsonObject).items.filter((candidate: JsonObject) => candidate.name === "牛奶").length, 1);
+
+    const forbiddenDelete = await api(`/api/v1/shopping-list/${shoppingItem.id}`, {
+      method: "DELETE", token: intruder.token,
+    });
+    assert.equal(forbiddenDelete.response.status, 404);
+    const removed = await api(`/api/v1/shopping-list/${shoppingItem.id}`, {
+      method: "DELETE", token: owner.token,
+    });
+    assert.equal(removed.response.status, 200);
+    assert.deepEqual(removed.body, { success: true });
+  });
+
   test("login audits use Express trusted-proxy resolution instead of raw forwarding headers", async () => {
     const account = await register("proxy-audit@example.com");
     app.set("trust proxy", false);

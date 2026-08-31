@@ -33,6 +33,26 @@ describe("candidate build transport policy", () => {
     expect(production.env).toBeUndefined();
   });
 
+  it.each(["china", "global"])("builds the %s deployment profile without server secrets", (deploymentProfile) => {
+    for (const suffix of ["preview", "production"] as const) {
+      const build = easConfig.build[`${deploymentProfile}-${suffix}` as keyof typeof easConfig.build] as { env?: Record<string, string> };
+      expect(build.env).toEqual({ EXPO_PUBLIC_DEPLOYMENT_PROFILE: deploymentProfile });
+      expect(build.env?.EXPO_PUBLIC_BACKEND_BASE_URL).toBeUndefined();
+    }
+    process.env.EXPO_PUBLIC_DEPLOYMENT_PROFILE = deploymentProfile;
+    const config = loadExpoConfig(`${deploymentProfile}-preview`, "https://api.example.test");
+    expect(config.extra.deploymentProfile).toBe(deploymentProfile);
+    const serialized = JSON.stringify(config);
+    expect(serialized).not.toContain("SUPABASE_SERVICE_ROLE_KEY");
+    expect(serialized).not.toContain("ALIYUN_ACCESS_KEY_SECRET");
+    expect(serialized).not.toContain("JWT_SECRET");
+  });
+
+  it("rejects an unknown deployment profile", () => {
+    process.env.EXPO_PUBLIC_DEPLOYMENT_PROFILE = "mars";
+    expect(() => loadExpoConfig("preview", "https://api.example.test")).toThrow(/must be china or global/);
+  });
+
   it.each(["preview", "production"])("requires HTTPS for the %s profile", (profile) => {
     expect(() => loadExpoConfig(profile, "http://api.example.test", "1")).toThrow(/require an HTTPS/);
     const config = loadExpoConfig(profile, "https://api.example.test", "1");

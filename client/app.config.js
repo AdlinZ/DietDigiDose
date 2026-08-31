@@ -3,6 +3,10 @@
 const release = require('../release.json');
 
 const appSlug = process.env.EXPO_PUBLIC_APP_SLUG || 'dietdigidose';
+const deploymentProfile = process.env.EXPO_PUBLIC_DEPLOYMENT_PROFILE || 'china';
+if (!['china', 'global'].includes(deploymentProfile)) {
+  throw new Error(`EXPO_PUBLIC_DEPLOYMENT_PROFILE must be china or global; received ${JSON.stringify(deploymentProfile)}`);
+}
 const easBuildProfile = process.env.EAS_BUILD_PROFILE;
 const isHttpPreview = easBuildProfile === 'preview-http';
 const appName = process.env.EXPO_PUBLIC_APP_NAME || (isHttpPreview ? '食光烙记 HTTP测试' : '食光烙记');
@@ -47,6 +51,7 @@ module.exports = ({ config }) => ({
     buildNumber,
     buildTime,
     buildFlavor: isHttpPreview ? 'preview-http' : 'standard',
+    deploymentProfile,
     eas: {
       ...config.extra?.eas,
       projectId: easProjectId,

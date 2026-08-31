@@ -89,6 +89,8 @@ describe("API security baseline", () => {
     const { response, body } = await api("/api/v1/health");
     assert.equal(response.status, 200);
     assert.equal((body as JsonObject).status, "ok");
+    assert.equal((body as JsonObject).deploymentProfile, "china");
+    assert.equal(((body as JsonObject).providers as JsonObject).auth, "aliyun-pnvs");
     assert.ok(response.headers.get("x-request-id"));
   });
 

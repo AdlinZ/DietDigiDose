@@ -32,6 +32,7 @@
     "contracts:generate": "pnpm --dir ./packages/contracts openapi:generate",
     "contracts:check": "pnpm --dir ./packages/contracts check",
     "architecture:check": "node scripts/check-module-boundaries.mjs",
+    "provider:smoke": "node scripts/smoke-provider-profiles.mjs",
     "database:schema:generate": "node scripts/generate-postgres-baseline.mjs",
     "database:schema:check": "node scripts/generate-postgres-baseline.mjs --check && pnpm --dir ./server db:postgres:check",
     "database:boundary:update": "node scripts/check-sqlite-boundary.mjs --update",

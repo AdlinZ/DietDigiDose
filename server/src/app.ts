@@ -32,10 +32,13 @@ import { errorEnvelope } from "./middleware/errorEnvelope.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { SERVER_BUILD_TIME, SERVER_VERSION } from "./version.js";
 import { recoverAgentRuntime } from "./services/agent/runtime.js";
+import { assertNoPublicServerSecrets, getProviderProfile } from "./providers/profiles.js";
 
 const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
 export function createApp() {
+  assertNoPublicServerSecrets();
+  const providerProfile = getProviderProfile();
   initDatabase();
   recoverAgentRuntime();
   const app = express();
@@ -81,7 +84,11 @@ export function createApp() {
     return res.type("html").send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>食光社区分享</title><style>body{font-family:system-ui;background:#fdf8f0;color:#2d2924;display:grid;place-items:center;min-height:100vh;margin:0}.card{max-width:520px;margin:24px;padding:28px;border-radius:24px;background:white;box-shadow:0 10px 40px #3d32291a}a{display:inline-block;margin-top:18px;padding:12px 20px;border-radius:999px;background:#2d6a4f;color:white;text-decoration:none}</style><div class="card"><h1>食光社区</h1><p><strong>${escapeHtml(share.username)}</strong> 的健康分享</p><p>${escapeHtml(share.content.slice(0, 220))}</p><a href="${appUrl}">打开食光烙记查看</a><p><small>未安装 App 时，可保存分享码 SG${code}，安装后打开 App 即可识别。</small></p></div></html>`);
   });
 
-  app.get("/api/v1/health", (_req, res) => res.status(200).json({ status: "ok" }));
+  app.get("/api/v1/health", (_req, res) => res.status(200).json({
+    status: "ok",
+    deploymentProfile: providerProfile.id,
+    providers: providerProfile.providers,
+  }));
   app.get("/api/v1/version", (req, res) => res.status(200).json({
     serverVersion: SERVER_VERSION,
     serverBuildTime: SERVER_BUILD_TIME,

@@ -12,6 +12,20 @@
         "buildType": "apk"
       }
     },
+    "china-preview": {
+      "extends": "preview",
+      "channel": "china-preview",
+      "env": {
+        "EXPO_PUBLIC_DEPLOYMENT_PROFILE": "china"
+      }
+    },
+    "global-preview": {
+      "extends": "preview",
+      "channel": "global-preview",
+      "env": {
+        "EXPO_PUBLIC_DEPLOYMENT_PROFILE": "global"
+      }
+    },
     "preview-http": {
       "extends": "preview",
       "channel": "preview-http",
@@ -34,6 +48,20 @@
       "channel": "production",
       "environment": "production",
       "autoIncrement": false
+    },
+    "china-production": {
+      "extends": "production",
+      "channel": "china-production",
+      "env": {
+        "EXPO_PUBLIC_DEPLOYMENT_PROFILE": "china"
+      }
+    },
+    "global-production": {
+      "extends": "production",
+      "channel": "global-production",
+      "env": {
+        "EXPO_PUBLIC_DEPLOYMENT_PROFILE": "global"
+      }
     },
     "candidate": {
       "channel": "candidate",

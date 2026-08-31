@@ -135,12 +135,16 @@ pnpm dev:admin
 | `pnpm dev:all` | 同时启动客户端、API 与管理后台 |
 | `pnpm lint:all` | 校验 client、server 与 admin |
 | `pnpm test:all` | 运行三端自动化测试 |
+| `pnpm test:coverage` | 运行 client/server 覆盖率门禁 |
+| `pnpm test:stability` | 连续两轮运行全量测试并生成稳定性报告 |
 | `pnpm build:client` | 导出 Expo Web 构建 |
 | `pnpm build:server` | 构建 Express 服务端 |
 | `pnpm build:admin` | 构建管理后台 |
 | `pnpm validate:toolchain` | 校验 Node/pnpm 与 CI 声明一致 |
 | `pnpm validate:release` | 校验版本、快照和双端构建号 |
 | `pnpm audit:prod` | 审计生产依赖 |
+
+测试分层、覆盖率、产物预算和 flaky/quarantine 处理规则见 [分层测试与质量门禁](docs/testing.md)。
 
 ## 发布与安全边界
 

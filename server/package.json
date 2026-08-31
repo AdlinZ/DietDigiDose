@@ -22,6 +22,10 @@
     "preinstall": "npx only-allow pnpm",
     "start": "node scripts/start-production.mjs",
     "lint": "tsc --noEmit",
+    "test:unit": "tsx --test test/agentArchitecture.test.ts test/aiErrors.test.ts test/communityRecommendation.test.ts test/contentGovernance.test.ts test/databaseBackup.test.ts test/mediaStorage.test.ts test/recipeQuality.test.ts test/scriptsCompatibility.test.ts",
+    "test:contract": "tsx --test --test-concurrency=1 test/app.test.ts",
+    "test:e2e": "tsx --test --test-concurrency=1 test/milestone35.test.ts",
+    "test:coverage": "tsx --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-lines=70 --test-coverage-branches=60 --test-coverage-functions=70 test/**/*.test.ts",
     "test": "tsx --test --test-concurrency=1 test/**/*.test.ts"
   },
   "dependencies": {

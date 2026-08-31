@@ -9,10 +9,26 @@
     "build": "expo export --platform web",
     "start": "node --dns-result-order=ipv4first ./node_modules/expo/bin/cli start --web --clear --port 8080",
     "test": "jest --runInBand",
+    "test:coverage": "jest --runInBand --coverage --coverageReporters=text-summary",
     "test:watch": "jest --watchAll"
   },
   "jest": {
-    "preset": "jest-expo"
+    "preset": "jest-expo",
+    "collectCoverageFrom": [
+      "utils/**/*.{ts,tsx}",
+      "services/**/*.{ts,tsx}",
+      "screens/**/{selectors,use*Data,feed,recommendations,carousel}.{ts,tsx}",
+      "components/Screen.tsx",
+      "contexts/ThemeContext.tsx"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "statements": 40,
+        "branches": 40,
+        "functions": 35,
+        "lines": 42
+      }
+    }
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",

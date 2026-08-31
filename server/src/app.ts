@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import authRoutes from "./routes/auth.js";
 import inventoryRoutes from "./modules/inventory/index.js";
-import dietRecordsRoutes from "./routes/diet-records.js";
+import dietRecordsRoutes from "./modules/dietRecords/index.js";
 import healthDataRoutes from "./modules/health/index.js";
 import recipesRoutes from "./routes/recipes.js";
 import foodsRoutes from "./modules/foods/index.js";

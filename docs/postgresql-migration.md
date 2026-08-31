@@ -15,6 +15,7 @@ The application still selects SQLite until every write path can switch in one co
 - Personal shopping list: CRUD, optimistic version checks, soft deletion, and idempotent transactional imports across SQLite and PostgreSQL repositories.
 - Health data: daily log merge semantics, profile defaults, structured health constraints, and owner-scoped deletion across SQLite and PostgreSQL repositories.
 - Cooking queue: atomic capacity and duplicate guards, recipe snapshots, optimistic status transitions, and transactional reorder across SQLite and PostgreSQL repositories.
+- Diet records: CRUD plus atomic cooking completion, including inventory consumption and concurrent idempotent retries across SQLite and PostgreSQL repositories.
 
 Each migrated domain keeps SQL inside its driver adapter; routes and services depend only on the repository port. The boundary ratchet must be updated only when a direct SQLite call is removed or moved into one of these adapters.
 

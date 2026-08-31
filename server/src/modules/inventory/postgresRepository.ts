@@ -35,6 +35,68 @@ function formatInventoryItem(item: QueryResultRow) {
   });
 }
 
+async function lockInventoryIdempotency(client: PoolClient, scope: string, userId: number, key: string) {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`inventory:${scope}:${userId}:${key}`]);
+}
+
+/** Runs an inventory consumption inside an existing PostgreSQL transaction. */
+export async function consumeInventoryWithPostgresClient(
+  client: PoolClient,
+  userId: number,
+  input: InventoryConsumptionData,
+) {
+  await lockInventoryIdempotency(client, "consume", userId, input.idempotency_key);
+  const existing = await client.query(`
+    SELECT result_json FROM inventory_consumption_requests WHERE user_id = $1 AND idempotency_key = $2
+  `, [userId, input.idempotency_key]);
+  if (existing.rows[0]) return inventoryConsumptionResponseSchema.parse({ ...existing.rows[0].result_json, repeated: true });
+
+  const changes = [];
+  const items = [];
+  for (const [index, consumption] of (input.items as InventoryConsumption[]).entries()) {
+    const selected = await client.query(`
+      SELECT * FROM inventory_items WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE
+    `, [consumption.item_id, userId]);
+    const row = selected.rows[0];
+    if (!row) throw new InventoryQuantityError("INVENTORY_CONFLICT", "库存食材不存在、已用完或不属于当前账号");
+    const transition = calculateInventoryConsumption(row, consumption);
+    const updated = await client.query(`
+      UPDATE inventory_items SET quantity = $1, quantity_value = $2, is_available = $3,
+        version = version + 1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4 AND user_id = $5 AND version = $6 AND is_available = TRUE AND deleted_at IS NULL
+      RETURNING *
+    `, [transition.nextQuantity, transition.storedValue === null ? null : transition.remaining, transition.available, consumption.item_id, userId, consumption.version]);
+    if (!updated.rows[0]) throw new InventoryQuantityError("INVENTORY_VERSION_CONFLICT", "库存已变化，请刷新后重试");
+    await client.query(`
+      INSERT INTO inventory_change_logs
+        (user_id, inventory_item_id, action, source, quantity_before, quantity_after,
+         quantity_unit, delta_value, idempotency_key, metadata_json)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+    `, [
+      userId, consumption.item_id, consumption.mode === "all" ? "consume_all" : "consume_partial",
+      input.source, transition.storedValue, transition.storedValue === null ? null : transition.remaining,
+      transition.storedUnit, transition.amountUsed === null ? null : -Math.round((transition.amountUsed + Number.EPSILON) * 1000) / 1000,
+      `${input.idempotency_key}:${consumption.item_id}:${index}`, "{}",
+    ]);
+    changes.push({
+      item_id: consumption.item_id,
+      quantity_before: transition.storedValue,
+      quantity_after: transition.storedValue === null ? null : transition.remaining,
+      quantity_unit: transition.storedUnit,
+      consumed_value: transition.amountUsed,
+      is_available: transition.available,
+      version: consumption.version + 1,
+    });
+    items.push(formatInventoryItem(updated.rows[0]));
+  }
+  const response = inventoryConsumptionResponseSchema.parse({ changes, items, repeated: false });
+  await client.query(`
+    INSERT INTO inventory_consumption_requests (user_id, idempotency_key, result_json)
+    VALUES ($1, $2, $3::jsonb)
+  `, [userId, input.idempotency_key, JSON.stringify(response)]);
+  return response;
+}
+
 export class PostgresInventoryRepository implements InventoryRepository {
   private readonly pool: Pool;
 
@@ -58,7 +120,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
   }
 
   private async lockIdempotency(client: PoolClient, scope: string, userId: number, key: string) {
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`inventory:${scope}:${userId}:${key}`]);
+    await lockInventoryIdempotency(client, scope, userId, key);
   }
 
   private async insertInventoryItem(
@@ -167,58 +229,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
   }
 
   async consume(userId: number, input: InventoryConsumptionData) {
-    return this.transaction(async (client) => {
-      await this.lockIdempotency(client, "consume", userId, input.idempotency_key);
-      const existing = await client.query(`
-        SELECT result_json FROM inventory_consumption_requests WHERE user_id = $1 AND idempotency_key = $2
-      `, [userId, input.idempotency_key]);
-      if (existing.rows[0]) return inventoryConsumptionResponseSchema.parse({ ...existing.rows[0].result_json, repeated: true });
-
-      const changes = [];
-      const items = [];
-      for (const [index, consumption] of (input.items as InventoryConsumption[]).entries()) {
-        const selected = await client.query(`
-          SELECT * FROM inventory_items WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE
-        `, [consumption.item_id, userId]);
-        const row = selected.rows[0];
-        if (!row) throw new InventoryQuantityError("INVENTORY_CONFLICT", "库存食材不存在、已用完或不属于当前账号");
-        const transition = calculateInventoryConsumption(row, consumption);
-        const updated = await client.query(`
-          UPDATE inventory_items SET quantity = $1, quantity_value = $2, is_available = $3,
-            version = version + 1, updated_at = CURRENT_TIMESTAMP
-          WHERE id = $4 AND user_id = $5 AND version = $6 AND is_available = TRUE AND deleted_at IS NULL
-          RETURNING *
-        `, [transition.nextQuantity, transition.storedValue === null ? null : transition.remaining, transition.available, consumption.item_id, userId, consumption.version]);
-        if (!updated.rows[0]) throw new InventoryQuantityError("INVENTORY_VERSION_CONFLICT", "库存已变化，请刷新后重试");
-        await client.query(`
-          INSERT INTO inventory_change_logs
-            (user_id, inventory_item_id, action, source, quantity_before, quantity_after,
-             quantity_unit, delta_value, idempotency_key, metadata_json)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
-        `, [
-          userId, consumption.item_id, consumption.mode === "all" ? "consume_all" : "consume_partial",
-          input.source, transition.storedValue, transition.storedValue === null ? null : transition.remaining,
-          transition.storedUnit, transition.amountUsed === null ? null : -Math.round((transition.amountUsed + Number.EPSILON) * 1000) / 1000,
-          `${input.idempotency_key}:${consumption.item_id}:${index}`, "{}",
-        ]);
-        changes.push({
-          item_id: consumption.item_id,
-          quantity_before: transition.storedValue,
-          quantity_after: transition.storedValue === null ? null : transition.remaining,
-          quantity_unit: transition.storedUnit,
-          consumed_value: transition.amountUsed,
-          is_available: transition.available,
-          version: consumption.version + 1,
-        });
-        items.push(formatInventoryItem(updated.rows[0]));
-      }
-      const response = inventoryConsumptionResponseSchema.parse({ changes, items, repeated: false });
-      await client.query(`
-        INSERT INTO inventory_consumption_requests (user_id, idempotency_key, result_json)
-        VALUES ($1, $2, $3::jsonb)
-      `, [userId, input.idempotency_key, JSON.stringify(response)]);
-      return response;
-    });
+    return this.transaction((client) => consumeInventoryWithPostgresClient(client, userId, input));
   }
 
   async history(userId: number, itemId: number) {

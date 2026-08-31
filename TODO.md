@@ -27,8 +27,8 @@
 - [x] CI 使用冻结依赖，执行三端校验、测试、构建和生产依赖审计
 - [x] 服务端核心库存、饮食、健康、权限和用户隔离已有集成测试
 - [x] 仓库已有 Android 内部分发预览配置和候选 APK
-- [ ] iOS 与 Android 真机完成同一版候选包的核心闭环验收
-- [ ] 全新数据库、升级数据库和备份恢复均在 staging 完成演练
+- [ ] [#107](https://github.com/AdlinZ/DietDigiDose/issues/107) iOS 与 Android 真机完成同一版候选包的核心闭环验收
+- [ ] [#106](https://github.com/AdlinZ/DietDigiDose/issues/106) 全新数据库、升级数据库和备份恢复均在 staging 完成演练
 
 ## P0：外部内测前必须完成
 
@@ -56,12 +56,12 @@
 ### 3. 数据库与发布环境
 
 - [x] 为 `user_custom_foods.status` 增加版本化迁移，并通过空数据库迁移集成测试验证
-- [ ] 部署独立、可持久化、仅通过 HTTPS 访问的 staging；验证 `DATABASE_PATH`、CORS、JWT、管理员初始密码和反向代理设置
+- [ ] [#105](https://github.com/AdlinZ/DietDigiDose/issues/105) 部署独立、可持久化、仅通过 HTTPS 访问的 staging；验证 `DATABASE_PATH`、CORS、JWT、管理员初始密码和反向代理设置
 - [x] 移除候选配置中的明文 HTTP 地址与不安全网络开关；EAS 候选/生产构建缺少 HTTPS API 时直接失败
 - [x] 补齐 iOS bundle identifier、构建号与 EAS preview/production 双端配置；候选构建缺少 HTTPS API 时直接失败
 - [x] 独立 `preview-http` 与 simulator profile 才允许显式 HTTP，并由配置回归测试锁定正式 preview/production profile 的 HTTPS 约束；HTTP 包仅用于受控测试账号
-- [ ] 基于同一提交和同一 staging 后端生成 iOS/Android 双端候选包
-- [ ] 完成备份、隔离恢复、健康检查、登录、库存读取和管理统计演练，记录恢复时间与回滚步骤
+- [ ] [#107](https://github.com/AdlinZ/DietDigiDose/issues/107) 基于同一提交和同一 staging 后端生成 iOS/Android 双端候选包
+- [ ] [#106](https://github.com/AdlinZ/DietDigiDose/issues/106) 完成备份、隔离恢复、健康检查、登录、库存读取和管理统计演练，记录恢复时间与回滚步骤
 
 ## P1：5～10 人封闭内测前完成
 
@@ -93,7 +93,7 @@
 - [ ] 在 iOS/Android 真机验证系统字体放大、VoiceOver 与 TalkBack 阅读顺序
 - [x] 为社区、菜谱和管理端用户/食谱/社区列表补不透明游标分页，并覆盖连续页无重复测试
 - [x] 新增认证、限流、MIME/魔数/大小校验的社区对象存储上传路径，新发布内容禁止把 Base64 图片写入数据库
-- [ ] 在 staging 创建受控媒体 bucket，并迁移已有内联社区图片后核验访问与删除策略
+- [ ] [#108](https://github.com/AdlinZ/DietDigiDose/issues/108) 在 staging 创建受控媒体 bucket，并迁移已有内联社区图片后核验访问与删除策略
 - [ ] 只有当单机 SQLite 的并发、备份窗口或部署方式成为实测瓶颈时，再迁移 Postgres 和任务队列
 - [ ] 根据真实漏斗决定优化方向，不以页面数量或 AI 功能数量作为阶段成果
 

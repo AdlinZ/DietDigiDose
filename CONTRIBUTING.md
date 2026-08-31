@@ -5,9 +5,13 @@ DietDigiDose 是基于 pnpm workspace 的 Expo、Express.js 与 React 管理端�
 ## 本地开发
 
 ```bash
+corepack enable
+corepack prepare pnpm@10.18.0 --activate
 pnpm install --frozen-lockfile
 pnpm dev
 ```
+
+仓库固定使用 Node.js 22.23.2 与 pnpm 10.18.0。请让 nvm、fnm、mise 或 asdf 读取根目录的 `.nvmrc`/`.node-version`；不要使用其他 Node 主版本生成锁文件或候选构建。
 
 前端依赖使用 `client` 目录中的 `npx expo install <package>` 安装；服务端依赖使用 `pnpm add <package>`。不要使用 npm 或 yarn 修改依赖锁文件。
 
@@ -23,6 +27,7 @@ pnpm dev
 提交 PR 前至少运行：
 
 ```bash
+pnpm -w validate:toolchain
 pnpm -w lint:all
 pnpm -w test:all
 ```

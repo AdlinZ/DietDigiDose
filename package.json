@@ -13,6 +13,7 @@
     "build:server": "pnpm --dir ./server build",
     "staging:smoke": "node deploy/staging-smoke.mjs",
     "build:admin": "pnpm --dir ./admin build",
+    "validate:toolchain": "node scripts/validate-toolchain.mjs",
     "validate:release": "node scripts/validate-release-metadata.mjs",
     "preinstall": "npx only-allow pnpm",
     "lint:client": "pnpm --dir ./client lint",
@@ -29,6 +30,7 @@
   "devDependencies": {},
   "packageManager": "pnpm@10.18.0",
   "engines": {
-    "pnpm": ">=9.0.0"
+    "node": "22.23.2",
+    "pnpm": "10.18.0"
   }
 }

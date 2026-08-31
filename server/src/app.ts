@@ -23,7 +23,7 @@ import kitchenwareRoutes from "./routes/kitchenware.js";
 import notificationsRoutes from "./routes/notifications.js";
 import mediaRoutes from "./routes/media.js";
 import householdRoutes from "./routes/households.js";
-import feedbackRoutes from "./routes/feedback.js";
+import feedbackRoutes from "./modules/feedback/index.js";
 import webhookRoutes from "./routes/webhooks.js";
 import { db, initDatabase } from "./storage/db.js";
 import { errorHandler, notFoundHandler, sendError } from "./utils/http.js";

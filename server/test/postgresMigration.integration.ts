@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
 import {
   exportMigrationArchive,
@@ -146,6 +147,24 @@ try {
   assert(history?.some((entry) => entry.action === "consume_partial"));
   assert.deepEqual(await inventoryRepository.remove(user.id, created), { kind: "removed" });
 
+  const feedbackRepository = new PostgresFeedbackRepository(pool);
+  const feedbackId = await feedbackRepository.create(user.id, {
+    category: "suggestion",
+    content: "希望增加批量录入功能",
+    context: { page: "inventory", recipeId: 12 },
+  });
+  const feedback = await pool.query(`
+    SELECT user_id, category, content, context_json, status
+    FROM user_feedback WHERE id = $1
+  `, [feedbackId]);
+  assert.deepEqual(feedback.rows[0], {
+    user_id: user.id,
+    category: "suggestion",
+    content: "希望增加批量录入功能",
+    context_json: { page: "inventory", recipeId: 12 },
+    status: "open",
+  });
+
   await pool.query(`DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dietdigidose_app_test') THEN
       CREATE ROLE dietdigidose_app_test NOLOGIN;
@@ -180,6 +199,7 @@ try {
     schema: archive.baselineSchemaSha256,
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
+    postgresFeedbackRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,
   }, null, 2));

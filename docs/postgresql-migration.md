@@ -4,6 +4,15 @@ PostgreSQL 16+ and the generated Drizzle schema are the target database authorit
 
 This is a staged cutover. Do not point production at PostgreSQL until every domain has a PostgreSQL repository and both staging rehearsals below pass. CI prevents new direct SQLite access and verifies that the generated baseline has not drifted.
 
+## Runtime adapter progress
+
+The application still selects SQLite until every write path can switch in one coordinated deployment. Completed driver-neutral domains are:
+
+- Inventory: SQLite and PostgreSQL repositories, including transactions, idempotency, optimistic concurrency, and concurrent PostgreSQL integration coverage.
+- User feedback: SQLite and PostgreSQL repositories with structured JSON context and PostgreSQL integration coverage.
+
+Each migrated domain keeps SQL inside its driver adapter; routes and services depend only on the repository port. The boundary ratchet must be updated only when a direct SQLite call is removed or moved into one of these adapters.
+
 ## Type and value mapping
 
 | SQLite final type/value | PostgreSQL target | Export transformation |

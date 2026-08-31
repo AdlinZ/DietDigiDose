@@ -1,13 +1,17 @@
-import { useCallback, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo, useState, type SetStateAction } from "react";
 
 import { inventoryApi, kitchenwareApi, recipesApi } from "@/services/api";
 import type { ApiFetch } from "@/services/api/client";
-import { getUserStorageKey } from "@/utils/userStorage";
 import { appendUniqueItemsByKey } from "@/utils/pagination";
+import { getUserStorageKey } from "@/utils/userStorage";
+import { inventoryQueryKeys } from "./queryKeys";
 import type { InventoryItem, KitchenwareCatalogItem, KitchenwareItem, Recipe } from "./types";
 
 type InventorySection = "inventory" | "recipes" | "kitchenware";
+type CachedResult<T> = { value: T; offlineMessage?: string };
+type RecipePage = { items: Recipe[]; total?: number; nextCursor: string | null; offlineMessage?: string };
 
 const OFFLINE_RECIPES_CACHE_KEY = "offline_cache_recipes";
 const OFFLINE_INVENTORY_CACHE_KEY = "offline_cache_inventory";
@@ -18,6 +22,15 @@ export interface RecipeCatalogQuery {
   search?: string;
   maxCookTime?: number;
   scope?: "official" | "personal";
+}
+
+function normalizeRecipeQuery(query: RecipeCatalogQuery): RecipeCatalogQuery {
+  return {
+    category: query.category?.trim() || undefined,
+    search: query.search?.trim() || undefined,
+    maxCookTime: query.maxCookTime && query.maxCookTime > 0 ? query.maxCookTime : undefined,
+    scope: query.scope,
+  };
 }
 
 function isDefaultRecipeQuery(query: RecipeCatalogQuery) {
@@ -34,196 +47,156 @@ export function buildRecipePageQuery(query: RecipeCatalogQuery, cursor?: string 
   return `?${params.toString()}`;
 }
 
-export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, userId?: number | null) {
-  const [items, setItems] = useState<InventoryItem[]>([]);
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [recipeTotal, setRecipeTotal] = useState(0);
-  const [recipeNextCursor, setRecipeNextCursor] = useState<string | null>(null);
-  const [recipeLibrarySummary, setRecipeLibrarySummary] = useState({ official: 0, community: 0, personal: 0, favorites: 0 });
-  const [kitchenware, setKitchenware] = useState<KitchenwareItem[]>([]);
-  const [kitchenwareCatalog, setKitchenwareCatalog] = useState<KitchenwareCatalogItem[]>([]);
-  const [loadingItems, setLoadingItems] = useState(true);
-  const [loadingRecipes, setLoadingRecipes] = useState(false);
-  const [loadingMoreRecipes, setLoadingMoreRecipes] = useState(false);
-  const [loadingKitchenware, setLoadingKitchenware] = useState(true);
-  const [sectionErrors, setSectionErrors] = useState<Partial<Record<InventorySection, string>>>({});
-  const inventoryCacheKey = getUserStorageKey(OFFLINE_INVENTORY_CACHE_KEY, userId);
-  const recipesRef = useRef<Recipe[]>([]);
-  const recipeQueryRef = useRef<RecipeCatalogQuery>({});
-  const recipeNextCursorRef = useRef<string | null>(null);
-  const recipeGenerationRef = useRef(0);
-  const loadingMoreRecipesRef = useRef(false);
+function sameRecipeQuery(left: RecipeCatalogQuery, right: RecipeCatalogQuery) {
+  return left.category === right.category
+    && left.search === right.search
+    && left.maxCookTime === right.maxCookTime
+    && left.scope === right.scope;
+}
 
-  const reloadRecipes = useCallback(async (query: RecipeCatalogQuery = recipeQueryRef.current) => {
-    const normalizedQuery = {
-      category: query.category?.trim() || undefined,
-      search: query.search?.trim() || undefined,
-      maxCookTime: query.maxCookTime && query.maxCookTime > 0 ? query.maxCookTime : undefined,
-      scope: query.scope,
-    };
-    recipeQueryRef.current = normalizedQuery;
-    const generation = recipeGenerationRef.current + 1;
-    recipeGenerationRef.current = generation;
-    recipeNextCursorRef.current = null;
-    setRecipeNextCursor(null);
-    loadingMoreRecipesRef.current = false;
-    setLoadingMoreRecipes(false);
-    setLoadingRecipes(true);
-    try {
-      const page = await recipesApi.listPage<Recipe>(buildRecipePageQuery(normalizedQuery), isAuthenticated ? authFetch : undefined);
-      if (recipeGenerationRef.current !== generation) return;
-      const validRecipes = Array.isArray(page.items) ? page.items : [];
-      recipesRef.current = validRecipes;
-      setRecipes(validRecipes);
-      setRecipeTotal(Number.isFinite(Number(page.total)) ? Math.max(0, Number(page.total)) : validRecipes.length);
-      recipeNextCursorRef.current = page.nextCursor || null;
-      setRecipeNextCursor(page.nextCursor || null);
-      setSectionErrors((current) => ({ ...current, recipes: undefined }));
-      if (isDefaultRecipeQuery(normalizedQuery)) {
-        void AsyncStorage.setItem(OFFLINE_RECIPES_CACHE_KEY, JSON.stringify(validRecipes));
+export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, userId?: number | null) {
+  const queryClient = useQueryClient();
+  const inventoryCacheKey = getUserStorageKey(OFFLINE_INVENTORY_CACHE_KEY, userId);
+  const personalInventoryKey = useMemo(() => inventoryQueryKeys.personal(userId), [userId]);
+  const [recipeQuery, setRecipeQuery] = useState<RecipeCatalogQuery>({});
+
+  const inventoryQuery = useQuery({
+    queryKey: personalInventoryKey,
+    enabled: isAuthenticated,
+    queryFn: async (): Promise<CachedResult<InventoryItem[]>> => {
+      try {
+        const value = await inventoryApi.list(authFetch);
+        if (inventoryCacheKey) void AsyncStorage.setItem(inventoryCacheKey, JSON.stringify(value));
+        return { value };
+      } catch (error) {
+        const cached = inventoryCacheKey ? await AsyncStorage.getItem(inventoryCacheKey) : null;
+        if (!cached) throw error;
+        const parsed: unknown = JSON.parse(cached);
+        return {
+          value: Array.isArray(parsed) ? parsed as InventoryItem[] : [],
+          offlineMessage: "离线模式 · 已载入本地食材快照",
+        };
       }
-    } catch (error) {
-      if (recipeGenerationRef.current !== generation) return;
-      console.error("Fetch recipes error:", error);
-      if (isDefaultRecipeQuery(normalizedQuery)) {
-        try {
-          const cached = await AsyncStorage.getItem(OFFLINE_RECIPES_CACHE_KEY);
-          if (cached) {
-            const cachedRecipes = JSON.parse(cached) as Recipe[];
-            recipesRef.current = Array.isArray(cachedRecipes) ? cachedRecipes : [];
-            setRecipes(recipesRef.current);
-            setRecipeTotal(recipesRef.current.length);
-            setSectionErrors((current) => ({ ...current, recipes: "离线模式 · 已载入本地历史食谱缓存" }));
-            return;
-          }
-        } catch {
-          // Fall through to the regular unavailable state.
+    },
+  });
+
+  const recipesQuery = useInfiniteQuery({
+    queryKey: inventoryQueryKeys.recipeCatalog(isAuthenticated ? userId : null, recipeQuery),
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam }): Promise<RecipePage> => {
+      try {
+        const page = await recipesApi.listPage<Recipe>(
+          buildRecipePageQuery(recipeQuery, pageParam),
+          isAuthenticated ? authFetch : undefined,
+        );
+        const items = Array.isArray(page.items) ? page.items : [];
+        if (!pageParam && isDefaultRecipeQuery(recipeQuery)) {
+          void AsyncStorage.setItem(OFFLINE_RECIPES_CACHE_KEY, JSON.stringify(items));
         }
+        return { ...page, items };
+      } catch (error) {
+        if (pageParam || !isDefaultRecipeQuery(recipeQuery)) throw error;
+        const cached = await AsyncStorage.getItem(OFFLINE_RECIPES_CACHE_KEY);
+        if (!cached) throw error;
+        const parsed: unknown = JSON.parse(cached);
+        const items = Array.isArray(parsed) ? parsed as Recipe[] : [];
+        return { items, total: items.length, nextCursor: null, offlineMessage: "离线模式 · 已载入本地历史食谱缓存" };
       }
-      recipesRef.current = [];
-      setRecipes([]);
-      setRecipeTotal(0);
-      setSectionErrors((current) => ({ ...current, recipes: "菜谱暂时无法加载，库存功能仍可使用" }));
-    } finally {
-      if (recipeGenerationRef.current === generation) setLoadingRecipes(false);
-    }
-  }, [authFetch, isAuthenticated]);
+    },
+    getNextPageParam: (page) => page.nextCursor || undefined,
+  });
+
+  const kitchenwareQuery = useQuery({
+    queryKey: inventoryQueryKeys.kitchenware(userId),
+    enabled: isAuthenticated,
+    queryFn: () => kitchenwareApi.list<KitchenwareItem>(authFetch),
+  });
+  const kitchenwareCatalogQuery = useQuery({
+    queryKey: inventoryQueryKeys.kitchenwareCatalog,
+    enabled: isAuthenticated,
+    queryFn: () => kitchenwareApi.catalog<KitchenwareCatalogItem>(authFetch),
+  });
+  const recipeLibrarySummaryQuery = useQuery({
+    queryKey: inventoryQueryKeys.recipeLibrarySummary(userId),
+    enabled: isAuthenticated,
+    queryFn: () => recipesApi.librarySummary(authFetch),
+  });
+
+  const items = inventoryQuery.data?.value ?? [];
+  const setItems = useCallback((next: SetStateAction<InventoryItem[]>) => {
+    queryClient.setQueryData<CachedResult<InventoryItem[]>>(personalInventoryKey, (current) => {
+      const previous = current?.value ?? [];
+      return { value: typeof next === "function" ? next(previous) : next };
+    });
+  }, [personalInventoryKey, queryClient]);
+
+  const recipes = useMemo(() => recipesQuery.data?.pages.reduce<Recipe[]>(
+    (all, page) => appendUniqueItemsByKey(all, page.items, (recipe) => recipe.id),
+    [],
+  ) ?? [], [recipesQuery.data]);
+  const firstRecipePage = recipesQuery.data?.pages[0];
+  const recipeTotal = Number.isFinite(Number(firstRecipePage?.total))
+    ? Math.max(0, Number(firstRecipePage?.total))
+    : recipes.length;
+
+  const refetchRecipes = recipesQuery.refetch;
+  const fetchNextRecipePage = recipesQuery.fetchNextPage;
+  const refetchInventory = inventoryQuery.refetch;
+  const refetchKitchenware = kitchenwareQuery.refetch;
+  const refetchKitchenwareCatalog = kitchenwareCatalogQuery.refetch;
+  const refetchRecipeLibrarySummary = recipeLibrarySummaryQuery.refetch;
+  const reloadRecipes = useCallback(async (next: RecipeCatalogQuery = recipeQuery) => {
+    const normalized = normalizeRecipeQuery(next);
+    if (sameRecipeQuery(normalized, recipeQuery)) await refetchRecipes();
+    else setRecipeQuery(normalized);
+  }, [recipeQuery, refetchRecipes]);
 
   const loadMoreRecipes = useCallback(async () => {
-    const cursor = recipeNextCursorRef.current;
-    if (!cursor || loadingMoreRecipesRef.current) return;
-    const generation = recipeGenerationRef.current;
-    loadingMoreRecipesRef.current = true;
-    setLoadingMoreRecipes(true);
-    try {
-      const page = await recipesApi.listPage<Recipe>(buildRecipePageQuery(recipeQueryRef.current, cursor), isAuthenticated ? authFetch : undefined);
-      if (recipeGenerationRef.current !== generation) return;
-      const incoming = Array.isArray(page.items) ? page.items : [];
-      const mergedRecipes = appendUniqueItemsByKey(recipesRef.current, incoming, (recipe) => recipe.id);
-      recipesRef.current = mergedRecipes;
-      setRecipes(mergedRecipes);
-      setRecipeTotal((current) => Number.isFinite(Number(page.total))
-        ? Math.max(0, Number(page.total))
-        : Math.max(current, mergedRecipes.length));
-      recipeNextCursorRef.current = page.nextCursor || null;
-      setRecipeNextCursor(page.nextCursor || null);
-      setSectionErrors((current) => ({ ...current, recipes: undefined }));
-      if (isDefaultRecipeQuery(recipeQueryRef.current)) {
-        void AsyncStorage.setItem(OFFLINE_RECIPES_CACHE_KEY, JSON.stringify(mergedRecipes));
-      }
-    } catch (error) {
-      if (recipeGenerationRef.current === generation) {
-        console.error("Fetch more recipes error:", error);
-        setSectionErrors((current) => ({ ...current, recipes: "后续菜谱加载失败，点击可重试" }));
-      }
-    } finally {
-      if (recipeGenerationRef.current === generation) {
-        loadingMoreRecipesRef.current = false;
-        setLoadingMoreRecipes(false);
-      }
-    }
-  }, [authFetch, isAuthenticated]);
+    if (recipesQuery.hasNextPage && !recipesQuery.isFetchingNextPage) await fetchNextRecipePage();
+  }, [fetchNextRecipePage, recipesQuery.hasNextPage, recipesQuery.isFetchingNextPage]);
 
   const refresh = useCallback(async () => {
-    void reloadRecipes(recipeQueryRef.current);
+    const operations: Array<Promise<unknown>> = [refetchRecipes()];
+    if (isAuthenticated) operations.push(
+      refetchInventory(),
+      refetchKitchenware(),
+      refetchKitchenwareCatalog(),
+      refetchRecipeLibrarySummary(),
+    );
+    await Promise.allSettled(operations);
+  }, [
+    isAuthenticated,
+    refetchInventory,
+    refetchKitchenware,
+    refetchKitchenwareCatalog,
+    refetchRecipeLibrarySummary,
+    refetchRecipes,
+  ]);
 
-    if (!isAuthenticated) {
-      setItems([]);
-      setKitchenware([]);
-      setKitchenwareCatalog([]);
-      setLoadingItems(false);
-      setLoadingKitchenware(false);
-      setSectionErrors((current) => ({ ...current, inventory: undefined, kitchenware: undefined }));
-      return;
-    }
-
-    setLoadingItems(true);
-    setLoadingKitchenware(true);
-    const [inventoryResult, kitchenwareResult, catalogResult, librarySummaryResult] = await Promise.allSettled([
-      inventoryApi.list(authFetch),
-      kitchenwareApi.list<KitchenwareItem>(authFetch),
-      kitchenwareApi.catalog<KitchenwareCatalogItem>(authFetch),
-      recipesApi.librarySummary(authFetch),
-    ]);
-
-    if (librarySummaryResult.status === "fulfilled") {
-      setRecipeLibrarySummary(librarySummaryResult.value);
-    }
-
-    if (inventoryResult.status === "fulfilled") {
-      const validItems = Array.isArray(inventoryResult.value) ? inventoryResult.value : [];
-      setItems(validItems);
-      setSectionErrors((current) => ({ ...current, inventory: undefined }));
-      if (inventoryCacheKey) void AsyncStorage.setItem(inventoryCacheKey, JSON.stringify(validItems));
-    } else {
-      console.error("Fetch inventory error:", inventoryResult.reason);
-      try {
-        const cached = inventoryCacheKey ? await AsyncStorage.getItem(inventoryCacheKey) : null;
-        if (cached) {
-          setItems(JSON.parse(cached));
-          setSectionErrors((current) => ({ ...current, inventory: "离线模式 · 已载入本地食材快照" }));
-        } else {
-          setSectionErrors((current) => ({ ...current, inventory: "库存暂时无法加载，菜谱与厨具仍可使用" }));
-        }
-      } catch {
-        setSectionErrors((current) => ({ ...current, inventory: "库存暂时无法加载，菜谱与厨具仍可使用" }));
-      }
-    }
-
-    if (kitchenwareResult.status === "fulfilled") {
-      setKitchenware(Array.isArray(kitchenwareResult.value) ? kitchenwareResult.value : []);
-    }
-    if (catalogResult.status === "fulfilled") {
-      setKitchenwareCatalog(Array.isArray(catalogResult.value) ? catalogResult.value : []);
-    }
-    if (kitchenwareResult.status === "rejected" || catalogResult.status === "rejected") {
-      const error = kitchenwareResult.status === "rejected"
-        ? kitchenwareResult.reason
-        : catalogResult.status === "rejected"
-          ? catalogResult.reason
-          : undefined;
-      console.error("Fetch kitchenware error:", error);
-      setSectionErrors((current) => ({ ...current, kitchenware: "部分厨具数据暂时无法加载，其他功能仍可使用" }));
-    } else {
-      setSectionErrors((current) => ({ ...current, kitchenware: undefined }));
-    }
-    setLoadingItems(false);
-    setLoadingKitchenware(false);
-  }, [authFetch, inventoryCacheKey, isAuthenticated, reloadRecipes]);
+  const sectionErrors: Partial<Record<InventorySection, string>> = {};
+  if (inventoryQuery.data?.offlineMessage) sectionErrors.inventory = inventoryQuery.data.offlineMessage;
+  else if (inventoryQuery.isError) sectionErrors.inventory = "库存暂时无法加载，菜谱与厨具仍可使用";
+  const offlineRecipePage = recipesQuery.data?.pages.find((page) => page.offlineMessage);
+  if (offlineRecipePage?.offlineMessage) sectionErrors.recipes = offlineRecipePage.offlineMessage;
+  else if (recipesQuery.isFetchNextPageError) sectionErrors.recipes = "后续菜谱加载失败，点击可重试";
+  else if (recipesQuery.isError) sectionErrors.recipes = "菜谱暂时无法加载，库存功能仍可使用";
+  if (kitchenwareQuery.isError || kitchenwareCatalogQuery.isError) {
+    sectionErrors.kitchenware = "部分厨具数据暂时无法加载，其他功能仍可使用";
+  }
 
   return {
     items,
     setItems,
     recipes,
     recipeTotal,
-    recipeLibrarySummary,
-    hasMoreRecipes: recipeNextCursor !== null,
-    kitchenware,
-    kitchenwareCatalog,
-    loadingItems,
-    loadingRecipes,
-    loadingMoreRecipes,
-    loadingKitchenware,
+    recipeLibrarySummary: recipeLibrarySummaryQuery.data ?? { official: 0, community: 0, personal: 0, favorites: 0 },
+    hasMoreRecipes: Boolean(recipesQuery.hasNextPage),
+    kitchenware: kitchenwareQuery.data ?? [],
+    kitchenwareCatalog: kitchenwareCatalogQuery.data ?? [],
+    loadingItems: inventoryQuery.isLoading,
+    loadingRecipes: recipesQuery.isLoading,
+    loadingMoreRecipes: recipesQuery.isFetchingNextPage,
+    loadingKitchenware: kitchenwareQuery.isLoading || kitchenwareCatalogQuery.isLoading,
     sectionErrors,
     refresh,
     reloadRecipes,

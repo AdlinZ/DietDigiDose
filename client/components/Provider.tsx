@@ -4,16 +4,19 @@ import { View } from 'react-native';
 import { WebOnlyPrettyScrollbar } from './PrettyScrollbar'
 import { NotificationLifecycle } from './NotificationLifecycle';
 import { ShareLinkLifecycle } from './ShareLinkLifecycle';
+import { ServerStateProvider } from './ServerStateProvider';
 
 function Provider({ children }: { children: ReactNode }) {
   return <WebOnlyPrettyScrollbar>
-      <AuthProvider>
-        <View style={{ flex: 1 }}>
-          <NotificationLifecycle />
-          <ShareLinkLifecycle />
-          {children}
-        </View>
-      </AuthProvider>
+      <ServerStateProvider>
+        <AuthProvider>
+          <View style={{ flex: 1 }}>
+            <NotificationLifecycle />
+            <ShareLinkLifecycle />
+            {children}
+          </View>
+        </AuthProvider>
+      </ServerStateProvider>
     </WebOnlyPrettyScrollbar>
 }
 

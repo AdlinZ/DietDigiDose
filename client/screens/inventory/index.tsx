@@ -34,10 +34,14 @@ import {
 } from "@/utils/userStorage";
 import { dateKeyAfterDays } from "@/utils/date";
 import { daysUntilDateKey, getExpirationBadgeConfig, getInventoryStatus } from "@/utils/inventory";
-import { aiApi, authApi, cookingQueueApi, foodsApi, healthApi, householdApi, insightsApi, inventoryApi, kitchenwareApi, recommendationsApi, recipesApi, shoppingListApi, type Household, type HouseholdActivityLog, type HouseholdInventoryItem, type RecipeRecommendationItem, type RecipeRecommendationPage } from "@/services/api";
+import { aiApi, authApi, cookingQueueApi, foodsApi, healthApi, householdApi, insightsApi, recommendationsApi, recipesApi, shoppingListApi, type Household, type HouseholdActivityLog, type HouseholdInventoryItem, type RecipeRecommendationItem, type RecipeRecommendationPage } from "@/services/api";
 import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, Recipe, StorageLocation } from "./types";
 import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, mergeDetectedFoods, normalizeDetectedFoods } from "./scan";
 import { useInventoryData } from "./useInventoryData";
+import { useInventoryMutations } from "./useInventoryMutations";
+import { InventorySegmentTabs, type InventorySegment } from "./InventorySegmentTabs";
+import { KitchenwareSection, type KitchenwareStarterKit } from "./KitchenwareSection";
+import { InventoryEntryForm } from "./InventoryEntryForm";
 import { normalizeShoppingItems } from "@/utils/shoppingList";
 import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
 import {
@@ -71,18 +75,6 @@ const KITCHENWARE_STARTER_KITS = [
   { name: "轻食减脂", items: ["空气炸锅", "平底锅", "电子秤", "玻璃保鲜盒"] },
   { name: "中式家常", items: ["炒锅", "汤锅", "蒸锅", "菜刀", "砧板"] },
   { name: "烘焙入门", items: ["烤箱", "烤盘", "蛋糕模具", "打蛋器", "硅胶刮刀"] },
-] as const;
-
-const INVENTORY_ENTRY_CATEGORIES = [
-  "蔬菜",
-  "肉食",
-  "水果",
-  "乳制品",
-  "粮油干货",
-  "水产海鲜",
-  "调味品",
-  "休闲零食",
-  "熟食面点",
 ] as const;
 
 export default function InventoryScreen() {
@@ -119,6 +111,7 @@ export default function InventoryScreen() {
     reloadRecipes,
     loadMoreRecipes,
   } = useInventoryData(authFetch, isAuthenticated, user?.id);
+  const inventoryMutations = useInventoryMutations(authFetch, user?.id);
   const [healthProfile, setHealthProfile] = useState<HealthProfile | null>(null);
 
   useEffect(() => {
@@ -130,7 +123,7 @@ export default function InventoryScreen() {
   }, [authFetch, isAuthenticated]);
 
   // Top Level Segment State
-  const [activeSegment, setActiveSegment] = useState<"inventory" | "recipes" | "kitchenware">("inventory");
+  const [activeSegment, setActiveSegment] = useState<InventorySegment>("inventory");
 
   useEffect(() => {
     if (highlightItemId) setActiveSegment("inventory");
@@ -180,10 +173,9 @@ export default function InventoryScreen() {
           image_url: kwImageUrl.trim() || null,
           purchase_date: kwPurchaseDate || null,
       };
-      if (editingKitchenware) await kitchenwareApi.update(authFetch, editingKitchenware.id, payload);
-      else await kitchenwareApi.create(authFetch, payload);
+      if (editingKitchenware) await inventoryMutations.updateKitchenware.mutateAsync({ id: editingKitchenware.id, input: payload });
+      else await inventoryMutations.createKitchenware.mutateAsync(payload);
       setKitchenwareModalVisible(false);
-      await fetchData();
       Alert.alert("保存成功", `厨具【${kwName}】已保存到我的装备库。`);
     } catch {
       Alert.alert("保存失败", "网络异常，请稍后重试");
@@ -199,11 +191,10 @@ export default function InventoryScreen() {
     }
     try {
       setSavingKitchenware(true);
-      await kitchenwareApi.create(authFetch, {
+      await inventoryMutations.createKitchenware.mutateAsync({
         name: item.name, category: item.category, status: "良好", note: item.care_note || "", image_url: null, purchase_date: null,
       });
       setSelectedCatalogKitchenware(null);
-      await fetchData();
       Alert.alert("已加入装备库", `已添加【${item.name}】，现在可用于食谱匹配和保养提醒。`);
     } catch {
       Alert.alert("添加失败", "网络异常，请稍后重试");
@@ -212,7 +203,7 @@ export default function InventoryScreen() {
     }
   };
 
-  const addStarterKit = async (kit: typeof KITCHENWARE_STARTER_KITS[number]) => {
+  const addStarterKit = async (kit: KitchenwareStarterKit) => {
     const targets = kitchenwareCatalog.filter((item) => kit.items.some((name) => name === item.name) && !kitchenware.some((owned) => owned.name === item.name));
     if (!targets.length) {
       Alert.alert("已配置完成", `「${kit.name}」套装中的厨具已都在你的装备库。`);
@@ -220,10 +211,9 @@ export default function InventoryScreen() {
     }
     try {
       setAddingStarterKit(kit.name);
-      await Promise.all(targets.map((item) => kitchenwareApi.create(authFetch, {
+      await Promise.all(targets.map((item) => inventoryMutations.createKitchenware.mutateAsync({
         name: item.name, category: item.category, status: "良好", note: item.care_note || "", image_url: null, purchase_date: null,
       })));
-      await fetchData();
       Alert.alert("套装已加入", `已将 ${targets.length} 件「${kit.name}」装备加入你的资产库。`);
     } catch {
       Alert.alert("添加失败", "部分厨具可能未保存，请刷新后重试。");
@@ -871,7 +861,7 @@ export default function InventoryScreen() {
         };
       });
 
-      await inventoryApi.bulkIntake(authFetch, {
+      await inventoryMutations.bulkIntake.mutateAsync({
         idempotency_key: intakeBatchKey,
         source: pendingIntakeSource,
         source_reference: pendingScanJobId,
@@ -880,8 +870,6 @@ export default function InventoryScreen() {
       for (const item of itemsToImport) {
         await addInventoryLog({ foodName: item.food_name, action: "add", quantity: item.quantity, storageLocation: item.storage_location }, user?.id);
       }
-      await fetchData();
-
       if (inventoryScanJobStorageKey) {
         await AsyncStorage.removeItem(inventoryScanJobStorageKey);
       }
@@ -1145,13 +1133,11 @@ export default function InventoryScreen() {
         await householdApi.inventoryCreate(authFetch, activeHousehold.id, payload);
         await loadFamilyInventory();
       } else if (editingItem) {
-        await inventoryApi.update(authFetch, editingItem.id, payload);
+        await inventoryMutations.updateInventory.mutateAsync({ id: editingItem.id, input: payload });
         await addInventoryLog({ foodName: payload.food_name, action: "edit", quantity: payload.quantity, storageLocation: payload.storage_location }, user?.id);
-        await fetchData();
       } else {
-        await inventoryApi.create(authFetch, payload);
+        await inventoryMutations.createInventory.mutateAsync(payload);
         await addInventoryLog({ foodName: payload.food_name, action: "add", quantity: payload.quantity, storageLocation: payload.storage_location }, user?.id);
-        await fetchData();
       }
       if (!editingItem && pendingScanJobId) {
         if (inventoryScanJobStorageKey) {
@@ -1179,8 +1165,7 @@ export default function InventoryScreen() {
               await householdApi.inventoryRemove(authFetch, activeHousehold.id, id);
               await loadFamilyInventory();
             } else {
-              await inventoryApi.remove(authFetch, id);
-              await fetchData();
+              await inventoryMutations.removeInventory.mutateAsync(id);
             }
             setModalVisible(false);
             setEditingItem(null);
@@ -1229,7 +1214,7 @@ export default function InventoryScreen() {
       if (activeHousehold) {
         await householdApi.inventoryUpdate(authFetch, activeHousehold.id, item.id, { storage_location: storageLocation });
       } else {
-        await inventoryApi.update(authFetch, item.id, { storage_location: storageLocation });
+        await inventoryMutations.updateInventory.mutateAsync({ id: item.id, input: { storage_location: storageLocation } });
       }
     } catch {
       setItems((currentItems) =>
@@ -1280,8 +1265,7 @@ export default function InventoryScreen() {
 
   const handleMaintainKitchenware = async (item: KitchenwareItem) => {
     try {
-      await kitchenwareApi.maintain(authFetch, item.id);
-      await fetchData();
+      await inventoryMutations.maintainKitchenware.mutateAsync(item.id);
       Alert.alert("保养完成", `已更新【${item.name}】的保养记录。`);
     } catch {
       Alert.alert("更新失败", "网络异常，请稍后重试");
@@ -1296,8 +1280,7 @@ export default function InventoryScreen() {
         style: "destructive",
         onPress: async () => {
           try {
-            await kitchenwareApi.remove(authFetch, item.id);
-            await fetchData();
+            await inventoryMutations.removeKitchenware.mutateAsync(item.id);
           } catch {
             Alert.alert("移除失败", "请稍后重试");
           }
@@ -1343,42 +1326,11 @@ export default function InventoryScreen() {
         className="bg-canvas"
       >
         {/* 三类资产是页面唯一顶栏，滚动时保持吸顶。 */}
-        <View className="border-b border-line/70 bg-canvas/95 px-4 py-2">
-          <View className="h-11 flex-row items-center gap-1">
-            {[
-              { key: "inventory" as const, label: "食材", count: items.length, icon: "boxes-stacked" },
-              { key: "recipes" as const, label: "食谱", count: recipeTotal, icon: "utensils" },
-              { key: "kitchenware" as const, label: "厨具", count: kitchenware.length, icon: "fire-burner" },
-            ].map((segment) => {
-              const isActive = activeSegment === segment.key;
-              return (
-                <TouchableOpacity
-                  key={segment.key}
-                  onPress={() => setActiveSegment(segment.key)}
-                  accessibilityRole="tab"
-                  accessibilityState={{ selected: isActive }}
-                  className={`flex-1 flex-row items-center justify-center gap-1.5 rounded-full py-2.5 ${
-                    isActive ? "bg-brand-fill shadow-xs" : "bg-transparent"
-                  }`}
-                >
-                  <FontAwesome6
-                    name={segment.icon as any}
-                    size={12}
-                    colorClassName={isActive ? "accent-on-brand" : "accent-copy-muted"}
-                  />
-                  <Text className={`text-xs ${isActive ? "font-black text-white" : "font-bold text-copy-muted"}`}>
-                    {segment.label}
-                  </Text>
-                  <View className={`min-w-5 items-center rounded-full px-1.5 py-0.5 ${isActive ? "bg-surface/20" : "bg-background-secondary"}`}>
-                    <Text className={`text-[9px] font-black ${isActive ? "text-white" : "text-copy-muted"}`}>
-                      {segment.count}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+        <InventorySegmentTabs
+          active={activeSegment}
+          counts={{ inventory: items.length, recipes: recipeTotal, kitchenware: kitchenware.length }}
+          onChange={setActiveSegment}
+        />
 
         {sectionErrors[activeSegment] ? (
           <TouchableOpacity
@@ -2272,218 +2224,26 @@ export default function InventoryScreen() {
           </View>
         )}
 
-        {/* CONTENT SEGMENT 3: KITCHENWARE */}
-        {activeSegment === "kitchenware" && !isAuthenticated && (
-          <View className="mx-5 mt-8 items-center rounded-[28px] border border-line bg-surface px-6 py-10">
-            <View className="mb-4 h-14 w-14 items-center justify-center rounded-full bg-brand/10">
-              <FontAwesome6 name="fire-burner" size={22} colorClassName="accent-brand" />
-            </View>
-            <Text className="text-base font-black text-ink">登录后管理你的厨具</Text>
-            <Text className="mt-2 text-center text-xs leading-5 text-copy-muted">
-              记录锅具、刀具和小家电，获得更匹配的食谱与保养提醒。
-            </Text>
-            <TouchableOpacity
-              onPress={() => router.push("/login")}
-              className="mt-5 rounded-2xl bg-brand-fill px-8 py-3"
-            >
-              <Text className="text-sm font-black text-white">立即登录</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {activeSegment === "kitchenware" && isAuthenticated && (
-          <View className="px-4 pt-4">
-            {/* 厨具智能保养与闲置唤醒 Banner */}
-            <View className="mb-4 flex-row items-center gap-3 rounded-[22px] border border-brand bg-brand-soft p-4 shadow-2xs">
-              <View className="h-11 w-11 items-center justify-center rounded-2xl bg-brand-fill shadow-xs">
-                <FontAwesome6 name="plug" size={16} colorClassName="accent-on-brand" />
-              </View>
-              <View className="flex-1">
-                <View className="flex-row items-center justify-between">
-                  <Text className="text-[13px] font-black text-brand">装备状态管家</Text>
-                  <View className="rounded-full bg-surface/70 px-2 py-1">
-                    <Text className="text-[9px] font-black text-brand">自动提醒</Text>
-                  </View>
-                </View>
-                <Text className="mt-1 text-[11px] text-copy-muted" numberOfLines={1}>
-                  {kitchenware.some((item) => item.status === "需保养" || item.status === "维修中")
-                    ? `有 ${kitchenware.filter((item) => item.status === "需保养" || item.status === "维修中").length} 件厨具需要关注`
-                    : kitchenware.length
-                      ? "当前装备状态良好，可随时记录保养"
-                      : "录入厨具后可获得状态与保养提醒"}
-                </Text>
-              </View>
-            </View>
-
-            <View className="mb-4 rounded-[24px] border border-line bg-surface p-4">
-              <View className="flex-row items-center justify-between">
-                <View>
-                  <Text className="text-[13px] font-black text-ink">按烹饪习惯快速配置</Text>
-                  <Text className="mt-1 text-[10px] text-copy-muted">选择一套常用装备，之后仍可逐件调整</Text>
-                </View>
-                <FontAwesome6 name="wand-magic-sparkles" size={15} colorClassName="accent-warm" />
-              </View>
-              <View className="mt-3">
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <View className="flex-row gap-2 pr-3">
-                  {KITCHENWARE_STARTER_KITS.map((kit) => (
-                    <TouchableOpacity key={kit.name} disabled={Boolean(addingStarterKit)} onPress={() => addStarterKit(kit)} className="w-44 rounded-2xl border border-line bg-brand-soft px-3.5 py-3 disabled:opacity-50">
-                      <View className="flex-row items-center justify-between">
-                        <Text className="text-[12px] font-black text-brand">{addingStarterKit === kit.name ? "添加中…" : kit.name}</Text>
-                        <FontAwesome6 name="plus" size={9} colorClassName="accent-brand" />
-                      </View>
-                      <Text numberOfLines={2} className="mt-1 text-[9px] leading-4 text-copy-muted">{kit.items.join(" · ")}</Text>
-                    </TouchableOpacity>
-                  ))}
-                  </View>
-                </ScrollView>
-              </View>
-            </View>
-
-            {/* 厨具分类 Selector + 录入新厨具按键 */}
-            <View className="mb-3 flex-row items-center justify-between">
-              <View>
-                <Text className="text-[15px] font-black text-ink">我的厨具</Text>
-                <Text className="mt-0.5 text-[10px] text-copy-muted">{kitchenware.length} 件装备 · 点卡片可查看与维护</Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => openKitchenwareModal()}
-                className="flex-row items-center gap-1.5 rounded-full bg-brand-fill px-4 py-2.5 shadow-2xs active:scale-95"
-              >
-                <FontAwesome6 name="plus" size={10} colorClassName="accent-on-brand" />
-                <Text className="text-xs font-black text-white">录入厨具</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View className="mb-4 -mx-4">
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="gap-2 px-4">
-                  {["全部", "小家电", "烹饪锅具", "刀具餐具", "烘焙工具", "其他"].map((cat) => (
-                    <TouchableOpacity
-                      key={cat}
-                      onPress={() => setActiveKitchenwareCategory(cat)}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: activeKitchenwareCategory === cat }}
-                      className={`rounded-full border px-3.5 py-2 ${
-                        activeKitchenwareCategory === cat
-                          ? "bg-brand-fill border-brand"
-                          : "border-line bg-surface"
-                      }`}
-                    >
-                      <Text
-                        className={`text-xs font-bold ${
-                          activeKitchenwareCategory === cat ? "text-white font-black" : "text-copy-muted"
-                        }`}
-                      >
-                        {cat}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-            </View>
-
-            {/* 厨具卡片双列 Bento 布局 */}
-            {loadingKitchenware ? (
-              <View className="items-center py-16">
-                <ActivityIndicator colorClassName="accent-brand" />
-                <Text className="mt-3 text-xs text-copy-muted">正在加载厨具装备...</Text>
-              </View>
-            ) : filteredKitchenware.length === 0 ? (
-              <View className="items-center rounded-[26px] border border-dashed border-line bg-surface px-6 py-10">
-                <View className="h-14 w-14 items-center justify-center rounded-2xl bg-background-secondary">
-                  <FontAwesome6 name="kitchen-set" size={24} colorClassName="accent-copy-muted" />
-                </View>
-                <Text className="mt-4 text-sm font-black text-ink">
-                  {kitchenware.length === 0 ? "建立你的厨房装备库" : "这个分类还没有厨具"}
-                </Text>
-                <Text className="mt-1 max-w-64 text-center text-xs leading-5 text-copy-muted">
-                  {kitchenware.length === 0 ? "添加常用锅具或小家电，就能获得更准确的食谱与保养提醒。" : "切换其他分类查看，或录入一件新厨具。"}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => openKitchenwareModal()}
-                  className="mt-5 rounded-full bg-brand-fill px-5 py-2.5"
-                >
-                  <Text className="text-xs font-black text-white">{kitchenware.length === 0 ? "录入第一件厨具" : "录入新厨具"}</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-            <View className="flex-row flex-wrap justify-between gap-y-3.5">
-              {filteredKitchenware.map((kw) => (
-                  <View
-                    key={kw.id}
-                    style={{ width: "48.5%" }}
-                    className="bg-surface rounded-[24px] overflow-hidden border border-line shadow-xs flex-col justify-between p-3"
-                  >
-                    <View>
-                      <View className="relative mb-2">
-                        {kw.image_url ? (
-                          <Image
-                            source={{ uri: kw.image_url }}
-                            className="w-full h-28 rounded-2xl border border-line"
-                            resizeMode="cover"
-                          />
-                        ) : (
-                          <View className="h-28 w-full items-center justify-center rounded-2xl border border-line bg-background-secondary">
-                            <FontAwesome6 name="kitchen-set" size={28} colorClassName="accent-copy-muted" />
-                          </View>
-                        )}
-                        <View className="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded-full">
-                          <Text className="text-[9px] font-bold text-white">{kw.status}</Text>
-                        </View>
-                        <View className="absolute left-2 top-2 flex-row gap-1">
-                          <TouchableOpacity
-                            onPress={() => openKitchenwareModal(kw)}
-                            className="h-6 w-6 items-center justify-center rounded-full bg-surface/90"
-                          >
-                            <FontAwesome6 name="pen" size={8} colorClassName="accent-brand" />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            onPress={() => handleDeleteKitchenware(kw)}
-                            className="h-6 w-6 items-center justify-center rounded-full bg-surface/90"
-                          >
-                            <FontAwesome6 name="trash" size={8} colorClassName="accent-critical" />
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-
-                      <Text numberOfLines={1} className="text-sm font-black text-ink">
-                        {kw.name}
-                      </Text>
-                      <Text numberOfLines={2} className="text-[10px] text-copy-muted mt-0.5 font-medium">
-                        {kw.note}
-                      </Text>
-                    </View>
-
-                    {/* 底部功能栏 */}
-                    <View className="mt-2.5 pt-2 border-t border-background-secondary flex-row items-center justify-between gap-1">
-                      <TouchableOpacity
-                        onPress={() =>
-                          router.push({
-                            pathname: "/ai-assistant",
-                            params: {
-                              prompt: `请为我的【${kw.name}】推荐 3 道专属极速美味食谱，附带所需食材与操作技巧！`,
-                            },
-                          })
-                        }
-                        className="bg-brand/10 border border-brand/20 flex-1 py-1 rounded-xl items-center flex-row justify-center gap-1 active:opacity-80"
-                      >
-                        <FontAwesome6 name="wand-magic-sparkles" size={8} colorClassName="accent-brand" />
-                        <Text className="text-[9px] font-black text-brand">AI 菜谱</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        onPress={() => handleMaintainKitchenware(kw)}
-                        className="bg-background-secondary px-2 py-1 rounded-xl items-center flex-row justify-center gap-1"
-                      >
-                        <FontAwesome6 name="wrench" size={8} colorClassName="accent-copy-muted" />
-                        <Text className="text-[9px] font-bold text-copy-muted">保养</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))}
-            </View>
-            )}
-          </View>
-        )}
+        <KitchenwareSection
+          active={activeSegment === "kitchenware"}
+          isAuthenticated={isAuthenticated}
+          items={kitchenware}
+          filteredItems={filteredKitchenware}
+          starterKits={KITCHENWARE_STARTER_KITS}
+          addingStarterKit={addingStarterKit}
+          activeCategory={activeKitchenwareCategory}
+          loading={loadingKitchenware}
+          onLogin={() => router.push("/login")}
+          onAddStarterKit={(kit) => void addStarterKit(kit)}
+          onCategoryChange={setActiveKitchenwareCategory}
+          onOpenEditor={openKitchenwareModal}
+          onDelete={handleDeleteKitchenware}
+          onMaintain={(item) => void handleMaintainKitchenware(item)}
+          onRequestRecipes={(item) => router.push({
+            pathname: "/ai-assistant",
+            params: { prompt: `请为我的【${item.name}】推荐 3 道专属极速美味食谱，附带所需食材与操作技巧！` },
+          })}
+        />
 
         {/* 全屏录入页：避免小屏设备上的底部弹层拥挤，底部主操作始终可达。 */}
         <Modal
@@ -2602,247 +2362,43 @@ export default function InventoryScreen() {
                 </View>
               </ScrollView>
             ) : (
-              <>
-                <ScrollView
-                  className="flex-1"
-                  showsVerticalScrollIndicator={false}
-                  keyboardShouldPersistTaps="handled"
-                  contentContainerStyle={{ paddingBottom: 16 }}
-                >
-                  <View className="w-full max-w-[720px] self-center px-5 pb-4 pt-4">
-                    <View className="rounded-[24px] border border-line bg-surface p-4 shadow-xs">
-                      <View className="mb-2 flex-row items-center justify-between">
-                        <Text className="text-xs font-black text-ink">食材名称 <Text className="text-critical">*</Text></Text>
-                        <Text className="text-[10px] text-copy-muted">输入后自动推荐分类和保质期</Text>
-                      </View>
-                      <View className="flex-row items-center rounded-2xl border border-line bg-canvas px-4">
-                        <View className="mr-3 h-8 w-8 items-center justify-center rounded-xl bg-brand-soft">
-                          <FontAwesome6 name="leaf" size={12} colorClassName="accent-brand" />
-                        </View>
-                        <TextInput
-                          nativeID="inventory-food-name"
-                          value={foodName}
-                          onChangeText={handleFoodNameChange}
-                          placeholder="输入食材名称"
-                          autoFocus={!editingItem}
-                          returnKeyType="next"
-                          className="min-h-14 flex-1 py-3.5 text-[17px] font-bold text-ink outline-none"
-                        />
-                      </View>
-                      {suggestions.length > 0 && (
-                        <View className="mt-2 flex-row flex-wrap gap-1.5 rounded-2xl bg-brand-soft p-2.5">
-                          {suggestions.map((sug) => (
-                            <TouchableOpacity
-                              key={sug.name}
-                              onPress={() => applyIngredientDefaults(sug.name)}
-                              className="flex-row items-center gap-1 rounded-xl bg-brand/10 px-2.5 py-1.5 active:bg-brand/20"
-                            >
-                              <FontAwesome6 name="plus" size={10} colorClassName="accent-brand" />
-                              <Text className="text-xs font-bold text-brand">{sug.name}</Text>
-                              {sug.category && <Text className="text-[10px] text-copy-muted">({sug.category})</Text>}
-                            </TouchableOpacity>
-                          ))}
-                        </View>
-                      )}
-
-                      <View className="mt-4 border-t border-line pt-4">
-                        <Text className="mb-1.5 text-xs font-bold text-copy-muted">分类</Text>
-                        <TouchableOpacity
-                          onPress={() => setCategoryMenuOpen((open) => !open)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`选择食材分类，当前为${category}`}
-                          accessibilityState={{ expanded: categoryMenuOpen }}
-                          className="flex-row items-center rounded-2xl border border-line bg-canvas px-4 py-3"
-                        >
-                          <View className="h-8 w-8 items-center justify-center rounded-xl bg-brand-soft">
-                            <FontAwesome6 name="shapes" size={11} colorClassName="accent-brand" />
-                          </View>
-                          <Text className="ml-3 flex-1 text-sm font-bold text-ink">{category}</Text>
-                          <Text className="mr-2 text-[10px] text-copy-muted">选择分类</Text>
-                          <FontAwesome6 name={categoryMenuOpen ? "chevron-up" : "chevron-down"} size={10} colorClassName="accent-copy-muted" />
-                        </TouchableOpacity>
-                        {categoryMenuOpen && (
-                          <View className="mt-2 overflow-hidden rounded-2xl border border-line bg-surface">
-                            {INVENTORY_ENTRY_CATEGORIES.map((item, index) => {
-                              const selected = category === item;
-                              return (
-                                <TouchableOpacity
-                                  key={item}
-                                  onPress={() => {
-                                    setCategory(item);
-                                    setCategoryMenuOpen(false);
-                                  }}
-                                  className={`flex-row items-center px-4 py-3 ${index > 0 ? "border-t border-line" : ""} ${selected ? "bg-brand-soft" : "bg-surface"}`}
-                                >
-                                  <Text className={`flex-1 text-sm ${selected ? "font-black text-brand" : "font-medium text-ink"}`}>{item}</Text>
-                                  {selected && <FontAwesome6 name="check" size={11} colorClassName="accent-brand" />}
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-                        )}
-                      </View>
-
-                    <View className="mt-4 border-t border-line pt-4">
-                      <View className="mb-3 flex-row items-center justify-between">
-                        <View className="flex-row items-center gap-2">
-                          <View className="h-7 w-7 items-center justify-center rounded-xl bg-brand-soft">
-                            <FontAwesome6 name="box" size={11} colorClassName="accent-brand" />
-                          </View>
-                          <Text className="text-sm font-black text-ink">库存信息</Text>
-                        </View>
-                        <Text className="text-[10px] text-copy-muted">数量与保存方式</Text>
-                      </View>
-
-                      <View className="flex-row items-end gap-3">
-                        <View className="w-[42%]">
-                          <Text className="mb-1.5 text-xs font-bold text-copy-muted">数量 <Text className="text-critical">*</Text></Text>
-                          <TextInput
-                            nativeID="inventory-quantity"
-                            value={quantity}
-                            onChangeText={setQuantity}
-                            placeholder="500g、2盒"
-                            className="rounded-2xl border border-line bg-canvas px-4 py-3 text-sm font-semibold text-ink outline-none"
-                          />
-                        </View>
-                        <View className="flex-1">
-                          <Text className="mb-1.5 text-xs font-bold text-copy-muted">存放位置</Text>
-                          <View className="flex-row rounded-2xl border border-line bg-canvas p-1">
-                            {(["冷藏", "冷冻", "常温"] as const).map((loc) => (
-                              <TouchableOpacity
-                                key={loc}
-                                onPress={() => handleStorageLocationChange(loc)}
-                                className={`flex-1 items-center rounded-xl py-2.5 ${storageLocation === loc ? "bg-brand-fill shadow-xs" : "bg-transparent"}`}
-                              >
-                                <Text className={`text-[11px] ${storageLocation === loc ? "font-bold text-white" : "font-medium text-copy-muted"}`}>{loc}</Text>
-                              </TouchableOpacity>
-                            ))}
-                          </View>
-                        </View>
-                      </View>
-                      <View className="mt-2 flex-row gap-1.5">
-                        {["100g", "1份", "2盒", "500g"].map((value) => (
-                          <TouchableOpacity
-                            key={value}
-                            onPress={() => setQuantity(value)}
-                            className={`flex-1 items-center rounded-full border py-1.5 ${quantity === value ? "border-brand/20 bg-brand-soft" : "border-line bg-canvas"}`}
-                          >
-                            <Text className={`text-[10px] font-bold ${quantity === value ? "text-brand" : "text-copy-muted"}`}>{value}</Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-
-                      <View className="mt-4 border-t border-line pt-4">
-                      <View className="mb-2.5 flex-row items-center justify-between">
-                        <View className="flex-row items-center gap-2.5">
-                          <View className="h-7 w-7 items-center justify-center rounded-xl bg-brand-soft">
-                            <FontAwesome6 name="bell" size={11} colorClassName="accent-brand" />
-                          </View>
-                          <Text className="text-sm font-black text-ink">到期日期</Text>
-                        </View>
-                        <View className="rounded-full bg-brand-soft px-2.5 py-1">
-                          <Text className="text-[10px] font-black text-brand">临期提醒</Text>
-                        </View>
-                      </View>
-                      <View className="mb-2 flex-row gap-2">
-                        {[{ label: "3 天", days: 3 }, { label: "7 天", days: 7 }, { label: "30 天", days: 30 }].map(({ label, days }) => {
-                          const date = dateKeyAfterDays(days);
-                          const selected = expirationDate === date;
-                          return (
-                            <TouchableOpacity key={label} onPress={() => setExpirationDate(date)} className={`flex-1 items-center rounded-xl border py-2 ${selected ? "border-brand bg-brand-fill" : "border-line bg-canvas"}`}>
-                              <Text className={`text-[11px] font-bold ${selected ? "text-white" : "text-copy-muted"}`}>{label}</Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                      <SmartDateInput
-                        value={expirationDate}
-                        onChange={setExpirationDate}
-                        containerStyle={{ marginBottom: 0 }}
-                        inputStyle={{ height: 46, shadowOpacity: 0, elevation: 0 }}
-                        iconSize={16}
-                      />
-                    </View>
-                    </View>
-
-                    <View className="mt-4 border-t border-line pt-4">
-                      <View className="flex-row items-center justify-between gap-3">
-                        <View className="flex-1 flex-row items-center gap-3">
-                          {imageUrl ? (
-                            <Image source={{ uri: imageUrl }} className="h-11 w-11 rounded-2xl bg-canvas" />
-                          ) : (
-                            <View className="h-11 w-11 items-center justify-center rounded-2xl bg-canvas">
-                              <FontAwesome6 name="image" size={15} colorClassName="accent-copy-muted" />
-                            </View>
-                          )}
-                          <View className="flex-1">
-                            <Text className="text-xs font-bold text-ink">食材照片 <Text className="font-medium text-copy-muted">（可选）</Text></Text>
-                            <Text className="mt-0.5 text-[10px] text-copy-muted">{imageUrl ? "照片已添加" : "添加后更容易辨认"}</Text>
-                          </View>
-                        </View>
-                        <View className="flex-row gap-2">
-                          <TouchableOpacity accessibilityLabel="拍摄食材照片" onPress={() => selectFoodPhoto("camera")} className="h-10 w-10 items-center justify-center rounded-xl bg-brand-soft">
-                            <FontAwesome6 name="camera" size={13} colorClassName="accent-brand" />
-                          </TouchableOpacity>
-                          <TouchableOpacity accessibilityLabel="从相册选择食材照片" onPress={() => selectFoodPhoto("library")} className="h-10 w-10 items-center justify-center rounded-xl bg-canvas">
-                            <FontAwesome6 name="images" size={13} colorClassName="accent-copy-muted" />
-                          </TouchableOpacity>
-                          {imageUrl && (
-                            <TouchableOpacity accessibilityLabel="移除食材照片" onPress={() => setImageUrl("")} className="h-10 w-10 items-center justify-center rounded-xl bg-danger-soft">
-                              <FontAwesome6 name="trash" size={12} colorClassName="accent-critical" />
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                      </View>
-                    </View>
-                    </View>
-
-                    {editingItem && (
-                      <View className="mt-3 flex-row gap-2.5">
-                        <TouchableOpacity
-                          onPress={() => {
-                            setModalVisible(false);
-                            router.push({
-                              pathname: "/ai-assistant",
-                              params: {
-                                prefill_food: editingItem.food_name,
-                                prompt: `我冰箱里有【${editingItem.food_name}】(${editingItem.quantity})，请帮我生成一份优先消耗它的营养餐单！`,
-                              },
-                            });
-                          }}
-                          className="flex-1 items-center rounded-2xl border border-highlight/40 bg-highlight/20 py-3.5"
-                        >
-                          <Text className="text-xs font-bold text-warm">AI 生成菜谱</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={() => handleDeleteItem(editingItem.id)}
-                          className="flex-row items-center justify-center gap-1.5 rounded-2xl bg-danger-soft px-5 py-3"
-                        >
-                          <FontAwesome6 name="trash-can" size={11} colorClassName="accent-critical" />
-                          <Text className="text-xs font-bold text-critical">移除</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-                </ScrollView>
-
-                <View className="border-t border-line bg-surface px-5 pt-3" style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
-                  <TouchableOpacity
-                    onPress={handleSaveItem}
-                    disabled={saving}
-                    className="w-full max-w-[680px] self-center items-center rounded-2xl bg-brand-fill py-4 shadow-sm active:opacity-90 disabled:opacity-60"
-                  >
-                    {saving ? (
-                      <ActivityIndicator colorClassName="accent-on-brand" />
-                    ) : (
-                      <View className="flex-row items-center gap-2">
-                        <FontAwesome6 name="check" size={13} colorClassName="accent-on-brand" />
-                        <Text className="text-base font-bold text-white">{editingItem ? "保存修改" : "加入食材库"}</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </>
+              <InventoryEntryForm
+                editingItem={editingItem}
+                foodName={foodName}
+                category={category}
+                categoryMenuOpen={categoryMenuOpen}
+                quantity={quantity}
+                storageLocation={storageLocation}
+                expirationDate={expirationDate}
+                imageUrl={imageUrl}
+                suggestions={suggestions}
+                saving={saving}
+                bottomInset={insets.bottom}
+                onFoodNameChange={handleFoodNameChange}
+                onApplySuggestion={applyIngredientDefaults}
+                onToggleCategoryMenu={() => setCategoryMenuOpen((open) => !open)}
+                onCategoryChange={(value) => {
+                  setCategory(value);
+                  setCategoryMenuOpen(false);
+                }}
+                onQuantityChange={setQuantity}
+                onStorageLocationChange={handleStorageLocationChange}
+                onExpirationDateChange={setExpirationDate}
+                onSelectPhoto={(source) => void selectFoodPhoto(source)}
+                onRemovePhoto={() => setImageUrl("")}
+                onRequestAiRecipe={(item) => {
+                  setModalVisible(false);
+                  router.push({
+                    pathname: "/ai-assistant",
+                    params: {
+                      prefill_food: item.food_name,
+                      prompt: `我冰箱里有【${item.food_name}】(${item.quantity})，请帮我生成一份优先消耗它的营养餐单！`,
+                    },
+                  });
+                }}
+                onDelete={handleDeleteItem}
+                onSave={() => void handleSaveItem()}
+              />
             )}
           </KeyboardAvoidingView>
         </Modal>

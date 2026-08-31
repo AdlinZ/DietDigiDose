@@ -13,7 +13,7 @@ import adminRoutes from "./routes/admin.js";
 import aiRoutes from "./routes/ai.js";
 import agentRunRoutes from "./routes/agent-runs.js";
 import shoppingListRoutes from "./modules/shopping/index.js";
-import cookingQueueRoutes from "./routes/cooking-queue.js";
+import cookingQueueRoutes from "./modules/cookingQueue/index.js";
 import mealPlanRoutes from "./routes/meal-plans.js";
 import insightsRoutes from "./routes/insights.js";
 import recommendationRoutes from "./routes/recommendations.js";

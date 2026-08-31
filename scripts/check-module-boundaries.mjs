@@ -4,6 +4,11 @@ import path from "node:path";
 const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
+  {
+    name: "cookingQueue",
+    concreteRepository: /sqliteRepository|SqliteCookingQueueRepository/,
+    legacyFile: "server/src/routes/cooking-queue.ts",
+  },
   { name: "inventory", concreteRepository: /sqliteRepository|SqliteInventoryRepository/ },
   { name: "feedback", concreteRepository: /sqliteRepository|SqliteFeedbackRepository/ },
   { name: "foods", concreteRepository: /sqliteRepository|SqliteFoodRepository/ },

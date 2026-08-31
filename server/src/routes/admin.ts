@@ -12,6 +12,7 @@ import { createAdminNotificationsRouter } from "./admin/notifications.js";
 import { createAdminAgentRunsRouter } from "./admin/agent-runs.js";
 import { createAdminMediaCleanupRouter } from "./admin/media-cleanup.js";
 import { createAdminVoicePackRouter } from "./admin/voice-packs.js";
+import { createAdminWorkerRunsRouter } from "./admin/worker-runs.js";
 import { auditAdminAction as audit } from "./admin/shared.js";
 import { aiErrorTypeForCode, sanitizeAIErrorMessage } from "../services/aiErrors.js";
 
@@ -30,6 +31,7 @@ router.use(createAdminNotificationsRouter());
 router.use(createAdminAgentRunsRouter());
 router.use(createAdminMediaCleanupRouter());
 router.use(createAdminVoicePackRouter());
+router.use(createAdminWorkerRunsRouter());
 
 // 1. 获取统计数据
 router.get("/stats", (req, res) => {

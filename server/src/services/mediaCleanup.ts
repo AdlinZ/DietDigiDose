@@ -123,13 +123,3 @@ export async function processPendingMediaCleanupJobs(limit = 25) {
   }
   return { checked: jobs.length, completed, failed };
 }
-
-export function startMediaCleanupScheduler() {
-  const run = () => void processPendingMediaCleanupJobs().catch((error) => {
-    console.error("Unable to process pending media cleanup jobs:", error);
-  });
-  run();
-  const timer = setInterval(run, 60 * 60 * 1000);
-  timer.unref();
-  return timer;
-}

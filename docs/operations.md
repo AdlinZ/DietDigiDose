@@ -73,6 +73,22 @@ pnpm --dir server db:restore /secure-backups/dietdigidose.db --force
 
 至少在首次外部内测前、每次 schema 变更后和公开发布前完成一次隔离恢复演练。
 
+## 后台 worker
+
+通知投递与媒体清理不随 API 进程启动。部署必须独立运行 `node dist/worker.js`；staging Compose 已包含共享同一持久化数据库的 `worker` 服务。API 与 worker 可以独立重启，worker 故障不会改变 API 健康状态。
+
+worker 默认启动后立即执行一次，之后每小时执行；可用 `WORKER_INTERVAL_MS`、`WORKER_TASK_TIMEOUT_MS`、`WORKER_LEASE_MS` 和 `MEDIA_CLEANUP_BATCH_SIZE` 调整。SQLite lease 防止多 worker 同时领取同一类任务，通知的投递预留和媒体清理 job claim 继续提供业务幂等保护。
+
+手动重跑全部任务或单项任务：
+
+```bash
+pnpm --dir server worker:run
+pnpm --dir server worker:run -- --task=notifications
+pnpm --dir server worker:run -- --task=media-cleanup
+```
+
+每批执行会写入 `worker_task_runs`，包含开始/结束时间、耗时、处理量、成功量、失败量和脱敏错误；管理员可用 `GET /api/v1/admin/worker-runs` 按 `task`、`status` 分页查看批次和当前 lease，`worker.task.*` 单行 JSON 日志可交给日志平台查询。失败会发送到 `ERROR_MONITOR_WEBHOOK_URL`，未完成媒体清理保持 `pending`，下一批自动重试。若 worker 异常退出，等待 `WORKER_LEASE_MS` 到期后再手动重跑；不要直接删除 `worker_task_leases`，除非已确认旧进程停止且记录了处置原因。
+
 ## 候选发布检查
 
 记录提交 SHA、client/server/admin 版本、数据库版本、构建号、后端域名和备份编号，然后执行：

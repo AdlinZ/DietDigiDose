@@ -10,6 +10,7 @@ try {
   await esbuild.build({
     entryPoints: {
       index: 'src/index.ts',
+      worker: 'src/worker.ts',
       'database-backup': 'scripts/database-backup.ts',
       'migrate-community-media': 'scripts/migrate-community-media.ts',
     },

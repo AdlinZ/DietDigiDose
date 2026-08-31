@@ -35,6 +35,16 @@ export type InventoryConsumption = {
   unit?: InventoryUnit;
 };
 
+export type InventoryConsumptionState = {
+  id: unknown;
+  food_name: unknown;
+  quantity: unknown;
+  quantity_value: unknown;
+  quantity_unit: unknown;
+  is_available: unknown;
+  version: unknown;
+};
+
 function roundQuantity(value: number) {
   return Math.round((value + Number.EPSILON) * 1000) / 1000;
 }
@@ -50,6 +60,45 @@ function convert(value: number, from: InventoryUnit, to: InventoryUnit) {
     throw new InventoryQuantityError("INVENTORY_UNIT_MISMATCH", `${source.label} 与 ${target.label} 不能安全换算`);
   }
   return value * source.factor / target.factor;
+}
+
+/** Driver-neutral quantity transition used by SQLite and PostgreSQL adapters. */
+export function calculateInventoryConsumption(item: InventoryConsumptionState, consumption: InventoryConsumption) {
+  if (!item.is_available) {
+    throw new InventoryQuantityError("INVENTORY_CONFLICT", "库存食材不存在、已用完或不属于当前账号");
+  }
+  if (Number(item.version) !== consumption.version) {
+    throw new InventoryQuantityError("INVENTORY_VERSION_CONFLICT", "库存已在其他设备更新，请刷新后重试");
+  }
+  const storedValue = item.quantity_value == null ? null : Number(item.quantity_value);
+  const storedUnit = typeof item.quantity_unit === "string" && INVENTORY_UNITS.includes(item.quantity_unit as InventoryUnit)
+    ? item.quantity_unit as InventoryUnit
+    : null;
+  let amountUsed = storedValue;
+  let remaining = 0;
+  let available = false;
+  if (consumption.mode === "amount") {
+    if (storedValue === null || !storedUnit) {
+      throw new InventoryQuantityError("STRUCTURED_QUANTITY_REQUIRED", `“${String(item.food_name)}”没有可安全部分扣减的结构化数量`);
+    }
+    if (!consumption.unit || !Number.isFinite(consumption.amount_value) || Number(consumption.amount_value) <= 0) {
+      throw new InventoryQuantityError("INVALID_CONSUMPTION_AMOUNT", "扣减数量必须大于 0");
+    }
+    amountUsed = convert(Number(consumption.amount_value), consumption.unit, storedUnit);
+    if (amountUsed > storedValue + 0.0001) {
+      throw new InventoryQuantityError("INVENTORY_INSUFFICIENT", `“${String(item.food_name)}”的剩余数量不足`);
+    }
+    remaining = Math.max(0, roundQuantity(storedValue - amountUsed));
+    available = remaining > 0;
+  }
+  return {
+    storedValue,
+    storedUnit,
+    amountUsed,
+    remaining,
+    available,
+    nextQuantity: storedUnit && storedValue !== null ? displayQuantity(remaining, storedUnit) : String(item.quantity),
+  };
 }
 
 export function applyInventoryConsumptions(

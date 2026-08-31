@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
 import {
   exportMigrationArchive,
   importMigrationArchive,
@@ -94,6 +95,57 @@ try {
   assert.equal(report.criticalMetrics["health.weight"], 62.5);
   assert.equal(report.criticalMetrics["ai.total_tokens"], 321);
 
+  const inventoryRepository = new PostgresInventoryRepository(pool);
+  const migratedItems = await inventoryRepository.list(user.id);
+  const migratedTomato = migratedItems.find((item) => item.food_name === "番茄")!;
+  assert.equal(migratedTomato.quantity_value, 250);
+  const created = await inventoryRepository.create(user.id, {
+    food_name: "牛奶",
+    category: "乳制品",
+    quantity: "500ml",
+    expiration_date: "2026-09-08",
+    storage_location: "冷藏",
+    quantity_value: 500,
+    quantity_unit: "ml",
+  });
+  const imported = await Promise.all([0, 1].map(() => inventoryRepository.importShoppingList(user.id, {
+    idempotency_key: "postgres-concurrent-import-0001",
+    items: [{
+      food_name: "土豆",
+      category: "蔬菜",
+      quantity: "2piece",
+      expiration_date: "2026-09-15",
+      storage_location: "常温",
+      quantity_value: 2,
+      quantity_unit: "piece",
+    }],
+  })));
+  assert.deepEqual(imported.map((result) => result.repeated).sort(), [false, true]);
+  assert.equal(imported[0]!.items[0]!.id, imported[1]!.items[0]!.id);
+  const consumed = await inventoryRepository.consume(user.id, {
+    idempotency_key: "postgres-consume-0001",
+    source: "cooking",
+    items: [{ item_id: migratedTomato.id, version: migratedTomato.version, mode: "amount", amount_value: 50, unit: "g" }],
+  });
+  assert.equal(consumed.items[0]!.quantity_value, 200);
+  const repeatedConsumption = await inventoryRepository.consume(user.id, {
+    idempotency_key: "postgres-consume-0001",
+    source: "cooking",
+    items: [{ item_id: migratedTomato.id, version: migratedTomato.version, mode: "amount", amount_value: 50, unit: "g" }],
+  });
+  assert.equal(repeatedConsumption.repeated, true);
+  assert.equal(repeatedConsumption.items[0]!.quantity_value, 200);
+  const updated = await inventoryRepository.update(user.id, created.id, created.version, {
+    nextQuantityValue: 500,
+    nextQuantityUnit: "ml",
+    patch: { storage_location: "冷冻", version: created.version },
+  });
+  assert.equal(updated.kind, "updated");
+  if (updated.kind === "updated") assert.equal(updated.item.storage_location, "冷冻");
+  const history = await inventoryRepository.history(user.id, migratedTomato.id);
+  assert(history?.some((entry) => entry.action === "consume_partial"));
+  assert.deepEqual(await inventoryRepository.remove(user.id, created), { kind: "removed" });
+
   await pool.query(`DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dietdigidose_app_test') THEN
       CREATE ROLE dietdigidose_app_test NOLOGIN;
@@ -119,7 +171,7 @@ try {
     transactionClient.release();
   }
   const rolledBack = await pool.query("SELECT quantity_value FROM inventory_items WHERE food_name = '番茄'");
-  assert.equal(Number(rolledBack.rows[0]?.quantity_value), 250);
+  assert.equal(Number(rolledBack.rows[0]?.quantity_value), 200);
 
   console.log(JSON.stringify({
     ok: true,
@@ -127,6 +179,7 @@ try {
     rows: report.rowCount,
     schema: archive.baselineSchemaSha256,
     repeatedAndConcurrentImportVerified: true,
+    postgresInventoryRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,
   }, null, 2));

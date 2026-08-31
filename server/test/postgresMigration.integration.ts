@@ -8,6 +8,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
+import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
 import { PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
 import {
   exportMigrationArchive,
@@ -165,6 +166,41 @@ try {
     status: "open",
   });
 
+  const postgresFood = await pool.query(`
+    INSERT INTO ingredients_library
+      (name, category, calories_100g, protein_100g, carbs_100g, fat_100g, barcode,
+       original_name, normalized_name, search_keywords, micronutrients_json, source, quality_status)
+    VALUES
+      ('Postgres 番茄', '蔬菜', 18, 0.9, 3.9, 0.2, '6900000000097',
+       'Postgres tomato', 'postgres番茄', 'postgresfood', '{"vitaminC":13.7}'::jsonb, 'official', 'trusted')
+    RETURNING id
+  `);
+  const postgresFoodId = Number(postgresFood.rows[0]!.id);
+  await pool.query(`
+    INSERT INTO ingredient_aliases (ingredient_id, alias, normalized_alias)
+    VALUES ($1, 'PG tomato', 'postgresfoodalias')
+  `, [postgresFoodId]);
+  const foodRepository = new PostgresFoodRepository(pool);
+  assert.equal((await foodRepository.findByBarcode("6900000000097"))?.name, "Postgres 番茄");
+  const postgresFoodResults = await foodRepository.searchTrusted("postgresfoodalias", 10);
+  assert.equal(postgresFoodResults.length, 1);
+  assert.deepEqual(postgresFoodResults[0]!.micronutrients_json, { vitaminC: 13.7 });
+  await foodRepository.recordSearchGap("postgresgap", " Postgres missing food ");
+  await foodRepository.recordSearchGap("postgresgap", "Postgres missing food updated");
+  const postgresGap = await pool.query(`
+    SELECT sample_query, hit_count FROM ingredient_search_gaps WHERE normalized_query = 'postgresgap'
+  `);
+  assert.deepEqual(postgresGap.rows[0], { sample_query: "Postgres missing food updated", hit_count: 2 });
+  const customFoodId = await foodRepository.createCustom(user.id, {
+    name: "Postgres 家庭豆浆",
+    calories_100g: 31,
+    protein_100g: 3,
+    carbs_100g: 1.2,
+    fat_100g: 1.6,
+  });
+  const customFood = await pool.query("SELECT user_id, name, status FROM user_custom_foods WHERE id = $1", [customFoodId]);
+  assert.deepEqual(customFood.rows[0], { user_id: user.id, name: "Postgres 家庭豆浆", status: "pending" });
+
   await pool.query(`DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dietdigidose_app_test') THEN
       CREATE ROLE dietdigidose_app_test NOLOGIN;
@@ -200,6 +236,7 @@ try {
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
+    postgresFoodRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,
   }, null, 2));

@@ -1,23 +1,8 @@
 import { createHash } from "node:crypto";
-import { Converter } from "opencc-js";
-
 import { db } from "../storage/db.js";
+import { normalizeContentTerm } from "../utils/contentNormalization.js";
 
-const TRADITIONAL_TO_SIMPLIFIED: Record<string, string> = {
-  "蕃": "番", "馬": "马", "鈴": "铃", "薯": "薯", "雞": "鸡", "魚": "鱼",
-  "蝦": "虾", "豬": "猪", "蔥": "葱", "薑": "姜", "蒜": "蒜", "蘿": "萝",
-  "蔔": "卜", "麵": "面", "飯": "饭", "湯": "汤", "醬": "酱", "鹽": "盐",
-};
-const toSimplified = Converter({ from: "tw", to: "cn" });
-
-export function normalizeContentTerm(value: string) {
-  return toSimplified(value.normalize("NFKC").toLocaleLowerCase()).split("")
-    .map((character) => TRADITIONAL_TO_SIMPLIFIED[character] || character)
-    .join("")
-    .replace(/\([^)]*\)|（[^）]*）/g, "")
-    .replace(/[\s·、，,。()（）/\\_-]/g, "")
-    .trim();
-}
+export { normalizeContentTerm } from "../utils/contentNormalization.js";
 
 export type IngredientQualityIssue =
   | "missing_source"
@@ -138,19 +123,6 @@ export function validateRecipePublication(input: {
   if (parseList(input.steps).length < 2) issues.add("missing_steps");
   if (!parseList(input.requiredKitchenware).length) issues.add("missing_kitchenware_mapping");
   return [...issues];
-}
-
-export function recordIngredientSearchGap(query: string) {
-  const normalized = normalizeContentTerm(query);
-  if (!normalized) return;
-  db.prepare(`
-    INSERT INTO ingredient_search_gaps (normalized_query, sample_query)
-    VALUES (?, ?)
-    ON CONFLICT(normalized_query) DO UPDATE SET
-      hit_count = hit_count + 1,
-      sample_query = excluded.sample_query,
-      last_seen_at = CURRENT_TIMESTAMP
-  `).run(normalized, query.trim().slice(0, 80));
 }
 
 export function ingredientPortionGrams(ingredientId: number, label: string, quantity = 1) {

@@ -658,6 +658,32 @@ describe("API security baseline", () => {
     assert.equal("user_id" in (submitted.body as JsonObject), false);
   });
 
+  test("authenticated users can submit custom food through the repository-backed route", async () => {
+    const account = await register("custom-food-module@example.com");
+    const submitted = await api("/api/v1/foods/custom", {
+      method: "POST",
+      token: account.token,
+      body: JSON.stringify({
+        name: "家庭豆浆",
+        calories_100g: 31,
+        protein_100g: 3,
+        carbs_100g: 1.2,
+        fat_100g: 1.6,
+      }),
+    });
+    assert.equal(submitted.response.status, 200);
+    assert.equal((submitted.body as JsonObject).success, true);
+    const row = db.prepare(`
+      SELECT user_id, name, calories_100g, status FROM user_custom_foods WHERE id = ?
+    `).get((submitted.body as JsonObject).id) as JsonObject;
+    assert.deepEqual(row, {
+      user_id: account.user.id,
+      name: "家庭豆浆",
+      calories_100g: 31,
+      status: "pending",
+    });
+  });
+
   test("high-cost AI routes share a per-user quota", async () => {
     const account = await register("ai-rate-limit@example.com");
     const invalidAudio = JSON.stringify({ audio: "data:text/plain;base64,SGVsbG8=", mimeType: "text/plain" });

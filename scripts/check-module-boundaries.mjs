@@ -6,6 +6,7 @@ const failures = [];
 const moduleSpecs = [
   { name: "inventory", concreteRepository: /sqliteRepository|SqliteInventoryRepository/ },
   { name: "feedback", concreteRepository: /sqliteRepository|SqliteFeedbackRepository/ },
+  { name: "foods", concreteRepository: /sqliteRepository|SqliteFoodRepository/ },
 ];
 
 function walk(directory) {

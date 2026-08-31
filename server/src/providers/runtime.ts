@@ -25,7 +25,6 @@ async function runWithTimeout<T>(operation: Operation<T>, timeoutMs: number): Pr
           controller.abort();
           reject(timeoutError(operation.providerId, timeoutMs));
         }, timeoutMs);
-        timer.unref?.();
       }),
     ]);
   } catch (error) {

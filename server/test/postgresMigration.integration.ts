@@ -15,6 +15,7 @@ import { PostgresHealthRepository } from "../src/modules/health/postgresReposito
 import { PostgresInsightsRepository } from "../src/modules/insights/postgresRepository.js";
 import { InsightsService } from "../src/modules/insights/service.js";
 import { consumeInventoryWithPostgresClient, PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
+import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
 import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
 import { PostgresWorkerRepository } from "../src/modules/worker/postgresRepository.js";
 import { WorkerRuntime } from "../src/modules/worker/service.js";
@@ -361,6 +362,79 @@ try {
   assert.equal(completedQueue?.status, "completed");
   assert.equal(await cookingQueueRepository.cancel("66666666-6666-4666-8666-666666666666", user.id), true);
 
+  const mealPlanRepository = new PostgresMealPlansRepository(pool);
+  const mealPlanId = "77777777-7777-4777-8777-777777777777";
+  const mealPlanItemId = "88888888-8888-4888-8888-888888888888";
+  await pool.query(`INSERT INTO meal_plans
+    (id, user_id, title, start_date, end_date, status, source, constraints_json)
+    VALUES ($1, $2, 'Postgres 并发餐单', '2026-09-01', '2026-09-07', 'active', 'manual', '{"servings":2}'::jsonb)`,
+  [mealPlanId, user.id]);
+  await pool.query(`INSERT INTO meal_plan_items
+    (id, plan_id, user_id, planned_date, meal_type, title, recipe_id, ingredients_json, steps_json,
+     calories, protein, carbs, fat)
+    VALUES ($1, $2, $3, '2026-09-03', '晚餐', 'Postgres 餐单料理', $4,
+      '[{"name":"Postgres 餐单专用姜","amount":"10g"}]'::jsonb, '["烹饪"]'::jsonb, 260, 15, 20, 12)`,
+  [mealPlanItemId, mealPlanId, user.id, Number(queueRecipe.id)]);
+  assert.equal((await mealPlanRepository.list(user.id + 1, false)).length, 0);
+  const initialMealPlan = await mealPlanRepository.find(user.id, mealPlanId, false);
+  assert.equal(initialMealPlan?.items instanceof Array, true);
+  const updatedMealPlanItem = await mealPlanRepository.updateItem(user.id, mealPlanId, mealPlanItemId, {
+    version: 1, plannedDate: "2026-09-04",
+  });
+  assert.equal(updatedMealPlanItem.kind, "updated");
+  assert.equal((await mealPlanRepository.updateItem(user.id, mealPlanId, mealPlanItemId, {
+    version: 1, plannedDate: "2026-09-05",
+  })).kind, "version_conflict");
+  const shoppingResults = await Promise.all([
+    mealPlanRepository.addShopping(user.id, mealPlanId, mealPlanItemId, {
+      version: 2, idempotencyKey: "postgres-meal-plan-shopping-0001",
+    }),
+    mealPlanRepository.addShopping(user.id, mealPlanId, mealPlanItemId, {
+      version: 2, idempotencyKey: "postgres-meal-plan-shopping-0001",
+    }),
+  ]);
+  const shoppingValues = shoppingResults.map((result) => {
+    if (result.kind !== "completed") throw new Error("meal plan shopping failed");
+    return result.value as Record<string, unknown> & { repeated: boolean };
+  });
+  assert.deepEqual(shoppingValues.map((result) => result.repeated).sort(), [false, true]);
+  assert.equal((await pool.query(`SELECT COUNT(*)::integer AS count FROM shopping_list_items
+    WHERE user_id = $1 AND client_id LIKE $2`, [user.id, `meal-plan:${mealPlanItemId}:%`])).rows[0]?.count, 1);
+  const mealQueueResults = await Promise.all([
+    mealPlanRepository.enqueue(user.id, mealPlanId, mealPlanItemId, {
+      version: 2, idempotencyKey: "postgres-meal-plan-queue-0001",
+    }),
+    mealPlanRepository.enqueue(user.id, mealPlanId, mealPlanItemId, {
+      version: 2, idempotencyKey: "postgres-meal-plan-queue-0001",
+    }),
+  ]);
+  const mealQueueValues = mealQueueResults.map((result) => {
+    if (result.kind !== "completed") throw new Error("meal plan queue failed");
+    return result.value as Record<string, unknown> & { repeated: boolean };
+  });
+  assert.deepEqual(mealQueueValues.map((result) => result.repeated).sort(), [false, true]);
+  assert.equal(mealQueueValues[0]!.queueItemId, mealQueueValues[1]!.queueItemId);
+  const mealCompletionResults = await Promise.all([
+    mealPlanRepository.complete(user.id, mealPlanId, mealPlanItemId, {
+      version: 3, idempotencyKey: "postgres-meal-plan-complete-0001",
+    }),
+    mealPlanRepository.complete(user.id, mealPlanId, mealPlanItemId, {
+      version: 3, idempotencyKey: "postgres-meal-plan-complete-0001",
+    }),
+  ]);
+  const mealCompletionValues = mealCompletionResults.map((result) => {
+    if (result.kind !== "completed") throw new Error("meal plan completion failed");
+    return result.value as Record<string, unknown> & { repeated: boolean };
+  });
+  assert.deepEqual(mealCompletionValues.map((result) => result.repeated).sort(), [false, true]);
+  assert.equal(mealCompletionValues[0]!.dietRecordId, mealCompletionValues[1]!.dietRecordId);
+  const updatedMealPlan = await mealPlanRepository.updatePlan(user.id, mealPlanId, { version: 1, title: "Postgres 已更新餐单" });
+  assert.equal(updatedMealPlan.kind, "updated");
+  assert.equal((await mealPlanRepository.removePlan(user.id + 1, mealPlanId, 2)), "not_found");
+  assert.equal((await mealPlanRepository.removePlan(user.id, mealPlanId, 2)), "removed");
+  assert.equal(await mealPlanRepository.find(user.id, mealPlanId, false), null);
+  assert.equal((await mealPlanRepository.find(user.id, mealPlanId, true))?.archived, true);
+
   const healthRepository = new PostgresHealthRepository(pool);
   const healthUpserts = await Promise.all([
     healthRepository.upsertLog(user.id, "2026-09-02", { weight: 63.2 }),
@@ -473,6 +547,7 @@ try {
     postgresDietRecordsRepositoryVerified: true,
     postgresInsightsRepositoryVerified: true,
     postgresCookingQueueRepositoryVerified: true,
+    postgresMealPlansRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
     postgresHealthRepositoryVerified: true,

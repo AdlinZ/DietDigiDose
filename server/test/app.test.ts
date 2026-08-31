@@ -628,6 +628,36 @@ describe("API security baseline", () => {
     assert.equal((blocked.body as JsonObject).code, "FOOD_SEARCH_RATE_LIMITED");
   });
 
+  test("authenticated feedback persists structured context without exposing ownership", async () => {
+    const account = await register("feedback-module@example.com");
+    const submitted = await api("/api/v1/feedback", {
+      method: "POST",
+      token: account.token,
+      body: JSON.stringify({
+        category: "issue",
+        content: "烹饪页面无法继续到下一步",
+        context: { page: "cooking", recipeId: 23, recipeTitle: "番茄炒蛋" },
+      }),
+    });
+    assert.equal(submitted.response.status, 201);
+    assert.deepEqual(submitted.body, { id: (submitted.body as JsonObject).id, status: "received" });
+
+    const row = db.prepare(`
+      SELECT user_id, category, content, context_json, status
+      FROM user_feedback WHERE id = ?
+    `).get((submitted.body as JsonObject).id) as JsonObject;
+    assert.equal(row.user_id, account.user.id);
+    assert.equal(row.category, "issue");
+    assert.equal(row.content, "烹饪页面无法继续到下一步");
+    assert.deepEqual(JSON.parse(row.context_json), {
+      page: "cooking",
+      recipeId: 23,
+      recipeTitle: "番茄炒蛋",
+    });
+    assert.equal(row.status, "open");
+    assert.equal("user_id" in (submitted.body as JsonObject), false);
+  });
+
   test("high-cost AI routes share a per-user quota", async () => {
     const account = await register("ai-rate-limit@example.com");
     const invalidAudio = JSON.stringify({ audio: "data:text/plain;base64,SGVsbG8=", mimeType: "text/plain" });

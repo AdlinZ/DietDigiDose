@@ -2,8 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
-const inventoryRoot = path.join(root, "server", "src", "modules", "inventory");
 const failures = [];
+const moduleSpecs = [
+  { name: "inventory", concreteRepository: /sqliteRepository|SqliteInventoryRepository/ },
+  { name: "feedback", concreteRepository: /sqliteRepository|SqliteFeedbackRepository/ },
+];
 
 function walk(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -12,14 +15,14 @@ function walk(directory) {
   });
 }
 
-function read(name) {
-  return fs.readFileSync(path.join(inventoryRoot, name), "utf8");
+function read(moduleName, fileName) {
+  return fs.readFileSync(path.join(root, "server", "src", "modules", moduleName, fileName), "utf8");
 }
 
-function reject(name, patterns) {
-  const source = read(name);
+function reject(moduleName, fileName, patterns) {
+  const source = read(moduleName, fileName);
   for (const [label, pattern] of patterns) {
-    if (pattern.test(source)) failures.push(`${name} must not depend on ${label}`);
+    if (pattern.test(source)) failures.push(`${moduleName}/${fileName} must not depend on ${label}`);
   }
 }
 
@@ -29,19 +32,24 @@ const persistencePatterns = [
   ["raw SQL execution", /\.prepare\s*\(|\b(?:SELECT|INSERT|UPDATE|DELETE)\s+(?:FROM|INTO|SET)/i],
 ];
 
-reject("route.ts", [
-  ...persistencePatterns,
-  ["a concrete repository", /sqliteRepository|SqliteInventoryRepository/],
-]);
-reject("service.ts", [
-  ...persistencePatterns,
-  ["a concrete repository", /sqliteRepository|SqliteInventoryRepository/],
-]);
-reject("repository.ts", persistencePatterns);
-
 const appSource = fs.readFileSync(path.join(root, "server", "src", "app.ts"), "utf8");
-if (!appSource.includes("./modules/inventory/index.js")) failures.push("app.ts must compose the inventory module entry point");
-if (fs.existsSync(path.join(root, "server", "src", "routes", "inventory.ts"))) failures.push("legacy inventory route must stay removed");
+for (const spec of moduleSpecs) {
+  reject(spec.name, "route.ts", [
+    ...persistencePatterns,
+    ["a concrete repository", spec.concreteRepository],
+  ]);
+  reject(spec.name, "service.ts", [
+    ...persistencePatterns,
+    ["a concrete repository", spec.concreteRepository],
+  ]);
+  reject(spec.name, "repository.ts", persistencePatterns);
+  if (!appSource.includes(`./modules/${spec.name}/index.js`)) {
+    failures.push(`app.ts must compose the ${spec.name} module entry point`);
+  }
+  if (fs.existsSync(path.join(root, "server", "src", "routes", `${spec.name}.ts`))) {
+    failures.push(`legacy ${spec.name} route must stay removed`);
+  }
+}
 
 const businessRoots = ["routes", "services", "modules"].map((name) => path.join(root, "server", "src", name));
 const concreteCloudSdk = /from\s+["'](?:@supabase\/supabase-js|@alicloud\/[^"']+)["']/;
@@ -55,5 +63,5 @@ if (failures.length) {
   console.error(`Module boundary violations:\n- ${failures.join("\n- ")}`);
   process.exitCode = 1;
 } else {
-  console.log("Module boundaries are valid (inventory layers and provider SDK isolation).");
+  console.log("Module boundaries are valid (domain layers and provider SDK isolation).");
 }

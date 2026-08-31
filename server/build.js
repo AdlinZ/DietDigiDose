@@ -12,6 +12,7 @@ try {
       index: 'src/index.ts',
       worker: 'src/worker.ts',
       'database-backup': 'scripts/database-backup.ts',
+      'database-rehearsal': 'scripts/database-rehearsal.ts',
       'migrate-community-media': 'scripts/migrate-community-media.ts',
     },
     bundle: true,

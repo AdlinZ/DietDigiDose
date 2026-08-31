@@ -28,5 +28,6 @@ jobs:
       - run: pnpm -w test:all
       - run: pnpm -w build:client
       - run: pnpm -w build:server
+      - run: pnpm --dir server db:rehearse -- --owner=GitHub-Actions
       - run: pnpm -w build:admin
       - run: pnpm -w audit:prod

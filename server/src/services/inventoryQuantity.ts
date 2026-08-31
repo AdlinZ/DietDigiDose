@@ -157,8 +157,31 @@ export function buildFefoConsumptionPreview(
     FROM inventory_items
     WHERE user_id = ? AND is_available = 1 AND deleted_at IS NULL
     ORDER BY expiration_date ASC, id ASC
-  `).all(userId) as Array<Record<string, unknown>>;
+  `).all(userId) as Array<{
+    id: unknown;
+    food_name: unknown;
+    quantity_value: unknown;
+    quantity_unit: unknown;
+    expiration_date: unknown;
+    batch_code: unknown;
+    version: unknown;
+  }>;
 
+  return buildFefoConsumptionPreviewFromCandidates(inventory, requests);
+}
+
+export function buildFefoConsumptionPreviewFromCandidates(
+  inventory: Array<{
+    id: unknown;
+    food_name: unknown;
+    quantity_value: unknown;
+    quantity_unit: unknown;
+    expiration_date: unknown;
+    batch_code: unknown;
+    version: unknown;
+  }>,
+  requests: Array<{ food_name: string; amount_value: number; unit: InventoryUnit }>,
+) {
   return requests.map((request) => {
     let remaining = request.amount_value;
     const deductions: Array<Record<string, unknown>> = [];

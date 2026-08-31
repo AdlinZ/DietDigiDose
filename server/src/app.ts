@@ -3,7 +3,7 @@ import cors from "cors";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import authRoutes from "./routes/auth.js";
-import inventoryRoutes from "./routes/inventory.js";
+import inventoryRoutes from "./modules/inventory/index.js";
 import dietRecordsRoutes from "./routes/diet-records.js";
 import healthDataRoutes from "./routes/health-data.js";
 import recipesRoutes from "./routes/recipes.js";

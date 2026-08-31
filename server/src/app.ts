@@ -19,7 +19,7 @@ import insightsRoutes from "./modules/insights/index.js";
 import recommendationRoutes from "./routes/recommendations.js";
 import realtimeVoiceRoutes from "./routes/realtime-voice.js";
 import voicePackRoutes from "./modules/voicePacks/index.js";
-import kitchenwareRoutes from "./routes/kitchenware.js";
+import { createKitchenwareModule } from "./modules/kitchenware/index.js";
 import notificationsRoutes from "./routes/notifications.js";
 import mediaRoutes from "./routes/media.js";
 import householdRoutes from "./routes/households.js";
@@ -41,6 +41,7 @@ export function createApp() {
   const providerProfile = getProviderProfile();
   initDatabase();
   recoverAgentRuntime();
+  const kitchenwareRoutes = createKitchenwareModule(db);
   const app = express();
   const uploadedMediaDir = path.resolve(process.env.MEDIA_LOCAL_ROOT || path.join(process.cwd(), "public"), "uploads");
   const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080,http://localhost:5173")

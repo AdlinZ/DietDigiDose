@@ -15,6 +15,8 @@ import { PostgresHealthRepository } from "../src/modules/health/postgresReposito
 import { PostgresInsightsRepository } from "../src/modules/insights/postgresRepository.js";
 import { InsightsService } from "../src/modules/insights/service.js";
 import { consumeInventoryWithPostgresClient, PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
+import { PostgresKitchenwareRepository } from "../src/modules/kitchenware/postgresRepository.js";
+import { KitchenwareService } from "../src/modules/kitchenware/service.js";
 import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
 import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
 import { PostgresVoicePacksRepository } from "../src/modules/voicePacks/postgresRepository.js";
@@ -475,6 +477,42 @@ try {
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs
     WHERE resource_type = 'voice_pack_version' AND resource_id = $1`, [String(voiceId)])).rows[0]?.count), 3);
 
+  const kitchenwareRepository = new PostgresKitchenwareRepository(pool);
+  const kitchenwareService = new KitchenwareService(kitchenwareRepository);
+  const postgresCatalog = await kitchenwareService.catalog("不粘锅");
+  assert.equal(postgresCatalog[0]?.name, "平底锅");
+  assert.equal(postgresCatalog[0]?.capabilities.some((capability) => capability.code === "fry"), true);
+  const postgresPan = await kitchenwareService.create(user.id, {
+    name: "不粘锅", category: "烹饪锅具", status: "需保养", note: "Postgres 厨具",
+    image_url: "", purchase_date: "2026-08-31",
+  });
+  assert.equal(postgresPan.name, "平底锅");
+  assert.equal((await kitchenwareRepository.listItems(user.id + 1)).length, 0);
+  assert.equal(await kitchenwareRepository.findOwnedItem(user.id + 1, Number(postgresPan.id)), null);
+  const maintainedPan = await kitchenwareRepository.maintainItem(user.id, Number(postgresPan.id));
+  assert.equal(maintainedPan?.status, "良好");
+
+  const kitchenwareRecipe = await pool.query(`INSERT INTO recipes
+    (title, cook_time, steps_json, ingredients_json, source, status, quality_status, data_license,
+     source_revision, serving_size, required_kitchenware_json)
+    VALUES ('Postgres 厨具替代菜', 20, '["烹饪测试"]'::jsonb, '[{"name":"番茄"}]'::jsonb,
+      'official', 'approved', 'trusted', 'DietDigiDose-Original', 'postgres-kitchenware-v1', 1, '["空气炸锅"]'::jsonb)
+    RETURNING id`);
+  const kitchenwareRecipeId = Number(kitchenwareRecipe.rows[0]!.id);
+  const kitchenwareCatalogIds = await pool.query("SELECT id, name FROM kitchenware_catalog WHERE name IN ('空气炸锅', '烤箱')");
+  const airFryerId = Number(kitchenwareCatalogIds.rows.find((row) => row.name === "空气炸锅")!.id);
+  await pool.query(`INSERT INTO recipe_kitchenware_requirements
+    (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
+    VALUES ($1, $2, NULL, 'required', 'test', 1, 'Postgres 空气炸锅测试')`, [kitchenwareRecipeId, airFryerId]);
+  await kitchenwareService.create(user.id, {
+    name: "烤箱", category: "小家电", status: "良好", note: "", image_url: "", purchase_date: "",
+  });
+  const postgresCompatibility = await kitchenwareService.compatibility(user.id, kitchenwareRecipeId);
+  assert.equal(postgresCompatibility.blocking.length, 0);
+  assert.equal(postgresCompatibility.requirements[0]?.substitution?.name, "烤箱");
+  assert.equal(await kitchenwareRepository.removeItem(user.id + 1, Number(postgresPan.id)), false);
+  assert.equal(await kitchenwareRepository.removeItem(user.id, Number(postgresPan.id)), true);
+
   const healthRepository = new PostgresHealthRepository(pool);
   const healthUpserts = await Promise.all([
     healthRepository.upsertLog(user.id, "2026-09-02", { weight: 63.2 }),
@@ -589,6 +627,7 @@ try {
     postgresCookingQueueRepositoryVerified: true,
     postgresMealPlansRepositoryVerified: true,
     postgresVoicePacksRepositoryVerified: true,
+    postgresKitchenwareRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
     postgresHealthRepositoryVerified: true,

@@ -19,6 +19,7 @@ The application still selects SQLite until every write path can switch in one co
 - Inventory insights: personal/household outcome traces, atomic inventory closure, optimistic corrections, and timezone-aware weekly reports across SQLite and PostgreSQL repositories.
 - Meal plans: owner-scoped plan and meal updates plus transactional shopping, cooking-queue, and diet-record execution with concurrent idempotent retries across SQLite and PostgreSQL repositories.
 - Voice packs: governed catalog publication, optimistic account preferences, immutable admin revisions, revocation cleanup, status history, and audit writes across SQLite and PostgreSQL repositories.
+- Kitchenware: owner-scoped assets, governed capabilities, safe substitutions, and recipe compatibility across SQLite and PostgreSQL repositories.
 
 Each migrated domain keeps SQL inside its driver adapter; routes and services depend only on the repository port. The boundary ratchet must be updated only when a direct SQLite call is removed or moved into one of these adapters.
 

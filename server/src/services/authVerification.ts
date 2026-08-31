@@ -1,4 +1,5 @@
 import type { Request } from "express";
+import { getProviderProfile } from "../providers/profiles.js";
 import { db, getSystemSetting } from "../storage/db.js";
 import { currentDateKey } from "../utils/date.js";
 import {
@@ -25,7 +26,8 @@ function numberSetting(key: string, fallback: number, min = 0, max = 1_000_000) 
 
 export function getSmsServiceConfig(): SmsServiceConfig {
   return {
-    enabled: getSystemSetting("auth.sms.enabled", defaultSmsEnabled() ? "1" : "0") === "1",
+    enabled: getProviderProfile().providers.auth === SMS_PROVIDER
+      && getSystemSetting("auth.sms.enabled", defaultSmsEnabled() ? "1" : "0") === "1",
     signName: getSystemSetting("auth.sms.sign_name", process.env.ALIYUN_SMS_SIGN_NAME?.trim() || "恒创联众"),
     templateCode: getSystemSetting("auth.sms.template_code", process.env.ALIYUN_SMS_TEMPLATE_CODE?.trim() || "100001"),
     packageTotal: numberSetting("auth.sms.package_total", 1000, 0),

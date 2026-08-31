@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { getProviderProfile } from "../providers/profiles.js";
 import { getSupabaseClient, getSupabaseServiceRoleKey } from "../storage/database/supabase-client.js";
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
@@ -21,7 +22,9 @@ export type StoredMediaReference =
 
 export async function uploadImageDataUrl(dataUrl: string, userId: number, scope: "community") {
   const parsed = parseImageDataUrl(dataUrl);
-  const bucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
+  const bucket = getProviderProfile().providers.storage === "supabase-storage"
+    ? process.env.SUPABASE_MEDIA_BUCKET?.trim()
+    : undefined;
   if (!bucket || !getSupabaseServiceRoleKey()) {
     return uploadToLocalMedia(parsed, userId, scope);
   }

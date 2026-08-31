@@ -769,11 +769,14 @@ export function initDatabase() {
   `).run('http://localhost:9090/media/community/tofu-seaweed-soup.png', 'http://localhost:9090/media/community/tofu-seaweed-soup.png');
 
   ensureAdminUser();
+  // Traceable, license-labelled food and recipe catalogs are product data, not
+  // demo accounts. Keep them available on an empty staging/production database
+  // while leaving synthetic users and community activity disabled.
+  seedIngredientsData();
+  seedExpandedRecipesData();
   if (process.env.ENABLE_DEMO_SEED === '1') {
     seedDefaultData();
     seedExpandedCommunityPosts();
-    seedIngredientsData();
-    seedExpandedRecipesData();
   }
 }
 
@@ -1014,10 +1017,35 @@ export function logAdminAction(params: {
 
 function seedIngredientsData() {
   const insert = db.prepare(`
-    INSERT INTO ingredients_library (name, category, calories_100g, protein_100g, carbs_100g, fat_100g, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO ingredients_library (
+      name, normalized_name, category, calories_100g, protein_100g, carbs_100g, fat_100g,
+      source, source_version, source_updated_at, data_license, nutrition_basis, quality_status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'usda_fdc_foundation', 'USDA-FDC-foundation-seed-v1',
+      CURRENT_TIMESTAMP, 'US-Public-Domain', 'per_100g', 'trusted')
   `);
-  const exists = db.prepare('SELECT id FROM ingredients_library WHERE name = ? AND deleted_at IS NULL LIMIT 1');
+  const exists = db.prepare('SELECT id, source FROM ingredients_library WHERE name = ? AND deleted_at IS NULL LIMIT 1');
+  const repairGovernance = db.prepare(`
+    UPDATE ingredients_library SET
+      normalized_name = COALESCE(normalized_name, ?),
+      source_version = COALESCE(source_version, 'USDA-FDC-foundation-seed-v1'),
+      source_updated_at = COALESCE(source_updated_at, created_at, CURRENT_TIMESTAMP),
+      data_license = COALESCE(data_license, 'US-Public-Domain'),
+      nutrition_basis = COALESCE(nutrition_basis, 'per_100g'),
+      quality_status = COALESCE(quality_status, 'trusted')
+    WHERE id = ? AND source = 'usda_fdc_foundation'
+  `);
+  const insertAlias = db.prepare(`
+    INSERT OR IGNORE INTO ingredient_aliases (ingredient_id, alias, normalized_alias, alias_type)
+    VALUES (?, ?, ?, 'canonical')
+  `);
+  const insertPortion = db.prepare(`
+    INSERT OR IGNORE INTO ingredient_portions (ingredient_id, label, grams, source, source_version)
+    VALUES (?, '100克', 100, 'usda_fdc_foundation', 'USDA-FDC-foundation-seed-v1')
+  `);
+  const normalize = (value: string) => value.toLocaleLowerCase()
+    .normalize('NFKC')
+    .replace(/[\s·、，,。()（）/\\_-]/g, '')
+    .trim();
 
   // 营养数值来自 USDA FoodData Central 的公开 Foundation / SR Legacy 数据（每 100g）。
   // 只补充缺少的名称，不覆盖管理员或用户已经维护的条目。
@@ -1091,9 +1119,22 @@ function seedIngredientsData() {
       ['蜂蜜', '调味料', 304, 0.3, 82.4, 0],
     ] as const;
 
-  for (const food of foods) {
-    if (!exists.get(food[0])) insert.run(...food, 'usda_fdc_foundation');
-  }
+  const transaction = db.transaction(() => {
+    for (const food of foods) {
+      const normalizedName = normalize(food[0]);
+      const existing = exists.get(food[0]) as { id: number; source: string } | undefined;
+      const ingredientId = existing
+        ? existing.id
+        : Number(insert.run(food[0], normalizedName, ...food.slice(1)).lastInsertRowid);
+      // A same-name administrator record remains administrator-owned. Only
+      // repair metadata and derived indexes for this bundled USDA catalog.
+      if (existing && existing.source !== 'usda_fdc_foundation') continue;
+      repairGovernance.run(normalizedName, ingredientId);
+      insertAlias.run(ingredientId, food[0], normalizedName);
+      insertPortion.run(ingredientId);
+    }
+  });
+  transaction();
 }
 
 /**
@@ -1101,14 +1142,39 @@ function seedIngredientsData() {
  * 不依赖外部服务，因此离线和首次启动也有足够内容可用。
  */
 function seedExpandedRecipesData() {
+  const normalize = (value: string) => value.toLocaleLowerCase()
+    .normalize('NFKC')
+    .replace(/[\s·、，,。()（）/\\_-]/g, '')
+    .trim();
   const exists = db.prepare(`
-    SELECT id FROM recipes WHERE title = ? AND deleted_at IS NULL LIMIT 1
+    SELECT id, source FROM recipes WHERE title = ? AND deleted_at IS NULL LIMIT 1
   `);
   const insert = db.prepare(`
     INSERT INTO recipes (
       title, description, image_url, cook_time, difficulty, calories, protein, carbs, fat,
-      category, tags, steps_json, ingredients_json, source, status, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'usda_based', 'approved', CURRENT_TIMESTAMP)
+      category, tags, steps_json, ingredients_json, source, status, quality_status, nutrition_basis,
+      canonical_key, source_content_hash, serving_size, prep_time, required_kitchenware_json,
+      data_license, source_revision, source_attribution, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'usda_based', 'approved', 'trusted',
+      'ingredient_estimate', ?, ?, 1, 10, '["菜刀"]', 'DietDigiDose-Original',
+      'usda-based-catalog-v1', 'DietDigiDose 编辑团队；营养估算基于 USDA FoodData Central', CURRENT_TIMESTAMP)
+  `);
+  const repairGovernance = db.prepare(`
+    UPDATE recipes SET
+      quality_status = COALESCE(quality_status, 'trusted'),
+      nutrition_basis = CASE WHEN nutrition_basis IS NULL OR nutrition_basis = 'source' THEN 'ingredient_estimate' ELSE nutrition_basis END,
+      canonical_key = COALESCE(canonical_key, ?),
+      source_content_hash = COALESCE(source_content_hash, ?),
+      serving_size = COALESCE(serving_size, 1),
+      prep_time = COALESCE(prep_time, 10),
+      required_kitchenware_json = CASE
+        WHEN required_kitchenware_json IS NULL OR required_kitchenware_json = '[]' THEN '["菜刀"]'
+        ELSE required_kitchenware_json
+      END,
+      data_license = COALESCE(data_license, 'DietDigiDose-Original'),
+      source_revision = COALESCE(source_revision, 'usda-based-catalog-v1'),
+      source_attribution = COALESCE(source_attribution, 'DietDigiDose 编辑团队；营养估算基于 USDA FoodData Central')
+    WHERE id = ? AND source = 'usda_based'
   `);
   const image = 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=600&auto=format&fit=crop&q=80';
   const recipes: Array<{
@@ -1143,22 +1209,37 @@ function seedExpandedRecipesData() {
 
   const transaction = db.transaction(() => {
     for (const recipe of recipes) {
-      if (exists.get(recipe.title)) continue;
-      insert.run(
-        recipe.title,
-        `按一人份设计的${recipe.category}食谱；营养数值为基于 USDA FoodData Central 公开食材数据的估算值。`,
-        image,
-        recipe.time,
-        recipe.time <= 12 ? '简单' : '中等',
-        recipe.calories,
-        recipe.protein,
-        recipe.carbs,
-        recipe.fat,
-        recipe.category,
-        JSON.stringify(recipe.tags),
-        JSON.stringify(['将食材洗净并按用量切配。', '按食材特性加热、拌匀或组合，确保肉类和蛋类彻底熟透。', '装盘后按口味加入少量盐、黑胡椒或柠檬汁即可。']),
-        JSON.stringify(recipe.ingredients),
-      );
+      const stepsJson = JSON.stringify(['将食材洗净并按用量切配。', '按食材特性加热、拌匀或组合，确保肉类和蛋类彻底熟透。', '装盘后按口味加入少量盐、黑胡椒或柠檬汁即可。']);
+      const ingredientsJson = JSON.stringify(recipe.ingredients);
+      const canonicalKey = normalize(recipe.title);
+      const contentHash = crypto.createHash('sha256').update(JSON.stringify({
+        title: canonicalKey,
+        ingredients: ingredientsJson,
+        steps: stepsJson,
+        revision: 'usda-based-catalog-v1',
+      })).digest('hex');
+      const existing = exists.get(recipe.title) as { id: number; source: string } | undefined;
+      const recipeId = existing
+        ? existing.id
+        : Number(insert.run(
+          recipe.title,
+          `按一人份设计的${recipe.category}食谱；营养数值为基于 USDA FoodData Central 公开食材数据的估算值。`,
+          image,
+          recipe.time,
+          recipe.time <= 12 ? '简单' : '中等',
+          recipe.calories,
+          recipe.protein,
+          recipe.carbs,
+          recipe.fat,
+          recipe.category,
+          JSON.stringify(recipe.tags),
+          stepsJson,
+          ingredientsJson,
+          canonicalKey,
+          contentHash,
+        ).lastInsertRowid);
+      if (existing && existing.source !== 'usda_based') continue;
+      repairGovernance.run(canonicalKey, contentHash, recipeId);
     }
   });
   transaction();

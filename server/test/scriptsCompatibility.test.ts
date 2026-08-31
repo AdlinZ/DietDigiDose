@@ -47,3 +47,13 @@ test("API and background worker have independent entry points", async () => {
   assert.match(workerEntry, /runManagedWorkerTask/);
   assert.match(workerEntry, /--once/);
 });
+
+test("database operations expose inspectable and guarded backup commands", async () => {
+  const serverPackage = await readPackageJson(serverRoot);
+  assert.equal(serverPackage.scripts?.["db:inspect"], "tsx scripts/database-backup.ts inspect");
+  assert.equal(serverPackage.scripts?.["db:rehearse"], "pnpm build && tsx scripts/database-rehearsal.ts");
+  const script = await readFile(path.join(serverRoot, "scripts", "database-backup.ts"), "utf8");
+  assert.match(script, /integrity_check/);
+  assert.match(script, /before-restore/);
+  assert.match(script, /backup destination already exists/);
+});

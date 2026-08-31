@@ -57,11 +57,17 @@ pnpm --dir server db:backup /secure-backups/dietdigidose.db
 
 每次备份记录时间、版本、文件大小、校验值和保存位置。只有实际恢复并通过验证的备份才算可用。
 
+备份命令输出 JSON；也可在不修改文件的情况下检查任意备份的完整性、SHA-256、migration 版本与核心表行数：
+
+```bash
+pnpm --dir server db:inspect /secure-backups/dietdigidose.db
+```
+
 ## SQLite 恢复与回滚
 
 1. 停止所有 server 实例，确认没有进程继续写入数据库。
 2. 校验备份来源、大小、权限、校验值和可用磁盘空间。
-3. 执行恢复；命令会先把现有数据库复制为带时间戳的安全副本。
+3. 执行恢复；命令会先验证备份，随后把现有数据库及 WAL 侧文件保留为带时间戳的安全副本，再原子切换已验证的恢复文件。无效备份不会触碰当前数据库。
 
 ```bash
 pnpm --dir server db:restore /secure-backups/dietdigidose.db --force
@@ -72,6 +78,17 @@ pnpm --dir server db:restore /secure-backups/dietdigidose.db --force
 6. 记录恢复耗时和数据时间点。若验证失败，停止写入，恢复命令生成的安全副本或上一份已验证备份，并回滚应用版本。
 
 至少在首次外部内测前、每次 schema 变更后和公开发布前完成一次隔离恢复演练。
+
+仓库提供完整演练入口。它在系统临时目录依次验证空库初始化、上一候选 migration 升级、双账号隔离、三种库存录入、食谱与烹饪扣减、饮食记录、媒体引用、在线备份、备份后写入边界、独立恢复、管理统计和安全副本回滚；报告包含候选 SHA、负责人、RPO、RTO、文件大小与摘要。演练数据成功后自动清除，失败时保留临时目录用于调查；`--keep` 可显式保留成功产物。
+
+```bash
+pnpm --dir server db:rehearse -- \
+  --owner=release-owner \
+  --previous-version=58 \
+  --output=/secure-reports/database-rehearsal.json
+```
+
+报告不得使用真实用户数据，也不得提交数据库、媒体或密钥。候选验收只接受从待发布提交运行的报告；CI 演练用于阻止代码回归，不能代替实际 staging 的持久卷、权限、备份存储与负责人验收。
 
 ## 后台 worker
 

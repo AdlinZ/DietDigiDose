@@ -16,6 +16,8 @@
     "localize:ingredient-names": "tsx scripts/localize-ingredient-names.ts",
     "db:backup": "tsx scripts/database-backup.ts backup",
     "db:restore": "tsx scripts/database-backup.ts restore",
+    "db:inspect": "tsx scripts/database-backup.ts inspect",
+    "db:rehearse": "pnpm build && tsx scripts/database-rehearsal.ts",
     "media:migrate": "tsx scripts/migrate-community-media.ts",
     "preinstall": "npx only-allow pnpm",
     "start": "node scripts/start-production.mjs",

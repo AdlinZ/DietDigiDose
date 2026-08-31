@@ -9,6 +9,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
+import { PostgresHealthRepository } from "../src/modules/health/postgresRepository.js";
 import { PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
 import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
 import { PostgresWorkerRepository } from "../src/modules/worker/postgresRepository.js";
@@ -204,6 +205,29 @@ try {
   const customFood = await pool.query("SELECT user_id, name, status FROM user_custom_foods WHERE id = $1", [customFoodId]);
   assert.deepEqual(customFood.rows[0], { user_id: user.id, name: "Postgres 家庭豆浆", status: "pending" });
 
+  const healthRepository = new PostgresHealthRepository(pool);
+  const healthUpserts = await Promise.all([
+    healthRepository.upsertLog(user.id, "2026-09-02", { weight: 63.2 }),
+    healthRepository.upsertLog(user.id, "2026-09-02", { water_ml: 1800, cycle_status: null }),
+  ]);
+  assert.deepEqual(healthUpserts.map((result) => result.created).sort(), [false, true]);
+  const postgresHealthLogs = await healthRepository.listLogs(user.id, 30);
+  const mergedHealthLog = postgresHealthLogs.filter((log) => log.recorded_date === "2026-09-02");
+  assert.equal(mergedHealthLog.length, 1);
+  assert.equal(mergedHealthLog[0]?.weight, 63.2);
+  assert.equal(mergedHealthLog[0]?.water_ml, 1800);
+  const postgresHealthProfile = await healthRepository.upsertProfile(user.id, {
+    allergies_json: [{ name: "花生", type: "allergy", severity: "severe" }],
+    medical_conditions_json: ["高血压"],
+    kitchen_constraints_json: { servings: 2 },
+    tracking_enabled: true,
+  });
+  assert.deepEqual(postgresHealthProfile.allergies_json, [{ name: "花生", type: "allergy", severity: "severe" }]);
+  assert.deepEqual(postgresHealthProfile.medical_conditions_json, ["高血压"]);
+  assert.equal(postgresHealthProfile.tracking_enabled, true);
+  assert.equal(await healthRepository.removeLog(user.id + 1, Number(mergedHealthLog[0]?.id)), false);
+  assert.equal(await healthRepository.removeLog(user.id, Number(mergedHealthLog[0]?.id)), true);
+
   const shoppingRepository = new PostgresShoppingRepository(pool);
   const shoppingItem = await shoppingRepository.create(
     "11111111-1111-4111-8111-111111111111",
@@ -292,6 +316,7 @@ try {
     postgresInventoryRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
+    postgresHealthRepositoryVerified: true,
     postgresShoppingRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,

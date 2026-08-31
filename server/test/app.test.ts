@@ -2013,6 +2013,18 @@ describe("user data isolation", () => {
     assert.equal((log.body as JsonObject).cycle_status, "经期");
     assert.equal((log.body as JsonObject).sleep_hours, 7.5);
 
+    const mergedLog = await api("/api/v1/health-data/log", {
+      method: "POST",
+      token: first.token,
+      body: JSON.stringify({ water_ml: 1800, cycle_status: null, recorded_date: "2026-08-03" }),
+    });
+    assert.equal(mergedLog.response.status, 200);
+    assert.equal((mergedLog.body as JsonObject).weight, 65);
+    assert.equal((mergedLog.body as JsonObject).water_ml, 1800);
+    assert.equal((mergedLog.body as JsonObject).cycle_status, null);
+    const latestLog = await api("/api/v1/health-data/latest", { token: first.token });
+    assert.equal((latestLog.body as JsonObject).id, (log.body as JsonObject).id);
+
     const secondProfile = await api("/api/v1/health-data/profile", { token: second.token });
     assert.equal((secondProfile.body as JsonObject).user_id, second.user.id);
     assert.equal((secondProfile.body as JsonObject).health_goal, "healthy");

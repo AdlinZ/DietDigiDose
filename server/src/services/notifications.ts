@@ -183,14 +183,9 @@ export async function sendExpiringInventoryNotifications() {
   const mark = db.prepare(`UPDATE notification_deliveries SET status = ?
     WHERE user_id = ? AND notification_type = 'expiring_inventory' AND delivery_date = ? AND status = 'queued'`);
   db.transaction(() => grouped.forEach((_items, userId) => mark.run(statuses.get(userId) ?? "inbox_only", userId, today)))();
-  return { recipients: grouped.size, messages: messages.length };
-}
-
-export function startNotificationScheduler() {
-  const run = async () => {
-    await checkExpoPushReceipts();
-    await sendExpiringInventoryNotifications();
+  return {
+    recipients: grouped.size,
+    messages: messages.length,
+    failedRecipients: [...statuses.values()].filter((status) => status === "failed").length,
   };
-  void run().catch((error) => console.error("Unable to process notifications:", error));
-  return setInterval(() => void run().catch((error) => console.error("Unable to process notifications:", error)), 60 * 60 * 1000);
 }

@@ -1963,6 +1963,41 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 59,
+    name: "independent_worker_task_runs",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS worker_task_leases (
+          task_name TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL,
+          lease_expires_at DATETIME NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS worker_task_runs (
+          id TEXT PRIMARY KEY,
+          task_name TEXT NOT NULL,
+          worker_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+          started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          finished_at DATETIME,
+          duration_ms INTEGER,
+          processed_count INTEGER NOT NULL DEFAULT 0,
+          succeeded_count INTEGER NOT NULL DEFAULT 0,
+          failed_count INTEGER NOT NULL DEFAULT 0,
+          result_json TEXT,
+          error_message TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_worker_task_runs_task_started
+          ON worker_task_runs(task_name, started_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_worker_task_runs_status_started
+          ON worker_task_runs(status, started_at DESC, id DESC);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(database: Database.Database) {

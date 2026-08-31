@@ -5,6 +5,8 @@
   "scripts": {
     "build": "node build.js",
     "dev": "tsx watch src/index.ts",
+    "worker": "tsx src/worker.ts",
+    "worker:run": "tsx src/worker.ts --once",
     "import:open-food-facts": "tsx scripts/import-open-food-facts.ts",
     "import:howtocook": "tsx scripts/import-howtocook.ts",
     "import:wikibooks-recipes": "tsx scripts/import-wikibooks-recipes.ts",

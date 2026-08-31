@@ -138,7 +138,9 @@ describe("API security baseline", () => {
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 52").get() as { name: string }).name, "content_import_failure_audit");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 53").get() as { name: string }).name, "durable_media_cleanup_jobs");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 54").get() as { name: string }).name, "media_cleanup_job_leases");
+    assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 59").get() as { name: string }).name, "independent_worker_task_runs");
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'media_cleanup_jobs'").get());
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'worker_task_runs'").get());
     const mediaCleanupColumns = db.prepare("PRAGMA table_info(media_cleanup_jobs)").all() as Array<{ name: string }>;
     assert.ok(mediaCleanupColumns.some((column) => column.name === "claim_token"));
     assert.ok(mediaCleanupColumns.some((column) => column.name === "claimed_at"));
@@ -157,6 +159,53 @@ describe("API security baseline", () => {
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_chat_session_deletions'").get());
     const mealPlanColumns = db.prepare("PRAGMA table_info(meal_plans)").all() as Array<{ name: string }>;
     assert.ok(mealPlanColumns.some((column) => column.name === "version"));
+  });
+
+  test("worker task leases prevent concurrent owners and persist batch outcomes", async () => {
+    const runtime = await import("../src/services/workerRuntime.js");
+    assert.equal(runtime.acquireWorkerTaskLease("media-cleanup", "worker-a", 60_000), true);
+    assert.equal(runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), false);
+    db.prepare("UPDATE worker_task_leases SET lease_expires_at = datetime('now', '-1 second') WHERE task_name = 'media-cleanup'").run();
+    assert.equal(runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), true);
+    assert.equal(runtime.releaseWorkerTaskLease("media-cleanup", "worker-b"), true);
+
+    const completed = await runtime.runManagedWorkerTask({
+      taskName: "media-cleanup",
+      workerId: "worker-test",
+      run: async () => ({ processed: 2, succeeded: 2, failed: 0, details: { source: "test" } }),
+    });
+    assert.equal(completed.status, "completed");
+    const completedRow = db.prepare(`SELECT status, processed_count AS processed, succeeded_count AS succeeded,
+      failed_count AS failed FROM worker_task_runs WHERE id = ?`).get(completed.runId) as JsonObject;
+    assert.deepEqual(completedRow, { status: "completed", processed: 2, succeeded: 2, failed: 0 });
+
+    const partialFailure = await runtime.runManagedWorkerTask({
+      taskName: "media-cleanup",
+      workerId: "worker-test",
+      run: async () => ({ processed: 2, succeeded: 1, failed: 1 }),
+    });
+    assert.equal(partialFailure.status, "failed");
+    const failedRow = db.prepare("SELECT status, error_message AS error FROM worker_task_runs WHERE id = ?")
+      .get(partialFailure.runId) as JsonObject;
+    assert.deepEqual(failedRow, { status: "failed", error: "1 item(s) failed" });
+    db.prepare("DELETE FROM worker_task_runs WHERE worker_id = 'worker-test'").run();
+  });
+
+  test("worker batch history is visible only to administrators", async () => {
+    const regular = await register("worker-observer@example.com");
+    const forbidden = await api("/api/v1/admin/worker-runs", { token: regular.token });
+    assert.equal(forbidden.response.status, 403);
+
+    db.prepare(`INSERT INTO worker_task_runs
+      (id, task_name, worker_id, status, finished_at, duration_ms, processed_count, succeeded_count, result_json)
+      VALUES ('worker-visible-run', 'notifications', 'worker-visible', 'completed', CURRENT_TIMESTAMP, 12, 3, 3, '{"source":"test"}')`).run();
+    const token = await loginAdmin();
+    const visible = await api("/api/v1/admin/worker-runs?task=notifications&status=completed", { token });
+    assert.equal(visible.response.status, 200);
+    const item = (visible.body as JsonObject).items.find((candidate: JsonObject) => candidate.id === "worker-visible-run");
+    assert.deepEqual(item.result, { source: "test" });
+    assert.equal(item.processed, 3);
+    db.prepare("DELETE FROM worker_task_runs WHERE id = 'worker-visible-run'").run();
   });
 
   test("login audits use Express trusted-proxy resolution instead of raw forwarding headers", async () => {

@@ -29,6 +29,13 @@
    docker compose -f deploy/docker-compose.staging.yml --project-directory deploy exec api node dist/migrate-community-media.js --apply
    ```
 
+6. `worker` 与 API 为独立进程。查看最近任务批次或手动触发单项任务：
+
+   ```bash
+   docker compose -f deploy/docker-compose.staging.yml --project-directory deploy logs worker
+   docker compose -f deploy/docker-compose.staging.yml --project-directory deploy exec worker node dist/worker.js --once --task=media-cleanup
+   ```
+
 ## 备份与隔离恢复
 
 先在线备份，再把备份复制到临时 volume 中启动隔离 API；不要覆盖正在服务的数据库。

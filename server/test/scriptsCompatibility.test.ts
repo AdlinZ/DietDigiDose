@@ -36,3 +36,14 @@ test("production defaults are applied inside the portable Node launcher", async 
   assert.match(launcher, /process\.env\.NODE_ENV \|\|= "production"/);
   assert.match(launcher, /process\.env\.PORT \|\|= "9090"/);
 });
+
+test("API and background worker have independent entry points", async () => {
+  const serverPackage = await readPackageJson(serverRoot);
+  assert.equal(serverPackage.scripts?.worker, "tsx src/worker.ts");
+  assert.equal(serverPackage.scripts?.["worker:run"], "tsx src/worker.ts --once");
+  const apiEntry = await readFile(path.join(serverRoot, "src", "index.ts"), "utf8");
+  assert.doesNotMatch(apiEntry, /start(?:Notification|MediaCleanup)Scheduler/);
+  const workerEntry = await readFile(path.join(serverRoot, "src", "worker.ts"), "utf8");
+  assert.match(workerEntry, /runManagedWorkerTask/);
+  assert.match(workerEntry, /--once/);
+});

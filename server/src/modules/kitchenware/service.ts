@@ -34,6 +34,10 @@ export class KitchenwareService {
     return this.evaluateRequirements(userId, recipeId);
   }
 
+  async requirements(recipeId: number) {
+    return (await this.repository.requirementsForRecipe(recipeId)).map(formatRequirement);
+  }
+
   async create(userId: number, body: Row) {
     const input = this.normalizeInput(body);
     this.validate(input);
@@ -97,7 +101,7 @@ export class KitchenwareService {
   }
 
   async evaluateRequirements(userId: number, recipeId: number) {
-    const requirements = (await this.repository.requirementsForRecipe(recipeId)).map(formatRequirement);
+    const requirements = await this.requirements(recipeId);
     const owned = await this.repository.ownedItems(userId);
     const catalog = await this.repository.listCatalog();
     const ownedCatalogIds = new Set<number>();

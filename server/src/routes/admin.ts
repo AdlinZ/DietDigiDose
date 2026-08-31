@@ -11,7 +11,7 @@ import { createAdminAssetsRouter } from "./admin/assets.js";
 import { createAdminNotificationsRouter } from "./admin/notifications.js";
 import { createAdminAgentRunsRouter } from "./admin/agent-runs.js";
 import { createAdminMediaCleanupRouter } from "./admin/media-cleanup.js";
-import { createAdminVoicePackRouter } from "./admin/voice-packs.js";
+import { createAdminVoicePackRouter } from "../modules/voicePacks/index.js";
 import { createAdminWorkerRunsRouter } from "../modules/worker/index.js";
 import { auditAdminAction as audit } from "./admin/shared.js";
 import { aiErrorTypeForCode, sanitizeAIErrorMessage } from "../services/aiErrors.js";

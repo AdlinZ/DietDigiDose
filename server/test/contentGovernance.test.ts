@@ -8,7 +8,7 @@ import {
   validateIngredientQuality,
   validateRecipePublication,
 } from "../src/services/contentGovernance.js";
-import { parseVoicePackCatalog } from "../src/routes/voice-packs.js";
+import { parseVoicePackCatalog } from "../src/modules/voicePacks/manifest.js";
 
 describe("content governance contracts", () => {
   test("normalizes common Chinese variants and punctuation", () => {

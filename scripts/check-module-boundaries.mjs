@@ -16,6 +16,12 @@ const moduleSpecs = [
   },
   { name: "inventory", concreteRepository: /sqliteRepository|SqliteInventoryRepository/ },
   {
+    name: "voicePacks",
+    concreteRepository: /sqliteRepository|SqliteVoicePacksRepository/,
+    legacyFile: "server/src/routes/voice-packs.ts",
+    extraLegacyFiles: ["server/src/routes/admin/voice-packs.ts", "server/src/services/voicePacks.ts"],
+  },
+  {
     name: "mealPlans",
     concreteRepository: /sqliteRepository|SqliteMealPlansRepository/,
     legacyFile: "server/src/routes/meal-plans.ts",
@@ -89,6 +95,9 @@ for (const spec of moduleSpecs) {
   const legacyFile = spec.legacyFile || `server/src/routes/${spec.name}.ts`;
   if (fs.existsSync(path.join(root, legacyFile))) {
     failures.push(`legacy ${spec.name} route must stay removed`);
+  }
+  for (const extraLegacyFile of spec.extraLegacyFiles || []) {
+    if (fs.existsSync(path.join(root, extraLegacyFile))) failures.push(`legacy ${extraLegacyFile} must stay removed`);
   }
 }
 

@@ -17,6 +17,8 @@ import { InsightsService } from "../src/modules/insights/service.js";
 import { consumeInventoryWithPostgresClient, PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
 import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
 import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
+import { PostgresVoicePacksRepository } from "../src/modules/voicePacks/postgresRepository.js";
+import { VoicePacksService } from "../src/modules/voicePacks/service.js";
 import { PostgresWorkerRepository } from "../src/modules/worker/postgresRepository.js";
 import { WorkerRuntime } from "../src/modules/worker/service.js";
 import {
@@ -435,6 +437,44 @@ try {
   assert.equal(await mealPlanRepository.find(user.id, mealPlanId, false), null);
   assert.equal((await mealPlanRepository.find(user.id, mealPlanId, true))?.archived, true);
 
+  const voicePacksRepository = new PostgresVoicePacksRepository(pool);
+  const voicePacksService = new VoicePacksService(voicePacksRepository);
+  const voiceManifest = {
+    voiceId: "postgres-licensed-zh", name: "Postgres 授权音色", version: "1.0.0", language: "zh-CN",
+    sampleRate: 22050, outputFormat: "pcm-f32" as const, minimumAppVersion: "1.0.0", minimumMemoryMb: 512,
+    license: { name: "Apache-2.0", url: "https://example.com/license", speakerAuthorization: "postgres-record", modelNotice: "extractable" },
+    resources: [{ path: "model.onnx", url: "https://example.com/model.onnx", sha256: "c".repeat(64), bytes: 1024 }],
+    model: { path: "model.onnx", vocabularyPath: "model.onnx", inputNames: { tokens: "tokens", lengths: "lengths" } },
+  };
+  const createdVoice = await voicePacksService.create(user.id, { manifest: voiceManifest, providerVoice: "alloy" }, {});
+  const voiceId = Number(createdVoice.id);
+  const preferenceCreates = await Promise.all([
+    voicePacksRepository.updatePreference(user.id, 0, null, null, "automatic"),
+    voicePacksRepository.updatePreference(user.id, 0, null, null, "automatic"),
+  ]);
+  assert.equal(preferenceCreates.filter(Boolean).length, 1);
+  const publishAudit = { adminUserId: user.id, action: "voice_pack.published", resourceId: voiceId, summary: "Postgres publish" };
+  const publishes = await Promise.all([
+    voicePacksRepository.transition(user.id, voiceId, 1, "draft", "published", "发布审核通过", publishAudit),
+    voicePacksRepository.transition(user.id, voiceId, 1, "draft", "published", "发布审核通过", publishAudit),
+  ]);
+  assert.equal(publishes.filter(Boolean).length, 1);
+  const catalog = await voicePacksService.catalog("1.0.0");
+  assert.equal(catalog.items.some((item) => item.voiceId === voiceManifest.voiceId), true);
+  const preference = await voicePacksRepository.preference(user.id);
+  const revokeAudit = { adminUserId: user.id, action: "voice_pack.revoked", resourceId: voiceId, summary: "Postgres revoke" };
+  const [selected, revokedVoice] = await Promise.all([
+    voicePacksRepository.updatePreference(user.id, preference.version, voiceManifest.voiceId, voiceManifest.version, "automatic"),
+    voicePacksRepository.transition(user.id, voiceId, 2, "published", "revoked", "紧急撤销测试", revokeAudit),
+  ]);
+  assert.equal(revokedVoice?.status, "revoked");
+  const clearedPreference = await voicePacksRepository.preference(user.id);
+  assert.equal(clearedPreference.selectedVoiceId, null);
+  assert.equal(clearedPreference.version, selected ? selected.version + 1 : preference.version);
+  assert.equal((await voicePacksRepository.history(voiceId)).length, 3);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs
+    WHERE resource_type = 'voice_pack_version' AND resource_id = $1`, [String(voiceId)])).rows[0]?.count), 3);
+
   const healthRepository = new PostgresHealthRepository(pool);
   const healthUpserts = await Promise.all([
     healthRepository.upsertLog(user.id, "2026-09-02", { weight: 63.2 }),
@@ -548,6 +588,7 @@ try {
     postgresInsightsRepositoryVerified: true,
     postgresCookingQueueRepositoryVerified: true,
     postgresMealPlansRepositoryVerified: true,
+    postgresVoicePacksRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
     postgresHealthRepositoryVerified: true,

@@ -22,6 +22,11 @@ const moduleSpecs = [
     extraLegacyFiles: ["server/src/routes/admin/voice-packs.ts", "server/src/services/voicePacks.ts"],
   },
   {
+    name: "kitchenware",
+    concreteRepository: /sqliteRepository|SqliteKitchenwareRepository/,
+    legacyFile: "server/src/routes/kitchenware.ts",
+  },
+  {
     name: "mealPlans",
     concreteRepository: /sqliteRepository|SqliteMealPlansRepository/,
     legacyFile: "server/src/routes/meal-plans.ts",

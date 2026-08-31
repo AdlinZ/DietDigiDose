@@ -12,6 +12,7 @@ The application still selects SQLite until every write path can switch in one co
 - User feedback: SQLite and PostgreSQL repositories with structured JSON context and PostgreSQL integration coverage.
 - Food library: barcode lookup, governed local search, search-gap aggregation, and custom-food submission across SQLite and PostgreSQL repositories.
 - Worker runtime: atomic multi-instance leases, run outcomes, failure persistence, and admin history across SQLite and PostgreSQL repositories.
+- Personal shopping list: CRUD, optimistic version checks, soft deletion, and idempotent transactional imports across SQLite and PostgreSQL repositories.
 
 Each migrated domain keeps SQL inside its driver adapter; routes and services depend only on the repository port. The boundary ratchet must be updated only when a direct SQLite call is removed or moved into one of these adapters.
 

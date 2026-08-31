@@ -10,6 +10,7 @@ import { Pool } from "pg";
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
 import { PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
+import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
 import { PostgresWorkerRepository } from "../src/modules/worker/postgresRepository.js";
 import { WorkerRuntime } from "../src/modules/worker/service.js";
 import {
@@ -203,6 +204,32 @@ try {
   const customFood = await pool.query("SELECT user_id, name, status FROM user_custom_foods WHERE id = $1", [customFoodId]);
   assert.deepEqual(customFood.rows[0], { user_id: user.id, name: "Postgres 家庭豆浆", status: "pending" });
 
+  const shoppingRepository = new PostgresShoppingRepository(pool);
+  const shoppingItem = await shoppingRepository.create(
+    "11111111-1111-4111-8111-111111111111",
+    user.id,
+    { name: "Postgres 番茄", amount: "2个", category: "蔬菜", checked: false },
+  );
+  assert.equal(shoppingItem.version, 1);
+  assert.equal(await shoppingRepository.update(shoppingItem.id, user.id, { version: 2, checked: true }), null);
+  const updatedShoppingItem = await shoppingRepository.update(shoppingItem.id, user.id, { version: 1, checked: true });
+  assert.equal(updatedShoppingItem?.checked, true);
+  const importShoppingItems = [
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      clientId: "postgres-shopping-import-0001:牛奶:1盒",
+      input: { name: "牛奶", amount: "1盒", category: "乳制品", checked: false },
+    },
+  ];
+  await Promise.all([
+    shoppingRepository.importItems(user.id, importShoppingItems),
+    shoppingRepository.importItems(user.id, [{ ...importShoppingItems[0]!, id: "33333333-3333-4333-8333-333333333333" }]),
+  ]);
+  const postgresShoppingItems = await shoppingRepository.list(user.id);
+  assert.equal(postgresShoppingItems.filter((item) => item.name === "牛奶").length, 1);
+  assert.equal(await shoppingRepository.remove(shoppingItem.id, user.id + 1), false);
+  assert.equal(await shoppingRepository.remove(shoppingItem.id, user.id), true);
+
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
@@ -265,6 +292,7 @@ try {
     postgresInventoryRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
+    postgresShoppingRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,

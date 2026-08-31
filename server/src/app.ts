@@ -7,7 +7,7 @@ import inventoryRoutes from "./modules/inventory/index.js";
 import dietRecordsRoutes from "./routes/diet-records.js";
 import healthDataRoutes from "./routes/health-data.js";
 import recipesRoutes from "./routes/recipes.js";
-import foodsRoutes from "./routes/foods.js";
+import foodsRoutes from "./modules/foods/index.js";
 import communityRoutes from "./routes/community.js";
 import adminRoutes from "./routes/admin.js";
 import aiRoutes from "./routes/ai.js";

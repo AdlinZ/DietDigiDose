@@ -8,10 +8,11 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { PostgresCookingQueueRepository } from "../src/modules/cookingQueue/postgresRepository.js";
+import { PostgresDietRecordsRepository } from "../src/modules/dietRecords/postgresRepository.js";
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
 import { PostgresHealthRepository } from "../src/modules/health/postgresRepository.js";
-import { PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
+import { consumeInventoryWithPostgresClient, PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
 import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
 import { PostgresWorkerRepository } from "../src/modules/worker/postgresRepository.js";
 import { WorkerRuntime } from "../src/modules/worker/service.js";
@@ -152,6 +153,58 @@ try {
   const history = await inventoryRepository.history(user.id, migratedTomato.id);
   assert(history?.some((entry) => entry.action === "consume_partial"));
   assert.deepEqual(await inventoryRepository.remove(user.id, created), { kind: "removed" });
+
+  const dietInventory = await inventoryRepository.create(user.id, {
+    food_name: "烹饪事务土豆",
+    category: "蔬菜",
+    quantity: "400g",
+    expiration_date: "2026-09-12",
+    storage_location: "常温",
+    quantity_value: 400,
+    quantity_unit: "g",
+  });
+  const dietRepository = new PostgresDietRecordsRepository(pool, consumeInventoryWithPostgresClient);
+  const completionInput = {
+    idempotency_key: "postgres-cooking-completion-0001",
+    recipe_id: null,
+    inventory_item_ids: [],
+    inventory_consumptions: [{
+      item_id: dietInventory.id,
+      version: dietInventory.version,
+      mode: "amount" as const,
+      amount_value: 125,
+      unit: "g" as const,
+    }],
+    diet_record: {
+      meal_type: "晚餐",
+      food_name: "Postgres 土豆料理",
+      amount: "1份",
+      calories: 280,
+      recorded_at: "2026-09-03",
+      recorded_time: "19:30",
+    },
+  };
+  const cookingCompletions = await Promise.all([
+    dietRepository.completeCooking(user.id, completionInput),
+    dietRepository.completeCooking(user.id, completionInput),
+  ]);
+  assert.deepEqual(cookingCompletions.map((result) => result.repeated).sort(), [false, true]);
+  const completionRecordIds = cookingCompletions.map((result) => Number((result.diet_record as { id: number }).id));
+  assert.equal(completionRecordIds[0], completionRecordIds[1]);
+  const storedDietInventory = await inventoryRepository.findOwned(user.id, dietInventory.id);
+  assert.equal(storedDietInventory?.quantity_value, 275);
+  const completedMeals = await dietRepository.list(user.id, "2026-09-03");
+  assert.equal(completedMeals.filter((record) => record.food_name === "Postgres 土豆料理").length, 1);
+  const manualDietRecord = await dietRepository.create(user.id, {
+    meal_type: "加餐",
+    food_name: "Postgres 酸奶",
+    amount: "1杯",
+    calories: 95,
+    recorded_at: "2026-09-04",
+    recorded_time: null,
+  });
+  assert.equal(await dietRepository.remove(user.id + 1, Number(manualDietRecord.id)), false);
+  assert.equal(await dietRepository.remove(user.id, Number(manualDietRecord.id)), true);
 
   const feedbackRepository = new PostgresFeedbackRepository(pool);
   const feedbackId = await feedbackRepository.create(user.id, {
@@ -359,6 +412,7 @@ try {
     schema: archive.baselineSchemaSha256,
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
+    postgresDietRecordsRepositoryVerified: true,
     postgresCookingQueueRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,

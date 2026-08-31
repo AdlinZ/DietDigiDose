@@ -380,7 +380,7 @@ export default function ShoppingListScreen() {
 
       const itemsToImport = checkedItems.map((item) => {
         const defaults = inferIngredientDefaults(item.name);
-        const location = item.storageLocation || defaults.storageLocation;
+        const location = (item.storageLocation || defaults.storageLocation) as "冷藏" | "冷冻" | "常温";
         const shelfDays = inferShelfLifeDays(item.name, location as any);
         const startDate = item.purchaseDate ? parseDateKey(item.purchaseDate) || new Date() : new Date();
         const expDate = dateKeyAfterDays(shelfDays, startDate);

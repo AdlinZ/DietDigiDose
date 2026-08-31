@@ -659,7 +659,7 @@ export default function CookingModeScreen() {
       return parsed ? [{ food_name: ingredient.name, amount_value: parsed.amount, unit: parsed.unit }] : [];
     });
     if (!requests.length) throw new Error("菜谱用量缺少可换算的数值和单位，请选择“整项用完”或先修改实际用量。");
-    const preview = await inventoryApi.consumptionPreview<ConsumptionPreview>(authFetch, requests);
+    const preview: ConsumptionPreview = await inventoryApi.consumptionPreview(authFetch, requests);
     const uncovered = preview.items.filter((item) => !item.fully_covered);
     if (uncovered.length) {
       const description = uncovered.slice(0, 3).map((item) => (

@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: 10.18.0
@@ -24,6 +26,7 @@ jobs:
       - run: pnpm -w validate:toolchain
       - run: pnpm install --frozen-lockfile
       - run: pnpm -w validate:release
+      - run: pnpm -w contracts:check
       - run: pnpm -w quality:test-quarantine
       - run: pnpm -w lint:all
       - run: pnpm -w test:all

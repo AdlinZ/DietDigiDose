@@ -29,6 +29,8 @@
     "test:migrations": "pnpm --dir ./server db:rehearse -- --owner=quality-gate",
     "test:coverage": "pnpm --dir ./client test:coverage && pnpm --dir ./server test:coverage",
     "test:stability": "node scripts/run-test-stability.mjs",
+    "contracts:generate": "pnpm --dir ./packages/contracts openapi:generate",
+    "contracts:check": "pnpm --dir ./packages/contracts check",
     "test:all": "pnpm test:client && pnpm test:server && pnpm test:admin",
     "quality:test-quarantine": "node scripts/check-test-quarantine.mjs",
     "quality:build-budgets": "node scripts/check-build-budgets.mjs",

@@ -1,4 +1,14 @@
 import { z } from "zod";
+import { inventoryConsumptionItemSchema } from "@dietdigidose/contracts";
+
+export {
+  inventoryBulkIntakeSchema,
+  inventoryConsumptionPreviewSchema,
+  inventoryConsumptionSchema,
+  inventoryCreateSchema,
+  inventoryUpdateSchema,
+  shoppingInventoryImportSchema,
+} from "@dietdigidose/contracts";
 
 const trimmedString = (min: number, max: number, label: string) =>
   z.string().trim().min(min, `${label}不能为空`).max(max, `${label}不能超过 ${max} 个字符`);
@@ -103,98 +113,6 @@ export const feedbackCreateSchema = z.object({
     recipeTitle: z.string().trim().max(160).optional(),
   }).strict().optional(),
 }).strict();
-
-const inventoryUnit = z.enum(["g", "kg", "ml", "l", "piece", "serving", "bag", "box", "bottle", "can"]);
-
-const inventoryCreateObject = z.object({
-  food_name: trimmedString(1, 100, "食材名称"),
-  category: trimmedString(1, 40, "分类"),
-  quantity: trimmedString(1, 40, "数量").default("1份"),
-  expiration_date: isoDate,
-  storage_location: z.enum(["冷藏", "冷冻", "常温"]).default("冷藏"),
-  image_url: optionalImage,
-  quantity_value: z.number().finite().positive().max(1_000_000).nullable().optional(),
-  quantity_unit: inventoryUnit.nullable().optional(),
-  package_size_value: z.number().finite().positive().max(1_000_000).nullable().optional(),
-  package_size_unit: inventoryUnit.nullable().optional(),
-  batch_code: z.string().trim().max(80).nullable().optional(),
-}).strict();
-
-export const inventoryCreateSchema = inventoryCreateObject.superRefine((value, context) => {
-  if ((value.quantity_value == null) !== (value.quantity_unit == null)) {
-    context.addIssue({ code: "custom", path: ["quantity_unit"], message: "结构化数量和单位必须同时填写" });
-  }
-  if ((value.package_size_value == null) !== (value.package_size_unit == null)) {
-    context.addIssue({ code: "custom", path: ["package_size_unit"], message: "包装规格数值和单位必须同时填写" });
-  }
-});
-
-export const inventoryUpdateSchema = inventoryCreateObject.partial().extend({
-  is_available: z.boolean().optional(),
-  version: z.number().int().positive().optional(),
-}).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个需要更新的字段");
-
-const inventoryConsumptionItemSchema = z.object({
-  item_id: z.number().int().positive(),
-  version: z.number().int().positive(),
-  mode: z.enum(["amount", "all"]),
-  amount_value: z.number().finite().positive().max(1_000_000).optional(),
-  unit: inventoryUnit.optional(),
-}).strict().superRefine((value, context) => {
-  if (value.mode === "amount" && (value.amount_value === undefined || value.unit === undefined)) {
-    context.addIssue({ code: "custom", path: ["amount_value"], message: "部分扣减需要填写数量和单位" });
-  }
-});
-
-export const inventoryConsumptionSchema = z.object({
-  idempotency_key: z.string().trim().min(16).max(200),
-  source: z.enum(["manual", "cooking", "ai"]).default("manual"),
-  items: z.array(inventoryConsumptionItemSchema).min(1).max(100),
-}).strict().superRefine((value, context) => {
-  if (new Set(value.items.map((item) => item.item_id)).size !== value.items.length) {
-    context.addIssue({ code: "custom", path: ["items"], message: "同一库存批次不能重复扣减" });
-  }
-});
-
-export const inventoryConsumptionPreviewSchema = z.object({
-  items: z.array(z.object({
-    food_name: trimmedString(1, 100, "食材名称"),
-    amount_value: z.number().finite().positive().max(1_000_000),
-    unit: inventoryUnit,
-  }).strict()).min(1).max(100),
-}).strict();
-
-export const shoppingInventoryImportSchema = z.object({
-  idempotency_key: z.string().trim().min(16, "幂等键格式无效").max(200, "幂等键过长"),
-  items: z.array(inventoryCreateSchema).min(1, "至少选择一项食材").max(100),
-}).strict();
-
-const inventoryIntakeItemSchema = inventoryCreateObject.extend({
-  confidence: z.number().finite().min(0).max(1).nullable().optional(),
-  confirmed: z.boolean(),
-  source: z.enum(["barcode", "receipt", "image", "manual", "recent"]),
-  barcode: z.string().trim().max(64).nullable().optional(),
-}).strict().superRefine((value, context) => {
-  if ((value.quantity_value == null) !== (value.quantity_unit == null)) {
-    context.addIssue({ code: "custom", path: ["quantity_unit"], message: "结构化数量和单位必须同时填写" });
-  }
-});
-
-export const inventoryBulkIntakeSchema = z.object({
-  idempotency_key: z.string().trim().min(16).max(200),
-  source: z.enum(["barcode", "receipt", "image", "manual", "recent"]),
-  source_reference: z.string().trim().max(200).nullable().optional(),
-  items: z.array(inventoryIntakeItemSchema).min(1).max(100),
-}).strict().superRefine((value, context) => {
-  value.items.forEach((item, index) => {
-    if (!item.confirmed) {
-      context.addIssue({ code: "custom", path: ["items", index, "confirmed"], message: "每项都必须由用户确认后才能入库" });
-    }
-    if (item.confidence !== null && item.confidence !== undefined && item.confidence < 0.8 && !item.confirmed) {
-      context.addIssue({ code: "custom", path: ["items", index, "confidence"], message: "低置信度项目不能静默入库" });
-    }
-  });
-});
 
 export const dietRecordCreateSchema = z.object({
   meal_type: z.string().trim().max(30, "餐别标签不能超过 30 个字符").default(""),

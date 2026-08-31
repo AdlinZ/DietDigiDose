@@ -1,33 +1,65 @@
 import { requestJson, type ApiFetch } from "./client";
-import type { InventoryItem } from "./types";
+import type {
+  InventoryBulkIntakeInput,
+  InventoryConsumptionInput,
+  InventoryConsumptionPreviewInput,
+  InventoryCreateInput,
+  InventoryUpdateInput,
+} from "@dietdigidose/contracts";
 
-export type InventoryInput = Omit<InventoryItem, "id" | "is_available" | "version"> & { is_available?: boolean; version?: number };
+export type InventoryInput = InventoryCreateInput;
+const loadInventoryContracts = () => import("@dietdigidose/contracts");
 
 export const inventoryApi = {
-  list: (apiFetch: ApiFetch) => requestJson<InventoryItem[]>(apiFetch, "/api/v1/inventory"),
-  create: (apiFetch: ApiFetch, input: InventoryInput) => requestJson<InventoryItem>(apiFetch, "/api/v1/inventory", {
-    method: "POST", body: JSON.stringify(input),
-  }),
-  importShoppingList: (apiFetch: ApiFetch, idempotencyKey: string, items: InventoryInput[]) =>
-    requestJson<{ items: InventoryItem[]; repeated: boolean }>(apiFetch, "/api/v1/inventory/import-shopping-list", {
+  list: async (apiFetch: ApiFetch) => {
+    const { inventoryListResponseSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, "/api/v1/inventory", {}, inventoryListResponseSchema);
+  },
+  create: async (apiFetch: ApiFetch, input: InventoryInput) => {
+    const { inventoryCreateSchema, inventoryItemSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, "/api/v1/inventory", {
+      method: "POST", body: JSON.stringify(inventoryCreateSchema.parse(input)),
+    }, inventoryItemSchema);
+  },
+  importShoppingList: async (apiFetch: ApiFetch, idempotencyKey: string, items: InventoryInput[]) => {
+    const { inventoryImportResponseSchema, shoppingInventoryImportSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, "/api/v1/inventory/import-shopping-list", {
       method: "POST",
-      body: JSON.stringify({ idempotency_key: idempotencyKey, items }),
-    }),
-  bulkIntake: <T>(apiFetch: ApiFetch, input: unknown) => requestJson<T>(apiFetch, "/api/v1/inventory/bulk-intake", {
-    method: "POST", body: JSON.stringify(input),
-  }),
-  update: (apiFetch: ApiFetch, id: number, input: Partial<InventoryInput>) => requestJson<InventoryItem>(apiFetch, `/api/v1/inventory/${id}`, {
-    method: "PUT", body: JSON.stringify(input),
-  }),
-  remove: (apiFetch: ApiFetch, id: number) => requestJson<{ message: string }>(apiFetch, `/api/v1/inventory/${id}`, { method: "DELETE" }),
-  consumptionPreview: <T>(apiFetch: ApiFetch, items: Array<{ food_name: string; amount_value: number; unit: string }>) =>
-    requestJson<T>(apiFetch, "/api/v1/inventory/consumption-preview", {
-      method: "POST", body: JSON.stringify({ items }),
-    }),
-  consume: <T>(apiFetch: ApiFetch, input: unknown) => requestJson<T>(apiFetch, "/api/v1/inventory/consume", {
-    method: "POST", body: JSON.stringify(input),
-  }),
-  history: <T>(apiFetch: ApiFetch, id: number) => requestJson<T[]>(apiFetch, `/api/v1/inventory/${id}/history`),
+      body: JSON.stringify(shoppingInventoryImportSchema.parse({ idempotency_key: idempotencyKey, items })),
+    }, inventoryImportResponseSchema);
+  },
+  bulkIntake: async (apiFetch: ApiFetch, input: InventoryBulkIntakeInput) => {
+    const { inventoryBulkIntakeResponseSchema, inventoryBulkIntakeSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, "/api/v1/inventory/bulk-intake", {
+      method: "POST", body: JSON.stringify(inventoryBulkIntakeSchema.parse(input)),
+    }, inventoryBulkIntakeResponseSchema);
+  },
+  update: async (apiFetch: ApiFetch, id: number, input: InventoryUpdateInput) => {
+    const { inventoryItemSchema, inventoryUpdateSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, `/api/v1/inventory/${id}`, {
+      method: "PUT", body: JSON.stringify(inventoryUpdateSchema.parse(input)),
+    }, inventoryItemSchema);
+  },
+  remove: async (apiFetch: ApiFetch, id: number) => {
+    const { inventoryDeleteResponseSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, `/api/v1/inventory/${id}`, { method: "DELETE" }, inventoryDeleteResponseSchema);
+  },
+  consumptionPreview: async (apiFetch: ApiFetch, items: InventoryConsumptionPreviewInput["items"]) => {
+    const { inventoryConsumptionPreviewResponseSchema, inventoryConsumptionPreviewSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, "/api/v1/inventory/consumption-preview", {
+      method: "POST", body: JSON.stringify(inventoryConsumptionPreviewSchema.parse({ items })),
+    }, inventoryConsumptionPreviewResponseSchema);
+  },
+  consume: async (apiFetch: ApiFetch, input: InventoryConsumptionInput) => {
+    const { inventoryConsumptionResponseSchema, inventoryConsumptionSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, "/api/v1/inventory/consume", {
+      method: "POST", body: JSON.stringify(inventoryConsumptionSchema.parse(input)),
+    }, inventoryConsumptionResponseSchema);
+  },
+  history: async (apiFetch: ApiFetch, id: number) => {
+    const { inventoryHistoryResponseSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, `/api/v1/inventory/${id}/history`, {}, inventoryHistoryResponseSchema);
+  },
 };
 
 export const kitchenwareApi = {

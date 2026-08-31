@@ -1,20 +1,4 @@
-export type InventoryItem = {
-  id: number;
-  food_name: string;
-  category: string;
-  quantity: string;
-  expiration_date: string;
-  storage_location: string;
-  image_url: string | null;
-  is_available: boolean;
-  quantity_value?: number | null;
-  quantity_unit?: "g" | "kg" | "ml" | "l" | "piece" | "serving" | "bag" | "box" | "bottle" | "can" | null;
-  package_size_value?: number | null;
-  package_size_unit?: "g" | "kg" | "ml" | "l" | "piece" | "serving" | "bag" | "box" | "bottle" | "can" | null;
-  batch_code?: string | null;
-  version?: number;
-  updated_at?: string;
-};
+export type { InventoryItem } from "@dietdigidose/contracts";
 
 export type DietRecord = {
   id: number;

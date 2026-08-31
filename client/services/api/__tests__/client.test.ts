@@ -3,6 +3,7 @@ jest.mock("@react-native-async-storage/async-storage", () =>
 
 import { requestJson, type ApiFetch } from "../client";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { z } from "zod";
 import {
   clearApiCacheScope,
   getApiCacheDiagnostics,
@@ -198,5 +199,20 @@ describe("API client", () => {
     now += 8 * 86_400_000;
     await expect(requestJson(apiFetch, "/api/v1/inventory")).rejects.toThrow("offline");
     jest.restoreAllMocks();
+  });
+
+  it("rejects malformed runtime responses before they enter the API cache", async () => {
+    const apiFetch: ApiFetch = jest.fn(async () => jsonResponse({ id: "not-a-number" }));
+    registerApiFetchScope(apiFetch, 801);
+    const responseSchema = z.object({ id: z.number() }).strict();
+
+    await expect(requestJson(apiFetch, "/api/v1/inventory", {}, responseSchema)).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+      status: 0,
+    });
+    await expect(requestJson(apiFetch, "/api/v1/inventory", {}, responseSchema)).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    });
+    expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 });

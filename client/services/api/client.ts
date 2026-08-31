@@ -7,6 +7,7 @@ import {
 } from "./cache";
 
 export type ApiFetch = (input: string, init?: RequestInit) => Promise<Response>;
+export type RuntimeSchema<T> = { parse: (value: unknown) => T };
 
 export class ApiError extends Error {
   status: number;
@@ -47,12 +48,18 @@ export function requestJson<T>(
   apiFetch: ApiFetch,
   path: string,
   options: RequestInit & { timeoutMs?: number } = {},
+  responseSchema?: RuntimeSchema<T>,
 ): Promise<T> {
   const method = (options.method || "GET").toUpperCase();
   const cachePolicy = method === "GET" ? apiCachePolicy(path) : null;
   if (cachePolicy) {
-    return cachedApiGet<T>(apiFetch, path, cachePolicy, (etag) =>
-      executeJsonRequestWithMetadata<T>(apiFetch, path, options, etag));
+    return cachedApiGet<T>(apiFetch, path, cachePolicy, async (etag) => {
+      const result = await executeJsonRequestWithMetadata<unknown>(apiFetch, path, options, etag);
+      return result.notModified
+        ? { notModified: true, etag: result.etag }
+        : { data: parseResponse(path, result.data, responseSchema), etag: result.etag };
+    })
+      .then((data) => parseResponse(path, data, responseSchema));
   }
   const mutationKey = method === "GET" || method === "HEAD"
     ? null
@@ -60,7 +67,8 @@ export function requestJson<T>(
   const existing = mutationKey ? inFlightMutations.get(mutationKey) : undefined;
   if (existing) return existing as Promise<T>;
 
-  const request = executeJsonRequest<T>(apiFetch, path, options).then(async (data) => {
+  const request = executeJsonRequest<unknown>(apiFetch, path, options).then(async (rawData) => {
+    const data = parseResponse(path, rawData, responseSchema);
     if (method !== "GET" && method !== "HEAD") await invalidateApiCacheForMutation(apiFetch, path);
     return data;
   });
@@ -71,6 +79,18 @@ export function requestJson<T>(
     }).catch(() => undefined);
   }
   return request;
+}
+
+function parseResponse<T>(path: string, data: unknown, responseSchema?: RuntimeSchema<T>): T {
+  if (!responseSchema) return data as T;
+  try {
+    return responseSchema.parse(data);
+  } catch (error) {
+    throw new ApiError("服务器响应不符合 API 契约", 0, {
+      code: "INVALID_API_RESPONSE",
+      details: { path, cause: error },
+    });
+  }
 }
 
 async function executeJsonRequest<T>(

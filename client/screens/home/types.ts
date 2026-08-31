@@ -21,16 +21,7 @@ export interface RankedRecipe extends Recipe {
   expiringMatchCount: number;
 }
 
-export interface InventoryItem {
-  id: number;
-  food_name: string;
-  category: string;
-  quantity: string;
-  expiration_date: string;
-  storage_location: string;
-  image_url: string | null;
-  is_available: boolean;
-}
+export type { InventoryItem } from "@dietdigidose/contracts";
 
 export interface DietRecord {
   id: number;

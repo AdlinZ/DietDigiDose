@@ -8,6 +8,11 @@ const moduleSpecs = [
   { name: "feedback", concreteRepository: /sqliteRepository|SqliteFeedbackRepository/ },
   { name: "foods", concreteRepository: /sqliteRepository|SqliteFoodRepository/ },
   {
+    name: "health",
+    concreteRepository: /sqliteRepository|SqliteHealthRepository/,
+    legacyFile: "server/src/routes/health-data.ts",
+  },
+  {
     name: "shopping",
     concreteRepository: /sqliteRepository|SqliteShoppingRepository/,
     legacyFile: "server/src/routes/shopping-list.ts",

@@ -1,4 +1,4 @@
-import { db } from "../storage/db.js";
+import type { AiToolDataService } from "../modules/aiToolData/service.js";
 import { currentDateKey, currentTimeKey, dateKeyAfterDays } from "../utils/date.js";
 import { createAIWritePreview } from "./aiWriteConfirmations.js";
 
@@ -234,35 +234,35 @@ export const aiToolsSchema = [
   },
 ];
 
+let configuredDataService: AiToolDataService | undefined;
+
+export function configureAiToolDataService(service: AiToolDataService) { configuredDataService = service; }
+
+function dataService() {
+  if (!configuredDataService) throw new Error("AI tool data service has not been configured");
+  return configuredDataService;
+}
+
 export function isAIQueryTool(name: string) { return name === "search_recipe_library" || name === "lookup_food_nutrition"; }
 
 export async function executeAIQueryTool(userId: number, toolName: string, args: Record<string, unknown>) {
   if (toolName === "search_recipe_library") {
     const names = Array.isArray(args.ingredientNames) ? args.ingredientNames.map(String).filter(Boolean).slice(0, 8) : [];
     const limit = Math.max(1, Math.min(Number(args.limit) || 5, 10));
-    const clauses = ["status = 'approved'", "deleted_at IS NULL", "COALESCE(quality_status, 'trusted') <> 'needs_review'"];
-    const params: Array<string | number> = [];
-    for (const name of names) { clauses.push("(title LIKE ? OR ingredients_json LIKE ?)"); params.push(`%${name}%`, `%${name}%`); }
-    if (Number.isFinite(Number(args.maxTimeMinutes))) { clauses.push("cook_time <= ?"); params.push(Math.max(0, Number(args.maxTimeMinutes))); }
-    if (Number.isFinite(Number(args.maxCalories))) { clauses.push("calories <= ?"); params.push(Math.max(0, Number(args.maxCalories))); }
-    if (Number.isFinite(Number(args.minProteinG))) { clauses.push("protein >= ?"); params.push(Math.max(0, Number(args.minProteinG))); }
-    const rows = db.prepare(`SELECT id, title, cook_time, difficulty, calories, protein, carbs, fat, tags, ingredients_json FROM recipes WHERE ${clauses.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params, limit) as any[];
-    return { recipes: rows.map((row) => ({ recipeId: row.id, name: row.title, estimatedTimeMinutes: row.cook_time, difficulty: row.difficulty, caloriesPerServing: row.calories, proteinG: row.protein, carbohydrateG: row.carbs, fatG: row.fat, tags: safeJson(row.tags), ingredients: safeJson(row.ingredients_json) })) };
+    return dataService().searchRecipes({ ingredientNames: names, limit,
+      maxTimeMinutes: Number.isFinite(Number(args.maxTimeMinutes)) ? Math.max(0, Number(args.maxTimeMinutes)) : undefined,
+      maxCalories: Number.isFinite(Number(args.maxCalories)) ? Math.max(0, Number(args.maxCalories)) : undefined,
+      minProteinG: Number.isFinite(Number(args.minProteinG)) ? Math.max(0, Number(args.minProteinG)) : undefined });
   }
   if (toolName === "lookup_food_nutrition") {
     const foodName = String(args.foodName || "").trim(); const amount = Math.max(0, Number(args.amount) || 0); const unit = String(args.unit || "g");
     if (!foodName || !amount) return { matches: [], warnings: ["缺少有效食品名称或数量"] };
-    const rows = db.prepare("SELECT name, brands, calories_100g, protein_100g, carbs_100g, fat_100g, source FROM ingredients_library WHERE deleted_at IS NULL AND name LIKE ? ORDER BY CASE WHEN name = ? THEN 0 ELSE 1 END LIMIT 3").all(`%${foodName}%`, foodName) as any[];
-    const multiplier = unit === "g" || unit === "ml" ? amount / 100 : 1;
-    return { matches: rows.map((row) => ({ matchedFoodName: row.name, matchType: row.name === foodName ? "exact_brand" : "fuzzy", confidence: row.name === foodName ? 0.9 : 0.55, amount, unit, nutrition: { caloriesKcal: round(row.calories_100g * multiplier), proteinG: round(row.protein_100g * multiplier), carbohydrateG: round(row.carbs_100g * multiplier), fatG: round(row.fat_100g * multiplier) }, source: row.source, warnings: row.name === foodName ? [] : ["基于模糊食材匹配，品牌和烹饪方式会影响结果"] })) };
+    return dataService().lookupFoodNutrition(foodName, amount, unit);
   }
   return { error: "未知查询工具" };
 }
-function safeJson(value: unknown) { try { return JSON.parse(String(value || "[]")); } catch { return []; } }
-function round(value: unknown) { return Math.round((Number(value) || 0) * 10) / 10; }
-
 /**
- * 执行 AI Function Tool 调用并写入 SQLite 数据库
+ * 执行 AI Function Tool 调用；持久化由已配置的数据适配器负责
  */
 export async function executeAITool(
   userId: number,
@@ -281,15 +281,13 @@ export async function executeAITool(
       const carbs = args.carbs ?? 35;
       const fat = args.fat ?? 8;
 
-      const result = db.prepare(`
-        INSERT INTO diet_records (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, recorded_time)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(userId, mealType, foodName, amount, calories, protein, carbs, fat, todayStr, currentTimeKey());
+      const id = await dataService().recordDietMeal({ userId, mealType, foodName, amount, calories, protein, carbs, fat,
+        recordedAt: todayStr, recordedTime: currentTimeKey() });
 
       return {
         success: true,
         message: `✅ 已成功为你完成【${mealType}】打卡：${foodName} (${amount}, 约 ${calories} kcal)!`,
-        details: { id: result.lastInsertRowid, mealType, foodName, calories },
+        details: { id, mealType, foodName, calories },
       };
     }
 

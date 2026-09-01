@@ -23,7 +23,8 @@
     "test:client": "pnpm --dir ./client test",
     "test:server": "pnpm --dir ./server test",
     "test:admin": "pnpm --dir ./admin test",
-    "test:unit": "pnpm --dir ./client test && pnpm --dir ./server test:unit && pnpm --dir ./admin test",
+    "test:upstream-security-watch": "node --test scripts/check-image-size-upstream.test.mjs",
+    "test:unit": "pnpm test:upstream-security-watch && pnpm --dir ./client test && pnpm --dir ./server test:unit && pnpm --dir ./admin test",
     "test:contract": "pnpm --dir ./server test:contract",
     "test:e2e": "pnpm --dir ./server test:e2e",
     "test:migrations": "pnpm --dir ./server db:rehearse -- --owner=quality-gate",
@@ -37,7 +38,7 @@
     "database:schema:check": "node scripts/generate-postgres-baseline.mjs --check && pnpm --dir ./server db:postgres:check",
     "database:boundary:update": "node scripts/check-sqlite-boundary.mjs --update",
     "database:boundary:check": "node scripts/check-sqlite-boundary.mjs",
-    "test:all": "pnpm test:client && pnpm test:server && pnpm test:admin",
+    "test:all": "pnpm test:upstream-security-watch && pnpm test:client && pnpm test:server && pnpm test:admin",
     "quality:test-quarantine": "node scripts/check-test-quarantine.mjs",
     "quality:build-budgets": "node scripts/check-build-budgets.mjs",
     "audit:prod": "pnpm audit --prod --registry=https://registry.npmjs.org"

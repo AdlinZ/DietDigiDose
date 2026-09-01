@@ -39,6 +39,8 @@ import { InventoryService } from "../src/modules/inventory/service.js";
 import { PostgresKitchenwareRepository } from "../src/modules/kitchenware/postgresRepository.js";
 import { KitchenwareService } from "../src/modules/kitchenware/service.js";
 import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
+import { PostgresRateLimitsRepository } from "../src/modules/rateLimits/postgresRepository.js";
+import { RateLimitsService } from "../src/modules/rateLimits/service.js";
 import { PostgresRecommendationsRepository } from "../src/modules/recommendations/postgresRepository.js";
 import { RecommendationsService } from "../src/modules/recommendations/service.js";
 import { PostgresRecipesRepository } from "../src/modules/recipes/postgresRepository.js";
@@ -1112,6 +1114,19 @@ try {
   const adminUserAudits=await pool.query("SELECT details_json FROM admin_audit_logs WHERE admin_user_id=$1 AND action='user.credentials.update'",[user.id]);
   assert.equal(adminUserAudits.rows.at(-1)?.details_json?.passwordReset,true);
 
+  const rateLimitsService = new RateLimitsService(new PostgresRateLimitsRepository(pool));
+  const sharedStatuses = await Promise.all(Array.from({ length: 5 }, () =>
+    rateLimitsService.consume("postgres-concurrent", "shared-client", 3, 60_000, 1_000_000)));
+  assert.equal(sharedStatuses.filter((status) => !status.blocked).length, 3);
+  assert.equal(sharedStatuses.filter((status) => status.blocked).length, 2);
+  assert.equal(sharedStatuses.filter((status) => status.blocked).every((status) => status.retryAfterSeconds === 60), true);
+  assert.equal((await rateLimitsService.consume("postgres-concurrent", "shared-client", 3, 60_000, 1_060_001)).blocked, false);
+  await Promise.all(Array.from({ length: 5 }, (_, attempt) =>
+    rateLimitsService.recordLoginFailure("postgres-rate@example.com", `192.0.2.${attempt + 1}`, 2_000_000)));
+  assert.equal((await rateLimitsService.loginStatus("POSTGRES-rate@example.com", "198.51.100.1", 2_000_001)).blocked, true);
+  await rateLimitsService.clearLoginFailures("postgres-rate@example.com");
+  assert.equal((await rateLimitsService.loginStatus("postgres-rate@example.com", "198.51.100.1", 2_000_002)).blocked, false);
+
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
@@ -1190,6 +1205,7 @@ try {
     postgresCommunityRepositoryVerified: true,
     postgresAdminCommunityRepositoryVerified: true,
     postgresAdminUsersRepositoryVerified: true,
+    postgresRateLimitsRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,

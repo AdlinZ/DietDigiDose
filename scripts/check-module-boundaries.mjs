@@ -5,6 +5,18 @@ const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
   {
+    name: "rateLimits",
+    routeFile: null,
+    concreteRepository: /sqliteRepository|SqliteRateLimitsRepository/,
+    compositionFile: "server/src/middleware/sharedRateLimit.ts",
+    compositionImport: "../modules/rateLimits/index.js",
+    extraCompositions: [{
+      file: "server/src/middleware/loginRateLimit.ts",
+      import: "../modules/rateLimits/index.js",
+    }],
+    legacyFile: null,
+  },
+  {
     name: "accessControl",
     routeFile: null,
     concreteRepository: /sqliteRepository|SqliteAccessControlRepository/,
@@ -179,6 +191,12 @@ for (const spec of moduleSpecs) {
   const compositionSource = fs.readFileSync(path.join(root, compositionFile), "utf8");
   if (!compositionSource.includes(compositionImport)) {
     failures.push(`${compositionFile} must compose the ${spec.name} module entry point`);
+  }
+  for (const composition of spec.extraCompositions || []) {
+    const source = fs.readFileSync(path.join(root, composition.file), "utf8");
+    if (!source.includes(composition.import)) {
+      failures.push(`${composition.file} must compose the ${spec.name} module entry point`);
+    }
   }
   const legacyFile = Object.hasOwn(spec, "legacyFile") ? spec.legacyFile : `server/src/routes/${spec.name}.ts`;
   if (legacyFile && fs.existsSync(path.join(root, legacyFile))) {

@@ -2,8 +2,6 @@
   "policy": "Existing SQLite access is frozen. Counts may only decrease or move behind repository adapters during PostgreSQL migration.",
   "files": {
     "server/src/app.ts": 1,
-    "server/src/middleware/loginRateLimit.ts": 5,
-    "server/src/middleware/sharedRateLimit.ts": 6,
     "server/src/modules/accessControl/index.ts": 1,
     "server/src/modules/accessControl/sqliteRepository.ts": 4,
     "server/src/modules/adminCommunity/index.ts": 1,
@@ -40,6 +38,8 @@
     "server/src/modules/kitchenware/sqliteRepository.ts": 18,
     "server/src/modules/mealPlans/index.ts": 1,
     "server/src/modules/mealPlans/sqliteRepository.ts": 25,
+    "server/src/modules/rateLimits/index.ts": 1,
+    "server/src/modules/rateLimits/sqliteRepository.ts": 10,
     "server/src/modules/recipes/sqliteRepository.ts": 26,
     "server/src/modules/recommendations/sqliteRepository.ts": 16,
     "server/src/modules/shopping/index.ts": 1,

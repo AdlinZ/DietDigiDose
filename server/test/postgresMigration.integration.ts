@@ -1038,7 +1038,7 @@ try {
     shareResults[1] && shareResults[1] !== "not_found" ? shareResults[1].code : null);
   const resolvedShare = await communityRepository.resolveShare(String(shareResults[0] && shareResults[0] !== "not_found" ? shareResults[0].code : ""));
   assert.equal(Number(resolvedShare?.post_id), questionId);
-  assert.equal(resolvedShare?.content,"PostgreSQL 问答");
+  assert.equal(resolvedShare?.content,"如何准备一份高蛋白燕麦早餐搭配？");
 
   await pool.query(`UPDATE user_health_profiles SET health_goal='lose_weight',allergies_json=$1::jsonb,
     dietary_restrictions_json=$2::jsonb WHERE user_id=$3`, [JSON.stringify([{ name: "花生" }]), JSON.stringify(["高盐"]), successorUserId]);

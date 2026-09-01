@@ -21,7 +21,7 @@ import { buildAgentSolutionCards } from "../services/agent/cards.js";
 import { ensureUserInitialState } from "../modules/accessControl/index.js";
 import { aiErrorTypeForCode } from "../services/aiErrors.js";
 import { getChatConfig } from "../services/aiService.js";
-import { getRecipeRecommendationPage } from "../services/recipeRecommendations.js";
+import { recommendationsService } from "../modules/recommendations/runtime.js";
 
 const router = Router();
 router.param("jobId", uuidParam);
@@ -324,12 +324,12 @@ router.post("/write-confirmations/:confirmationId/commit", validateBody(aiWriteC
 /**
  * 首页时段推荐：模型读取用户库存、当天饮食及热量目标，返回可直接渲染的多张卡片。
  */
-router.post("/home-recommendations", validateBody(aiHomeRecommendationsSchema), (req: AuthRequest, res) => {
+router.post("/home-recommendations", validateBody(aiHomeRecommendationsSchema), async (req: AuthRequest, res) => {
   const userId = req.userId!;
   const period = typeof req.body?.period === "string" ? req.body.period.slice(0, 40) : "当前时段";
   try {
     const mealType = /早餐|早/.test(period) ? "breakfast" : /午餐|午/.test(period) ? "lunch" : /晚餐|晚/.test(period) ? "dinner" : "snack";
-    const recommendations = getRecipeRecommendationPage(userId, {
+    const recommendations = await recommendationsService().page(userId, {
       surface: "home", matchStatus: "all", mealType, pageSize: 12,
     });
     const cards = recommendations.items.slice(0, 5).map((item) => {

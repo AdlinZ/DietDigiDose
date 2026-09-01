@@ -94,6 +94,7 @@ const moduleSpecs = [
     compositionFile: "server/src/composition/sqliteRuntime.ts",
     compositionImport: "../modules/recommendations/index.js",
     legacyFile: "server/src/routes/recommendations.ts",
+    extraLegacyFiles: ["server/src/services/recipeRecommendations.ts"],
   },
   {
     name: "recipes",

@@ -598,7 +598,7 @@ describe("API security baseline", () => {
     assert.equal(bySeedKey.get("diet_helper")?.tracking_enabled, 1);
 
     const { buildUserContext, generateSystemPrompt } = await import("../src/services/contextBuilder.js");
-    const highRiskPrompt = generateSystemPrompt(buildUserContext(bySeedKey.get("diet_helper")?.user_id));
+    const highRiskPrompt = generateSystemPrompt(await buildUserContext(bySeedKey.get("diet_helper")?.user_id));
     assert.match(highRiskPrompt, /海鲜/);
     assert.match(highRiskPrompt, /慢性肾脏病/);
     assert.match(highRiskPrompt, /华法林/);
@@ -2186,7 +2186,7 @@ describe("user data isolation", () => {
     assert.equal((profile.body as JsonObject).tracking_enabled, true);
     assert.equal((profile.body as JsonObject).allergies_json, undefined);
     const { buildUserContext, generateSystemPrompt } = await import("../src/services/contextBuilder.js");
-    const aiPrompt = generateSystemPrompt(buildUserContext(first.user.id));
+    const aiPrompt = generateSystemPrompt(await buildUserContext(first.user.id));
     assert.match(aiPrompt, /坚果/);
     assert.match(aiPrompt, /高血压/);
     assert.match(aiPrompt, /不得建议调整服药频率/);

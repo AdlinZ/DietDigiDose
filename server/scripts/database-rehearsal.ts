@@ -316,7 +316,8 @@ async function main() {
     const legacyDatabase = new Database(legacyPath);
     const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
       .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => migration.version !== 59);
+    const supportedRollbackFixtures = new Set([59, 60]);
+    const unsupportedVersions = newerVersions.filter((migration) => !supportedRollbackFixtures.has(migration.version));
     if (unsupportedVersions.length) {
       legacyDatabase.close();
       throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);

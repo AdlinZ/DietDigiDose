@@ -1235,14 +1235,14 @@ describe("user data isolation", () => {
   });
 
   test("kitchenware aliases resolve to governed capabilities and safe substitutions", async () => {
-    const catalog = await api("/api/v1/kitchenware/catalog?query=不粘锅", { token: first.token });
+    const catalog = await api("/api/v1/kitchenware/catalog?query=煎锅", { token: first.token });
     assert.equal(catalog.response.status, 200);
     assert.equal((catalog.body as JsonObject[])[0].name, "平底锅");
     assert.ok((catalog.body as JsonObject[])[0].capabilities.some((item: JsonObject) => item.code === "fry"));
 
     const created = await api("/api/v1/kitchenware", {
       method: "POST", token: first.token,
-      body: JSON.stringify({ name: "不粘锅", category: "烹饪锅具", status: "良好", note: "", image_url: "", purchase_date: "" }),
+      body: JSON.stringify({ name: "煎锅", category: "烹饪锅具", status: "良好", note: "", image_url: "", purchase_date: "" }),
     });
     assert.equal(created.response.status, 201);
     assert.equal((created.body as JsonObject).name, "平底锅");

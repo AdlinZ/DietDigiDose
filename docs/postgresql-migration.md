@@ -1,6 +1,6 @@
 # SQLite to PostgreSQL migration
 
-PostgreSQL 16+ and the generated Drizzle schema are the target database authority. The checked-in baseline covers the final result of `initDatabase()` plus all 59 SQLite migrations: 92 migrated tables, 133 unique/secondary indexes, and 138 foreign keys. Drizzle migration `0001` adds four PostgreSQL-native LangGraph checkpoint tables, for 96 target tables in total. `server/src/storage/database/schema.ts` is the application schema entry point; the obsolete parallel schema has been removed.
+PostgreSQL 16+ and the generated Drizzle schema are the target database authority. The checked-in baseline covers the final result of `initDatabase()` plus all 60 SQLite migrations: 92 migrated tables, 133 unique/secondary indexes, and 138 foreign keys. Drizzle migration `0001` adds four PostgreSQL-native LangGraph checkpoint tables, for 96 target tables in total. `server/src/storage/database/schema.ts` is the application schema entry point; the obsolete parallel schema has been removed.
 
 The API and worker now select one database explicitly with `DATABASE_DRIVER=sqlite|postgresql`. PostgreSQL startup requires `DATABASE_URL`, validates the migrated application and LangGraph schema, and never executes runtime DDL. API and worker use the same repository composition and close their pools during graceful shutdown. Keep SQLite selected until both staging rehearsals below pass.
 

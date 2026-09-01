@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { assessRecipeQuality } from "../services/recipeQuality.js";
+import { kitchenwareCatalogV4Sql } from "../services/kitchenwareCatalogSeed.js";
 
 type Migration = {
   version: number;
@@ -1996,6 +1997,13 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_worker_task_runs_status_started
           ON worker_task_runs(status, started_at DESC, id DESC);
       `);
+    },
+  },
+  {
+    version: 60,
+    name: "kitchenware_catalog_v4",
+    up(connection) {
+      connection.exec(kitchenwareCatalogV4Sql());
     },
   },
 ];

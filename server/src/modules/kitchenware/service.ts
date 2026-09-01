@@ -83,7 +83,9 @@ export class KitchenwareService {
       const exact = names.some((name) => normalizeContentTerm(name) === normalized);
       const partial = names.some((name) => {
         const candidate = normalizeContentTerm(name);
-        return candidate.includes(normalized) || normalized.includes(candidate);
+        if (candidate.length < 2 || normalized.length < 2) return false;
+        const contained = candidate.includes(normalized) || normalized.includes(candidate);
+        return contained && Math.min(candidate.length, normalized.length) / Math.max(candidate.length, normalized.length) >= 0.5;
       });
       const score = exact ? 1 : partial ? 0.72 : 0;
       if (score && (!best || score > best.score)) best = { row, score };
@@ -115,16 +117,17 @@ export class KitchenwareService {
     const ownedCapabilities = new Set(await this.repository.capabilityCodesForCatalogIds([...ownedCatalogIds]));
     const evaluated = await Promise.all(requirements.map(async (requirement) => {
       const exact = Boolean(requirement.catalogId && ownedCatalogIds.has(requirement.catalogId));
-      const capability = Boolean(requirement.capabilityCode && ownedCapabilities.has(requirement.capabilityCode));
+      const capability = Boolean(!requirement.catalogId && requirement.capabilityCode && ownedCapabilities.has(requirement.capabilityCode));
       if (exact || capability) return { ...requirement, satisfied: true, substitution: null };
       if (!requirement.catalogId || ownedCatalogIds.size === 0) return { ...requirement, satisfied: false, substitution: null };
       const substitution = await this.repository.substitutionFor(requirement.catalogId, [...ownedCatalogIds]);
+      const allowedSubstitution = substitution && String(substitution.relation_type) !== "forbidden" ? substitution : null;
       return {
         ...requirement,
-        satisfied: Boolean(substitution),
-        substitution: substitution ? {
-          name: String(substitution.name), relationType: String(substitution.relation_type),
-          impact: parseJson(substitution.impact_json, {}), safetyNote: String(substitution.safety_note || ""),
+        satisfied: Boolean(allowedSubstitution),
+        substitution: allowedSubstitution ? {
+          name: String(allowedSubstitution.name), relationType: String(allowedSubstitution.relation_type),
+          impact: parseJson(allowedSubstitution.impact_json, {}), safetyNote: String(allowedSubstitution.safety_note || ""),
         } : null,
       };
     }));

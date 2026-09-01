@@ -127,6 +127,7 @@ import { AdminUsersService } from "../modules/adminUsers/service.js";
 import { PostgresAdminUsersRepository } from "../modules/adminUsers/postgresRepository.js";
 import { getPublicAgentCheckpointState, cancelSupervisorRun, startSupervisorRun, waitForSupervisorRunCompletion } from "../services/agent/runtime.js";
 import { transcribeAudio } from "../services/aiService.js";
+import { seedKitchenwareCatalogV4Postgres } from "../services/kitchenwareCatalogSeed.js";
 import aiRoutes from "../routes/ai.js";
 import agentRunRoutes from "../routes/agent-runs.js";
 import webhookRoutes from "../routes/webhooks.js";
@@ -154,6 +155,7 @@ async function assertRuntimeSchema(pool: Pool) {
 
 async function configureSharedRuntime(pool: Pool) {
   await assertRuntimeSchema(pool);
+  await seedKitchenwareCatalogV4Postgres(pool);
   configureAgentCheckpointer(await createPostgresAgentCheckpointer(pool));
   configureAccessControlService(new AccessControlService(new PostgresAccessControlRepository(pool)));
   configureRateLimitsService(new RateLimitsService(new PostgresRateLimitsRepository(pool)));

@@ -63,7 +63,9 @@ export function resolveKitchenwareCatalog(rawName: string) {
     const exact = names.some((name) => normalizeContentTerm(name) === normalized);
     const partial = names.some((name) => {
       const candidate = normalizeContentTerm(name);
-      return candidate.includes(normalized) || normalized.includes(candidate);
+      if (candidate.length < 2 || normalized.length < 2) return false;
+      const contained = candidate.includes(normalized) || normalized.includes(candidate);
+      return contained && Math.min(candidate.length, normalized.length) / Math.max(candidate.length, normalized.length) >= 0.5;
     });
     const score = exact ? 1 : partial ? 0.72 : 0;
     if (score && (!best || score > best.score)) best = { row, score };

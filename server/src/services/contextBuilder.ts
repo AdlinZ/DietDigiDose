@@ -1,5 +1,5 @@
-import { db, getSystemSetting } from "../storage/db.js";
 import dayjs from "dayjs";
+import { aiContextService } from "../modules/aiContext/runtime.js";
 import { recommendationsService } from "../modules/recommendations/runtime.js";
 
 export interface UserContext {
@@ -29,6 +29,7 @@ export interface UserContext {
     score: number;
     scoringVersion: string;
   }>;
+  personaPrompt?: string;
 }
 
 // 运营后台可覆盖此人设文本；用户实时数据、工具规则和安全边界仍由下方模板统一追加。
@@ -66,67 +67,12 @@ const OUTPUT_DEVELOPER_PROMPT = `【固定规则：输出】
  * 获取并组装指定用户的上下文数据
  */
 export async function buildUserContext(userId: number): Promise<UserContext> {
-  // 1. 用户信息
-  const user = db.prepare("SELECT username, daily_calories_target FROM users WHERE id = ?").get(userId) as any;
-  const username = user?.username || "用户";
-  const dailyCaloriesTarget = user?.daily_calories_target || 2000;
-
-  // 2. 冰箱现有可用食材 (前 15 条)
-  const inventory = db
-    .prepare(
-      "SELECT food_name, quantity, expiration_date, storage_location FROM inventory_items WHERE user_id = ? AND is_available = 1 ORDER BY expiration_date ASC LIMIT 15"
-    )
-    .all(userId) as any[];
-
-  // 3. 用户当前可用厨具
-  const kitchenware = db
-    .prepare(
-      "SELECT name, category, status FROM kitchenware_items WHERE user_id = ? AND deleted_at IS NULL AND status != '维修中' ORDER BY updated_at DESC LIMIT 20"
-    )
-    .all(userId) as any[];
-
-  // 4. 今日已记录的饮食 (按当前日期)
   const todayStr = dayjs().format("YYYY-MM-DD");
-  const todayDiet = db
-    .prepare(
-      "SELECT meal_type, food_name, calories, protein, carbs, fat FROM diet_records WHERE user_id = ? AND recorded_at LIKE ? ORDER BY id DESC"
-    )
-    .all(userId, `${todayStr}%`) as any[];
-
-  // 5. 最新健康体征
-  const latestHealth = db
-    .prepare("SELECT weight, body_fat, water_ml FROM health_logs WHERE user_id = ? ORDER BY id DESC LIMIT 1")
-    .get(userId) as any;
-
-  // 6. 用户主动维护的安全限制与可执行约束
-  const profileRow = db.prepare(`
-    SELECT age, dietary_preference, allergies_json, medications, medical_conditions_json,
-      medical_notes, dietary_restrictions_json, disliked_foods, kitchen_constraints_json,
-      nutrition_targets_json
-    FROM user_health_profiles WHERE user_id = ?
-  `).get(userId) as any;
-  const safeJson = <T>(value: unknown, fallback: T): T => {
-    if (typeof value !== "string") return fallback;
-    try { return JSON.parse(value) as T; } catch { return fallback; }
-  };
-  const healthProfile = profileRow ? {
-    age: profileRow.age ?? null,
-    dietary_preference: profileRow.dietary_preference || "",
-    allergies: safeJson(profileRow.allergies_json, []),
-    medications: profileRow.medications || "",
-    medical_conditions: safeJson(profileRow.medical_conditions_json, []),
-    medical_notes: profileRow.medical_notes || "",
-    dietary_restrictions: safeJson(profileRow.dietary_restrictions_json, []),
-    disliked_foods: profileRow.disliked_foods || "",
-    kitchen_constraints: safeJson(profileRow.kitchen_constraints_json, {}),
-    nutrition_targets: safeJson(profileRow.nutrition_targets_json, {}),
-  } : undefined;
-
-  // AI 与页面复用同一套候选生成和硬约束，避免模型绕过过敏、时长、厨具或审核状态。
-  const recommendedRecipes = (await recommendationsService().compute(userId, {
-    surface: "ai",
-    matchStatus: "all",
-  })).results.slice(0, 12).map((item) => ({
+  const [context, recommendationPage] = await Promise.all([
+    aiContextService().load(userId, todayStr),
+    recommendationsService().compute(userId, { surface: "ai", matchStatus: "all" }),
+  ]);
+  const recommendedRecipes = recommendationPage.results.slice(0, 12).map((item) => ({
     recipeId: item.recipeId,
     title: item.recipe.title,
     reasons: item.reasons,
@@ -136,13 +82,7 @@ export async function buildUserContext(userId: number): Promise<UserContext> {
 
   return {
     userId,
-    username,
-    dailyCaloriesTarget,
-    inventory: inventory || [],
-    kitchenware: kitchenware || [],
-    todayDiet: todayDiet || [],
-    latestHealth,
-    healthProfile,
+    ...context,
     recommendedRecipes,
   };
 }
@@ -158,7 +98,7 @@ export function generateSystemPrompt(ctx: UserContext): string {
 export function buildAIPromptMessages(ctx: UserContext): Array<{ role: "system"; content: string }> {
   const totalCaloriesToday = ctx.todayDiet.reduce((sum, item) => sum + (item.calories || 0), 0);
   const totalProteinToday = ctx.todayDiet.reduce((sum, item) => sum + (item.protein || 0), 0);
-  const personaPrompt = getSystemSetting("AI_SYSTEM_PROMPT").trim() || DEFAULT_AI_PERSONA_PROMPT;
+  const personaPrompt = ctx.personaPrompt?.trim() || DEFAULT_AI_PERSONA_PROMPT;
   const nutritionTargets = ctx.healthProfile?.nutrition_targets || {};
   const runtimeContext = {
     current_time: dayjs().format(),

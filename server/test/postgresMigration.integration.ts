@@ -7,6 +7,8 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { PostgresAdminConsoleRepository } from "../src/modules/adminConsole/postgresRepository.js";
+import { AdminConsoleService } from "../src/modules/adminConsole/service.js";
 import { PostgresAdminFoodAssetsRepository } from "../src/modules/adminFoodAssets/postgresRepository.js";
 import { AdminFoodAssetsService } from "../src/modules/adminFoodAssets/service.js";
 import { PostgresAdminKitchenwareRepository } from "../src/modules/adminKitchenware/postgresRepository.js";
@@ -373,6 +375,43 @@ try {
     AND resource_id=ANY($1::text[])`, [[String(sourceAdminFood.id), String(targetAdminFood.id), String(customFoodId), String(rejectedCustomFoodId)]]))
     .rows[0]?.count), 7);
   await adminFoodService.removeIngredient(targetAdminFood.id, adminFoodContext);
+
+  const adminConsoleRepository = new PostgresAdminConsoleRepository(pool);
+  const adminConsoleService = new AdminConsoleService(adminConsoleRepository);
+  await pool.query("INSERT INTO funnel_events (event_name,actor_hash) VALUES ('admin_console_test','actor-test')");
+  await pool.query(`INSERT INTO inventory_scan_jobs (id,user_id,image_hash,status,result_json)
+    VALUES ('admin-console-scan',$1,'hash-admin-console','completed','[{"foodName":"番茄"}]'::jsonb)`, [user.id]);
+  await pool.query(`INSERT INTO ai_chat_messages (user_id,session_id,role,content,source,status,payload_json,response_time_ms)
+    VALUES ($1,'admin-console-chat','user','管理员控制台问题','assistant','completed',NULL,NULL),
+           ($1,'admin-console-chat','assistant','管理员控制台回答','assistant','completed','{"solutionCards":[{"title":"番茄汤"}]}'::jsonb,321)`, [user.id]);
+  await pool.query(`INSERT INTO ai_usage_logs
+    (user_id,endpoint,model,prompt_tokens,completion_tokens,total_tokens,latency_ms,success,failure_reason,estimated_cost_usd)
+    VALUES ($1,'admin-console','test-model',10,5,15,250,FALSE,'injected provider failure',0.001)`, [user.id]);
+  const consoleStats = await adminConsoleService.stats();
+  assert(Number(consoleStats.users) >= 1); assert(Number(consoleStats.ingredients) >= 1);
+  assert.equal((await adminConsoleService.funnel({ days: 7 })).items.some((item) => item.eventName === "admin_console_test"), true);
+  const consoleAudits = await adminConsoleService.auditLogs({ action: "ingredient.delete", page: 1, pageSize: 10 });
+  assert.equal(consoleAudits.items.some((item) => item.resourceId === String(targetAdminFood.id)), true);
+  const consoleScans = await adminConsoleService.scanJobs({ status: "completed", user: String(user.id) });
+  assert.equal(consoleScans.items.find((item) => item.id === "admin-console-scan")?.itemCount, 1);
+  assert.equal((await adminConsoleService.scanJob("admin-console-scan")).items.length, 1);
+  const consoleConversations = await adminConsoleService.conversations({ query: String(user.id) });
+  assert.equal(consoleConversations.items.some((item) => item.sessionId === "admin-console-chat"), true);
+  const consoleConversation = await adminConsoleService.conversation(user.id, "admin-console-chat");
+  assert.equal((consoleConversation.messages[1]?.payload as Record<string, unknown>).solutionCards instanceof Array, true);
+  const consoleUsage = await adminConsoleService.usage({ range: "all", userId: user.id });
+  assert(Number(consoleUsage.summary.totalTokens) >= 15);
+  assert.equal(consoleUsage.failures.some((item) => item.endpoint === "admin-console"), true);
+  assert.equal((await adminConsoleService.trends()).length, 7);
+  assert((await adminConsoleService.recent()).recentUsers.length >= 1);
+  assert.equal((await adminConsoleService.trash()).ingredients.some((item) => Number(item.id) === targetAdminFood.id), true);
+  await assert.rejects(() => adminConsoleRepository.restore("ingredients", targetAdminFood.id, {
+    adminUserId: 2_147_000_000, action: "ingredients.restore", resourceType: "ingredients",
+    resourceId: targetAdminFood.id, summary: "回滚恢复测试",
+  }));
+  assert((await pool.query("SELECT deleted_at FROM ingredients_library WHERE id=$1", [targetAdminFood.id])).rows[0]?.deleted_at);
+  await adminConsoleService.restore("ingredients", targetAdminFood.id, adminFoodContext);
+  assert.equal((await pool.query("SELECT deleted_at FROM ingredients_library WHERE id=$1", [targetAdminFood.id])).rows[0]?.deleted_at, null);
 
   const cookingQueueRepository = new PostgresCookingQueueRepository(pool);
   await pool.query("DELETE FROM cooking_queue_items WHERE user_id = $1", [user.id]);
@@ -847,6 +886,7 @@ try {
     postgresRecipesRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
+    postgresAdminConsoleRepositoryVerified: true,
     postgresHealthRepositoryVerified: true,
     postgresShoppingRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,

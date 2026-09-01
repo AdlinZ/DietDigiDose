@@ -11,19 +11,19 @@ const router = Router();
 router.use(authMiddleware);
 router.param("runId", uuidParam);
 
-router.get("/agent-runs/:runId", (req: AuthRequest, res) => {
-  const row = getAgentRunRow(String(req.params.runId), req.userId!);
+router.get("/agent-runs/:runId", async (req: AuthRequest, res) => {
+  const row = await getAgentRunRow(String(req.params.runId), req.userId!);
   if (!row) return res.status(404).json({ error: "Agent Run 不存在或无权访问", code: "AGENT_RUN_NOT_FOUND" });
   const afterSequence = Math.max(0, Number(req.query.afterSequence) || 0);
   const run = toAgentRunSummary(row);
-  return res.json({ run, events: listAgentEvents(row.id, req.userId!, afterSequence), solutionCards: buildAgentSolutionCards(run.id, run.artifacts) });
+  return res.json({ run, events: await listAgentEvents(row.id, req.userId!, afterSequence), solutionCards: buildAgentSolutionCards(run.id, run.artifacts) });
 });
 
-router.get("/agent-runs/:runId/media", (req: AuthRequest, res) => {
+router.get("/agent-runs/:runId/media", async (req: AuthRequest, res) => {
   const runId = String(req.params.runId);
-  const row = getAgentRunRow(runId, req.userId!);
+  const row = await getAgentRunRow(runId, req.userId!);
   if (!row) return res.status(404).json({ error: "Agent Run 不存在或无权访问", code: "AGENT_RUN_NOT_FOUND" });
-  const media = getAgentRunMedia(runId, req.userId!);
+  const media = await getAgentRunMedia(runId, req.userId!);
   if (!media || media.kind !== "image") {
     return res.status(404).json({ error: "图片附件不存在", code: "AGENT_MEDIA_NOT_FOUND" });
   }
@@ -45,9 +45,9 @@ router.post("/agent-runs/:runId/resume", validateBody(agentRunResumeSchema), asy
   }
 });
 
-router.post("/agent-runs/:runId/cancel", (req: AuthRequest, res) => {
+router.post("/agent-runs/:runId/cancel", async (req: AuthRequest, res) => {
   try {
-    cancelSupervisorRun(req.userId!, String(req.params.runId));
+    await cancelSupervisorRun(req.userId!, String(req.params.runId));
     return res.json({ success: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "取消 Agent Run 失败";

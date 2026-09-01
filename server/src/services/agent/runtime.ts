@@ -245,8 +245,8 @@ async function withTransientRetries<T>(operation: () => Promise<T>, retries = 2)
   throw lastError;
 }
 
-function assertRunActive(runId: string) {
-  const row = getAgentRunRow(runId);
+async function assertRunActive(runId: string) {
+  const row = await getAgentRunRow(runId);
   if (!row || row.status === "cancelled") throw new Error("AGENT_RUN_CANCELLED");
 }
 
@@ -263,16 +263,16 @@ const supervisorSchema = z.object({
 });
 
 async function supervisorNode(state: SupervisorGraphState) {
-  assertRunActive(state.runId);
-  appendAgentEvent(state.runId, state.userId, "Supervisor", "routing_started", "Supervisor 正在分析目标并分派专业 Agent");
+  await assertRunActive(state.runId);
+  await appendAgentEvent(state.runId, state.userId, "Supervisor", "routing_started", "Supervisor 正在分析目标并分派专业 Agent");
   const inputText = promptText(state.input);
   const safetyBlock = findAllergyConflict(inputText, await buildUserContext(state.userId));
   if (safetyBlock) {
-    appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_detected", `检测到已记录的过敏限制：${safetyBlock.allergyName}`, {
+    await appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_detected", `检测到已记录的过敏限制：${safetyBlock.allergyName}`, {
       allergyName: safetyBlock.allergyName,
       severe: safetyBlock.severe,
     });
-    appendAgentEvent(state.runId, state.userId, "Supervisor", "routing_completed", "请求已交由健康安全门禁处理", {
+    await appendAgentEvent(state.runId, state.userId, "Supervisor", "routing_completed", "请求已交由健康安全门禁处理", {
       goal: "阻断过敏原相关建议与写入，并提供安全替代方案",
       specialists: [],
     });
@@ -304,24 +304,24 @@ async function supervisorNode(state: SupervisorGraphState) {
   let supplementalInput: string | undefined;
   const mediaRecognitionPending = forced.has("VisionAgent") || forced.has("VoiceAgent");
   if (decision.needsInput && !mediaRecognitionPending && state.input.modality !== "home") {
-    setAgentRunStatus(state.runId, "awaiting_input", { pendingInput: { question: decision.needsInput } });
-    appendAgentEvent(state.runId, state.userId, "Supervisor", "input_required", decision.needsInput);
+    await setAgentRunStatus(state.runId, "awaiting_input", { pendingInput: { question: decision.needsInput } });
+    await appendAgentEvent(state.runId, state.userId, "Supervisor", "input_required", decision.needsInput);
     const resumed = interrupt<{ runId: string; question: string }, { input: string }>({ runId: state.runId, question: decision.needsInput });
     supplementalInput = resumed.input.trim().slice(0, 4000);
     if (!supplementalInput) throw new Error("补充信息不能为空");
-    setAgentRunStatus(state.runId, "running", { pendingInput: null });
-    appendAgentEvent(state.runId, state.userId, "Supervisor", "input_received", "已收到补充信息，重新规划任务");
+    await setAgentRunStatus(state.runId, "running", { pendingInput: null });
+    await appendAgentEvent(state.runId, state.userId, "Supervisor", "input_received", "已收到补充信息，重新规划任务");
     decision = await invokeStructured(
       () => routingAgent.invoke({ messages: [{ role: "user", content: `${inputText}\n用户补充：${supplementalInput}` }] }, { recursionLimit: 6 }),
       supervisorSchema,
       { runId: state.runId, userId: state.userId, agentName: "Supervisor", phase: "routing_resume", model: await modelNameFor("SUPERVISOR") },
     );
   } else if (decision.needsInput && state.input.modality === "home") {
-    appendAgentEvent(state.runId, state.userId, "Supervisor", "clarification_skipped", "首页推荐采用保守默认值继续执行，不向用户发起阻塞式追问");
+    await appendAgentEvent(state.runId, state.userId, "Supervisor", "clarification_skipped", "首页推荐采用保守默认值继续执行，不向用户发起阻塞式追问");
   }
   for (const specialist of decision.specialists) forced.add(specialist);
   const specialists = [...forced].slice(0, 5);
-  appendAgentEvent(state.runId, state.userId, "Supervisor", "routing_completed", `已分派：${specialists.join("、")}`, {
+  await appendAgentEvent(state.runId, state.userId, "Supervisor", "routing_completed", `已分派：${specialists.join("、")}`, {
     goal: decision.goal,
     specialists,
     supplementalInput: supplementalInput || null,
@@ -376,7 +376,7 @@ const visionChatResultSchema = z.object({
 }).strict();
 
 async function runNutritionAgent(state: SupervisorGraphState): Promise<SpecialistOutput> {
-  appendAgentEvent(state.runId, state.userId, "NutritionPlanningAgent", "agent_started", "营养规划 Agent 正在分析约束");
+  await appendAgentEvent(state.runId, state.userId, "NutritionPlanningAgent", "agent_started", "营养规划 Agent 正在分析约束");
   const agent = createAgent({
     model: await modelFor("NUTRITION"), tools: nutritionTools(state.userId),
     middleware: [toolCallLimitMiddleware({ runLimit: 6 })],
@@ -390,12 +390,12 @@ async function runNutritionAgent(state: SupervisorGraphState): Promise<Specialis
     { runId: state.runId, userId: state.userId, agentName: "NutritionPlanningAgent", phase: "specialist", model: await modelNameFor("NUTRITION") },
   );
   const output = { ...result, artifacts: result.artifacts || [] };
-  appendAgentEvent(state.runId, state.userId, "NutritionPlanningAgent", "agent_completed", "营养规划分析完成", output);
+  await appendAgentEvent(state.runId, state.userId, "NutritionPlanningAgent", "agent_completed", "营养规划分析完成", output);
   return output;
 }
 
 async function runRecipeAgent(state: SupervisorGraphState): Promise<SpecialistOutput> {
-  appendAgentEvent(state.runId, state.userId, "RecipeCookingAgent", "agent_started", "菜谱烹饪 Agent 正在检索与设计方案");
+  await appendAgentEvent(state.runId, state.userId, "RecipeCookingAgent", "agent_started", "菜谱烹饪 Agent 正在检索与设计方案");
   const agent = createAgent({
     model: await modelFor("RECIPE"), tools: recipeTools(state.userId),
     middleware: [toolCallLimitMiddleware({ runLimit: 6 })],
@@ -409,14 +409,14 @@ async function runRecipeAgent(state: SupervisorGraphState): Promise<SpecialistOu
     { runId: state.runId, userId: state.userId, agentName: "RecipeCookingAgent", phase: "specialist", model: await modelNameFor("RECIPE") },
   );
   const output = { ...result, artifacts: result.artifacts || [] };
-  appendAgentEvent(state.runId, state.userId, "RecipeCookingAgent", "agent_completed", "菜谱烹饪分析完成", output);
+  await appendAgentEvent(state.runId, state.userId, "RecipeCookingAgent", "agent_completed", "菜谱烹饪分析完成", output);
   return output;
 }
 
 async function runVisionAgent(state: SupervisorGraphState): Promise<SpecialistOutput> {
-  const media = getAgentRunMedia(state.runId, state.userId);
+  const media = await getAgentRunMedia(state.runId, state.userId);
   if (!media || media.kind !== "image") throw new Error("VisionAgent 缺少图片输入");
-  appendAgentEvent(state.runId, state.userId, "VisionAgent", "agent_started", "视觉 Agent 正在识别图片");
+  await appendAgentEvent(state.runId, state.userId, "VisionAgent", "agent_started", "视觉 Agent 正在识别图片");
   const isChatAttachment = state.input.metadata?.attachmentMode === "chat";
   const modalityPrompt = state.input.modality === "receipt"
     ? "识别小票中的食品项目、数量、价格；仅返回 JSON，格式为 {items:[{name,quantity,price,category}],confidence,warnings}。"
@@ -438,7 +438,7 @@ async function runVisionAgent(state: SupervisorGraphState): Promise<SpecialistOu
     data = isChatAttachment ? visionChatResultSchema.parse(data) : visionFoodResultSchema.parse(data);
   }
   const output = { summary: typeof data === "string" ? data : JSON.stringify(data), artifacts: [{ type: "vision" as const, title: "视觉识别", data }] };
-  appendAgentEvent(state.runId, state.userId, "VisionAgent", "agent_completed", "视觉识别完成", {
+  await appendAgentEvent(state.runId, state.userId, "VisionAgent", "agent_completed", "视觉识别完成", {
     ...output,
     lowConfidence: typeof data === "object" && data !== null && "confidence" in data ? Number((data as any).confidence) < 0.65 : true,
   });
@@ -446,9 +446,9 @@ async function runVisionAgent(state: SupervisorGraphState): Promise<SpecialistOu
 }
 
 async function runVoiceAgent(state: SupervisorGraphState): Promise<SpecialistOutput> {
-  const media = getAgentRunMedia(state.runId, state.userId);
+  const media = await getAgentRunMedia(state.runId, state.userId);
   if (!media || media.kind !== "audio") throw new Error("VoiceAgent 缺少音频输入");
-  appendAgentEvent(state.runId, state.userId, "VoiceAgent", "agent_started", "语音 Agent 正在转录音频");
+  await appendAgentEvent(state.runId, state.userId, "VoiceAgent", "agent_started", "语音 Agent 正在转录音频");
   const result = await withTransientRetries(() => transcribeAudio(media.data_base64, {
     userId: state.userId,
     mimeType: media.mime_type || state.input.mimeType || "audio/m4a",
@@ -457,19 +457,19 @@ async function runVoiceAgent(state: SupervisorGraphState): Promise<SpecialistOut
     phase: "transcription",
   }));
   const output = { summary: result.text, transcript: result.text, artifacts: [{ type: "transcript" as const, title: "语音转录", data: { text: result.text } }] };
-  appendAgentEvent(state.runId, state.userId, "VoiceAgent", "agent_completed", "语音转录完成", output);
+  await appendAgentEvent(state.runId, state.userId, "VoiceAgent", "agent_completed", "语音转录完成", output);
   return output;
 }
 
 async function dispatchNode(state: SupervisorGraphState) {
-  assertRunActive(state.runId);
+  await assertRunActive(state.runId);
   const specialistSet = new Set(state.specialists);
   const mediaEntries: Array<readonly [string, SpecialistOutput]> = [];
   if (specialistSet.has("VisionAgent")) mediaEntries.push(["VisionAgent", await runVisionAgent(state)] as const);
   if (specialistSet.has("VoiceAgent")) mediaEntries.push(["VoiceAgent", await runVoiceAgent(state)] as const);
 
   if (mediaEntries.length) {
-    appendAgentEvent(state.runId, state.userId, "Supervisor", "media_routing_started", "Supervisor 正在根据识别结果继续分派任务");
+    await appendAgentEvent(state.runId, state.userId, "Supervisor", "media_routing_started", "Supervisor 正在根据识别结果继续分派任务");
     const routingAgent = createAgent({
       model: await modelFor("SUPERVISOR"), tools: [],
       systemPrompt: structuredSystemPrompt(`你是 Supervisor。根据视觉或语音识别结果选择后续专业 Agent：NutritionPlanningAgent、RecipeCookingAgent、OperationsAgent。
@@ -482,7 +482,7 @@ async function dispatchNode(state: SupervisorGraphState) {
       { runId: state.runId, userId: state.userId, agentName: "Supervisor", phase: "media_routing", model: await modelNameFor("SUPERVISOR") },
     );
     for (const specialist of routed.specialists) specialistSet.add(specialist);
-    appendAgentEvent(state.runId, state.userId, "Supervisor", "media_routing_completed", `识别后分派：${[...specialistSet].join("、")}`);
+    await appendAgentEvent(state.runId, state.userId, "Supervisor", "media_routing_completed", `识别后分派：${[...specialistSet].join("、")}`);
   }
 
   const mediaOutputs = Object.fromEntries(mediaEntries);
@@ -506,7 +506,7 @@ async function dispatchNode(state: SupervisorGraphState) {
 
 async function preflightPolicyNode(state: SupervisorGraphState) {
   if (state.safetyBlock) {
-    appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_blocked", "已阻断过敏原相关建议、餐单与业务写入", {
+    await appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_blocked", "已阻断过敏原相关建议、餐单与业务写入", {
       allergyName: state.safetyBlock.allergyName,
       severe: state.safetyBlock.severe,
     });
@@ -514,11 +514,11 @@ async function preflightPolicyNode(state: SupervisorGraphState) {
   }
   const supplementalSafetyBlock = findAllergyConflict(requestText(state), await buildUserContext(state.userId));
   if (supplementalSafetyBlock) {
-    appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_detected", `补充信息命中已记录的过敏限制：${supplementalSafetyBlock.allergyName}`, {
+    await appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_detected", `补充信息命中已记录的过敏限制：${supplementalSafetyBlock.allergyName}`, {
       allergyName: supplementalSafetyBlock.allergyName,
       severe: supplementalSafetyBlock.severe,
     });
-    appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_blocked", "已阻断过敏原相关建议、餐单与业务写入", {
+    await appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_blocked", "已阻断过敏原相关建议、餐单与业务写入", {
       allergyName: supplementalSafetyBlock.allergyName,
       severe: supplementalSafetyBlock.severe,
     });
@@ -529,10 +529,10 @@ async function preflightPolicyNode(state: SupervisorGraphState) {
       safetyBlock: supplementalSafetyBlock,
     };
   }
-  const media = getAgentRunMedia(state.runId, state.userId);
+  const media = await getAgentRunMedia(state.runId, state.userId);
   if (["image", "inventory_scan", "receipt"].includes(state.input.modality) && media?.kind !== "image") throw new Error("PolicyGate：缺少经过网关校验的图片输入");
   if (state.input.modality === "audio" && media?.kind !== "audio") throw new Error("PolicyGate：缺少经过网关校验的音频输入");
-  appendAgentEvent(state.runId, state.userId, "PolicyGate", "preflight_passed", "输入模态、权限与健康安全前置检查已通过", {
+  await appendAgentEvent(state.runId, state.userId, "PolicyGate", "preflight_passed", "输入模态、权限与健康安全前置检查已通过", {
     modality: state.input.modality,
     hasMedia: Boolean(media),
   });
@@ -545,13 +545,13 @@ async function specialistResultPolicyNode(state: SupervisorGraphState) {
   const visionData = visionArtifact?.data as { confidence?: unknown } | undefined;
   const confidence = Number(visionData?.confidence);
   if (state.specialists.includes("OperationsAgent") && (!Number.isFinite(confidence) || confidence < 0.65) && visionArtifact) {
-    appendAgentEvent(state.runId, state.userId, "PolicyGate", "low_confidence_write_blocked", "视觉结果置信度不足，已阻断自动写入", { confidence: Number.isFinite(confidence) ? confidence : null });
+    await appendAgentEvent(state.runId, state.userId, "PolicyGate", "low_confidence_write_blocked", "视觉结果置信度不足，已阻断自动写入", { confidence: Number.isFinite(confidence) ? confidence : null });
     return {
       specialists: state.specialists.filter((name) => name !== "OperationsAgent"),
       outputs: { ...state.outputs, PolicyGate: { warning: "视觉结果置信度不足，未生成任何业务写入；请用户补充或确认识别内容。", confidence: Number.isFinite(confidence) ? confidence : null } },
     };
   }
-  appendAgentEvent(state.runId, state.userId, "PolicyGate", "specialist_results_validated", "专业 Agent 结构化结果已通过安全检查", {
+  await appendAgentEvent(state.runId, state.userId, "PolicyGate", "specialist_results_validated", "专业 Agent 结构化结果已通过安全检查", {
     specialists: state.specialists,
     artifactCount: state.artifacts.length,
   });
@@ -568,7 +568,7 @@ const operationSchema = z.object({
 
 async function operationsNode(state: SupervisorGraphState) {
   if (state.safetyBlock || !state.specialists.includes("OperationsAgent")) return { actions: [] };
-  appendAgentEvent(state.runId, state.userId, "OperationsAgent", "agent_started", "业务操作 Agent 正在生成类型化动作");
+  await appendAgentEvent(state.runId, state.userId, "OperationsAgent", "agent_started", "业务操作 Agent 正在生成类型化动作");
   const agent = createAgent({
     model: await modelFor("OPERATIONS"), tools: [],
     systemPrompt: structuredSystemPrompt(`你是 OperationsAgent。只根据用户明确表达的意图生成业务动作，不补充用户未要求的写入。
@@ -585,7 +585,7 @@ async function operationsNode(state: SupervisorGraphState) {
     actions = validateAgentActions(result.actions || [], await buildUserContext(state.userId));
   } catch (error) {
     if (!(error instanceof AgentSafetyConflictError)) throw error;
-    appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_blocked", "业务动作命中过敏限制，已在审批和写入前阻断", {
+    await appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_blocked", "业务动作命中过敏限制，已在审批和写入前阻断", {
       allergyName: error.block.allergyName,
       severe: error.block.severe,
     });
@@ -595,34 +595,34 @@ async function operationsNode(state: SupervisorGraphState) {
       outputs: { ...state.outputs, PolicyGate: { warning: error.block.reply } },
     };
   }
-  appendAgentEvent(state.runId, state.userId, "OperationsAgent", "agent_completed", actions.length ? `已生成 ${actions.length} 个业务动作` : "无需业务写入", { actions });
+  await appendAgentEvent(state.runId, state.userId, "OperationsAgent", "agent_completed", actions.length ? `已生成 ${actions.length} 个业务动作` : "无需业务写入", { actions });
   return { actions };
 }
 
 async function approvalNode(state: SupervisorGraphState) {
   if (!state.actions.length) return {};
-  const existingActions = getRunActions(state.runId, state.userId);
-  const saved = saveAgentActions(state.runId, state.userId, state.actions);
+  const existingActions = await getRunActions(state.runId, state.userId);
+  const saved = await saveAgentActions(state.runId, state.userId, state.actions);
   const existingById = new Map(existingActions.map((action) => [action.id, action]));
   const lowRisk = saved.filter((action) => action.riskLevel === "low" && (!action.id || existingById.get(action.id)?.status === "proposed" || !existingById.has(action.id)));
   if (lowRisk.length) {
     await executeAgentActions(state.userId, state.runId, lowRisk);
-    appendAgentEvent(state.runId, state.userId, "OperationsAgent", "low_risk_executed", `已自动执行 ${lowRisk.length} 个低风险操作`, { undoAvailableUntil: new Date(Date.now() + 10 * 60_000).toISOString() });
+    await appendAgentEvent(state.runId, state.userId, "OperationsAgent", "low_risk_executed", `已自动执行 ${lowRisk.length} 个低风险操作`, { undoAvailableUntil: new Date(Date.now() + 10 * 60_000).toISOString() });
   }
   const highRisk = saved.filter((action) => action.riskLevel === "high");
   if (!hasHighRiskActions(highRisk)) return { actions: saved };
   const bundle = { version: 1, actions: highRisk, expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString() };
   const approvalAlreadyRequested = existingActions.some((action) => action.riskLevel === "high" && action.status === "awaiting_approval");
   if (!approvalAlreadyRequested) {
-    setAgentRunStatus(state.runId, "awaiting_approval", { pendingApproval: bundle });
-    appendAgentEvent(state.runId, state.userId, "PolicyGate", "approval_required", `有 ${highRisk.length} 个操作需要确认`);
+    await setAgentRunStatus(state.runId, "awaiting_approval", { pendingApproval: bundle });
+    await appendAgentEvent(state.runId, state.userId, "PolicyGate", "approval_required", `有 ${highRisk.length} 个操作需要确认`);
   }
   const resume = interrupt<{ runId: string; bundle: typeof bundle }, { decision: "approve" | "reject" | "edit"; actions?: AgentActionProposal[] }>({ runId: state.runId, bundle });
-  setAgentRunStatus(state.runId, "running", { pendingApproval: null });
+  await setAgentRunStatus(state.runId, "running", { pendingApproval: null });
   if (resume.decision === "reject") {
-    recordActionDecision(highRisk.flatMap((action) => action.id ? [action.id] : []), state.userId, "reject");
-    for (const action of highRisk) if (action.id) updateActionStatus(action.id, "rejected");
-    appendAgentEvent(state.runId, state.userId, "PolicyGate", "approval_rejected", "用户已拒绝高风险操作");
+    await recordActionDecision(highRisk.flatMap((action) => action.id ? [action.id] : []), state.userId, "reject");
+    for (const action of highRisk) if (action.id) await updateActionStatus(action.id, "rejected");
+    await appendAgentEvent(state.runId, state.userId, "PolicyGate", "approval_rejected", "用户已拒绝高风险操作");
     return { actions: saved, approvalDecision: "reject" as const };
   }
   let approved = highRisk;
@@ -646,23 +646,23 @@ async function approvalNode(state: SupervisorGraphState) {
       submittedIds.add(id);
       return { ...action, id };
     });
-    reviseRunActions(state.runId, state.userId, approved);
+    await reviseRunActions(state.runId, state.userId, approved);
     const removed = highRisk.filter((action) => action.id && !submittedIds.has(action.id));
     const removedIds = removed.flatMap((action) => action.id ? [action.id] : []);
-    recordActionDecision(removedIds, state.userId, "reject");
-    for (const action of removed) if (action.id) updateActionStatus(action.id, "rejected");
+    await recordActionDecision(removedIds, state.userId, "reject");
+    for (const action of removed) if (action.id) await updateActionStatus(action.id, "rejected");
   }
-  recordActionDecision(approved.flatMap((action) => action.id ? [action.id] : []), state.userId, resume.decision);
+  await recordActionDecision(approved.flatMap((action) => action.id ? [action.id] : []), state.userId, resume.decision);
   await executeAgentActions(state.userId, state.runId, approved);
-  appendAgentEvent(state.runId, state.userId, "OperationsAgent", "approved_actions_executed", `已执行 ${approved.length} 个获批操作`);
+  await appendAgentEvent(state.runId, state.userId, "OperationsAgent", "approved_actions_executed", `已执行 ${approved.length} 个获批操作`);
   return { actions: saved, approvalDecision: "approve" as const };
 }
 
 async function synthesisPolicyNode(state: SupervisorGraphState) {
-  const actions = getRunActions(state.runId, state.userId);
+  const actions = await getRunActions(state.runId, state.userId);
   const forbidden = actions.find((action) => action.riskLevel === "forbidden");
   if (forbidden) throw new Error("PolicyGate：最终产物包含禁止操作");
-  appendAgentEvent(state.runId, state.userId, "PolicyGate", "synthesis_allowed", "最终汇总前的安全与权限检查已通过", {
+  await appendAgentEvent(state.runId, state.userId, "PolicyGate", "synthesis_allowed", "最终汇总前的安全与权限检查已通过", {
     artifactCount: state.artifacts.length,
     actionCount: actions.length,
   });
@@ -674,15 +674,15 @@ const finalSchema = z.object({
 });
 
 async function finalNode(state: SupervisorGraphState) {
-  assertRunActive(state.runId);
-  const actions = getRunActions(state.runId, state.userId);
-  appendAgentEvent(state.runId, state.userId, "Supervisor", "synthesis_started", "Supervisor 正在汇总专业 Agent 结果", {
+  await assertRunActive(state.runId);
+  const actions = await getRunActions(state.runId, state.userId);
+  await appendAgentEvent(state.runId, state.userId, "Supervisor", "synthesis_started", "Supervisor 正在汇总专业 Agent 结果", {
     specialists: state.specialists,
     artifactCount: state.artifacts.length,
     actionCount: actions.length,
   });
   if (state.safetyBlock) {
-    appendAgentEvent(state.runId, state.userId, "Supervisor", "run_completed", "Supervisor 已完成健康安全答复", {
+    await appendAgentEvent(state.runId, state.userId, "Supervisor", "run_completed", "Supervisor 已完成健康安全答复", {
       reply: state.safetyBlock.reply,
       artifacts: state.artifacts,
     });
@@ -700,7 +700,7 @@ async function finalNode(state: SupervisorGraphState) {
     { runId: state.runId, userId: state.userId, agentName: "Supervisor", phase: "synthesis", model: await modelNameFor("SUPERVISOR") },
   );
   const reply = normalizePrivacyDisclosure(result.reply, actions.length, requestText(state));
-  appendAgentEvent(state.runId, state.userId, "Supervisor", "run_completed", "Supervisor 已完成最终答复", {
+  await appendAgentEvent(state.runId, state.userId, "Supervisor", "run_completed", "Supervisor 已完成最终答复", {
     reply,
     artifacts: state.artifacts,
   });
@@ -728,10 +728,10 @@ const graph = new StateGraph(SupervisorState)
   .compile({ checkpointer: checkpoint });
 
 async function invokeRun(runId: string, resume?: AgentResumePayload) {
-  const stored = getAgentRunInput(runId);
+  const stored = await getAgentRunInput(runId);
   if (!stored) throw new Error("Agent Run 不存在");
   const config = { configurable: { thread_id: stored.threadId }, recursionLimit: Math.max(20, Number(process.env.AI_AGENT_RECURSION_LIMIT) || 60) };
-  setAgentRunStatus(runId, "running", { pendingApproval: resume ? null : undefined });
+  await setAgentRunStatus(runId, "running", { pendingApproval: resume ? null : undefined });
   const controller = new AbortController();
   activeRunControllers.set(runId, controller);
   const timeout = setTimeout(() => controller.abort(new Error("Agent Run 超过 180 秒执行上限")), Math.max(1_000, Number(process.env.AI_AGENT_RUN_TIMEOUT_MS) || 180_000));
@@ -745,31 +745,32 @@ async function invokeRun(runId: string, resume?: AgentResumePayload) {
     clearTimeout(timeout);
     if (activeRunControllers.get(runId) === controller) activeRunControllers.delete(runId);
   }
-  const row = getAgentRunRow(runId);
+  const row = await getAgentRunRow(runId);
   if (row?.status === "awaiting_approval" || row?.status === "awaiting_input" || row?.status === "cancelled") return;
   const final = result;
-  setAgentRunStatus(runId, "completed", { result: { reply: final.reply, transcript: final.transcript, artifacts: final.artifacts || [] }, pendingApproval: null });
+  await setAgentRunStatus(runId, "completed", { result: { reply: final.reply, transcript: final.transcript, artifacts: final.artifacts || [] }, pendingApproval: null });
 }
 
 function kickOff(runId: string, resume?: AgentResumePayload) {
   const existing = activeRuns.get(runId);
   if (existing) return existing;
-  const promise = invokeRun(runId, resume).catch((error: unknown) => {
-    const current = getAgentRunRow(runId);
+  const promise = invokeRun(runId, resume).catch(async (error: unknown) => {
+    const current = await getAgentRunRow(runId);
     if (current?.status === "cancelled") return;
     const classified = classifyAIError(error);
-    setAgentRunStatus(runId, "failed", {
+    const failed = await setAgentRunStatus(runId, "failed", {
       errorCode: classified.code,
       errorMessage: classified.adminMessage,
     });
-    const stored = getAgentRunInput(runId);
-    if (stored) appendAgentEvent(runId, stored.userId, "Supervisor", "run_failed", classified.adminMessage, {
+    if (!failed) return;
+    const stored = await getAgentRunInput(runId);
+    if (stored) await appendAgentEvent(runId, stored.userId, "Supervisor", "run_failed", classified.adminMessage, {
       errorCode: classified.code,
       errorType: classified.type,
     });
-  }).finally(() => {
+  }).finally(async () => {
     activeRuns.delete(runId);
-    const stored = getAgentRunInput(runId);
+    const stored = await getAgentRunInput(runId);
     if (stored) void scheduleQueuedRuns(stored.userId).catch((error) => {
       console.error("[Agent scheduling error]", error instanceof Error ? error.message : error);
     });
@@ -781,7 +782,7 @@ function kickOff(runId: string, resume?: AgentResumePayload) {
 async function waitForRun(runId: string, waitMs: number) {
   const pending = activeRuns.get(runId);
   if (pending && waitMs > 0) await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, waitMs))]);
-  const row = getAgentRunRow(runId);
+  const row = await getAgentRunRow(runId);
   if (!row) throw new Error("Agent Run 不存在");
   return toAgentRunSummary(row);
 }
@@ -789,21 +790,21 @@ async function waitForRun(runId: string, waitMs: number) {
 export async function waitForSupervisorRunCompletion(runId: string) {
   const pending = activeRuns.get(runId);
   if (pending) await pending;
-  const row = getAgentRunRow(runId);
+  const row = await getAgentRunRow(runId);
   if (!row) throw new Error("Agent Run 不存在");
   return toAgentRunSummary(row);
 }
 
 export async function startSupervisorRun(userId: number, input: AgentInput, waitMs = 25_000): Promise<AgentResponse> {
-  const reusable = input.idempotencyKey ? findReusableAgentRun(userId, input.idempotencyKey) : undefined;
-  const created = reusable || createAgentRun(userId, input);
+  const reusable = input.idempotencyKey ? await findReusableAgentRun(userId, input.idempotencyKey) : undefined;
+  const created = reusable || await createAgentRun(userId, input);
   await scheduleQueuedRuns(userId);
   const run = await waitForRun(created.id, waitMs);
   return { mode: "agent", run, reply: run.reply, transcript: run.transcript, artifacts: run.artifacts, pendingApproval: run.pendingApproval };
 }
 
 export async function resumeSupervisorRun(userId: number, runId: string, resume: AgentResumePayload, waitMs = 25_000) {
-  const row = getAgentRunRow(runId, userId);
+  const row = await getAgentRunRow(runId, userId);
   if (!row) throw new Error("Agent Run 不存在或无权操作");
   if (row.status !== "awaiting_approval" && row.status !== "awaiting_input") throw new Error("Agent Run 当前不等待恢复");
   if (row.status === "awaiting_input") {
@@ -815,45 +816,47 @@ export async function resumeSupervisorRun(userId: number, runId: string, resume:
   const pending = toAgentRunSummary(row).pendingApproval;
   if (!pending || Date.parse(pending.expiresAt) <= Date.now()) {
     await agentSchedulingService().expireAwaitingApproval(runId, userId);
-    setAgentRunStatus(runId, "expired", { pendingApproval: null, errorCode: "AGENT_APPROVAL_EXPIRED", errorMessage: "批准包已超过 24 小时有效期" });
+    await setAgentRunStatus(runId, "expired", { pendingApproval: null, errorCode: "AGENT_APPROVAL_EXPIRED", errorMessage: "批准包已超过 24 小时有效期" });
     throw new Error("批准包已过期");
   }
   kickOff(runId, resume);
   return waitForRun(runId, waitMs);
 }
 
-export function cancelSupervisorRun(userId: number, runId: string) {
-  const row = getAgentRunRow(runId, userId);
+export async function cancelSupervisorRun(userId: number, runId: string) {
+  const row = await getAgentRunRow(runId, userId);
   if (!row) throw new Error("Agent Run 不存在或无权操作");
   if (["completed", "failed", "cancelled", "expired"].includes(row.status)) throw new Error("Agent Run 已结束");
-  setAgentRunStatus(runId, "cancelled", { pendingApproval: null, pendingInput: null });
+  if (!await setAgentRunStatus(runId, "cancelled", { pendingApproval: null, pendingInput: null })) {
+    throw new Error("Agent Run 已结束");
+  }
   activeRunControllers.get(runId)?.abort(new Error("AGENT_RUN_CANCELLED"));
-  appendAgentEvent(runId, userId, "Supervisor", "run_cancelled", "用户已取消 Agent Run");
+  await appendAgentEvent(runId, userId, "Supervisor", "run_cancelled", "用户已取消 Agent Run");
 }
 
 export async function retrySupervisorRun(userId: number, runId: string, waitMs = 25_000) {
-  const row = getAgentRunRow(runId, userId);
+  const row = await getAgentRunRow(runId, userId);
   if (!row) throw new Error("Agent Run 不存在或无权操作");
   if (row.status !== "failed") throw new Error("只有失败的 Agent Run 可以重试");
   await checkpoint.deleteThread(row.checkpoint_thread_id);
-  setAgentRunStatus(runId, "queued", { pendingApproval: null, pendingInput: null, errorCode: null, errorMessage: null });
+  await setAgentRunStatus(runId, "queued", { pendingApproval: null, pendingInput: null, errorCode: null, errorMessage: null });
   kickOff(runId);
   return waitForRun(runId, waitMs);
 }
 
 export async function undoSupervisorRun(userId: number, runId: string) {
-  const row = getAgentRunRow(runId, userId);
+  const row = await getAgentRunRow(runId, userId);
   if (!row) throw new Error("Agent Run 不存在或无权操作");
   const result = await undoAgentRunActions(userId, runId);
-  appendAgentEvent(runId, userId, "OperationsAgent", "actions_undone", `已撤销 ${result.undone} 个低风险操作`);
+  await appendAgentEvent(runId, userId, "OperationsAgent", "actions_undone", `已撤销 ${result.undone} 个低风险操作`);
   return result;
 }
 
 export async function recoverAgentRuntime() {
   await agentSchedulingService().resetInterruptedRuns();
   const userIds = new Set<number>();
-  for (const { id } of listRecoverableAgentRuns()) {
-    const stored = getAgentRunInput(id);
+  for (const { id } of await listRecoverableAgentRuns()) {
+    const stored = await getAgentRunInput(id);
     if (stored) userIds.add(stored.userId);
   }
   await Promise.all([...userIds].map((userId) => scheduleQueuedRuns(userId)));

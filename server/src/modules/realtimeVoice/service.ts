@@ -11,7 +11,7 @@ export interface RealtimeVoiceDependencies {
   transcribe(audioBase64: string, input: { userId: number; mimeType: string; agentName: string; phase: string }): Promise<{ text: string }>;
   startRun(userId: number, input: Record<string, unknown>, priority: number): Promise<{ run: SupervisorRun }>;
   waitForRun(runId: string): Promise<SupervisorRun>;
-  cancelRun(userId: number, runId: string): unknown;
+  cancelRun(userId: number, runId: string): Promise<void>;
 }
 
 function timestamp(value: string) {
@@ -95,7 +95,7 @@ export class RealtimeVoiceService {
     await this.repository.recordTurnActivity(sessionId, connectedMs, Boolean(input.interruptedResponse));
     if (input.interruptedResponse) {
       const interrupted = await this.repository.interruptedTurn(sessionId, userId);
-      if (interrupted?.agentRunId) try { this.dependencies.cancelRun(userId, interrupted.agentRunId); } catch { /* terminal */ }
+      if (interrupted?.agentRunId) try { await this.dependencies.cancelRun(userId, interrupted.agentRunId); } catch { /* terminal */ }
       await this.repository.emitEvent(sessionId, "response.cancelled", { turnId: interrupted?.id || input.turnId,
         interruptedByTurnId: input.turnId, reason: "barge_in" });
     }
@@ -127,7 +127,7 @@ export class RealtimeVoiceService {
     const session = await this.repository.session(sessionId, userId);
     if (!session) throw new RealtimeVoiceError(404, "REALTIME_VOICE_SESSION_NOT_FOUND", "实时语音会话不存在");
     if (session.status !== "closed") for (const runId of await this.repository.pendingRuns(sessionId, userId)) {
-      try { this.dependencies.cancelRun(userId, runId); } catch { /* terminal */ }
+      try { await this.dependencies.cancelRun(userId, runId); } catch { /* terminal */ }
     }
     const closed = session.status === "closed" ? session : await this.repository.close(sessionId, userId);
     return { session: publicRealtimeVoiceSession(closed ?? session) };

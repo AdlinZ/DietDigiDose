@@ -28,6 +28,8 @@ import { AgentSchedulingService } from "../src/modules/agentScheduling/service.j
 import { PostgresAgentOperationsRepository } from "../src/modules/agentOperations/postgresRepository.js";
 import { AgentOperationsService } from "../src/modules/agentOperations/service.js";
 import type { ExecutableAgentAction } from "../src/modules/agentOperations/repository.js";
+import { PostgresAgentRunsRepository } from "../src/modules/agentRuns/postgresRepository.js";
+import { AgentRunsService } from "../src/modules/agentRuns/service.js";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { PostgresAuthVerificationRepository } from "../src/modules/authVerification/postgresRepository.js";
@@ -620,6 +622,61 @@ try {
   assert.deepEqual((await aiConversationsService.legacyInventoryScanJob(legacyScanId, user.id))?.result,
     [{ foodName: "PostgreSQL 番茄" }]);
   assert.equal(await aiConversationsService.legacyInventoryScanJob(legacyScanId, householdMember), null);
+  const agentRunsService = new AgentRunsService(new PostgresAgentRunsRepository(pool));
+  const postgresAgentRunInput = {
+    modality: "image", source: "assistant", sessionId: " postgres-agent-runs ", prompt: "识别 PostgreSQL 番茄",
+    image: "data:image/png;base64,cG9zdGdyZXMtc2VjcmV0", mimeType: "image/png", idempotencyKey: "postgres-agent-runs-key",
+  } as const;
+  const concurrentAgentRuns = await Promise.all([
+    agentRunsService.createRun(user.id, postgresAgentRunInput),
+    agentRunsService.createRun(user.id, postgresAgentRunInput),
+  ]);
+  assert.deepEqual(concurrentAgentRuns[0], concurrentAgentRuns[1]);
+  const agentRun = concurrentAgentRuns[0]!;
+  assert.equal(agentRun.sessionId, "postgres-agent-runs");
+  const storedAgentRun = await agentRunsService.run(agentRun.id, user.id);
+  assert(storedAgentRun);
+  assert.equal(storedAgentRun.input_json.includes("cG9zdGdyZXMtc2VjcmV0"), false);
+  assert.equal((await agentRunsService.media(agentRun.id, user.id))?.data_base64,
+    "data:image/png;base64,cG9zdGdyZXMtc2VjcmV0");
+  assert.equal(await agentRunsService.run(agentRun.id, householdMember), undefined);
+  assert.equal((await agentRunsService.reusableRun(user.id, "postgres-agent-runs-key"))?.id, agentRun.id);
+  const concurrentEventSequences = await Promise.all(Array.from({ length: 12 }, (_, index) =>
+    agentRunsService.appendEvent(agentRun.id, user.id, "VisionAgent", "concurrent_event", `并发事件 ${index + 1}`, { index })));
+  assert.deepEqual([...concurrentEventSequences].sort((left, right) => left - right),
+    Array.from({ length: 12 }, (_, index) => index + 2));
+  assert.deepEqual((await agentRunsService.events(agentRun.id, user.id)).map((event) => event.sequence),
+    Array.from({ length: 13 }, (_, index) => index + 1));
+  await agentRunsService.setStatus(agentRun.id, "running");
+  const runProposals = [
+    { actionType: "record_diet_meal" as const, riskLevel: "high" as const,
+      summary: "记录 PostgreSQL 晚餐", payload: { foodName: "番茄" } },
+    { actionType: "record_health_log" as const, riskLevel: "high" as const,
+      summary: "记录 PostgreSQL 饮水", payload: { waterMl: 300 } },
+  ];
+  const concurrentSavedActions = await Promise.all([
+    agentRunsService.saveActions(agentRun.id, user.id, runProposals),
+    agentRunsService.saveActions(agentRun.id, user.id, runProposals),
+  ]);
+  assert.deepEqual(concurrentSavedActions[0], concurrentSavedActions[1]);
+  assert.equal((await agentRunsService.actions(agentRun.id, user.id)).length, 2);
+  await assert.rejects(() => agentRunsService.reviseActions(agentRun.id, user.id, [
+    { ...runProposals[0], id: concurrentSavedActions[0]![0]!.id, payload: { foodName: "鸡蛋" } },
+    { ...runProposals[1], id: "missing-agent-action", payload: { waterMl: 999 } },
+  ]), /已变化/);
+  assert.deepEqual((await agentRunsService.actions(agentRun.id, user.id))[0]?.payload, { foodName: "番茄" });
+  const approvedActionId = concurrentSavedActions[0]![0]!.id;
+  await agentRunsService.recordActionDecision([approvedActionId], user.id, "approve");
+  await agentRunsService.updateActionStatus(approvedActionId, "executed", { result: { dietRecordId: 123 } });
+  assert.deepEqual((await agentRunsService.actions(agentRun.id, user.id))[0]?.result, { dietRecordId: 123 });
+  await agentRunsService.setStatus(agentRun.id, "completed", { result: { reply: "PostgreSQL Agent Run 完成" }, pendingApproval: null });
+  const completedAgentRun = await agentRunsService.run(agentRun.id, user.id);
+  assert.equal(completedAgentRun?.status, "completed");
+  assert.equal(completedAgentRun?.result_json, '{"reply":"PostgreSQL Agent Run 完成"}');
+  assert.equal(await agentRunsService.setStatus(agentRun.id, "cancelled"), false);
+  const agentRunNativeTypes = (await pool.query(`SELECT pg_typeof(input_json)::text AS input_type,
+    pg_typeof(result_json)::text AS result_type FROM agent_runs WHERE id=$1`, [agentRun.id])).rows[0];
+  assert.deepEqual(agentRunNativeTypes, { input_type: "jsonb", result_type: "jsonb" });
   const adminAgentRunId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const adminAgentActionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   await pool.query("DELETE FROM agent_runs WHERE id=$1", [adminAgentRunId]);
@@ -798,7 +855,7 @@ try {
     transcribe: async () => ({ text: "  PostgreSQL 增量转写  " }),
     startRun: async () => ({ run: { id: "postgres-realtime-run", status: "queued" } }),
     waitForRun: async (id) => ({ id, status: "completed", reply: "保持中火并持续翻炒。" }),
-    cancelRun: (_userId, runId) => { cancelledRealtimeRuns.push(runId); },
+    cancelRun: async (_userId, runId) => { cancelledRealtimeRuns.push(runId); },
   });
   const realtimeInput = { recipeId: Number(queueRecipe.id), platform: "ios", idempotencyKey: "postgres-realtime-session-0001",
     currentStep: 1, recipeSteps: ["备菜", "翻炒"], recipeIngredients: ["番茄", "鸡蛋"] };
@@ -1726,6 +1783,7 @@ try {
     postgresAIConversationsRepositoryVerified: true,
     postgresAdminAgentRunsRepositoryVerified: true,
     postgresAgentOperationsRepositoryVerified: true,
+    postgresAgentRunsRepositoryVerified: true,
     postgresAgentSchedulingRepositoryVerified: true,
     postgresAIRuntimeRepositoryVerified: true,
     postgresAiToolDataRepositoryVerified: true,

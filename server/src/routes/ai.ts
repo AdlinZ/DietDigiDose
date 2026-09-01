@@ -323,7 +323,7 @@ router.post("/inventory-scan-jobs", validateBody(aiImageSchema), async (req: Aut
 
 /** Get a durable recognition job. */
 router.get("/inventory-scan-jobs/:jobId", async (req: AuthRequest, res) => {
-  const agentRow = getAgentRunRow(String(req.params.jobId), req.userId!);
+  const agentRow = await getAgentRunRow(String(req.params.jobId), req.userId!);
   if (agentRow) {
     const run = toAgentRunSummary(agentRow);
     const vision = run.artifacts.find((artifact) => artifact.type === "vision")?.data as { items?: unknown } | undefined;

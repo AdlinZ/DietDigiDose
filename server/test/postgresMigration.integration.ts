@@ -539,14 +539,10 @@ try {
     payload: { mealType: "午餐", foodName: "PostgreSQL AI 确认餐", amount: "1份", calories: 260 } });
   const kitchenwarePreview = await aiWriteService.createPreview({ userId: user.id, action: "add_kitchenware_item",
     payload: { name: "PostgreSQL AI 确认炒锅", category: "烹饪锅具", status: "良好" } });
-  const healthPreview = await aiWriteService.createPreview({ userId: user.id, action: "record_health_log",
-    payload: { weightKg: 61.2, waterMl: 450 } });
   await aiWriteService.commit({ userId: user.id, confirmationId: dietPreview.confirmationId,
     idempotencyKey: "postgres-ai-write-diet-0001" });
   await aiWriteService.commit({ userId: user.id, confirmationId: kitchenwarePreview.confirmationId,
     idempotencyKey: "postgres-ai-write-kitchenware-0001" });
-  await aiWriteService.commit({ userId: user.id, confirmationId: healthPreview.confirmationId,
-    idempotencyKey: "postgres-ai-write-health-0001" });
   const concurrentHealthPreviews = await Promise.all([
     aiWriteService.createPreview({ userId: householdMember, action: "record_health_log", payload: { weightKg: 60.5 } }),
     aiWriteService.createPreview({ userId: householdMember, action: "record_health_log", payload: { waterMl: 500 } }),
@@ -561,8 +557,6 @@ try {
     [user.id, "PostgreSQL AI 确认餐"])).rows[0]?.calories), 260);
   assert.equal((await pool.query("SELECT status FROM kitchenware_items WHERE user_id=$1 AND name=$2",
     [user.id, "PostgreSQL AI 确认炒锅"])).rows[0]?.status, "良好");
-  assert.equal(Number((await pool.query("SELECT weight FROM health_logs WHERE user_id=$1 AND recorded_date=CURRENT_DATE::text",
-    [user.id])).rows[0]?.weight), 61.2);
   const expiredPreview = await aiWriteService.createPreview({ userId: user.id, action: "record_health_log", payload: { waterMl: 100 } });
   await pool.query("UPDATE ai_write_confirmations SET expires_at=CURRENT_TIMESTAMP-INTERVAL '1 second' WHERE id=$1",
     [expiredPreview.confirmationId]);

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { Router } from "express";
 import type { AuthRequest } from "../../middleware/auth.js";
-import { db } from "../../storage/db.js";
+import { authVerificationService } from "../../modules/authVerification/runtime.js";
 import { sendError } from "../../utils/http.js";
 import {
   decryptSubjectPhone,
@@ -32,13 +32,6 @@ const SETTINGS: Record<string, string> = {
   globalDailyLimit: "auth.sms.limit.global_day",
 };
 
-function saveSetting(key: string, value: string) {
-  db.prepare(`
-    INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
-  `).run(key, value);
-}
-
 function eventSubject(row: Record<string, unknown>): VerificationSubjectRow {
   return {
     id: Number(row.subjectId),
@@ -53,15 +46,9 @@ function eventSubject(row: Record<string, unknown>): VerificationSubjectRow {
 export function createAdminAuthServicesRouter() {
   const router = Router();
 
-  router.get("/auth-services/sms/config", (_req, res) => {
-    const config = getSmsServiceConfig();
+  router.get("/auth-services/sms/config", async (_req, res) => {
+    const [config, recent] = await Promise.all([getSmsServiceConfig(), authVerificationService().recentSendEvent()]);
     const credentials = smsCredentialsStatus();
-    const recent = db.prepare(`
-      SELECT event_type AS eventType, outcome, provider_code AS providerCode, created_at AS createdAt
-      FROM auth_verification_events
-      WHERE channel = 'sms' AND event_type IN ('send_accepted', 'send_rejected', 'send_failed')
-      ORDER BY id DESC LIMIT 1
-    `).get() || null;
     return res.json({
       ...config,
       provider: SMS_PROVIDER,
@@ -97,13 +84,9 @@ export function createAdminAuthServicesRouter() {
         return sendError(res, 400, `${key} 格式无效`, "INVALID_SMS_CONFIG");
       }
     }
-    db.transaction(() => {
-      for (const key of allowed) {
-        if (body[key] === undefined) continue;
-        const value = key === "enabled" ? (body[key] ? "1" : "0") : String(body[key]).trim();
-        saveSetting(SETTINGS[key], value);
-      }
-    })();
+    await authVerificationService().saveSettings(allowed.filter((key) => body[key] !== undefined).map((key) => ({
+      key: SETTINGS[key]!, value: key === "enabled" ? (body[key] ? "1" : "0") : String(body[key]).trim(),
+    })));
     await auditAdminAction(req, {
       action: "auth.sms.config.update",
       resourceType: "auth_service",
@@ -111,33 +94,29 @@ export function createAdminAuthServicesRouter() {
       summary: "更新短信认证服务配置",
       details: { fields: Object.keys(body) },
     });
-    return res.json({ success: true, config: getSmsServiceConfig() });
+    return res.json({ success: true, config: await getSmsServiceConfig() });
   });
 
   router.post("/auth-services/sms/test-send", async (req: AuthRequest, res) => {
     const phone = normalizeMainlandPhone(req.body?.phone);
     if (!phone) return sendError(res, 400, "请输入有效的中国大陆手机号", "INVALID_PHONE");
-    const config = getSmsServiceConfig();
+    const config = await getSmsServiceConfig();
     if (!config.enabled) return sendError(res, 409, "请先启用短信认证服务", "SMS_SERVICE_DISABLED");
     if (!smsCredentialsStatus().configured) return sendError(res, 503, "阿里云密钥未在部署环境中配置", "SMS_SERVICE_NOT_CONFIGURED");
-    const subject = findOrCreateSmsSubject(phone);
+    const subject = await findOrCreateSmsSubject(phone);
     const challengeId = crypto.randomUUID();
     const outId = `test_${crypto.randomUUID().replace(/-/g, "")}`;
     const sourceIp = getClientIp(req);
-    db.prepare(`
-      INSERT INTO auth_verification_challenges (id, subject_id, purpose, out_id, status, expires_at, source_ip, user_agent)
-      VALUES (?, ?, 'admin_test', ?, 'pending', ?, ?, ?)
-    `).run(challengeId, subject.id, outId, new Date(Date.now() + 5 * 60_000).toISOString(), sourceIp, req.get("user-agent") || null);
-    incrementDailyUsage("send_requests");
-    incrementDailyUsage("send_api_calls");
-    recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "send_api_called", outcome: "admin_test", sourceIp, userAgent: req.get("user-agent"), outId });
+    await authVerificationService().createChallenge({ id: challengeId, subjectId: subject.id, purpose: "admin_test", outId,
+      expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(), sourceIp, userAgent: req.get("user-agent") || null });
+    await incrementDailyUsage("send_requests");
+    await incrementDailyUsage("send_api_calls");
+    await recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "send_api_called", outcome: "admin_test", sourceIp, userAgent: req.get("user-agent"), outId });
     try {
       const result = await getSmsProvider().send(phone, outId, config);
-      db.prepare(`
-        UPDATE auth_verification_challenges SET status = ?, biz_id = ?, provider_request_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `).run(result.success ? "accepted" : "failed", result.bizId, result.requestId, challengeId);
-      incrementDailyUsage(result.success ? "accepted" : "provider_errors");
-      recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: result.success ? "send_accepted" : "send_rejected", outcome: result.success ? "accepted" : "provider_error", providerCode: result.code, providerMessage: result.message, providerRequestId: result.requestId, bizId: result.bizId, outId, sourceIp, userAgent: req.get("user-agent") });
+      await authVerificationService().updateTestChallenge(challengeId, result.success ? "accepted" : "failed", result.bizId, result.requestId);
+      await incrementDailyUsage(result.success ? "accepted" : "provider_errors");
+      await recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: result.success ? "send_accepted" : "send_rejected", outcome: result.success ? "accepted" : "provider_error", providerCode: result.code, providerMessage: result.message, providerRequestId: result.requestId, bizId: result.bizId, outId, sourceIp, userAgent: req.get("user-agent") });
       await auditAdminAction(req, { action: "auth.sms.test_send", resourceType: "auth_service", resourceId: challengeId, summary: `测试发送短信至 ${maskMainlandPhone(phone)}`, details: { success: result.success, providerCode: result.code } });
       if (!result.success) {
         const providerMessage = result.message.replace(/\b1[3-9]\d{9}\b/g, "[phone]").slice(0, 300);
@@ -161,53 +140,22 @@ export function createAdminAuthServicesRouter() {
           ? error.stack?.replace(/\b1[3-9]\d{9}\b/g, "[phone]").split("\n").slice(0, 8).join("\n")
           : undefined,
       });
-      db.prepare("UPDATE auth_verification_challenges SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(challengeId);
-      incrementDailyUsage("provider_errors");
-      recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "send_failed", outcome: "provider_error", providerCode: providerErrorName, providerMessage: providerErrorMessage, outId, sourceIp, userAgent: req.get("user-agent") });
+      await authVerificationService().failChallenge(challengeId);
+      await incrementDailyUsage("provider_errors");
+      await recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "send_failed", outcome: "provider_error", providerCode: providerErrorName, providerMessage: providerErrorMessage, outId, sourceIp, userAgent: req.get("user-agent") });
       return sendError(res, 502, `测试短信发送失败：${providerErrorMessage}`, "SMS_PROVIDER_UNAVAILABLE");
     }
   });
 
-  router.get("/auth-services/sms/overview", (req, res) => {
+  router.get("/auth-services/sms/overview", async (req, res) => {
     const days = Math.max(1, Math.min(90, Number(req.query.days) || 30));
     const firstUsageDate = dateKeyAfterDays(-(days - 1));
-    const totals = db.prepare(`
-      SELECT
-        COALESCE(SUM(send_requests), 0) AS sendRequests,
-        COALESCE(SUM(send_api_calls), 0) AS sendApiCalls,
-        COALESCE(SUM(accepted), 0) AS accepted,
-        COALESCE(SUM(delivered), 0) AS delivered,
-        COALESCE(SUM(delivery_failed), 0) AS deliveryFailed,
-        COALESCE(SUM(verify_api_calls), 0) AS verifyApiCalls,
-        COALESCE(SUM(verify_passed), 0) AS verifyPassed,
-        COALESCE(SUM(verify_failed), 0) AS verifyFailed,
-        COALESCE(SUM(local_rate_limited), 0) AS rateLimited,
-        COALESCE(SUM(provider_errors), 0) AS providerErrors,
-        COALESCE(SUM(delivery_units), 0) AS deliveryUnits
-      FROM auth_verification_usage_daily
-      WHERE channel = 'sms' AND provider = ? AND usage_date >= ?
-    `).get(SMS_PROVIDER, firstUsageDate) as Record<string, number>;
-    const daily = db.prepare(`
-      SELECT usage_date AS date, send_api_calls AS sendApiCalls, accepted, delivered,
-             delivery_failed AS deliveryFailed, verify_passed AS verifyPassed,
-             verify_failed AS verifyFailed, local_rate_limited AS rateLimited,
-             provider_errors AS providerErrors, delivery_units AS deliveryUnits
-      FROM auth_verification_usage_daily
-      WHERE channel = 'sms' AND provider = ? AND usage_date >= ?
-      ORDER BY usage_date ASC
-    `).all(SMS_PROVIDER, firstUsageDate);
-    const config = getSmsServiceConfig();
-    const usedSinceBaseline = (db.prepare(`
-      SELECT COALESCE(SUM(delivery_units), 0) AS count
-      FROM auth_verification_usage_daily
-      WHERE channel = 'sms' AND provider = ? AND (? IS NULL OR usage_date >= date(?))
-    `).get(SMS_PROVIDER, config.packageBaselineAt, config.packageBaselineAt) as { count: number }).count;
-    const attacks = db.prepare(`
-      SELECT source_ip AS ip, COUNT(*) AS blocked
-      FROM auth_verification_events
-      WHERE event_type = 'send_rate_limited' AND created_at >= datetime('now', ?)
-      GROUP BY source_ip ORDER BY blocked DESC LIMIT 10
-    `).all(`-${days} days`);
+    const config = await getSmsServiceConfig();
+    const [{ totals, daily }, usedSinceBaseline, attacks] = await Promise.all([
+      authVerificationService().usageOverview(firstUsageDate),
+      authVerificationService().usedSince(config.packageBaselineAt),
+      authVerificationService().attacks(new Date(Date.now() - days * 24 * 60 * 60_000).toISOString()),
+    ]);
     return res.json({
       days,
       totals,
@@ -223,11 +171,9 @@ export function createAdminAuthServicesRouter() {
     });
   });
 
-  router.get("/auth-services/sms/events", (req, res) => {
+  router.get("/auth-services/sms/events", async (req, res) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.max(10, Math.min(100, Number(req.query.pageSize) || 20));
-    const conditions: string[] = ["e.channel = 'sms'"];
-    const params: Array<string | number> = [];
     const stringFilter = (name: string) => typeof req.query[name] === "string" ? String(req.query[name]).trim() : "";
     const userId = stringFilter("userId");
     const username = stringFilter("username");
@@ -235,39 +181,23 @@ export function createAdminAuthServicesRouter() {
     const ip = stringFilter("ip");
     const outcome = stringFilter("outcome");
     const providerId = stringFilter("providerId");
-    if (userId) { conditions.push("u.id = ?"); params.push(Number(userId) || -1); }
-    if (username) { conditions.push("u.username LIKE ?"); params.push(`%${username}%`); }
+    const filters: { userId?: number; username?: string; subjectHmac?: string; ip?: string; outcome?: string; providerId?: string } = {};
+    if (userId) filters.userId = Number(userId) || -1;
+    if (username) filters.username = username;
     if (phone) {
       const normalized = normalizeMainlandPhone(phone);
       if (!normalized) return sendError(res, 400, "完整手机号格式无效", "INVALID_PHONE_FILTER");
-      conditions.push("s.subject_hmac = ?"); params.push(verificationSubjectHmac(normalized));
+      filters.subjectHmac = verificationSubjectHmac(normalized);
     }
-    if (ip) { conditions.push("e.source_ip = ?"); params.push(ip); }
-    if (outcome) { conditions.push("e.outcome = ?"); params.push(outcome); }
-    if (providerId) { conditions.push("(e.biz_id = ? OR e.out_id = ? OR e.provider_request_id = ?)"); params.push(providerId, providerId, providerId); }
-    const where = `WHERE ${conditions.join(" AND ")}`;
-    const total = (db.prepare(`
-      SELECT COUNT(*) AS count FROM auth_verification_events e
-      JOIN auth_verification_subjects s ON s.id = e.subject_id
-      LEFT JOIN users u ON u.id = s.user_id ${where}
-    `).get(...params) as { count: number }).count;
-    const rows = db.prepare(`
-      SELECT e.id, e.subject_id AS subjectId, e.challenge_id AS challengeId,
-             e.event_type AS eventType, e.outcome, e.provider_code AS providerCode,
-             e.provider_message AS providerMessage, e.provider_request_id AS providerRequestId,
-             e.biz_id AS bizId, e.out_id AS outId, e.source_ip AS sourceIp,
-             e.created_at AS createdAt, u.id AS userId, u.username, u.is_disabled AS userDisabled,
-             s.subject_hmac AS subjectHmac, s.subject_ciphertext AS subjectCiphertext,
-             s.subject_iv AS subjectIv, s.subject_auth_tag AS subjectAuthTag
-      FROM auth_verification_events e
-      JOIN auth_verification_subjects s ON s.id = e.subject_id
-      LEFT JOIN users u ON u.id = s.user_id
-      ${where} ORDER BY e.id DESC LIMIT ? OFFSET ?
-    `).all(...params, pageSize, (page - 1) * pageSize) as Array<Record<string, unknown>>;
+    if (ip) filters.ip = ip;
+    if (outcome) filters.outcome = outcome;
+    if (providerId) filters.providerId = providerId;
+    const { rows, total } = await authVerificationService().events(filters, page, pageSize);
     const items = rows.map((row) => {
       const phoneMasked = maskMainlandPhone(decryptSubjectPhone(eventSubject(row)));
       const { subjectHmac: _h, subjectCiphertext: _c, subjectIv: _i, subjectAuthTag: _t, ...safe } = row;
-      return { ...safe, phoneMasked, userStatus: row.userId == null ? "unregistered" : row.userDisabled === 1 ? "disabled" : "active" };
+      return { ...safe, phoneMasked, userStatus: row.userId == null ? "unregistered"
+        : row.userDisabled === 1 || row.userDisabled === true ? "disabled" : "active" };
     });
     return res.json({ items, total, page, pageSize });
   });
@@ -275,13 +205,7 @@ export function createAdminAuthServicesRouter() {
   router.post("/auth-services/sms/events/:id/reveal-phone", async (req: AuthRequest, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return sendError(res, 400, "事件 ID 无效", "INVALID_EVENT_ID");
-    const row = db.prepare(`
-      SELECT e.id, s.id AS subjectId, s.user_id AS userId, s.subject_hmac AS subjectHmac,
-             s.subject_ciphertext AS subjectCiphertext, s.subject_iv AS subjectIv,
-             s.subject_auth_tag AS subjectAuthTag
-      FROM auth_verification_events e
-      JOIN auth_verification_subjects s ON s.id = e.subject_id WHERE e.id = ?
-    `).get(id) as Record<string, unknown> | undefined;
+    const row = await authVerificationService().eventSubject(id);
     if (!row) return sendError(res, 404, "认证事件不存在", "AUTH_EVENT_NOT_FOUND");
     const phone = decryptSubjectPhone(eventSubject(row));
     await auditAdminAction(req, {
@@ -300,8 +224,10 @@ export function createAdminAuthServicesRouter() {
       return sendError(res, 400, "套餐剩余量格式无效", "INVALID_PACKAGE_REMAINING");
     }
     const nowIso = new Date().toISOString();
-    saveSetting(SETTINGS.packageBaselineRemaining, String(remaining));
-    saveSetting(SETTINGS.packageBaselineAt, nowIso);
+    await authVerificationService().saveSettings([
+      { key: SETTINGS.packageBaselineRemaining, value: String(remaining) },
+      { key: SETTINGS.packageBaselineAt, value: nowIso },
+    ]);
     await auditAdminAction(req, { action: "auth.sms.package.reconcile", resourceType: "auth_service", resourceId: "sms", summary: `校准短信套餐剩余量为 ${remaining}`, details: { remaining } });
     return res.json({ success: true, remaining, reconciledAt: nowIso });
   });

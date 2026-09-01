@@ -11,6 +11,7 @@ import { createAdminVoicePackRouter } from "../modules/voicePacks/index.js";
 import { createAdminWorkerRunsRouter } from "../modules/worker/index.js";
 import { createAdminAgentRunsRouter } from "./admin/agent-runs.js";
 import { createAdminAIConfigRouter } from "./admin/ai-config.js";
+import { createAdminAuthServicesRouter } from "./admin/auth-services.js";
 import { createAdminMediaCleanupRouter } from "./admin/media-cleanup.js";
 import { createAdminNotificationsRouter } from "./admin/notifications.js";
 
@@ -18,6 +19,7 @@ const router = Router();
 router.use(authMiddleware);
 router.use(requireAdmin);
 router.use(createAdminAIConfigRouter());
+router.use(createAdminAuthServicesRouter());
 router.use(createAdminUsersRouter());
 router.use(createAdminCommunityRouter());
 router.use(createAdminRecipesRouter());

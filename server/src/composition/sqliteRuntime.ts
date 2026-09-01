@@ -4,6 +4,9 @@ import { SqliteAiContextRepository } from "../modules/aiContext/sqliteRepository
 import { createAIRuntimeService } from "../modules/aiRuntime/index.js";
 import { configureAIRuntimeService } from "../modules/aiRuntime/runtime.js";
 import { SqliteAIRuntimeRepository } from "../modules/aiRuntime/sqliteRepository.js";
+import { createAuthVerificationService } from "../modules/authVerification/index.js";
+import { configureAuthVerificationService } from "../modules/authVerification/runtime.js";
+import { SqliteAuthVerificationRepository } from "../modules/authVerification/sqliteRepository.js";
 import { createAiToolDataService } from "../modules/aiToolData/index.js";
 import { SqliteAiToolDataRepository } from "../modules/aiToolData/sqliteRepository.js";
 import { createAdminAuditService } from "../modules/adminAudit/index.js";
@@ -20,6 +23,7 @@ export function initializeSqliteApplication() {
   initDatabase();
   configureAiContextService(createAiContextService(new SqliteAiContextRepository(db)));
   configureAIRuntimeService(createAIRuntimeService(new SqliteAIRuntimeRepository(db)));
+  configureAuthVerificationService(createAuthVerificationService(new SqliteAuthVerificationRepository(db)));
   configureAiToolDataService(createAiToolDataService(new SqliteAiToolDataRepository(db)));
   configureAdminAuditService(createAdminAuditService(new SqliteAdminAuditRepository(db)));
   const recommendations = createRecommendationsRuntime(db);

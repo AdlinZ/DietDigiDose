@@ -1,5 +1,5 @@
 import type { AuthRequest } from "../../middleware/auth.js";
-import { logAdminAction } from "../../storage/db.js";
+import type { AdminAuditService } from "../../modules/adminAudit/service.js";
 
 export type AdminAuditEvent = {
   action: string;
@@ -9,9 +9,14 @@ export type AdminAuditEvent = {
   details?: Record<string, unknown>;
 };
 
-export function auditAdminAction(req: AuthRequest, event: AdminAuditEvent) {
+let configuredAdminAuditService: AdminAuditService | undefined;
+
+export function configureAdminAuditService(service: AdminAuditService) { configuredAdminAuditService = service; }
+
+export async function auditAdminAction(req: AuthRequest, event: AdminAuditEvent) {
   if (!req.userId) return;
-  logAdminAction({
+  if (!configuredAdminAuditService) throw new Error("Admin audit service has not been configured");
+  await configuredAdminAuditService.record({
     adminUserId: req.userId,
     ...event,
     ipAddress: req.ip,

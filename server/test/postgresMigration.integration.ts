@@ -11,6 +11,8 @@ import { PostgresAccessControlRepository } from "../src/modules/accessControl/po
 import { AccessControlService } from "../src/modules/accessControl/service.js";
 import { PostgresAiToolDataRepository } from "../src/modules/aiToolData/postgresRepository.js";
 import { AiToolDataService } from "../src/modules/aiToolData/service.js";
+import { PostgresAdminAuditRepository } from "../src/modules/adminAudit/postgresRepository.js";
+import { AdminAuditService } from "../src/modules/adminAudit/service.js";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { PostgresAdminCommunityRepository } from "../src/modules/adminCommunity/postgresRepository.js";
@@ -771,6 +773,16 @@ try {
   assert.equal((await pool.query("SELECT food_name FROM diet_records WHERE id = $1", [aiDietId])).rows[0]?.food_name,
     "Postgres AI 工具餐");
 
+  const adminAuditService = new AdminAuditService(new PostgresAdminAuditRepository(pool));
+  await adminAuditService.record({ adminUserId: user.id, action: "postgres.audit.verify", resourceType: "integration",
+    resourceId: 149, summary: "验证 PostgreSQL 管理员审计", details: { jsonb: true },
+    ipAddress: "192.0.2.149", userAgent: "postgres-integration" });
+  const postgresAudit = await pool.query(`SELECT resource_id, details_json, ip_address FROM admin_audit_logs
+    WHERE admin_user_id = $1 AND action = 'postgres.audit.verify'`, [user.id]);
+  assert.equal(postgresAudit.rows[0]?.resource_id, "149");
+  assert.deepEqual(postgresAudit.rows[0]?.details_json, { jsonb: true });
+  assert.equal(postgresAudit.rows[0]?.ip_address, "192.0.2.149");
+
   const recipesRepository = new PostgresRecipesRepository(pool);
   const recipesService = new RecipesService(recipesRepository, kitchenwareService);
   const postgresRecipePage = await recipesService.list(user.id, {
@@ -1233,6 +1245,7 @@ try {
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
     postgresAiToolDataRepositoryVerified: true,
+    postgresAdminAuditRepositoryVerified: true,
     postgresDietRecordsRepositoryVerified: true,
     postgresInsightsRepositoryVerified: true,
     postgresCookingQueueRepositoryVerified: true,

@@ -74,7 +74,7 @@ export function createAdminAuthServicesRouter() {
     });
   });
 
-  router.put("/auth-services/sms/config", (req: AuthRequest, res) => {
+  router.put("/auth-services/sms/config", async (req: AuthRequest, res) => {
     const body = req.body || {};
     const allowed = ["enabled", "signName", "templateCode", "packageTotal", "phoneHourlyLimit", "phoneDailyLimit", "ipHourlyLimit", "ipDailyLimit", "globalDailyLimit"];
     for (const key of Object.keys(body)) {
@@ -104,7 +104,7 @@ export function createAdminAuthServicesRouter() {
         saveSetting(SETTINGS[key], value);
       }
     })();
-    auditAdminAction(req, {
+    await auditAdminAction(req, {
       action: "auth.sms.config.update",
       resourceType: "auth_service",
       resourceId: "sms",
@@ -138,7 +138,7 @@ export function createAdminAuthServicesRouter() {
       `).run(result.success ? "accepted" : "failed", result.bizId, result.requestId, challengeId);
       incrementDailyUsage(result.success ? "accepted" : "provider_errors");
       recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: result.success ? "send_accepted" : "send_rejected", outcome: result.success ? "accepted" : "provider_error", providerCode: result.code, providerMessage: result.message, providerRequestId: result.requestId, bizId: result.bizId, outId, sourceIp, userAgent: req.get("user-agent") });
-      auditAdminAction(req, { action: "auth.sms.test_send", resourceType: "auth_service", resourceId: challengeId, summary: `测试发送短信至 ${maskMainlandPhone(phone)}`, details: { success: result.success, providerCode: result.code } });
+      await auditAdminAction(req, { action: "auth.sms.test_send", resourceType: "auth_service", resourceId: challengeId, summary: `测试发送短信至 ${maskMainlandPhone(phone)}`, details: { success: result.success, providerCode: result.code } });
       if (!result.success) {
         const providerMessage = result.message.replace(/\b1[3-9]\d{9}\b/g, "[phone]").slice(0, 300);
         return sendError(
@@ -272,7 +272,7 @@ export function createAdminAuthServicesRouter() {
     return res.json({ items, total, page, pageSize });
   });
 
-  router.post("/auth-services/sms/events/:id/reveal-phone", (req: AuthRequest, res) => {
+  router.post("/auth-services/sms/events/:id/reveal-phone", async (req: AuthRequest, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return sendError(res, 400, "事件 ID 无效", "INVALID_EVENT_ID");
     const row = db.prepare(`
@@ -284,7 +284,7 @@ export function createAdminAuthServicesRouter() {
     `).get(id) as Record<string, unknown> | undefined;
     if (!row) return sendError(res, 404, "认证事件不存在", "AUTH_EVENT_NOT_FOUND");
     const phone = decryptSubjectPhone(eventSubject(row));
-    auditAdminAction(req, {
+    await auditAdminAction(req, {
       action: "auth.sms.phone.reveal",
       resourceType: "auth_verification_event",
       resourceId: id,
@@ -294,7 +294,7 @@ export function createAdminAuthServicesRouter() {
     return res.json({ eventId: id, phone });
   });
 
-  router.post("/auth-services/sms/package/reconcile", (req: AuthRequest, res) => {
+  router.post("/auth-services/sms/package/reconcile", async (req: AuthRequest, res) => {
     const remaining = Number(req.body?.remaining);
     if (!Number.isInteger(remaining) || remaining < 0 || remaining > 10_000_000) {
       return sendError(res, 400, "套餐剩余量格式无效", "INVALID_PACKAGE_REMAINING");
@@ -302,7 +302,7 @@ export function createAdminAuthServicesRouter() {
     const nowIso = new Date().toISOString();
     saveSetting(SETTINGS.packageBaselineRemaining, String(remaining));
     saveSetting(SETTINGS.packageBaselineAt, nowIso);
-    auditAdminAction(req, { action: "auth.sms.package.reconcile", resourceType: "auth_service", resourceId: "sms", summary: `校准短信套餐剩余量为 ${remaining}`, details: { remaining } });
+    await auditAdminAction(req, { action: "auth.sms.package.reconcile", resourceType: "auth_service", resourceId: "sms", summary: `校准短信套餐剩余量为 ${remaining}`, details: { remaining } });
     return res.json({ success: true, remaining, reconciledAt: nowIso });
   });
 

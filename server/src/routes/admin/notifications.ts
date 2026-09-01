@@ -1,9 +1,10 @@
 import { Router, type NextFunction } from "express";
-import { db, logAdminAction } from "../../storage/db.js";
+import { db } from "../../storage/db.js";
 import type { AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
 import { notificationCampaignSchema } from "../../validation/schemas.js";
 import { sendExpoPush } from "../../services/notifications.js";
+import { auditAdminAction } from "./shared.js";
 
 export function createAdminNotificationsRouter() {
   const router = Router();
@@ -97,7 +98,8 @@ export function createAdminNotificationsRouter() {
       db.prepare(`UPDATE notification_campaigns
         SET status = ?, success_count = ?, failure_count = ?, sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
         .run(failure ? "completed_with_failures" : "completed", success, failure, campaignId);
-      logAdminAction({ adminUserId: req.userId!, action: "notifications.campaign.send", resourceType: "notification_campaign", resourceId: campaignId, summary: `发送通知「${title}」给 ${recipients.length} 位用户`, ipAddress: req.ip, userAgent: req.get("user-agent") });
+      await auditAdminAction(req, { action: "notifications.campaign.send", resourceType: "notification_campaign",
+        resourceId: campaignId, summary: `发送通知「${title}」给 ${recipients.length} 位用户` });
       return res.status(201).json({ id: campaignId, recipients: recipients.length, success, failure });
     } catch (error) {
       db.prepare("UPDATE notification_campaigns SET status = 'failed', failure_count = ?, sent_at = CURRENT_TIMESTAMP WHERE id = ?")

@@ -1,10 +1,11 @@
 import { Router } from "express";
-import { getSystemSetting, logAdminAction, setSystemSetting } from "../../storage/db.js";
+import { getSystemSetting, setSystemSetting } from "../../storage/db.js";
 import { getAIConfig, testAIConnection } from "../../services/aiService.js";
 import { DEFAULT_AI_PERSONA_PROMPT } from "../../services/contextBuilder.js";
 import { validateBody } from "../../middleware/validate.js";
 import { adminAIConfigSchema, adminAIConfigTestSchema } from "../../validation/schemas.js";
 import type { AuthRequest } from "../../middleware/auth.js";
+import { auditAdminAction } from "./shared.js";
 
 export function createAdminAIConfigRouter() {
   const router = Router();
@@ -63,7 +64,7 @@ export function createAdminAIConfigRouter() {
     }
   });
 
-  router.put("/ai-config", validateBody(adminAIConfigSchema), (req: AuthRequest, res) => {
+  router.put("/ai-config", validateBody(adminAIConfigSchema), async (req: AuthRequest, res) => {
     try {
       const {
         apiKey, baseUrl, model, visionModel, asrModel,
@@ -100,8 +101,7 @@ export function createAdminAIConfigRouter() {
       if (systemPrompt !== undefined) setSystemSetting("AI_SYSTEM_PROMPT", systemPrompt.trim());
 
       if (req.userId) {
-        logAdminAction({
-          adminUserId: req.userId,
+        await auditAdminAction(req, {
           action: "ai_config.update",
           resourceType: "ai_config",
           resourceId: "global",
@@ -118,8 +118,6 @@ export function createAdminAIConfigRouter() {
             operationsModelChanged: operationsModel !== undefined,
             systemPromptChanged: systemPrompt !== undefined,
           },
-          ipAddress: req.ip,
-          userAgent: req.get("user-agent"),
         });
       }
       res.json({ success: true, message: "AI 配置更新成功" });

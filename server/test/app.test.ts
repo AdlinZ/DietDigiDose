@@ -545,6 +545,38 @@ describe("API security baseline", () => {
     db.prepare("DELETE FROM user_custom_foods WHERE id IN (?, ?)").run(approvedId, rejectedId);
   });
 
+  test("admin console aggregates preserve dashboard and diagnostic contracts", async () => {
+    const adminToken = await loginAdmin();
+    const owner = db.prepare("SELECT id FROM users WHERE username <> 'admin' ORDER BY id LIMIT 1").get() as { id: number };
+    db.prepare("INSERT INTO funnel_events (event_name,actor_hash) VALUES ('admin_console_contract','contract-actor')").run();
+    db.prepare(`INSERT INTO inventory_scan_jobs (id,user_id,image_hash,status,result_json)
+      VALUES ('admin-console-contract-scan',?,'contract-hash','completed','[{"foodName":"番茄"}]')`).run(owner.id);
+    db.prepare(`INSERT INTO ai_usage_logs
+      (user_id,endpoint,model,prompt_tokens,completion_tokens,total_tokens,latency_ms,success,failure_reason)
+      VALUES (?,'admin-console-contract','test-model',8,4,12,120,0,'contract failure')`).run(owner.id);
+    const [stats, trends, recent, funnel, audits, usage, scans, scan] = await Promise.all([
+      api("/api/v1/admin/stats", { token: adminToken }), api("/api/v1/admin/stats/trends", { token: adminToken }),
+      api("/api/v1/admin/stats/recent", { token: adminToken }), api("/api/v1/admin/funnel?days=7", { token: adminToken }),
+      api("/api/v1/admin/audit-logs?page=1&pageSize=10", { token: adminToken }),
+      api(`/api/v1/admin/ai-usage?range=all&userId=${owner.id}`, { token: adminToken }),
+      api("/api/v1/admin/inventory-scan-jobs?status=completed", { token: adminToken }),
+      api("/api/v1/admin/inventory-scan-jobs/admin-console-contract-scan", { token: adminToken }),
+    ]);
+    for (const result of [stats, trends, recent, funnel, audits, usage, scans, scan]) assert.equal(result.response.status, 200);
+    assert.equal(typeof (stats.body as JsonObject).users, "number");
+    assert.equal((trends.body as JsonObject[]).length, 7);
+    assert.ok(Array.isArray((recent.body as JsonObject).recentUsers));
+    assert.equal((funnel.body as JsonObject).items.some((item: JsonObject) => item.eventName === "admin_console_contract"), true);
+    assert.ok(Array.isArray((audits.body as JsonObject).items));
+    assert.equal(typeof (usage.body as JsonObject).summary.totalTokens, "number");
+    assert.equal((usage.body as JsonObject).failures.some((item: JsonObject) => item.endpoint === "admin-console-contract"), true);
+    assert.equal((scans.body as JsonObject).items.find((item: JsonObject) => item.id === "admin-console-contract-scan").itemCount, 1);
+    assert.equal((scan.body as JsonObject).items.length, 1);
+    db.prepare("DELETE FROM inventory_scan_jobs WHERE id='admin-console-contract-scan'").run();
+    db.prepare("DELETE FROM funnel_events WHERE event_name='admin_console_contract'").run();
+    db.prepare("DELETE FROM ai_usage_logs WHERE endpoint='admin-console-contract'").run();
+  });
+
   test("demo users cover distinct health and dietary recommendation scenarios", async () => {
     const profiles = db.prepare(`
       SELECT u.nickname AS seed_key, u.daily_calories_target, hp.*

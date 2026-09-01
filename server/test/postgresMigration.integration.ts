@@ -18,6 +18,8 @@ import { AdminKitchenwareService } from "../src/modules/adminKitchenware/service
 import { PostgresAdminRecipesRepository } from "../src/modules/adminRecipes/postgresRepository.js";
 import { AdminRecipesService } from "../src/modules/adminRecipes/service.js";
 import { PostgresCookingQueueRepository } from "../src/modules/cookingQueue/postgresRepository.js";
+import { PostgresCommunityRepository } from "../src/modules/community/postgresRepository.js";
+import { CommunityService } from "../src/modules/community/service.js";
 import { PostgresDietRecordsRepository } from "../src/modules/dietRecords/postgresRepository.js";
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
@@ -936,6 +938,103 @@ try {
   assert.deepEqual(deletionCleanup?.urls_json,[deletionMediaUrl]);
   assert.equal(deletionCleanup?.objects_json[0]?.backend,"local");
 
+  const communityRepository = new PostgresCommunityRepository(pool);
+  const communityService = new CommunityService(communityRepository);
+  const checkInResults = await Promise.all([
+    communityRepository.checkIn(successorUserId, "2026-09-01"),
+    communityRepository.checkIn(successorUserId, "2026-09-01"),
+  ]);
+  assert.deepEqual(checkInResults.sort(), [false, true]);
+  const followResults = await Promise.all([
+    communityRepository.toggleFollow(successorUserId, user.id),
+    communityRepository.toggleFollow(successorUserId, user.id),
+  ]);
+  assert(followResults.every((result) => result.kind === "updated"));
+  assert.deepEqual(followResults.map((result) => result.kind === "updated" && result.active).sort(), [false, true]);
+  const followed = await communityRepository.toggleFollow(successorUserId, user.id);
+  assert.equal(followed.kind === "updated" && followed.active, true);
+
+  const questionResult = await communityRepository.createPost({
+    userId: user.id,
+    username: "PostgresAuthor",
+    avatarUrl: null,
+    category: "问答",
+    content: "如何准备一份高蛋白燕麦早餐搭配？",
+    imageUrls: [],
+    eventStartAt: null,
+    eventEndAt: null,
+    questionStatus: "open",
+    ipLocation: "集成测试",
+    linkedRecipeId: null,
+  });
+  assert.equal(questionResult.kind, "created");
+  if (questionResult.kind !== "created") throw new Error("PostgreSQL community question was not created");
+  const questionId = Number(questionResult.post.id);
+  const eventResult = await communityRepository.createPost({
+    userId: user.id,
+    username: "PostgresAuthor",
+    avatarUrl: null,
+    category: "活动",
+    content: "一起完成七天健康早餐打卡活动",
+    imageUrls: [],
+    eventStartAt: "2026-09-01T00:00:00.000Z",
+    eventEndAt: "2099-09-30T00:00:00.000Z",
+    questionStatus: null,
+    ipLocation: null,
+    linkedRecipeId: null,
+  });
+  assert.equal(eventResult.kind, "created");
+  if (eventResult.kind !== "created") throw new Error("PostgreSQL community event was not created");
+  const eventId = Number(eventResult.post.id);
+
+  const likeResults = await Promise.all([
+    communityRepository.togglePostLike(successorUserId, questionId),
+    communityRepository.togglePostLike(successorUserId, questionId),
+  ]);
+  assert.deepEqual(likeResults.map((result) => result.kind === "updated" && result.active).sort(), [false, true]);
+  const liked = await communityRepository.togglePostLike(successorUserId, questionId);
+  assert.equal(liked.kind === "updated" && liked.active && liked.count === 1, true);
+  const joinResults = await Promise.all([
+    communityRepository.toggleJoin(successorUserId, eventId, Date.now()),
+    communityRepository.toggleJoin(successorUserId, eventId, Date.now()),
+  ]);
+  assert.deepEqual(joinResults.map((result) => result.kind === "updated" && result.active).sort(), [false, true]);
+  const joined = await communityRepository.toggleJoin(successorUserId, eventId, Date.now());
+  assert.equal(joined.kind === "updated" && joined.active && joined.count === 1, true);
+
+  const comment = await communityRepository.createComment(successorUserId, questionId, "PostgresSuccessor", null, "可以提前浸泡燕麦并搭配鸡蛋。", null);
+  assert(comment);
+  const accepted = await communityRepository.acceptComment(user.id, questionId, Number(comment.id));
+  assert.deepEqual(accepted, { kind: "updated", acceptedCommentId: Number(comment.id) });
+  const commentLike = await communityRepository.toggleCommentLike(user.id, Number(comment.id));
+  assert.equal(commentLike.kind === "updated" && commentLike.active && commentLike.count === 1, true);
+  const comments = await communityService.comments(user.id, questionId);
+  assert.equal(comments[0]?.is_accepted, true);
+  assert.equal(comments[0]?.is_liked, true);
+
+  const shareResults = await Promise.all([
+    communityRepository.share(questionId, successorUserId, ["PGSHARE001"], "2099-10-01T00:00:00.000Z"),
+    communityRepository.share(questionId, successorUserId, ["PGSHARE002"], "2099-10-01T00:00:00.000Z"),
+  ]);
+  assert(shareResults.every((result) => result && result !== "not_found"));
+  assert.equal(shareResults[0] && shareResults[0] !== "not_found" ? shareResults[0].code : null,
+    shareResults[1] && shareResults[1] !== "not_found" ? shareResults[1].code : null);
+  const resolvedShare = await communityRepository.resolveShare(String(shareResults[0] && shareResults[0] !== "not_found" ? shareResults[0].code : ""));
+  assert.equal(Number(resolvedShare?.post_id), questionId);
+
+  await pool.query(`UPDATE user_health_profiles SET health_goal='lose_weight',allergies_json=$1::jsonb,
+    dietary_restrictions_json=$2::jsonb WHERE user_id=$3`, [JSON.stringify([{ name: "花生" }]), JSON.stringify(["高盐"]), successorUserId]);
+  const recommendationSource = await communityRepository.recommendationSource(successorUserId);
+  assert.deepEqual(recommendationSource.health?.allergies_json, [{ name: "花生" }]);
+  const feed = await communityService.posts(successorUserId, { sort: "recommended", pageSize: 1 });
+  if (Array.isArray(feed.body)) throw new Error("PostgreSQL community cursor response was not returned");
+  assert.equal(feed.body.items.length, 1);
+  assert.equal(typeof feed.body.items[0]?.is_liked, "boolean");
+  const viewed = await communityService.post(successorUserId, questionId);
+  assert(Number(viewed.views_count) >= 1);
+  const communityProfile = await communityService.profile(successorUserId, user.id);
+  assert.equal(communityProfile.is_following, true);
+
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
@@ -1011,6 +1110,7 @@ try {
     postgresHealthRepositoryVerified: true,
     postgresShoppingRepositoryVerified: true,
     postgresAuthAccountRepositoryVerified: true,
+    postgresCommunityRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,

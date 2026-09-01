@@ -12,6 +12,13 @@ const moduleSpecs = [
     legacyFile: null,
   },
   {
+    name: "community",
+    concreteRepository: /sqliteRepository|SqliteCommunityRepository/,
+    compositionFile: "server/src/routes/community.ts",
+    compositionImport: "../modules/community/index.js",
+    legacyFile: null,
+  },
+  {
     name: "cookingQueue",
     concreteRepository: /sqliteRepository|SqliteCookingQueueRepository/,
     legacyFile: "server/src/routes/cooking-queue.ts",

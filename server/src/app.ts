@@ -37,7 +37,9 @@ export function createApp() {
   assertNoPublicServerSecrets();
   const providerProfile = getProviderProfile();
   const { kitchenwareRoutes, recommendationRoutes, recipesRoutes, realtimeVoiceRoutes } = initializeSqliteApplication();
-  recoverAgentRuntime();
+  void recoverAgentRuntime().catch((error) => {
+    console.error("[Agent recovery error]", error instanceof Error ? error.message : error);
+  });
   const app = express();
   const uploadedMediaDir = path.resolve(process.env.MEDIA_LOCAL_ROOT || path.join(process.cwd(), "public"), "uploads");
   const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080,http://localhost:5173")

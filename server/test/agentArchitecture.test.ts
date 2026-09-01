@@ -66,6 +66,13 @@ describe("Supervisor Agent architecture", () => {
     assert.match(operations, /run\.status !== "running"/);
   });
 
+  test("runtime scheduling is persistence-agnostic", () => {
+    const runtime = read("../src/services/agent/runtime.ts");
+    assert.match(runtime, /agentSchedulingService\(\)\.claimQueuedRuns/);
+    assert.match(runtime, /agentSchedulingService\(\)\.resetInterruptedRuns/);
+    assert.doesNotMatch(runtime, /db\.prepare\(/);
+  });
+
   test("vision food artifacts retain the client nutrition contract", () => {
     const runtime = read("../src/services/agent/runtime.ts");
     for (const field of ["foodName", "estimatedWeightGrams", "calories", "proteinGrams", "carbsGrams", "fatGrams", "description", "confidence"]) {

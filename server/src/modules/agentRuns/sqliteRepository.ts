@@ -108,15 +108,23 @@ export class SqliteAgentRunsRepository implements AgentRunsRepository {
 
   async saveActions(runId: string, userId: number, proposals: AgentActionProposal[]) {
     return this.database.transaction(() => {
-      const existing = this.database.prepare(`SELECT id,action_type,version FROM agent_actions
-        WHERE run_id=? AND user_id=? ORDER BY created_at,id`).all(runId, userId) as Array<{ id: string; action_type: string; version: number }>;
+      const existing = this.database.prepare(`SELECT id,action_type,idempotency_key,version FROM agent_actions
+        WHERE run_id=? AND user_id=?`).all(runId, userId) as Array<{
+          id: string; action_type: string; idempotency_key: string; version: number;
+        }>;
       if (existing.length) {
+        const byIdempotencyKey = new Map(existing.map((item) => [item.idempotency_key, item]));
         if (existing.length !== proposals.length
-          || existing.some((item, index) => item.action_type !== proposals[index]?.actionType)) {
+          || proposals.some((proposal, index) => {
+            const item = byIdempotencyKey.get(`${runId}:${index}:${proposal.actionType}`);
+            return !item || item.action_type !== proposal.actionType;
+          })) {
           throw new Error("Agent action bundle 已变化，请刷新后重试");
         }
-        return existing.map((item, index) => ({ ...proposals[index], id: item.id, version: item.version }))
-          .filter((item): item is AgentActionProposal & { id: string; version: number } => Boolean(item.actionType));
+        return proposals.map((proposal, index) => {
+          const item = byIdempotencyKey.get(`${runId}:${index}:${proposal.actionType}`)!;
+          return { ...proposal, id: item.id, version: item.version };
+        });
       }
       const insert = this.database.prepare(`INSERT INTO agent_actions
         (id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key,expires_at)

@@ -125,15 +125,21 @@ export class PostgresAgentRunsRepository implements AgentRunsRepository {
     return this.transaction(async (client) => {
       const owner = await client.query("SELECT id FROM agent_runs WHERE id=$1 AND user_id=$2 FOR UPDATE", [runId, userId]);
       if (!owner.rows[0]) throw new Error("Agent Run 不存在或无权操作");
-      const existing = (await client.query(`SELECT id,action_type,version FROM agent_actions
-        WHERE run_id=$1 AND user_id=$2 ORDER BY created_at,id`, [runId, userId])).rows as Row[];
+      const existing = (await client.query(`SELECT id,action_type,idempotency_key,version FROM agent_actions
+        WHERE run_id=$1 AND user_id=$2`, [runId, userId])).rows as Row[];
       if (existing.length) {
+        const byIdempotencyKey = new Map(existing.map((item) => [String(item.idempotency_key), item]));
         if (existing.length !== proposals.length
-          || existing.some((item, index) => item.action_type !== proposals[index]?.actionType)) {
+          || proposals.some((proposal, index) => {
+            const item = byIdempotencyKey.get(`${runId}:${index}:${proposal.actionType}`);
+            return !item || item.action_type !== proposal.actionType;
+          })) {
           throw new Error("Agent action bundle 已变化，请刷新后重试");
         }
-        return existing.map((item, index) => ({ ...proposals[index], id: String(item.id), version: Number(item.version) }))
-          .filter((item): item is AgentActionProposal & { id: string; version: number } => Boolean(item.actionType));
+        return proposals.map((proposal, index) => {
+          const item = byIdempotencyKey.get(`${runId}:${index}:${proposal.actionType}`)!;
+          return { ...proposal, id: String(item.id), version: Number(item.version) };
+        });
       }
       const saved: Array<AgentActionProposal & { id: string }> = [];
       for (const [index, proposal] of proposals.entries()) {

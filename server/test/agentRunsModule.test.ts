@@ -84,6 +84,23 @@ describe("Agent runs module", () => {
         { ...proposals[0], actionType: "record_health_log" as const },
       ]), /bundle 已变化/);
       await assert.rejects(() => repository.saveActions(created.id, 42, []), /bundle 已变化/);
+      const orderedRun = await repository.createRun(42, {
+        modality: "text", prompt: "验证 action 顺序", idempotencyKey: "request-2",
+      });
+      const orderedProposals = [
+        proposals[0],
+        { actionType: "record_health_log" as const, riskLevel: "high" as const,
+          summary: "记录饮水", payload: { waterMl: 300 } },
+      ];
+      await repository.saveActions(orderedRun.id, 42, orderedProposals);
+      database.prepare("UPDATE agent_actions SET id='z-first' WHERE run_id=? AND action_type='record_diet_meal'")
+        .run(orderedRun.id);
+      database.prepare("UPDATE agent_actions SET id='a-second' WHERE run_id=? AND action_type='record_health_log'")
+        .run(orderedRun.id);
+      const replayed = await repository.saveActions(orderedRun.id, 42, orderedProposals);
+      assert.deepEqual(replayed.map((action) => [action.id, action.actionType]), [
+        ["z-first", "record_diet_meal"], ["a-second", "record_health_log"],
+      ]);
       await assert.rejects(() => repository.reviseActions(created.id, 42, [
         { ...proposals[0], id: saved[0]?.id, payload: { foodName: "鸡蛋" } },
         { ...proposals[0], id: "missing", payload: { foodName: "应回滚" } },
@@ -97,7 +114,7 @@ describe("Agent runs module", () => {
       assert.equal((await repository.run(created.id, 42))?.status, "completed");
       assert.equal(await repository.setStatus(created.id, "cancelled", {}), false);
       assert.equal((await repository.run(created.id, 42))?.status, "completed");
-      assert.equal(await repository.deleteUserData(42), 1);
+      assert.equal(await repository.deleteUserData(42), 2);
       assert.equal(await repository.run(created.id, 42), undefined);
     } finally {
       database.close();

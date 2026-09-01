@@ -13,6 +13,7 @@ import {
   buildFefoConsumptionPreviewFromCandidates,
   InventoryQuantityError,
 } from "../../services/inventoryQuantity.js";
+import { recordFunnelEvent } from "../../services/funnelEvents.js";
 import { InventoryDomainError, type InventoryDomainErrorCode } from "./errors.js";
 import type { InventoryRepository } from "./repository.js";
 import type {
@@ -24,21 +25,10 @@ import type {
   InventoryUpdateData,
 } from "./types.js";
 
-type InventoryServiceDependencies = {
-  recordInventoryAdded?: (userId: number) => void;
-};
-
 export class InventoryService {
   private readonly repository: InventoryRepository;
-  private readonly dependencies: InventoryServiceDependencies;
 
-  constructor(
-    repository: InventoryRepository,
-    dependencies: InventoryServiceDependencies = {},
-  ) {
-    this.repository = repository;
-    this.dependencies = dependencies;
-  }
+  constructor(repository: InventoryRepository) { this.repository = repository; }
 
   async list(userId: number) {
     return inventoryListResponseSchema.parse(await this.repository.list(userId));
@@ -46,19 +36,19 @@ export class InventoryService {
 
   async create(userId: number, input: InventoryCreateData) {
     const item = inventoryItemSchema.parse(await this.repository.create(userId, input));
-    this.dependencies.recordInventoryAdded?.(userId);
+    await this.recordAdded(userId);
     return item;
   }
 
   async importShoppingList(userId: number, input: InventoryImportData) {
     const response = inventoryImportResponseSchema.parse(await this.repository.importShoppingList(userId, input));
-    if (!response.repeated && response.items.length > 0) this.dependencies.recordInventoryAdded?.(userId);
+    if (!response.repeated && response.items.length > 0) await this.recordAdded(userId);
     return response;
   }
 
   async bulkIntake(userId: number, input: InventoryBulkIntakeData) {
     const response = inventoryBulkIntakeResponseSchema.parse(await this.repository.bulkIntake(userId, input));
-    if (!response.repeated && response.items.length > 0) this.dependencies.recordInventoryAdded?.(userId);
+    if (!response.repeated && response.items.length > 0) await this.recordAdded(userId);
     return response;
   }
 
@@ -117,5 +107,9 @@ export class InventoryService {
     const result = await this.repository.remove(userId, item);
     if (result.kind === "not_found") throw new InventoryDomainError("INVENTORY_NOT_FOUND", "未找到相关食材");
     return inventoryDeleteResponseSchema.parse({ message: "删除成功" });
+  }
+
+  private recordAdded(userId: number) {
+    return recordFunnelEvent(userId, "inventory_added", (eventName, actorHash) => this.repository.recordFunnelEvent(eventName, actorHash));
   }
 }

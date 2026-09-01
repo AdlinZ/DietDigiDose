@@ -10,6 +10,10 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
     this.database = database;
   }
 
+  async recordFunnelEvent(eventName: string, actorHash: string) {
+    this.database.prepare("INSERT INTO funnel_events (event_name,actor_hash) VALUES (?,?)").run(eventName, actorHash);
+  }
+
   async list(userId: number, date?: string) {
     const where = date ? "WHERE user_id = ? AND recorded_at = ?" : "WHERE user_id = ?";
     const params = date ? [userId, date] : [userId];

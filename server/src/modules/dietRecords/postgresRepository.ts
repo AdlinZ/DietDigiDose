@@ -28,6 +28,10 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
     this.consumeInventory = consumeInventory;
   }
 
+  async recordFunnelEvent(eventName: string, actorHash: string) {
+    await this.pool.query("INSERT INTO funnel_events (event_name,actor_hash) VALUES ($1,$2)", [eventName, actorHash]);
+  }
+
   async list(userId: number, date?: string) {
     const result = date
       ? await this.pool.query(`SELECT * FROM diet_records WHERE user_id = $1 AND recorded_at = $2

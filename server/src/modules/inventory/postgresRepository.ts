@@ -104,6 +104,10 @@ export class PostgresInventoryRepository implements InventoryRepository {
     this.pool = pool;
   }
 
+  async recordFunnelEvent(eventName: string, actorHash: string) {
+    await this.pool.query("INSERT INTO funnel_events (event_name,actor_hash) VALUES ($1,$2)", [eventName, actorHash]);
+  }
+
   private async transaction<T>(operation: (client: PoolClient) => Promise<T>) {
     const client = await this.pool.connect();
     try {

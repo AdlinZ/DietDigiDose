@@ -5,6 +5,7 @@ import { DietRecordsService } from "../src/modules/dietRecords/service.js";
 
 function fakeRepository(overrides: Partial<DietRecordsRepository> = {}): DietRecordsRepository {
   return {
+    recordFunnelEvent: async () => undefined,
     list: async () => [],
     create: async (_userId, record) => ({ id: 1, ...record }),
     remove: async () => true,
@@ -51,7 +52,8 @@ describe("diet records module", () => {
         calls += 1;
         return { repeated: calls > 1 };
       },
-    }), { recordCookingCompleted: () => { funnelEvents += 1; } });
+      recordFunnelEvent: async () => { funnelEvents += 1; },
+    }));
     const input = {
       idempotency_key: "cooking-module-test-0001",
       inventory_item_ids: [3, 3, 5],

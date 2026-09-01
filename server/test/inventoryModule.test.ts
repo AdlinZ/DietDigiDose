@@ -24,6 +24,7 @@ const item: InventoryItem = {
 
 function fakeRepository(overrides: Partial<InventoryRepository> = {}): InventoryRepository {
   return {
+    recordFunnelEvent: async () => undefined,
     list: async () => [item],
     findOwned: async () => item,
     create: async () => item,
@@ -49,9 +50,7 @@ function fakeRepository(overrides: Partial<InventoryRepository> = {}): Inventory
 describe("inventory module service", () => {
   test("runs business behavior against a replacement repository", async () => {
     const events: number[] = [];
-    const service = new InventoryService(fakeRepository(), {
-      recordInventoryAdded: (userId) => events.push(userId),
-    });
+    const service = new InventoryService(fakeRepository({ recordFunnelEvent: async () => { events.push(42); } }));
 
     assert.deepEqual(await service.list(42), [item]);
     assert.equal((await service.create(42, {
@@ -95,7 +94,8 @@ describe("inventory module service", () => {
     let events = 0;
     const service = new InventoryService(fakeRepository({
       importShoppingList: async () => ({ items: [item], repeated: true }),
-    }), { recordInventoryAdded: () => { events += 1; } });
+      recordFunnelEvent: async () => { events += 1; },
+    }));
 
     const response = await service.importShoppingList(42, {
       idempotency_key: "shopping-import-key-0001",

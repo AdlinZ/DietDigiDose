@@ -76,6 +76,18 @@ describe("Supervisor Agent architecture", () => {
     assert.doesNotMatch(runtime, /db\.prepare\(/);
   });
 
+  test("Agent run lifecycle persistence is behind SQLite and PostgreSQL repositories", () => {
+    const facade = read("../src/services/agent/repository.ts");
+    const sqliteRuns = read("../src/modules/agentRuns/sqliteRepository.ts");
+    const postgresRuns = read("../src/modules/agentRuns/postgresRepository.ts");
+    assert.match(facade, /agentRunsService\(\)/);
+    assert.doesNotMatch(facade, /db\.prepare\(|better-sqlite3/);
+    assert.match(sqliteRuns, /class SqliteAgentRunsRepository/);
+    assert.match(postgresRuns, /class PostgresAgentRunsRepository/);
+    assert.match(postgresRuns, /pg_advisory_xact_lock/);
+    assert.match(postgresRuns, /FOR UPDATE/);
+  });
+
   test("vision food artifacts retain the client nutrition contract", () => {
     const runtime = read("../src/services/agent/runtime.ts");
     for (const field of ["foodName", "estimatedWeightGrams", "calories", "proteinGrams", "carbsGrams", "fatGrams", "description", "confidence"]) {

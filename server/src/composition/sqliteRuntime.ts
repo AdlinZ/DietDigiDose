@@ -26,6 +26,9 @@ import { SqliteAgentSchedulingRepository } from "../modules/agentScheduling/sqli
 import { createAgentOperationsService } from "../modules/agentOperations/index.js";
 import { configureAgentOperationsService } from "../modules/agentOperations/runtime.js";
 import { SqliteAgentOperationsRepository } from "../modules/agentOperations/sqliteRepository.js";
+import { createAgentRunsService } from "../modules/agentRuns/index.js";
+import { configureAgentRunsService } from "../modules/agentRuns/runtime.js";
+import { SqliteAgentRunsRepository } from "../modules/agentRuns/sqliteRepository.js";
 import { createKitchenwareModule } from "../modules/kitchenware/index.js";
 import { createRecipesModule } from "../modules/recipes/index.js";
 import { createRecommendationsRuntime } from "../modules/recommendations/index.js";
@@ -47,6 +50,7 @@ export function initializeSqliteApplication() {
   configureAdminAuditService(createAdminAuditService(new SqliteAdminAuditRepository(db)));
   configureAgentSchedulingService(createAgentSchedulingService(new SqliteAgentSchedulingRepository(db)));
   configureAgentOperationsService(createAgentOperationsService(new SqliteAgentOperationsRepository(db)));
+  configureAgentRunsService(createAgentRunsService(new SqliteAgentRunsRepository(db)));
   const recommendations = createRecommendationsRuntime(db);
   configureRecommendationsService(recommendations.service);
   return {

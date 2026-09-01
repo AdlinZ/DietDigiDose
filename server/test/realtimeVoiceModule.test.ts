@@ -47,7 +47,7 @@ function service(repository: RealtimeVoiceRepository, overrides: Partial<Constru
     transcribe: async () => ({ text: "  切好的番茄  " }),
     startRun: async () => ({ run: { id: "run-1", status: "queued" } }),
     waitForRun: async () => ({ id: "run-1", status: "completed", reply: "保持中火翻炒。" }),
-    cancelRun: () => {},
+    cancelRun: async () => {},
     ...overrides,
   });
 }
@@ -85,7 +85,7 @@ describe("realtime voice module", () => {
 
   test("streams completed answers, cancels barge-ins, and cancels pending work on close", async () => {
     const { repository, state } = fakeRepository(); const cancelled: string[] = [];
-    const subject = service(repository, { cancelRun: (_userId, runId) => { cancelled.push(runId); } });
+    const subject = service(repository, { cancelRun: async (_userId, runId) => { cancelled.push(runId); } });
     const result = await subject.turn(42, state.session.id,
       { turnId: "turn-question", transcript: "现在火候怎么控制", currentStep: 2, timerSeconds: 30, interruptedResponse: true });
     assert.equal(result.intent, "question");

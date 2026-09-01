@@ -21,6 +21,8 @@ import { PostgresAIWriteConfirmationsRepository } from "../src/modules/aiWriteCo
 import { AIWriteConfirmationsService } from "../src/modules/aiWriteConfirmations/service.js";
 import { PostgresAdminAuditRepository } from "../src/modules/adminAudit/postgresRepository.js";
 import { AdminAuditService } from "../src/modules/adminAudit/service.js";
+import { PostgresAdminAgentRunsRepository } from "../src/modules/adminAgentRuns/postgresRepository.js";
+import { AdminAgentRunsService } from "../src/modules/adminAgentRuns/service.js";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { PostgresAuthVerificationRepository } from "../src/modules/authVerification/postgresRepository.js";
@@ -613,6 +615,45 @@ try {
   assert.deepEqual((await aiConversationsService.legacyInventoryScanJob(legacyScanId, user.id))?.result,
     [{ foodName: "PostgreSQL 番茄" }]);
   assert.equal(await aiConversationsService.legacyInventoryScanJob(legacyScanId, householdMember), null);
+  const adminAgentRunId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const adminAgentActionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  await pool.query("DELETE FROM agent_runs WHERE id=$1", [adminAgentRunId]);
+  await pool.query(`INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,result_json,
+    checkpoint_thread_id,started_at,completed_at) VALUES($1,$2,'postgres-admin-agent','image','vision-food','completed',
+    '{"prompt":"识别 PostgreSQL 沙拉","mediaRef":"must-not-leak"}'::jsonb,
+    '{"reply":"PostgreSQL 蔬菜沙拉","artifacts":[{"type":"vision","data":{"confidence":0.93}}]}'::jsonb,
+    $1,CURRENT_TIMESTAMP-INTERVAL '3 seconds',CURRENT_TIMESTAMP)`, [adminAgentRunId, user.id]);
+  await pool.query(`INSERT INTO agent_run_media(id,run_id,user_id,kind,mime_type,data_base64)
+    VALUES('postgres-admin-agent-media',$1,$2,'image','image/png','raw-media-must-not-leak')`, [adminAgentRunId, user.id]);
+  await pool.query(`INSERT INTO agent_run_events(run_id,user_id,sequence,agent_name,event_type,summary,payload_json) VALUES
+    ($1,$2,1,'Supervisor','routing_started','开始分派','{"specialists":["VisionAgent"]}'::jsonb),
+    ($1,$2,2,'VisionAgent','agent_completed','视觉识别完成','{"confidence":0.93}'::jsonb),
+    ($1,$2,3,'OperationsAgent','agent_completed','动作完成',NULL),
+    ($1,$2,4,'Supervisor','run_completed','运行完成',NULL)`, [adminAgentRunId, user.id]);
+  await pool.query(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+    VALUES($1,$2,$3,'add_inventory_item','high','awaiting_approval','{"foodName":"生菜"}'::jsonb,$1)`,
+  [adminAgentActionId, adminAgentRunId, user.id]);
+  await pool.query(`INSERT INTO ai_usage_logs(user_id,endpoint,model,prompt_tokens,completion_tokens,total_tokens,latency_ms,
+    success,estimated_cost_usd,run_id,agent_name,phase) VALUES
+    ($1,'agent:Supervisor','postgres-supervisor',120,30,150,800,TRUE,0.0012,$2,'Supervisor','routing'),
+    ($1,'agent:VisionAgent','postgres-vision',200,50,250,1200,TRUE,0.0025,$2,'VisionAgent','recognition')`,
+  [user.id, adminAgentRunId]);
+  const adminAgentRunsService = new AdminAgentRunsService(new PostgresAdminAgentRunsRepository(pool));
+  const adminAgentList = await adminAgentRunsService.list({ query: adminAgentRunId, modality: "image", agent: "VisionAgent", range: "all" });
+  assert.equal(adminAgentList.total, 1);
+  assert.equal(adminAgentList.items[0]?.specialists, "VisionAgent,OperationsAgent");
+  assert.equal(adminAgentList.items[0]?.hasMedia, 1);
+  assert.equal(adminAgentList.items[0]?.totalTokens, 400);
+  assert.equal(adminAgentList.usageSummary.estimatedCostUsd, 0.0037);
+  const adminAgentDetail = await adminAgentRunsService.detail(adminAgentRunId);
+  assert.equal(adminAgentDetail.run.input.prompt, "识别 PostgreSQL 沙拉");
+  assert.equal(adminAgentDetail.run.input.mediaRef, undefined);
+  assert.equal(adminAgentDetail.run.checkpointCount, 0);
+  assert.equal((adminAgentDetail.events[2]?.payload as { actions: Array<{ payload: { foodName: string } }> })
+    .actions[0]?.payload.foodName, "生菜");
+  assert.equal((adminAgentDetail.events[3]?.payload as { reply: string }).reply, "PostgreSQL 蔬菜沙拉");
+  assert.equal(adminAgentDetail.usage.summary.totalTokens, 400);
+  assert.equal(JSON.stringify(adminAgentDetail).includes("raw-media-must-not-leak"), false);
   const realtimeRepository = new PostgresRealtimeVoiceRepository(pool);
   const cancelledRealtimeRuns: string[] = [];
   const realtimeService = new RealtimeVoiceService(realtimeRepository, {
@@ -1545,6 +1586,7 @@ try {
     postgresInventoryRepositoryVerified: true,
     postgresAiContextRepositoryVerified: true,
     postgresAIConversationsRepositoryVerified: true,
+    postgresAdminAgentRunsRepositoryVerified: true,
     postgresAIRuntimeRepositoryVerified: true,
     postgresAiToolDataRepositoryVerified: true,
     postgresAIWriteConfirmationsRepositoryVerified: true,

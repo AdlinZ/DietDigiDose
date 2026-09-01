@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";import type {AdminUsersRepository} from "./repository.js";
-import type {AuditContext,AuditEvent,CredentialsInput,LevelSource,ListInput,Row} from "./types.js";
+import{levelRuleFrom,type UserLevelRule}from"../community/level.js";import type {AuditContext,AuditEvent,CredentialsInput,LevelSource,ListInput,Row} from "./types.js";
 export class SqliteAdminUsersRepository implements AdminUsersRepository {private readonly database:Database.Database;constructor(database:Database.Database){this.database=database;}
   async listUsers(input:ListInput){const values:number[]=[];if(input.cursorId)values.push(input.cursorId);if(input.limit)values.push(input.limit);return this.database.prepare(`SELECT u.id,u.username,u.email,u.phone,u.avatar_url,u.role,u.is_verified_expert,
     COALESCE(u.is_disabled,0) AS is_disabled,u.created_at,CASE WHEN hp.user_id IS NULL THEN 0 ELSE 1 END AS has_health_profile FROM users u LEFT JOIN user_health_profiles hp ON hp.user_id=u.id
@@ -28,6 +28,10 @@ export class SqliteAdminUsersRepository implements AdminUsersRepository {private
   async updateRole(userId:number,role:"admin"|"user",context:AuditContext){return this.change(userId,"role",role,context,"user.role.update",(u)=>`修改用户 ${u.username||userId} 的角色`,(u)=>({before:u.role,after:role}));}
   async updateExpert(userId:number,value:boolean,context:AuditContext){return this.change(userId,"is_verified_expert",value?1:0,context,"user.expert.update",u=>`${value?"认证":"取消认证"}专业用户 ${u.username}`,u=>({before:Boolean(u.is_verified_expert),after:value}));}
   async updateStatus(userId:number,value:boolean,context:AuditContext){return this.change(userId,"is_disabled",value?1:0,context,value?"user.disable":"user.enable",u=>`${value?"停用":"启用"}用户 ${u.username}`,u=>({before:Boolean(u.is_disabled),after:value}));}
+  async levelRule(){return((this.database.prepare("SELECT value FROM system_settings WHERE key='USER_LEVEL_RULE'").get()as{value:string}|undefined)?.value)||null;}
+  async saveLevelRule(rule:UserLevelRule,context:AuditContext){this.database.transaction(()=>{const previous=this.database.prepare("SELECT value FROM system_settings WHERE key='USER_LEVEL_RULE'").get()as{value:string}|undefined;
+    this.database.prepare(`INSERT INTO system_settings(key,value,updated_at)VALUES('USER_LEVEL_RULE',?,CURRENT_TIMESTAMP)ON CONFLICT(key)DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP`).run(JSON.stringify(rule));
+    this.audit({...context,action:"user_level_rule.update",resourceType:"user_level_rule",resourceId:"global",summary:"更新账户成长等级规则",details:{previous:levelRuleFrom(previous?.value||null),current:rule}});})();}
   private change(userId:number,column:"role"|"is_verified_expert"|"is_disabled",value:unknown,context:AuditContext,action:string,summary:(u:Row)=>string,details:(u:Row)=>Row){return Promise.resolve(this.database.transaction(()=>{const u=this.database.prepare(`SELECT username,${column} FROM users WHERE id=?`).get(userId) as Row|undefined;if(!u)return{kind:"not_found" as const};this.database.prepare(`UPDATE users SET ${column}=? WHERE id=?`).run(value,userId);
     this.audit({...context,action,resourceType:"user",resourceId:userId,summary:summary(u),details:details(u)});return{kind:"updated" as const};})());}
   private audit(e:AuditEvent){this.database.prepare(`INSERT INTO admin_audit_logs (admin_user_id,action,resource_type,resource_id,summary,details_json,ip_address,user_agent) VALUES (?,?,?,?,?,?,?,?)`)

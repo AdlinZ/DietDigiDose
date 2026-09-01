@@ -1062,6 +1062,10 @@ try {
 
   const adminUsersRepository=new PostgresAdminUsersRepository(pool);
   const adminUsersService=new AdminUsersService(adminUsersRepository);
+  const postgresLevelRule=await adminUsersService.levelRule();
+  postgresLevelRule.xp.dailyCheckIn=9;
+  assert.equal((await adminUsersService.saveLevelRule(postgresLevelRule,moderationContext)).rule.xp.dailyCheckIn,9);
+  assert.equal((await adminUsersService.levelRule()).xp.dailyCheckIn,9);
   const adminUsersPage=await adminUsersService.users({pageSize:2});
   assert(!Array.isArray(adminUsersPage)&&adminUsersPage.items.length===2);
   assert.equal(typeof (!Array.isArray(adminUsersPage)&&adminUsersPage.items[0]?.level.xp),"number");

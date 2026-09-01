@@ -9,6 +9,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
+import { PostgresAdminCommunityRepository } from "../src/modules/adminCommunity/postgresRepository.js";
 import { PostgresAdminConsoleRepository } from "../src/modules/adminConsole/postgresRepository.js";
 import { AdminConsoleService } from "../src/modules/adminConsole/service.js";
 import { PostgresAdminFoodAssetsRepository } from "../src/modules/adminFoodAssets/postgresRepository.js";
@@ -1035,6 +1036,28 @@ try {
   const communityProfile = await communityService.profile(successorUserId, user.id);
   assert.equal(communityProfile.is_following, true);
 
+  const adminCommunityRepository = new PostgresAdminCommunityRepository(pool);
+  const moderationContext = { adminUserId:user.id,ipAddress:"127.0.0.1",userAgent:"postgres-integration" };
+  const activeCommunityPosts = await adminCommunityRepository.listPosts({status:"active",cursorId:null,limit:2});
+  assert.equal(activeCommunityPosts.length,2);
+  const eventUpdated = await adminCommunityRepository.updateEvent(eventId,{startAt:"2026-09-02T00:00:00.000Z",endAt:"2099-10-01T00:00:00.000Z"},moderationContext);
+  assert.equal(eventUpdated.kind,"updated");
+  const reopened = await adminCommunityRepository.updateQuestion(questionId,{status:"open",acceptedCommentId:null},moderationContext);
+  assert.equal(reopened.kind,"updated");
+  const resolved = await adminCommunityRepository.updateQuestion(questionId,{status:"resolved",acceptedCommentId:Number(comment.id)},moderationContext);
+  assert.equal(resolved.kind,"updated");
+  assert.equal(await adminCommunityRepository.deleteComment(Number(comment.id),moderationContext),true);
+  const moderatedQuestion=(await pool.query("SELECT question_status,accepted_comment_id,comment_count FROM community_posts WHERE id=$1",[questionId])).rows[0];
+  assert.equal(moderatedQuestion?.question_status,"open");
+  assert.equal(moderatedQuestion?.accepted_comment_id,null);
+  assert.equal(Number(moderatedQuestion?.comment_count),0);
+  assert.equal(await adminCommunityRepository.softDeletePost(eventId,moderationContext),true);
+  const deletedCommunityPosts=await adminCommunityRepository.listPosts({status:"deleted",cursorId:null,limit:null});
+  assert(deletedCommunityPosts.some((post)=>Number(post.id)===eventId));
+  const moderationAudits=await pool.query(`SELECT action,details_json FROM admin_audit_logs WHERE admin_user_id=$1
+    AND action LIKE 'community.%' ORDER BY id`,[user.id]);
+  assert(moderationAudits.rows.some((audit)=>audit.action==="community.comment.delete"&&typeof audit.details_json?.contentPreview==="string"));
+
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
@@ -1111,6 +1134,7 @@ try {
     postgresShoppingRepositoryVerified: true,
     postgresAuthAccountRepositoryVerified: true,
     postgresCommunityRepositoryVerified: true,
+    postgresAdminCommunityRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,

@@ -77,6 +77,13 @@ const moduleSpecs = [
     compositionImport: "../modules/adminConsole/index.js",
   },
   {
+    name: "adminCommunity",
+    concreteRepository: /sqliteRepository|SqliteAdminCommunityRepository/,
+    compositionFile: "server/src/routes/admin.ts",
+    compositionImport: "../modules/adminCommunity/index.js",
+    legacyFile: "server/src/routes/admin/community.ts",
+  },
+  {
     name: "mealPlans",
     concreteRepository: /sqliteRepository|SqliteMealPlansRepository/,
     legacyFile: "server/src/routes/meal-plans.ts",

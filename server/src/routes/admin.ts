@@ -6,7 +6,7 @@ import { positiveIntegerParam } from "../middleware/validateParam.js";
 import { createAdminAIConfigRouter } from "./admin/ai-config.js";
 import { createAdminUsersRouter } from "./admin/users.js";
 import { createAdminCommunityRouter } from "./admin/community.js";
-import { createAdminRecipesRouter } from "./admin/recipes.js";
+import { createAdminRecipesRouter } from "../modules/adminRecipes/index.js";
 import { createAdminAssetsRouter } from "./admin/assets.js";
 import { createAdminNotificationsRouter } from "./admin/notifications.js";
 import { createAdminAgentRunsRouter } from "./admin/agent-runs.js";

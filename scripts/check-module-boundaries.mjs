@@ -37,6 +37,13 @@ const moduleSpecs = [
     legacyFile: "server/src/routes/recipes.ts",
   },
   {
+    name: "adminRecipes",
+    concreteRepository: /sqliteRepository|SqliteAdminRecipesRepository/,
+    compositionFile: "server/src/routes/admin.ts",
+    compositionImport: "../modules/adminRecipes/index.js",
+    legacyFile: "server/src/routes/admin/recipes.ts",
+  },
+  {
     name: "mealPlans",
     concreteRepository: /sqliteRepository|SqliteMealPlansRepository/,
     legacyFile: "server/src/routes/meal-plans.ts",

@@ -7,6 +7,8 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { PostgresAdminRecipesRepository } from "../src/modules/adminRecipes/postgresRepository.js";
+import { AdminRecipesService } from "../src/modules/adminRecipes/service.js";
 import { PostgresCookingQueueRepository } from "../src/modules/cookingQueue/postgresRepository.js";
 import { PostgresDietRecordsRepository } from "../src/modules/dietRecords/postgresRepository.js";
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
@@ -611,6 +613,46 @@ try {
       catalogId: 2_147_483_647, confidence: 1 }],
   }));
   assert.equal(Number((await pool.query("SELECT COUNT(*)::integer AS count FROM recipes WHERE title = $1", [failedSubmissionTitle])).rows[0]?.count), 0);
+
+  const adminRecipesRepository = new PostgresAdminRecipesRepository(pool);
+  const adminRecipesService = new AdminRecipesService(adminRecipesRepository, kitchenwareService);
+  const adminRecipeBody = {
+    title: "Postgres 管理员事务菜", description: "验证管理员菜谱 PostgreSQL 事务", image_url: "", cook_time: 22,
+    difficulty: "简单", calories: 220, protein: 10, carbs: 24, fat: 7, category: "晚餐", tags: ["postgres-admin"],
+    steps: ["番茄切块", "放入空气炸锅烤熟"], ingredients: [{ name: "番茄", amount: "2个" }],
+    required_kitchenware: ["空气炸锅", "Postgres 管理员未知锅"], optional_kitchenware: [], serving_size: 2,
+  };
+  const adminContext = { adminUserId: user.id, ipAddress: "127.0.0.1", userAgent: "postgres-integration" };
+  const firstAdminRecipe = await adminRecipesService.create(user.id, adminRecipeBody, adminContext);
+  const secondAdminRecipe = await adminRecipesService.create(user.id, { ...adminRecipeBody, description: "重复检测样本" }, adminContext);
+  const adminList = await adminRecipesService.list({ search: "Postgres 管理员事务菜", pageSize: 10 });
+  assert.equal((adminList as { total: number }).total, 2);
+  const adminStored = await pool.query(`SELECT tags, steps_json, status, quality_status FROM recipes WHERE id=$1`, [firstAdminRecipe.id]);
+  assert.deepEqual(adminStored.rows[0]?.tags, ["postgres-admin"]);
+  assert.equal(adminStored.rows[0]?.steps_json.length, 2);
+  assert.equal(adminStored.rows[0]?.status, "approved");
+  assert.equal(adminStored.rows[0]?.quality_status, "trusted");
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_duplicate_candidates
+    WHERE recipe_id=$1 AND candidate_recipe_id=$2`, [Math.min(firstAdminRecipe.id, secondAdminRecipe.id), Math.max(firstAdminRecipe.id, secondAdminRecipe.id)])).rows[0]?.count), 1);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM kitchenware_mapping_reviews
+    WHERE source_type='recipe' AND source_id=$1 AND raw_name='Postgres 管理员未知锅'`, [String(firstAdminRecipe.id)])).rows[0]?.count), 1);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs
+    WHERE action='recipe.create' AND resource_id=$1`, [String(firstAdminRecipe.id)])).rows[0]?.count), 1);
+
+  const beforeFailedMapping = (await pool.query("SELECT required_kitchenware_json FROM recipes WHERE id=$1", [firstAdminRecipe.id])).rows[0]?.required_kitchenware_json;
+  await assert.rejects(() => adminRecipesRepository.replaceKitchenware(firstAdminRecipe.id, ["无效 FK 锅"], [], [{
+    rawName: "无效 FK 锅", normalizedName: "无效fk锅", catalogId: 2_147_483_647, capabilityCode: null,
+    role: "required", confidence: 1,
+  }], { ...adminContext, action: "recipe.kitchenware_update", resourceId: firstAdminRecipe.id, summary: "必须回滚" }));
+  assert.deepEqual((await pool.query("SELECT required_kitchenware_json FROM recipes WHERE id=$1", [firstAdminRecipe.id])).rows[0]?.required_kitchenware_json, beforeFailedMapping);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs
+    WHERE action='recipe.kitchenware_update' AND resource_id=$1 AND summary='必须回滚'`, [String(firstAdminRecipe.id)])).rows[0]?.count), 0);
+  const adminCoverage = await adminRecipesService.coverage();
+  assert(adminCoverage.byCategory.some((row) => row.value === "晚餐"));
+  await adminRecipesService.reviewQuality(user.id, firstAdminRecipe.id, "needs_review", "PostgreSQL 集成复核", adminContext);
+  assert.equal((await pool.query("SELECT quality_status FROM recipes WHERE id=$1", [firstAdminRecipe.id])).rows[0]?.quality_status, "needs_review");
+  await adminRecipesService.remove(user.id, secondAdminRecipe.id, adminContext);
+  assert((await pool.query("SELECT deleted_at FROM recipes WHERE id=$1", [secondAdminRecipe.id])).rows[0]?.deleted_at);
 
   const healthRepository = new PostgresHealthRepository(pool);
   const healthUpserts = await Promise.all([

@@ -977,44 +977,6 @@ export function logAIUsage(params: {
   }
 }
 
-export function logAdminAction(params: {
-  adminUserId: number;
-  action: string;
-  resourceType: string;
-  resourceId?: string | number | null;
-  summary: string;
-  details?: Record<string, unknown> | null;
-  ipAddress?: string | null;
-  userAgent?: string | null;
-}): void {
-  try {
-    db.prepare(`
-      INSERT INTO admin_audit_logs (
-        admin_user_id,
-        action,
-        resource_type,
-        resource_id,
-        summary,
-        details_json,
-        ip_address,
-        user_agent
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      params.adminUserId,
-      params.action,
-      params.resourceType,
-      params.resourceId === undefined || params.resourceId === null ? null : String(params.resourceId),
-      params.summary,
-      params.details ? JSON.stringify(params.details) : null,
-      params.ipAddress || null,
-      params.userAgent || null,
-    );
-  } catch (error) {
-    console.error('[logAdminAction Error]', error);
-  }
-}
-
 function seedIngredientsData() {
   const insert = db.prepare(`
     INSERT INTO ingredients_library (

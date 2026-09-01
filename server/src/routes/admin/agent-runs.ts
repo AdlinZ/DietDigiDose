@@ -233,7 +233,7 @@ export function createAdminAgentRunsRouter() {
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };
-      auditAdminAction(req, {
+      await auditAdminAction(req, {
         action: "agent_run.view",
         resourceType: "agent_run",
         resourceId: runId,

@@ -159,8 +159,9 @@ export class PostgresCommunityRepository implements CommunityRepository {
   }
 
   async resolveShare(code: string) {
-    return row(await this.pool.query(`SELECT s.post_id,to_char(s.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS') AS expires_at
-      FROM community_share_codes s JOIN community_posts p ON p.id=s.post_id
+    return row(await this.pool.query(`SELECT s.post_id,to_char(s.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS') AS expires_at,
+      p.content,COALESCE(u.username,p.username) AS username FROM community_share_codes s JOIN community_posts p ON p.id=s.post_id
+      LEFT JOIN users u ON u.id=p.user_id
       WHERE s.code=$1 AND s.expires_at>CURRENT_TIMESTAMP AND p.deleted_at IS NULL`, [code]));
   }
 

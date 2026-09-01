@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import { JWT_SECRET } from "../../config/security.js";
+import { recordFunnelEvent, type FunnelEventName } from "../../services/funnelEvents.js";
 import type { AccessControlRepository } from "./repository.js";
 import type { AccessUser } from "./types.js";
 
@@ -27,5 +28,10 @@ export class AccessControlService {
     const user = await this.user(userId);
     if (!user) throw new Error("USER_NOT_FOUND");
     return jwt.sign({ userId, sessionVersion: user.sessionVersion }, JWT_SECRET, { expiresIn: "30d" });
+  }
+
+  recordFunnelEvent(userId: number, eventName: FunnelEventName) {
+    return recordFunnelEvent(userId, eventName,
+      (name, actorHash) => this.repository.recordFunnelEvent(name, actorHash));
   }
 }

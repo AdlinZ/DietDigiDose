@@ -38,6 +38,10 @@ export class SqliteInventoryRepository implements InventoryRepository {
     this.database = database;
   }
 
+  async recordFunnelEvent(eventName: string, actorHash: string) {
+    this.database.prepare("INSERT INTO funnel_events (event_name,actor_hash) VALUES (?,?)").run(eventName, actorHash);
+  }
+
   private insertInventoryItem(userId: number, item: InventoryCreateData | InventoryBulkIntakeData["items"][number]) {
     const row = this.database.prepare(`
       INSERT INTO inventory_items (

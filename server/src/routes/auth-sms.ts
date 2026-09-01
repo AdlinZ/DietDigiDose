@@ -3,7 +3,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { db } from "../storage/db.js";
 import { sendError } from "../utils/http.js";
-import { recordFunnelEvent } from "../services/funnelEvents.js";
+import { recordFunnelEvent, signUserToken } from "../modules/accessControl/index.js";
 import {
   countIpSends,
   countSubjectSends,
@@ -20,7 +20,6 @@ import {
 } from "../services/authVerification.js";
 import { hashRegistrationToken } from "../services/authVerificationCrypto.js";
 import { getSmsProvider, smsCredentialsStatus } from "../services/smsVerificationProvider.js";
-import { signUserToken } from "../modules/accessControl/index.js";
 import { ensureUserInitialState } from "../services/userInitialization.js";
 
 const router = Router();
@@ -295,7 +294,7 @@ router.post("/verify", async (req, res) => {
       })();
       if (user.is_disabled === 1) return sendError(res, 403, "账号已被停用", "ACCOUNT_DISABLED");
       ensureUserInitialState(user.id);
-      recordFunnelEvent(user.id, "login_succeeded");
+      await recordFunnelEvent(user.id, "login_succeeded");
       return res.json({
         status: "authenticated",
         token: await signUserToken(user.id),
@@ -373,7 +372,7 @@ router.post("/register", async (req, res) => {
       db.prepare("UPDATE auth_verification_challenges SET status = 'consumed', consumed_at = ?, registration_token_hash = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(nowIso, challenge.id);
       recordVerificationEvent({ subjectId: challenge.subject_id, challengeId: challenge.id, eventType: "registration", outcome: "succeeded", sourceIp, userAgent });
     })();
-    recordFunnelEvent(newUserId, "account_registered");
+    await recordFunnelEvent(newUserId, "account_registered");
     return res.status(201).json({
       token: await signUserToken(newUserId),
       user: userResponse(newUserId),

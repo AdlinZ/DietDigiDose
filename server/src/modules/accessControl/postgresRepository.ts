@@ -11,4 +11,8 @@ export class PostgresAccessControlRepository implements AccessControlRepository 
     return ((await this.pool.query(`SELECT session_version AS "sessionVersion",is_disabled AS "isDisabled",role,
       must_change_password AS "mustChangePassword" FROM users WHERE id=$1`, [userId])).rows[0] as StoredAccessUser | undefined) || null;
   }
+
+  async recordFunnelEvent(eventName: string, actorHash: string) {
+    await this.pool.query("INSERT INTO funnel_events (event_name,actor_hash) VALUES ($1,$2)", [eventName, actorHash]);
+  }
 }

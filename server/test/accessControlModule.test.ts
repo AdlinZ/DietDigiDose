@@ -6,6 +6,7 @@ import { AccessControlService } from "../src/modules/accessControl/service.js";
 function repository(overrides: Partial<AccessControlRepository> = {}): AccessControlRepository {
   return {
     user: async () => null,
+    recordFunnelEvent: async () => undefined,
     ...overrides,
   };
 }
@@ -42,5 +43,23 @@ describe("access control module", () => {
     assert.equal(claims.userId, 9);
     assert.equal(claims.sessionVersion, 5);
     await assert.rejects(() => new AccessControlService(repository()).signUserToken(99), /USER_NOT_FOUND/);
+  });
+
+  test("writes only pseudonymous best-effort funnel events", async () => {
+    const stored: Array<{ eventName: string; actorHash: string }> = [];
+    const service = new AccessControlService(repository({
+      recordFunnelEvent: async (eventName, actorHash) => { stored.push({ eventName, actorHash }); },
+    }));
+    await service.recordFunnelEvent(9, "login_succeeded");
+    assert.equal(stored[0]?.eventName, "login_succeeded");
+    assert.match(stored[0]?.actorHash || "", /^[a-f0-9]{64}$/);
+    const originalWarn = console.warn;
+    let warning = "";
+    console.warn = (...values: unknown[]) => { warning = values.map(String).join(" "); };
+    try {
+      await new AccessControlService(repository({ recordFunnelEvent: async () => { throw new Error("telemetry unavailable"); } }))
+        .recordFunnelEvent(9, "login_succeeded");
+    } finally { console.warn = originalWarn; }
+    assert.match(warning, /telemetry unavailable/);
   });
 });

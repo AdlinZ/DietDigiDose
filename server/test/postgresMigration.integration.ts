@@ -26,6 +26,7 @@ import { PostgresCookingQueueRepository } from "../src/modules/cookingQueue/post
 import { PostgresCommunityRepository } from "../src/modules/community/postgresRepository.js";
 import { CommunityService } from "../src/modules/community/service.js";
 import { PostgresDietRecordsRepository } from "../src/modules/dietRecords/postgresRepository.js";
+import { DietRecordsService } from "../src/modules/dietRecords/service.js";
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
 import { PostgresHealthRepository } from "../src/modules/health/postgresRepository.js";
@@ -34,6 +35,7 @@ import { HouseholdsService } from "../src/modules/households/service.js";
 import { PostgresInsightsRepository } from "../src/modules/insights/postgresRepository.js";
 import { InsightsService } from "../src/modules/insights/service.js";
 import { consumeInventoryWithPostgresClient, PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
+import { InventoryService } from "../src/modules/inventory/service.js";
 import { PostgresKitchenwareRepository } from "../src/modules/kitchenware/postgresRepository.js";
 import { KitchenwareService } from "../src/modules/kitchenware/service.js";
 import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
@@ -134,10 +136,14 @@ try {
   assert.equal(report.criticalMetrics["ai.total_tokens"], 321);
 
   const inventoryRepository = new PostgresInventoryRepository(pool);
+  const inventoryService = new InventoryService(inventoryRepository);
+  const funnelBefore = await pool.query(`SELECT event_name,COUNT(*)::int AS count FROM funnel_events
+    WHERE event_name IN ('inventory_added','cooking_completed') GROUP BY event_name`);
+  const initialFunnelCounts = new Map(funnelBefore.rows.map((row) => [String(row.event_name), Number(row.count)]));
   const migratedItems = await inventoryRepository.list(user.id);
   const migratedTomato = migratedItems.find((item) => item.food_name === "番茄")!;
   assert.equal(migratedTomato.quantity_value, 250);
-  const created = await inventoryRepository.create(user.id, {
+  const created = await inventoryService.create(user.id, {
     food_name: "牛奶",
     category: "乳制品",
     quantity: "500ml",
@@ -146,7 +152,7 @@ try {
     quantity_value: 500,
     quantity_unit: "ml",
   });
-  const imported = await Promise.all([0, 1].map(() => inventoryRepository.importShoppingList(user.id, {
+  const imported = await Promise.all([0, 1].map(() => inventoryService.importShoppingList(user.id, {
     idempotency_key: "postgres-concurrent-import-0001",
     items: [{
       food_name: "土豆",
@@ -194,6 +200,7 @@ try {
     quantity_unit: "g",
   });
   const dietRepository = new PostgresDietRecordsRepository(pool, consumeInventoryWithPostgresClient);
+  const dietService = new DietRecordsService(dietRepository);
   const completionInput = {
     idempotency_key: "postgres-cooking-completion-0001",
     recipe_id: null,
@@ -215,8 +222,8 @@ try {
     },
   };
   const cookingCompletions = await Promise.all([
-    dietRepository.completeCooking(user.id, completionInput),
-    dietRepository.completeCooking(user.id, completionInput),
+    dietService.completeCooking(user.id, completionInput),
+    dietService.completeCooking(user.id, completionInput),
   ]);
   assert.deepEqual(cookingCompletions.map((result) => result.repeated).sort(), [false, true]);
   const completionRecordIds = cookingCompletions.map((result) => Number((result.diet_record as { id: number }).id));
@@ -225,6 +232,11 @@ try {
   assert.equal(storedDietInventory?.quantity_value, 275);
   const completedMeals = await dietRepository.list(user.id, "2026-09-03");
   assert.equal(completedMeals.filter((record) => record.food_name === "Postgres 土豆料理").length, 1);
+  const funnelAfter = await pool.query(`SELECT event_name,COUNT(*)::int AS count FROM funnel_events
+    WHERE event_name IN ('inventory_added','cooking_completed') GROUP BY event_name`);
+  const finalFunnelCounts = new Map(funnelAfter.rows.map((row) => [String(row.event_name), Number(row.count)]));
+  assert.equal((finalFunnelCounts.get("inventory_added")||0)-(initialFunnelCounts.get("inventory_added")||0),2);
+  assert.equal((finalFunnelCounts.get("cooking_completed")||0)-(initialFunnelCounts.get("cooking_completed")||0),1);
   const manualDietRecord = await dietRepository.create(user.id, {
     meal_type: "加餐",
     food_name: "Postgres 酸奶",

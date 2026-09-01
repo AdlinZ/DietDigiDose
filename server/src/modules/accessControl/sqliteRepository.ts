@@ -11,4 +11,8 @@ export class SqliteAccessControlRepository implements AccessControlRepository {
     return (this.database.prepare(`SELECT session_version AS sessionVersion,is_disabled AS isDisabled,role,
       must_change_password AS mustChangePassword FROM users WHERE id=?`).get(userId) as StoredAccessUser | undefined) || null;
   }
+
+  async recordFunnelEvent(eventName: string, actorHash: string) {
+    this.database.prepare("INSERT INTO funnel_events (event_name,actor_hash) VALUES (?,?)").run(eventName, actorHash);
+  }
 }

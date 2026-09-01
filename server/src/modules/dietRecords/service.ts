@@ -1,17 +1,12 @@
 import { currentDateKey, currentTimeKey } from "../../utils/date.js";
+import { recordFunnelEvent } from "../../services/funnelEvents.js";
 import type { DietRecordsRepository } from "./repository.js";
 import type { CookingCompletionInput, DietRecordInput, PreparedDietRecord } from "./types.js";
 
-type Dependencies = { recordCookingCompleted?: (userId: number) => void };
-
 export class DietRecordsService {
   private readonly repository: DietRecordsRepository;
-  private readonly dependencies: Dependencies;
 
-  constructor(repository: DietRecordsRepository, dependencies: Dependencies = {}) {
-    this.repository = repository;
-    this.dependencies = dependencies;
-  }
+  constructor(repository: DietRecordsRepository) { this.repository = repository; }
 
   list(userId: number, date?: string) { return this.repository.list(userId, date); }
 
@@ -38,7 +33,8 @@ export class DietRecordsService {
       inventory_item_ids: [...new Set(input.inventory_item_ids)],
       diet_record: this.prepareRecord(input.diet_record),
     });
-    if (!result.repeated) this.dependencies.recordCookingCompleted?.(userId);
+    if (!result.repeated) await recordFunnelEvent(userId, "cooking_completed",
+      (eventName, actorHash) => this.repository.recordFunnelEvent(eventName, actorHash));
     return result;
   }
 }

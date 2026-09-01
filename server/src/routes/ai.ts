@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
-import { db } from "../storage/db.js";
+import type { ChatTurnAudit } from "../modules/aiConversations/index.js";
+import { aiConversationsService } from "../modules/aiConversations/runtime.js";
 import { aiWriteConfirmationsService } from "../modules/aiWriteConfirmations/runtime.js";
 import { validateBody } from "../middleware/validate.js";
 import {
@@ -101,71 +102,9 @@ const normalizeInventoryScanItems = (raw: unknown): InventoryScanItem[] =>
       estimatedExpireDays: Math.max(1, Math.min(Number(item.estimatedExpireDays) || 7, 365)),
     }));
 
-type ChatTurnAudit = {
-  userId: number;
-  sessionId: string;
-  source: "assistant" | "voice" | "cooking" | "cooking_voice";
-  userContent: string;
-  assistantContent: string;
-  systemContents?: string[];
-  status?: "completed" | "failed";
-  payload?: Record<string, unknown> | null;
-  confirmationId?: string | null;
-  responseTimeMs: number;
-  requestedAt: number;
-  respondedAt: number;
-};
-
-const toStoredDateTime = (timestamp: number) =>
-  new Date(timestamp).toISOString().slice(0, 23).replace("T", " ");
-
-export const recordChatTurn = ({
-  userId,
-  sessionId,
-  source,
-  userContent,
-  assistantContent,
-  systemContents = [],
-  status = "completed",
-  payload = null,
-  confirmationId = null,
-  responseTimeMs,
-  requestedAt,
-  respondedAt,
-}: ChatTurnAudit) => {
-  const insert = db.prepare(`
-    INSERT INTO ai_chat_messages
-      (user_id, session_id, role, content, response_time_ms, source, status,
-       payload_json, confirmation_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const save = db.transaction(() => {
-    const requestTime = toStoredDateTime(requestedAt);
-    const deletedAfterRequest = db.prepare(`
-      SELECT 1 FROM ai_chat_session_deletions
-      WHERE user_id = ? AND session_id = ? AND deleted_at >= ?
-      LIMIT 1
-    `).get(userId, sessionId, requestTime);
-    if (deletedAfterRequest) return false;
-    [...new Set(systemContents.map((content) => content.trim()).filter(Boolean))].forEach((content) => {
-      insert.run(userId, sessionId, "system", content.slice(0, 12000), null, source, "completed", null, null, requestTime);
-    });
-    insert.run(userId, sessionId, "user", userContent.slice(0, 12000), null, source, "completed", null, null, requestTime);
-    insert.run(
-      userId,
-      sessionId,
-      "assistant",
-      assistantContent.slice(0, 12000),
-      Math.max(0, Math.round(responseTimeMs)),
-      source,
-      status,
-      payload ? JSON.stringify(payload).slice(0, 50_000) : null,
-      confirmationId,
-      toStoredDateTime(respondedAt),
-    );
-    return true;
-  });
-  try { save(); } catch (error) { console.error("[AI Chat Audit Error]", error); }
+export const recordChatTurn = async (turn: ChatTurnAudit) => {
+  try { return await aiConversationsService().recordTurn(turn); }
+  catch (error) { console.error("[AI Chat Audit Error]", error); return false; }
 };
 
 /**
@@ -205,7 +144,7 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
         const completedAt = Date.now();
         const assistantContent = completedRun.reply || completedRun.error?.message;
         if (!requestedText || !assistantContent) return;
-        recordChatTurn({
+        await recordChatTurn({
           userId,
           sessionId,
           source,
@@ -236,7 +175,7 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
       const errorMessage = response.run.error?.message || "AI Agent 执行失败，请稍后重试";
       const errorCode = errorMessage.includes("未配置") ? "AI_NOT_CONFIGURED" : (response.run.error?.code || "AI_AGENT_FAILED");
       if (requestedText) {
-        recordChatTurn({
+        await recordChatTurn({
           userId, sessionId, source, userContent: requestedText, assistantContent: errorMessage,
           status: "failed", payload: {
             agentRunId: response.run.id,
@@ -254,7 +193,7 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
       }
       return res.status(503).json({ ...response, error: errorMessage, code: errorCode, sessionId, responseTimeMs });
     }
-    if (response.reply) recordChatTurn({
+    if (response.reply) await recordChatTurn({
       userId, sessionId, source, userContent: requestedText, assistantContent: response.reply,
       payload: { agentRunId: response.run.id, artifacts, solutionCards, pendingApproval: response.pendingApproval },
       responseTimeMs, requestedAt: requestStartedAt, respondedAt,
@@ -267,7 +206,7 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
     const errorMessage = "AI 对话请求失败，请稍后重试";
     if (requestedText) {
       const respondedAt = Date.now();
-      recordChatTurn({ userId, sessionId, source, userContent: requestedText, assistantContent: errorMessage, status: "failed", payload: {
+      await recordChatTurn({ userId, sessionId, source, userContent: requestedText, assistantContent: errorMessage, status: "failed", payload: {
         errorCode: "AI_AGENT_FAILED",
         errorType: "server",
         errorMessage: error instanceof Error ? error.message.slice(0, 500) : "Unknown server error",
@@ -281,28 +220,18 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
   }
 });
 
-router.delete("/chat-conversations/:sessionId", (req: AuthRequest, res) => {
+router.delete("/chat-conversations/:sessionId", async (req: AuthRequest, res) => {
   const sessionId = String(req.params.sessionId || "").trim();
   if (!sessionId || sessionId.length > 120) {
     return res.status(400).json({ error: "会话参数无效" });
   }
-  const deleted = db.transaction(() => {
-    db.prepare(`
-      DELETE FROM agent_run_media
-      WHERE user_id = ? AND run_id IN (
-        SELECT id FROM agent_runs WHERE user_id = ? AND session_id = ?
-      )
-    `).run(req.userId!, req.userId!, sessionId);
-    const changes = db.prepare("DELETE FROM ai_chat_messages WHERE user_id = ? AND session_id = ?")
-      .run(req.userId!, sessionId).changes;
-    db.prepare(`
-      INSERT INTO ai_chat_session_deletions (user_id, session_id, deleted_at)
-      VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
-      ON CONFLICT(user_id, session_id) DO UPDATE SET deleted_at = excluded.deleted_at
-    `).run(req.userId!, sessionId);
-    return changes;
-  })();
-  return res.json({ success: true, deleted });
+  try {
+    const deleted = await aiConversationsService().deleteConversation(req.userId!, sessionId);
+    return res.json({ success: true, deleted });
+  } catch (error) {
+    console.error("[AI Chat Delete Error]", error);
+    return res.status(500).json({ error: "删除会话失败" });
+  }
 });
 
 // 用户确认后的唯一写入入口。模型不能直接提交，确认记录与幂等键均按当前用户校验。
@@ -393,7 +322,7 @@ router.post("/inventory-scan-jobs", validateBody(aiImageSchema), async (req: Aut
 });
 
 /** Get a durable recognition job. */
-router.get("/inventory-scan-jobs/:jobId", (req: AuthRequest, res) => {
+router.get("/inventory-scan-jobs/:jobId", async (req: AuthRequest, res) => {
   const agentRow = getAgentRunRow(String(req.params.jobId), req.userId!);
   if (agentRow) {
     const run = toAgentRunSummary(agentRow);
@@ -404,19 +333,21 @@ router.get("/inventory-scan-jobs/:jobId", (req: AuthRequest, res) => {
     const status = run.status === "completed" ? "completed" : run.status === "failed" || run.status === "cancelled" || run.status === "expired" ? "failed" : "processing";
     return res.json({ mode: "agent", run, jobId: run.id, status, items, confidence: Number.isFinite(confidence) ? confidence : null, lowConfidence, error: run.error?.message, createdAt: run.createdAt, updatedAt: run.updatedAt });
   }
-  const job = db.prepare(`
-    SELECT id, status, result_json, error_message, created_at, updated_at
-    FROM inventory_scan_jobs WHERE id = ? AND user_id = ?
-  `).get(req.params.jobId, req.userId!) as { id: string; status: string; result_json: string | null; error_message: string | null; created_at: string; updated_at: string } | undefined;
-  if (!job) return res.status(404).json({ error: "识别任务不存在或无权访问" });
-  return res.json({
-    jobId: job.id,
-    status: job.status,
-    items: job.result_json ? JSON.parse(job.result_json) : undefined,
-    error: job.error_message || undefined,
-    createdAt: job.created_at,
-    updatedAt: job.updated_at,
-  });
+  try {
+    const job = await aiConversationsService().legacyInventoryScanJob(String(req.params.jobId), req.userId!);
+    if (!job) return res.status(404).json({ error: "识别任务不存在或无权访问" });
+    return res.json({
+      jobId: job.id,
+      status: job.status,
+      items: job.result,
+      error: job.errorMessage || undefined,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+    });
+  } catch (error) {
+    console.error("[AI Inventory Scan Read Error]", error);
+    return res.status(500).json({ error: "读取识别任务失败" });
+  }
 });
 
 /**
@@ -488,7 +419,7 @@ router.post("/voice-command", validateBody(aiVoiceCommandSchema), async (req: Au
       metadata: { currentStep, recipeTitle, recipeSteps, recipeIngredients },
     });
     const respondedAt = Date.now();
-    if (response.reply) recordChatTurn({
+    if (response.reply) await recordChatTurn({
       userId, sessionId, source: "cooking_voice", userContent: text,
       assistantContent: response.reply, systemContents: [runtimeContext], payload: { agentRunId: response.run.id, artifacts: response.artifacts },
       responseTimeMs: respondedAt - requestStartedAt, requestedAt: requestStartedAt, respondedAt,
@@ -499,7 +430,7 @@ router.post("/voice-command", validateBody(aiVoiceCommandSchema), async (req: Au
     const errorMessage = "处理语音指令失败，请稍后重试";
     if (text) {
       const respondedAt = Date.now();
-      recordChatTurn({
+      await recordChatTurn({
         userId, sessionId, source: "cooking_voice", userContent: text,
         assistantContent: errorMessage, status: "failed", payload: { errorCode: "VOICE_COMMAND_FAILED" },
         responseTimeMs: respondedAt - requestStartedAt, requestedAt: requestStartedAt, respondedAt,

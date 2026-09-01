@@ -1,6 +1,9 @@
 import { createAiContextService } from "../modules/aiContext/index.js";
 import { configureAiContextService } from "../modules/aiContext/runtime.js";
 import { SqliteAiContextRepository } from "../modules/aiContext/sqliteRepository.js";
+import { createAIConversationsService } from "../modules/aiConversations/index.js";
+import { configureAIConversationsService } from "../modules/aiConversations/runtime.js";
+import { SqliteAIConversationsRepository } from "../modules/aiConversations/sqliteRepository.js";
 import { createAIRuntimeService } from "../modules/aiRuntime/index.js";
 import { configureAIRuntimeService } from "../modules/aiRuntime/runtime.js";
 import { SqliteAIRuntimeRepository } from "../modules/aiRuntime/sqliteRepository.js";
@@ -29,6 +32,7 @@ import { configureAdminAuditService } from "../routes/admin/shared.js";
 export function initializeSqliteApplication() {
   initDatabase();
   configureAiContextService(createAiContextService(new SqliteAiContextRepository(db)));
+  configureAIConversationsService(createAIConversationsService(new SqliteAIConversationsRepository(db)));
   configureAIRuntimeService(createAIRuntimeService(new SqliteAIRuntimeRepository(db)));
   configureAuthVerificationService(createAuthVerificationService(new SqliteAuthVerificationRepository(db)));
   configureNotificationsService(createNotificationsService(new SqliteNotificationsRepository(db)));

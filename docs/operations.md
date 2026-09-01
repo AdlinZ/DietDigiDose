@@ -1,21 +1,21 @@
 # Staging 与生产运维手册
 
-> 更新于 2026-08-06。当前系统的实际主数据源是 SQLite，适合单实例封闭 Beta。完成 [开发 TODO](../TODO.md) 中的发布阻断项之前，本手册是部署目标和演练步骤，不代表仓库已经具备公开生产能力。
+> 更新于 2026-09-01。staging/production 运行时目标是 PostgreSQL 16 + Drizzle；SQLite 仅保留本地兼容和最终迁移/回滚窗口。完成发布阻断项之前，本手册是部署目标和演练步骤，不代表仓库已经具备公开生产能力。
 
 ## 当前部署边界
 
-- server 只运行一个会写入数据库的实例，不做水平扩容；多实例共享同一个 SQLite 文件不在当前支持范围内。
-- 显式设置 `DATABASE_PATH` 到持久化磁盘，不能依赖容器临时文件系统。数据库、备份和上传媒体都视为用户数据。
+- API 与 worker 独立运行并共享 PostgreSQL；worker lease 和业务幂等允许安全重启，扩容仍须先测量连接池和锁竞争。
+- 显式设置 `DATABASE_DRIVER=postgresql` 与服务端 `DATABASE_URL`，PostgreSQL 数据目录必须使用持久卷。数据库、备份和上传媒体都视为用户数据。
 - staging 与 production 使用不同数据库、JWT、管理员密码、AI 密钥、域名和备份目录，禁止复制真实生产健康数据到 staging。
 - 演示用户、社区内容和高互动数据仅在 `ENABLE_DEMO_SEED=1` 时生成；staging 与 production 必须保持为 `0`。
-- SQLite 是否需要迁移到 Postgres，以实测并发、备份窗口和部署需求决定，不因“准备上线”提前迁移。
+- migration 账号与应用账号分离；应用账号不得拥有 schema/role 管理权限，API 启动只校验 schema，不执行 DDL。
 
 ## 环境与网络
 
 以 `server/.env.example` 为字段清单，并至少确认：
 
 - `NODE_ENV=production`
-- `DATABASE_PATH` 指向持久化、权限受限的绝对路径
+- `DATABASE_DRIVER=postgresql`，`DATABASE_URL` 从服务端密钥存储注入；连接池上限与数据库容量一致
 - `JWT_SECRET` 为随机且不少于 32 个字符的独立密钥
 - `ADMIN_INITIAL_PASSWORD` 不少于 12 位，只用于首次创建管理员；首次登录后立即修改
 - `CORS_ORIGINS` 只列出 App Web 端和管理后台的 HTTPS Origin，不使用通配符
@@ -34,52 +34,59 @@
 
 ## 全新数据库与迁移验收
 
-每个候选版本都要同时验证“空库初始化”和“旧库升级”，不能只在开发者现有数据库上启动成功：
+每个候选版本都要同时验证“空 PostgreSQL 初始化”和“旧库迁移/升级”，不能只在开发者现有数据库上启动成功：
 
-1. 在隔离环境把 `DATABASE_PATH` 指向新的空路径并启动 server。
-2. 验证健康检查、注册、登录、库存和饮食记录。
+1. 用 migration 账号对空目标执行 `node dist/apply-postgres-schema.js`，确认 92 个业务表与 4 个 LangGraph 表均由 Drizzle migration 创建。
+2. 用无 DDL 权限的应用账号启动 API/worker，验证 health 中 `databaseDriver=postgresql`、注册、登录、库存和饮食记录。
 3. 提交一条自定义食物，使用管理员完成审核，再打开管理统计。
-4. 确认 `user_custom_foods.status` 等所有业务代码依赖的字段由版本化迁移创建。
-5. 复制脱敏的上一版本数据库，在隔离环境启动新版本并重复核心读取、写入与管理统计。
-6. 保留迁移日志、提交 SHA、数据库版本和执行结果；任何失败都阻断候选发布。
+4. 对脱敏上一候选 SQLite 快照执行 `docs/postgresql-migration.md` 的只读 export、schema、重复 import 和全量 validate。
+5. 对迁移后的目标重复核心读取、写入、并发幂等与管理统计，并验证 checkpoint 恢复。
+6. 保留 migration 日志、提交 SHA、Drizzle journal、96 表清单和执行结果；任何差异都阻断候选发布。
 
-仓库已包含 `user_custom_foods.status` 的 v16 迁移和空库自动化检查；候选发布仍需按上述步骤在实际 staging 完成投稿、审核和统计验收。
+CI 会在干净 PostgreSQL 16 上完成全量 schema/import/validate、所有仓储行为、API runtime health、最小权限和回滚检查；候选发布仍需按上述步骤在实际 staging 完成。
 
-## SQLite 备份
+## PostgreSQL 备份
 
-服务运行期间使用 SQLite 在线备份 API，并始终显式传入安全目标路径：
+服务运行期间使用 PostgreSQL custom archive，并始终显式写入权限受限、独立于应用容器的目标：
 
 ```bash
-pnpm --dir server db:backup /secure-backups/dietdigidose.db
+docker compose -f deploy/docker-compose.staging.yml --project-directory deploy exec -T postgres \
+  pg_dump --username=dietdigidose --dbname=dietdigidose --format=custom --no-owner --no-acl \
+  > /secure-backups/dietdigidose/staging.dump
+sha256sum /secure-backups/dietdigidose/staging.dump
 ```
 
-不带目标参数时会写入已被 Git 忽略的 `server/backups/`；候选和生产仍应显式使用权限受限、独立于应用工作目录的备份位置。备份应加密、限制访问、每天执行并异地保留至少 30 天。备份文件含用户及健康数据，不得进入 Git、构建产物或公开对象存储。
+备份应加密、限制访问、每天执行并异地保留至少 30 天。备份文件含用户及健康数据，不得进入 Git、构建产物或公开对象存储。
 
 每次备份记录时间、版本、文件大小、校验值和保存位置。只有实际恢复并通过验证的备份才算可用。
 
-备份命令输出 JSON；也可在不修改文件的情况下检查任意备份的完整性、SHA-256、migration 版本与核心表行数：
+同时记录源 PostgreSQL 版本、Drizzle migration、96 表数量、关键表行数和 archive 清单：
 
 ```bash
-pnpm --dir server db:inspect /secure-backups/dietdigidose.db
+pg_restore --list /secure-backups/dietdigidose/staging.dump > /secure-backups/dietdigidose/staging.list
+docker compose -f deploy/docker-compose.staging.yml --project-directory deploy exec -T postgres \
+  psql --username=dietdigidose --dbname=dietdigidose --tuples-only --command \
+  "SHOW server_version; SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'; SELECT COUNT(*) FROM users; SELECT COUNT(*) FROM inventory_items;"
 ```
 
-## SQLite 恢复与回滚
+## PostgreSQL 恢复与回滚
 
 1. 停止所有 server 实例，确认没有进程继续写入数据库。
 2. 校验备份来源、大小、权限、校验值和可用磁盘空间。
-3. 执行恢复；命令会先验证备份，随后把现有数据库及 WAL 侧文件保留为带时间戳的安全副本，再原子切换已验证的恢复文件。无效备份不会触碰当前数据库。
+3. 在独立 PostgreSQL 实例/volume 创建空目标，先应用同一提交的 Drizzle migrations，再执行恢复。恢复演练不得连接当前服务数据库。
 
 ```bash
-pnpm --dir server db:restore /secure-backups/dietdigidose.db --force
+pg_restore --dbname="$ISOLATED_RESTORE_URL" --clean --if-exists --no-owner --no-acl \
+  /secure-backups/dietdigidose/staging.dump
 ```
 
-4. 启动与该数据版本兼容的 server。迁移会在启动时运行，但仍需按上一节验证目标 schema，不能假设迁移一定完整。
+4. 用应用账号启动与该数据版本兼容的隔离 API/worker；应用启动不会自动迁移 schema。
 5. 调用 `/api/v1/health`，再依次验证登录、库存读取、写入、管理统计和媒体访问。
-6. 记录恢复耗时和数据时间点。若验证失败，停止写入，恢复命令生成的安全副本或上一份已验证备份，并回滚应用版本。
+6. 记录恢复耗时和数据时间点。若验证失败，保持现网写入冻结，恢复目标快照或上一份已验证备份，并回滚应用版本。
 
 至少在首次外部内测前、每次 schema 变更后和公开发布前完成一次隔离恢复演练。
 
-仓库提供完整演练入口。它在系统临时目录依次验证空库初始化、上一候选 migration 升级、双账号隔离、三种库存录入、食谱与烹饪扣减、饮食记录、媒体引用、在线备份、备份后写入边界、独立恢复、管理统计和安全副本回滚；报告包含候选 SHA、负责人、RPO、RTO、文件大小与摘要。演练数据成功后自动清除，失败时保留临时目录用于调查；`--keep` 可显式保留成功产物。
+旧版 SQLite 最终切换前，仓库演练入口仍用于验证 SQLite 在线备份、上一候选 migration、恢复安全副本与 export 来源完整性；PostgreSQL 上线后的日常备份必须使用上面的 `pg_dump`/`pg_restore` 演练。
 
 ```bash
 pnpm --dir server db:rehearse -- \
@@ -92,9 +99,9 @@ pnpm --dir server db:rehearse -- \
 
 ## 后台 worker
 
-通知投递与媒体清理不随 API 进程启动。部署必须独立运行 `node dist/worker.js`；staging Compose 已包含共享同一持久化数据库的 `worker` 服务。API 与 worker 可以独立重启，worker 故障不会改变 API 健康状态。
+通知投递与媒体清理不随 API 进程启动。部署必须独立运行 `node dist/worker.js`；staging Compose 已包含共享同一 PostgreSQL 的 `worker` 服务。API 与 worker 可以独立重启，worker 故障不会改变 API 健康状态。
 
-worker 默认启动后立即执行一次，之后每小时执行；可用 `WORKER_INTERVAL_MS`、`WORKER_TASK_TIMEOUT_MS`、`WORKER_LEASE_MS` 和 `MEDIA_CLEANUP_BATCH_SIZE` 调整。SQLite lease 防止多 worker 同时领取同一类任务，通知的投递预留和媒体清理 job claim 继续提供业务幂等保护。
+worker 默认启动后立即执行一次，之后每小时执行；可用 `WORKER_INTERVAL_MS`、`WORKER_TASK_TIMEOUT_MS`、`WORKER_LEASE_MS` 和 `MEDIA_CLEANUP_BATCH_SIZE` 调整。PostgreSQL 原子 lease 防止多 worker 同时领取同一类任务，通知的投递预留和媒体清理 job claim 继续提供业务幂等保护。
 
 手动重跑全部任务或单项任务：
 

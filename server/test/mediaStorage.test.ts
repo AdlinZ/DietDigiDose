@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -7,6 +10,7 @@ import {
   isStoredMediaUrlForUser,
   MediaStorageUnavailableError,
   parseImageDataUrl,
+  uploadImageDataUrl,
   type StoredMediaReference,
 } from "../src/services/mediaStorage.js";
 
@@ -22,6 +26,29 @@ describe("media storage validation", () => {
   it("rejects unsupported or empty payloads", () => {
     assert.throws(() => parseImageDataUrl("data:image/svg+xml;base64,PHN2Zz4="), InvalidMediaError);
     assert.throws(() => parseImageDataUrl("data:image/png;base64,"), InvalidMediaError);
+  });
+
+  it("overwrites a deterministic migration object on safe reruns", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "dietdigidose-media-migration-"));
+    const previousRoot = process.env.MEDIA_LOCAL_ROOT;
+    const previousProfile = process.env.DEPLOYMENT_PROFILE;
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    try {
+      process.env.MEDIA_LOCAL_ROOT = root;
+      process.env.DEPLOYMENT_PROFILE = "china";
+      const dataUrl = `data:image/png;base64,${png.toString("base64")}`;
+      const options = { deterministicKey: "a".repeat(64), overwrite: true };
+      const first = await uploadImageDataUrl(dataUrl, 42, "community", options);
+      const second = await uploadImageDataUrl(dataUrl, 42, "community", options);
+      assert.equal(first.url, second.url);
+      assert.match(first.url, /\/community\/42\/migration\/a{64}\.png$/);
+    } finally {
+      if (previousRoot === undefined) delete process.env.MEDIA_LOCAL_ROOT;
+      else process.env.MEDIA_LOCAL_ROOT = previousRoot;
+      if (previousProfile === undefined) delete process.env.DEPLOYMENT_PROFILE;
+      else process.env.DEPLOYMENT_PROFILE = previousProfile;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("only recognizes media from the current user's object prefix", () => {
@@ -80,6 +107,28 @@ describe("media storage validation", () => {
       await assert.rejects(() => deleteStoredMediaReferences(references), /媒体删除失败/);
     } finally {
       globalThis.fetch = previousFetch;
+      for (const key of keys) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("does not silently write global-profile uploads to local disk when object storage is unavailable", async () => {
+    const keys = ["DEPLOYMENT_PROFILE", "SUPABASE_URL", "SUPABASE_MEDIA_BUCKET", "SUPABASE_SERVICE_ROLE_KEY"] as const;
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    try {
+      process.env.DEPLOYMENT_PROFILE = "global";
+      process.env.SUPABASE_URL = "https://storage.example";
+      process.env.SUPABASE_MEDIA_BUCKET = "";
+      process.env.SUPABASE_SERVICE_ROLE_KEY = "";
+      await assert.rejects(
+        () => uploadImageDataUrl(`data:image/png;base64,${png.toString("base64")}`, 42, "community"),
+        MediaStorageUnavailableError,
+      );
+    } finally {
       for (const key of keys) {
         const value = previous[key];
         if (value === undefined) delete process.env[key];

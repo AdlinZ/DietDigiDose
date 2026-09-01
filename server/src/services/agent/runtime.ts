@@ -606,7 +606,7 @@ async function approvalNode(state: SupervisorGraphState) {
   const existingById = new Map(existingActions.map((action) => [action.id, action]));
   const lowRisk = saved.filter((action) => action.riskLevel === "low" && (!action.id || existingById.get(action.id)?.status === "proposed" || !existingById.has(action.id)));
   if (lowRisk.length) {
-    executeAgentActions(state.userId, state.runId, lowRisk);
+    await executeAgentActions(state.userId, state.runId, lowRisk);
     appendAgentEvent(state.runId, state.userId, "OperationsAgent", "low_risk_executed", `已自动执行 ${lowRisk.length} 个低风险操作`, { undoAvailableUntil: new Date(Date.now() + 10 * 60_000).toISOString() });
   }
   const highRisk = saved.filter((action) => action.riskLevel === "high");
@@ -653,7 +653,7 @@ async function approvalNode(state: SupervisorGraphState) {
     for (const action of removed) if (action.id) updateActionStatus(action.id, "rejected");
   }
   recordActionDecision(approved.flatMap((action) => action.id ? [action.id] : []), state.userId, resume.decision);
-  executeAgentActions(state.userId, state.runId, approved);
+  await executeAgentActions(state.userId, state.runId, approved);
   appendAgentEvent(state.runId, state.userId, "OperationsAgent", "approved_actions_executed", `已执行 ${approved.length} 个获批操作`);
   return { actions: saved, approvalDecision: "approve" as const };
 }
@@ -841,10 +841,10 @@ export async function retrySupervisorRun(userId: number, runId: string, waitMs =
   return waitForRun(runId, waitMs);
 }
 
-export function undoSupervisorRun(userId: number, runId: string) {
+export async function undoSupervisorRun(userId: number, runId: string) {
   const row = getAgentRunRow(runId, userId);
   if (!row) throw new Error("Agent Run 不存在或无权操作");
-  const result = undoAgentRunActions(userId, runId);
+  const result = await undoAgentRunActions(userId, runId);
   appendAgentEvent(runId, userId, "OperationsAgent", "actions_undone", `已撤销 ${result.undone} 个低风险操作`);
   return result;
 }

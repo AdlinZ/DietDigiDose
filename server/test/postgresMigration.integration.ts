@@ -25,6 +25,9 @@ import { PostgresAdminAgentRunsRepository } from "../src/modules/adminAgentRuns/
 import { AdminAgentRunsService } from "../src/modules/adminAgentRuns/service.js";
 import { PostgresAgentSchedulingRepository } from "../src/modules/agentScheduling/postgresRepository.js";
 import { AgentSchedulingService } from "../src/modules/agentScheduling/service.js";
+import { PostgresAgentOperationsRepository } from "../src/modules/agentOperations/postgresRepository.js";
+import { AgentOperationsService } from "../src/modules/agentOperations/service.js";
+import type { ExecutableAgentAction } from "../src/modules/agentOperations/repository.js";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { PostgresAuthVerificationRepository } from "../src/modules/authVerification/postgresRepository.js";
@@ -679,6 +682,116 @@ try {
   assert.equal(await schedulingService.resetInterruptedRuns() >= 2, true);
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM agent_runs
     WHERE id=ANY($1::text[]) AND status='queued'`, [schedulingRunIds])).rows[0]?.count), 4);
+  const operationsService = new AgentOperationsService(new PostgresAgentOperationsRepository(pool));
+  const operationsRunId = `postgres-agent-operations-${user.id}`;
+  const operationsActionId = `postgres-agent-operations-action-${user.id}`;
+  await pool.query(`INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id)
+    VALUES($1,$2,$1,'text','assistant','running','{}'::jsonb,$1)`, [operationsRunId, user.id]);
+  await pool.query(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+    VALUES($1,$2,$3,'add_shopping_items','low','proposed',$4,$1)`,
+  [operationsActionId, operationsRunId, user.id, { items: [{ name: "PostgreSQL Agent 番茄", amount: "2个" }] }]);
+  const operationsProposal = { id: operationsActionId, actionType: "add_shopping_items" as const, riskLevel: "low" as const,
+    summary: "加入 PostgreSQL 采购清单", payload: { items: [{ name: "PostgreSQL Agent 番茄", amount: "2个" }] } };
+  const concurrentOperations = await Promise.all([
+    operationsService.executeActions(user.id, operationsRunId, [operationsProposal]),
+    operationsService.executeActions(user.id, operationsRunId, [operationsProposal]),
+  ]);
+  assert.deepEqual(concurrentOperations[0], concurrentOperations[1]);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM shopping_list_items
+    WHERE user_id=$1 AND source_run_id=$2`, [user.id, operationsRunId])).rows[0]?.count), 1);
+  assert.deepEqual(await operationsService.undoActions(user.id, operationsRunId), { undone: 1 });
+  assert.equal((await pool.query(`SELECT status FROM agent_actions WHERE id=$1`, [operationsActionId])).rows[0]?.status, "undone");
+  assert.equal((await pool.query(`SELECT deleted_at IS NOT NULL AS deleted,version FROM shopping_list_items
+    WHERE source_run_id=$1`, [operationsRunId])).rows[0]?.deleted, true);
+  await assert.rejects(() => operationsService.undoActions(user.id, operationsRunId), /没有可撤销/);
+
+  const failedOperationsRunId = `postgres-agent-operations-failed-${user.id}`;
+  const failedOperationsActionIds = ["first", "second"].map((suffix) => `${failedOperationsRunId}-${suffix}`);
+  await pool.query(`INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id)
+    VALUES($1,$2,$1,'text','assistant','running','{}'::jsonb,$1)`, [failedOperationsRunId, user.id]);
+  await pool.query(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+    VALUES($1,$3,$4,'add_shopping_items','low','proposed','{}'::jsonb,$1),
+          ($2,$3,$4,'update_shopping_item','low','proposed','{}'::jsonb,$2)`,
+  [failedOperationsActionIds[0], failedOperationsActionIds[1], failedOperationsRunId, user.id]);
+  await assert.rejects(() => operationsService.executeActions(user.id, failedOperationsRunId, [
+    { id: failedOperationsActionIds[0], actionType: "add_shopping_items", riskLevel: "low", summary: "应整体回滚",
+      payload: { items: [{ name: "PostgreSQL 应回滚" }] } },
+    { id: failedOperationsActionIds[1], actionType: "update_shopping_item", riskLevel: "low", summary: "触发回滚",
+      payload: { itemId: "missing" } },
+  ]), /不存在或无权修改/);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM shopping_list_items
+    WHERE user_id=$1 AND name='PostgreSQL 应回滚'`, [user.id])).rows[0]?.count), 0);
+  assert.deepEqual((await pool.query(`SELECT status FROM agent_actions WHERE id=ANY($1::text[]) ORDER BY id`,
+    [failedOperationsActionIds])).rows.map((row) => row.status), ["failed", "failed"]);
+
+  const operationTypesRunId = `postgres-agent-operation-types-${user.id}`;
+  await pool.query(`INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id)
+    VALUES($1,$2,$1,'text','assistant','running','{}'::jsonb,$1)`, [operationTypesRunId, user.id]);
+  const insertOperationProposals = async (proposals: ExecutableAgentAction[]) => {
+    for (const proposal of proposals) {
+      await pool.query(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+        VALUES($1,$2,$3,$4,$5,'proposed',$6,$1)`,
+      [proposal.id, operationTypesRunId, user.id, proposal.actionType, proposal.riskLevel, proposal.payload]);
+    }
+  };
+  const createOperationProposals: ExecutableAgentAction[] = [
+    { id: `${operationTypesRunId}-plan`, actionType: "create_meal_plan", riskLevel: "low", summary: "创建餐单",
+      payload: { title: "PostgreSQL Agent 餐单", startDate: "2026-09-01", endDate: "2026-09-02", constraints: { salt: "low" },
+        items: [{ date: "2026-09-01", mealType: "晚餐", title: "番茄蛋", ingredients: ["番茄"], steps: ["翻炒"], calories: 320.4 }] } },
+    { id: `${operationTypesRunId}-shopping`, actionType: "add_shopping_items", riskLevel: "low", summary: "创建采购项",
+      payload: { items: [{ name: "PostgreSQL Agent 洋葱", amount: "1个", category: "蔬菜" }] } },
+    { id: `${operationTypesRunId}-diet`, actionType: "record_diet_meal", riskLevel: "high", summary: "记录饮食",
+      payload: { foodName: "PostgreSQL Agent 午餐", calories: 430.6, recordedAt: "2026-09-01" } },
+    { id: `${operationTypesRunId}-inventory`, actionType: "add_inventory_item", riskLevel: "high", summary: "增加库存",
+      payload: { name: "PostgreSQL Agent 土豆", quantity: "2个", expireDays: 5 } },
+    { id: `${operationTypesRunId}-kitchenware`, actionType: "add_kitchenware_item", riskLevel: "high", summary: "增加厨具",
+      payload: { name: "PostgreSQL Agent 炒锅", category: "锅具" } },
+    { id: `${operationTypesRunId}-recipe`, actionType: "submit_recipe", riskLevel: "high", summary: "提交菜谱",
+      payload: { title: "PostgreSQL Agent 菜谱", cookTime: 12.7, calories: 280.8, tags: ["测试"], steps: ["烹饪"], ingredients: ["土豆"] } },
+  ];
+  await insertOperationProposals(createOperationProposals);
+  assert.equal((await operationsService.executeActions(user.id, operationTypesRunId, createOperationProposals)).length, 6);
+  const createdPlan = (await pool.query("SELECT id FROM meal_plans WHERE created_by_run_id=$1", [operationTypesRunId])).rows[0];
+  const createdShopping = (await pool.query("SELECT id FROM shopping_list_items WHERE source_run_id=$1", [operationTypesRunId])).rows[0];
+  const createdInventory = (await pool.query("SELECT id FROM inventory_items WHERE user_id=$1 AND food_name='PostgreSQL Agent 土豆'", [user.id])).rows[0];
+  assert(createdPlan?.id && createdShopping?.id && createdInventory?.id);
+  const mutateOperationProposals: ExecutableAgentAction[] = [
+    { id: `${operationTypesRunId}-plan-update`, actionType: "update_meal_plan", riskLevel: "low", summary: "更新餐单",
+      payload: { planId: createdPlan.id, title: "PostgreSQL Agent 新餐单" } },
+    { id: `${operationTypesRunId}-shopping-update`, actionType: "update_shopping_item", riskLevel: "low", summary: "更新采购项",
+      payload: { itemId: createdShopping.id, amount: "3个", checked: true } },
+    { id: `${operationTypesRunId}-inventory-update`, actionType: "update_inventory_item", riskLevel: "high", summary: "更新库存",
+      payload: { itemId: createdInventory.id, name: "PostgreSQL Agent 新土豆" } },
+    { id: `${operationTypesRunId}-inventory-consume`, actionType: "consume_inventory_items", riskLevel: "high", summary: "消耗库存",
+      payload: { itemIds: [createdInventory.id] } },
+    { id: `${operationTypesRunId}-plan-delete`, actionType: "delete_meal_plan", riskLevel: "high", summary: "删除餐单",
+      payload: { planId: createdPlan.id } },
+    { id: `${operationTypesRunId}-shopping-delete`, actionType: "delete_shopping_item", riskLevel: "high", summary: "删除采购项",
+      payload: { itemId: createdShopping.id } },
+  ];
+  await insertOperationProposals(mutateOperationProposals);
+  assert.equal((await operationsService.executeActions(user.id, operationTypesRunId, mutateOperationProposals)).length, 6);
+  assert.deepEqual((await pool.query(`SELECT deleted_at IS NOT NULL AS deleted,title FROM meal_plans WHERE id=$1`, [createdPlan.id])).rows[0],
+    { deleted: true, title: "PostgreSQL Agent 新餐单" });
+  assert.deepEqual((await pool.query(`SELECT deleted_at IS NOT NULL AS deleted,amount,checked FROM shopping_list_items WHERE id=$1`, [createdShopping.id])).rows[0],
+    { deleted: true, amount: "3个", checked: true });
+  assert.deepEqual((await pool.query(`SELECT food_name,is_available FROM inventory_items WHERE id=$1`, [createdInventory.id])).rows[0],
+    { food_name: "PostgreSQL Agent 新土豆", is_available: false });
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM agent_actions
+    WHERE run_id=$1 AND status='executed'`, [operationTypesRunId])).rows[0]?.count), 12);
+  const healthOperationRunId = `postgres-agent-operation-health-${householdMember}`;
+  const healthOperationActionId = `${healthOperationRunId}-action`;
+  await pool.query(`INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id)
+    VALUES($1,$2,$1,'text','assistant','running','{}'::jsonb,$1)`, [healthOperationRunId, householdMember]);
+  const healthOperationProposal: ExecutableAgentAction = { id: healthOperationActionId, actionType: "record_health_log",
+    riskLevel: "high", summary: "记录健康", payload: { weightKg: 60.7, waterMl: 500.4, recordedDate: "2025-09-01" } };
+  await pool.query(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+    VALUES($1,$2,$3,'record_health_log','high','proposed',$4,$1)`,
+  [healthOperationActionId, healthOperationRunId, householdMember, healthOperationProposal.payload]);
+  const healthOperationResult = await operationsService.executeActions(householdMember, healthOperationRunId, [healthOperationProposal]);
+  const healthOperationId = Number((healthOperationResult[0]?.result as { healthLogId: number }).healthLogId);
+  assert.deepEqual((await pool.query("SELECT weight,water_ml,recorded_date FROM health_logs WHERE id=$1", [healthOperationId])).rows[0],
+    { weight: 60.7, water_ml: 500, recorded_date: "2025-09-01" });
   const realtimeRepository = new PostgresRealtimeVoiceRepository(pool);
   const cancelledRealtimeRuns: string[] = [];
   const realtimeService = new RealtimeVoiceService(realtimeRepository, {
@@ -1612,6 +1725,7 @@ try {
     postgresAiContextRepositoryVerified: true,
     postgresAIConversationsRepositoryVerified: true,
     postgresAdminAgentRunsRepositoryVerified: true,
+    postgresAgentOperationsRepositoryVerified: true,
     postgresAgentSchedulingRepositoryVerified: true,
     postgresAIRuntimeRepositoryVerified: true,
     postgresAiToolDataRepositoryVerified: true,

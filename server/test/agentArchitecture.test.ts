@@ -60,10 +60,13 @@ describe("Supervisor Agent architecture", () => {
 
   test("cancellation is propagated and every action transaction checks run status", () => {
     const runtime = read("../src/services/agent/runtime.ts");
-    const operations = read("../src/services/agent/operations.ts");
+    const sqliteOperations = read("../src/modules/agentOperations/sqliteRepository.ts");
+    const postgresOperations = read("../src/modules/agentOperations/postgresRepository.ts");
     assert.match(runtime, /activeRunControllers/);
     assert.match(runtime, /abort\(new Error\("AGENT_RUN_CANCELLED"\)\)/);
-    assert.match(operations, /run\.status !== "running"/);
+    assert.match(sqliteOperations, /run\.status !== "running"/);
+    assert.match(postgresOperations, /run\.rows\[0\]\.status !== "running"/);
+    assert.match(postgresOperations, /FOR UPDATE/);
   });
 
   test("runtime scheduling is persistence-agnostic", () => {

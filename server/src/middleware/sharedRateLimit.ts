@@ -18,7 +18,7 @@ export function getRateLimitClientIp(req: Request) {
 
 export function sharedRateLimit(options: RateLimitOptions) {
   return (req: Request, res: Response, next: NextFunction) => {
-    void rateLimitsService.consume(options.namespace, options.key(req), options.limit, options.windowMs).then((status) => {
+    void rateLimitsService().consume(options.namespace, options.key(req), options.limit, options.windowMs).then((status) => {
       if (!status.blocked) return next();
       res.setHeader("Retry-After", status.retryAfterSeconds);
       return res.status(429).json({ error: options.message, code: options.code, retryAfterSeconds: status.retryAfterSeconds });

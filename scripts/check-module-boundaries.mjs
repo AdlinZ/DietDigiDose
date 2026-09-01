@@ -86,8 +86,8 @@ const moduleSpecs = [
     name: "mediaCleanup",
     routeFile: null,
     concreteRepository: /sqliteRepository|SqliteMediaCleanupRepository/,
-    compositionFile: "server/src/routes/admin/media-cleanup.ts",
-    compositionImport: "../../modules/mediaCleanup/index.js",
+    compositionFile: "server/src/composition/postgresRuntime.ts",
+    compositionImport: "../modules/mediaCleanup/postgresRepository.js",
     legacyFile: null,
     extraLegacyFiles: ["server/src/services/mediaCleanup.ts"],
   },
@@ -287,8 +287,8 @@ for (const spec of moduleSpecs) {
     ["a concrete repository", spec.concreteRepository],
   ]);
   reject(spec.name, "repository.ts", persistencePatterns);
-  const compositionFile = spec.compositionFile || "server/src/app.ts";
-  const compositionImport = spec.compositionImport || `./modules/${spec.name}/index.js`;
+  const compositionFile = spec.compositionFile || "server/src/composition/sqliteRuntime.ts";
+  const compositionImport = spec.compositionImport || `../modules/${spec.name}/index.js`;
   const compositionSource = fs.readFileSync(path.join(root, compositionFile), "utf8");
   if (!compositionSource.includes(compositionImport)) {
     failures.push(`${compositionFile} must compose the ${spec.name} module entry point`);
@@ -297,6 +297,13 @@ for (const spec of moduleSpecs) {
     const source = fs.readFileSync(path.join(root, composition.file), "utf8");
     if (!source.includes(composition.import)) {
       failures.push(`${composition.file} must compose the ${spec.name} module entry point`);
+    }
+  }
+  const postgresRepository = path.join(root, "server", "src", "modules", spec.name, "postgresRepository.ts");
+  if (fs.existsSync(postgresRepository)) {
+    const postgresComposition = fs.readFileSync(path.join(root, "server/src/composition/postgresRuntime.ts"), "utf8");
+    if (!postgresComposition.includes(`../modules/${spec.name}/postgresRepository.js`)) {
+      failures.push(`server/src/composition/postgresRuntime.ts must compose the ${spec.name} PostgreSQL repository`);
     }
   }
   const legacyFile = Object.hasOwn(spec, "legacyFile") ? spec.legacyFile : `server/src/routes/${spec.name}.ts`;

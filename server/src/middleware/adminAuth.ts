@@ -7,7 +7,7 @@ export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction
     return res.status(401).json({ error: "未登录，请先登录" });
   }
 
-  void accessControlService.user(req.userId).then((user) => {
+  void accessControlService().user(req.userId).then((user) => {
     if (!user || user.role !== 'admin') {
       return res.status(403).json({ error: "无权限：需要管理员角色", code: "ADMIN_ROLE_REQUIRED" });
     }

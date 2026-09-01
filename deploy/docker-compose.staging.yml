@@ -1,6 +1,35 @@
 name: dietdigidose-staging
 
 services:
+  postgres:
+    image: postgres:16.10-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dietdigidose
+      POSTGRES_USER: dietdigidose
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - staging_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dietdigidose -d dietdigidose"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [staging]
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    restart: "no"
+    command: ["node", "dist/apply-postgres-schema.js"]
+    environment:
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?set DATABASE_MIGRATION_URL in deploy/.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [staging]
+
   api:
     build:
       context: ..
@@ -12,13 +41,16 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 9090
-      DATABASE_PATH: /data/dietdigidose.db
+      DATABASE_DRIVER: postgresql
       TRUST_PROXY: "1"
       REQUIRE_HTTPS: "1"
       ENABLE_DEMO_SEED: "0"
       MEDIA_LOCAL_ROOT: /data/media
     volumes:
-      - staging_database:/data
+      - staging_media:/data/media
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -41,15 +73,15 @@ services:
       - ${SERVER_ENV_FILE:-server.env}
     environment:
       NODE_ENV: production
-      DATABASE_PATH: /data/dietdigidose.db
+      DATABASE_DRIVER: postgresql
       ENABLE_DEMO_SEED: "0"
       MEDIA_LOCAL_ROOT: /data/media
       WORKER_INTERVAL_MS: "3600000"
     volumes:
-      - staging_database:/data
+      - staging_media:/data/media
     depends_on:
-      api:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks: [staging]
 
   caddy:
@@ -75,6 +107,7 @@ networks:
   staging:
 
 volumes:
-  staging_database:
+  staging_postgres:
+  staging_media:
   caddy_data:
   caddy_config:

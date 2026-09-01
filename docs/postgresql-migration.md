@@ -26,6 +26,7 @@ The application still selects SQLite until every write path can switch in one co
 - Admin kitchenware: governed catalog CRUD, cross-account asset moderation, JSONB compatibility formatting, soft deletion, and atomic audit writes across SQLite and PostgreSQL repositories.
 - Admin food assets: governed ingredient CRUD, aliases, merges, coverage reporting, UGC review, JSONB compatibility formatting, and atomic audit writes across SQLite and PostgreSQL repositories.
 - Admin console: dashboard metrics, privacy-safe funnels, audit logs, AI usage and conversation diagnostics, scan jobs, recent activity, and transactional trash restoration across SQLite and PostgreSQL repositories.
+- Households: membership lifecycle, optimistic owner transfer, collaborative shopping, idempotent inventory intake, shared inventory, and activity history across SQLite and PostgreSQL repositories.
 
 Each migrated domain keeps SQL inside its driver adapter; routes and services depend only on the repository port. The boundary ratchet must be updated only when a direct SQLite call is removed or moved into one of these adapters.
 

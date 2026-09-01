@@ -20,6 +20,8 @@ import { PostgresDietRecordsRepository } from "../src/modules/dietRecords/postgr
 import { PostgresFeedbackRepository } from "../src/modules/feedback/postgresRepository.js";
 import { PostgresFoodRepository } from "../src/modules/foods/postgresRepository.js";
 import { PostgresHealthRepository } from "../src/modules/health/postgresRepository.js";
+import { PostgresHouseholdsRepository } from "../src/modules/households/postgresRepository.js";
+import { HouseholdsService } from "../src/modules/households/service.js";
 import { PostgresInsightsRepository } from "../src/modules/insights/postgresRepository.js";
 import { InsightsService } from "../src/modules/insights/service.js";
 import { consumeInventoryWithPostgresClient, PostgresInventoryRepository } from "../src/modules/inventory/postgresRepository.js";
@@ -412,6 +414,63 @@ try {
   assert((await pool.query("SELECT deleted_at FROM ingredients_library WHERE id=$1", [targetAdminFood.id])).rows[0]?.deleted_at);
   await adminConsoleService.restore("ingredients", targetAdminFood.id, adminFoodContext);
   assert.equal((await pool.query("SELECT deleted_at FROM ingredients_library WHERE id=$1", [targetAdminFood.id])).rows[0]?.deleted_at, null);
+
+  const householdMember = Number((await pool.query(`INSERT INTO users (username,email,password_hash)
+    VALUES ('postgres-household-member','postgres-household-member@example.com','integration-hash') RETURNING id`)).rows[0]?.id);
+  const householdsRepository = new PostgresHouseholdsRepository(pool);
+  const householdsService = new HouseholdsService(householdsRepository, () => "PGHOUSE1");
+  await assert.rejects(() => householdsRepository.create(2_147_000_000, "Postgres 回滚家庭", "PGROLL01"));
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::integer AS count FROM households WHERE invite_code='PGROLL01'"))
+    .rows[0]?.count), 0);
+  const postgresHousehold = await householdsService.create(user.id, "Postgres 协作家庭");
+  const postgresHouseholdId = Number(postgresHousehold.id);
+  assert.equal((await householdsService.join(householdMember, "pghouse1")).status, 201);
+  const firstHouseholdShopping = await householdsService.createShopping(user.id, postgresHouseholdId,
+    "77777777-7777-4777-8777-777777777771", { name: "Postgres 家庭牛奶", amount: "2盒", category: "乳制品" });
+  const secondHouseholdShopping = await householdsService.createShopping(householdMember, postgresHouseholdId,
+    "77777777-7777-4777-8777-777777777772", { name: "Postgres 家庭番茄", amount: "3个", category: "蔬菜" });
+  const purchasedFirst = await householdsService.updateShopping(householdMember, postgresHouseholdId,
+    firstHouseholdShopping.item.id, { version: firstHouseholdShopping.item.version, checked: true });
+  const purchasedSecond = await householdsService.updateShopping(user.id, postgresHouseholdId,
+    secondHouseholdShopping.item.id, { version: secondHouseholdShopping.item.version, checked: true });
+  const staleBatch = await householdsRepository.intake(user.id, postgresHouseholdId, "household-stale-batch", {
+    idempotencyKey: "postgres-household-stale-intake-0001",
+    items: [
+      { id: purchasedFirst.id, version: purchasedFirst.version, quantity: "2盒", expirationDate: "2026-09-08", storageLocation: "冷藏" },
+      { id: purchasedSecond.id, version: purchasedSecond.version - 1, quantity: "3个", expirationDate: "2026-09-06", storageLocation: "冷藏" },
+    ],
+  });
+  assert.equal(staleBatch.kind, "version_conflict");
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::integer AS count FROM household_inventory_items WHERE household_id=$1",
+    [postgresHouseholdId])).rows[0]?.count), 0);
+  const intakeInput = { idempotencyKey: "postgres-household-concurrent-intake-0001", items: [
+    { id: purchasedFirst.id, version: purchasedFirst.version, quantity: "2盒", expirationDate: "2026-09-08", storageLocation: "冷藏" },
+    { id: purchasedSecond.id, version: purchasedSecond.version, quantity: "3个", expirationDate: "2026-09-06", storageLocation: "冷藏" },
+  ] };
+  const concurrentIntakes = await Promise.all([
+    householdsRepository.intake(user.id, postgresHouseholdId, "household-intake-a", intakeInput),
+    householdsRepository.intake(householdMember, postgresHouseholdId, "household-intake-b", intakeInput),
+  ]);
+  assert.deepEqual(concurrentIntakes.map((result) => result.kind).sort(), ["created", "repeated"]);
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::integer AS count FROM household_inventory_items WHERE household_id=$1",
+    [postgresHouseholdId])).rows[0]?.count), 2);
+  const manualHouseholdInventory = await householdsService.createInventory(user.id, postgresHouseholdId, {
+    food_name: "Postgres 家庭鸡蛋", expiration_date: "2026-09-09", quantity: "6个",
+  });
+  const updatedHouseholdInventory = await householdsService.updateInventory(householdMember, postgresHouseholdId,
+    Number(manualHouseholdInventory.id), { quantity: "5个", is_available: true });
+  assert.equal(updatedHouseholdInventory.quantity, "5个");
+  await householdsService.removeInventory(user.id, postgresHouseholdId, Number(manualHouseholdInventory.id));
+  assert((await householdsService.history(user.id, postgresHouseholdId)).length >= 7);
+  await assert.rejects(() => householdsService.transferOwner(user.id, postgresHouseholdId,
+    { newOwnerUserId: householdMember, version: 999 }), /家庭空间已更新/);
+  const currentHousehold = (await householdsService.mine(user.id)).find((item) => Number(item.id) === postgresHouseholdId)!;
+  await householdsService.transferOwner(user.id, postgresHouseholdId,
+    { newOwnerUserId: householdMember, version: Number(currentHousehold.version) });
+  await householdsService.leave(user.id, postgresHouseholdId);
+  await householdsService.leave(householdMember, postgresHouseholdId);
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::integer AS count FROM households WHERE id=$1", [postgresHouseholdId]))
+    .rows[0]?.count), 0);
 
   const cookingQueueRepository = new PostgresCookingQueueRepository(pool);
   await pool.query("DELETE FROM cooking_queue_items WHERE user_id = $1", [user.id]);
@@ -887,6 +946,7 @@ try {
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
     postgresAdminConsoleRepositoryVerified: true,
+    postgresHouseholdsRepositoryVerified: true,
     postgresHealthRepositoryVerified: true,
     postgresShoppingRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,

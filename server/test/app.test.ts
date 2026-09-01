@@ -1658,6 +1658,7 @@ describe("user data isolation", () => {
     });
     assert.equal((duplicate.body as JsonObject).mergeCandidates.length, 1);
     assert.notEqual((duplicate.body as JsonObject).item.id, item.id);
+    const duplicateItem = (duplicate.body as JsonObject).item;
 
     const secondList = await api(`/api/v1/households/${household.id}/shopping-list`, { token: second.token });
     assert.equal(secondList.response.status, 200);
@@ -1673,6 +1674,23 @@ describe("user data isolation", () => {
     });
     assert.equal(stale.response.status, 409);
     assert.equal((stale.body as JsonObject).code, "HOUSEHOLD_SHOPPING_VERSION_CONFLICT");
+    const purchasedDuplicate = await api(`/api/v1/households/${household.id}/shopping-list/${duplicateItem.id}`, {
+      method: "PATCH", token: first.token, body: JSON.stringify({ version: duplicateItem.version, checked: true }),
+    });
+    const atomicFailure = await api(`/api/v1/households/${household.id}/shopping-list/intake`, {
+      method: "POST", token: first.token, body: JSON.stringify({
+        idempotencyKey: "household-shopping-stale-batch-0001",
+        items: [
+          { id: (purchased.body as JsonObject).id, version: (purchased.body as JsonObject).version,
+            quantity: "2盒", expirationDate: "2026-09-05", storageLocation: "冷藏" },
+          { id: duplicateItem.id, version: duplicateItem.version,
+            quantity: "1箱", expirationDate: "2026-09-06", storageLocation: "冷藏" },
+        ],
+      }),
+    });
+    assert.equal(atomicFailure.response.status, 409);
+    assert.equal((purchasedDuplicate.body as JsonObject).version, duplicateItem.version + 1);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM household_inventory_items WHERE household_id = ?").get(household.id) as { count: number }).count, 0);
 
     const hidden = await api(`/api/v1/households/${household.id}/shopping-list`, { token: intruder.token });
     assert.equal(hidden.response.status, 404);

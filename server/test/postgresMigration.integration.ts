@@ -51,6 +51,8 @@ import { KitchenwareService } from "../src/modules/kitchenware/service.js";
 import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
 import { PostgresMediaCleanupRepository } from "../src/modules/mediaCleanup/postgresRepository.js";
 import { MediaCleanupService } from "../src/modules/mediaCleanup/service.js";
+import { PostgresNotificationsRepository } from "../src/modules/notifications/postgresRepository.js";
+import { createNotificationsService } from "../src/modules/notifications/service.js";
 import { PostgresRateLimitsRepository } from "../src/modules/rateLimits/postgresRepository.js";
 import { RateLimitsService } from "../src/modules/rateLimits/service.js";
 import { PostgresRecommendationsRepository } from "../src/modules/recommendations/postgresRepository.js";
@@ -881,6 +883,48 @@ try {
   assert.equal((await authVerificationService.register({ tokenHash: "postgres-registration-token-hash", phone: "18800002149",
     username: "postgres短信重复用户", passwordHash: "hash", at: new Date().toISOString() })).status, "invalid_token");
 
+  if (postgresRegistration.status === "created") {
+    const notificationUserId = postgresRegistration.userId;
+    const notificationsRepository = new PostgresNotificationsRepository(pool);
+    const notificationsService = createNotificationsService(notificationsRepository);
+    const preferences = { ...await notificationsService.preferences(notificationUserId), breakfast_time: "07:30", expiring_alert: true };
+    await notificationsService.savePreferences(notificationUserId, preferences);
+    assert.equal((await notificationsService.preferences(notificationUserId)).breakfast_time, "07:30");
+    await notificationsService.saveDevice(notificationUserId, "ExpoPushToken[postgres-notifications]", "ios");
+    await notificationsRepository.ensureRoutineNotification({ userId: notificationUserId, kind: "meal", key: "breakfast",
+      dateKey: "2026-09-01", title: "Postgres 早餐", body: "Postgres 例行提醒" });
+    await notificationsRepository.ensureRoutineNotification({ userId: notificationUserId, kind: "meal", key: "breakfast",
+      dateKey: "2026-09-01", title: "Postgres 早餐", body: "Postgres 例行提醒" });
+    assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM user_notification_inbox
+      WHERE user_id=$1 AND group_key='routine:meal:breakfast:2026-09-01'`, [notificationUserId])).rows[0].count), 1);
+    await pool.query(`INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date,quantity_value,quantity_unit,is_available)
+      VALUES($1,'Postgres 临期苹果','水果','1个','2026-09-02',1,'个',TRUE)`, [notificationUserId]);
+    const prepared = await notificationsRepository.prepareExpiring("2026-09-01", "2026-09-04");
+    assert.equal(prepared.length, 1);
+    assert.equal((await notificationsRepository.prepareExpiring("2026-09-01", "2026-09-04")).length, 0);
+    const pendingHistory = await notificationsRepository.history(notificationUserId, "pending", null, 10);
+    const expiryNotificationId = Number(pendingHistory[0]?.id);
+    assert.equal(await notificationsRepository.action(notificationUserId, expiryNotificationId, "complete", { postgres: true }), true);
+    assert.equal((await pool.query("SELECT is_available FROM inventory_items WHERE food_name='Postgres 临期苹果'")).rows[0].is_available, false);
+    const campaign = await notificationsRepository.beginCampaign(user.id, "Postgres 活动", "Postgres 活动正文");
+    assert(campaign.devices.some((device) => device.userId === notificationUserId));
+    await notificationsRepository.recordPushTickets([{ message: { to: "ExpoPushToken[postgres-notifications]", title: "Postgres 活动",
+      body: "Postgres 活动正文", data: { type: "admin_campaign", campaignId: campaign.campaignId } },
+    ticket: { id: "postgres-notification-ticket", status: "ok" } }]);
+    const pendingReceipt = (await notificationsRepository.pendingReceipts(new Date(Date.now() + 60_000).toISOString(), 10))
+      .find((item) => item.ticketId === "postgres-notification-ticket")!;
+    assert.equal(pendingReceipt.userId, notificationUserId);
+    await notificationsRepository.applyReceipts([{ ...pendingReceipt,
+      receipt: { status: "error", details: { error: "DeviceNotRegistered" }, message: "gone" } }]);
+    await notificationsRepository.finishCampaign(campaign.campaignId,
+      campaign.devices.map((device) => ({ deviceId: device.id, userId: device.userId, status: "accepted" as const, errorCode: null })), 1, 0);
+    assert.equal((await pool.query("SELECT is_active FROM push_devices WHERE expo_push_token='ExpoPushToken[postgres-notifications]'"))
+      .rows[0].is_active, false);
+    const notificationAdmin = await notificationsService.adminData();
+    assert(notificationAdmin.metrics.pushSubmitted >= 1);
+    assert(notificationAdmin.metrics.pushFailures >= 1);
+  }
+
   const adminAuditService = new AdminAuditService(new PostgresAdminAuditRepository(pool));
   await adminAuditService.record({ adminUserId: user.id, action: "postgres.audit.verify", resourceType: "integration",
     resourceId: 149, summary: "验证 PostgreSQL 管理员审计", details: { jsonb: true },
@@ -1377,6 +1421,7 @@ try {
     postgresRateLimitsRepositoryVerified: true,
     postgresMediaCleanupRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,
+    postgresNotificationsRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,
   }, null, 2));

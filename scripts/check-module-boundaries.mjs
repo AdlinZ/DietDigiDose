@@ -5,6 +5,14 @@ const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
   {
+    name: "notifications",
+    routeFile: null,
+    concreteRepository: /sqliteRepository|SqliteNotificationsRepository/,
+    compositionFile: "server/src/composition/sqliteRuntime.ts",
+    compositionImport: "../modules/notifications/index.js",
+    legacyFile: null,
+  },
+  {
     name: "authVerification",
     routeFile: null,
     concreteRepository: /sqliteRepository|SqliteAuthVerificationRepository/,

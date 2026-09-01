@@ -11,7 +11,7 @@ function repository(overrides: Partial<AuthAccountRepository> = {}): AuthAccount
     recordAdminAudit: async () => undefined, getMe: async () => null, getCredentials: async () => null,
     changePassword: async () => false, updateProfile: async () => ({ status: "updated", user: {} }),
     exportAiData: async () => ({ messages: [], scan_jobs: [], agent_runs: [], agent_events: [], agent_actions: [],
-      agent_media_references: [], agent_checkpoints: [], agent_checkpoint_writes: [] }),
+      agent_media_references: [], agent_checkpoints: [], agent_checkpoint_blobs: [], agent_checkpoint_writes: [] }),
     deleteAiData: async () => ({ messages: 0, scan_jobs: 0, usage_logs: 0, write_confirmations: 0,
       chat_session_deletions: 0, agent_runs: 0 }), accountMediaUrls: async () => [],
     deleteAccount: async () => ({ deleted: false, cleanupJobId: null }), ...overrides,

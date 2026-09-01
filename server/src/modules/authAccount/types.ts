@@ -44,6 +44,7 @@ export type AiDataExport = {
   agent_actions: Row[];
   agent_media_references: Row[];
   agent_checkpoints: Row[];
+  agent_checkpoint_blobs: Row[];
   agent_checkpoint_writes: Row[];
 };
 

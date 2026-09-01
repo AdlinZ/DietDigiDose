@@ -26,6 +26,8 @@ import { SqliteAgentSchedulingRepository } from "../modules/agentScheduling/sqli
 import { createAgentOperationsService } from "../modules/agentOperations/index.js";
 import { configureAgentOperationsService } from "../modules/agentOperations/runtime.js";
 import { SqliteAgentOperationsRepository } from "../modules/agentOperations/sqliteRepository.js";
+import { configureAgentCheckpointer } from "../modules/agentCheckpoints/runtime.js";
+import { createSqliteAgentCheckpointer } from "../modules/agentCheckpoints/sqlite.js";
 import { createAgentRunsService } from "../modules/agentRuns/index.js";
 import { configureAgentRunsService } from "../modules/agentRuns/runtime.js";
 import { SqliteAgentRunsRepository } from "../modules/agentRuns/sqliteRepository.js";
@@ -38,8 +40,14 @@ import { db, initDatabase } from "../storage/db.js";
 import { configureAiToolDataService } from "../services/aiTools.js";
 import { configureAdminAuditService } from "../routes/admin/shared.js";
 
+let sqliteAgentCheckpointer: ReturnType<typeof createSqliteAgentCheckpointer> | undefined;
+
 export function initializeSqliteApplication() {
   initDatabase();
+  sqliteAgentCheckpointer ||= createSqliteAgentCheckpointer(
+    db as unknown as Parameters<typeof createSqliteAgentCheckpointer>[0],
+  );
+  configureAgentCheckpointer(sqliteAgentCheckpointer);
   configureAiContextService(createAiContextService(new SqliteAiContextRepository(db)));
   configureAIConversationsService(createAIConversationsService(new SqliteAIConversationsRepository(db)));
   configureAIRuntimeService(createAIRuntimeService(new SqliteAIRuntimeRepository(db)));

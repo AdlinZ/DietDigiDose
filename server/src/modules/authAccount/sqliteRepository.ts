@@ -106,6 +106,8 @@ export class SqliteAuthAccountRepository implements AuthAccountRepository {
       agent_checkpoints: checkpointTable ? all(`SELECT c.thread_id,c.checkpoint_ns,c.checkpoint_id,c.parent_checkpoint_id,c.type,
         CAST(c.checkpoint AS TEXT) AS checkpoint_json,CAST(c.metadata AS TEXT) AS metadata_json FROM checkpoints c
         JOIN agent_runs r ON r.checkpoint_thread_id=c.thread_id WHERE r.user_id=? ORDER BY c.checkpoint_id ASC`) : [],
+      // SQLiteSaver stores channel values inside checkpoint_json instead of a separate blob table.
+      agent_checkpoint_blobs: [],
       agent_checkpoint_writes: checkpointTable ? all(`SELECT w.thread_id,w.checkpoint_ns,w.checkpoint_id,w.task_id,w.idx,w.channel,w.type,
         CAST(w.value AS TEXT) AS value_json FROM writes w JOIN agent_runs r ON r.checkpoint_thread_id=w.thread_id
         WHERE r.user_id=? ORDER BY w.checkpoint_id ASC,w.idx ASC`) : [],

@@ -88,7 +88,8 @@ export class PostgresAuthAccountRepository implements AuthAccountRepository {
   }); }
 
   async exportAiData(userId: number): Promise<AiDataExport> {
-    const [messagesResult,scanResult,runsResult,eventsResult,actionsResult,mediaResult] = await Promise.all([
+    const [messagesResult,scanResult,runsResult,eventsResult,actionsResult,mediaResult,
+      checkpointsResult,checkpointBlobsResult,checkpointWritesResult] = await Promise.all([
       this.pool.query(`SELECT session_id,role,content,source,status,response_time_ms,payload_json,created_at
         FROM ai_chat_messages WHERE user_id=$1 ORDER BY created_at ASC,id ASC`,[userId]),
       this.pool.query("SELECT id,status,result_json,error_message,created_at,updated_at FROM inventory_scan_jobs WHERE user_id=$1 ORDER BY created_at ASC",[userId]),
@@ -96,11 +97,25 @@ export class PostgresAuthAccountRepository implements AuthAccountRepository {
       this.pool.query(`SELECT e.* FROM agent_run_events e JOIN agent_runs r ON r.id=e.run_id WHERE r.user_id=$1 ORDER BY e.created_at ASC,e.sequence ASC`,[userId]),
       this.pool.query(`SELECT a.* FROM agent_actions a JOIN agent_runs r ON r.id=a.run_id WHERE r.user_id=$1 ORDER BY a.created_at ASC`,[userId]),
       this.pool.query("SELECT id,run_id,kind,mime_type,created_at FROM agent_run_media WHERE user_id=$1 ORDER BY created_at ASC",[userId]),
+      this.pool.query(`SELECT c.thread_id,c.checkpoint_ns,c.checkpoint_id,c.parent_checkpoint_id,c.type,
+        c.checkpoint AS checkpoint_json,c.metadata AS metadata_json FROM checkpoints c
+        JOIN agent_runs r ON r.checkpoint_thread_id=c.thread_id WHERE r.user_id=$1
+        ORDER BY c.thread_id,c.checkpoint_ns,c.checkpoint_id`,[userId]),
+      this.pool.query(`SELECT b.thread_id,b.checkpoint_ns,b.channel,b.version,b.type,
+        ENCODE(b.blob,'base64') AS blob_base64 FROM checkpoint_blobs b
+        JOIN agent_runs r ON r.checkpoint_thread_id=b.thread_id WHERE r.user_id=$1
+        ORDER BY b.thread_id,b.checkpoint_ns,b.channel,b.version`,[userId]),
+      this.pool.query(`SELECT w.thread_id,w.checkpoint_ns,w.checkpoint_id,w.task_id,w.idx,w.channel,w.type,
+        ENCODE(w.blob,'base64') AS value_base64 FROM checkpoint_writes w
+        JOIN agent_runs r ON r.checkpoint_thread_id=w.thread_id WHERE r.user_id=$1
+        ORDER BY w.thread_id,w.checkpoint_ns,w.checkpoint_id,w.task_id,w.idx`,[userId]),
     ]);
     return { messages:stringifyJson(rows(messagesResult),["payload_json"]),scan_jobs:stringifyJson(rows(scanResult),["result_json"]),
       agent_runs:stringifyJson(rows(runsResult),["input_json","result_json","pending_approval_json","pending_input_json"]),
       agent_events:stringifyJson(rows(eventsResult),["payload_json"]),agent_actions:stringifyJson(rows(actionsResult),["payload_json","before_json","result_json"]),
-      agent_media_references:rows(mediaResult),agent_checkpoints:[],agent_checkpoint_writes:[] };
+      agent_media_references:rows(mediaResult),
+      agent_checkpoints:stringifyJson(rows(checkpointsResult),["checkpoint_json","metadata_json"]),
+      agent_checkpoint_blobs:rows(checkpointBlobsResult),agent_checkpoint_writes:rows(checkpointWritesResult) };
   }
 
   async deleteAiData(userId: number): Promise<AiDataDeletion> { return this.tx(async (client) => {

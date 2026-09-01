@@ -1,6 +1,6 @@
 # SQLite to PostgreSQL migration
 
-PostgreSQL 16+ and the generated Drizzle schema are the target database authority. The checked-in baseline covers the final result of `initDatabase()` plus all 59 SQLite migrations: 92 tables, 133 unique/secondary indexes, and 138 foreign keys. `server/src/storage/database/schema.ts` is the application schema entry point; the obsolete parallel schema has been removed.
+PostgreSQL 16+ and the generated Drizzle schema are the target database authority. The checked-in baseline covers the final result of `initDatabase()` plus all 59 SQLite migrations: 92 migrated tables, 133 unique/secondary indexes, and 138 foreign keys. Drizzle migration `0001` adds four PostgreSQL-native LangGraph checkpoint tables, for 96 target tables in total. `server/src/storage/database/schema.ts` is the application schema entry point; the obsolete parallel schema has been removed.
 
 This is a staged cutover. Do not point production at PostgreSQL until every domain has a PostgreSQL repository and both staging rehearsals below pass. CI prevents new direct SQLite access and verifies that the generated baseline has not drifted.
 
@@ -27,6 +27,7 @@ The application still selects SQLite until every write path can switch in one co
 - Admin food assets: governed ingredient CRUD, aliases, merges, coverage reporting, UGC review, JSONB compatibility formatting, and atomic audit writes across SQLite and PostgreSQL repositories.
 - Admin console: dashboard metrics, privacy-safe funnels, audit logs, AI usage and conversation diagnostics, scan jobs, recent activity, and transactional trash restoration across SQLite and PostgreSQL repositories.
 - Households: membership lifecycle, optimistic owner transfer, collaborative shopping, idempotent inventory intake, shared inventory, and activity history across SQLite and PostgreSQL repositories.
+- Agent runs and checkpoints: run/media/event/action metadata uses SQLite and PostgreSQL repositories; LangGraph saver selection is injected at composition time, PostgreSQL checkpoint schema is Drizzle-owned, and checkpoint rows cascade with their owning run.
 
 Each migrated domain keeps SQL inside its driver adapter; routes and services depend only on the repository port. The boundary ratchet must be updated only when a direct SQLite call is removed or moved into one of these adapters.
 
@@ -45,6 +46,8 @@ Each migrated domain keeps SQL inside its driver adapter; routes and services de
 | `BLOB` | `bytea` | Base64 in the archive, binary parameter on import |
 
 The exhaustive per-table/per-column mapping is generated at `server/src/storage/database/postgres/baseline-manifest.json`. Changes are made in `server/src/storage/db.ts`/SQLite migrations only during the transition, followed by `pnpm -w database:schema:generate` and a Drizzle migration. Once the runtime cutover is complete, SQLite schema generation is deleted and Drizzle migrations become the only schema-change entry point.
+
+The PostgreSQL checkpointer is pinned to `@langchain/langgraph-checkpoint-postgres` 1.0.5. Its schema version `4` is seeded by Drizzle migration `0001`; application startup validates that version and must not call `PostgresSaver.setup()`, because runtime DDL would bypass the migration authority. The migration archive currently covers the 92 canonical SQLite business tables; portable conversion of existing SQLite checkpoint blobs is still required before a staging or production cutover that retains resumable Agent runs.
 
 ## Commands
 

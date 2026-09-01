@@ -7,6 +7,15 @@ import type {
   SpecialistName,
 } from "../../services/agent/types.js";
 
+export function agentActionProposalIndex(runId: string, idempotencyKey: unknown) {
+  const value = String(idempotencyKey || "");
+  const prefix = `${runId}:`;
+  if (!value.startsWith(prefix)) return Number.MAX_SAFE_INTEGER;
+  const separator = value.indexOf(":", prefix.length);
+  const index = Number(value.slice(prefix.length, separator < 0 ? undefined : separator));
+  return Number.isSafeInteger(index) && index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+}
+
 export type AgentRunRow = {
   id: string;
   user_id: number;

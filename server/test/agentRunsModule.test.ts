@@ -101,6 +101,8 @@ describe("Agent runs module", () => {
       assert.deepEqual(replayed.map((action) => [action.id, action.actionType]), [
         ["z-first", "record_diet_meal"], ["a-second", "record_health_log"],
       ]);
+      assert.deepEqual((await repository.actions(orderedRun.id, 42)).map((action) => action.actionType),
+        ["record_diet_meal", "record_health_log"]);
       await assert.rejects(() => repository.reviseActions(created.id, 42, [
         { ...proposals[0], id: saved[0]?.id, payload: { foodName: "鸡蛋" } },
         { ...proposals[0], id: "missing", payload: { foodName: "应回滚" } },

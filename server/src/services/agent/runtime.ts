@@ -1,5 +1,4 @@
 import { Annotation, Command, END, START, StateGraph, interrupt } from "@langchain/langgraph";
-import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { ChatOpenAI } from "@langchain/openai";
 import { createAgent, tool, toolCallLimitMiddleware } from "langchain";
 import { z } from "zod";
@@ -8,7 +7,7 @@ import { buildAIPromptMessages, buildUserContext } from "../contextBuilder.js";
 import { executeAIQueryTool } from "../aiTools.js";
 import { aiRuntimeService } from "../../modules/aiRuntime/runtime.js";
 import { agentSchedulingService } from "../../modules/agentScheduling/runtime.js";
-import { db } from "../../storage/db.js";
+import { agentCheckpointer } from "../../modules/agentCheckpoints/runtime.js";
 import { classifyAIError } from "../aiErrors.js";
 import {
   appendAgentEvent,
@@ -175,15 +174,12 @@ async function recordAgentTokenUsage(
   });
 }
 
-// Reuse the application's WAL-enabled connection. The saver only relies on the
-// better-sqlite3 Database API, and sharing it avoids loading a second native ABI.
-const checkpoint = new SqliteSaver(db as unknown as ConstructorParameters<typeof SqliteSaver>[0]);
 const activeRuns = new Map<string, Promise<void>>();
 const activeRunControllers = new Map<string, AbortController>();
 type AgentResumePayload = { decision: "approve" | "reject" | "edit"; actions?: AgentActionProposal[] } | { input: string };
 
 export async function getPublicAgentCheckpointState(runId: string) {
-  const tuple = await checkpoint.getTuple({ configurable: { thread_id: runId, checkpoint_ns: "" } });
+  const tuple = await agentCheckpointer().getTuple({ configurable: { thread_id: runId, checkpoint_ns: "" } });
   const values = tuple?.checkpoint.channel_values as Record<string, unknown> | undefined;
   if (!values) return null;
   const rawOutputs = values.outputs && typeof values.outputs === "object" ? values.outputs as Record<string, unknown> : {};
@@ -707,25 +703,30 @@ async function finalNode(state: SupervisorGraphState) {
   return { reply, artifacts: state.artifacts };
 }
 
-const graph = new StateGraph(SupervisorState)
-  .addNode("supervisor", supervisorNode)
-  .addNode("preflight_policy", preflightPolicyNode)
-  .addNode("dispatch_specialists", dispatchNode)
-  .addNode("specialist_result_policy", specialistResultPolicyNode)
-  .addNode("operations", operationsNode)
-  .addNode("approval", approvalNode)
-  .addNode("synthesis_policy", synthesisPolicyNode)
-  .addNode("final", finalNode)
-  .addEdge(START, "supervisor")
-  .addEdge("supervisor", "preflight_policy")
-  .addEdge("preflight_policy", "dispatch_specialists")
-  .addEdge("dispatch_specialists", "specialist_result_policy")
-  .addEdge("specialist_result_policy", "operations")
-  .addEdge("operations", "approval")
-  .addEdge("approval", "synthesis_policy")
-  .addEdge("synthesis_policy", "final")
-  .addEdge("final", END)
-  .compile({ checkpointer: checkpoint });
+function createSupervisorGraph() {
+  return new StateGraph(SupervisorState)
+    .addNode("supervisor", supervisorNode)
+    .addNode("preflight_policy", preflightPolicyNode)
+    .addNode("dispatch_specialists", dispatchNode)
+    .addNode("specialist_result_policy", specialistResultPolicyNode)
+    .addNode("operations", operationsNode)
+    .addNode("approval", approvalNode)
+    .addNode("synthesis_policy", synthesisPolicyNode)
+    .addNode("final", finalNode)
+    .addEdge(START, "supervisor")
+    .addEdge("supervisor", "preflight_policy")
+    .addEdge("preflight_policy", "dispatch_specialists")
+    .addEdge("dispatch_specialists", "specialist_result_policy")
+    .addEdge("specialist_result_policy", "operations")
+    .addEdge("operations", "approval")
+    .addEdge("approval", "synthesis_policy")
+    .addEdge("synthesis_policy", "final")
+    .addEdge("final", END)
+    .compile({ checkpointer: agentCheckpointer() });
+}
+
+let graph: ReturnType<typeof createSupervisorGraph> | undefined;
+function supervisorGraph() { return graph ||= createSupervisorGraph(); }
 
 async function invokeRun(runId: string, resume?: AgentResumePayload) {
   const stored = await getAgentRunInput(runId);
@@ -739,8 +740,8 @@ async function invokeRun(runId: string, resume?: AgentResumePayload) {
   try {
     const runConfig = { ...config, signal: controller.signal };
     result = resume
-      ? await graph.invoke(new Command({ resume }), runConfig) as SupervisorGraphState
-      : await graph.invoke({ runId, userId: stored.userId, input: stored.input, goal: "", specialists: [], outputs: {}, actions: [], artifacts: [] }, runConfig) as SupervisorGraphState;
+      ? await supervisorGraph().invoke(new Command({ resume }), runConfig) as SupervisorGraphState
+      : await supervisorGraph().invoke({ runId, userId: stored.userId, input: stored.input, goal: "", specialists: [], outputs: {}, actions: [], artifacts: [] }, runConfig) as SupervisorGraphState;
   } finally {
     clearTimeout(timeout);
     if (activeRunControllers.get(runId) === controller) activeRunControllers.delete(runId);
@@ -838,7 +839,7 @@ export async function retrySupervisorRun(userId: number, runId: string, waitMs =
   const row = await getAgentRunRow(runId, userId);
   if (!row) throw new Error("Agent Run 不存在或无权操作");
   if (row.status !== "failed") throw new Error("只有失败的 Agent Run 可以重试");
-  await checkpoint.deleteThread(row.checkpoint_thread_id);
+  await agentCheckpointer().deleteThread(row.checkpoint_thread_id);
   await setAgentRunStatus(runId, "queued", { pendingApproval: null, pendingInput: null, errorCode: null, errorMessage: null });
   kickOff(runId);
   return waitForRun(runId, waitMs);

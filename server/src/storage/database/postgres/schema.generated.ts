@@ -95,6 +95,7 @@ export const agentRuns = pgTable("agent_runs", {
   updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull().defaultNow(),
   pending_input_json: jsonb("pending_input_json"),
 }, (table) => [
+  unique("agent_runs_checkpoint_thread_id_key").on(table.checkpoint_thread_id),
   index("idx_agent_runs_session").on(table.user_id, table.session_id, table.created_at.desc()),
   index("idx_agent_runs_status_updated").on(table.status, table.updated_at),
   index("idx_agent_runs_user_created").on(table.user_id, table.created_at.desc()),

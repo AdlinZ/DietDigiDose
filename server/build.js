@@ -1,5 +1,6 @@
 import * as esbuild from 'esbuild';
 import { createRequire } from 'module';
+import { rmSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json');
@@ -7,6 +8,7 @@ const rootPkg = require('../package.json');
 const dependencies = pkg.dependencies || {};
 const externalList = Object.keys(dependencies).filter(dep => dep !== 'dayjs');
 try {
+  rmSync(new URL('./dist/', import.meta.url), { recursive: true, force: true });
   await esbuild.build({
     entryPoints: {
       index: 'src/index.ts',
@@ -16,6 +18,7 @@ try {
       'migrate-community-media': 'scripts/migrate-community-media.ts',
     },
     bundle: true,
+    splitting: true,
     platform: 'node',
     format: 'esm',
     outdir: 'dist',

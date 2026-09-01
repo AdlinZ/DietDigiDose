@@ -1083,6 +1083,11 @@ try {
   const migratedToken=await accessControlService.signUserToken(user.id);
   const migratedClaims=JSON.parse(Buffer.from(migratedToken.split(".")[1]!,"base64url").toString()) as Record<string,unknown>;
   assert.equal(migratedClaims.sessionVersion,migratedAccessUser?.sessionVersion);
+  const bootstrapUserId=Number((await pool.query(`INSERT INTO users(username,email,password_hash)
+    VALUES('Postgres Bootstrap','postgres-bootstrap@example.com','not-used') RETURNING id`)).rows[0].id);
+  await accessControlService.ensureUserInitialState(bootstrapUserId);
+  await accessControlService.ensureUserInitialState(bootstrapUserId);
+  assert.equal(Number((await pool.query("SELECT COUNT(*) AS count FROM user_health_profiles WHERE user_id=$1",[bootstrapUserId])).rows[0].count),1);
   const postgresLevelRule=await adminUsersService.levelRule();
   postgresLevelRule.xp.dailyCheckIn=9;
   assert.equal((await adminUsersService.saveLevelRule(postgresLevelRule,moderationContext)).rule.xp.dailyCheckIn,9);

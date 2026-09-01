@@ -11,7 +11,7 @@ const moduleSpecs = [
     compositionFile: "server/src/middleware/auth.ts",
     compositionImport: "../modules/accessControl/index.js",
     legacyFile: null,
-    extraLegacyFiles: ["server/src/services/sessionTokens.ts"],
+    extraLegacyFiles: ["server/src/services/sessionTokens.ts", "server/src/services/userInitialization.ts"],
   },
   {
     name: "authAccount",

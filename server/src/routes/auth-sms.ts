@@ -3,7 +3,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { db } from "../storage/db.js";
 import { sendError } from "../utils/http.js";
-import { recordFunnelEvent, signUserToken } from "../modules/accessControl/index.js";
+import { ensureUserInitialState, recordFunnelEvent, signUserToken } from "../modules/accessControl/index.js";
 import {
   countIpSends,
   countSubjectSends,
@@ -20,7 +20,6 @@ import {
 } from "../services/authVerification.js";
 import { hashRegistrationToken } from "../services/authVerificationCrypto.js";
 import { getSmsProvider, smsCredentialsStatus } from "../services/smsVerificationProvider.js";
-import { ensureUserInitialState } from "../services/userInitialization.js";
 
 const router = Router();
 
@@ -293,7 +292,7 @@ router.post("/verify", async (req, res) => {
         recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "login", outcome: user.is_disabled ? "account_disabled" : "succeeded", sourceIp, userAgent });
       })();
       if (user.is_disabled === 1) return sendError(res, 403, "账号已被停用", "ACCOUNT_DISABLED");
-      ensureUserInitialState(user.id);
+      await ensureUserInitialState(user.id);
       await recordFunnelEvent(user.id, "login_succeeded");
       return res.json({
         status: "authenticated",
@@ -367,7 +366,8 @@ router.post("/register", async (req, res) => {
         VALUES (?, NULL, ?, ?, NULL, ?)
       `).run(username, phone, bcrypt.hashSync(password, bcrypt.genSaltSync(12)), nowIso);
       newUserId = Number(result.lastInsertRowid);
-      ensureUserInitialState(newUserId);
+      // The SQLite adapter executes this idempotent insert synchronously so it remains part of the registration transaction.
+      void ensureUserInitialState(newUserId);
       db.prepare("UPDATE auth_verification_subjects SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(newUserId, challenge.subject_id);
       db.prepare("UPDATE auth_verification_challenges SET status = 'consumed', consumed_at = ?, registration_token_hash = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(nowIso, challenge.id);
       recordVerificationEvent({ subjectId: challenge.subject_id, challengeId: challenge.id, eventType: "registration", outcome: "succeeded", sourceIp, userAgent });

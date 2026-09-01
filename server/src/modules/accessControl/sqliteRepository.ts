@@ -12,6 +12,11 @@ export class SqliteAccessControlRepository implements AccessControlRepository {
       must_change_password AS mustChangePassword FROM users WHERE id=?`).get(userId) as StoredAccessUser | undefined) || null;
   }
 
+  ensureUserInitialState(userId: number) {
+    this.database.prepare("INSERT OR IGNORE INTO user_health_profiles (user_id) VALUES (?)").run(userId);
+    return Promise.resolve();
+  }
+
   async recordFunnelEvent(eventName: string, actorHash: string) {
     this.database.prepare("INSERT INTO funnel_events (event_name,actor_hash) VALUES (?,?)").run(eventName, actorHash);
   }

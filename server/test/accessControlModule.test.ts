@@ -6,6 +6,7 @@ import { AccessControlService } from "../src/modules/accessControl/service.js";
 function repository(overrides: Partial<AccessControlRepository> = {}): AccessControlRepository {
   return {
     user: async () => null,
+    ensureUserInitialState: async () => undefined,
     recordFunnelEvent: async () => undefined,
     ...overrides,
   };
@@ -61,5 +62,16 @@ describe("access control module", () => {
         .recordFunnelEvent(9, "login_succeeded");
     } finally { console.warn = originalWarn; }
     assert.match(warning, /telemetry unavailable/);
+  });
+
+  test("validates and idempotently delegates account bootstrap", async () => {
+    const userIds: number[] = [];
+    const service = new AccessControlService(repository({
+      ensureUserInitialState: async (userId) => { userIds.push(userId); },
+    }));
+    await service.ensureUserInitialState(12);
+    await service.ensureUserInitialState(12);
+    assert.deepEqual(userIds, [12, 12]);
+    assert.throws(() => service.ensureUserInitialState(0), /INVALID_USER_ID/);
   });
 });

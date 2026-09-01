@@ -82,7 +82,13 @@ async function main() {
   const command = args[0];
   if (command === "export") {
     const manifest = exportArchive();
-    console.log(JSON.stringify({ ok: true, tables: manifest.tables.length, rows: manifest.tables.reduce((sum, table) => sum + table.rowCount, 0) }, null, 2));
+    console.log(JSON.stringify({
+      ok: true,
+      tables: manifest.tables.length,
+      rows: manifest.tables.reduce((sum, table) => sum + table.rowCount, 0),
+      checkpoints: manifest.langgraph.checkpoints.rowCount,
+      checkpointWrites: manifest.langgraph.writes.rowCount,
+    }, null, 2));
     return;
   }
   if (command === "apply-schema") {

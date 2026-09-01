@@ -13,6 +13,8 @@ export interface RealtimeVoiceRepository {
   recordTurn(input: { id: string; sessionId: string; userId: number; transcript: string; intent: string;
     action: Record<string, unknown>; agentRunId?: string | null; eventType: string; eventPayload: Record<string, unknown> }): Promise<void>;
   emitEvent(sessionId: string, eventType: string, payload: Record<string, unknown>): Promise<number>;
+  appendResponseDelta(input: { sessionId: string; userId: number; turnId: string; runId: string; index: number;
+    delta: string; firstResponseMs: number }): Promise<boolean>;
   events(sessionId: string, after: number): Promise<RealtimeVoiceEvent[]>;
   completeResponse(input: { sessionId: string; turnId: string; text: string; status: string; firstResponseMs: number }): Promise<void>;
   pendingRuns(sessionId: string, userId: number): Promise<string[]>;

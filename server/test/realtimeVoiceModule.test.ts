@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { describe, test } from "node:test";
+import Database from "better-sqlite3";
+import { AIMessageChunk } from "@langchain/core/messages";
+import { FakeStreamingChatModel } from "@langchain/core/utils/testing";
 import { RealtimeVoiceError } from "../src/modules/realtimeVoice/errors.js";
 import type { RealtimeVoiceRepository } from "../src/modules/realtimeVoice/repository.js";
 import { RealtimeVoiceService } from "../src/modules/realtimeVoice/service.js";
+import { SqliteRealtimeVoiceRepository } from "../src/modules/realtimeVoice/sqliteRepository.js";
 import type { RealtimeVoiceEvent, RealtimeVoiceSession, RealtimeVoiceTurn, TranscriptChunk } from "../src/modules/realtimeVoice/types.js";
+import { StructuredReplyDecoder, StructuredReplyStreamHandler } from "../src/services/agent/replyStream.js";
 
 function activeSession(overrides: Partial<RealtimeVoiceSession> = {}): RealtimeVoiceSession {
   return { id: "session-1", userId: 42, recipeId: 7, status: "active", platform: "ios", context: { recipeTitle: "番茄炒蛋" },
@@ -33,6 +38,9 @@ function fakeRepository(overrides: Partial<RealtimeVoiceRepository> = {}) {
       agentRunId: input.agentRunId ?? null }); },
     emitEvent: async (_sessionId, type, payload) => { const sequence = state.events.length + 1;
       state.events.push({ sequence, type, payload, createdAt: new Date().toISOString() }); return sequence; },
+    appendResponseDelta: async (input) => { const sequence = state.events.length + 1;
+      state.events.push({ sequence, type: "response.text.delta", payload: { turnId: input.turnId, index: input.index,
+        delta: input.delta, upstream: true }, createdAt: new Date().toISOString() }); return true; },
     events: async (_sessionId, after) => state.events.filter((event) => event.sequence > after),
     completeResponse: async (input) => { state.completed.push({ text: input.text, status: input.status }); },
     pendingRuns: async () => ["pending-run"],
@@ -80,19 +88,88 @@ describe("realtime voice module", () => {
       { turnId: "turn-write", transcript: "删除这条库存", currentStep: 1, timerSeconds: 0 });
     assert.equal(confirmation.intent, "confirmation_required");
     assert.equal(confirmation.action?.requiresConfirmation, true);
+    const mealPlan = await subject.turn(42, state.session.id,
+      { turnId: "turn-meal-plan", transcript: "给我创建一份一周餐单", currentStep: 1, timerSeconds: 0 });
+    assert.equal(mealPlan.intent, "confirmation_required");
     assert.equal(runs, 0);
   });
 
   test("streams completed answers, cancels barge-ins, and cancels pending work on close", async () => {
     const { repository, state } = fakeRepository(); const cancelled: string[] = [];
-    const subject = service(repository, { cancelRun: async (_userId, runId) => { cancelled.push(runId); } });
+    const subject = service(repository, {
+      startRun: async (_userId, _input, _priority, onReplyDelta) => {
+        await onReplyDelta?.("run-1", "保持中火");
+        await onReplyDelta?.("run-1", "翻炒。");
+        return { run: { id: "run-1", status: "queued" } };
+      },
+      cancelRun: async (_userId, runId) => { cancelled.push(runId); },
+    });
     const result = await subject.turn(42, state.session.id,
       { turnId: "turn-question", transcript: "现在火候怎么控制", currentStep: 2, timerSeconds: 30, interruptedResponse: true });
     assert.equal(result.intent, "question");
     await waitForImmediate();
     assert.deepEqual(cancelled, ["old-run"]);
+    assert.deepEqual(state.events.filter((event) => event.type === "response.text.delta").map((event) => event.payload.delta),
+      ["保持中火", "翻炒。"]);
     assert.deepEqual(state.completed, [{ text: "保持中火翻炒。", status: "completed" }]);
     await subject.close(42, state.session.id);
     assert.deepEqual(cancelled, ["old-run", "pending-run"]);
+  });
+
+  test("decodes and batches genuine structured model token deltas", async () => {
+    const decoder = new StructuredReplyDecoder();
+    assert.equal(decoder.push('```json\n{"rep'), "");
+    assert.equal(decoder.push('ly":"先加\\u5c1'), "先加");
+    assert.equal(decoder.push('1量水。再翻\\n炒。"}'), "少量水。再翻\n炒。");
+
+    const deltas: string[] = [];
+    const handler = new StructuredReplyStreamHandler((delta) => { deltas.push(delta); });
+    for (const token of ['{"reply":"保持中火。', '翻炒至蛋液凝固；', '立即关火。"}']) {
+      await handler.handleLLMNewToken(token);
+    }
+    await handler.handleLLMEnd();
+    assert.deepEqual(deltas, ["保持中火。", "翻炒至蛋液凝固；", "立即关火。"]);
+
+    const modelDeltas: string[] = [];
+    const modelHandler = new StructuredReplyStreamHandler((delta) => { modelDeltas.push(delta); });
+    const model = new FakeStreamingChatModel({ sleep: 0, chunks: [
+      new AIMessageChunk('{"reply":"上游第一句。'),
+      new AIMessageChunk('上游第二句。"}'),
+    ] });
+    const result = await model.invoke("ignored", { callbacks: [modelHandler] });
+    assert.equal(result.content, '{"reply":"上游第一句。上游第二句。"}');
+    assert.deepEqual(modelDeltas, ["上游第一句。", "上游第二句。"]);
+  });
+
+  test("SQLite accepts live deltas only for an active, uncancelled turn and avoids completion duplicates", async () => {
+    const database = new Database(":memory:");
+    database.exec(`
+      CREATE TABLE realtime_voice_sessions (
+        id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, status TEXT NOT NULL,
+        expires_at TEXT NOT NULL, first_response_ms INTEGER
+      );
+      CREATE TABLE realtime_voice_turns (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, user_id INTEGER NOT NULL, agent_run_id TEXT
+      );
+      CREATE TABLE realtime_voice_events (
+        session_id TEXT NOT NULL, sequence INTEGER NOT NULL, event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(session_id, sequence)
+      );
+      INSERT INTO realtime_voice_sessions(id,user_id,status,expires_at)
+        VALUES('session-1',42,'active',datetime('now','+1 hour'));
+      INSERT INTO realtime_voice_turns(id,session_id,user_id,agent_run_id)
+        VALUES('turn-1','session-1',42,'run-1');
+    `);
+    const repository = new SqliteRealtimeVoiceRepository(database);
+    assert.equal(await repository.appendResponseDelta({ sessionId: "session-1", userId: 42, turnId: "turn-1",
+      runId: "run-1", index: 0, delta: "保持中火。", firstResponseMs: 25 }), true);
+    await repository.completeResponse({ sessionId: "session-1", turnId: "turn-1", text: "保持中火。", status: "completed", firstResponseMs: 50 });
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM realtime_voice_events WHERE event_type='response.text.delta'")
+      .get() as { count: number }).count, 1);
+    await repository.emitEvent("session-1", "response.cancelled", { turnId: "turn-1" });
+    assert.equal(await repository.appendResponseDelta({ sessionId: "session-1", userId: 42, turnId: "turn-1",
+      runId: "run-1", index: 1, delta: "不应写入", firstResponseMs: 25 }), false);
+    database.close();
   });
 });

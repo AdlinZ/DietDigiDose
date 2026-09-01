@@ -15,6 +15,7 @@ import {
   voicePreferenceStorageKey,
   VOICE_PREFERENCE_STORAGE_PREFIX,
 } from "@/services/voicePreferenceScope";
+import { KeyedSerialQueue } from "@/services/voiceOutputQueue";
 
 const PACK_ROOT = Platform.OS === "web" || !FileSystem.documentDirectory
   ? null
@@ -469,9 +470,8 @@ function sentences(text: string) {
   return text.match(/[^。！？!?；;]+[。！？!?；;]?/g)?.map((item) => item.trim()).filter(Boolean) || [text];
 }
 
-export async function speakWithVoiceFallback(apiFetch: ApiFetch, text: string, options: { userId?: number; sensitive?: boolean } = {}): Promise<VoiceSource> {
-  const generation = ++playbackGeneration;
-  await stopActiveSoundOnly();
+async function speakWithGeneration(apiFetch: ApiFetch, text: string,
+  options: { userId?: number; sensitive?: boolean }, generation: number): Promise<VoiceSource> {
   const state = await getVoicePackState(options.userId);
   if (state.preference !== "system-only" && state.installed && state.benchmark?.passed !== false) {
     try {
@@ -501,8 +501,33 @@ export async function speakWithVoiceFallback(apiFetch: ApiFetch, text: string, o
       // The system voice is the final, offline-capable fallback.
     }
   }
-  if (generation === playbackGeneration) Speech.speak(text, { language: "zh-CN", rate: 1 });
+  if (generation === playbackGeneration) await new Promise<void>((resolve) => Speech.speak(text, {
+    language: "zh-CN",
+    rate: 1,
+    onDone: resolve,
+    onStopped: resolve,
+    onError: () => resolve(),
+  }));
   return "system";
+}
+
+let streamGeneration = 0;
+const streamQueue = new KeyedSerialQueue<VoiceSource>();
+
+export async function speakWithVoiceFallback(apiFetch: ApiFetch, text: string, options: { userId?: number; sensitive?: boolean } = {}): Promise<VoiceSource> {
+  streamQueue.cancel();
+  const generation = ++playbackGeneration;
+  streamGeneration = generation;
+  await stopActiveSoundOnly();
+  return speakWithGeneration(apiFetch, text, options, generation);
+}
+
+export function enqueueVoiceOutput(apiFetch: ApiFetch, text: string,
+  options: { streamId: string; userId?: number; sensitive?: boolean }): Promise<VoiceSource | null> {
+  return streamQueue.enqueue(options.streamId, async () => {
+    streamGeneration = ++playbackGeneration;
+    await stopActiveSoundOnly();
+  }, () => speakWithGeneration(apiFetch, text, options, streamGeneration));
 }
 
 async function stopActiveSoundOnly() {
@@ -515,6 +540,7 @@ async function stopActiveSoundOnly() {
 }
 
 export async function stopVoiceOutput() {
+  streamQueue.cancel();
   playbackGeneration += 1;
   await stopActiveSoundOnly();
 }

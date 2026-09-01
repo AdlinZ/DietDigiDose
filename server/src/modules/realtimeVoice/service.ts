@@ -9,7 +9,8 @@ interface SupervisorRun {
 
 export interface RealtimeVoiceDependencies {
   transcribe(audioBase64: string, input: { userId: number; mimeType: string; agentName: string; phase: string }): Promise<{ text: string }>;
-  startRun(userId: number, input: Record<string, unknown>, priority: number): Promise<{ run: SupervisorRun }>;
+  startRun(userId: number, input: Record<string, unknown>, priority: number,
+    onReplyDelta?: (runId: string, delta: string) => Promise<void> | void): Promise<{ run: SupervisorRun }>;
   waitForRun(runId: string): Promise<SupervisorRun>;
   cancelRun(userId: number, runId: string): Promise<void>;
 }
@@ -26,7 +27,10 @@ function deterministicIntent(text: string) {
   if (/开始.*(?:计时|倒计时)|继续计时/.test(text)) return { intent: "control", action: "START_TIMER" };
   const add = /(?:增加|加)(\d{1,2})(?:分钟|分)/.exec(text);
   if (add) return { intent: "control", action: "ADD_TIMER", seconds: Number(add[1]) * 60 };
-  if (/删除|扣减库存|记录饮食|打卡|完成烹饪|清空/.test(text)) return { intent: "confirmation_required", action: "PERSISTENT_WRITE" };
+  const writeVerb = /保存|记录|添加|新增|创建|制定|生成|修改|更新|删除|扣减|清空|打卡|完成/;
+  const businessObject = /餐单|采购|购物|库存|饮食|健康|体重|饮水|厨具|菜谱|食材|烹饪/;
+  if (/删除|扣减库存|记录饮食|打卡|完成烹饪|清空/.test(text) || (writeVerb.test(text) && businessObject.test(text)))
+    return { intent: "confirmation_required", action: "PERSISTENT_WRITE" };
   return { intent: "question", action: null };
 }
 
@@ -107,13 +111,27 @@ export class RealtimeVoiceService {
         eventType: parsed.intent === "control" ? "control.ready" : "confirmation.required", eventPayload: { turnId: input.turnId, ...action } });
       return { turnId: input.turnId, intent: parsed.intent, action, repeated: false };
     }
+    const stream = { text: "", nextIndex: 0, turnReady: false, pending: [] as Array<{ runId: string; delta: string }>,
+      writes: Promise.resolve() };
+    const appendDelta = async (runId: string, delta: string) => {
+      const accepted = await this.repository.appendResponseDelta({ sessionId, userId, turnId: input.turnId, runId,
+        index: stream.nextIndex, delta, firstResponseMs: Math.max(0, Date.now() - timestamp(session.connectedAt)) });
+      if (accepted) { stream.text += delta; stream.nextIndex += 1; }
+    };
+    const onReplyDelta = (runId: string, delta: string) => {
+      if (!stream.turnReady) { stream.pending.push({ runId, delta }); return Promise.resolve(); }
+      stream.writes = stream.writes.then(() => appendDelta(runId, delta));
+      return stream.writes;
+    };
     const response = await this.dependencies.startRun(userId, { modality: "cooking", source: "realtime_cooking_voice", sessionId,
       idempotencyKey: `realtime-voice:${sessionId}:${input.turnId}`,
       prompt: `${text}\n当前菜品：${String(session.context.recipeTitle || "当前菜品")}；当前步骤序号：${input.currentStep}；计时：${input.timerSeconds} 秒。回答限 80 字。`,
-      metadata: { realtimeVoiceSessionId: sessionId, turnId: input.turnId, currentStep: input.currentStep } }, 0);
+      metadata: { realtimeVoiceSessionId: sessionId, turnId: input.turnId, currentStep: input.currentStep } }, 0, onReplyDelta);
     await this.repository.recordTurn({ id: input.turnId, sessionId, userId, transcript: text, intent: "question", action: {},
       agentRunId: response.run.id, eventType: "response.started", eventPayload: { turnId: input.turnId, runId: response.run.id } });
-    void this.completeRun(userId, sessionId, input.turnId, response.run.id);
+    for (const pending of stream.pending.splice(0)) stream.writes = stream.writes.then(() => appendDelta(pending.runId, pending.delta));
+    stream.turnReady = true;
+    void this.completeRun(userId, sessionId, input.turnId, response.run.id, stream);
     return { turnId: input.turnId, intent: "question", run: response.run, repeated: false };
   }
 
@@ -137,12 +155,20 @@ export class RealtimeVoiceService {
     if (!["active", "muted"].includes(session.status) || timestamp(session.expiresAt) <= Date.now())
       throw new RealtimeVoiceError(410, "REALTIME_VOICE_SESSION_EXPIRED", "实时语音会话已结束");
   }
-  private async completeRun(userId: number, sessionId: string, turnId: string, runId: string) {
+  private async completeRun(userId: number, sessionId: string, turnId: string, runId: string,
+    stream: { text: string; nextIndex: number; writes: Promise<void> }) {
     try {
       const run = await this.dependencies.waitForRun(runId);
+      await stream.writes;
       const active = await this.repository.session(sessionId, userId);
       if (!active || active.status === "closed" || run.status === "cancelled" || run.status === "expired") return;
       const text = run.reply || run.error?.message || "暂时无法回答，请使用屏幕操作继续烹饪";
+      if (stream.text && text.startsWith(stream.text) && text.length > stream.text.length) {
+        const delta = text.slice(stream.text.length);
+        const accepted = await this.repository.appendResponseDelta({ sessionId, userId, turnId, runId,
+          index: stream.nextIndex, delta, firstResponseMs: Math.max(0, Date.now() - timestamp(active.connectedAt)) });
+        if (accepted) { stream.text += delta; stream.nextIndex += 1; }
+      }
       await this.repository.completeResponse({ sessionId, turnId, text, status: run.status,
         firstResponseMs: Math.max(0, Date.now() - timestamp(active.connectedAt)) });
     } catch { await this.repository.emitEvent(sessionId, "response.failed", { turnId }); }

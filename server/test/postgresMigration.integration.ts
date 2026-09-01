@@ -933,7 +933,11 @@ try {
   const cancelledRealtimeRuns: string[] = [];
   const realtimeService = new RealtimeVoiceService(realtimeRepository, {
     transcribe: async () => ({ text: "  PostgreSQL 增量转写  " }),
-    startRun: async () => ({ run: { id: "postgres-realtime-run", status: "queued" } }),
+    startRun: async (_userId, _input, _priority, onReplyDelta) => {
+      await onReplyDelta?.("postgres-realtime-run", "保持中火");
+      await onReplyDelta?.("postgres-realtime-run", "并持续翻炒。");
+      return { run: { id: "postgres-realtime-run", status: "queued" } };
+    },
     waitForRun: async (id) => ({ id, status: "completed", reply: "保持中火并持续翻炒。" }),
     cancelRun: async (_userId, runId) => { cancelledRealtimeRuns.push(runId); },
   });
@@ -970,11 +974,17 @@ try {
     if (!realtimeResponseCompleted) await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(realtimeResponseCompleted, true);
+  const realtimeResponseDeltas = (await realtimeRepository.events(realtimeSessionId, 0))
+    .filter((event) => event.type === "response.text.delta" && event.payload.turnId === "postgres-question-turn");
+  assert.deepEqual(realtimeResponseDeltas.map((event) => event.payload.delta), ["保持中火", "并持续翻炒。"]);
+  assert.equal(realtimeResponseDeltas.every((event) => event.payload.upstream === true), true);
   const realtimeNativeTypes = (await pool.query(`SELECT pg_typeof(s.context_json)::text AS context_type,
     pg_typeof(c.is_final)::text AS final_type, c.is_final FROM realtime_voice_sessions s
     JOIN realtime_voice_transcript_chunks c ON c.session_id=s.id WHERE s.id=$1`, [realtimeSessionId])).rows[0];
   assert.deepEqual(realtimeNativeTypes, { context_type: "jsonb", final_type: "boolean", is_final: true });
   assert.equal((await realtimeService.close(user.id, realtimeSessionId)).session.status, "closed");
+  assert.equal(await realtimeRepository.appendResponseDelta({ sessionId: realtimeSessionId, userId: user.id,
+    turnId: "postgres-question-turn", runId: "postgres-realtime-run", index: 2, delta: "不应写入", firstResponseMs: 1 }), false);
   assert.deepEqual(cancelledRealtimeRuns, ["postgres-realtime-run"]);
   const queueInput = {
     userId: user.id,

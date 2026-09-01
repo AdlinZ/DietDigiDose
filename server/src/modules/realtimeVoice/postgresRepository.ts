@@ -90,6 +90,29 @@ export class PostgresRealtimeVoiceRepository implements RealtimeVoiceRepository 
     return this.tx((client) => this.event(client, sessionId, eventType, payload));
   }
 
+  async appendResponseDelta(input: { sessionId: string; userId: number; turnId: string; runId: string; index: number;
+    delta: string; firstResponseMs: number }) {
+    return this.tx(async (client) => {
+      // Serialize the eligibility check with response.cancelled/session.closed events.
+      // Otherwise a cancellation could commit while this transaction is waiting to
+      // append its event, leaving a stale delta after the cancellation marker.
+      await this.lockEvents(client, input.sessionId);
+      const eligible = (await client.query(`SELECT 1 FROM realtime_voice_sessions s
+        JOIN realtime_voice_turns t ON t.session_id=s.id AND t.user_id=s.user_id
+        WHERE s.id=$1 AND s.user_id=$2 AND s.status IN ('active','muted') AND s.expires_at>CURRENT_TIMESTAMP
+          AND t.id=$3 AND t.agent_run_id=$4
+          AND NOT EXISTS (SELECT 1 FROM realtime_voice_events e WHERE e.session_id=s.id
+            AND e.event_type='response.cancelled' AND e.payload_json->>'turnId'=t.id)`,
+      [input.sessionId, input.userId, input.turnId, input.runId])).rows[0];
+      if (!eligible) return false;
+      await this.event(client, input.sessionId, "response.text.delta",
+        { turnId: input.turnId, index: input.index, delta: input.delta, upstream: true });
+      await client.query("UPDATE realtime_voice_sessions SET first_response_ms=COALESCE(first_response_ms,$1) WHERE id=$2",
+        [input.firstResponseMs, input.sessionId]);
+      return true;
+    });
+  }
+
   async events(sessionId: string, after: number) {
     return (await this.pool.query(`SELECT sequence,event_type AS type,payload_json AS payload,created_at AS "createdAt"
       FROM realtime_voice_events WHERE session_id=$1 AND sequence>$2 ORDER BY sequence LIMIT 100`, [sessionId, after])).rows.map((row) => ({
@@ -99,8 +122,11 @@ export class PostgresRealtimeVoiceRepository implements RealtimeVoiceRepository 
 
   async completeResponse(input: { sessionId: string; turnId: string; text: string; status: string; firstResponseMs: number }) {
     await this.tx(async (client) => {
-      for (const [index, delta] of input.text.split(/(?<=[。！？!?])/).filter(Boolean).entries())
-        await this.event(client, input.sessionId, "response.text.delta", { turnId: input.turnId, index, delta });
+      const alreadyStreamed = (await client.query(`SELECT 1 FROM realtime_voice_events
+        WHERE session_id=$1 AND event_type='response.text.delta' AND payload_json->>'turnId'=$2 LIMIT 1`,
+      [input.sessionId, input.turnId])).rows[0];
+      if (!alreadyStreamed) for (const [index, delta] of input.text.split(/(?<=[。！？!?])/).filter(Boolean).entries())
+        await this.event(client, input.sessionId, "response.text.delta", { turnId: input.turnId, index, delta, upstream: false });
       await this.event(client, input.sessionId, "response.completed", { turnId: input.turnId, text: input.text, status: input.status });
       await client.query("UPDATE realtime_voice_sessions SET first_response_ms=COALESCE(first_response_ms,$1) WHERE id=$2",
         [input.firstResponseMs, input.sessionId]);
@@ -123,11 +149,14 @@ export class PostgresRealtimeVoiceRepository implements RealtimeVoiceRepository 
   }
 
   private async event(client: PoolClient, sessionId: string, eventType: string, payload: Record<string, unknown>) {
-    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`realtime-event:${sessionId}`]);
+    await this.lockEvents(client, sessionId);
     const sequence = Number((await client.query("SELECT COALESCE(MAX(sequence),0)+1 AS value FROM realtime_voice_events WHERE session_id=$1", [sessionId])).rows[0].value);
     await client.query(`INSERT INTO realtime_voice_events(session_id,sequence,event_type,payload_json) VALUES($1,$2,$3,$4::jsonb)`,
       [sessionId, sequence, eventType, JSON.stringify(payload)]);
     return sequence;
+  }
+  private async lockEvents(client: PoolClient, sessionId: string) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`realtime-event:${sessionId}`]);
   }
   private object(value: unknown) { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
   private iso(value: unknown) { return value instanceof Date ? value.toISOString() : String(value); }

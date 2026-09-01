@@ -7,7 +7,8 @@ import { SqliteRealtimeVoiceRepository } from "./sqliteRepository.js";
 export function createRealtimeVoiceModule(database: ConstructorParameters<typeof SqliteRealtimeVoiceRepository>[0]) {
   const service = new RealtimeVoiceService(new SqliteRealtimeVoiceRepository(database), {
     transcribe: transcribeAudio,
-    startRun: (userId, input, priority) => startSupervisorRun(userId, input as Parameters<typeof startSupervisorRun>[1], priority),
+    startRun: (userId, input, priority, onReplyDelta) =>
+      startSupervisorRun(userId, input as Parameters<typeof startSupervisorRun>[1], priority, onReplyDelta),
     waitForRun: waitForSupervisorRunCompletion,
     cancelRun: cancelSupervisorRun,
   });

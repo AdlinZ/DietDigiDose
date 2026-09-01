@@ -183,7 +183,8 @@ export async function initializePostgresApplication(): Promise<ApplicationRuntim
     const voicePacks = new VoicePacksService(new PostgresVoicePacksRepository(pool));
     const realtimeVoice = new RealtimeVoiceService(new PostgresRealtimeVoiceRepository(pool), {
       transcribe: transcribeAudio,
-      startRun: (userId, input, priority) => startSupervisorRun(userId, input as Parameters<typeof startSupervisorRun>[1], priority),
+      startRun: (userId, input, priority, onReplyDelta) =>
+        startSupervisorRun(userId, input as Parameters<typeof startSupervisorRun>[1], priority, onReplyDelta),
       waitForRun: waitForSupervisorRunCompletion,
       cancelRun: cancelSupervisorRun,
     });

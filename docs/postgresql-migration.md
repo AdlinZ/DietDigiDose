@@ -21,6 +21,7 @@ The application still selects SQLite until every write path can switch in one co
 - Voice packs: governed catalog publication, optimistic account preferences, immutable admin revisions, revocation cleanup, status history, and audit writes across SQLite and PostgreSQL repositories.
 - Kitchenware: owner-scoped assets, governed capabilities, safe substitutions, and recipe compatibility across SQLite and PostgreSQL repositories.
 - Recommendations: governed candidate reads, immutable cursor snapshots, and atomic idempotent behavior events across SQLite and PostgreSQL repositories.
+- Recipes: governed public discovery, personal libraries, favorites, user submissions, and transactional kitchenware requirement mapping across SQLite and PostgreSQL repositories.
 
 Each migrated domain keeps SQL inside its driver adapter; routes and services depend only on the repository port. The boundary ratchet must be updated only when a direct SQLite call is removed or moved into one of these adapters.
 

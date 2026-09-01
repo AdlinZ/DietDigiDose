@@ -6,7 +6,7 @@ import authRoutes from "./routes/auth.js";
 import inventoryRoutes from "./modules/inventory/index.js";
 import dietRecordsRoutes from "./modules/dietRecords/index.js";
 import healthDataRoutes from "./modules/health/index.js";
-import recipesRoutes from "./routes/recipes.js";
+import { createRecipesModule } from "./modules/recipes/index.js";
 import foodsRoutes from "./modules/foods/index.js";
 import communityRoutes from "./routes/community.js";
 import adminRoutes from "./routes/admin.js";
@@ -43,6 +43,7 @@ export function createApp() {
   recoverAgentRuntime();
   const kitchenwareRoutes = createKitchenwareModule(db);
   const recommendationRoutes = createRecommendationsModule(db);
+  const recipesRoutes = createRecipesModule(db);
   const app = express();
   const uploadedMediaDir = path.resolve(process.env.MEDIA_LOCAL_ROOT || path.join(process.cwd(), "public"), "uploads");
   const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080,http://localhost:5173")

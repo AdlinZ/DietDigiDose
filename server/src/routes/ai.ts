@@ -201,7 +201,7 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
     const artifacts = response.artifacts ?? response.run.artifacts;
     const solutionCards = buildAgentSolutionCards(response.run.id, artifacts);
     if (response.run.status === "queued" || response.run.status === "running") {
-      void waitForSupervisorRunCompletion(response.run.id).then((completedRun) => {
+      void waitForSupervisorRunCompletion(response.run.id).then(async (completedRun) => {
         const completedAt = Date.now();
         const assistantContent = completedRun.reply || completedRun.error?.message;
         if (!requestedText || !assistantContent) return;
@@ -224,7 +224,7 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
             requestId: String(res.locals.requestId || ""),
             occurredAt: new Date(completedAt).toISOString(),
             source,
-            modelIdentifier: getChatConfig().model,
+            modelIdentifier: (await getChatConfig()).model,
           },
           responseTimeMs: completedAt - requestStartedAt,
           requestedAt: requestStartedAt,
@@ -247,7 +247,7 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
             requestId: String(res.locals.requestId || ""),
             occurredAt: new Date(respondedAt).toISOString(),
             source,
-            modelIdentifier: getChatConfig().model,
+            modelIdentifier: (await getChatConfig()).model,
           }, responseTimeMs,
           requestedAt: requestStartedAt, respondedAt,
         });

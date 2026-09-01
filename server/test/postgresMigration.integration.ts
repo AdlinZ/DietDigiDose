@@ -11,6 +11,8 @@ import { PostgresAccessControlRepository } from "../src/modules/accessControl/po
 import { AccessControlService } from "../src/modules/accessControl/service.js";
 import { PostgresAiContextRepository } from "../src/modules/aiContext/postgresRepository.js";
 import { AiContextService } from "../src/modules/aiContext/service.js";
+import { PostgresAIRuntimeRepository } from "../src/modules/aiRuntime/postgresRepository.js";
+import { AIRuntimeService } from "../src/modules/aiRuntime/service.js";
 import { PostgresAiToolDataRepository } from "../src/modules/aiToolData/postgresRepository.js";
 import { AiToolDataService } from "../src/modules/aiToolData/service.js";
 import { PostgresAdminAuditRepository } from "../src/modules/adminAudit/postgresRepository.js";
@@ -797,6 +799,29 @@ try {
   assert.deepEqual(aiContext.healthProfile?.medical_conditions, ["孕期"]);
   assert.equal(aiContext.healthProfile?.kitchen_constraints.meal_time_minutes, 20);
 
+  const aiRuntimeService = new AIRuntimeService(new PostgresAIRuntimeRepository(pool), {
+    AI_INPUT_COST_PER_MILLION_USD: "2", AI_OUTPUT_COST_PER_MILLION_USD: "4",
+  });
+  await aiRuntimeService.saveSettings([
+    { key: "AI_API_KEY", value: "postgres-global-key" },
+    { key: "AI_BASE_URL", value: "https://postgres-ai.test/v1/" },
+    { key: "AI_CHAT_MODEL", value: "postgres-chat-model" },
+    { key: "AI_RECIPE_MODEL", value: "postgres-recipe-model" },
+  ]);
+  const postgresAIConfig = await aiRuntimeService.config();
+  assert.deepEqual(postgresAIConfig.chat,
+    { apiKey: "postgres-global-key", baseUrl: "https://postgres-ai.test/v1", model: "postgres-chat-model" });
+  assert.equal((await aiRuntimeService.agentConfig("RECIPE")).model, "postgres-recipe-model");
+  await aiRuntimeService.recordUsage({ userId: user.id, endpoint: "postgres-ai-runtime", model: "postgres-chat-model",
+    runId: "postgres-ai-runtime-run", agentName: "Recipe", phase: "integration", promptTokens: 1_000,
+    completionTokens: 500, latencyMs: 33, success: false, failureReason: "integration failure" });
+  const postgresAIUsage = (await pool.query(`SELECT total_tokens, success, estimated_cost_usd, failure_reason
+    FROM ai_usage_logs WHERE user_id = $1 AND endpoint = 'postgres-ai-runtime'`, [user.id])).rows[0];
+  assert.equal(Number(postgresAIUsage?.total_tokens), 1_500);
+  assert.equal(postgresAIUsage?.success, false);
+  assert.equal(Number(postgresAIUsage?.estimated_cost_usd), 0.004);
+  assert.equal(postgresAIUsage?.failure_reason, "integration failure");
+
   const adminAuditService = new AdminAuditService(new PostgresAdminAuditRepository(pool));
   await adminAuditService.record({ adminUserId: user.id, action: "postgres.audit.verify", resourceType: "integration",
     resourceId: 149, summary: "验证 PostgreSQL 管理员审计", details: { jsonb: true },
@@ -1269,6 +1294,7 @@ try {
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
     postgresAiContextRepositoryVerified: true,
+    postgresAIRuntimeRepositoryVerified: true,
     postgresAiToolDataRepositoryVerified: true,
     postgresAdminAuditRepositoryVerified: true,
     postgresDietRecordsRepositoryVerified: true,

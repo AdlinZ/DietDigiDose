@@ -1,62 +1,17 @@
 import dotenv from "dotenv";
-import { getSystemSetting, logAIUsage } from "../storage/db.js";
+import { aiRuntimeService } from "../modules/aiRuntime/runtime.js";
 import { executeAIQueryTool, executeAITool, isAIQueryTool } from "./aiTools.js";
 import { createAIWritePreview } from "./aiWriteConfirmations.js";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout.js";
 dotenv.config();
 
-export function getChatConfig() {
-  const globalKey = getSystemSetting("AI_API_KEY") || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
-  const globalUrl = (getSystemSetting("AI_BASE_URL") || process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
+export async function getChatConfig() { return (await aiRuntimeService().config()).chat; }
 
-  const apiKey = getSystemSetting("AI_CHAT_API_KEY") || globalKey;
-  const baseUrl = (getSystemSetting("AI_CHAT_BASE_URL") || globalUrl).replace(/\/$/, "");
-  const model = getSystemSetting("AI_CHAT_MODEL") || getSystemSetting("AI_MODEL") || process.env.AI_MODEL || "deepseek-ai/DeepSeek-V3";
+export async function getVisionConfig() { return (await aiRuntimeService().config()).vision; }
 
-  return { apiKey, baseUrl, model };
-}
+export async function getAsrConfig() { return (await aiRuntimeService().config()).asr; }
 
-export function getVisionConfig() {
-  const globalKey = getSystemSetting("AI_API_KEY") || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
-  const globalUrl = (getSystemSetting("AI_BASE_URL") || process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
-
-  const apiKey = getSystemSetting("AI_VISION_API_KEY") || globalKey;
-  const baseUrl = (getSystemSetting("AI_VISION_BASE_URL") || globalUrl).replace(/\/$/, "");
-  const model = getSystemSetting("AI_VISION_MODEL") || process.env.AI_VISION_MODEL || "Qwen/Qwen2.5-VL-72B-Instruct";
-
-  return { apiKey, baseUrl, model };
-}
-
-export function getAsrConfig() {
-  const globalKey = getSystemSetting("AI_API_KEY") || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
-  const globalUrl = (getSystemSetting("AI_BASE_URL") || process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
-
-  const apiKey = getSystemSetting("AI_ASR_API_KEY") || globalKey;
-  const baseUrl = (getSystemSetting("AI_ASR_BASE_URL") || globalUrl).replace(/\/$/, "");
-  const model = getSystemSetting("AI_ASR_MODEL") || process.env.AI_ASR_MODEL || "FunAudioLLM/SenseVoiceSmall";
-
-  return { apiKey, baseUrl, model };
-}
-
-export function getAIConfig() {
-  const chat = getChatConfig();
-  const vision = getVisionConfig();
-  const asr = getAsrConfig();
-
-  const globalKey = getSystemSetting("AI_API_KEY") || process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "";
-  const globalUrl = (getSystemSetting("AI_BASE_URL") || process.env.AI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
-
-  return {
-    apiKey: globalKey,
-    baseUrl: globalUrl,
-    model: chat.model,
-    visionModel: vision.model,
-    asrModel: asr.model,
-    chat,
-    vision,
-    asr,
-  };
-}
+export function getAIConfig() { return aiRuntimeService().config(); }
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -351,7 +306,7 @@ export async function chatCompletion(
   messages: ChatMessage[],
   options: ChatCompletionOptions = {}
 ): Promise<ChatCompletionResult> {
-  const chatConfig = getChatConfig();
+  const chatConfig = await getChatConfig();
   const apiKey = (options.apiKey || chatConfig.apiKey).trim();
   const baseUrl = (options.baseUrl || chatConfig.baseUrl).replace(/\/$/, "").trim();
   const model = options.model || chatConfig.model;
@@ -415,7 +370,7 @@ export async function chatCompletion(
     const usage = data.usage || {};
 
     if (options.userId) {
-      logAIUsage({
+      await aiRuntimeService().recordUsage({
         userId: options.userId,
         endpoint: options.endpoint || "chat",
         model: data.model || model,
@@ -546,7 +501,7 @@ export async function chatCompletion(
   } catch (err: any) {
     console.error("[AI Service Exception]", err.message);
     if (options.userId && !usageLogged) {
-      logAIUsage({
+      await aiRuntimeService().recordUsage({
         userId: options.userId,
         endpoint: options.endpoint || "chat",
         model,
@@ -584,7 +539,7 @@ export async function testAIConnection(overrideConfig?: {
   baseUrl?: string;
   model?: string;
 }): Promise<{ reply: string; latencyMs: number }> {
-  const currentConfig = getAIConfig();
+  const currentConfig = await getAIConfig();
   const apiKey = (overrideConfig?.apiKey || currentConfig.apiKey).trim();
   const baseUrl = (overrideConfig?.baseUrl || currentConfig.baseUrl).replace(/\/$/, "").trim();
   const model = (overrideConfig?.model || currentConfig.model).trim();
@@ -641,7 +596,7 @@ export async function analyzeImage(
   prompt: string,
   options: ChatCompletionOptions = {}
 ): Promise<string> {
-  const visionConfig = getVisionConfig();
+  const visionConfig = await getVisionConfig();
   const model = options.model || visionConfig.model;
   const apiKey = options.apiKey || visionConfig.apiKey;
   const baseUrl = options.baseUrl || visionConfig.baseUrl;
@@ -722,7 +677,7 @@ export async function transcribeAudio(
   audioBase64: string,
   options: { userId?: number; mimeType?: string; runId?: string; agentName?: string; phase?: string } = {}
 ): Promise<{ text: string }> {
-  const { apiKey, baseUrl, model: asrModel } = getAsrConfig();
+  const { apiKey, baseUrl, model: asrModel } = await getAsrConfig();
   const startedAt = Date.now();
   if (!audioBase64 || audioBase64.length === 0) {
     return { text: "" };
@@ -752,7 +707,7 @@ export async function transcribeAudio(
         const data = (await response.json()) as { text?: string };
         if (data && typeof data.text === "string" && data.text.trim()) {
           if (options.userId) {
-            logAIUsage({
+            await aiRuntimeService().recordUsage({
               userId: options.userId,
               endpoint: "voice-transcribe",
               model: asrModel,
@@ -771,7 +726,7 @@ export async function transcribeAudio(
     } catch (err) {
       console.warn("[transcribeAudio API Error]", err);
       if (options.userId) {
-        logAIUsage({
+        await aiRuntimeService().recordUsage({
           userId: options.userId,
           endpoint: "voice-transcribe",
           model: asrModel,
@@ -789,7 +744,7 @@ export async function transcribeAudio(
 
   const error = new Error("语音识别服务尚未配置");
   if (options.userId) {
-    logAIUsage({
+    await aiRuntimeService().recordUsage({
       userId: options.userId,
       endpoint: "voice-transcribe",
       model: asrModel,

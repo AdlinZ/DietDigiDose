@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import {decodeCursor,encodeCursor} from "../../utils/cursor.js";
-import {levelFrom} from "../community/level.js";
+import {levelFrom,levelRuleFrom,type UserLevelRule} from "../community/level.js";
 import {AdminUsersError} from "./errors.js";
 import type {AdminUsersRepository} from "./repository.js";
 import type {AuditContext,Row} from "./types.js";
@@ -38,4 +38,6 @@ export class AdminUsersService {
     return{success:true,is_verified_expert:value};}
   async status(actorId:number,userId:number,value:boolean,context:AuditContext){if(actorId===userId&&value)throw new AdminUsersError(400,"不能停用当前的管理员账号");
     if((await this.repository.updateStatus(userId,value,context)).kind==="not_found")throw new AdminUsersError(404,"未找到该用户");return{success:true,is_disabled:value?1:0};}
+  async levelRule(){return levelRuleFrom(await this.repository.levelRule());}
+  async saveLevelRule(rule:UserLevelRule,context:AuditContext){await this.repository.saveLevelRule(rule,context);return{success:true,rule};}
 }

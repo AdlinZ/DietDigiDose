@@ -89,6 +89,7 @@ const moduleSpecs = [
     compositionFile: "server/src/routes/admin.ts",
     compositionImport: "../modules/adminUsers/index.js",
     legacyFile: "server/src/routes/admin/users.ts",
+    extraLegacyFiles: ["server/src/routes/admin/user-level-rule.ts", "server/src/services/userLevel.ts"],
   },
   {
     name: "mealPlans",

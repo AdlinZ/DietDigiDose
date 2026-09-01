@@ -900,10 +900,12 @@ try {
     await pool.query(`INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date,quantity_value,quantity_unit,is_available)
       VALUES($1,'Postgres 临期苹果','水果','1个','2026-09-02',1,'个',TRUE)`, [notificationUserId]);
     const prepared = await notificationsRepository.prepareExpiring("2026-09-01", "2026-09-04");
-    assert.equal(prepared.length, 1);
+    const preparedNotification = prepared.find((item) => item.userId === notificationUserId);
+    assert(preparedNotification);
     assert.equal((await notificationsRepository.prepareExpiring("2026-09-01", "2026-09-04")).length, 0);
     const pendingHistory = await notificationsRepository.history(notificationUserId, "pending", null, 10);
-    const expiryNotificationId = Number(pendingHistory[0]?.id);
+    assert(pendingHistory.some((item) => Number(item.id) === preparedNotification.notificationId));
+    const expiryNotificationId = preparedNotification.notificationId;
     assert.equal(await notificationsRepository.action(notificationUserId, expiryNotificationId, "complete", { postgres: true }), true);
     assert.equal((await pool.query("SELECT is_available FROM inventory_items WHERE food_name='Postgres 临期苹果'")).rows[0].is_available, false);
     const campaign = await notificationsRepository.beginCampaign(user.id, "Postgres 活动", "Postgres 活动正文");

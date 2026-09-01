@@ -7,6 +7,8 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
+import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { PostgresAdminConsoleRepository } from "../src/modules/adminConsole/postgresRepository.js";
 import { AdminConsoleService } from "../src/modules/adminConsole/service.js";
 import { PostgresAdminFoodAssetsRepository } from "../src/modules/adminFoodAssets/postgresRepository.js";
@@ -875,6 +877,65 @@ try {
   assert.equal(await shoppingRepository.remove(shoppingItem.id, user.id + 1), false);
   assert.equal(await shoppingRepository.remove(shoppingItem.id, user.id), true);
 
+  const authAccountRepository = new PostgresAuthAccountRepository(pool);
+  const authAccountService = new AuthAccountService(authAccountRepository);
+  const registeredAuth = await authAccountService.register("postgres-auth@example.com", "PostgresAuth", "initialPass1");
+  const authUserId = Number(registeredAuth.user.id);
+  assert.equal((await authAccountService.me(authUserId)).must_change_password, 0);
+  const loggedInAuth = await authAccountService.login("POSTGRES-AUTH@EXAMPLE.COM", "initialPass1", "127.0.0.7");
+  assert.equal(loggedInAuth.rawIdentifier, "postgres-auth@example.com");
+  assert.equal(loggedInAuth.user.last_login_ip, "127.0.0.7");
+  await authAccountService.changePassword(authUserId, "initialPass1", "changedPass2");
+  await assert.rejects(() => authAccountService.login("postgres-auth@example.com", "initialPass1", "127.0.0.7"), /密码错误/);
+  assert.equal((await authAccountService.login("postgres-auth@example.com", "changedPass2", "127.0.0.7")).user.id, authUserId);
+  await assert.rejects(() => authAccountService.updateProfile(authUserId, { username: "ADMIN" }), /用户名/);
+  const profile = await authAccountService.updateProfile(authUserId, { username: "PostgresAuthUpdated", bio: "PostgreSQL 认证资料" });
+  assert.equal(profile.bio, "PostgreSQL 认证资料");
+
+  const usernameRace = await Promise.allSettled([
+    authAccountService.register("postgres-auth-race-a@example.com", "PostgresRace", "racePass1"),
+    authAccountService.register("postgres-auth-race-b@example.com", "postgresrace", "racePass1"),
+  ]);
+  assert.deepEqual(usernameRace.map((result) => result.status).sort(), ["fulfilled", "rejected"]);
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::integer AS count FROM users WHERE LOWER(username)='postgresrace'")).rows[0]?.count), 1);
+
+  await pool.query(`INSERT INTO ai_chat_messages (user_id,session_id,role,content,source,status,payload_json)
+    VALUES ($1,'postgres-auth-export','user','导出测试','assistant','completed','{"kind":"auth"}'::jsonb)`, [authUserId]);
+  await pool.query(`INSERT INTO inventory_scan_jobs (id,user_id,image_hash,status,result_json)
+    VALUES ('postgres-auth-scan',$1,'postgres-auth-image','completed','[{"foodName":"番茄"}]'::jsonb)`, [authUserId]);
+  await pool.query(`INSERT INTO agent_runs (id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id)
+    VALUES ('postgres-auth-run',$1,'postgres-auth-export','text','assistant','completed','{"message":"测试"}'::jsonb,'postgres-auth-thread')`, [authUserId]);
+  await pool.query(`INSERT INTO agent_actions (id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+    VALUES ('postgres-auth-action','postgres-auth-run',$1,'add_shopping_items','low','executed','{"items":[]}'::jsonb,'postgres-auth-action-key')`, [authUserId]);
+  const exportedAuthData = await authAccountService.exportAiData(authUserId);
+  assert.equal(typeof exportedAuthData.messages[0]?.payload_json, "string");
+  assert.equal(typeof exportedAuthData.scan_jobs[0]?.result_json, "string");
+  assert.equal(typeof exportedAuthData.agent_runs[0]?.input_json, "string");
+  assert.equal(typeof exportedAuthData.agent_actions[0]?.payload_json, "string");
+  assert.deepEqual(exportedAuthData.agent_checkpoints, []);
+  const deletedAuthData = await authAccountService.deleteAiData(authUserId);
+  assert.deepEqual({ messages: deletedAuthData.deleted.messages, scanJobs: deletedAuthData.deleted.scan_jobs,
+    runs: deletedAuthData.deleted.agent_runs }, { messages: 1, scanJobs: 1, runs: 1 });
+
+  const deletingAccount = await authAccountService.register("postgres-delete@example.com", "PostgresDelete", "deletePass1");
+  const deletingUserId = Number(deletingAccount.user.id);
+  const successorAccount = await authAccountService.register("postgres-successor@example.com", "PostgresSuccessor", "successPass1");
+  const successorUserId = Number(successorAccount.user.id);
+  const deletionHouseholdId = Number((await pool.query(`INSERT INTO households (name,invite_code,owner_id)
+    VALUES ('Postgres 删号家庭','PGDELETE',$1) RETURNING id`, [deletingUserId])).rows[0]?.id);
+  await pool.query(`INSERT INTO household_members (household_id,user_id,role) VALUES ($1,$2,'owner'),($1,$3,'member')`,
+    [deletionHouseholdId,deletingUserId,successorUserId]);
+  const deletionMediaUrl = `/media/uploads/community/${deletingUserId}/2026-09-01/photo.png`;
+  await pool.query(`INSERT INTO community_posts (user_id,username,content,image_url,image_urls)
+    VALUES ($1,'PostgresDelete','媒体清理事务',$2,$3)`, [deletingUserId,deletionMediaUrl,JSON.stringify([deletionMediaUrl])]);
+  assert.equal((await authAccountService.deleteAccount(deletingUserId,"deletePass1")).success,true);
+  assert.equal((await pool.query("SELECT 1 FROM users WHERE id=$1",[deletingUserId])).rowCount,0);
+  assert.equal(Number((await pool.query("SELECT owner_id FROM households WHERE id=$1",[deletionHouseholdId])).rows[0]?.owner_id),successorUserId);
+  assert.equal((await pool.query("SELECT 1 FROM household_members WHERE household_id=$1 AND user_id=$2",[deletionHouseholdId,deletingUserId])).rowCount,0);
+  const deletionCleanup = (await pool.query("SELECT urls_json,objects_json FROM media_cleanup_jobs WHERE owner_user_id=$1",[deletingUserId])).rows[0];
+  assert.deepEqual(deletionCleanup?.urls_json,[deletionMediaUrl]);
+  assert.equal(deletionCleanup?.objects_json[0]?.backend,"local");
+
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
@@ -949,6 +1010,7 @@ try {
     postgresHouseholdsRepositoryVerified: true,
     postgresHealthRepositoryVerified: true,
     postgresShoppingRepositoryVerified: true,
+    postgresAuthAccountRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,

@@ -39,6 +39,8 @@ import { InventoryService } from "../src/modules/inventory/service.js";
 import { PostgresKitchenwareRepository } from "../src/modules/kitchenware/postgresRepository.js";
 import { KitchenwareService } from "../src/modules/kitchenware/service.js";
 import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
+import { PostgresMediaCleanupRepository } from "../src/modules/mediaCleanup/postgresRepository.js";
+import { MediaCleanupService } from "../src/modules/mediaCleanup/service.js";
 import { PostgresRateLimitsRepository } from "../src/modules/rateLimits/postgresRepository.js";
 import { RateLimitsService } from "../src/modules/rateLimits/service.js";
 import { PostgresRecommendationsRepository } from "../src/modules/recommendations/postgresRepository.js";
@@ -1127,6 +1129,26 @@ try {
   await rateLimitsService.clearLoginFailures("postgres-rate@example.com");
   assert.equal((await rateLimitsService.loginStatus("postgres-rate@example.com", "198.51.100.1", 2_000_002)).blocked, false);
 
+  const mediaCleanupRepository = new PostgresMediaCleanupRepository(pool);
+  const mediaJobId = await mediaCleanupRepository.enqueue(user.id, ["/media/uploads/postgres-cleanup.png"], [
+    { backend: "local", path: "/tmp/postgres-cleanup.png" },
+  ]);
+  const concurrentClaims = await Promise.all([
+    mediaCleanupRepository.claim(mediaJobId, "postgres-claim-a", 30),
+    mediaCleanupRepository.claim(mediaJobId, "postgres-claim-b", 30),
+  ]);
+  assert.equal(concurrentClaims.filter(Boolean).length, 1);
+  const winningClaim = concurrentClaims.find(Boolean)!;
+  await mediaCleanupRepository.release(mediaJobId, winningClaim.claim_token!, "integration retry");
+  const deletedMediaReferences: unknown[] = [];
+  const mediaCleanupService = new MediaCleanupService(mediaCleanupRepository, async (references) => {
+    deletedMediaReferences.push(...references);
+  });
+  assert.equal(await mediaCleanupService.process(mediaJobId), true);
+  assert.deepEqual(deletedMediaReferences, [{ backend: "local", path: "/tmp/postgres-cleanup.png" }]);
+  const mediaCleanupPage = await mediaCleanupService.list({ status: "completed", page: 1, pageSize: 10 });
+  assert(mediaCleanupPage.items.some((job) => job.id === mediaJobId && job.urlCount === 1));
+
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
@@ -1206,6 +1228,7 @@ try {
     postgresAdminCommunityRepositoryVerified: true,
     postgresAdminUsersRepositoryVerified: true,
     postgresRateLimitsRepositoryVerified: true,
+    postgresMediaCleanupRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,

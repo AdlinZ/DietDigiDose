@@ -1,4 +1,4 @@
-import { processMediaCleanupJob } from "../../services/mediaCleanup.js";
+import { processMediaCleanupJob } from "../mediaCleanup/index.js";
 import { db } from "../../storage/db.js";
 import { createAuthAccountRouter as createRouter } from "./route.js";
 import { AuthAccountService } from "./service.js";

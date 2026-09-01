@@ -2963,10 +2963,10 @@ describe("core business authorization", () => {
     process.env.SUPABASE_MEDIA_BUCKET = "community-media";
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     try {
-      const { enqueueMediaCleanup, processMediaCleanupJob } = await import("../src/services/mediaCleanup.js");
+      const { enqueueMediaCleanup, processMediaCleanupJob } = await import("../src/modules/mediaCleanup/index.js");
       const ownerId = 97_501;
       const url = `https://project.example/storage/v1/object/public/community-media/community/${ownerId}/2026-08-28/photo.png`;
-      const jobId = enqueueMediaCleanup(ownerId, [url]);
+      const jobId = await enqueueMediaCleanup(ownerId, [url]);
       assert.ok(jobId);
       await assert.rejects(() => processMediaCleanupJob(jobId!));
       const row = db.prepare("SELECT status, attempts, last_error, objects_json FROM media_cleanup_jobs WHERE id = ?")
@@ -3048,12 +3048,12 @@ describe("core business authorization", () => {
       assert.equal(staleItem.stale, true);
       assert.equal(staleItem.eligibleForRetry, true);
 
-      const { claimMediaCleanupJob } = await import("../src/services/mediaCleanup.js");
+      const { claimMediaCleanupJob } = await import("../src/modules/mediaCleanup/index.js");
       const concurrencyJobId = Number(db.prepare(`
         INSERT INTO media_cleanup_jobs (owner_user_id, urls_json) VALUES (?, '[]')
       `).run(ownerBase + 4).lastInsertRowid);
-      const firstClaim = claimMediaCleanupJob(concurrencyJobId);
-      const duplicateClaim = claimMediaCleanupJob(concurrencyJobId);
+      const firstClaim = await claimMediaCleanupJob(concurrencyJobId);
+      const duplicateClaim = await claimMediaCleanupJob(concurrencyJobId);
       assert.ok(firstClaim?.claim_token);
       assert.equal(duplicateClaim, null);
       const busyRetry = await api(`/api/v1/admin/media-cleanup-jobs/${concurrencyJobId}/retry`, { method: "POST", token: adminToken });

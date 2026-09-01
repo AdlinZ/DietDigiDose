@@ -5,6 +5,15 @@ const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
   {
+    name: "mediaCleanup",
+    routeFile: null,
+    concreteRepository: /sqliteRepository|SqliteMediaCleanupRepository/,
+    compositionFile: "server/src/routes/admin/media-cleanup.ts",
+    compositionImport: "../../modules/mediaCleanup/index.js",
+    legacyFile: null,
+    extraLegacyFiles: ["server/src/services/mediaCleanup.ts"],
+  },
+  {
     name: "rateLimits",
     routeFile: null,
     concreteRepository: /sqliteRepository|SqliteRateLimitsRepository/,

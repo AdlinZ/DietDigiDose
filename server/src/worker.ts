@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { initializeSqliteWorker } from "./composition/sqliteRuntime.js";
 import { checkExpoPushReceipts, sendExpiringInventoryNotifications } from "./services/notifications.js";
-import { processPendingMediaCleanupJobs } from "./services/mediaCleanup.js";
+import { processPendingMediaCleanupJobs } from "./modules/mediaCleanup/index.js";
 import { runManagedWorkerTask, type WorkerTaskName, type WorkerTaskRunResult } from "./modules/worker/index.js";
 import { logger } from "./utils/logger.js";
 

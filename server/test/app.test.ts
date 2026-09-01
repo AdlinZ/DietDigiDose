@@ -436,6 +436,51 @@ describe("API security baseline", () => {
     db.prepare("DELETE FROM recipes WHERE id = ?").run(recipeId);
   });
 
+  test("admin kitchenware catalog and asset moderation preserve legacy contracts", async () => {
+    db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+    const adminLogin = await api("/api/v1/auth/login", {
+      method: "POST", body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+    });
+    const adminToken = (adminLogin.body as JsonObject).token;
+    const created = await api("/api/v1/admin/kitchenware/catalog", {
+      method: "POST", token: adminToken, body: JSON.stringify({
+        name: "契约测试锅", category: "烹饪锅具", aliases: ["测试炖锅"], cooking_methods: ["炖"], care_note: "保持干燥",
+      }),
+    });
+    assert.equal(created.response.status, 201);
+    const catalogId = Number((created.body as JsonObject).id);
+    assert.deepEqual(JSON.parse((created.body as JsonObject).aliases), ["测试炖锅"]);
+    const duplicate = await api("/api/v1/admin/kitchenware/catalog", {
+      method: "POST", token: adminToken, body: JSON.stringify({
+        name: "契约测试锅", category: "烹饪锅具", aliases: [], cooking_methods: [], care_note: "",
+      }),
+    });
+    assert.equal(duplicate.response.status, 409);
+    const updated = await api(`/api/v1/admin/kitchenware/catalog/${catalogId}`, {
+      method: "PUT", token: adminToken, body: JSON.stringify({
+        name: "契约测试炖锅", category: "烹饪锅具", aliases: ["测试锅"], cooking_methods: ["煮", "炖"], care_note: "擦干",
+      }),
+    });
+    assert.equal(updated.response.status, 200);
+    assert.deepEqual(JSON.parse((updated.body as JsonObject).cooking_methods), ["煮", "炖"]);
+
+    const owner = db.prepare("SELECT id FROM users WHERE username <> 'admin' ORDER BY id LIMIT 1").get() as { id: number };
+    const assetId = Number(db.prepare(`INSERT INTO kitchenware_items (user_id, name, category, status, note)
+      VALUES (?, '管理员资产测试锅', '烹饪锅具', '良好', '契约测试')`).run(owner.id).lastInsertRowid);
+    const status = await api(`/api/v1/admin/kitchenware/${assetId}/status`, {
+      method: "PUT", token: adminToken, body: JSON.stringify({ status: "需保养" }),
+    });
+    assert.equal(status.response.status, 200);
+    assert.equal((db.prepare("SELECT status FROM kitchenware_items WHERE id = ?").get(assetId) as JsonObject).status, "需保养");
+    const removed = await api(`/api/v1/admin/kitchenware/${assetId}`, { method: "DELETE", token: adminToken });
+    assert.equal(removed.response.status, 200);
+    assert.ok((db.prepare("SELECT deleted_at FROM kitchenware_items WHERE id = ?").get(assetId) as JsonObject).deleted_at);
+    assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM admin_audit_logs WHERE resource_id = ?
+      AND action IN ('kitchenware.status_update', 'kitchenware.delete')`).get(String(assetId)) as JsonObject).count, 2);
+    const deleted = await api(`/api/v1/admin/kitchenware/catalog/${catalogId}`, { method: "DELETE", token: adminToken });
+    assert.equal(deleted.response.status, 200);
+  });
+
   test("demo users cover distinct health and dietary recommendation scenarios", async () => {
     const profiles = db.prepare(`
       SELECT u.nickname AS seed_key, u.daily_calories_target, hp.*

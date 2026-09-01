@@ -7,6 +7,8 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { PostgresAdminKitchenwareRepository } from "../src/modules/adminKitchenware/postgresRepository.js";
+import { AdminKitchenwareService } from "../src/modules/adminKitchenware/service.js";
 import { PostgresAdminRecipesRepository } from "../src/modules/adminRecipes/postgresRepository.js";
 import { AdminRecipesService } from "../src/modules/adminRecipes/service.js";
 import { PostgresCookingQueueRepository } from "../src/modules/cookingQueue/postgresRepository.js";
@@ -497,6 +499,34 @@ try {
   assert.equal(await kitchenwareRepository.findOwnedItem(user.id + 1, Number(postgresPan.id)), null);
   const maintainedPan = await kitchenwareRepository.maintainItem(user.id, Number(postgresPan.id));
   assert.equal(maintainedPan?.status, "良好");
+
+  const adminKitchenwareRepository = new PostgresAdminKitchenwareRepository(pool);
+  const adminKitchenwareService = new AdminKitchenwareService(adminKitchenwareRepository);
+  const adminKitchenwareContext = { adminUserId: user.id, ipAddress: "127.0.0.1", userAgent: "postgres-integration" };
+  const adminCatalog = await adminKitchenwareService.createCatalog({
+    name: "Postgres 管理炖锅", category: "烹饪锅具", aliases: ["PG 炖锅"], cooking_methods: ["炖"], care_note: "保持干燥",
+  }, adminKitchenwareContext);
+  assert.equal(adminCatalog.aliases, '["PG 炖锅"]');
+  assert.equal((await adminKitchenwareService.catalog({ search: "PG 炖锅" })).some((item) => Number(item.id) === Number(adminCatalog.id)), true);
+  await assert.rejects(() => adminKitchenwareService.createCatalog({
+    name: "Postgres 管理炖锅", category: "烹饪锅具", aliases: [], cooking_methods: [], care_note: "",
+  }, adminKitchenwareContext), /已存在/);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs
+    WHERE action='kitchenware_catalog.create' AND resource_id=$1`, [String(adminCatalog.id)])).rows[0]?.count), 1);
+  const updatedAdminCatalog = await adminKitchenwareService.updateCatalog(Number(adminCatalog.id), {
+    name: "Postgres 管理汤锅", category: "烹饪锅具", aliases: ["PG 汤锅"], cooking_methods: ["煮", "炖"], care_note: "擦干",
+  }, adminKitchenwareContext);
+  assert.equal(updatedAdminCatalog.cooking_methods, '["煮","炖"]');
+  const moderatedAsset = await kitchenwareService.create(user.id, {
+    name: "Postgres 管理资产", category: "其他", status: "良好", note: "moderation", image_url: "", purchase_date: "",
+  });
+  await adminKitchenwareService.updateAssetStatus(Number(moderatedAsset.id), "需保养", adminKitchenwareContext);
+  assert.equal((await pool.query("SELECT status FROM kitchenware_items WHERE id=$1", [moderatedAsset.id])).rows[0]?.status, "需保养");
+  await adminKitchenwareService.removeAsset(Number(moderatedAsset.id), adminKitchenwareContext);
+  assert((await pool.query("SELECT deleted_at FROM kitchenware_items WHERE id=$1", [moderatedAsset.id])).rows[0]?.deleted_at);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs
+    WHERE resource_type='kitchenware' AND resource_id=$1`, [String(moderatedAsset.id)])).rows[0]?.count), 2);
+  await adminKitchenwareService.removeCatalog(Number(adminCatalog.id), adminKitchenwareContext);
 
   const kitchenwareRecipe = await pool.query(`INSERT INTO recipes
     (title, cook_time, steps_json, ingredients_json, source, status, quality_status, data_license,

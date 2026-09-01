@@ -68,6 +68,13 @@ const moduleSpecs = [
     legacyFile: "server/src/routes/meal-plans.ts",
   },
   {
+    name: "households",
+    concreteRepository: /sqliteRepository|SqliteHouseholdsRepository/,
+    compositionFile: "server/src/routes/households.ts",
+    compositionImport: "../modules/households/index.js",
+    legacyFile: null,
+  },
+  {
     name: "insights",
     concreteRepository: /sqliteRepository|SqliteInsightsRepository/,
     legacyFile: "server/src/routes/insights.ts",
@@ -133,8 +140,8 @@ for (const spec of moduleSpecs) {
   if (!compositionSource.includes(compositionImport)) {
     failures.push(`${compositionFile} must compose the ${spec.name} module entry point`);
   }
-  const legacyFile = spec.legacyFile || `server/src/routes/${spec.name}.ts`;
-  if (fs.existsSync(path.join(root, legacyFile))) {
+  const legacyFile = Object.hasOwn(spec, "legacyFile") ? spec.legacyFile : `server/src/routes/${spec.name}.ts`;
+  if (legacyFile && fs.existsSync(path.join(root, legacyFile))) {
     failures.push(`legacy ${spec.name} route must stay removed`);
   }
   for (const extraLegacyFile of spec.extraLegacyFiles || []) {

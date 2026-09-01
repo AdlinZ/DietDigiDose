@@ -6,7 +6,6 @@ import authRoutes from "./routes/auth.js";
 import inventoryRoutes from "./modules/inventory/index.js";
 import dietRecordsRoutes from "./modules/dietRecords/index.js";
 import healthDataRoutes from "./modules/health/index.js";
-import { createRecipesModule } from "./modules/recipes/index.js";
 import foodsRoutes from "./modules/foods/index.js";
 import communityRoutes, { communityService } from "./routes/community.js";
 import { CommunityError } from "./modules/community/errors.js";
@@ -17,16 +16,14 @@ import shoppingListRoutes from "./modules/shopping/index.js";
 import cookingQueueRoutes from "./modules/cookingQueue/index.js";
 import mealPlanRoutes from "./modules/mealPlans/index.js";
 import insightsRoutes from "./modules/insights/index.js";
-import { createRecommendationsModule } from "./modules/recommendations/index.js";
 import realtimeVoiceRoutes from "./routes/realtime-voice.js";
 import voicePackRoutes from "./modules/voicePacks/index.js";
-import { createKitchenwareModule } from "./modules/kitchenware/index.js";
 import notificationsRoutes from "./routes/notifications.js";
 import mediaRoutes from "./routes/media.js";
 import householdRoutes from "./routes/households.js";
 import feedbackRoutes from "./modules/feedback/index.js";
 import webhookRoutes from "./routes/webhooks.js";
-import { db, initDatabase } from "./storage/db.js";
+import { initializeSqliteApplication } from "./composition/sqliteRuntime.js";
 import { errorHandler, notFoundHandler, sendError } from "./utils/http.js";
 import { requestContext } from "./middleware/requestContext.js";
 import { errorEnvelope } from "./middleware/errorEnvelope.js";
@@ -40,11 +37,8 @@ const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export function createApp() {
   assertNoPublicServerSecrets();
   const providerProfile = getProviderProfile();
-  initDatabase();
+  const { kitchenwareRoutes, recommendationRoutes, recipesRoutes } = initializeSqliteApplication();
   recoverAgentRuntime();
-  const kitchenwareRoutes = createKitchenwareModule(db);
-  const recommendationRoutes = createRecommendationsModule(db);
-  const recipesRoutes = createRecipesModule(db);
   const app = express();
   const uploadedMediaDir = path.resolve(process.env.MEDIA_LOCAL_ROOT || path.join(process.cwd(), "public"), "uploads");
   const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080,http://localhost:5173")

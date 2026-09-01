@@ -1,7 +1,7 @@
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { initDatabase } from "./storage/db.js";
+import { initializeSqliteWorker } from "./composition/sqliteRuntime.js";
 import { checkExpoPushReceipts, sendExpiringInventoryNotifications } from "./services/notifications.js";
 import { processPendingMediaCleanupJobs } from "./services/mediaCleanup.js";
 import { runManagedWorkerTask, type WorkerTaskName, type WorkerTaskRunResult } from "./modules/worker/index.js";
@@ -63,7 +63,7 @@ export async function runWorkerCycle(workerId: string, tasks = selectedTasks()) 
 }
 
 async function main() {
-  initDatabase();
+  initializeSqliteWorker();
   const workerId = `${os.hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
   const once = process.argv.includes("--once");
   const intervalMs = numberFromEnv("WORKER_INTERVAL_MS", 60 * 60_000);

@@ -2,11 +2,11 @@
 
 PostgreSQL 16+ and the generated Drizzle schema are the target database authority. The checked-in baseline covers the final result of `initDatabase()` plus all 59 SQLite migrations: 92 migrated tables, 133 unique/secondary indexes, and 138 foreign keys. Drizzle migration `0001` adds four PostgreSQL-native LangGraph checkpoint tables, for 96 target tables in total. `server/src/storage/database/schema.ts` is the application schema entry point; the obsolete parallel schema has been removed.
 
-This is a staged cutover. Do not point production at PostgreSQL until every domain has a PostgreSQL repository and both staging rehearsals below pass. CI prevents new direct SQLite access and verifies that the generated baseline has not drifted.
+The API and worker now select one database explicitly with `DATABASE_DRIVER=sqlite|postgresql`. PostgreSQL startup requires `DATABASE_URL`, validates the migrated application and LangGraph schema, and never executes runtime DDL. API and worker use the same repository composition and close their pools during graceful shutdown. Keep SQLite selected until both staging rehearsals below pass.
 
 ## Runtime adapter progress
 
-The application still selects SQLite until every write path can switch in one coordinated deployment. Completed driver-neutral domains are:
+The default remains SQLite for local compatibility; staging composition selects PostgreSQL. Completed driver-neutral domains are:
 
 - Inventory: SQLite and PostgreSQL repositories, including transactions, idempotency, optimistic concurrency, and concurrent PostgreSQL integration coverage.
 - User feedback: SQLite and PostgreSQL repositories with structured JSON context and PostgreSQL integration coverage.

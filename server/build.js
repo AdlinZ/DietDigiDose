@@ -16,6 +16,7 @@ try {
       'database-backup': 'scripts/database-backup.ts',
       'database-rehearsal': 'scripts/database-rehearsal.ts',
       'migrate-community-media': 'scripts/migrate-community-media.ts',
+      'apply-postgres-schema': 'scripts/apply-postgres-schema.ts',
     },
     bundle: true,
     splitting: true,

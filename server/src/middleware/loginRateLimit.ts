@@ -10,7 +10,7 @@ function requestIdentifier(req: Request) {
 }
 
 export function loginRateLimit(req: Request, res: Response, next: NextFunction) {
-  void rateLimitsService.loginStatus(requestIdentifier(req), normalizeIp(req)).then((status) => {
+  void rateLimitsService().loginStatus(requestIdentifier(req), normalizeIp(req)).then((status) => {
     if (!status.blocked) return next();
     res.setHeader("Retry-After", status.retryAfterSeconds);
     return res.status(429).json({
@@ -20,9 +20,9 @@ export function loginRateLimit(req: Request, res: Response, next: NextFunction) 
 }
 
 export function recordLoginFailure(req: Request) {
-  return rateLimitsService.recordLoginFailure(requestIdentifier(req), normalizeIp(req));
+  return rateLimitsService().recordLoginFailure(requestIdentifier(req), normalizeIp(req));
 }
 
 export function clearLoginFailures(username: unknown) {
-  return rateLimitsService.clearLoginFailures(username);
+  return rateLimitsService().clearLoginFailures(username);
 }

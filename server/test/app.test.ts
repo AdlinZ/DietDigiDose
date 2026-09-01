@@ -68,7 +68,7 @@ before(async () => {
     import("../src/storage/db.js"),
   ]);
   db = database.db;
-  app = createApp();
+  app = await createApp();
   await new Promise<void>((resolve, reject) => {
     server = app.listen(0, "127.0.0.1", (error?: Error) => error ? reject(error) : resolve());
   });

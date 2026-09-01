@@ -24,7 +24,7 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
     }
     return sendError(res, 401, "无效的 Token", "INVALID_TOKEN");
   }
-  void accessControlService.user(decoded.userId).then((user) => {
+  void accessControlService().user(decoded.userId).then((user) => {
     if (!user) return sendError(res, 401, "用户不存在", "USER_NOT_FOUND");
     if (user.isDisabled) return sendError(res, 403, "账号已被停用", "ACCOUNT_DISABLED");
     if (!Number.isInteger(decoded.sessionVersion) || decoded.sessionVersion !== user.sessionVersion) {
@@ -52,7 +52,7 @@ export function optionalAuthMiddleware(req: AuthRequest, res: Response, next: Ne
     }
     return sendError(res, 401, "无效的 Token", "INVALID_TOKEN");
   }
-  void accessControlService.user(decoded.userId).then((user) => {
+  void accessControlService().user(decoded.userId).then((user) => {
     if (!user) return sendError(res, 401, "用户不存在", "USER_NOT_FOUND");
     if (user.isDisabled) return sendError(res, 403, "账号已被停用", "ACCOUNT_DISABLED");
     if (!Number.isInteger(decoded.sessionVersion) || decoded.sessionVersion !== user.sessionVersion) {

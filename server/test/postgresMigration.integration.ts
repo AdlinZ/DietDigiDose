@@ -1871,6 +1871,21 @@ try {
   const rolledBack = await pool.query("SELECT quantity_value FROM inventory_items WHERE food_name = '番茄'");
   assert.equal(Number(rolledBack.rows[0]?.quantity_value), 200);
 
+  process.env.DATABASE_DRIVER = "postgresql";
+  process.env.DATABASE_URL = connectionString;
+  process.env.REQUIRE_HTTPS = "0";
+  const { createApp } = await import("../src/app.js");
+  const app = await createApp();
+  const runtimeServer = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => runtimeServer.once("listening", resolve));
+  const address = runtimeServer.address();
+  assert(address && typeof address === "object");
+  const health = await fetch(`http://127.0.0.1:${address.port}/api/v1/health`);
+  assert.equal(health.status, 200);
+  assert.equal((await health.json() as { databaseDriver: string }).databaseDriver, "postgresql");
+  await new Promise<void>((resolve, reject) => runtimeServer.close((error) => error ? reject(error) : resolve()));
+  await app.locals.closeRuntime();
+
   console.log(JSON.stringify({
     ok: true,
     tables: report.tableCount,
@@ -1914,6 +1929,7 @@ try {
     postgresNotificationsRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,
+    postgresApplicationRuntimeVerified: true,
   }, null, 2));
 } finally {
   await pool.end();

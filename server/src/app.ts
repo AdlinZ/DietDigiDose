@@ -2,27 +2,8 @@ import express from "express";
 import cors from "cors";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import authRoutes from "./routes/auth.js";
-import inventoryRoutes from "./modules/inventory/index.js";
-import dietRecordsRoutes from "./modules/dietRecords/index.js";
-import healthDataRoutes from "./modules/health/index.js";
-import foodsRoutes from "./modules/foods/index.js";
-import communityRoutes, { communityService } from "./routes/community.js";
 import { CommunityError } from "./modules/community/errors.js";
-import adminRoutes from "./routes/admin.js";
-import aiRoutes from "./routes/ai.js";
-import agentRunRoutes from "./routes/agent-runs.js";
-import shoppingListRoutes from "./modules/shopping/index.js";
-import cookingQueueRoutes from "./modules/cookingQueue/index.js";
-import mealPlanRoutes from "./modules/mealPlans/index.js";
-import insightsRoutes from "./modules/insights/index.js";
-import voicePackRoutes from "./modules/voicePacks/index.js";
-import notificationsRoutes from "./routes/notifications.js";
-import mediaRoutes from "./routes/media.js";
-import householdRoutes from "./routes/households.js";
-import feedbackRoutes from "./modules/feedback/index.js";
-import webhookRoutes from "./routes/webhooks.js";
-import { initializeSqliteApplication } from "./composition/sqliteRuntime.js";
+import { initializeApplicationRuntime } from "./composition/runtime.js";
 import { errorHandler, notFoundHandler, sendError } from "./utils/http.js";
 import { requestContext } from "./middleware/requestContext.js";
 import { errorEnvelope } from "./middleware/errorEnvelope.js";
@@ -33,14 +14,16 @@ import { assertNoPublicServerSecrets, getProviderProfile } from "./providers/pro
 
 const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
-export function createApp() {
+export async function createApp() {
   assertNoPublicServerSecrets();
   const providerProfile = getProviderProfile();
-  const { kitchenwareRoutes, recommendationRoutes, recipesRoutes, realtimeVoiceRoutes } = initializeSqliteApplication();
+  const runtime = await initializeApplicationRuntime();
+  const routes = runtime.routes;
   void recoverAgentRuntime().catch((error) => {
     console.error("[Agent recovery error]", error instanceof Error ? error.message : error);
   });
   const app = express();
+  app.locals.closeRuntime = runtime.close;
   const uploadedMediaDir = path.resolve(process.env.MEDIA_LOCAL_ROOT || path.join(process.cwd(), "public"), "uploads");
   const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:8080,http://localhost:5173")
     .split(",")
@@ -71,7 +54,7 @@ export function createApp() {
   app.get("/share/posts/:code", (req, res, next) => {
     const code = String(req.params.code || "").trim().toUpperCase();
     const escapeHtml = (value: string) => value.replace(/[&<>\"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[character]!));
-    void communityService.resolveShare(code).then((share) => {
+    void runtime.communityService.resolveShare(code).then((share) => {
       const appUrl = `dietdigidose://post-detail?id=${share.post_id}&shareCode=${code}`;
       res.type("html").send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>食光社区分享</title><style>body{font-family:system-ui;background:#fdf8f0;color:#2d2924;display:grid;place-items:center;min-height:100vh;margin:0}.card{max-width:520px;margin:24px;padding:28px;border-radius:24px;background:white;box-shadow:0 10px 40px #3d32291a}a{display:inline-block;margin-top:18px;padding:12px 20px;border-radius:999px;background:#2d6a4f;color:white;text-decoration:none}</style><div class="card"><h1>食光社区</h1><p><strong>${escapeHtml(String(share.username))}</strong> 的健康分享</p><p>${escapeHtml(String(share.content).slice(0, 220))}</p><a href="${appUrl}">打开食光烙记查看</a><p><small>未安装 App 时，可保存分享码 SG${code}，安装后打开 App 即可识别。</small></p></div></html>`);
     }).catch((error) => error instanceof CommunityError && error.status === 404
@@ -81,6 +64,7 @@ export function createApp() {
 
   app.get("/api/v1/health", (_req, res) => res.status(200).json({
     status: "ok",
+    databaseDriver: runtime.driver,
     deploymentProfile: providerProfile.id,
     providers: providerProfile.providers,
   }));
@@ -97,29 +81,29 @@ export function createApp() {
     conversationRetentionDays: Math.max(1, Number(process.env.AI_CONVERSATION_RETENTION_DAYS) || 90),
     supportContact: process.env.PRIVACY_SUPPORT_CONTACT?.trim() || "应用商店开发者联系方式",
   }));
-  app.use("/api/v1/auth", authRoutes);
-  app.use("/api/v1/webhooks", webhookRoutes);
-  app.use("/api/v1/inventory", inventoryRoutes);
-  app.use("/api/v1/diet-records", dietRecordsRoutes);
-  app.use("/api/v1/health-data", healthDataRoutes);
-  app.use("/api/v1/recipes", recipesRoutes);
-  app.use("/api/v1/foods", foodsRoutes);
-  app.use("/api/v1/community", communityRoutes);
-  app.use("/api/v1/admin", adminRoutes);
-  app.use("/api/v1/ai/realtime-voice", realtimeVoiceRoutes);
-  app.use("/api/v1/ai/voice-packs", voicePackRoutes);
-  app.use("/api/v1/ai", aiRoutes);
-  app.use("/api/v1/ai", agentRunRoutes);
-  app.use("/api/v1/shopping-list", shoppingListRoutes);
-  app.use("/api/v1/cooking-queue", cookingQueueRoutes);
-  app.use("/api/v1/meal-plans", mealPlanRoutes);
-  app.use("/api/v1/insights", insightsRoutes);
-  app.use("/api/v1/recommendations", recommendationRoutes);
-  app.use("/api/v1/kitchenware", kitchenwareRoutes);
-  app.use("/api/v1/notifications", notificationsRoutes);
-  app.use("/api/v1/media", mediaRoutes);
-  app.use("/api/v1/households", householdRoutes);
-  app.use("/api/v1/feedback", feedbackRoutes);
+  app.use("/api/v1/auth", routes.auth);
+  app.use("/api/v1/webhooks", routes.webhooks);
+  app.use("/api/v1/inventory", routes.inventory);
+  app.use("/api/v1/diet-records", routes.dietRecords);
+  app.use("/api/v1/health-data", routes.healthData);
+  app.use("/api/v1/recipes", routes.recipes);
+  app.use("/api/v1/foods", routes.foods);
+  app.use("/api/v1/community", routes.community);
+  app.use("/api/v1/admin", routes.admin);
+  app.use("/api/v1/ai/realtime-voice", routes.realtimeVoice);
+  app.use("/api/v1/ai/voice-packs", routes.voicePacks);
+  app.use("/api/v1/ai", routes.ai);
+  app.use("/api/v1/ai", routes.agentRuns);
+  app.use("/api/v1/shopping-list", routes.shopping);
+  app.use("/api/v1/cooking-queue", routes.cookingQueue);
+  app.use("/api/v1/meal-plans", routes.mealPlans);
+  app.use("/api/v1/insights", routes.insights);
+  app.use("/api/v1/recommendations", routes.recommendations);
+  app.use("/api/v1/kitchenware", routes.kitchenware);
+  app.use("/api/v1/notifications", routes.notifications);
+  app.use("/api/v1/media", routes.media);
+  app.use("/api/v1/households", routes.households);
+  app.use("/api/v1/feedback", routes.feedback);
 
   app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (error instanceof SyntaxError && "body" in error) {

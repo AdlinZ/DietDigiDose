@@ -1,10 +1,10 @@
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { initializeSqliteWorker } from "./composition/sqliteRuntime.js";
+import { initializeWorkerRuntime } from "./composition/runtime.js";
+import type { WorkerRuntimeBundle } from "./composition/types.js";
 import { checkExpoPushReceipts, sendExpiringInventoryNotifications } from "./services/notifications.js";
-import { processPendingMediaCleanupJobs } from "./modules/mediaCleanup/index.js";
-import { runManagedWorkerTask, type WorkerTaskName, type WorkerTaskRunResult } from "./modules/worker/index.js";
+import type { WorkerTaskName, WorkerTaskRunResult } from "./modules/worker/types.js";
 import { logger } from "./utils/logger.js";
 
 const supportedTasks: WorkerTaskName[] = ["notifications", "media-cleanup"];
@@ -27,7 +27,7 @@ function selectedTasks() {
   return [...new Set(tasks)] as WorkerTaskName[];
 }
 
-export async function runWorkerCycle(workerId: string, tasks = selectedTasks()) {
+export async function runWorkerCycle(workerId: string, runtime: WorkerRuntimeBundle, tasks = selectedTasks()) {
   const leaseMs = numberFromEnv("WORKER_LEASE_MS", 10 * 60_000);
   const timeoutMs = numberFromEnv("WORKER_TASK_TIMEOUT_MS", 5 * 60_000);
   const results: WorkerTaskRunResult[] = [];
@@ -49,7 +49,7 @@ export async function runWorkerCycle(workerId: string, tasks = selectedTasks()) 
           };
         }
       : async () => {
-          const cleanup = await processPendingMediaCleanupJobs(numberFromEnv("MEDIA_CLEANUP_BATCH_SIZE", 25));
+          const cleanup = await runtime.mediaCleanup.processPending(numberFromEnv("MEDIA_CLEANUP_BATCH_SIZE", 25));
           return {
             processed: cleanup.checked,
             succeeded: cleanup.completed,
@@ -57,56 +57,61 @@ export async function runWorkerCycle(workerId: string, tasks = selectedTasks()) 
             details: cleanup,
           };
         };
+    const runManagedWorkerTask = runtime.worker.run.bind(runtime.worker);
     results.push(await runManagedWorkerTask({ taskName, workerId, leaseMs, timeoutMs, run }));
   }
   return results;
 }
 
 async function main() {
-  initializeSqliteWorker();
-  const workerId = `${os.hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
-  const once = process.argv.includes("--once");
-  const intervalMs = numberFromEnv("WORKER_INTERVAL_MS", 60 * 60_000);
-  let stopping = false;
-  let running = false;
+  const runtime = await initializeWorkerRuntime();
+  try {
+    const workerId = `${os.hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
+    const once = process.argv.includes("--once");
+    const intervalMs = numberFromEnv("WORKER_INTERVAL_MS", 60 * 60_000);
+    let stopping = false;
+    let running = false;
 
-  const stop = (signal: string) => {
-    stopping = true;
-    logger.info("worker.stopping", { workerId, signal });
-  };
-  process.on("SIGINT", () => stop("SIGINT"));
-  process.on("SIGTERM", () => stop("SIGTERM"));
+    const stop = (signal: string) => {
+      stopping = true;
+      logger.info("worker.stopping", { workerId, signal });
+    };
+    process.on("SIGINT", () => stop("SIGINT"));
+    process.on("SIGTERM", () => stop("SIGTERM"));
 
-  logger.info("worker.started", { workerId, tasks: selectedTasks(), once, intervalMs });
-  do {
-    if (!running) {
-      running = true;
-      try {
-        await runWorkerCycle(workerId);
-      } finally {
-        running = false;
+    logger.info("worker.started", { workerId, tasks: selectedTasks(), once, intervalMs });
+    do {
+      if (!running) {
+        running = true;
+        try {
+          await runWorkerCycle(workerId, runtime);
+        } finally {
+          running = false;
+        }
       }
-    }
-    if (once || stopping) break;
-    await new Promise<void>((resolve) => {
-      const cleanup = () => {
-        process.off("SIGINT", finish);
-        process.off("SIGTERM", finish);
-      };
-      const finish = () => {
-        clearTimeout(timer);
-        cleanup();
-        resolve();
-      };
-      const timer = setTimeout(() => {
-        cleanup();
-        resolve();
-      }, intervalMs);
-      process.once("SIGINT", finish);
-      process.once("SIGTERM", finish);
-    });
-  } while (!stopping);
-  logger.info("worker.stopped", { workerId });
+      if (once || stopping) break;
+      await new Promise<void>((resolve) => {
+        const cleanup = () => {
+          process.off("SIGINT", finish);
+          process.off("SIGTERM", finish);
+        };
+        const finish = () => {
+          clearTimeout(timer);
+          cleanup();
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve();
+        }, intervalMs);
+        process.once("SIGINT", finish);
+        process.once("SIGTERM", finish);
+      });
+    } while (!stopping);
+    logger.info("worker.stopped", { workerId });
+  } finally {
+    await runtime.close();
+  }
 }
 
 const isEntryPoint = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]!).href;

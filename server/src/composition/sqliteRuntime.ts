@@ -39,15 +39,46 @@ import { createRealtimeVoiceModule } from "../modules/realtimeVoice/index.js";
 import { db, initDatabase } from "../storage/db.js";
 import { configureAiToolDataService } from "../services/aiTools.js";
 import { configureAdminAuditService } from "../routes/admin/shared.js";
+import { AccessControlService, configureAccessControlService } from "../modules/accessControl/index.js";
+import { SqliteAccessControlRepository } from "../modules/accessControl/sqliteRepository.js";
+import { configureRateLimitsService, RateLimitsService } from "../modules/rateLimits/index.js";
+import { SqliteRateLimitsRepository } from "../modules/rateLimits/sqliteRepository.js";
+import authRoutes from "../routes/auth.js";
+import webhookRoutes from "../routes/webhooks.js";
+import inventoryRoutes from "../modules/inventory/index.js";
+import dietRecordsRoutes from "../modules/dietRecords/index.js";
+import healthDataRoutes from "../modules/health/index.js";
+import foodsRoutes from "../modules/foods/index.js";
+import communityRoutes, { communityService } from "../modules/community/index.js";
+import adminRoutes from "../routes/admin.js";
+import aiRoutes from "../routes/ai.js";
+import agentRunRoutes from "../routes/agent-runs.js";
+import shoppingRoutes from "../modules/shopping/index.js";
+import cookingQueueRoutes from "../modules/cookingQueue/index.js";
+import mealPlanRoutes from "../modules/mealPlans/index.js";
+import insightsRoutes from "../modules/insights/index.js";
+import voicePackRoutes from "../modules/voicePacks/index.js";
+import notificationsRoutes from "../routes/notifications.js";
+import mediaRoutes from "../routes/media.js";
+import householdRoutes from "../routes/households.js";
+import feedbackRoutes from "../modules/feedback/index.js";
+import { WorkerRuntime } from "../modules/worker/service.js";
+import { SqliteWorkerRepository } from "../modules/worker/sqliteRepository.js";
+import { MediaCleanupService } from "../modules/mediaCleanup/service.js";
+import { SqliteMediaCleanupRepository } from "../modules/mediaCleanup/sqliteRepository.js";
+import { deleteStoredMediaReferences } from "../services/mediaStorage.js";
+import type { ApplicationRuntime, WorkerRuntimeBundle } from "./types.js";
 
 let sqliteAgentCheckpointer: ReturnType<typeof createSqliteAgentCheckpointer> | undefined;
 
-export function initializeSqliteApplication() {
+export function initializeSqliteApplication(): ApplicationRuntime {
   initDatabase();
   sqliteAgentCheckpointer ||= createSqliteAgentCheckpointer(
     db as unknown as Parameters<typeof createSqliteAgentCheckpointer>[0],
   );
   configureAgentCheckpointer(sqliteAgentCheckpointer);
+  configureAccessControlService(new AccessControlService(new SqliteAccessControlRepository(db)));
+  configureRateLimitsService(new RateLimitsService(new SqliteRateLimitsRepository(db)));
   configureAiContextService(createAiContextService(new SqliteAiContextRepository(db)));
   configureAIConversationsService(createAIConversationsService(new SqliteAIConversationsRepository(db)));
   configureAIRuntimeService(createAIRuntimeService(new SqliteAIRuntimeRepository(db)));
@@ -62,14 +93,44 @@ export function initializeSqliteApplication() {
   const recommendations = createRecommendationsRuntime(db);
   configureRecommendationsService(recommendations.service);
   return {
-    kitchenwareRoutes: createKitchenwareModule(db),
-    recipesRoutes: createRecipesModule(db),
-    recommendationRoutes: recommendations.routes,
-    realtimeVoiceRoutes: createRealtimeVoiceModule(db),
+    driver: "sqlite",
+    communityService,
+    routes: {
+      auth: authRoutes,
+      webhooks: webhookRoutes,
+      inventory: inventoryRoutes,
+      dietRecords: dietRecordsRoutes,
+      healthData: healthDataRoutes,
+      recipes: createRecipesModule(db),
+      foods: foodsRoutes,
+      community: communityRoutes,
+      admin: adminRoutes,
+      realtimeVoice: createRealtimeVoiceModule(db),
+      voicePacks: voicePackRoutes,
+      ai: aiRoutes,
+      agentRuns: agentRunRoutes,
+      shopping: shoppingRoutes,
+      cookingQueue: cookingQueueRoutes,
+      mealPlans: mealPlanRoutes,
+      insights: insightsRoutes,
+      recommendations: recommendations.routes,
+      kitchenware: createKitchenwareModule(db),
+      notifications: notificationsRoutes,
+      media: mediaRoutes,
+      households: householdRoutes,
+      feedback: feedbackRoutes,
+    },
+    async close() {},
   };
 }
 
-export function initializeSqliteWorker() {
+export function initializeSqliteWorker(): WorkerRuntimeBundle {
   initDatabase();
   configureNotificationsService(createNotificationsService(new SqliteNotificationsRepository(db)));
+  return {
+    driver: "sqlite",
+    worker: new WorkerRuntime(new SqliteWorkerRepository(db)),
+    mediaCleanup: new MediaCleanupService(new SqliteMediaCleanupRepository(db), deleteStoredMediaReferences),
+    async close() {},
+  };
 }

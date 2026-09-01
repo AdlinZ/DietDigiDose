@@ -1,6 +1,9 @@
 import { createAiContextService } from "../modules/aiContext/index.js";
 import { configureAiContextService } from "../modules/aiContext/runtime.js";
 import { SqliteAiContextRepository } from "../modules/aiContext/sqliteRepository.js";
+import { createAIRuntimeService } from "../modules/aiRuntime/index.js";
+import { configureAIRuntimeService } from "../modules/aiRuntime/runtime.js";
+import { SqliteAIRuntimeRepository } from "../modules/aiRuntime/sqliteRepository.js";
 import { createAiToolDataService } from "../modules/aiToolData/index.js";
 import { SqliteAiToolDataRepository } from "../modules/aiToolData/sqliteRepository.js";
 import { createAdminAuditService } from "../modules/adminAudit/index.js";
@@ -16,6 +19,7 @@ import { configureAdminAuditService } from "../routes/admin/shared.js";
 export function initializeSqliteApplication() {
   initDatabase();
   configureAiContextService(createAiContextService(new SqliteAiContextRepository(db)));
+  configureAIRuntimeService(createAIRuntimeService(new SqliteAIRuntimeRepository(db)));
   configureAiToolDataService(createAiToolDataService(new SqliteAiToolDataRepository(db)));
   configureAdminAuditService(createAdminAuditService(new SqliteAdminAuditRepository(db)));
   const recommendations = createRecommendationsRuntime(db);

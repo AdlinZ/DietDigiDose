@@ -919,64 +919,6 @@ function seedCommunityComments() {
   }
 }
 
-export function setSystemSetting(key: string, value: string): void {
-  db.prepare(`
-    INSERT INTO system_settings (key, value, updated_at)
-    VALUES (?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
-  `).run(key, value);
-}
-
-export function logAIUsage(params: {
-  userId: number;
-  endpoint: string;
-  model: string;
-  runId?: string;
-  agentName?: string;
-  phase?: string;
-  promptTokens?: number;
-  completionTokens?: number;
-  totalTokens?: number;
-  latencyMs?: number;
-  success?: boolean;
-  estimatedCostUsd?: number;
-  failureReason?: string;
-}): void {
-  try {
-    const promptTokens = Math.max(0, params.promptTokens || 0);
-    const completionTokens = Math.max(0, params.completionTokens || 0);
-    const totalTokens = Math.max(0, params.totalTokens ?? (promptTokens + completionTokens));
-    const inputRate = Number(process.env.AI_INPUT_COST_PER_MILLION_USD) || 0;
-    const outputRate = Number(process.env.AI_OUTPUT_COST_PER_MILLION_USD) || 0;
-    const estimatedCostUsd = params.estimatedCostUsd ?? (
-      (promptTokens * inputRate + completionTokens * outputRate) / 1_000_000
-    );
-    db.prepare(`
-      INSERT INTO ai_usage_logs (
-        user_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens,
-        latency_ms, success, estimated_cost_usd, failure_reason, run_id, agent_name, phase
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      params.userId,
-      params.endpoint,
-      params.model,
-      promptTokens,
-      completionTokens,
-      totalTokens,
-      params.latencyMs || 0,
-      params.success !== false ? 1 : 0,
-      Math.max(0, estimatedCostUsd),
-      params.failureReason?.slice(0, 500) || null,
-      params.runId || null,
-      params.agentName?.slice(0, 80) || null,
-      params.phase?.slice(0, 80) || null,
-    );
-  } catch (e) {
-    console.error('[logAIUsage Error]', e);
-  }
-}
-
 function seedIngredientsData() {
   const insert = db.prepare(`
     INSERT INTO ingredients_library (

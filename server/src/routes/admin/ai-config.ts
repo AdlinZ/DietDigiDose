@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { getSystemSetting, setSystemSetting } from "../../storage/db.js";
-import { getAIConfig, testAIConnection } from "../../services/aiService.js";
+import { aiRuntimeService } from "../../modules/aiRuntime/runtime.js";
+import { testAIConnection } from "../../services/aiService.js";
 import { DEFAULT_AI_PERSONA_PROMPT } from "../../services/contextBuilder.js";
 import { validateBody } from "../../middleware/validate.js";
 import { adminAIConfigSchema, adminAIConfigTestSchema } from "../../validation/schemas.js";
@@ -10,9 +10,10 @@ import { auditAdminAction } from "./shared.js";
 export function createAdminAIConfigRouter() {
   const router = Router();
 
-  router.get("/ai-config", (_req, res) => {
+  router.get("/ai-config", async (_req, res) => {
     try {
-      const config = getAIConfig();
+      const settings = await aiRuntimeService().settings();
+      const config = await aiRuntimeService().config(settings);
       const formatMasked = (key?: string) =>
         key ? (key.length > 8 ? `${key.slice(0, 4)}****${key.slice(-4)}` : "********") : "";
 
@@ -24,10 +25,10 @@ export function createAdminAIConfigRouter() {
         visionModel: config.visionModel,
         asrModel: config.asrModel,
         agents: {
-          supervisorModel: getSystemSetting("AI_SUPERVISOR_MODEL").trim() || config.chat.model,
-          nutritionModel: getSystemSetting("AI_NUTRITION_MODEL").trim() || config.chat.model,
-          recipeModel: getSystemSetting("AI_RECIPE_MODEL").trim() || config.chat.model,
-          operationsModel: getSystemSetting("AI_OPERATIONS_MODEL").trim() || config.chat.model,
+          supervisorModel: settings.AI_SUPERVISOR_MODEL?.trim() || config.chat.model,
+          nutritionModel: settings.AI_NUTRITION_MODEL?.trim() || config.chat.model,
+          recipeModel: settings.AI_RECIPE_MODEL?.trim() || config.chat.model,
+          operationsModel: settings.AI_OPERATIONS_MODEL?.trim() || config.chat.model,
         },
 
         chat: {
@@ -35,29 +36,29 @@ export function createAdminAIConfigRouter() {
           hasApiKey: !!config.chat.apiKey,
           baseUrl: config.chat.baseUrl,
           model: config.chat.model,
-          isCustomKey: !!getSystemSetting("AI_CHAT_API_KEY"),
-          isCustomUrl: !!getSystemSetting("AI_CHAT_BASE_URL"),
+          isCustomKey: !!settings.AI_CHAT_API_KEY,
+          isCustomUrl: !!settings.AI_CHAT_BASE_URL,
         },
         vision: {
           maskedKey: formatMasked(config.vision.apiKey),
           hasApiKey: !!config.vision.apiKey,
           baseUrl: config.vision.baseUrl,
           model: config.vision.model,
-          isCustomKey: !!getSystemSetting("AI_VISION_API_KEY"),
-          isCustomUrl: !!getSystemSetting("AI_VISION_BASE_URL"),
+          isCustomKey: !!settings.AI_VISION_API_KEY,
+          isCustomUrl: !!settings.AI_VISION_BASE_URL,
         },
         asr: {
           maskedKey: formatMasked(config.asr.apiKey),
           hasApiKey: !!config.asr.apiKey,
           baseUrl: config.asr.baseUrl,
           model: config.asr.model,
-          isCustomKey: !!getSystemSetting("AI_ASR_API_KEY"),
-          isCustomUrl: !!getSystemSetting("AI_ASR_BASE_URL"),
+          isCustomKey: !!settings.AI_ASR_API_KEY,
+          isCustomUrl: !!settings.AI_ASR_BASE_URL,
         },
 
-        systemPrompt: getSystemSetting("AI_SYSTEM_PROMPT").trim() || DEFAULT_AI_PERSONA_PROMPT,
-        isSystemPromptCustomized: !!getSystemSetting("AI_SYSTEM_PROMPT").trim(),
-        isConfiguredFromDB: !!getSystemSetting("AI_API_KEY"),
+        systemPrompt: settings.AI_SYSTEM_PROMPT?.trim() || DEFAULT_AI_PERSONA_PROMPT,
+        isSystemPromptCustomized: !!settings.AI_SYSTEM_PROMPT?.trim(),
+        isConfiguredFromDB: !!settings.AI_API_KEY,
       });
     } catch {
       res.status(500).json({ error: "获取 AI 配置失败" });
@@ -75,30 +76,22 @@ export function createAdminAIConfigRouter() {
         systemPrompt,
       } = req.body;
 
-      if (typeof apiKey === "string" && apiKey.trim()) setSystemSetting("AI_API_KEY", apiKey.trim());
-      if (baseUrl !== undefined) setSystemSetting("AI_BASE_URL", baseUrl.trim());
-      if (model !== undefined) setSystemSetting("AI_MODEL", model.trim());
-      if (visionModel !== undefined) setSystemSetting("AI_VISION_MODEL", visionModel.trim());
-      if (asrModel !== undefined) setSystemSetting("AI_ASR_MODEL", asrModel.trim());
-      if (supervisorModel !== undefined) setSystemSetting("AI_SUPERVISOR_MODEL", supervisorModel.trim());
-      if (nutritionModel !== undefined) setSystemSetting("AI_NUTRITION_MODEL", nutritionModel.trim());
-      if (recipeModel !== undefined) setSystemSetting("AI_RECIPE_MODEL", recipeModel.trim());
-      if (operationsModel !== undefined) setSystemSetting("AI_OPERATIONS_MODEL", operationsModel.trim());
-
-      if (typeof chatApiKey === "string") setSystemSetting("AI_CHAT_API_KEY", chatApiKey.trim());
-      if (chatBaseUrl !== undefined) setSystemSetting("AI_CHAT_BASE_URL", chatBaseUrl.trim());
+      const entries: Array<{ key: string; value: string }> = [];
+      const add = (key: string, value: string | undefined) => {
+        if (value !== undefined) entries.push({ key, value: value.trim() });
+      };
+      if (typeof apiKey === "string" && apiKey.trim()) add("AI_API_KEY", apiKey);
+      add("AI_BASE_URL", baseUrl); add("AI_MODEL", model); add("AI_VISION_MODEL", visionModel); add("AI_ASR_MODEL", asrModel);
+      add("AI_SUPERVISOR_MODEL", supervisorModel); add("AI_NUTRITION_MODEL", nutritionModel);
+      add("AI_RECIPE_MODEL", recipeModel); add("AI_OPERATIONS_MODEL", operationsModel);
+      add("AI_CHAT_API_KEY", chatApiKey); add("AI_CHAT_BASE_URL", chatBaseUrl);
       if (chatModel !== undefined) {
-        setSystemSetting("AI_CHAT_MODEL", chatModel.trim());
-        setSystemSetting("AI_MODEL", chatModel.trim());
+        add("AI_CHAT_MODEL", chatModel);
+        add("AI_MODEL", chatModel);
       }
-
-      if (typeof visionApiKey === "string") setSystemSetting("AI_VISION_API_KEY", visionApiKey.trim());
-      if (visionBaseUrl !== undefined) setSystemSetting("AI_VISION_BASE_URL", visionBaseUrl.trim());
-
-      if (typeof asrApiKey === "string") setSystemSetting("AI_ASR_API_KEY", asrApiKey.trim());
-      if (asrBaseUrl !== undefined) setSystemSetting("AI_ASR_BASE_URL", asrBaseUrl.trim());
-
-      if (systemPrompt !== undefined) setSystemSetting("AI_SYSTEM_PROMPT", systemPrompt.trim());
+      add("AI_VISION_API_KEY", visionApiKey); add("AI_VISION_BASE_URL", visionBaseUrl);
+      add("AI_ASR_API_KEY", asrApiKey); add("AI_ASR_BASE_URL", asrBaseUrl); add("AI_SYSTEM_PROMPT", systemPrompt);
+      await aiRuntimeService().saveSettings(entries);
 
       if (req.userId) {
         await auditAdminAction(req, {

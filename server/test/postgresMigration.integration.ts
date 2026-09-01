@@ -9,6 +9,8 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { PostgresAccessControlRepository } from "../src/modules/accessControl/postgresRepository.js";
 import { AccessControlService } from "../src/modules/accessControl/service.js";
+import { PostgresAiContextRepository } from "../src/modules/aiContext/postgresRepository.js";
+import { AiContextService } from "../src/modules/aiContext/service.js";
 import { PostgresAiToolDataRepository } from "../src/modules/aiToolData/postgresRepository.js";
 import { AiToolDataService } from "../src/modules/aiToolData/service.js";
 import { PostgresAdminAuditRepository } from "../src/modules/adminAudit/postgresRepository.js";
@@ -773,6 +775,28 @@ try {
   assert.equal((await pool.query("SELECT food_name FROM diet_records WHERE id = $1", [aiDietId])).rows[0]?.food_name,
     "Postgres AI 工具餐");
 
+  await pool.query(`INSERT INTO system_settings (key, value) VALUES ('AI_SYSTEM_PROMPT', 'Postgres 食语人设')
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`);
+  await pool.query(`INSERT INTO user_health_profiles
+    (user_id, age, dietary_preference, allergies_json, medical_conditions_json, dietary_restrictions_json,
+      kitchen_constraints_json, nutrition_targets_json)
+    VALUES ($1, 31, '清淡', '[{"name":"花生","type":"过敏","severity":"重度"}]'::jsonb, '["孕期"]'::jsonb,
+      '["低盐"]'::jsonb, '{"meal_time_minutes":20}'::jsonb, '{"protein_g":90}'::jsonb)
+    ON CONFLICT (user_id) DO UPDATE SET age = EXCLUDED.age, dietary_preference = EXCLUDED.dietary_preference,
+      allergies_json = EXCLUDED.allergies_json, medical_conditions_json = EXCLUDED.medical_conditions_json,
+      dietary_restrictions_json = EXCLUDED.dietary_restrictions_json,
+      kitchen_constraints_json = EXCLUDED.kitchen_constraints_json, nutrition_targets_json = EXCLUDED.nutrition_targets_json`, [user.id]);
+  const aiContextService = new AiContextService(new PostgresAiContextRepository(pool));
+  const aiContext = await aiContextService.load(user.id, "2026-09-01");
+  assert.equal(aiContext.personaPrompt, "Postgres 食语人设");
+  assert(aiContext.inventory.some((item) => item.food_name === "番茄"));
+  assert(aiContext.kitchenware.some((item) => item.name === "烤箱"));
+  assert(aiContext.todayDiet.some((item) => item.food_name === "Postgres AI 工具餐"));
+  assert.equal(aiContext.latestHealth?.weight, 62.5);
+  assert.deepEqual(aiContext.healthProfile?.allergies, [{ name: "花生", type: "过敏", severity: "重度" }]);
+  assert.deepEqual(aiContext.healthProfile?.medical_conditions, ["孕期"]);
+  assert.equal(aiContext.healthProfile?.kitchen_constraints.meal_time_minutes, 20);
+
   const adminAuditService = new AdminAuditService(new PostgresAdminAuditRepository(pool));
   await adminAuditService.record({ adminUserId: user.id, action: "postgres.audit.verify", resourceType: "integration",
     resourceId: 149, summary: "验证 PostgreSQL 管理员审计", details: { jsonb: true },
@@ -1244,6 +1268,7 @@ try {
     schema: archive.baselineSchemaSha256,
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
+    postgresAiContextRepositoryVerified: true,
     postgresAiToolDataRepositoryVerified: true,
     postgresAdminAuditRepositoryVerified: true,
     postgresDietRecordsRepositoryVerified: true,

@@ -7,6 +7,8 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { PostgresAdminFoodAssetsRepository } from "../src/modules/adminFoodAssets/postgresRepository.js";
+import { AdminFoodAssetsService } from "../src/modules/adminFoodAssets/service.js";
 import { PostgresAdminKitchenwareRepository } from "../src/modules/adminKitchenware/postgresRepository.js";
 import { AdminKitchenwareService } from "../src/modules/adminKitchenware/service.js";
 import { PostgresAdminRecipesRepository } from "../src/modules/adminRecipes/postgresRepository.js";
@@ -329,6 +331,48 @@ try {
   });
   const customFood = await pool.query("SELECT user_id, name, status FROM user_custom_foods WHERE id = $1", [customFoodId]);
   assert.deepEqual(customFood.rows[0], { user_id: user.id, name: "Postgres 家庭豆浆", status: "pending" });
+
+  const adminFoodRepository = new PostgresAdminFoodAssetsRepository(pool);
+  const adminFoodService = new AdminFoodAssetsService(adminFoodRepository);
+  const adminFoodContext = { adminUserId: user.id, ipAddress: "127.0.0.1", userAgent: "postgres-integration" };
+  const legacyFoodPage = await adminFoodService.ingredients({ search: "Postgres 番茄", page: 1, pageSize: 10 });
+  assert.equal(legacyFoodPage.items[0]?.micronutrients_json, '{"vitaminC":13.7}');
+  const adminIngredient = (name: string, aliases: string[] = []) => ({
+    name, category: "蔬菜", calories_100g: 20, protein_100g: 1, carbs_100g: 4, fat_100g: 0.2,
+    source: "official", aliases, search_keywords: "postgres admin food", preparation_state: "raw",
+    source_version: "postgres-admin-v1", data_license: "DietDigiDose-Original", edible_ratio: 1,
+  });
+  await assert.rejects(() => adminFoodService.createIngredient(adminIngredient("Postgres 回滚食材"), {
+    ...adminFoodContext, adminUserId: 2_147_000_000,
+  }));
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::integer AS count FROM ingredients_library WHERE name='Postgres 回滚食材'"))
+    .rows[0]?.count), 0);
+  const sourceAdminFood = await adminFoodService.createIngredient(adminIngredient("Postgres 管理番茄", ["PG 管理西红柿"]), adminFoodContext);
+  const targetAdminFood = await adminFoodService.createIngredient(adminIngredient("Postgres 目标番茄"), adminFoodContext);
+  await adminFoodService.updateIngredient(sourceAdminFood.id, adminIngredient("Postgres 管理红番茄", ["PG 红番茄"]), adminFoodContext);
+  const addedAlias = await adminFoodService.addAlias(sourceAdminFood.id, { alias: "PG 红柿" }, adminFoodContext);
+  assert.equal(addedAlias.aliases.includes("PG 红柿"), true);
+  await adminFoodService.mergeIngredient(sourceAdminFood.id, { targetId: targetAdminFood.id }, adminFoodContext);
+  const mergedTarget = (await pool.query("SELECT aliases_json FROM ingredients_library WHERE id=$1", [targetAdminFood.id])).rows[0];
+  assert.equal(mergedTarget.aliases_json.includes("Postgres 管理红番茄"), true);
+  const coverage = await adminFoodService.coverage();
+  assert.equal(coverage.categories.some((item) => item.category === "蔬菜"), true);
+
+  await adminFoodService.approveCustomFood(customFoodId, adminFoodContext);
+  assert.equal((await pool.query("SELECT status FROM user_custom_foods WHERE id=$1", [customFoodId])).rows[0]?.status, "approved");
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM ingredients_library
+    WHERE name='Postgres 家庭豆浆' AND source='ugc'`)).rows[0]?.count), 1);
+  await assert.rejects(() => adminFoodService.approveCustomFood(customFoodId, adminFoodContext), /记录未找到/);
+  const rejectedCustomFoodId = await foodRepository.createCustom(user.id, {
+    name: "Postgres 驳回食品", calories_100g: 10, protein_100g: 0, carbs_100g: 1, fat_100g: 0,
+  });
+  await adminFoodService.rejectCustomFood(rejectedCustomFoodId, adminFoodContext);
+  assert.equal((await pool.query("SELECT status FROM user_custom_foods WHERE id=$1", [rejectedCustomFoodId])).rows[0]?.status, "rejected");
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs WHERE action IN
+    ('ingredient.create','ingredient.update','ingredient.alias_add','ingredient.merge','custom_food.approve','custom_food.reject')
+    AND resource_id=ANY($1::text[])`, [[String(sourceAdminFood.id), String(targetAdminFood.id), String(customFoodId), String(rejectedCustomFoodId)]]))
+    .rows[0]?.count), 7);
+  await adminFoodService.removeIngredient(targetAdminFood.id, adminFoodContext);
 
   const cookingQueueRepository = new PostgresCookingQueueRepository(pool);
   await pool.query("DELETE FROM cooking_queue_items WHERE user_id = $1", [user.id]);

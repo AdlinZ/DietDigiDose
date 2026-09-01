@@ -481,6 +481,70 @@ describe("API security baseline", () => {
     assert.equal(deleted.response.status, 200);
   });
 
+  test("admin food assets keep aliases, reviews and audits atomic", async () => {
+    const adminToken = await loginAdmin();
+    const ingredient = (name: string, aliases: string[] = []) => ({
+      name, category: "蔬菜", calories_100g: 21, protein_100g: 1, carbs_100g: 4, fat_100g: 0.2,
+      source: "official", aliases, search_keywords: "契约 番茄", preparation_state: "raw",
+      source_version: "contract-v1", data_license: "DietDigiDose-Original", edible_ratio: 1,
+    });
+    const created = await api("/api/v1/admin/ingredients", {
+      method: "POST", token: adminToken, body: JSON.stringify(ingredient("管理员事务番茄", ["事务西红柿"])),
+    });
+    assert.equal(created.response.status, 200);
+    const sourceId = Number((created.body as JsonObject).id);
+    const listed = await api("/api/v1/admin/ingredients?search=管理员事务番茄&page=1&pageSize=10", { token: adminToken });
+    const listedItem = (listed.body as JsonObject).items.find((item: JsonObject) => item.id === sourceId);
+    assert.deepEqual(JSON.parse(listedItem.aliases_json), ["事务西红柿"]);
+
+    const updated = await api(`/api/v1/admin/ingredients/${sourceId}`, {
+      method: "PUT", token: adminToken, body: JSON.stringify(ingredient("管理员事务红番茄", ["事务番茄"])),
+    });
+    assert.equal(updated.response.status, 200);
+    const aliased = await api(`/api/v1/admin/ingredients/${sourceId}/aliases`, {
+      method: "POST", token: adminToken, body: JSON.stringify({ alias: "红柿" }),
+    });
+    assert.equal(aliased.response.status, 201);
+    assert.deepEqual((aliased.body as JsonObject).aliases, ["事务番茄", "红柿"].sort());
+
+    const target = await api("/api/v1/admin/ingredients", {
+      method: "POST", token: adminToken, body: JSON.stringify(ingredient("管理员目标番茄")),
+    });
+    const targetId = Number((target.body as JsonObject).id);
+    const merged = await api(`/api/v1/admin/ingredients/${sourceId}/merge`, {
+      method: "POST", token: adminToken, body: JSON.stringify({ targetId }),
+    });
+    assert.equal(merged.response.status, 200);
+    assert.ok((db.prepare("SELECT deleted_at FROM ingredients_library WHERE id=?").get(sourceId) as JsonObject).deleted_at);
+    assert.ok(JSON.parse((db.prepare("SELECT aliases_json FROM ingredients_library WHERE id=?").get(targetId) as JsonObject).aliases_json)
+      .includes("管理员事务红番茄"));
+
+    const owner = db.prepare("SELECT id FROM users WHERE username <> 'admin' ORDER BY id LIMIT 1").get() as { id: number };
+    const approvedId = Number(db.prepare(`INSERT INTO user_custom_foods
+      (user_id, name, calories_100g, protein_100g, carbs_100g, fat_100g, status)
+      VALUES (?, '管理员审核豆浆', 31, 3, 1.2, 1.6, 'pending')`).run(owner.id).lastInsertRowid);
+    const approved = await api(`/api/v1/admin/custom-foods/${approvedId}/approve`, { method: "POST", token: adminToken });
+    assert.equal(approved.response.status, 200);
+    assert.equal((db.prepare("SELECT status FROM user_custom_foods WHERE id=?").get(approvedId) as JsonObject).status, "approved");
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM ingredients_library WHERE name='管理员审核豆浆' AND source='ugc'").get() as JsonObject).count, 1);
+    const repeated = await api(`/api/v1/admin/custom-foods/${approvedId}/approve`, { method: "POST", token: adminToken });
+    assert.equal(repeated.response.status, 404);
+
+    const rejectedId = Number(db.prepare(`INSERT INTO user_custom_foods
+      (user_id, name, calories_100g, status) VALUES (?, '管理员驳回食品', 10, 'pending')`).run(owner.id).lastInsertRowid);
+    const rejected = await api(`/api/v1/admin/custom-foods/${rejectedId}/reject`, { method: "POST", token: adminToken });
+    assert.equal(rejected.response.status, 200);
+    assert.equal((db.prepare("SELECT status FROM user_custom_foods WHERE id=?").get(rejectedId) as JsonObject).status, "rejected");
+    assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM admin_audit_logs WHERE action IN
+      ('ingredient.create','ingredient.update','ingredient.alias_add','ingredient.merge','custom_food.approve','custom_food.reject')
+      AND resource_id IN (?, ?, ?, ?)`).get(String(sourceId), String(targetId), String(approvedId), String(rejectedId)) as JsonObject).count, 7);
+
+    const removed = await api(`/api/v1/admin/ingredients/${targetId}`, { method: "DELETE", token: adminToken });
+    assert.equal(removed.response.status, 200);
+    db.prepare("DELETE FROM ingredients_library WHERE id IN (?, ?) OR name='管理员审核豆浆'").run(sourceId, targetId);
+    db.prepare("DELETE FROM user_custom_foods WHERE id IN (?, ?)").run(approvedId, rejectedId);
+  });
+
   test("demo users cover distinct health and dietary recommendation scenarios", async () => {
     const profiles = db.prepare(`
       SELECT u.nickname AS seed_key, u.daily_calories_target, hp.*

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { AgentActionProposal, AgentInput, AgentRunEvent, AgentRunStatus, SpecialistName } from "../../services/agent/types.js";
+import { agentActionProposalIndex } from "./repository.js";
 import type {
   AgentRunAction,
   AgentRunMedia,
@@ -175,6 +176,8 @@ export class PostgresAgentRunsRepository implements AgentRunsRepository {
   async actions(runId: string, userId: number) {
     const rows = (await this.pool.query(`SELECT * FROM agent_actions WHERE run_id=$1 AND user_id=$2
       ORDER BY created_at,id`, [runId, userId])).rows as Row[];
+    rows.sort((left, right) => agentActionProposalIndex(runId, left.idempotency_key)
+      - agentActionProposalIndex(runId, right.idempotency_key));
     return rows.map((row): AgentRunAction => ({
       id: String(row.id),
       actionType: String(row.action_type) as AgentActionProposal["actionType"],

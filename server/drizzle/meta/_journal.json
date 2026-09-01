@@ -8,6 +8,13 @@
       "when": 1788202487400,
       "tag": "0000_spotty_rocket_racer",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788256769324,
+      "tag": "0001_luxuriant_boomerang",
+      "breakpoints": true
     }
   ]
 }

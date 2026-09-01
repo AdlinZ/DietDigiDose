@@ -76,6 +76,20 @@ describe("Supervisor Agent architecture", () => {
     assert.doesNotMatch(runtime, /db\.prepare\(/);
   });
 
+  test("LangGraph checkpoints are configured behind Drizzle-owned SQLite and PostgreSQL adapters", () => {
+    const runtime = read("../src/services/agent/runtime.ts");
+    const postgresCheckpoints = read("../src/modules/agentCheckpoints/postgres.ts");
+    const postgresSchema = read("../src/storage/database/postgres/schema.extensions.ts");
+    assert.match(runtime, /agentCheckpointer\(\)/);
+    assert.doesNotMatch(runtime, /SqliteSaver|storage\/db/);
+    assert.match(postgresCheckpoints, /new PostgresSaver\(pool/);
+    assert.doesNotMatch(postgresCheckpoints, /\.setup\(\)/);
+    for (const table of ["checkpoint_migrations", "checkpoints", "checkpoint_blobs", "checkpoint_writes"]) {
+      assert.match(postgresSchema, new RegExp(`pgTable\\(\"${table}\"`));
+    }
+    assert.match(postgresSchema, /onDelete: "cascade"/);
+  });
+
   test("Agent run lifecycle persistence is behind SQLite and PostgreSQL repositories", () => {
     const facade = read("../src/services/agent/repository.ts");
     const sqliteRuns = read("../src/modules/agentRuns/sqliteRepository.ts");

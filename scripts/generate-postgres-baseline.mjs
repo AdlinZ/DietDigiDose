@@ -38,6 +38,7 @@ const BOOLEAN_COLUMNS = new Set([
 ]);
 const JSON_COLUMNS = new Set(["kitchenware_catalog.aliases", "kitchenware_catalog.cooking_methods", "recipes.tags"]);
 const BIGINT_COLUMNS = new Set(["rate_limit_buckets.window_started_at", "rate_limit_buckets.blocked_until"]);
+const POSTGRES_ONLY_UNIQUE_COLUMNS = new Set(["agent_runs.checkpoint_thread_id"]);
 
 function quoteIdentifier(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
@@ -239,6 +240,11 @@ function renderDrizzle(tables, sourceHash) {
     const primaryKeyColumns = table.columns.filter((column) => column.primaryKeyOrder > 0).sort((left, right) => left.primaryKeyOrder - right.primaryKeyOrder);
     if (primaryKeyColumns.length > 1) {
       lines.push(`  primaryKey({ name: ${escapeString(`${table.name}_pkey`)}, columns: [${primaryKeyColumns.map((column) => `table.${propertyName(column.name)}`).join(", ")}] }),`);
+    }
+    for (const column of table.columns) {
+      if (POSTGRES_ONLY_UNIQUE_COLUMNS.has(`${table.name}.${column.name}`)) {
+        lines.push(`  unique(${escapeString(`${table.name}_${column.name}_key`)}).on(table.${propertyName(column.name)}),`);
+      }
     }
     for (const dbIndex of table.indexes) {
       if (dbIndex.origin === "pk") continue;

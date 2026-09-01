@@ -28,6 +28,7 @@ import { AgentSchedulingService } from "../src/modules/agentScheduling/service.j
 import { PostgresAgentOperationsRepository } from "../src/modules/agentOperations/postgresRepository.js";
 import { AgentOperationsService } from "../src/modules/agentOperations/service.js";
 import type { ExecutableAgentAction } from "../src/modules/agentOperations/repository.js";
+import { createPostgresAgentCheckpointer } from "../src/modules/agentCheckpoints/postgres.js";
 import { PostgresAgentRunsRepository } from "../src/modules/agentRuns/postgresRepository.js";
 import { AgentRunsService } from "../src/modules/agentRuns/service.js";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
@@ -641,6 +642,40 @@ try {
     "data:image/png;base64,cG9zdGdyZXMtc2VjcmV0");
   assert.equal(await agentRunsService.run(agentRun.id, householdMember), undefined);
   assert.equal((await agentRunsService.reusableRun(user.id, "postgres-agent-runs-key"))?.id, agentRun.id);
+  const checkpointRun = await agentRunsService.createRun(user.id, {
+    modality: "text", prompt: "验证 PostgreSQL checkpoint", idempotencyKey: "postgres-checkpoint-key",
+  });
+  const postgresCheckpointer = await createPostgresAgentCheckpointer(pool);
+  const checkpointConfig = await postgresCheckpointer.put(
+    { configurable: { thread_id: checkpointRun.id, checkpoint_ns: "" } },
+    {
+      v: 1,
+      id: "00000000-0000-6000-8000-000000000001",
+      ts: new Date().toISOString(),
+      channel_values: { goal: "验证 PostgreSQL checkpoint" },
+      channel_versions: { goal: "1" },
+      versions_seen: {},
+    },
+    { source: "input", step: 0, parents: {} },
+    { goal: "1" },
+  );
+  await postgresCheckpointer.putWrites(checkpointConfig, [["checkpoint_test", { ok: true }]], "checkpoint-task");
+  const checkpointTuple = await postgresCheckpointer.getTuple(checkpointConfig);
+  assert.equal(checkpointTuple?.checkpoint.channel_values.goal, "验证 PostgreSQL checkpoint");
+  assert.deepEqual(checkpointTuple?.pendingWrites, [["checkpoint-task", "checkpoint_test", { ok: true }]]);
+  const checkpointStorage = (await pool.query(`SELECT
+    (SELECT COUNT(*)::integer FROM checkpoints WHERE thread_id=$1) AS checkpoints,
+    (SELECT COUNT(*)::integer FROM checkpoint_blobs WHERE thread_id=$1) AS blobs,
+    (SELECT COUNT(*)::integer FROM checkpoint_writes WHERE thread_id=$1) AS writes,
+    (SELECT MAX(v)::integer FROM checkpoint_migrations) AS version`, [checkpointRun.id])).rows[0];
+  assert.deepEqual(checkpointStorage, { checkpoints: 1, blobs: 1, writes: 1, version: 4 });
+  await pool.query("DELETE FROM agent_runs WHERE id=$1", [checkpointRun.id]);
+  assert.equal(await postgresCheckpointer.getTuple(checkpointConfig), undefined);
+  const checkpointRowsAfterRunDeletion = (await pool.query(`SELECT
+    (SELECT COUNT(*)::integer FROM checkpoints WHERE thread_id=$1) AS checkpoints,
+    (SELECT COUNT(*)::integer FROM checkpoint_blobs WHERE thread_id=$1) AS blobs,
+    (SELECT COUNT(*)::integer FROM checkpoint_writes WHERE thread_id=$1) AS writes`, [checkpointRun.id])).rows[0];
+  assert.deepEqual(checkpointRowsAfterRunDeletion, { checkpoints: 0, blobs: 0, writes: 0 });
   const concurrentEventSequences = await Promise.all(Array.from({ length: 12 }, (_, index) =>
     agentRunsService.appendEvent(agentRun.id, user.id, "VisionAgent", "concurrent_event", `并发事件 ${index + 1}`, { index })));
   assert.deepEqual([...concurrentEventSequences].sort((left, right) => left - right),
@@ -700,6 +735,14 @@ try {
     ($1,'agent:Supervisor','postgres-supervisor',120,30,150,800,TRUE,0.0012,$2,'Supervisor','routing'),
     ($1,'agent:VisionAgent','postgres-vision',200,50,250,1200,TRUE,0.0025,$2,'VisionAgent','recognition')`,
   [user.id, adminAgentRunId]);
+  await postgresCheckpointer.put(
+    { configurable: { thread_id: adminAgentRunId, checkpoint_ns: "" } },
+    {
+      v: 1, id: "00000000-0000-6000-8000-000000000002", ts: new Date().toISOString(),
+      channel_values: { goal: "识别 PostgreSQL 沙拉" }, channel_versions: { goal: "1" }, versions_seen: {},
+    },
+    { source: "loop", step: 1, parents: {} }, { goal: "1" },
+  );
   const adminAgentRunsService = new AdminAgentRunsService(new PostgresAdminAgentRunsRepository(pool));
   const adminAgentList = await adminAgentRunsService.list({ query: adminAgentRunId, modality: "image", agent: "VisionAgent", range: "all" });
   assert.equal(adminAgentList.total, 1);
@@ -710,7 +753,7 @@ try {
   const adminAgentDetail = await adminAgentRunsService.detail(adminAgentRunId);
   assert.equal(adminAgentDetail.run.input.prompt, "识别 PostgreSQL 沙拉");
   assert.equal(adminAgentDetail.run.input.mediaRef, undefined);
-  assert.equal(adminAgentDetail.run.checkpointCount, 0);
+  assert.equal(adminAgentDetail.run.checkpointCount, 1);
   assert.equal((adminAgentDetail.events[2]?.payload as { actions: Array<{ payload: { foodName: string } }> })
     .actions[0]?.payload.foodName, "生菜");
   assert.equal((adminAgentDetail.events[3]?.payload as { reply: string }).reply, "PostgreSQL 蔬菜沙拉");
@@ -1500,15 +1543,34 @@ try {
     VALUES ('postgres-auth-run',$1,'postgres-auth-export','text','assistant','completed','{"message":"测试"}'::jsonb,'postgres-auth-thread')`, [authUserId]);
   await pool.query(`INSERT INTO agent_actions (id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
     VALUES ('postgres-auth-action','postgres-auth-run',$1,'add_shopping_items','low','executed','{"items":[]}'::jsonb,'postgres-auth-action-key')`, [authUserId]);
+  const authCheckpointConfig = await postgresCheckpointer.put(
+    { configurable: { thread_id: "postgres-auth-thread", checkpoint_ns: "" } },
+    {
+      v: 1, id: "00000000-0000-6000-8000-000000000003", ts: new Date().toISOString(),
+      channel_values: { message: "导出 checkpoint" }, channel_versions: { message: "1" }, versions_seen: {},
+    },
+    { source: "input", step: 0, parents: {} }, { message: "1" },
+  );
+  await postgresCheckpointer.putWrites(authCheckpointConfig, [["export_test", { exported: true }]], "auth-export-task");
   const exportedAuthData = await authAccountService.exportAiData(authUserId);
   assert.equal(typeof exportedAuthData.messages[0]?.payload_json, "string");
   assert.equal(typeof exportedAuthData.scan_jobs[0]?.result_json, "string");
   assert.equal(typeof exportedAuthData.agent_runs[0]?.input_json, "string");
   assert.equal(typeof exportedAuthData.agent_actions[0]?.payload_json, "string");
-  assert.deepEqual(exportedAuthData.agent_checkpoints, []);
+  assert.equal(exportedAuthData.agent_checkpoints.length, 1);
+  assert.equal(typeof exportedAuthData.agent_checkpoints[0]?.checkpoint_json, "string");
+  assert.equal(exportedAuthData.agent_checkpoint_blobs.length, 1);
+  assert.equal(typeof exportedAuthData.agent_checkpoint_blobs[0]?.blob_base64, "string");
+  assert.equal(exportedAuthData.agent_checkpoint_writes.length, 1);
+  assert.equal(typeof exportedAuthData.agent_checkpoint_writes[0]?.value_base64, "string");
   const deletedAuthData = await authAccountService.deleteAiData(authUserId);
   assert.deepEqual({ messages: deletedAuthData.deleted.messages, scanJobs: deletedAuthData.deleted.scan_jobs,
     runs: deletedAuthData.deleted.agent_runs }, { messages: 1, scanJobs: 1, runs: 1 });
+  assert.deepEqual((await pool.query(`SELECT
+    (SELECT COUNT(*)::integer FROM checkpoints WHERE thread_id='postgres-auth-thread') AS checkpoints,
+    (SELECT COUNT(*)::integer FROM checkpoint_blobs WHERE thread_id='postgres-auth-thread') AS blobs,
+    (SELECT COUNT(*)::integer FROM checkpoint_writes WHERE thread_id='postgres-auth-thread') AS writes`)).rows[0],
+  { checkpoints: 0, blobs: 0, writes: 0 });
 
   const deletingAccount = await authAccountService.register("postgres-delete@example.com", "PostgresDelete", "deletePass1");
   const deletingUserId = Number(deletingAccount.user.id);
@@ -1783,6 +1845,7 @@ try {
     postgresAIConversationsRepositoryVerified: true,
     postgresAdminAgentRunsRepositoryVerified: true,
     postgresAgentOperationsRepositoryVerified: true,
+    postgresAgentCheckpointerVerified: true,
     postgresAgentRunsRepositoryVerified: true,
     postgresAgentSchedulingRepositoryVerified: true,
     postgresAIRuntimeRepositoryVerified: true,

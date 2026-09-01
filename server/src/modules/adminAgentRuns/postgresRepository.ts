@@ -56,7 +56,7 @@ export class PostgresAdminAgentRunsRepository implements AdminAgentRunsRepositor
       r.created_at AS "createdAt",r.updated_at AS "updatedAt",EXISTS(SELECT 1 FROM agent_run_media m WHERE m.run_id=r.id) AS "hasMedia"
       FROM agent_runs r JOIN users u ON u.id=r.user_id WHERE r.id=$1`, [runId])).rows[0] as Row | undefined;
     if (!run) return null;
-    const [events, actions, usageRecords, usageSummary, usageByAgent] = await Promise.all([
+    const [events, actions, usageRecords, usageSummary, usageByAgent, checkpointCounts] = await Promise.all([
       this.pool.query(`SELECT sequence,agent_name AS "agentName",event_type AS "eventType",summary,payload_json AS "payloadJson",
         created_at AS "createdAt" FROM agent_run_events WHERE run_id=$1 ORDER BY sequence`, [runId]),
       this.pool.query(`SELECT id,action_type AS "actionType",risk_level AS "riskLevel",status,payload_json AS "payloadJson",
@@ -75,8 +75,14 @@ export class PostgresAdminAgentRunsRepository implements AdminAgentRunsRepositor
         COALESCE(SUM(prompt_tokens),0)::integer AS "promptTokens",COALESCE(SUM(completion_tokens),0)::integer AS "completionTokens",
         COALESCE(SUM(total_tokens),0)::integer AS "totalTokens",COALESCE(ROUND(SUM(estimated_cost_usd)::numeric,6),0) AS "estimatedCostUsd"
         FROM ai_usage_logs WHERE run_id=$1 GROUP BY COALESCE(agent_name,'Unknown') ORDER BY "totalTokens" DESC,"modelCalls" DESC`, [runId]),
+      this.pool.query(`SELECT
+        (SELECT COUNT(*)::integer FROM checkpoints WHERE thread_id=$1) AS "checkpointCount",
+        (SELECT COUNT(*)::integer FROM checkpoint_writes WHERE thread_id=$1) AS "checkpointWriteCount"`,
+      [String(run.checkpointThreadId)]),
     ]);
-    return { run, checkpointAvailable: false, checkpointCount: 0, checkpointWriteCount: 0, events: events.rows as Row[],
+    return { run, checkpointAvailable: true,
+      checkpointCount: Number(checkpointCounts.rows[0]?.checkpointCount || 0),
+      checkpointWriteCount: Number(checkpointCounts.rows[0]?.checkpointWriteCount || 0), events: events.rows as Row[],
       actions: actions.rows as Row[], usageRecords: usageRecords.rows as Row[], usageSummary: usageSummary.rows[0] as Row,
       usageByAgent: usageByAgent.rows as Row[] };
   }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { AgentActionProposal, AgentInput, AgentRunEvent, AgentRunStatus, SpecialistName } from "../../services/agent/types.js";
+import { agentActionProposalIndex } from "./repository.js";
 import type {
   AgentRunAction,
   AgentRunMedia,
@@ -156,8 +157,11 @@ export class SqliteAgentRunsRepository implements AgentRunsRepository {
   }
 
   async actions(runId: string, userId: number) {
-    return (this.database.prepare("SELECT * FROM agent_actions WHERE run_id=? AND user_id=? ORDER BY created_at,id")
-      .all(runId, userId) as Array<Record<string, unknown>>).map((row): AgentRunAction => ({
+    const rows = this.database.prepare("SELECT * FROM agent_actions WHERE run_id=? AND user_id=? ORDER BY created_at,id")
+      .all(runId, userId) as Array<Record<string, unknown>>;
+    rows.sort((left, right) => agentActionProposalIndex(runId, left.idempotency_key)
+      - agentActionProposalIndex(runId, right.idempotency_key));
+    return rows.map((row): AgentRunAction => ({
         id: String(row.id),
         actionType: String(row.action_type) as AgentActionProposal["actionType"],
         riskLevel: String(row.risk_level) as AgentActionProposal["riskLevel"],
@@ -168,7 +172,7 @@ export class SqliteAgentRunsRepository implements AgentRunsRepository {
         version: Number(row.version),
         createdAt: String(row.created_at),
         executedAt: row.executed_at ? String(row.executed_at) : undefined,
-      }));
+    }));
   }
 
   async reviseActions(runId: string, userId: number, actions: Array<AgentActionProposal & { id?: string }>) {

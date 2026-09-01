@@ -7,6 +7,7 @@ import { analyzeImage, transcribeAudio } from "../aiService.js";
 import { buildAIPromptMessages, buildUserContext } from "../contextBuilder.js";
 import { executeAIQueryTool } from "../aiTools.js";
 import { aiRuntimeService } from "../../modules/aiRuntime/runtime.js";
+import { agentSchedulingService } from "../../modules/agentScheduling/runtime.js";
 import { db } from "../../storage/db.js";
 import { classifyAIError } from "../aiErrors.js";
 import {
@@ -197,13 +198,9 @@ export async function getPublicAgentCheckpointState(runId: string) {
   };
 }
 
-function scheduleQueuedRuns(userId: number) {
-  const running = db.prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE user_id = ? AND status = 'running'").get(userId) as { count: number };
-  const slots = Math.max(0, 2 - running.count);
-  if (!slots) return;
-  const queued = db.prepare("SELECT id FROM agent_runs WHERE user_id = ? AND status = 'queued' ORDER BY created_at, id LIMIT ?")
-    .all(userId, slots) as Array<{ id: string }>;
-  for (const item of queued) kickOff(item.id);
+async function scheduleQueuedRuns(userId: number) {
+  const runIds = await agentSchedulingService().claimQueuedRuns(userId, 2);
+  for (const runId of runIds) kickOff(runId);
 }
 
 async function modelNameFor(agent: ModelRole) { return (await aiRuntimeService().agentConfig(agent)).model; }
@@ -773,7 +770,9 @@ function kickOff(runId: string, resume?: AgentResumePayload) {
   }).finally(() => {
     activeRuns.delete(runId);
     const stored = getAgentRunInput(runId);
-    if (stored) scheduleQueuedRuns(stored.userId);
+    if (stored) void scheduleQueuedRuns(stored.userId).catch((error) => {
+      console.error("[Agent scheduling error]", error instanceof Error ? error.message : error);
+    });
   });
   activeRuns.set(runId, promise);
   return promise;
@@ -798,7 +797,7 @@ export async function waitForSupervisorRunCompletion(runId: string) {
 export async function startSupervisorRun(userId: number, input: AgentInput, waitMs = 25_000): Promise<AgentResponse> {
   const reusable = input.idempotencyKey ? findReusableAgentRun(userId, input.idempotencyKey) : undefined;
   const created = reusable || createAgentRun(userId, input);
-  scheduleQueuedRuns(userId);
+  await scheduleQueuedRuns(userId);
   const run = await waitForRun(created.id, waitMs);
   return { mode: "agent", run, reply: run.reply, transcript: run.transcript, artifacts: run.artifacts, pendingApproval: run.pendingApproval };
 }
@@ -815,7 +814,7 @@ export async function resumeSupervisorRun(userId: number, runId: string, resume:
   if (!("decision" in resume)) throw new Error("当前 Agent Run 需要批准决定");
   const pending = toAgentRunSummary(row).pendingApproval;
   if (!pending || Date.parse(pending.expiresAt) <= Date.now()) {
-    db.prepare("UPDATE agent_actions SET status = 'expired', updated_at = CURRENT_TIMESTAMP WHERE run_id = ? AND user_id = ? AND status = 'awaiting_approval'").run(runId, userId);
+    await agentSchedulingService().expireAwaitingApproval(runId, userId);
     setAgentRunStatus(runId, "expired", { pendingApproval: null, errorCode: "AGENT_APPROVAL_EXPIRED", errorMessage: "批准包已超过 24 小时有效期" });
     throw new Error("批准包已过期");
   }
@@ -850,12 +849,12 @@ export function undoSupervisorRun(userId: number, runId: string) {
   return result;
 }
 
-export function recoverAgentRuntime() {
-  db.prepare("UPDATE agent_runs SET status = 'queued', updated_at = CURRENT_TIMESTAMP WHERE status = 'running'").run();
+export async function recoverAgentRuntime() {
+  await agentSchedulingService().resetInterruptedRuns();
   const userIds = new Set<number>();
   for (const { id } of listRecoverableAgentRuns()) {
     const stored = getAgentRunInput(id);
     if (stored) userIds.add(stored.userId);
   }
-  for (const userId of userIds) scheduleQueuedRuns(userId);
+  await Promise.all([...userIds].map((userId) => scheduleQueuedRuns(userId)));
 }

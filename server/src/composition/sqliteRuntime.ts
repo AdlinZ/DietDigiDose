@@ -20,6 +20,9 @@ import { configureAIWriteConfirmationsService } from "../modules/aiWriteConfirma
 import { SqliteAIWriteConfirmationsRepository } from "../modules/aiWriteConfirmations/sqliteRepository.js";
 import { createAdminAuditService } from "../modules/adminAudit/index.js";
 import { SqliteAdminAuditRepository } from "../modules/adminAudit/sqliteRepository.js";
+import { createAgentSchedulingService } from "../modules/agentScheduling/index.js";
+import { configureAgentSchedulingService } from "../modules/agentScheduling/runtime.js";
+import { SqliteAgentSchedulingRepository } from "../modules/agentScheduling/sqliteRepository.js";
 import { createKitchenwareModule } from "../modules/kitchenware/index.js";
 import { createRecipesModule } from "../modules/recipes/index.js";
 import { createRecommendationsRuntime } from "../modules/recommendations/index.js";
@@ -39,6 +42,7 @@ export function initializeSqliteApplication() {
   configureAiToolDataService(createAiToolDataService(new SqliteAiToolDataRepository(db)));
   configureAIWriteConfirmationsService(createAIWriteConfirmationsService(new SqliteAIWriteConfirmationsRepository(db)));
   configureAdminAuditService(createAdminAuditService(new SqliteAdminAuditRepository(db)));
+  configureAgentSchedulingService(createAgentSchedulingService(new SqliteAgentSchedulingRepository(db)));
   const recommendations = createRecommendationsRuntime(db);
   configureRecommendationsService(recommendations.service);
   return {

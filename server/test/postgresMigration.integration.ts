@@ -23,6 +23,8 @@ import { PostgresAdminAuditRepository } from "../src/modules/adminAudit/postgres
 import { AdminAuditService } from "../src/modules/adminAudit/service.js";
 import { PostgresAdminAgentRunsRepository } from "../src/modules/adminAgentRuns/postgresRepository.js";
 import { AdminAgentRunsService } from "../src/modules/adminAgentRuns/service.js";
+import { PostgresAgentSchedulingRepository } from "../src/modules/agentScheduling/postgresRepository.js";
+import { AgentSchedulingService } from "../src/modules/agentScheduling/service.js";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { PostgresAuthVerificationRepository } from "../src/modules/authVerification/postgresRepository.js";
@@ -654,6 +656,29 @@ try {
   assert.equal((adminAgentDetail.events[3]?.payload as { reply: string }).reply, "PostgreSQL 蔬菜沙拉");
   assert.equal(adminAgentDetail.usage.summary.totalTokens, 400);
   assert.equal(JSON.stringify(adminAgentDetail).includes("raw-media-must-not-leak"), false);
+  const schedulingService = new AgentSchedulingService(new PostgresAgentSchedulingRepository(pool));
+  const schedulingRunIds = [0, 1, 2, 3].map((index) => `postgres-agent-scheduling-${user.id}-${index}`);
+  await pool.query("DELETE FROM agent_runs WHERE id=ANY($1::text[])", [schedulingRunIds]);
+  await pool.query(`INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id,created_at)
+    SELECT id,$1,id,'text','assistant',status,'{}'::jsonb,id,created_at FROM UNNEST(
+      $2::text[],$3::text[],$4::timestamptz[]) AS seed(id,status,created_at)`, [user.id, schedulingRunIds,
+    ["running", "queued", "queued", "queued"],
+    ["2026-09-01T00:00:00Z", "2026-09-01T00:00:01Z", "2026-09-01T00:00:02Z", "2026-09-01T00:00:03Z"]]);
+  const concurrentSchedulingClaims = await Promise.all([
+    schedulingService.claimQueuedRuns(user.id, 2), schedulingService.claimQueuedRuns(user.id, 2),
+  ]);
+  assert.deepEqual(concurrentSchedulingClaims.flat(), [schedulingRunIds[1]]);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM agent_runs
+    WHERE id=ANY($1::text[]) AND status='running'`, [schedulingRunIds])).rows[0]?.count), 2);
+  const schedulingActionId = `postgres-agent-scheduling-action-${user.id}`;
+  await pool.query(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+    VALUES($1,$2,$3,'record_diet_meal','high','awaiting_approval','{}'::jsonb,$1)`,
+  [schedulingActionId, schedulingRunIds[1], user.id]);
+  assert.equal(await schedulingService.expireAwaitingApproval(schedulingRunIds[1]!, user.id), 1);
+  assert.equal((await pool.query("SELECT status FROM agent_actions WHERE id=$1", [schedulingActionId])).rows[0]?.status, "expired");
+  assert.equal(await schedulingService.resetInterruptedRuns() >= 2, true);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM agent_runs
+    WHERE id=ANY($1::text[]) AND status='queued'`, [schedulingRunIds])).rows[0]?.count), 4);
   const realtimeRepository = new PostgresRealtimeVoiceRepository(pool);
   const cancelledRealtimeRuns: string[] = [];
   const realtimeService = new RealtimeVoiceService(realtimeRepository, {
@@ -1587,6 +1612,7 @@ try {
     postgresAiContextRepositoryVerified: true,
     postgresAIConversationsRepositoryVerified: true,
     postgresAdminAgentRunsRepositoryVerified: true,
+    postgresAgentSchedulingRepositoryVerified: true,
     postgresAIRuntimeRepositoryVerified: true,
     postgresAiToolDataRepositoryVerified: true,
     postgresAIWriteConfirmationsRepositoryVerified: true,

@@ -9,6 +9,8 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import { PostgresAccessControlRepository } from "../src/modules/accessControl/postgresRepository.js";
 import { AccessControlService } from "../src/modules/accessControl/service.js";
+import { PostgresAiToolDataRepository } from "../src/modules/aiToolData/postgresRepository.js";
+import { AiToolDataService } from "../src/modules/aiToolData/service.js";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { PostgresAdminCommunityRepository } from "../src/modules/adminCommunity/postgresRepository.js";
@@ -748,6 +750,27 @@ try {
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_recommendation_events
     WHERE user_id = $1 AND idempotency_key = $2`, [user.id, recommendationEventInput.idempotencyKey])).rows[0]?.count), 1);
 
+  const aiToolDataService = new AiToolDataService(new PostgresAiToolDataRepository(pool));
+  await pool.query(`INSERT INTO recipes
+    (title, cook_time, difficulty, calories, protein, carbs, fat, tags, ingredients_json, source, status, quality_status)
+    VALUES ('Postgres AI 工具菜', 14, '简单', 280, 19, 24, 9, '["AI工具"]'::jsonb,
+      '[{"name":"PG专用番茄"}]'::jsonb, 'official', 'approved', 'trusted')`);
+  const aiRecipes = await aiToolDataService.searchRecipes({ ingredientNames: ["PG专用番茄"], maxTimeMinutes: 15,
+    maxCalories: 300, minProteinG: 18, limit: 2 });
+  assert.equal(aiRecipes.recipes.length, 1);
+  assert.equal(aiRecipes.recipes[0]?.name, "Postgres AI 工具菜");
+  assert.deepEqual(aiRecipes.recipes[0]?.tags, ["AI工具"]);
+  await pool.query(`INSERT INTO ingredients_library
+    (name, category, calories_100g, protein_100g, carbs_100g, fat_100g, source, quality_status)
+    VALUES ('PG专用燕麦', '主食', 380, 13.2, 67.5, 6.5, 'postgres-integration', 'trusted')`);
+  const aiNutrition = await aiToolDataService.lookupFoodNutrition("PG专用燕麦", 50, "g");
+  assert.deepEqual(aiNutrition.matches[0]?.nutrition,
+    { caloriesKcal: 190, proteinG: 6.6, carbohydrateG: 33.8, fatG: 3.3 });
+  const aiDietId = await aiToolDataService.recordDietMeal({ userId: user.id, mealType: "午餐", foodName: "Postgres AI 工具餐",
+    amount: "1份", calories: 280, protein: 19, carbs: 24, fat: 9, recordedAt: "2026-09-01", recordedTime: "12:30" });
+  assert.equal((await pool.query("SELECT food_name FROM diet_records WHERE id = $1", [aiDietId])).rows[0]?.food_name,
+    "Postgres AI 工具餐");
+
   const recipesRepository = new PostgresRecipesRepository(pool);
   const recipesService = new RecipesService(recipesRepository, kitchenwareService);
   const postgresRecipePage = await recipesService.list(user.id, {
@@ -1209,6 +1232,7 @@ try {
     schema: archive.baselineSchemaSha256,
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
+    postgresAiToolDataRepositoryVerified: true,
     postgresDietRecordsRepositoryVerified: true,
     postgresInsightsRepositoryVerified: true,
     postgresCookingQueueRepositoryVerified: true,

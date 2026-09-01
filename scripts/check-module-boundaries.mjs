@@ -5,6 +5,14 @@ const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
   {
+    name: "aiToolData",
+    routeFile: null,
+    concreteRepository: /sqliteRepository|SqliteAiToolDataRepository/,
+    compositionFile: "server/src/composition/sqliteRuntime.ts",
+    compositionImport: "../modules/aiToolData/index.js",
+    legacyFile: null,
+  },
+  {
     name: "mediaCleanup",
     routeFile: null,
     concreteRepository: /sqliteRepository|SqliteMediaCleanupRepository/,

@@ -59,16 +59,22 @@ const moduleSpecs = [
   {
     name: "kitchenware",
     concreteRepository: /sqliteRepository|SqliteKitchenwareRepository/,
+    compositionFile: "server/src/composition/sqliteRuntime.ts",
+    compositionImport: "../modules/kitchenware/index.js",
     legacyFile: "server/src/routes/kitchenware.ts",
   },
   {
     name: "recommendations",
     concreteRepository: /sqliteRepository|SqliteRecommendationsRepository/,
+    compositionFile: "server/src/composition/sqliteRuntime.ts",
+    compositionImport: "../modules/recommendations/index.js",
     legacyFile: "server/src/routes/recommendations.ts",
   },
   {
     name: "recipes",
     concreteRepository: /sqliteRepository|SqliteRecipesRepository/,
+    compositionFile: "server/src/composition/sqliteRuntime.ts",
+    compositionImport: "../modules/recipes/index.js",
     legacyFile: "server/src/routes/recipes.ts",
   },
   {
@@ -173,6 +179,13 @@ const persistencePatterns = [
   ["the database singleton", /storage\/db|\bdb\s*\./],
   ["raw SQL execution", /\.prepare\s*\(|\b(?:SELECT|INSERT|UPDATE|DELETE)\s+(?:FROM|INTO|SET)/i],
 ];
+
+for (const entryPoint of ["server/src/app.ts", "server/src/worker.ts"]) {
+  const source = fs.readFileSync(path.join(root, entryPoint), "utf8");
+  if (/storage\/db|better-sqlite3|\bdb\s*\./.test(source)) {
+    failures.push(`${entryPoint} must use the database composition root instead of a concrete SQLite runtime`);
+  }
+}
 
 for (const spec of moduleSpecs) {
   if (spec.routeFile !== null) {

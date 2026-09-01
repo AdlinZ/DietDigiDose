@@ -34,9 +34,9 @@ export function createAuthAccountRouter(service: AuthAccountService) {
   router.post("/login", loginRateLimit, validateBody(loginSchema), async (req, res) => {
     try {
       const result = await service.login(req.body.identifier, req.body.password, getRateLimitClientIp(req), req.get("user-agent"));
-      clearLoginFailures(result.rawIdentifier); return res.json({ token: result.token, user: result.user });
+      await clearLoginFailures(result.rawIdentifier); return res.json({ token: result.token, user: result.user });
     } catch (error) {
-      if (error instanceof AuthAccountError && error.recordLoginFailure) recordLoginFailure(req);
+      if (error instanceof AuthAccountError && error.recordLoginFailure) await recordLoginFailure(req);
       if (known(error, res)) return;
       console.error("Login error:", error); return sendError(res, 500, "登录失败", "LOGIN_FAILED");
     }

@@ -52,7 +52,7 @@
     "server/src/modules/mediaCleanup/sqliteRepository.ts": 11,
     "server/src/modules/notifications/sqliteRepository.ts": 57,
     "server/src/modules/rateLimits/sqliteRepository.ts": 10,
-    "server/src/modules/realtimeVoice/sqliteRepository.ts": 25,
+    "server/src/modules/realtimeVoice/sqliteRepository.ts": 23,
     "server/src/modules/recipes/sqliteRepository.ts": 26,
     "server/src/modules/recommendations/sqliteRepository.ts": 16,
     "server/src/modules/shopping/index.ts": 1,

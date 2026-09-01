@@ -21,7 +21,7 @@ import { aiApi, cookingQueueApi, dietApi, inventoryApi, recipesApi, waitForAgent
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useRealtimeCookingVoice } from "@/hooks/useRealtimeCookingVoice";
 import { parseStructuredQuantity, structuredUnitLabel, type StructuredUnit } from "@/utils/structuredQuantity";
-import { prefetchVoiceText, prewarmVoicePack, speakWithVoiceFallback, stopVoiceOutput, type VoiceSource } from "@/services/voicePackManager";
+import { enqueueVoiceOutput, prefetchVoiceText, prewarmVoicePack, speakWithVoiceFallback, stopVoiceOutput, type VoiceSource } from "@/services/voicePackManager";
 
 interface CookingStep {
   text: string;
@@ -454,10 +454,15 @@ export default function CookingModeScreen() {
       setVoiceHudState({ visible: true, type: "result", actionDoneText: message });
       if (autoSpeechEnabled) speak(message);
     },
-    onAnswerDelta: (text) => setVoiceHudState((previous) => ({ ...previous, visible: true, type: "result", aiText: text })),
-    onAnswer: (text) => {
+    onAnswerDelta: (text, delta, turnId) => {
       setVoiceHudState((previous) => ({ ...previous, visible: true, type: "result", aiText: text }));
-      if (autoSpeechEnabled) speak(text, true);
+      if (autoSpeechEnabled) void enqueueVoiceOutput(authFetch, delta, { streamId: turnId, userId: user?.id, sensitive: true })
+        .then((source) => { if (source) setVoiceSource(source); })
+        .catch(() => setVoiceSource("system"));
+    },
+    onAnswer: (text, streamed) => {
+      setVoiceHudState((previous) => ({ ...previous, visible: true, type: "result", aiText: text }));
+      if (autoSpeechEnabled && !streamed) speak(text, true);
     },
     onConfirmationRequired: (message) => {
       void stopVoiceOutput();

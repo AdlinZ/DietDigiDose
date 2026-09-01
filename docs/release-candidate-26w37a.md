@@ -42,7 +42,7 @@ Android `versionCode`：`263701`
 - [ ] iOS、Android 分别执行全新安装、升级安装、冷启动和完整核心闭环。
 - [ ] Android 与 Web 完成实时语音的扬声器、耳机、弱网、断网重连、权限拒绝及连续五轮对话测试。
 - [ ] Android/iOS 真机验证新增的增量 ASR 快照通道在前后台切换、弱网、回声和连续五轮下的延迟与稳定性。
-- [ ] 将 Agent/模型回答接入真正的上游流式文本或音频下行；当前回答事件仍在 Agent Run 完成后按句发送，不能宣称“边生成边播放”已经验收。
+- [x] Agent 最终合成模型的真实 token stream 已解码为持久化短句增量，客户端按 turn 串行合成/播放；插话会取消旧 generation 和未播放队列。自动化已覆盖结构化 JSON 跨 token 解码、SQLite/PostgreSQL 增量去重和播放队列取消；实际模型首包延迟、扬声器/耳机回声与连续五轮仍须随 #62 真机验收。
 - [ ] 提供经说话人授权、发行许可审查且带固定发音回归结果的中文 ONNX 音色包，并在目标中端 Android 与 iOS 设备记录首段延迟、实时系数、峰值内存和连续合成结果。
 - [ ] 用实际 `preview-http` APK 与正式 APK 验证可并行安装、无法相互覆盖且签名摘要不同。
 - [ ] 在 GitHub 仓库配置受保护 `http-apk-*` 标签 Ruleset，并确认 `android-release` Environment 需要发布负责人审批。

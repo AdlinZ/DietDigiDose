@@ -9,7 +9,7 @@ export class SqliteRealtimeVoiceRepository implements RealtimeVoiceRepository {
   constructor(database: Database.Database) { this.database = database; }
 
   async createSession(input: { id: string; userId: number; recipeId: number; platform: string; context: Record<string, unknown>; idempotencyKey: string }) {
-    return this.database.transaction(() => {
+    return this.atomic(() => {
       const recipe = this.database.prepare("SELECT id,title FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL")
         .get(input.recipeId) as { id: number; title: string } | undefined;
       if (!recipe) return { status: "recipe_missing" as const };
@@ -21,7 +21,7 @@ export class SqliteRealtimeVoiceRepository implements RealtimeVoiceRepository {
         JSON.stringify({ recipeTitle: recipe.title, ...input.context }), input.idempotencyKey);
       this.event(input.id, "session.ready", { transport: "event-stream", rawAudioRetained: false, vad: "client" });
       return { status: "created" as const, session: this.mapSession(this.sessionRow(input.id, input.userId)!) };
-    })();
+    });
   }
 
   async session(sessionId: string, userId: number) {
@@ -45,7 +45,7 @@ export class SqliteRealtimeVoiceRepository implements RealtimeVoiceRepository {
 
   async recordTranscript(input: { sessionId: string; turnId: string; userId: number; sequence: number; transcript: string;
     final: boolean; audioBytes: number; latencyMs: number; firstTranscriptMs: number }) {
-    this.database.transaction(() => {
+    this.atomic(() => {
       const inserted = this.database.prepare(`INSERT OR IGNORE INTO realtime_voice_transcript_chunks
         (session_id,turn_id,user_id,sequence,transcript,is_final,audio_bytes,latency_ms) VALUES(?,?,?,?,?,?,?,?)`)
         .run(input.sessionId, input.turnId, input.userId, input.sequence, input.transcript, Number(input.final), input.audioBytes, input.latencyMs);
@@ -54,7 +54,7 @@ export class SqliteRealtimeVoiceRepository implements RealtimeVoiceRepository {
         last_heartbeat_at=CURRENT_TIMESTAMP WHERE id=?`).run(input.firstTranscriptMs, input.sessionId);
       this.event(input.sessionId, input.final ? "transcript.completed" : "transcript.delta", { turnId: input.turnId,
         sequence: input.sequence, transcript: input.transcript, latencyMs: input.latencyMs });
-    })();
+    });
   }
 
   async turn(sessionId: string, userId: number, turnId: string) {
@@ -78,16 +78,34 @@ export class SqliteRealtimeVoiceRepository implements RealtimeVoiceRepository {
 
   async recordTurn(input: { id: string; sessionId: string; userId: number; transcript: string; intent: string;
     action: Record<string, unknown>; agentRunId?: string | null; eventType: string; eventPayload: Record<string, unknown> }) {
-    this.database.transaction(() => {
+    this.atomic(() => {
       this.database.prepare(`INSERT INTO realtime_voice_turns(id,session_id,user_id,transcript,intent,action_json,agent_run_id)
         VALUES(?,?,?,?,?,?,?)`).run(input.id, input.sessionId, input.userId, input.transcript, input.intent,
         JSON.stringify(input.action), input.agentRunId ?? null);
       this.event(input.sessionId, input.eventType, input.eventPayload);
-    })();
+    });
   }
 
   async emitEvent(sessionId: string, eventType: string, payload: Record<string, unknown>) {
-    return this.database.transaction(() => this.event(sessionId, eventType, payload))();
+    return this.atomic(() => this.event(sessionId, eventType, payload));
+  }
+
+  async appendResponseDelta(input: { sessionId: string; userId: number; turnId: string; runId: string; index: number;
+    delta: string; firstResponseMs: number }) {
+    return this.atomic(() => {
+      const eligible = this.database.prepare(`SELECT 1 FROM realtime_voice_sessions s
+        JOIN realtime_voice_turns t ON t.session_id=s.id AND t.user_id=s.user_id
+        WHERE s.id=? AND s.user_id=? AND s.status IN ('active','muted') AND datetime(s.expires_at)>CURRENT_TIMESTAMP
+          AND t.id=? AND t.agent_run_id=?
+          AND NOT EXISTS (SELECT 1 FROM realtime_voice_events e WHERE e.session_id=s.id
+            AND e.event_type='response.cancelled' AND json_extract(e.payload_json,'$.turnId')=t.id)`)
+        .get(input.sessionId, input.userId, input.turnId, input.runId);
+      if (!eligible) return false;
+      this.event(input.sessionId, "response.text.delta", { turnId: input.turnId, index: input.index, delta: input.delta, upstream: true });
+      this.database.prepare("UPDATE realtime_voice_sessions SET first_response_ms=COALESCE(first_response_ms,?) WHERE id=?")
+        .run(input.firstResponseMs, input.sessionId);
+      return true;
+    });
   }
 
   async events(sessionId: string, after: number) {
@@ -98,13 +116,16 @@ export class SqliteRealtimeVoiceRepository implements RealtimeVoiceRepository {
   }
 
   async completeResponse(input: { sessionId: string; turnId: string; text: string; status: string; firstResponseMs: number }) {
-    this.database.transaction(() => {
-      input.text.split(/(?<=[。！？!?])/).filter(Boolean).forEach((delta, index) =>
-        this.event(input.sessionId, "response.text.delta", { turnId: input.turnId, index, delta }));
+    this.atomic(() => {
+      const alreadyStreamed = this.database.prepare(`SELECT 1 FROM realtime_voice_events
+        WHERE session_id=? AND event_type='response.text.delta' AND json_extract(payload_json,'$.turnId')=? LIMIT 1`)
+        .get(input.sessionId, input.turnId);
+      if (!alreadyStreamed) input.text.split(/(?<=[。！？!?])/).filter(Boolean).forEach((delta, index) =>
+        this.event(input.sessionId, "response.text.delta", { turnId: input.turnId, index, delta, upstream: false }));
       this.event(input.sessionId, "response.completed", { turnId: input.turnId, text: input.text, status: input.status });
       this.database.prepare("UPDATE realtime_voice_sessions SET first_response_ms=COALESCE(first_response_ms,?) WHERE id=?")
         .run(input.firstResponseMs, input.sessionId);
-    })();
+    });
   }
 
   async pendingRuns(sessionId: string, userId: number) {
@@ -113,18 +134,19 @@ export class SqliteRealtimeVoiceRepository implements RealtimeVoiceRepository {
   }
 
   async close(sessionId: string, userId: number) {
-    return this.database.transaction(() => {
+    return this.atomic(() => {
       const changed = this.database.prepare(`UPDATE realtime_voice_sessions SET status='closed',version=version+1,closed_at=CURRENT_TIMESTAMP
         WHERE id=? AND user_id=? AND status<>'closed'`).run(sessionId, userId).changes;
       if (changed) this.event(sessionId, "session.closed", { rawAudioRetained: false });
       const row = this.sessionRow(sessionId, userId);
       return row ? this.mapSession(row) : null;
-    })();
+    });
   }
 
   private sessionRow(sessionId: string, userId: number) {
     return this.database.prepare("SELECT * FROM realtime_voice_sessions WHERE id=? AND user_id=?").get(sessionId, userId) as Row | undefined;
   }
+  private atomic<T>(work: () => T) { return this.database.transaction(work)(); }
   private event(sessionId: string, eventType: string, payload: Record<string, unknown>) {
     const sequence = Number((this.database.prepare(`SELECT COALESCE(MAX(sequence),0)+1 AS value FROM realtime_voice_events WHERE session_id=?`)
       .get(sessionId) as { value: number }).value);

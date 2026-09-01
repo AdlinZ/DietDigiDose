@@ -18,8 +18,8 @@ type Options = {
   onTranscript: (text: string, final: boolean) => void;
   onBargeIn: () => void;
   onControl: (action: string, seconds: number) => void;
-  onAnswerDelta: (text: string) => void;
-  onAnswer: (text: string) => void;
+  onAnswerDelta: (text: string, delta: string, turnId: string) => void;
+  onAnswer: (text: string, streamed: boolean, turnId: string) => void;
   onConfirmationRequired: (message: string) => void;
   onError: (message: string) => void;
 };
@@ -96,6 +96,7 @@ export function useRealtimeCookingVoice(options: Options) {
   const pollAnswer = useCallback(async (sessionId: string, turnId: string, generation: number) => {
     let after = 0;
     let combined = "";
+    let receivedDelta = false;
     const deadline = Date.now() + 120_000;
     while (activeRef.current && responseGeneration.current === generation && Date.now() < deadline) {
       const page = await realtimeVoiceApi.events(authFetch, sessionId, after);
@@ -103,12 +104,14 @@ export function useRealtimeCookingVoice(options: Options) {
         after = Math.max(after, event.sequence);
         if (event.payload.turnId !== turnId) continue;
         if (event.type === "response.text.delta") {
-          combined += String(event.payload.delta || "");
-          optionsRef.current.onAnswerDelta(combined);
+          const delta = String(event.payload.delta || "");
+          combined += delta;
+          receivedDelta = true;
+          optionsRef.current.onAnswerDelta(combined, delta, turnId);
         }
         if (event.type === "response.completed") {
           const answer = String(event.payload.text || combined);
-          optionsRef.current.onAnswer(answer);
+          optionsRef.current.onAnswer(answer, receivedDelta, turnId);
           setState("listening");
           return;
         }

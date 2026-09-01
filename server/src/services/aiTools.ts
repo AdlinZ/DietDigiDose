@@ -1,6 +1,6 @@
 import type { AiToolDataService } from "../modules/aiToolData/service.js";
+import { aiWriteConfirmationsService } from "../modules/aiWriteConfirmations/runtime.js";
 import { currentDateKey, currentTimeKey, dateKeyAfterDays } from "../utils/date.js";
-import { createAIWritePreview } from "./aiWriteConfirmations.js";
 
 /**
  * OpenAI Function Calling 工具 Schema 定义
@@ -298,7 +298,7 @@ export async function executeAITool(
       const quantity = args.quantity || "1份";
       const expireDays = args.expireDays ?? 7;
 
-      const preview = createAIWritePreview({ userId, action: "add_inventory_item", payload: {
+      const preview = await aiWriteConfirmationsService().createPreview({ userId, action: "add_inventory_item", payload: {
         name, category, location: location === "保鲜库" ? "冷藏" : location === "冷冻库" ? "冷冻" : "常温", quantity, expireDays,
       } });
 
@@ -318,7 +318,7 @@ export async function executeAITool(
       const status = allowedStatuses.has(args.status) ? args.status : "良好";
       const note = String(args.note || "").trim().slice(0, 300);
 
-      const preview = createAIWritePreview({ userId, action: "add_kitchenware_item", payload: { name, category, status, note } });
+      const preview = await aiWriteConfirmationsService().createPreview({ userId, action: "add_kitchenware_item", payload: { name, category, status, note } });
 
       return {
         success: true,
@@ -332,7 +332,7 @@ export async function executeAITool(
       const bodyFat = args.bodyFatPercentage ?? null;
       const waterMl = args.waterMl ?? null;
 
-      const preview = createAIWritePreview({ userId, action: "record_health_log", payload: { weightKg: weight, bodyFatPercentage: bodyFat, waterMl } });
+      const preview = await aiWriteConfirmationsService().createPreview({ userId, action: "record_health_log", payload: { weightKg: weight, bodyFatPercentage: bodyFat, waterMl } });
 
       return {
         success: true,

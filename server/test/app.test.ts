@@ -1989,6 +1989,35 @@ describe("user data isolation", () => {
     assert.equal(hiddenRequest.response.status, 404);
   });
 
+  test("AI write confirmations enforce ownership, expiry, and idempotent commits", async () => {
+    const confirmationId = "12345678-1234-4234-8234-123456789012";
+    db.prepare(`INSERT INTO ai_write_confirmations
+      (id,user_id,action,payload_json,expires_at) VALUES(?,?,?, ?,datetime('now','+15 minutes'))`)
+      .run(confirmationId, first.user.id, "add_inventory_item", JSON.stringify({ name: "确认写入番茄", quantity: "2个", location: "冷藏" }));
+    const body = JSON.stringify({ idempotencyKey: "ai-write-contract-key-0001" });
+    const denied = await api(`/api/v1/ai/write-confirmations/${confirmationId}/commit`, { method: "POST", token: second.token, body });
+    assert.equal(denied.response.status, 404);
+    const committed = await api(`/api/v1/ai/write-confirmations/${confirmationId}/commit`, { method: "POST", token: first.token, body });
+    const repeated = await api(`/api/v1/ai/write-confirmations/${confirmationId}/commit`, { method: "POST", token: first.token, body });
+    assert.equal(committed.response.status, 200);
+    assert.equal(repeated.response.status, 200);
+    assert.equal((committed.body as JsonObject).result.id, (repeated.body as JsonObject).result.id);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM inventory_items WHERE user_id=? AND food_name=?")
+      .get(first.user.id, "确认写入番茄") as { count: number }).count, 1);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM ai_write_audit_logs WHERE confirmation_id=? AND event='committed'")
+      .get(confirmationId) as { count: number }).count, 1);
+
+    const expiredId = "23456789-2345-4345-8345-234567890123";
+    db.prepare(`INSERT INTO ai_write_confirmations
+      (id,user_id,action,payload_json,expires_at) VALUES(?,?,?, ?,datetime('now','-1 minute'))`)
+      .run(expiredId, first.user.id, "record_health_log", JSON.stringify({ waterMl: 300 }));
+    const expired = await api(`/api/v1/ai/write-confirmations/${expiredId}/commit`, {
+      method: "POST", token: first.token, body: JSON.stringify({ idempotencyKey: "ai-write-contract-key-0002" }),
+    });
+    assert.equal(expired.response.status, 409);
+    assert.equal((db.prepare("SELECT status FROM ai_write_confirmations WHERE id=?").get(expiredId) as { status: string }).status, "expired");
+  });
+
   test("realtime cooking voice sessions support continuous idempotent controls, barge-in and safe confirmation", async () => {
     const recipe = db.prepare("SELECT id, steps_json, ingredients_json FROM recipes WHERE status = 'approved' AND deleted_at IS NULL ORDER BY id LIMIT 1")
       .get() as { id: number; steps_json: string; ingredients_json: string };

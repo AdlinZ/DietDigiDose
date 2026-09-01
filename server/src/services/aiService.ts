@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import { aiRuntimeService } from "../modules/aiRuntime/runtime.js";
+import { aiWriteConfirmationsService } from "../modules/aiWriteConfirmations/runtime.js";
 import { executeAIQueryTool, executeAITool, isAIQueryTool } from "./aiTools.js";
-import { createAIWritePreview } from "./aiWriteConfirmations.js";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout.js";
 dotenv.config();
 
@@ -430,7 +430,7 @@ export async function chatCompletion(
           carbs: fnArgs.carbs || 45,
           fat: fnArgs.fat || 10,
         };
-        const writeConfirmation = createAIWritePreview({ userId: options.userId, action: "record_diet_meal", payload: card });
+        const writeConfirmation = await aiWriteConfirmationsService().createPreview({ userId: options.userId, action: "record_diet_meal", payload: card });
         return {
           reply: `🍱 食语已为你识别并整理好【${card.mealType}】打卡数据卡片！请核对信息，点击【确认打卡保存】或【弹出修改】：`,
           actionCard: card,

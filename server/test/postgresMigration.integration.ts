@@ -554,14 +554,14 @@ try {
   await Promise.all(concurrentHealthPreviews.map((preview, index) => aiWriteService.commit({ userId: householdMember,
     confirmationId: preview.confirmationId, idempotencyKey: `postgres-ai-write-health-concurrent-000${index + 2}` })));
   const concurrentHealth = (await pool.query(`SELECT COUNT(*)::int AS count,MAX(weight) AS weight,MAX(water_ml) AS water_ml
-    FROM health_logs WHERE user_id=$1 AND recorded_date=CURRENT_DATE`, [householdMember])).rows[0];
+    FROM health_logs WHERE user_id=$1 AND recorded_date=CURRENT_DATE::text`, [householdMember])).rows[0];
   assert.deepEqual({ count: Number(concurrentHealth.count), weight: Number(concurrentHealth.weight), waterMl: Number(concurrentHealth.water_ml) },
     { count: 1, weight: 60.5, waterMl: 500 });
   assert.equal(Number((await pool.query("SELECT calories FROM diet_records WHERE user_id=$1 AND food_name=$2",
     [user.id, "PostgreSQL AI 确认餐"])).rows[0]?.calories), 260);
   assert.equal((await pool.query("SELECT status FROM kitchenware_items WHERE user_id=$1 AND name=$2",
     [user.id, "PostgreSQL AI 确认炒锅"])).rows[0]?.status, "良好");
-  assert.equal(Number((await pool.query("SELECT weight FROM health_logs WHERE user_id=$1 AND recorded_date=CURRENT_DATE",
+  assert.equal(Number((await pool.query("SELECT weight FROM health_logs WHERE user_id=$1 AND recorded_date=CURRENT_DATE::text",
     [user.id])).rows[0]?.weight), 61.2);
   const expiredPreview = await aiWriteService.createPreview({ userId: user.id, action: "record_health_log", payload: { waterMl: 100 } });
   await pool.query("UPDATE ai_write_confirmations SET expires_at=CURRENT_TIMESTAMP-INTERVAL '1 second' WHERE id=$1",

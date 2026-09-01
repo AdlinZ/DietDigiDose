@@ -5,6 +5,15 @@ const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
   {
+    name: "accessControl",
+    routeFile: null,
+    concreteRepository: /sqliteRepository|SqliteAccessControlRepository/,
+    compositionFile: "server/src/middleware/auth.ts",
+    compositionImport: "../modules/accessControl/index.js",
+    legacyFile: null,
+    extraLegacyFiles: ["server/src/services/sessionTokens.ts"],
+  },
+  {
     name: "authAccount",
     concreteRepository: /sqliteRepository|SqliteAuthAccountRepository/,
     compositionFile: "server/src/routes/auth.ts",
@@ -154,10 +163,12 @@ const persistencePatterns = [
 ];
 
 for (const spec of moduleSpecs) {
-  reject(spec.name, "route.ts", [
-    ...persistencePatterns,
-    ["a concrete repository", spec.concreteRepository],
-  ]);
+  if (spec.routeFile !== null) {
+    reject(spec.name, spec.routeFile || "route.ts", [
+      ...persistencePatterns,
+      ["a concrete repository", spec.concreteRepository],
+    ]);
+  }
   reject(spec.name, "service.ts", [
     ...persistencePatterns,
     ["a concrete repository", spec.concreteRepository],

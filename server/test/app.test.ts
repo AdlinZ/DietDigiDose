@@ -94,6 +94,97 @@ describe("API security baseline", () => {
     assert.ok(response.headers.get("x-request-id"));
   });
 
+  test("SMS verification, registration, delivery callbacks and admin observability share one repository runtime", async () => {
+    const sms = await import("../src/services/smsVerificationProvider.js");
+    const environment = {
+      ALIYUN_ACCESS_KEY_ID: process.env.ALIYUN_ACCESS_KEY_ID,
+      ALIYUN_ACCESS_KEY_SECRET: process.env.ALIYUN_ACCESS_KEY_SECRET,
+      ALIYUN_SMS_CALLBACK_TOKEN: process.env.ALIYUN_SMS_CALLBACK_TOKEN,
+      AUTH_AUDIT_ENCRYPTION_KEY: process.env.AUTH_AUDIT_ENCRYPTION_KEY,
+    };
+    process.env.ALIYUN_ACCESS_KEY_ID = "test-access-key-id";
+    process.env.ALIYUN_ACCESS_KEY_SECRET = "test-access-key-secret";
+    process.env.ALIYUN_SMS_CALLBACK_TOKEN = "contract-callback-token";
+    process.env.AUTH_AUDIT_ENCRYPTION_KEY = "contract-audit-encryption-key";
+    sms.setSmsProviderForTests({
+      id: "contract-sms",
+      async send(_phone, outId) {
+        return { success: true, code: "OK", message: "accepted", requestId: `request-${outId}`,
+          bizId: `biz-${outId}`, outId };
+      },
+      async verify(_phone, outId) { return { success: true, passed: true, code: "OK", message: "passed", outId }; },
+    });
+    db.prepare(`INSERT INTO system_settings(key,value,updated_at) VALUES('auth.sms.enabled','1',CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value='1',updated_at=CURRENT_TIMESTAMP`).run();
+    try {
+      const sent = await api("/api/v1/auth/sms/send", {
+        method: "POST", body: JSON.stringify({ phone: "13500135000" }),
+      });
+      assert.equal(sent.response.status, 201);
+      const sentBody = sent.body as JsonObject;
+      assert.equal(sentBody.phoneMasked, "135****5000");
+
+      const verified = await api("/api/v1/auth/sms/verify", {
+        method: "POST", body: JSON.stringify({ challengeId: sentBody.challengeId, code: "123456" }),
+      });
+      assert.equal(verified.response.status, 200);
+      assert.equal((verified.body as JsonObject).status, "registration_required");
+
+      const registered = await api("/api/v1/auth/sms/register", {
+        method: "POST", body: JSON.stringify({ registrationToken: (verified.body as JsonObject).registrationToken,
+          username: "短信契约用户", password: "SmsPassword123" }),
+      });
+      assert.equal(registered.response.status, 201);
+      assert.equal((registered.body as JsonObject).user.phone, "13500135000");
+
+      const resent = await api("/api/v1/auth/sms/send", {
+        method: "POST", body: JSON.stringify({ phone: "13500135000" }),
+      });
+      assert.equal(resent.response.status, 201);
+      const reverified = await api("/api/v1/auth/sms/verify", {
+        method: "POST", body: JSON.stringify({ challengeId: (resent.body as JsonObject).challengeId, code: "654321" }),
+      });
+      assert.equal(reverified.response.status, 200);
+      assert.equal((reverified.body as JsonObject).status, "authenticated");
+
+      const deliveryPayload = [{ biz_id: `biz_${sentBody.challengeId}`, out_id: "", err_code: "DELIVERED",
+        err_msg: "delivered to 13500135000", success: true, sms_size: "2" }];
+      const storedChallenge = db.prepare("SELECT biz_id,out_id FROM auth_verification_challenges WHERE id=?")
+        .get(sentBody.challengeId) as { biz_id: string; out_id: string };
+      deliveryPayload[0]!.biz_id = storedChallenge.biz_id;
+      deliveryPayload[0]!.out_id = storedChallenge.out_id;
+      const delivered = await api("/api/v1/webhooks/aliyun/sms-delivery/contract-callback-token", {
+        method: "POST", body: JSON.stringify(deliveryPayload),
+      });
+      const duplicate = await api("/api/v1/webhooks/aliyun/sms-delivery/contract-callback-token", {
+        method: "POST", body: JSON.stringify(deliveryPayload),
+      });
+      assert.equal(delivered.response.status, 200);
+      assert.equal(duplicate.response.status, 200);
+      assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM auth_verification_events
+        WHERE challenge_id=? AND event_type='delivery_report'`).get(sentBody.challengeId) as { count: number }).count, 1);
+
+      const adminToken = await loginAdmin();
+      const config = await api("/api/v1/admin/auth-services/sms/config", { token: adminToken });
+      const overview = await api("/api/v1/admin/auth-services/sms/overview?days=1", { token: adminToken });
+      const events = await api("/api/v1/admin/auth-services/sms/events?phone=13500135000", { token: adminToken });
+      assert.equal(config.response.status, 200);
+      assert.equal((config.body as JsonObject).enabled, true);
+      assert.equal(overview.response.status, 200);
+      assert.ok((overview.body as JsonObject).totals.delivered >= 1);
+      assert.equal(events.response.status, 200);
+      assert.ok((events.body as JsonObject).items.length >= 1);
+      assert.equal((events.body as JsonObject).items[0].phoneMasked, "135****5000");
+    } finally {
+      sms.setSmsProviderForTests(null);
+      db.prepare("UPDATE system_settings SET value='0',updated_at=CURRENT_TIMESTAMP WHERE key='auth.sms.enabled'").run();
+      for (const [key, value] of Object.entries(environment)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("fresh databases include required schema migrations", () => {
     const columns = db.prepare("PRAGMA table_info(user_custom_foods)").all() as Array<{ name: string }>;
     assert.ok(columns.some((column) => column.name === "status"));

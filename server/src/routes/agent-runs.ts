@@ -65,9 +65,9 @@ router.post("/agent-runs/:runId/retry", async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/agent-runs/:runId/undo", (req: AuthRequest, res) => {
+router.post("/agent-runs/:runId/undo", async (req: AuthRequest, res) => {
   try {
-    return res.json({ success: true, result: undoSupervisorRun(req.userId!, String(req.params.runId)) });
+    return res.json({ success: true, result: await undoSupervisorRun(req.userId!, String(req.params.runId)) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "撤销 Agent 操作失败";
     return res.status(/不存在|无权/.test(message) ? 404 : /过期/.test(message) ? 409 : 400).json({ error: message, code: "AGENT_UNDO_FAILED" });

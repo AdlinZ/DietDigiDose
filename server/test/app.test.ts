@@ -2824,7 +2824,7 @@ describe("core business authorization", () => {
       VALUES (?, ?, ?, 'add_shopping_items', 'low', 'proposed', ?, ?)`)
       .run(cancelledActionId, cancelledRunId, first.user.id, JSON.stringify({ items: [{ name: "不应写入的食材" }] }), `cancelled:${cancelledActionId}`);
     const { executeAgentActions } = await import("../src/services/agent/operations.js");
-    assert.throws(() => executeAgentActions(first.user.id, cancelledRunId, [{
+    await assert.rejects(() => executeAgentActions(first.user.id, cancelledRunId, [{
       id: cancelledActionId,
       actionType: "add_shopping_items",
       riskLevel: "low",

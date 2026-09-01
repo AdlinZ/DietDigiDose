@@ -20,22 +20,36 @@ export type StoredMediaReference =
   | { backend: "local"; path: string }
   | { backend: "supabase"; origin: string; bucket: string; objectPath: string };
 
-export async function uploadImageDataUrl(dataUrl: string, userId: number, scope: "community") {
+type MediaUploadOptions = { deterministicKey?: string; overwrite?: boolean };
+
+export async function uploadImageDataUrl(
+  dataUrl: string,
+  userId: number,
+  scope: "community",
+  options: MediaUploadOptions = {},
+) {
   const parsed = parseImageDataUrl(dataUrl);
-  const bucket = getProviderProfile().providers.storage === "supabase-storage"
-    ? process.env.SUPABASE_MEDIA_BUCKET?.trim()
-    : undefined;
+  if (options.deterministicKey && !/^[a-f0-9]{64}$/.test(options.deterministicKey)) {
+    throw new InvalidMediaError("媒体对象摘要无效");
+  }
+  const remoteStorage = getProviderProfile().providers.storage === "supabase-storage";
+  if (!remoteStorage) {
+    return uploadToLocalMedia(parsed, userId, scope, options);
+  }
+  const bucket = process.env.SUPABASE_MEDIA_BUCKET?.trim();
   if (!bucket || !getSupabaseServiceRoleKey()) {
-    return uploadToLocalMedia(parsed, userId, scope);
+    throw new MediaStorageUnavailableError("媒体对象存储配置不可用");
   }
   const client = getSupabaseClient();
-  if (!client) return uploadToLocalMedia(parsed, userId, scope);
+  if (!client) throw new MediaStorageUnavailableError("媒体对象存储尚未配置");
 
-  const objectPath = `${scope}/${userId}/${new Date().toISOString().slice(0, 10)}/${randomUUID()}.${parsed.extension}`;
+  const objectPath = options.deterministicKey
+    ? `${scope}/${userId}/migration/${options.deterministicKey}.${parsed.extension}`
+    : `${scope}/${userId}/${new Date().toISOString().slice(0, 10)}/${randomUUID()}.${parsed.extension}`;
   const { error } = await client.storage.from(bucket).upload(objectPath, parsed.buffer, {
     contentType: parsed.mimeType,
     cacheControl: "31536000",
-    upsert: false,
+    upsert: Boolean(options.overwrite),
   });
   if (error) throw new Error(`媒体上传失败: ${error.message}`);
   const { data } = client.storage.from(bucket).getPublicUrl(objectPath);
@@ -49,17 +63,18 @@ async function uploadToLocalMedia(
   parsed: ReturnType<typeof parseImageDataUrl>,
   userId: number,
   scope: "community",
+  options: MediaUploadOptions,
 ) {
-  const date = new Date().toISOString().slice(0, 10);
-  const fileName = `${randomUUID()}.${parsed.extension}`;
-  const objectPath = `uploads/${scope}/${userId}/${date}/${fileName}`;
+  const directory = options.deterministicKey ? "migration" : new Date().toISOString().slice(0, 10);
+  const fileName = `${options.deterministicKey || randomUUID()}.${parsed.extension}`;
+  const objectPath = `uploads/${scope}/${userId}/${directory}/${fileName}`;
   const publicMediaRoot = getPublicMediaRoot();
   const destination = path.resolve(publicMediaRoot, objectPath);
   if (!destination.startsWith(`${publicMediaRoot}${path.sep}`)) {
     throw new InvalidMediaError("媒体保存路径无效");
   }
   await mkdir(path.dirname(destination), { recursive: true });
-  await writeFile(destination, parsed.buffer, { flag: "wx" });
+  await writeFile(destination, parsed.buffer, { flag: options.overwrite ? "w" : "wx" });
   return {
     url: `/media/${objectPath}`,
     objectPath,

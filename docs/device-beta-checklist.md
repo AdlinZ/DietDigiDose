@@ -43,7 +43,7 @@
 - [ ] 优先连接 staging HTTPS API；临时使用局域网时，手机可以直接访问电脑的 LAN IP 和服务端端口
 - [ ] client/.env 的 EXPO_PUBLIC_BACKEND_BASE_URL 不使用手机无法访问的 localhost
 - [ ] staging 使用独立数据库、独立 JWT 密钥和非生产 AI 密钥
-- [ ] staging 使用持久化 `DATABASE_PATH`，并确认只运行一个 SQLite 写入实例
+- [ ] staging 使用持久化 PostgreSQL volume，API 与 worker 的 `DATABASE_DRIVER=postgresql` 且连接同一已迁移数据库
 - [ ] 已准备至少一条已审核菜谱、一条待审核投稿和临期库存测试数据
 - [ ] 已记录测试开始前的数据库备份，并验证 /api/v1/health
 - [ ] 演示用户、社区内容和高互动数据在 staging/production 默认不自动生成

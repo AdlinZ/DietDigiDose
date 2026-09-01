@@ -99,7 +99,7 @@ cp server/.env.example server/.env
 EXPO_PUBLIC_BACKEND_BASE_URL=http://localhost:9090
 ```
 
-服务端开发模式可以自动生成本地 JWT 密钥。生产与 staging 必须设置强 `JWT_SECRET`、`ADMIN_INITIAL_PASSWORD`、明确的 `CORS_ORIGINS`，并将 `DATABASE_PATH` 指向持久化磁盘。完整字段与说明见 [`server/.env.example`](server/.env.example)。
+服务端开发模式可以使用默认 SQLite 并自动生成本地 JWT 密钥。生产与 staging 必须设置强 `JWT_SECRET`、`ADMIN_INITIAL_PASSWORD`、明确的 `CORS_ORIGINS`，并用 `DATABASE_DRIVER=postgresql`、`DATABASE_URL` 连接持久化 PostgreSQL。完整字段与说明见 [`server/.env.example`](server/.env.example)。
 
 ### 启动
 

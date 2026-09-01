@@ -57,6 +57,8 @@ import { PostgresRateLimitsRepository } from "../src/modules/rateLimits/postgres
 import { RateLimitsService } from "../src/modules/rateLimits/service.js";
 import { PostgresRecommendationsRepository } from "../src/modules/recommendations/postgresRepository.js";
 import { RecommendationsService } from "../src/modules/recommendations/service.js";
+import { PostgresRealtimeVoiceRepository } from "../src/modules/realtimeVoice/postgresRepository.js";
+import { RealtimeVoiceService } from "../src/modules/realtimeVoice/service.js";
 import { PostgresRecipesRepository } from "../src/modules/recipes/postgresRepository.js";
 import { RecipesService } from "../src/modules/recipes/service.js";
 import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
@@ -515,6 +517,53 @@ try {
     FROM recipes WHERE deleted_at IS NULL AND status = 'approved' ORDER BY id LIMIT 2`);
   assert.equal(queueRecipes.rows.length, 2);
   const queueRecipe = queueRecipes.rows[0]!;
+  const realtimeRepository = new PostgresRealtimeVoiceRepository(pool);
+  const cancelledRealtimeRuns: string[] = [];
+  const realtimeService = new RealtimeVoiceService(realtimeRepository, {
+    transcribe: async () => ({ text: "  PostgreSQL 增量转写  " }),
+    startRun: async () => ({ run: { id: "postgres-realtime-run", status: "queued" } }),
+    waitForRun: async (id) => ({ id, status: "completed", reply: "保持中火并持续翻炒。" }),
+    cancelRun: (_userId, runId) => { cancelledRealtimeRuns.push(runId); },
+  });
+  const realtimeInput = { recipeId: Number(queueRecipe.id), platform: "ios", idempotencyKey: "postgres-realtime-session-0001",
+    currentStep: 1, recipeSteps: ["备菜", "翻炒"], recipeIngredients: ["番茄", "鸡蛋"] };
+  const concurrentRealtimeSessions = await Promise.all([
+    realtimeService.create(user.id, realtimeInput), realtimeService.create(user.id, realtimeInput),
+  ]);
+  assert.deepEqual(concurrentRealtimeSessions.map((result) => result.repeated).sort(), [false, true]);
+  assert.equal(concurrentRealtimeSessions[0]!.session.id, concurrentRealtimeSessions[1]!.session.id);
+  const realtimeSessionId = concurrentRealtimeSessions[0]!.session.id;
+  const mutedRealtime = await realtimeService.heartbeat(user.id, realtimeSessionId, { version: 1, muted: true, reconnect: true });
+  assert.equal(mutedRealtime.session.version, 2);
+  assert.equal(mutedRealtime.session.metrics.reconnects, 1);
+  await assert.rejects(() => realtimeService.heartbeat(user.id, realtimeSessionId, { version: 1 }), /会话状态已更新/);
+  await Promise.all(Array.from({ length: 12 }, (_, index) =>
+    realtimeRepository.emitEvent(realtimeSessionId, "integration.concurrent", { index })));
+  const concurrentRealtimeEvents = await realtimeRepository.events(realtimeSessionId, 0);
+  assert.deepEqual(concurrentRealtimeEvents.map((event) => event.sequence),
+    Array.from({ length: concurrentRealtimeEvents.length }, (_, index) => index + 1));
+  const audioInput = { turnId: "postgres-audio-turn", sequence: 1, audioBase64: "YXVkaW8=", mimeType: "audio/webm", final: true };
+  assert.equal((await realtimeService.audio(user.id, realtimeSessionId, audioInput)).transcript, "PostgreSQL 增量转写");
+  assert.equal((await realtimeService.audio(user.id, realtimeSessionId, audioInput)).repeated, true);
+  const realtimeControl = await realtimeService.turn(user.id, realtimeSessionId,
+    { turnId: "postgres-control-turn", transcript: "增加3分钟", currentStep: 1, timerSeconds: 0 });
+  assert.deepEqual(realtimeControl.action, { action: "ADD_TIMER", seconds: 180 });
+  const realtimeQuestion = await realtimeService.turn(user.id, realtimeSessionId,
+    { turnId: "postgres-question-turn", transcript: "火候怎么控制", currentStep: 2, timerSeconds: 30 });
+  assert.equal(realtimeQuestion.intent, "question");
+  let realtimeResponseCompleted = false;
+  for (let attempt = 0; attempt < 50 && !realtimeResponseCompleted; attempt += 1) {
+    realtimeResponseCompleted = (await realtimeRepository.events(realtimeSessionId, 0))
+      .some((event) => event.type === "response.completed");
+    if (!realtimeResponseCompleted) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(realtimeResponseCompleted, true);
+  const realtimeNativeTypes = (await pool.query(`SELECT pg_typeof(s.context_json)::text AS context_type,
+    pg_typeof(c.is_final)::text AS final_type, c.is_final FROM realtime_voice_sessions s
+    JOIN realtime_voice_transcript_chunks c ON c.session_id=s.id WHERE s.id=$1`, [realtimeSessionId])).rows[0];
+  assert.deepEqual(realtimeNativeTypes, { context_type: "jsonb", final_type: "boolean", is_final: true });
+  assert.equal((await realtimeService.close(user.id, realtimeSessionId)).session.status, "closed");
+  assert.deepEqual(cancelledRealtimeRuns, ["postgres-realtime-run"]);
   const queueInput = {
     userId: user.id,
     recipeId: Number(queueRecipe.id),
@@ -1409,6 +1458,7 @@ try {
     postgresVoicePacksRepositoryVerified: true,
     postgresKitchenwareRepositoryVerified: true,
     postgresRecommendationsRepositoryVerified: true,
+    postgresRealtimeVoiceRepositoryVerified: true,
     postgresRecipesRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,

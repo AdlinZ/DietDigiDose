@@ -5,6 +5,13 @@ const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
   {
+    name: "realtimeVoice",
+    concreteRepository: /sqliteRepository|SqliteRealtimeVoiceRepository/,
+    compositionFile: "server/src/composition/sqliteRuntime.ts",
+    compositionImport: "../modules/realtimeVoice/index.js",
+    legacyFile: "server/src/routes/realtime-voice.ts",
+  },
+  {
     name: "notifications",
     routeFile: null,
     concreteRepository: /sqliteRepository|SqliteNotificationsRepository/,

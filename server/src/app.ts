@@ -16,7 +16,6 @@ import shoppingListRoutes from "./modules/shopping/index.js";
 import cookingQueueRoutes from "./modules/cookingQueue/index.js";
 import mealPlanRoutes from "./modules/mealPlans/index.js";
 import insightsRoutes from "./modules/insights/index.js";
-import realtimeVoiceRoutes from "./routes/realtime-voice.js";
 import voicePackRoutes from "./modules/voicePacks/index.js";
 import notificationsRoutes from "./routes/notifications.js";
 import mediaRoutes from "./routes/media.js";
@@ -37,7 +36,7 @@ const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export function createApp() {
   assertNoPublicServerSecrets();
   const providerProfile = getProviderProfile();
-  const { kitchenwareRoutes, recommendationRoutes, recipesRoutes } = initializeSqliteApplication();
+  const { kitchenwareRoutes, recommendationRoutes, recipesRoutes, realtimeVoiceRoutes } = initializeSqliteApplication();
   recoverAgentRuntime();
   const app = express();
   const uploadedMediaDir = path.resolve(process.env.MEDIA_LOCAL_ROOT || path.join(process.cwd(), "public"), "uploads");

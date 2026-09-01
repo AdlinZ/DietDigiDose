@@ -18,6 +18,7 @@ import { createKitchenwareModule } from "../modules/kitchenware/index.js";
 import { createRecipesModule } from "../modules/recipes/index.js";
 import { createRecommendationsRuntime } from "../modules/recommendations/index.js";
 import { configureRecommendationsService } from "../modules/recommendations/runtime.js";
+import { createRealtimeVoiceModule } from "../modules/realtimeVoice/index.js";
 import { db, initDatabase } from "../storage/db.js";
 import { configureAiToolDataService } from "../services/aiTools.js";
 import { configureAdminAuditService } from "../routes/admin/shared.js";
@@ -36,6 +37,7 @@ export function initializeSqliteApplication() {
     kitchenwareRoutes: createKitchenwareModule(db),
     recipesRoutes: createRecipesModule(db),
     recommendationRoutes: recommendations.routes,
+    realtimeVoiceRoutes: createRealtimeVoiceModule(db),
   };
 }
 

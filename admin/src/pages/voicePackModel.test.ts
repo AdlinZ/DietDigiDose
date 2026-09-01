@@ -21,4 +21,18 @@ describe('voice pack admin model', () => {
   it('flags unsafe manifests before submission', () => {
     expect(voicePackManifestChecks({ resources: [{ url: 'http://bad', path: '../model', sha256: 'no' }] }).every((item) => item.passed)).toBe(false);
   });
+
+  it('requires explicit distribution, bounded resources and a declared text processor', () => {
+    const safe = {
+      voiceId: 'internal-cn', version: '1.0.0', distribution: 'internal-test',
+      resources: [
+        { url: 'https://example.com/model', path: 'model.onnx', sha256: 'a'.repeat(64), bytes: 1024 },
+        { url: 'https://example.com/map', path: 'tokens.json', sha256: 'b'.repeat(64), bytes: 1024 },
+      ],
+      model: { textProcessor: { type: 'token-map-v1', mappingPath: 'tokens.json' } },
+      license: { name: 'test', url: 'https://example.com/license', speakerAuthorization: 'record', modelNotice: 'extractable' },
+    };
+    expect(voicePackManifestChecks(safe).every((item) => item.passed)).toBe(true);
+    expect(voicePackManifestChecks({ ...safe, distribution: undefined }).every((item) => item.passed)).toBe(false);
+  });
 });

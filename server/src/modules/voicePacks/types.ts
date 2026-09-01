@@ -1,11 +1,14 @@
 export type VoicePackResource = { path: string; url: string; sha256: string; bytes: number };
 export type VoicePackManifest = {
   voiceId: string; name: string; version: string; language: string;
+  distribution?: "public" | "internal-test";
   gender?: "male" | "female" | "neutral" | "unspecified"; deviceRequirements?: string[];
   sampleRate: number; outputFormat: "pcm-f32"; minimumAppVersion: string; minimumMemoryMb: number;
   license: { name: string; url: string; speakerAuthorization: string; modelNotice: string };
   resources: VoicePackResource[];
-  model: { path: string; vocabularyPath: string; inputNames: { tokens: string; lengths: string; scales?: string; speakerId?: string }; outputName?: string; speakerId?: number };
+  model: { path: string; vocabularyPath: string;
+    textProcessor?: { type: "character-v1" } | { type: "token-map-v1"; mappingPath: string };
+    inputNames: { tokens: string; lengths: string; scales?: string; speakerId?: string }; outputName?: string; speakerId?: number };
   previewUrl?: string; revoked?: boolean;
 };
 export type VoicePackRow = Record<string, unknown> & {

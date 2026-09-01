@@ -86,6 +86,7 @@ export type VoicePackManifest = {
   voiceId: string;
   name: string;
   version: string;
+  distribution?: "public" | "internal-test";
   language: "zh-CN";
   gender?: "male" | "female" | "neutral" | "unspecified";
   deviceRequirements?: string[];
@@ -98,6 +99,7 @@ export type VoicePackManifest = {
   model: {
     path: string;
     vocabularyPath: string;
+    textProcessor?: { type: "character-v1" } | { type: "token-map-v1"; mappingPath: string };
     inputNames: { tokens: string; lengths: string; scales?: string; speakerId?: string };
     outputName?: string;
     speakerId?: number;

@@ -39,6 +39,8 @@ services:
       - ${SERVER_ENV_FILE:-server.env}
     environment:
       NODE_ENV: production
+      DEPLOYMENT_ENV: staging
+      VOICE_PACK_ALLOW_INTERNAL_TEST: ${VOICE_PACK_ALLOW_INTERNAL_TEST:-0}
       HOST: 0.0.0.0
       PORT: 9090
       DATABASE_DRIVER: postgresql
@@ -73,6 +75,8 @@ services:
       - ${SERVER_ENV_FILE:-server.env}
     environment:
       NODE_ENV: production
+      DEPLOYMENT_ENV: staging
+      VOICE_PACK_ALLOW_INTERNAL_TEST: ${VOICE_PACK_ALLOW_INTERNAL_TEST:-0}
       DATABASE_DRIVER: postgresql
       ENABLE_DEMO_SEED: "0"
       MEDIA_LOCAL_ROOT: /data/media

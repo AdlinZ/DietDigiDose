@@ -6,6 +6,8 @@
 
 每个 `VOICE_PACK_CATALOG_JSON` 条目必须记录：`voiceId`、语义版本、`zh-CN`、采样率、最低应用版本与内存、模型和词表资源、逐文件大小与 SHA-256、HTTPS 地址、许可证链接、可核验的说话人授权记录，以及“模型安装到终端后可能被提取”的风险说明。模型路径和词表路径必须同时出现在受控资源清单中；服务端会拒绝路径穿越、HTTP、缺失摘要、重复资源或已撤销版本。
 
+清单必须显式声明 `distribution` 为 `public` 或 `internal-test`。内部测试音色只有在非 production 的 `DEPLOYMENT_ENV` 且 `VOICE_PACK_ALLOW_INTERNAL_TEST=1` 时才能发布、列出或用于服务端合成；production 即使数据库残留该版本也会过滤。单个资源上限 200 MB、整包上限 350 MB，最多 16 个资源。需要音素化的 Piper 类模型必须声明 `model.textProcessor.type=token-map-v1` 并把映射文件纳入资源摘要，不能把中文字符直接冒充音素 token；真正以字符为输入的模型才使用 `character-v1`。
+
 训练代码、基础权重、运行库、说话人录音与最终模型分别做许可证审查。授权记录至少包含说话人身份确认、允许的产品与发行范围、撤销方式和日期。撤销版本加入清单的 `revoked: true` 后，客户端下次同步会停止并删除本地模型。
 
 ## 固定中文回归集

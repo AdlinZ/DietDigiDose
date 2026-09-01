@@ -5,6 +5,13 @@ const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
   {
+    name: "authAccount",
+    concreteRepository: /sqliteRepository|SqliteAuthAccountRepository/,
+    compositionFile: "server/src/routes/auth.ts",
+    compositionImport: "../modules/authAccount/index.js",
+    legacyFile: null,
+  },
+  {
     name: "cookingQueue",
     concreteRepository: /sqliteRepository|SqliteCookingQueueRepository/,
     legacyFile: "server/src/routes/cooking-queue.ts",

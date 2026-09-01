@@ -551,8 +551,13 @@ try {
   const realtimeQuestion = await realtimeService.turn(user.id, realtimeSessionId,
     { turnId: "postgres-question-turn", transcript: "火候怎么控制", currentStep: 2, timerSeconds: 30 });
   assert.equal(realtimeQuestion.intent, "question");
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert((await realtimeRepository.events(realtimeSessionId, 0)).some((event) => event.type === "response.completed"));
+  let realtimeResponseCompleted = false;
+  for (let attempt = 0; attempt < 50 && !realtimeResponseCompleted; attempt += 1) {
+    realtimeResponseCompleted = (await realtimeRepository.events(realtimeSessionId, 0))
+      .some((event) => event.type === "response.completed");
+    if (!realtimeResponseCompleted) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(realtimeResponseCompleted, true);
   const realtimeNativeTypes = (await pool.query(`SELECT pg_typeof(s.context_json)::text AS context_type,
     pg_typeof(c.is_final)::text AS final_type, c.is_final FROM realtime_voice_sessions s
     JOIN realtime_voice_transcript_chunks c ON c.session_id=s.id WHERE s.id=$1`, [realtimeSessionId])).rows[0];

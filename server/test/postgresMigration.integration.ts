@@ -10,6 +10,8 @@ import { Pool } from "pg";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { PostgresAdminCommunityRepository } from "../src/modules/adminCommunity/postgresRepository.js";
+import { PostgresAdminUsersRepository } from "../src/modules/adminUsers/postgresRepository.js";
+import { AdminUsersService } from "../src/modules/adminUsers/service.js";
 import { PostgresAdminConsoleRepository } from "../src/modules/adminConsole/postgresRepository.js";
 import { AdminConsoleService } from "../src/modules/adminConsole/service.js";
 import { PostgresAdminFoodAssetsRepository } from "../src/modules/adminFoodAssets/postgresRepository.js";
@@ -1058,6 +1060,27 @@ try {
     AND action LIKE 'community.%' ORDER BY id`,[user.id]);
   assert(moderationAudits.rows.some((audit)=>audit.action==="community.comment.delete"&&typeof audit.details_json?.contentPreview==="string"));
 
+  const adminUsersRepository=new PostgresAdminUsersRepository(pool);
+  const adminUsersService=new AdminUsersService(adminUsersRepository);
+  const adminUsersPage=await adminUsersService.users({pageSize:2});
+  assert(!Array.isArray(adminUsersPage)&&adminUsersPage.items.length===2);
+  assert.equal(typeof (!Array.isArray(adminUsersPage)&&adminUsersPage.items[0]?.level.xp),"number");
+  const adminHealth=await adminUsersService.healthProfile(successorUserId,moderationContext);
+  assert(Array.isArray(adminHealth.profile?.allergies));
+  const adjustedLevel=await adminUsersService.adjustLevel(successorUserId,25,"PostgreSQL 集成调整",moderationContext);
+  assert(Number(adjustedLevel.level.adjustmentXp)>=25);
+  const credentialUpdate=await adminUsersService.credentials(successorUserId,{identifier:"postgres-admin-updated@example.com",newPassword:"updatedPass1"},moderationContext);
+  assert.equal(credentialUpdate.user.email,"postgres-admin-updated@example.com");
+  const existingAdminEmail=String((await pool.query("SELECT email FROM users WHERE id<>$1 AND email IS NOT NULL LIMIT 1",[successorUserId])).rows[0]?.email);
+  await assert.rejects(()=>adminUsersService.credentials(successorUserId,{identifier:existingAdminEmail},moderationContext),/已被其他账号/);
+  assert.equal((await adminUsersService.expert(successorUserId,true,moderationContext)).is_verified_expert,true);
+  assert.equal((await adminUsersService.status(user.id,successorUserId,true,moderationContext)).is_disabled,1);
+  assert.equal((await adminUsersService.status(user.id,successorUserId,false,moderationContext)).is_disabled,0);
+  assert.equal((await adminUsersService.role(user.id,successorUserId,"admin",moderationContext)).success,true);
+  assert.equal((await adminUsersService.role(user.id,successorUserId,"user",moderationContext)).success,true);
+  const adminUserAudits=await pool.query("SELECT details_json FROM admin_audit_logs WHERE admin_user_id=$1 AND action='user.credentials.update'",[user.id]);
+  assert.equal(adminUserAudits.rows.at(-1)?.details_json?.passwordReset,true);
+
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
@@ -1135,6 +1158,7 @@ try {
     postgresAuthAccountRepositoryVerified: true,
     postgresCommunityRepositoryVerified: true,
     postgresAdminCommunityRepositoryVerified: true,
+    postgresAdminUsersRepositoryVerified: true,
     postgresWorkerRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,

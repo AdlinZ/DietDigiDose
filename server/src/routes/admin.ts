@@ -6,13 +6,13 @@ import { createAdminCommunityRouter } from "../modules/adminCommunity/index.js";
 import { createAdminFoodAssetsRouter } from "../modules/adminFoodAssets/index.js";
 import { createAdminKitchenwareRouter } from "../modules/adminKitchenware/index.js";
 import { createAdminRecipesRouter } from "../modules/adminRecipes/index.js";
+import { createAdminUsersRouter } from "../modules/adminUsers/index.js";
 import { createAdminVoicePackRouter } from "../modules/voicePacks/index.js";
 import { createAdminWorkerRunsRouter } from "../modules/worker/index.js";
 import { createAdminAgentRunsRouter } from "./admin/agent-runs.js";
 import { createAdminAIConfigRouter } from "./admin/ai-config.js";
 import { createAdminMediaCleanupRouter } from "./admin/media-cleanup.js";
 import { createAdminNotificationsRouter } from "./admin/notifications.js";
-import { createAdminUsersRouter } from "./admin/users.js";
 
 const router = Router();
 router.use(authMiddleware);

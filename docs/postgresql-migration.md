@@ -47,7 +47,7 @@ Each migrated domain keeps SQL inside its driver adapter; routes and services de
 
 The exhaustive per-table/per-column mapping is generated at `server/src/storage/database/postgres/baseline-manifest.json`. Changes are made in `server/src/storage/db.ts`/SQLite migrations only during the transition, followed by `pnpm -w database:schema:generate` and a Drizzle migration. Once the runtime cutover is complete, SQLite schema generation is deleted and Drizzle migrations become the only schema-change entry point.
 
-The PostgreSQL checkpointer is pinned to `@langchain/langgraph-checkpoint-postgres` 1.0.5. Its schema version `4` is seeded by Drizzle migration `0001`; application startup validates that version and must not call `PostgresSaver.setup()`, because runtime DDL would bypass the migration authority. The migration archive currently covers the 92 canonical SQLite business tables; portable conversion of existing SQLite checkpoint blobs is still required before a staging or production cutover that retains resumable Agent runs.
+The PostgreSQL checkpointer is pinned to `@langchain/langgraph-checkpoint-postgres` 1.0.5. Its schema version `4` is seeded by Drizzle migration `0001`; application startup validates that version and must not call `PostgresSaver.setup()`, because runtime DDL would bypass the migration authority. Migration archive v2 includes the 92 canonical SQLite business tables plus raw typed SQLiteSaver checkpoints and pending writes. Import decodes them through the pinned LangGraph serializer, rebuilds PostgreSQL channel blobs, preserves parents/task indexes, rejects orphan Agent threads, and validates semantic checkpoint content after repeated imports.
 
 ## Commands
 

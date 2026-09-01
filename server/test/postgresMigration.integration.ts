@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { Pool } from "pg";
 import { PostgresAccessControlRepository } from "../src/modules/accessControl/postgresRepository.js";
 import { AccessControlService } from "../src/modules/accessControl/service.js";
@@ -122,6 +123,30 @@ sqliteModule.db.prepare(`
   INSERT INTO ai_usage_logs (user_id, endpoint, model, total_tokens, success)
   VALUES (?, '/integration', 'test-model', 321, 1)
 `).run(user.id);
+sqliteModule.db.prepare(`INSERT INTO agent_runs
+  (id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id)
+  VALUES ('sqlite-checkpoint-run',?,'sqlite-checkpoint-session','text','assistant','awaiting_approval',
+    '{"prompt":"迁移 checkpoint"}','sqlite-checkpoint-thread')`).run(user.id);
+const sqliteCheckpointer = new SqliteSaver(sqliteModule.db);
+const sqliteCheckpointConfig = await sqliteCheckpointer.put(
+  { configurable: { thread_id: "sqlite-checkpoint-thread", checkpoint_ns: "" } },
+  {
+    v: 4, id: "00000000-0000-6000-8000-000000000000", ts: new Date(0).toISOString(),
+    channel_values: { goal: "从 SQLite 恢复", typedBytes: new Uint8Array([0, 1, 255]) },
+    channel_versions: { goal: "1", typedBytes: "1" }, versions_seen: {},
+  },
+  { source: "input", step: 0, parents: {} },
+);
+const sqliteChildCheckpointConfig = await sqliteCheckpointer.put(
+  sqliteCheckpointConfig,
+  {
+    v: 4, id: "00000000-0000-6000-8000-000000000001", ts: new Date(1).toISOString(),
+    channel_values: { goal: "从 SQLite 恢复完成", typedBytes: new Uint8Array([0, 1, 255, 2]) },
+    channel_versions: { goal: "2", typedBytes: "2" }, versions_seen: { supervisor: { goal: "1" } },
+  },
+  { source: "loop", step: 1, parents: {} },
+);
+await sqliteCheckpointer.putWrites(sqliteChildCheckpointConfig, [["approval", { approved: false }]], "sqlite-task");
 sqliteModule.db.close();
 
 const source = new Database(sqlitePath, { readonly: true, fileMustExist: true });
@@ -166,6 +191,18 @@ try {
   assert.equal(report.criticalMetrics["diet.calories"], 45);
   assert.equal(report.criticalMetrics["health.weight"], 62.5);
   assert.equal(report.criticalMetrics["ai.total_tokens"], 321);
+  assert.deepEqual(report.langgraph, {
+    sourcePresent: true, checkpointCount: 2, checkpointBlobCount: 4, checkpointWriteCount: 1,
+  });
+  const migratedCheckpointSaver = await createPostgresAgentCheckpointer(pool);
+  const migratedCheckpoint = await migratedCheckpointSaver.getTuple({
+    configurable: { thread_id: "sqlite-checkpoint-thread", checkpoint_ns: "" },
+  });
+  assert.equal(migratedCheckpoint?.checkpoint.channel_values.goal, "从 SQLite 恢复完成");
+  assert.deepEqual(Array.from(migratedCheckpoint?.checkpoint.channel_values.typedBytes as Uint8Array), [0, 1, 255, 2]);
+  assert.equal(migratedCheckpoint?.parentConfig?.configurable?.checkpoint_id,
+    "00000000-0000-6000-8000-000000000000");
+  assert.deepEqual(migratedCheckpoint?.pendingWrites, [["sqlite-task", "approval", { approved: false }]]);
 
   const inventoryRepository = new PostgresInventoryRepository(pool);
   const inventoryService = new InventoryService(inventoryRepository);

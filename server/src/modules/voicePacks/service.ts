@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { VoicePacksError } from "./errors.js";
-import { appVersionAtLeast, parseVoicePackCatalog, parseVoicePackRow, validateVoicePackManifest, voicePackResourceFingerprint } from "./manifest.js";
+import { appVersionAtLeast, internalTestVoicePacksEnabled, parseVoicePackCatalog, parseVoicePackRow, validateVoicePackManifest, voicePackResourceFingerprint } from "./manifest.js";
 import type { VoicePacksRepository } from "./repository.js";
 import type { VoicePackAudit, VoicePackDraft, VoicePackRow } from "./types.js";
 
@@ -22,17 +22,29 @@ export function parseVoicePackDraft(body: Record<string, unknown>): VoicePackDra
 export class VoicePacksService {
   private readonly repository: VoicePacksRepository;
   constructor(repository: VoicePacksRepository) { this.repository = repository; }
-  private async ensureCatalog() { await this.repository.ensureEnvironmentCatalog(parseVoicePackCatalog()); }
+  private async ensureCatalog() {
+    const allowInternal = internalTestVoicePacksEnabled();
+    await this.repository.ensureEnvironmentCatalog(parseVoicePackCatalog()
+      .filter((manifest) => manifest.distribution !== "internal-test" || allowInternal));
+  }
   async catalog(clientVersion: string) {
     await this.ensureCatalog(); const rows = (await this.repository.listVersions())
       .sort((left, right) => left.voice_id.localeCompare(right.voice_id) || Number(right.id) - Number(left.id));
+    const allowInternal = internalTestVoicePacksEnabled();
     const items = rows.filter((row) => row.status === "published").map(parseVoicePackRow)
+      .filter((manifest) => manifest.distribution !== "internal-test" || allowInternal)
       .filter((manifest) => appVersionAtLeast(clientVersion, manifest.minimumAppVersion));
     const revoked = rows.filter((row) => row.status === "revoked").map((row) => ({ voiceId: row.voice_id, version: row.version }));
     const source = rows.map((row) => `${row.id}:${row.revision}:${row.status}:${row.updated_at}`).join("|");
     return { items, revoked, catalogVersion: createHash("sha256").update(source).digest("hex").slice(0, 20), authority: "database" as const };
   }
-  async findPublished(voiceId: string, version?: string | null) { await this.ensureCatalog(); return this.repository.findPublished(voiceId, version); }
+  async findPublished(voiceId: string, version?: string | null) {
+    await this.ensureCatalog();
+    const row = await this.repository.findPublished(voiceId, version);
+    if (!row) return null;
+    const manifest = parseVoicePackRow(row);
+    return manifest.distribution === "internal-test" && !internalTestVoicePacksEnabled() ? null : row;
+  }
   preference(userId: number) { return this.repository.preference(userId); }
   async updatePreference(userId: number, body: Record<string, unknown>) {
     const preference = body.preference; const voiceId = body.selectedVoiceId == null ? null : String(body.selectedVoiceId);
@@ -73,7 +85,11 @@ export class VoicePacksService {
     if (target === "published" && !["draft", "disabled"].includes(row.status)) throw new VoicePacksError(409, "当前状态不能发布", "VOICE_PACK_INVALID_TRANSITION");
     if (target === "disabled" && row.status !== "published") throw new VoicePacksError(409, "仅已发布音色可以下架", "VOICE_PACK_INVALID_TRANSITION");
     if (target === "revoked" && row.status === "revoked") throw new VoicePacksError(409, "音色已经撤销", "VOICE_PACK_INVALID_TRANSITION");
-    if (!validateVoicePackManifest(parseVoicePackRow(row))) throw new VoicePacksError(400, "音色包未通过发布校验", "VOICE_PACK_VALIDATION_FAILED");
+    const manifest = validateVoicePackManifest(parseVoicePackRow(row));
+    if (!manifest) throw new VoicePacksError(400, "音色包未通过发布校验", "VOICE_PACK_VALIDATION_FAILED");
+    if (target === "published" && manifest.distribution === "internal-test" && !internalTestVoicePacksEnabled()) {
+      throw new VoicePacksError(409, "当前环境禁止发布内部测试音色", "VOICE_PACK_INTERNAL_TEST_FORBIDDEN");
+    }
     const next = await this.repository.transition(userId, id, revision, row.status, target, reason, { ...context, adminUserId: userId,
       action: `voice_pack.${target}`, resourceId: id, summary: `音色包 ${row.voice_id}@${row.version} 状态变更为 ${target}`,
       details: { before: row.status, after: target, reason: reason || null, revision: revision + 1 } });

@@ -16,6 +16,14 @@ import {
   VOICE_PREFERENCE_STORAGE_PREFIX,
 } from "@/services/voicePreferenceScope";
 import { KeyedSerialQueue } from "@/services/voiceOutputQueue";
+import {
+  MAX_VOICE_PACK_RESOURCE_BYTES,
+  MAX_VOICE_PACK_TOTAL_BYTES,
+  replaceVoicePackDirectory,
+  tokenizeVoiceText,
+  voiceBenchmarkPassed,
+  voicePlaybackFinished,
+} from "@/services/voicePackPolicy";
 
 const PACK_ROOT = Platform.OS === "web" || !FileSystem.documentDirectory
   ? null
@@ -60,7 +68,8 @@ let activeDownload: FileSystem.DownloadResumable | null = null;
 let activeDownloadContext: VoicePackState["pausedDownload"] = null;
 let activeSound: Audio.Sound | null = null;
 let playbackGeneration = 0;
-let localSession: null | { key: string; session: any; vocabulary: Record<string, number>; manifest: VoicePackManifest } = null;
+let localSession: null | { key: string; session: any; vocabulary: Record<string, number>;
+  tokenMap: Record<string, string[]>; manifest: VoicePackManifest } = null;
 
 async function ensureDirectory(uri: string) {
   const info = await FileSystem.getInfoAsync(uri);
@@ -155,6 +164,11 @@ export async function installVoicePack(
   options: { allowCellular?: boolean; onProgress?: (progress: number) => void; userId?: number } = {},
 ) {
   if (Platform.OS === "web") throw new Error("Web 暂不支持本地 ONNX 音色包，请使用云端或系统语音");
+  if (!manifest.resources.length || manifest.resources.length > 16
+    || manifest.resources.some((resource) => resource.bytes <= 0 || resource.bytes > MAX_VOICE_PACK_RESOURCE_BYTES)
+    || manifest.resources.reduce((sum, resource) => sum + resource.bytes, 0) > MAX_VOICE_PACK_TOTAL_BYTES) {
+    throw new Error("音色包资源数量或大小超出安全限制");
+  }
   const packRoot = requireNativeRoot(PACK_ROOT);
   const network = await Network.getNetworkStateAsync();
   if (network.isConnected === false || network.isInternetReachable === false) throw new Error("当前没有可用网络");
@@ -162,6 +176,7 @@ export async function installVoicePack(
   await ensureDirectory(packRoot);
   const staging = `${packRoot}.staging-${manifest.voiceId}-${manifest.version}/`;
   const finalDirectory = `${packRoot}${manifest.voiceId}/${manifest.version}/`;
+  const rollbackDirectory = `${packRoot}${manifest.voiceId}/.${manifest.version}.rollback/`;
   const priorDevice = await getDeviceState();
   const resume = priorDevice.pausedDownload?.manifest.voiceId === manifest.voiceId
     && priorDevice.pausedDownload.manifest.version === manifest.version
@@ -203,8 +218,11 @@ export async function installVoicePack(
     }
     await FileSystem.writeAsStringAsync(`${staging}manifest.json`, JSON.stringify(manifest));
     await ensureDirectory(`${packRoot}${manifest.voiceId}/`);
-    await FileSystem.deleteAsync(finalDirectory, { idempotent: true });
-    await FileSystem.moveAsync({ from: staging, to: finalDirectory });
+    await replaceVoicePackDirectory({
+      info: (uri) => FileSystem.getInfoAsync(uri),
+      remove: (uri) => FileSystem.deleteAsync(uri, { idempotent: true }),
+      move: (from, to) => FileSystem.moveAsync({ from, to }),
+    }, staging, finalDirectory, rollbackDirectory);
     const latestDevice = await getDeviceState();
     const installedPacks = [...latestDevice.installedPacks.filter((item) => !(item.voiceId === manifest.voiceId && item.version === manifest.version)), manifest];
     await saveDeviceState({ ...latestDevice, installedPacks, pausedDownload: null });
@@ -239,29 +257,41 @@ export async function resumeVoicePackDownload(options: { allowCellular?: boolean
   return installVoicePack(paused.manifest, options);
 }
 
-export async function deleteVoicePack(userId?: number, deleteGeneratedAudio = false) {
-  const state = await getVoicePackState(userId);
+export async function deleteVoicePack(userId?: number, deleteGeneratedAudio = false,
+  target?: { voiceId: string; version: string }) {
+  const [state, device] = await Promise.all([getVoicePackState(userId), getDeviceState()]);
+  const manifest = target
+    ? device.installedPacks.find((item) => item.voiceId === target.voiceId && item.version === target.version) || null
+    : state.installed;
+  if (!manifest) return state;
   await stopVoiceOutput();
   const preference = await getUserPreference(userId);
-  await saveUserPreference(userId, { ...preference, selectedVoiceId: null, selectedVersion: null });
+  if (isVoicePackSelected(preference, manifest.voiceId, manifest.version)) {
+    await saveUserPreference(userId, { ...preference, selectedVoiceId: null, selectedVersion: null });
+  }
   const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(`${VOICE_PREFERENCE_STORAGE_PREFIX}:`));
   const preferences = await AsyncStorage.multiGet(keys);
-  const stillReferenced = state.installed && preferences.some(([, value]) => {
+  const stillReferenced = preferences.some(([, value]) => {
     try {
       const other = JSON.parse(value || "null") as UserVoicePreference | null;
-      return state.installed ? isVoicePackSelected(other, state.installed.voiceId, state.installed.version) : false;
+      return isVoicePackSelected(other, manifest.voiceId, manifest.version);
     } catch { return false; }
   });
-  if (state.installed && !stillReferenced && PACK_ROOT) {
-    await FileSystem.deleteAsync(`${PACK_ROOT}${state.installed.voiceId}/${state.installed.version}/`, { idempotent: true });
-    const device = await getDeviceState();
-    await saveDeviceState({ ...device, installedPacks: device.installedPacks.filter((item) => !(item.voiceId === state.installed?.voiceId && item.version === state.installed?.version)) });
+  if (!stillReferenced && PACK_ROOT) {
+    await FileSystem.deleteAsync(`${PACK_ROOT}${manifest.voiceId}/${manifest.version}/`, { idempotent: true });
+    await FileSystem.deleteAsync(`${PACK_ROOT}${manifest.voiceId}/.${manifest.version}.rollback/`, { idempotent: true });
+    const latest = await getDeviceState();
+    await saveDeviceState({ ...latest,
+      installedPacks: latest.installedPacks.filter((item) => !(item.voiceId === manifest.voiceId && item.version === manifest.version)),
+      benchmarks: Object.fromEntries(Object.entries(latest.benchmarks)
+        .filter(([key]) => key !== `${manifest.voiceId}@${manifest.version}`)),
+    });
   }
-  localSession = null;
-  if (deleteGeneratedAudio && state.installed) {
+  if (localSession?.key === `${manifest.voiceId}@${manifest.version}`) localSession = null;
+  if (deleteGeneratedAudio) {
     await purgeVoiceAudioCacheForPack(
-      state.installed.voiceId,
-      state.installed.version,
+      manifest.voiceId,
+      manifest.version,
       userId,
       !stillReferenced,
     );
@@ -322,13 +352,17 @@ async function localEngine(userId?: number) {
   const key = `${manifest.voiceId}@${manifest.version}`;
   if (localSession?.key === key) return localSession;
   const directory = `${packRoot}${manifest.voiceId}/${manifest.version}/`;
-  const [{ InferenceSession }, vocabularyText] = await Promise.all([
+  const processor = manifest.model.textProcessor || { type: "character-v1" as const };
+  const [{ InferenceSession }, vocabularyText, tokenMapText] = await Promise.all([
     import("onnxruntime-react-native"),
     FileSystem.readAsStringAsync(`${directory}${safeResourcePath(manifest.model.vocabularyPath)}`),
+    processor.type === "token-map-v1"
+      ? FileSystem.readAsStringAsync(`${directory}${safeResourcePath(processor.mappingPath)}`)
+      : Promise.resolve("{}"),
   ]);
   const started = Date.now();
   const session = await InferenceSession.create(`${directory}${safeResourcePath(manifest.model.path)}`);
-  localSession = { key, session, vocabulary: JSON.parse(vocabularyText), manifest };
+  localSession = { key, session, vocabulary: JSON.parse(vocabularyText), tokenMap: JSON.parse(tokenMapText), manifest };
   const device = await getDeviceState();
   if (!device.benchmarks[key]) await saveDeviceState({ ...device, benchmarks: { ...device.benchmarks, [key]: {
     modelLoadMs: Date.now() - started, firstAudioMs: 0, realtimeFactor: 0, peakMemoryMb: null, passed: true, measuredAt: new Date().toISOString(),
@@ -336,21 +370,10 @@ async function localEngine(userId?: number) {
   return localSession;
 }
 
-function tokenize(text: string, vocabulary: Record<string, number>) {
-  const unknown = vocabulary["<unk>"] ?? 0;
-  const start = vocabulary["<bos>"];
-  const end = vocabulary["<eos>"];
-  return [
-    ...(start === undefined ? [] : [start]),
-    ...[...text.normalize("NFKC")].map((character) => vocabulary[character] ?? unknown),
-    ...(end === undefined ? [] : [end]),
-  ];
-}
-
 async function synthesizeLocal(text: string, userId?: number) {
   const engine = await localEngine(userId);
   const { Tensor } = await import("onnxruntime-react-native");
-  const ids = tokenize(text, engine.vocabulary);
+  const ids = tokenizeVoiceText(text, engine.vocabulary, engine.manifest.model.textProcessor, engine.tokenMap);
   const names = engine.manifest.model.inputNames;
   const feeds: Record<string, any> = {
     [names.tokens]: new Tensor("int64", BigInt64Array.from(ids.map(BigInt)), [1, ids.length]),
@@ -369,11 +392,12 @@ async function synthesizeLocal(text: string, userId?: number) {
   const benchmarkKey = `${engine.manifest.voiceId}@${engine.manifest.version}`;
   const previousBenchmark = device.benchmarks[benchmarkKey];
   const realtimeFactor = firstAudioMs / Math.max(1, durationMs);
+  const passed = voiceBenchmarkPassed(firstAudioMs, realtimeFactor);
   await saveDeviceState({ ...device, benchmarks: { ...device.benchmarks, [benchmarkKey]: {
     modelLoadMs: previousBenchmark?.modelLoadMs || 0, firstAudioMs, realtimeFactor,
-    peakMemoryMb: null, passed: firstAudioMs <= 2_500 && realtimeFactor <= 1.2, measuredAt: new Date().toISOString(),
+    peakMemoryMb: null, passed, measuredAt: new Date().toISOString(),
   } } });
-  if (firstAudioMs > 5_000 || realtimeFactor > 1.5) throw new Error("设备本地语音性能不足");
+  if (!passed) throw new Error("设备本地语音性能不足");
   return encodePcmWav(samples, engine.manifest.sampleRate);
 }
 
@@ -459,9 +483,14 @@ async function playUri(uri: string, generation: number) {
   if (activeSound) await activeSound.unloadAsync().catch(() => undefined);
   const created = await Audio.Sound.createAsync({ uri }, { shouldPlay: true });
   activeSound = created.sound;
-  await new Promise<void>((resolve) => created.sound.setOnPlaybackStatusUpdate((status) => {
-    if (status.isLoaded && status.didJustFinish) resolve();
-  }));
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; resolve(); } };
+    created.sound.setOnPlaybackStatusUpdate((status) => {
+      if (voicePlaybackFinished(status)) finish();
+    });
+  });
+  created.sound.setOnPlaybackStatusUpdate(null);
   await created.sound.unloadAsync().catch(() => undefined);
   if (activeSound === created.sound) activeSound = null;
 }

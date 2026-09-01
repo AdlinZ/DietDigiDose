@@ -220,6 +220,22 @@ export default function SettingsScreen() {
     }
   };
 
+  const deleteInstalledVoice = async (manifest: VoicePackManifest, deleteGeneratedAudio: boolean) => {
+    setVoiceBusy(true);
+    try {
+      const selected = voiceState?.selectedVoiceId === manifest.voiceId && voiceState.selectedVersion === manifest.version;
+      await deleteVoicePack(user?.id, deleteGeneratedAudio, { voiceId: manifest.voiceId, version: manifest.version });
+      setVoiceState(selected
+        ? await persistVoicePreference({ selectedVoiceId: null, selectedVersion: null,
+          preference: voiceState?.preference || "automatic" })
+        : await getVoicePackState(user?.id));
+    } catch (error) {
+      Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试");
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
   const handleSaveCalorie = async () => {
     const val = parseInt(calorieTarget);
     if (isNaN(val) || val < 1000 || val > 5000) {
@@ -461,16 +477,12 @@ export default function SettingsScreen() {
                     { text: "取消", style: "cancel" },
                     {
                       text: "仅删除模型",
-                      onPress: () => void deleteVoicePack(user?.id, false)
-                        .then(() => persistVoicePreference({ selectedVoiceId: null, selectedVersion: null, preference: voiceState.preference })).then(setVoiceState)
-                        .catch((error) => Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试")),
+                      onPress: () => void deleteInstalledVoice(voiceState.installed!, false),
                     },
                     {
                       text: "模型与音频",
                       style: "destructive",
-                      onPress: () => void deleteVoicePack(user?.id, true)
-                        .then(() => persistVoicePreference({ selectedVoiceId: null, selectedVersion: null, preference: voiceState.preference })).then(setVoiceState)
-                        .catch((error) => Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试")),
+                      onPress: () => void deleteInstalledVoice(voiceState.installed!, true),
                     },
                   ])}
                   className="items-center rounded-xl border border-critical/30 px-4 py-3"
@@ -501,36 +513,49 @@ export default function SettingsScreen() {
                 const installedOnDevice = voiceState?.installedPacks.some((item) => item.voiceId === manifest.voiceId && item.version === manifest.version);
                 const selected = voiceState?.selectedVoiceId === manifest.voiceId && voiceState.selectedVersion === manifest.version;
                 return (
-                  <TouchableOpacity
-                    key={`${manifest.voiceId}@${manifest.version}`}
-                    disabled={voiceBusy || !isAuthenticated || selected}
-                    onPress={() => {
-                      if (!installedOnDevice) {
-                        void installSelectedVoice(manifest);
-                        return;
-                      }
-                      setVoiceBusy(true);
-                      void persistVoicePreference({
-                        selectedVoiceId: manifest.voiceId,
-                        selectedVersion: manifest.version,
-                        preference: voiceState?.preference || "automatic",
-                      }).then(setVoiceState)
-                        .catch((error) => Alert.alert("选择失败", error instanceof Error ? error.message : "请稍后重试"))
-                        .finally(() => setVoiceBusy(false));
-                    }}
-                    className={`rounded-2xl border p-3 active:bg-brand-soft ${selected ? "border-brand bg-brand-soft" : "border-line bg-canvas"}`}
-                  >
-                    <View className="flex-row items-center justify-between">
+                  <View key={`${manifest.voiceId}@${manifest.version}`}
+                    className={`flex-row items-center rounded-2xl border ${selected ? "border-brand bg-brand-soft" : "border-line bg-canvas"}`}>
+                    <TouchableOpacity
+                      disabled={voiceBusy || !isAuthenticated || selected}
+                      onPress={() => {
+                        if (!installedOnDevice) {
+                          void installSelectedVoice(manifest);
+                          return;
+                        }
+                        setVoiceBusy(true);
+                        void persistVoicePreference({
+                          selectedVoiceId: manifest.voiceId,
+                          selectedVersion: manifest.version,
+                          preference: voiceState?.preference || "automatic",
+                        }).then(setVoiceState)
+                          .catch((error) => Alert.alert("选择失败", error instanceof Error ? error.message : "请稍后重试"))
+                          .finally(() => setVoiceBusy(false));
+                      }}
+                      className="flex-1 p-3 active:bg-brand-soft"
+                    >
+                      <View className="flex-row items-center justify-between">
                       <View className="flex-1">
-                        <Text className="text-sm font-black text-ink">{manifest.name}</Text>
+                        <View className="flex-row items-center gap-2"><Text className="text-sm font-black text-ink">{manifest.name}</Text>
+                          {manifest.distribution === "internal-test" ? <Text className="rounded bg-purple-100 px-1.5 py-0.5 text-[9px] font-black text-purple-700">内部测试</Text> : null}
+                        </View>
                         <Text className="mt-1 text-[10px] leading-4 text-copy-muted">
                           {manifest.version} · {(manifest.resources.reduce((sum, resource) => sum + resource.bytes, 0) / 1024 / 1024).toFixed(1)} MB · {manifest.license.name}
                         </Text>
                       </View>
                       {voiceDownloading ? <ActivityIndicator size="small" colorClassName="accent-brand" /> : <Text className="text-xs font-bold text-brand">{selected ? "已选择" : installedOnDevice ? "选择" : "下载"}</Text>}
-                    </View>
-                    {voiceDownloading && !installedOnDevice ? <Text className="mt-2 text-[10px] font-bold text-brand">已下载 {Math.round(voiceProgress * 100)}%</Text> : null}
-                  </TouchableOpacity>
+                      </View>
+                      {voiceDownloading && !installedOnDevice ? <Text className="mt-2 text-[10px] font-bold text-brand">已下载 {Math.round(voiceProgress * 100)}%</Text> : null}
+                    </TouchableOpacity>
+                    {installedOnDevice && !selected ? <TouchableOpacity disabled={voiceBusy}
+                      onPress={() => Alert.alert("删除本地音色包", `删除 ${manifest.name}？`, [
+                        { text: "取消", style: "cancel" },
+                        { text: "仅删除模型", onPress: () => void deleteInstalledVoice(manifest, false) },
+                        { text: "模型与音频", style: "destructive", onPress: () => void deleteInstalledVoice(manifest, true) },
+                      ])}
+                      className="mr-3 rounded-xl border border-critical/30 px-3 py-2">
+                      <Text className="text-[10px] font-black text-critical">删除</Text>
+                    </TouchableOpacity> : null}
+                  </View>
                 );
               }) : (
                   <Text className="text-[11px] leading-5 text-copy-muted">

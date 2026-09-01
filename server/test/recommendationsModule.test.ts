@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { RecommendationsError } from "../src/modules/recommendations/errors.js";
 import type { RecommendationsRepository } from "../src/modules/recommendations/repository.js";
+import { configureRecommendationsService, recommendationsService } from "../src/modules/recommendations/runtime.js";
 import { RecommendationsService } from "../src/modules/recommendations/service.js";
 
 function repository(overrides: Partial<RecommendationsRepository> = {}) {
@@ -20,6 +21,12 @@ const kitchenware = {
 };
 
 describe("recommendations module", () => {
+  test("shares the composed service with AI and Agent consumers", () => {
+    const service = new RecommendationsService(repository(), kitchenware);
+    configureRecommendationsService(service);
+    assert.equal(recommendationsService(), service);
+  });
+
   test("scores PostgreSQL-style JSON values and persists a driver-neutral snapshot", async () => {
     let stored: unknown;
     const service = new RecommendationsService(repository({ createRequest: async (input) => { stored = input; } }), kitchenware);

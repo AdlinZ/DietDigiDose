@@ -256,8 +256,8 @@ function assertRunActive(runId: string) {
   if (!row || row.status === "cancelled") throw new Error("AGENT_RUN_CANCELLED");
 }
 
-function publicContext(userId: number) {
-  return buildAIPromptMessages(buildUserContext(userId)).map((message) => message.content).join("\n\n");
+async function publicContext(userId: number) {
+  return buildAIPromptMessages(await buildUserContext(userId)).map((message) => message.content).join("\n\n");
 }
 
 const supervisorSchema = z.object({
@@ -272,7 +272,7 @@ async function supervisorNode(state: SupervisorGraphState) {
   assertRunActive(state.runId);
   appendAgentEvent(state.runId, state.userId, "Supervisor", "routing_started", "Supervisor 正在分析目标并分派专业 Agent");
   const inputText = promptText(state.input);
-  const safetyBlock = findAllergyConflict(inputText, buildUserContext(state.userId));
+  const safetyBlock = findAllergyConflict(inputText, await buildUserContext(state.userId));
   if (safetyBlock) {
     appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_detected", `检测到已记录的过敏限制：${safetyBlock.allergyName}`, {
       allergyName: safetyBlock.allergyName,
@@ -389,8 +389,9 @@ async function runNutritionAgent(state: SupervisorGraphState): Promise<Specialis
     systemPrompt: structuredSystemPrompt(`你是 NutritionPlanningAgent。只提供营养分析、餐单内容和结构化产物，不执行写操作。
 严格核对过敏、用药、疾病、今日摄入和目标；数据不足时明确指出。所有营养值标记为估算。`, specialistOutputSchema),
   });
+  const context = await publicContext(state.userId);
   const result = await invokeStructured(
-    () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${publicContext(state.userId)}` }] }, { recursionLimit: 12 }),
+    () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${context}` }] }, { recursionLimit: 12 }),
     specialistOutputSchema,
     { runId: state.runId, userId: state.userId, agentName: "NutritionPlanningAgent", phase: "specialist", model: modelNameFor("NUTRITION") },
   );
@@ -407,8 +408,9 @@ async function runRecipeAgent(state: SupervisorGraphState): Promise<SpecialistOu
     systemPrompt: structuredSystemPrompt(`你是 RecipeCookingAgent。只提供菜谱、食材替换、火候与食品安全建议，不执行写操作。
 优先使用平台已审核菜谱和用户现有厨具；步骤必须可执行并包含时间或火候。`, specialistOutputSchema),
   });
+  const context = await publicContext(state.userId);
   const result = await invokeStructured(
-    () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${publicContext(state.userId)}` }] }, { recursionLimit: 12 }),
+    () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${context}` }] }, { recursionLimit: 12 }),
     specialistOutputSchema,
     { runId: state.runId, userId: state.userId, agentName: "RecipeCookingAgent", phase: "specialist", model: modelNameFor("RECIPE") },
   );
@@ -516,7 +518,7 @@ async function preflightPolicyNode(state: SupervisorGraphState) {
     });
     return {};
   }
-  const supplementalSafetyBlock = findAllergyConflict(requestText(state), buildUserContext(state.userId));
+  const supplementalSafetyBlock = findAllergyConflict(requestText(state), await buildUserContext(state.userId));
   if (supplementalSafetyBlock) {
     appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_detected", `补充信息命中已记录的过敏限制：${supplementalSafetyBlock.allergyName}`, {
       allergyName: supplementalSafetyBlock.allergyName,
@@ -586,7 +588,7 @@ async function operationsNode(state: SupervisorGraphState) {
   );
   let actions: AgentActionProposal[];
   try {
-    actions = validateAgentActions(result.actions || [], buildUserContext(state.userId));
+    actions = validateAgentActions(result.actions || [], await buildUserContext(state.userId));
   } catch (error) {
     if (!(error instanceof AgentSafetyConflictError)) throw error;
     appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_blocked", "业务动作命中过敏限制，已在审批和写入前阻断", {
@@ -631,12 +633,13 @@ async function approvalNode(state: SupervisorGraphState) {
   }
   let approved = highRisk;
   if (resume.decision === "edit") {
+    const userContext = await buildUserContext(state.userId);
     const edited = (resume.actions || []).map((action) => ({
       ...validateAgentActions([{
         actionType: action.actionType,
         summary: action.summary,
         payload: action.payload,
-      }], buildUserContext(state.userId))[0],
+      }], userContext)[0],
       id: action.id,
     }));
     if (edited.some((action) => action.riskLevel !== "high")) throw new Error("编辑后的批准包包含无效风险等级");

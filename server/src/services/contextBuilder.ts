@@ -1,6 +1,6 @@
 import { db, getSystemSetting } from "../storage/db.js";
 import dayjs from "dayjs";
-import { computeRecipeRecommendations } from "./recipeRecommendations.js";
+import { recommendationsService } from "../modules/recommendations/runtime.js";
 
 export interface UserContext {
   userId: number;
@@ -65,7 +65,7 @@ const OUTPUT_DEVELOPER_PROMPT = `【固定规则：输出】
 /**
  * 获取并组装指定用户的上下文数据
  */
-export function buildUserContext(userId: number): UserContext {
+export async function buildUserContext(userId: number): Promise<UserContext> {
   // 1. 用户信息
   const user = db.prepare("SELECT username, daily_calories_target FROM users WHERE id = ?").get(userId) as any;
   const username = user?.username || "用户";
@@ -123,10 +123,10 @@ export function buildUserContext(userId: number): UserContext {
   } : undefined;
 
   // AI 与页面复用同一套候选生成和硬约束，避免模型绕过过敏、时长、厨具或审核状态。
-  const recommendedRecipes = computeRecipeRecommendations(userId, {
+  const recommendedRecipes = (await recommendationsService().compute(userId, {
     surface: "ai",
     matchStatus: "all",
-  }).results.slice(0, 12).map((item) => ({
+  })).results.slice(0, 12).map((item) => ({
     recipeId: item.recipeId,
     title: item.recipe.title,
     reasons: item.reasons,

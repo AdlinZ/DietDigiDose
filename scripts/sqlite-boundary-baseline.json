@@ -72,7 +72,6 @@
     "server/src/services/inventoryQuantity.ts": 5,
     "server/src/services/kitchenwareCapabilities.ts": 14,
     "server/src/services/notifications.ts": 23,
-    "server/src/services/recipeRecommendations.ts": 12,
     "server/src/storage/database/postgres/migration.ts": 8,
     "server/src/storage/db.ts": 112,
     "server/src/storage/migrations.ts": 89

@@ -215,6 +215,11 @@ describe("26w35 milestone regressions", () => {
     assert.equal(signedInFirst.response.status, 201);
     assert.equal(signedInSecond.response.status, 200);
     assert.equal((signedInFirst.body as JsonObject).code, (signedInSecond.body as JsonObject).code);
+    const landing = await fetch(`${baseUrl}/share/posts/${(signedInFirst.body as JsonObject).code}`);
+    const landingHtml = await landing.text();
+    assert.equal(landing.status, 200);
+    assert.match(landingHtml, /分享码并发回归/);
+    assert.match(landingHtml, new RegExp(`dietdigidose://post-detail\\?id=${postId}`));
 
     db.prepare(`
       INSERT INTO community_share_codes (code, post_id, created_by, expires_at)

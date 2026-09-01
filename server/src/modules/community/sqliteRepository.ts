@@ -63,7 +63,8 @@ export class SqliteCommunityRepository implements CommunityRepository {
       .get(postId,userId,userId) as {code:string;expires_at:string}|undefined; if(existing)return {...existing,created:false};
     for(const code of codes)try { this.database.prepare("INSERT INTO community_share_codes (code,post_id,created_by,expires_at) VALUES (?,?,?,?)").run(code,postId,userId,expiresAt);
       return {code,expires_at:expiresAt,created:true}; } catch {} return null; })(); }
-  async resolveShare(code:string) { return (this.database.prepare(`SELECT s.post_id,s.expires_at FROM community_share_codes s JOIN community_posts p ON p.id=s.post_id
+  async resolveShare(code:string) { return (this.database.prepare(`SELECT s.post_id,s.expires_at,p.content,COALESCE(u.username,p.username) AS username
+    FROM community_share_codes s JOIN community_posts p ON p.id=s.post_id LEFT JOIN users u ON u.id=p.user_id
     WHERE s.code=? AND s.expires_at>CURRENT_TIMESTAMP AND p.deleted_at IS NULL`).get(code) as Row|undefined)||null; }
   async createPost(input:CreatePostInput) { return this.database.transaction(()=>{ if(input.linkedRecipeId&&!this.database.prepare(`SELECT 1 FROM recipes WHERE id=? AND deleted_at IS NULL
       AND status='approved' AND COALESCE(quality_status,'trusted')<>'needs_review'`).get(input.linkedRecipeId))return {kind:"linked_recipe_not_public" as const};

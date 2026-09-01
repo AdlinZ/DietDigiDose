@@ -8,7 +8,8 @@ import dietRecordsRoutes from "./modules/dietRecords/index.js";
 import healthDataRoutes from "./modules/health/index.js";
 import { createRecipesModule } from "./modules/recipes/index.js";
 import foodsRoutes from "./modules/foods/index.js";
-import communityRoutes from "./routes/community.js";
+import communityRoutes, { communityService } from "./routes/community.js";
+import { CommunityError } from "./modules/community/errors.js";
 import adminRoutes from "./routes/admin.js";
 import aiRoutes from "./routes/ai.js";
 import agentRunRoutes from "./routes/agent-runs.js";
@@ -72,19 +73,15 @@ export function createApp() {
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
   app.use("/media/uploads", express.static(uploadedMediaDir, { maxAge: "1y", immutable: true }));
   app.use("/media", express.static(staticAssetsDir, { maxAge: "7d" }));
-  app.get("/share/posts/:code", (req, res) => {
+  app.get("/share/posts/:code", (req, res, next) => {
     const code = String(req.params.code || "").trim().toUpperCase();
-    const share = db.prepare(`
-      SELECT s.post_id, p.content, COALESCE(u.username, p.username) AS username
-      FROM community_share_codes s
-      JOIN community_posts p ON p.id = s.post_id
-      LEFT JOIN users u ON u.id = p.user_id
-      WHERE s.code = ? AND s.expires_at > CURRENT_TIMESTAMP AND p.deleted_at IS NULL
-    `).get(code) as { post_id: number; content: string; username: string } | undefined;
-    if (!share) return res.status(404).type("html").send("<!doctype html><meta charset=utf-8><title>分享已失效</title><p>该食光分享已失效或不存在。</p>");
     const escapeHtml = (value: string) => value.replace(/[&<>\"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[character]!));
-    const appUrl = `dietdigidose://post-detail?id=${share.post_id}&shareCode=${code}`;
-    return res.type("html").send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>食光社区分享</title><style>body{font-family:system-ui;background:#fdf8f0;color:#2d2924;display:grid;place-items:center;min-height:100vh;margin:0}.card{max-width:520px;margin:24px;padding:28px;border-radius:24px;background:white;box-shadow:0 10px 40px #3d32291a}a{display:inline-block;margin-top:18px;padding:12px 20px;border-radius:999px;background:#2d6a4f;color:white;text-decoration:none}</style><div class="card"><h1>食光社区</h1><p><strong>${escapeHtml(share.username)}</strong> 的健康分享</p><p>${escapeHtml(share.content.slice(0, 220))}</p><a href="${appUrl}">打开食光烙记查看</a><p><small>未安装 App 时，可保存分享码 SG${code}，安装后打开 App 即可识别。</small></p></div></html>`);
+    void communityService.resolveShare(code).then((share) => {
+      const appUrl = `dietdigidose://post-detail?id=${share.post_id}&shareCode=${code}`;
+      res.type("html").send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>食光社区分享</title><style>body{font-family:system-ui;background:#fdf8f0;color:#2d2924;display:grid;place-items:center;min-height:100vh;margin:0}.card{max-width:520px;margin:24px;padding:28px;border-radius:24px;background:white;box-shadow:0 10px 40px #3d32291a}a{display:inline-block;margin-top:18px;padding:12px 20px;border-radius:999px;background:#2d6a4f;color:white;text-decoration:none}</style><div class="card"><h1>食光社区</h1><p><strong>${escapeHtml(String(share.username))}</strong> 的健康分享</p><p>${escapeHtml(String(share.content).slice(0, 220))}</p><a href="${appUrl}">打开食光烙记查看</a><p><small>未安装 App 时，可保存分享码 SG${code}，安装后打开 App 即可识别。</small></p></div></html>`);
+    }).catch((error) => error instanceof CommunityError && error.status === 404
+      ? res.status(404).type("html").send("<!doctype html><meta charset=utf-8><title>分享已失效</title><p>该食光分享已失效或不存在。</p>")
+      : next(error));
   });
 
   app.get("/api/v1/health", (_req, res) => res.status(200).json({

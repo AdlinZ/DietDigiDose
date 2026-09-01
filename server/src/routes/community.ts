@@ -1,1 +1,1 @@
-export { default } from "../modules/community/index.js";
+export { default, communityService } from "../modules/community/index.js";

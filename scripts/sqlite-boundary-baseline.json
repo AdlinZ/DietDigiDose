@@ -1,7 +1,7 @@
 {
   "policy": "Existing SQLite access is frozen. Counts may only decrease or move behind repository adapters during PostgreSQL migration.",
   "files": {
-    "server/src/app.ts": 2,
+    "server/src/app.ts": 1,
     "server/src/middleware/loginRateLimit.ts": 5,
     "server/src/middleware/sharedRateLimit.ts": 6,
     "server/src/modules/accessControl/index.ts": 1,

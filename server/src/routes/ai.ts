@@ -2,7 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { db } from "../storage/db.js";
-import { commitAIWritePreview } from "../services/aiWriteConfirmations.js";
+import { aiWriteConfirmationsService } from "../modules/aiWriteConfirmations/runtime.js";
 import { validateBody } from "../middleware/validate.js";
 import {
   aiChatSchema,
@@ -306,9 +306,9 @@ router.delete("/chat-conversations/:sessionId", (req: AuthRequest, res) => {
 });
 
 // 用户确认后的唯一写入入口。模型不能直接提交，确认记录与幂等键均按当前用户校验。
-router.post("/write-confirmations/:confirmationId/commit", validateBody(aiWriteConfirmationCommitSchema), (req: AuthRequest, res) => {
+router.post("/write-confirmations/:confirmationId/commit", validateBody(aiWriteConfirmationCommitSchema), async (req: AuthRequest, res) => {
   try {
-    const result = commitAIWritePreview({
+    const result = await aiWriteConfirmationsService().commit({
       userId: req.userId!,
       confirmationId: String(req.params.confirmationId),
       idempotencyKey: req.body.idempotencyKey,

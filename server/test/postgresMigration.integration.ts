@@ -15,6 +15,8 @@ import { PostgresAIRuntimeRepository } from "../src/modules/aiRuntime/postgresRe
 import { AIRuntimeService } from "../src/modules/aiRuntime/service.js";
 import { PostgresAiToolDataRepository } from "../src/modules/aiToolData/postgresRepository.js";
 import { AiToolDataService } from "../src/modules/aiToolData/service.js";
+import { PostgresAIWriteConfirmationsRepository } from "../src/modules/aiWriteConfirmations/postgresRepository.js";
+import { AIWriteConfirmationsService } from "../src/modules/aiWriteConfirmations/service.js";
 import { PostgresAdminAuditRepository } from "../src/modules/adminAudit/postgresRepository.js";
 import { AdminAuditService } from "../src/modules/adminAudit/service.js";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
@@ -517,6 +519,55 @@ try {
     FROM recipes WHERE deleted_at IS NULL AND status = 'approved' ORDER BY id LIMIT 2`);
   assert.equal(queueRecipes.rows.length, 2);
   const queueRecipe = queueRecipes.rows[0]!;
+  const aiWriteRepository = new PostgresAIWriteConfirmationsRepository(pool);
+  const aiWriteService = new AIWriteConfirmationsService(aiWriteRepository);
+  const inventoryPreview = await aiWriteService.createPreview({ userId: user.id, action: "add_inventory_item",
+    payload: { name: "PostgreSQL AI 确认番茄", quantity: "3个", location: "冷藏", expireDays: 4 },
+    conversationId: "postgres-ai-write", sourceMessageId: "message-1" });
+  const concurrentAIWrites = await Promise.all([
+    aiWriteService.commit({ userId: user.id, confirmationId: inventoryPreview.confirmationId,
+      idempotencyKey: "postgres-ai-write-concurrent-0001" }),
+    aiWriteService.commit({ userId: user.id, confirmationId: inventoryPreview.confirmationId,
+      idempotencyKey: "postgres-ai-write-concurrent-0001" }),
+  ]);
+  assert.equal(concurrentAIWrites[0]!.id, concurrentAIWrites[1]!.id);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::int AS count FROM inventory_items
+    WHERE user_id=$1 AND food_name='PostgreSQL AI 确认番茄'`, [user.id])).rows[0]?.count), 1);
+  await assert.rejects(() => aiWriteService.commit({ userId: user.id + 1, confirmationId: inventoryPreview.confirmationId,
+    idempotencyKey: "postgres-ai-write-foreign-0001" }), /不存在或无权/);
+  const dietPreview = await aiWriteService.createPreview({ userId: user.id, action: "record_diet_meal",
+    payload: { mealType: "午餐", foodName: "PostgreSQL AI 确认餐", amount: "1份", calories: 260 } });
+  const kitchenwarePreview = await aiWriteService.createPreview({ userId: user.id, action: "add_kitchenware_item",
+    payload: { name: "PostgreSQL AI 确认炒锅", category: "烹饪锅具", status: "良好" } });
+  await aiWriteService.commit({ userId: user.id, confirmationId: dietPreview.confirmationId,
+    idempotencyKey: "postgres-ai-write-diet-0001" });
+  await aiWriteService.commit({ userId: user.id, confirmationId: kitchenwarePreview.confirmationId,
+    idempotencyKey: "postgres-ai-write-kitchenware-0001" });
+  const concurrentHealthPreviews = await Promise.all([
+    aiWriteService.createPreview({ userId: householdMember, action: "record_health_log", payload: { weightKg: 60.5 } }),
+    aiWriteService.createPreview({ userId: householdMember, action: "record_health_log", payload: { waterMl: 500 } }),
+  ]);
+  await Promise.all(concurrentHealthPreviews.map((preview, index) => aiWriteService.commit({ userId: householdMember,
+    confirmationId: preview.confirmationId, idempotencyKey: `postgres-ai-write-health-concurrent-000${index + 2}` })));
+  const concurrentHealth = (await pool.query(`SELECT COUNT(*)::int AS count,MAX(weight) AS weight,MAX(water_ml) AS water_ml
+    FROM health_logs WHERE user_id=$1 AND recorded_date=CURRENT_DATE::text`, [householdMember])).rows[0];
+  assert.deepEqual({ count: Number(concurrentHealth.count), weight: Number(concurrentHealth.weight), waterMl: Number(concurrentHealth.water_ml) },
+    { count: 1, weight: 60.5, waterMl: 500 });
+  assert.equal(Number((await pool.query("SELECT calories FROM diet_records WHERE user_id=$1 AND food_name=$2",
+    [user.id, "PostgreSQL AI 确认餐"])).rows[0]?.calories), 260);
+  assert.equal((await pool.query("SELECT status FROM kitchenware_items WHERE user_id=$1 AND name=$2",
+    [user.id, "PostgreSQL AI 确认炒锅"])).rows[0]?.status, "良好");
+  const expiredPreview = await aiWriteService.createPreview({ userId: user.id, action: "record_health_log", payload: { waterMl: 100 } });
+  await pool.query("UPDATE ai_write_confirmations SET expires_at=CURRENT_TIMESTAMP-INTERVAL '1 second' WHERE id=$1",
+    [expiredPreview.confirmationId]);
+  await assert.rejects(() => aiWriteService.commit({ userId: user.id, confirmationId: expiredPreview.confirmationId,
+    idempotencyKey: "postgres-ai-write-expired-0001" }), /确认已过期/);
+  const aiWriteNativeTypes = (await pool.query(`SELECT pg_typeof(payload_json)::text AS payload_type,
+    pg_typeof(committed_result_json)::text AS result_type FROM ai_write_confirmations WHERE id=$1`,
+  [inventoryPreview.confirmationId])).rows[0];
+  assert.deepEqual(aiWriteNativeTypes, { payload_type: "jsonb", result_type: "jsonb" });
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::int AS count FROM ai_write_audit_logs WHERE confirmation_id=$1",
+    [inventoryPreview.confirmationId])).rows[0]?.count), 2);
   const realtimeRepository = new PostgresRealtimeVoiceRepository(pool);
   const cancelledRealtimeRuns: string[] = [];
   const realtimeService = new RealtimeVoiceService(realtimeRepository, {
@@ -1450,6 +1501,7 @@ try {
     postgresAiContextRepositoryVerified: true,
     postgresAIRuntimeRepositoryVerified: true,
     postgresAiToolDataRepositoryVerified: true,
+    postgresAIWriteConfirmationsRepositoryVerified: true,
     postgresAdminAuditRepositoryVerified: true,
     postgresDietRecordsRepositoryVerified: true,
     postgresInsightsRepositoryVerified: true,

@@ -12,6 +12,9 @@ import { configureNotificationsService } from "../modules/notifications/runtime.
 import { SqliteNotificationsRepository } from "../modules/notifications/sqliteRepository.js";
 import { createAiToolDataService } from "../modules/aiToolData/index.js";
 import { SqliteAiToolDataRepository } from "../modules/aiToolData/sqliteRepository.js";
+import { createAIWriteConfirmationsService } from "../modules/aiWriteConfirmations/index.js";
+import { configureAIWriteConfirmationsService } from "../modules/aiWriteConfirmations/runtime.js";
+import { SqliteAIWriteConfirmationsRepository } from "../modules/aiWriteConfirmations/sqliteRepository.js";
 import { createAdminAuditService } from "../modules/adminAudit/index.js";
 import { SqliteAdminAuditRepository } from "../modules/adminAudit/sqliteRepository.js";
 import { createKitchenwareModule } from "../modules/kitchenware/index.js";
@@ -30,6 +33,7 @@ export function initializeSqliteApplication() {
   configureAuthVerificationService(createAuthVerificationService(new SqliteAuthVerificationRepository(db)));
   configureNotificationsService(createNotificationsService(new SqliteNotificationsRepository(db)));
   configureAiToolDataService(createAiToolDataService(new SqliteAiToolDataRepository(db)));
+  configureAIWriteConfirmationsService(createAIWriteConfirmationsService(new SqliteAIWriteConfirmationsRepository(db)));
   configureAdminAuditService(createAdminAuditService(new SqliteAdminAuditRepository(db)));
   const recommendations = createRecommendationsRuntime(db);
   configureRecommendationsService(recommendations.service);

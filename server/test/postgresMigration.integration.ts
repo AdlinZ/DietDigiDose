@@ -20,6 +20,8 @@ import { KitchenwareService } from "../src/modules/kitchenware/service.js";
 import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
 import { PostgresRecommendationsRepository } from "../src/modules/recommendations/postgresRepository.js";
 import { RecommendationsService } from "../src/modules/recommendations/service.js";
+import { PostgresRecipesRepository } from "../src/modules/recipes/postgresRepository.js";
+import { RecipesService } from "../src/modules/recipes/service.js";
 import { PostgresShoppingRepository } from "../src/modules/shopping/postgresRepository.js";
 import { PostgresVoicePacksRepository } from "../src/modules/voicePacks/postgresRepository.js";
 import { VoicePacksService } from "../src/modules/voicePacks/service.js";
@@ -547,6 +549,69 @@ try {
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_recommendation_events
     WHERE user_id = $1 AND idempotency_key = $2`, [user.id, recommendationEventInput.idempotencyKey])).rows[0]?.count), 1);
 
+  const recipesRepository = new PostgresRecipesRepository(pool);
+  const recipesService = new RecipesService(recipesRepository, kitchenwareService);
+  const postgresRecipePage = await recipesService.list(user.id, {
+    search: "Postgres 厨具替代菜", pageSize: "1",
+  }, { protocol: "https", host: "api.integration.test" });
+  const postgresRecipeBody = postgresRecipePage.body as { items: Array<Record<string, unknown>>; total: number };
+  assert.equal(postgresRecipeBody.items[0]?.title, "Postgres 厨具替代菜");
+  assert.equal(Array.isArray(postgresRecipeBody.items[0]?.ingredients), true);
+  assert.equal(postgresRecipeBody.total, 1);
+
+  const submissionBody = {
+    title: "Postgres 用户投稿事务菜", description: "验证 PostgreSQL 投稿事务", image_url: "", cook_time: 18,
+    difficulty: "简单", calories: 180, protein: 9, carbs: 20, fat: 6, category: "晚餐", tags: ["postgres"],
+    steps: ["使用空气炸锅制作"], ingredients: [{ name: "番茄", amount: "2个" }],
+    required_kitchenware: ["空气炸锅", "Postgres 未知锅"], optional_kitchenware: [], serving_size: 2,
+  };
+  const createdSubmission = await recipesService.createSubmission(user.id, submissionBody);
+  const submissionId = createdSubmission.id;
+  assert.equal(await recipesRepository.findPublic(submissionId), null);
+  assert.equal((await recipesRepository.listMine(user.id)).some((recipe) => Number(recipe.id) === submissionId), true);
+  assert.equal(await recipesRepository.findSubmission(user.id + 1, submissionId), null);
+  const storedSubmission = await pool.query(`SELECT tags, ingredients_json, status FROM recipes WHERE id = $1`, [submissionId]);
+  assert.deepEqual(storedSubmission.rows[0]?.tags, ["postgres"]);
+  assert.equal(storedSubmission.rows[0]?.ingredients_json[0]?.name, "番茄");
+  assert.equal(storedSubmission.rows[0]?.status, "pending");
+  const storedRequirements = await pool.query(`SELECT c.name, r.role FROM recipe_kitchenware_requirements r
+    JOIN kitchenware_catalog c ON c.id = r.catalog_id WHERE r.recipe_id = $1 ORDER BY c.name`, [submissionId]);
+  assert.deepEqual(storedRequirements.rows, [{ name: "空气炸锅", role: "required" }]);
+  const storedReview = await pool.query(`SELECT raw_name, status FROM kitchenware_mapping_reviews
+    WHERE source_type = 'recipe' AND source_id = $1`, [String(submissionId)]);
+  assert.deepEqual(storedReview.rows, [{ raw_name: "Postgres 未知锅", status: "pending" }]);
+  await assert.rejects(() => recipesService.updateSubmission(user.id + 1, submissionId, submissionBody), /未找到该投稿/);
+  await recipesService.updateSubmission(user.id, submissionId, {
+    ...submissionBody, title: "Postgres 用户投稿已更新", required_kitchenware: ["烤箱"],
+  });
+  const updatedRequirements = await pool.query(`SELECT c.name FROM recipe_kitchenware_requirements r
+    JOIN kitchenware_catalog c ON c.id = r.catalog_id WHERE r.recipe_id = $1`, [submissionId]);
+  assert.deepEqual(updatedRequirements.rows, [{ name: "烤箱" }]);
+
+  await pool.query("DELETE FROM recipe_favorites WHERE user_id = $1 AND recipe_id = $2", [user.id, kitchenwareRecipeId]);
+  const favoriteWrites = await Promise.all([
+    recipesRepository.addFavorite(user.id, kitchenwareRecipeId), recipesRepository.addFavorite(user.id, kitchenwareRecipeId),
+  ]);
+  assert.deepEqual(favoriteWrites, [true, true]);
+  assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_favorites
+    WHERE user_id = $1 AND recipe_id = $2`, [user.id, kitchenwareRecipeId])).rows[0]?.count), 1);
+  assert.equal(await recipesRepository.withdrawSubmission(user.id + 1, submissionId), false);
+  assert.equal(await recipesRepository.withdrawSubmission(user.id, submissionId), true);
+
+  const failedSubmissionTitle = "Postgres 必须回滚的投稿";
+  await assert.rejects(() => recipesRepository.createSubmission({
+    authorUserId: user.id, canonicalKey: "postgresrollback", sourceContentHash: "f".repeat(64),
+    recipe: {
+      title: failedSubmissionTitle, description: "", imageUrl: "", cookTime: 10, difficulty: "简单", calories: 100,
+      protein: 5, carbs: 10, fat: 3, nutrition: [], category: "其他", tags: [], steps: ["烹饪"],
+      ingredients: [{ name: "番茄", amount: "1个", group: "主料" }], servingSize: 1, prepTime: 0,
+      cuisine: null, mealTypes: [], requiredKitchenware: ["无效厨具"], optionalKitchenware: [],
+    },
+    requirements: [{ rawName: "无效厨具", normalizedName: "无效厨具", role: "required",
+      catalogId: 2_147_483_647, confidence: 1 }],
+  }));
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::integer AS count FROM recipes WHERE title = $1", [failedSubmissionTitle])).rows[0]?.count), 0);
+
   const healthRepository = new PostgresHealthRepository(pool);
   const healthUpserts = await Promise.all([
     healthRepository.upsertLog(user.id, "2026-09-02", { weight: 63.2 }),
@@ -663,6 +728,7 @@ try {
     postgresVoicePacksRepositoryVerified: true,
     postgresKitchenwareRepositoryVerified: true,
     postgresRecommendationsRepositoryVerified: true,
+    postgresRecipesRepositoryVerified: true,
     postgresFeedbackRepositoryVerified: true,
     postgresFoodRepositoryVerified: true,
     postgresHealthRepositoryVerified: true,

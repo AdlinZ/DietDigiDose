@@ -2269,6 +2269,18 @@ describe("core business authorization", () => {
     });
     assert.equal(forbidden.response.status, 404);
 
+    const updated = await api(`/api/v1/recipes/submissions/${recipeId}`, {
+      method: "PUT",
+      token: first.token,
+      body: JSON.stringify({ ...payload, title: "番茄鸡蛋更新菜谱", required_kitchenware: ["空气炸锅"] }),
+    });
+    assert.equal(updated.response.status, 200);
+    const storedSubmission = db.prepare("SELECT title, status FROM recipes WHERE id = ?").get(recipeId) as JsonObject;
+    assert.deepEqual(storedSubmission, { title: "番茄鸡蛋更新菜谱", status: "pending" });
+    const storedRequirement = db.prepare(`SELECT c.name FROM recipe_kitchenware_requirements r
+      JOIN kitchenware_catalog c ON c.id = r.catalog_id WHERE r.recipe_id = ? AND r.role = 'required'`).get(recipeId) as JsonObject;
+    assert.equal(storedRequirement.name, "空气炸锅");
+
     db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
     const adminLogin = await api("/api/v1/auth/login", {
       method: "POST",

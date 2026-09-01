@@ -18,7 +18,7 @@ import { sharedRateLimit } from "../middleware/sharedRateLimit.js";
 import { startSupervisorRun, waitForSupervisorRunCompletion } from "../services/agent/runtime.js";
 import { getAgentRunRow, toAgentRunSummary } from "../services/agent/repository.js";
 import { buildAgentSolutionCards } from "../services/agent/cards.js";
-import { ensureUserInitialState } from "../services/userInitialization.js";
+import { ensureUserInitialState } from "../modules/accessControl/index.js";
 import { aiErrorTypeForCode } from "../services/aiErrors.js";
 import { getChatConfig } from "../services/aiService.js";
 import { getRecipeRecommendationPage } from "../services/recipeRecommendations.js";
@@ -175,7 +175,7 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
   const requestStartedAt = Date.now();
   const { messages = [], prompt, sessionId: requestedSessionId, source = "assistant", image, imageMimeType } = req.body;
   const userId = req.userId!;
-  ensureUserInitialState(userId);
+  await ensureUserInitialState(userId);
   const sessionId = typeof requestedSessionId === "string" && requestedSessionId.trim()
     ? requestedSessionId.trim().slice(0, 120)
     : randomUUID();

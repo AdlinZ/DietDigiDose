@@ -30,6 +30,11 @@ export class AccessControlService {
     return jwt.sign({ userId, sessionVersion: user.sessionVersion }, JWT_SECRET, { expiresIn: "30d" });
   }
 
+  ensureUserInitialState(userId: number) {
+    if (!Number.isInteger(userId) || userId <= 0) throw new Error("INVALID_USER_ID");
+    return this.repository.ensureUserInitialState(userId);
+  }
+
   recordFunnelEvent(userId: number, eventName: FunnelEventName) {
     return recordFunnelEvent(userId, eventName,
       (name, actorHash) => this.repository.recordFunnelEvent(name, actorHash));

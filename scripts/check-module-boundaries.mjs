@@ -5,6 +5,14 @@ const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
   {
+    name: "aiConversations",
+    routeFile: null,
+    concreteRepository: /sqliteRepository|SqliteAIConversationsRepository/,
+    compositionFile: "server/src/composition/sqliteRuntime.ts",
+    compositionImport: "../modules/aiConversations/index.js",
+    legacyFile: null,
+  },
+  {
     name: "aiWriteConfirmations",
     routeFile: null,
     concreteRepository: /sqliteRepository|SqliteAIWriteConfirmationsRepository/,

@@ -2781,7 +2781,7 @@ describe("core business authorization", () => {
       VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))`).run(first.user.id, sessionId);
     const { recordChatTurn } = await import("../src/routes/ai.js");
 
-    recordChatTurn({
+    await recordChatTurn({
       userId: first.user.id,
       sessionId,
       source: "assistant",
@@ -2797,7 +2797,7 @@ describe("core business authorization", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 10));
     const requestedAfterDeletion = Date.now();
-    recordChatTurn({
+    await recordChatTurn({
       userId: first.user.id,
       sessionId,
       source: "assistant",

@@ -11,6 +11,8 @@ import { PostgresAccessControlRepository } from "../src/modules/accessControl/po
 import { AccessControlService } from "../src/modules/accessControl/service.js";
 import { PostgresAiContextRepository } from "../src/modules/aiContext/postgresRepository.js";
 import { AiContextService } from "../src/modules/aiContext/service.js";
+import { PostgresAIConversationsRepository } from "../src/modules/aiConversations/postgresRepository.js";
+import { AIConversationsService } from "../src/modules/aiConversations/service.js";
 import { PostgresAIRuntimeRepository } from "../src/modules/aiRuntime/postgresRepository.js";
 import { AIRuntimeService } from "../src/modules/aiRuntime/service.js";
 import { PostgresAiToolDataRepository } from "../src/modules/aiToolData/postgresRepository.js";
@@ -568,6 +570,49 @@ try {
   assert.deepEqual(aiWriteNativeTypes, { payload_type: "jsonb", result_type: "jsonb" });
   assert.equal(Number((await pool.query("SELECT COUNT(*)::int AS count FROM ai_write_audit_logs WHERE confirmation_id=$1",
     [inventoryPreview.confirmationId])).rows[0]?.count), 2);
+  const aiConversationsRepository = new PostgresAIConversationsRepository(pool);
+  const aiConversationsService = new AIConversationsService(aiConversationsRepository);
+  const conversationSessionId = `postgres-ai-conversation-${user.id}`;
+  const conversationRunId = `postgres-ai-conversation-run-${user.id}`;
+  await pool.query("DELETE FROM agent_runs WHERE id=$1", [conversationRunId]);
+  await pool.query("DELETE FROM ai_chat_session_deletions WHERE user_id=$1 AND session_id=$2", [user.id, conversationSessionId]);
+  await pool.query("DELETE FROM ai_chat_messages WHERE user_id=$1 AND session_id=$2", [user.id, conversationSessionId]);
+  const firstConversationAt = Date.now();
+  assert.equal(await aiConversationsService.recordTurn({ userId: user.id, sessionId: conversationSessionId,
+    source: "assistant", userContent: "PostgreSQL 会话问题", assistantContent: "PostgreSQL 会话回答",
+    systemContents: ["PostgreSQL 系统上下文"], payload: { trace: { provider: "postgres" } }, responseTimeMs: 25,
+    requestedAt: firstConversationAt, respondedAt: firstConversationAt + 25 }), true);
+  await pool.query(`INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id)
+    VALUES($1,$2,$3,'text','assistant','completed','{}'::jsonb,$1)`, [conversationRunId, user.id, conversationSessionId]);
+  await pool.query(`INSERT INTO agent_run_media(id,run_id,user_id,kind,mime_type,data_base64)
+    VALUES($1,$2,$3,'image','image/png','cG5n')`, [`${conversationRunId}-media`, conversationRunId, user.id]);
+  const requestedBeforeDelete = Date.now() - 1_000;
+  await Promise.all([
+    aiConversationsService.recordTurn({ userId: user.id, sessionId: conversationSessionId, source: "assistant",
+      userContent: "删除前的问题", assistantContent: "迟到回答", responseTimeMs: 1_100,
+      requestedAt: requestedBeforeDelete, respondedAt: Date.now() + 100 }),
+    aiConversationsService.deleteConversation(user.id, conversationSessionId),
+  ]);
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::int AS count FROM ai_chat_messages WHERE user_id=$1 AND session_id=$2",
+    [user.id, conversationSessionId])).rows[0]?.count), 0);
+  assert.equal(Number((await pool.query("SELECT COUNT(*)::int AS count FROM agent_run_media WHERE run_id=$1",
+    [conversationRunId])).rows[0]?.count), 0);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const requestedAfterDelete = Date.now();
+  assert.equal(await aiConversationsService.recordTurn({ userId: user.id, sessionId: conversationSessionId,
+    source: "assistant", userContent: "删除后的新问题", assistantContent: "新回答", payload: { safe: true },
+    responseTimeMs: 20, requestedAt: requestedAfterDelete, respondedAt: requestedAfterDelete + 20 }), true);
+  const conversationNativeType = (await pool.query(`SELECT pg_typeof(payload_json)::text AS payload_type
+    FROM ai_chat_messages WHERE user_id=$1 AND session_id=$2 AND role='assistant'`, [user.id, conversationSessionId])).rows[0];
+  assert.deepEqual(conversationNativeType, { payload_type: "jsonb" });
+  const legacyScanId = `postgres-ai-conversation-scan-${user.id}`;
+  await pool.query(`INSERT INTO inventory_scan_jobs(id,user_id,image_hash,status,result_json)
+    VALUES($1,$2,$1,'completed','[{"foodName":"PostgreSQL 番茄"}]'::jsonb)
+    ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id,status=excluded.status,result_json=excluded.result_json`,
+  [legacyScanId, user.id]);
+  assert.deepEqual((await aiConversationsService.legacyInventoryScanJob(legacyScanId, user.id))?.result,
+    [{ foodName: "PostgreSQL 番茄" }]);
+  assert.equal(await aiConversationsService.legacyInventoryScanJob(legacyScanId, householdMember), null);
   const realtimeRepository = new PostgresRealtimeVoiceRepository(pool);
   const cancelledRealtimeRuns: string[] = [];
   const realtimeService = new RealtimeVoiceService(realtimeRepository, {
@@ -1499,6 +1544,7 @@ try {
     repeatedAndConcurrentImportVerified: true,
     postgresInventoryRepositoryVerified: true,
     postgresAiContextRepositoryVerified: true,
+    postgresAIConversationsRepositoryVerified: true,
     postgresAIRuntimeRepositoryVerified: true,
     postgresAiToolDataRepositoryVerified: true,
     postgresAIWriteConfirmationsRepositoryVerified: true,

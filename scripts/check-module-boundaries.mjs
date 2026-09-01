@@ -5,6 +5,13 @@ const root = path.resolve(import.meta.dirname, "..");
 const failures = [];
 const moduleSpecs = [
   {
+    name: "adminAgentRuns",
+    concreteRepository: /sqliteRepository|SqliteAdminAgentRunsRepository/,
+    compositionFile: "server/src/routes/admin.ts",
+    compositionImport: "../modules/adminAgentRuns/index.js",
+    legacyFile: "server/src/routes/admin/agent-runs.ts",
+  },
+  {
     name: "aiConversations",
     routeFile: null,
     concreteRepository: /sqliteRepository|SqliteAIConversationsRepository/,

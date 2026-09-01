@@ -20,7 +20,7 @@ import {
 } from "../services/authVerification.js";
 import { hashRegistrationToken } from "../services/authVerificationCrypto.js";
 import { getSmsProvider, smsCredentialsStatus } from "../services/smsVerificationProvider.js";
-import { signUserToken } from "../services/sessionTokens.js";
+import { signUserToken } from "../modules/accessControl/index.js";
 import { ensureUserInitialState } from "../services/userInitialization.js";
 
 const router = Router();
@@ -298,7 +298,7 @@ router.post("/verify", async (req, res) => {
       recordFunnelEvent(user.id, "login_succeeded");
       return res.json({
         status: "authenticated",
-        token: signUserToken(user.id),
+        token: await signUserToken(user.id),
         user: userResponse(user.id),
       });
     }
@@ -334,7 +334,7 @@ router.post("/verify", async (req, res) => {
   }
 });
 
-router.post("/register", (req, res) => {
+router.post("/register", async (req, res) => {
   const registrationToken = typeof req.body?.registrationToken === "string" ? req.body.registrationToken : "";
   const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
@@ -375,7 +375,7 @@ router.post("/register", (req, res) => {
     })();
     recordFunnelEvent(newUserId, "account_registered");
     return res.status(201).json({
-      token: signUserToken(newUserId),
+      token: await signUserToken(newUserId),
       user: userResponse(newUserId),
     });
   } catch (error) {

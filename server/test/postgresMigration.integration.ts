@@ -7,6 +7,8 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { PostgresAccessControlRepository } from "../src/modules/accessControl/postgresRepository.js";
+import { AccessControlService } from "../src/modules/accessControl/service.js";
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { PostgresAdminCommunityRepository } from "../src/modules/adminCommunity/postgresRepository.js";
@@ -1062,6 +1064,13 @@ try {
 
   const adminUsersRepository=new PostgresAdminUsersRepository(pool);
   const adminUsersService=new AdminUsersService(adminUsersRepository);
+  const accessControlService=new AccessControlService(new PostgresAccessControlRepository(pool));
+  const migratedAccessUser=await accessControlService.user(user.id);
+  assert.equal(migratedAccessUser?.role,"admin");
+  assert.equal(migratedAccessUser?.isDisabled,false);
+  const migratedToken=await accessControlService.signUserToken(user.id);
+  const migratedClaims=JSON.parse(Buffer.from(migratedToken.split(".")[1]!,"base64url").toString()) as Record<string,unknown>;
+  assert.equal(migratedClaims.sessionVersion,migratedAccessUser?.sessionVersion);
   const postgresLevelRule=await adminUsersService.levelRule();
   postgresLevelRule.xp.dailyCheckIn=9;
   assert.equal((await adminUsersService.saveLevelRule(postgresLevelRule,moderationContext)).rule.xp.dailyCheckIn,9);

@@ -395,6 +395,47 @@ describe("API security baseline", () => {
     db.prepare(`DELETE FROM recipes WHERE id IN (${ids.map(() => "?").join(",")})`).run(...ids);
   });
 
+  test("admin recipe writes atomically persist mappings, review queues and audits", async () => {
+    db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
+    const adminLogin = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ identifier: "admin", password: "AdminPassword1234" }),
+    });
+    const adminToken = (adminLogin.body as JsonObject).token;
+    const payload = {
+      title: "管理员仓储事务菜", description: "验证管理员菜谱仓储边界", image_url: "", cook_time: 20,
+      difficulty: "简单", calories: 210, protein: 10, carbs: 22, fat: 7, category: "晚餐", tags: ["事务"],
+      steps: ["番茄切块", "放入空气炸锅烤熟"], ingredients: [{ name: "番茄", amount: "2个" }],
+      required_kitchenware: ["空气炸锅", "契约测试未知锅"], optional_kitchenware: [], serving_size: 2,
+    };
+    const created = await api("/api/v1/admin/recipes", {
+      method: "POST", token: adminToken, body: JSON.stringify(payload),
+    });
+    assert.equal(created.response.status, 200);
+    const recipeId = Number((created.body as JsonObject).id);
+    const stored = db.prepare("SELECT title, status, quality_status, tags FROM recipes WHERE id = ?").get(recipeId) as JsonObject;
+    assert.equal(stored.title, payload.title);
+    assert.equal(stored.status, "approved");
+    assert.equal(stored.quality_status, "trusted");
+    assert.deepEqual(JSON.parse(stored.tags), ["事务"]);
+    assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM recipe_kitchenware_requirements r
+      JOIN kitchenware_catalog c ON c.id = r.catalog_id WHERE r.recipe_id = ? AND c.name = '空气炸锅'`).get(recipeId) as JsonObject).count, 1);
+    assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM kitchenware_mapping_reviews
+      WHERE source_type = 'recipe' AND source_id = ? AND raw_name = '契约测试未知锅'`).get(String(recipeId)) as JsonObject).count, 1);
+    assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM admin_audit_logs
+      WHERE action = 'recipe.create' AND resource_id = ?`).get(String(recipeId)) as JsonObject).count, 1);
+
+    const updated = await api(`/api/v1/admin/recipes/${recipeId}`, {
+      method: "PUT", token: adminToken, body: JSON.stringify({ ...payload, title: "管理员仓储更新菜", required_kitchenware: ["烤箱"] }),
+    });
+    assert.equal(updated.response.status, 200);
+    assert.equal((db.prepare(`SELECT c.name FROM recipe_kitchenware_requirements r JOIN kitchenware_catalog c ON c.id = r.catalog_id
+      WHERE r.recipe_id = ? AND r.role = 'required'`).get(recipeId) as JsonObject).name, "烤箱");
+    assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM admin_audit_logs
+      WHERE action = 'recipe.update' AND resource_id = ?`).get(String(recipeId)) as JsonObject).count, 1);
+    db.prepare("DELETE FROM recipes WHERE id = ?").run(recipeId);
+  });
+
   test("demo users cover distinct health and dietary recommendation scenarios", async () => {
     const profiles = db.prepare(`
       SELECT u.nickname AS seed_key, u.daily_calories_target, hp.*

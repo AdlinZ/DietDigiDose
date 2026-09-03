@@ -7,8 +7,11 @@
 !**/.env.example
 server/data
 server/backups
-client
-admin
+client/*
+!client/package.json
+!client/assets/
+client/assets/*
+!client/assets/logo.png
 *.apk
 *.log
 

@@ -89,7 +89,11 @@ services:
     networks: [staging]
 
   caddy:
-    image: caddy:2.10.2-alpine
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        VITE_APP_ENTRY_URL: ${VITE_APP_ENTRY_URL:-/login}
     restart: unless-stopped
     depends_on:
       api:

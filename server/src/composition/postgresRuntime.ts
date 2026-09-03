@@ -104,6 +104,7 @@ import { createAdminAIConfigRouter } from "../routes/admin/ai-config.js";
 import { createAdminAuthServicesRouter } from "../routes/admin/auth-services.js";
 import { createAdminMediaCleanupRouter } from "../routes/admin/media-cleanup.js";
 import { createAdminNotificationsRouter } from "../routes/admin/notifications.js";
+import { createAdminSiteSettingsRouter } from "../routes/admin/site-settings.js";
 import { createAdminAgentRunsRouter } from "../modules/adminAgentRuns/route.js";
 import { AdminAgentRunsService } from "../modules/adminAgentRuns/service.js";
 import { PostgresAdminAgentRunsRepository } from "../modules/adminAgentRuns/postgresRepository.js";
@@ -197,6 +198,7 @@ export async function initializePostgresApplication(): Promise<ApplicationRuntim
       createAdminKitchenwareRouter(new AdminKitchenwareService(new PostgresAdminKitchenwareRepository(pool))),
       createAdminFoodAssetsRouter(new AdminFoodAssetsService(new PostgresAdminFoodAssetsRepository(pool))),
       createAdminNotificationsRouter(),
+      createAdminSiteSettingsRouter(),
       createAdminAgentRunsRouter(new AdminAgentRunsService(new PostgresAdminAgentRunsRepository(pool), getPublicAgentCheckpointState)),
       createAdminMediaCleanupRouter(mediaCleanup),
       createAdminVoicePackRouter(voicePacks),

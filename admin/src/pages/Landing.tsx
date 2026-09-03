@@ -1,19 +1,23 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import logoUrl from '../../../client/assets/logo.png';
+import api from '../services/api';
 import {
   ArrowRight,
   Bot,
   Boxes,
   Camera,
   Check,
+  ChevronDown,
   ChevronRight,
   CirclePlay,
   CookingPot,
+  Menu,
   ScanLine,
   ShieldCheck,
   Sparkles,
   Utensils,
+  X,
 } from 'lucide-react';
 
 const Github = ({ size = 15 }: { size?: number }) => (
@@ -34,8 +38,6 @@ const steps = [
   ['02', '获取可执行的建议', 'AI 优先匹配现有食材和设备，不止给一张漂亮食谱。'],
   ['03', '把每一天变成反馈', '从一餐到一周，看见自己的营养节奏与变化。'],
 ];
-
-const appEntryUrl = import.meta.env.VITE_APP_ENTRY_URL ?? 'http://localhost:8080';
 
 const moments = [
   {
@@ -66,16 +68,32 @@ const moments = [
 
 export default function Landing() {
   const [activeMoment, setActiveMoment] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [filing, setFiling] = useState({ enabled: false, text: '', url: '' });
   const selectedMoment = moments[activeMoment];
   const SelectedMomentIcon = selectedMoment.icon;
 
+  useEffect(() => {
+    let active = true;
+    api.get('/site-settings')
+      .then(({ data }) => { if (active && data?.filing) setFiling(data.filing); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    document.title = '食光烙记｜AI 饮食与厨房管理';
+  }, []);
+
+  const closeMobileMenu = () => setMobileMenuOpen(false);
+
   return (
-    <main className="min-h-screen overflow-hidden bg-[#FCFBF7] text-[#21332A] selection:bg-[#2D6A4F] selection:text-white">
+    <main className="min-h-screen overflow-x-hidden bg-[#FCFBF7] text-[#21332A] selection:bg-[#2D6A4F] selection:text-white">
       <header className="sticky top-0 z-40 border-b border-[#DDE8DF]/80 bg-[#FCFBF7]/85 backdrop-blur-xl">
         <div className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-5 lg:px-8">
           <Link to="/" className="flex items-center gap-3">
             <img src={logoUrl} alt="食光烙记" className="h-10 w-10 object-contain" />
-            <div>
+            <div className="hidden sm:block">
               <p className="text-base font-extrabold tracking-tight text-[#215E43]">食光烙记</p>
               <p className="text-[10px] font-semibold tracking-[0.12em] text-[#7D8D82]">DIETDIGIDOSE</p>
             </div>
@@ -86,14 +104,27 @@ export default function Landing() {
             <a href="#moments" className="transition-colors hover:text-[#215E43]">使用场景</a>
             <a href="#how-it-works" className="transition-colors hover:text-[#215E43]">使用方式</a>
             <a href="#beta" className="transition-colors hover:text-[#215E43]">内测计划</a>
-            <a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 transition-colors hover:text-[#215E43]"><Github size={15} /> GitHub</a>
           </nav>
 
           <div className="flex items-center gap-2">
-            <a href={appEntryUrl} className="hidden rounded-xl px-4 py-2 text-sm font-semibold text-[#446154] transition-colors hover:bg-[#EEF4EE] sm:block">打开 App</a>
-            <a href={appEntryUrl} className="inline-flex items-center gap-2 rounded-xl bg-[#215E43] px-4 py-2.5 text-sm font-bold text-white shadow-[0_8px_20px_rgba(33,94,67,0.18)] transition hover:-translate-y-0.5 hover:bg-[#184D36]">开始使用 <ArrowRight size={15} /></a>
+            <Link to="/login" className="hidden rounded-xl px-4 py-2 text-sm font-semibold text-[#446154] transition-colors hover:bg-[#EEF4EE] sm:block">管理后台</Link>
+            <a href="#beta" className="inline-flex items-center gap-2 rounded-xl bg-[#215E43] px-4 py-2.5 text-sm font-bold text-white shadow-[0_8px_20px_rgba(33,94,67,0.18)] transition hover:-translate-y-0.5 hover:bg-[#184D36]">申请内测 <ArrowRight size={15} /></a>
+            <button type="button" onClick={() => setMobileMenuOpen((open) => !open)} aria-expanded={mobileMenuOpen} aria-label={mobileMenuOpen ? '关闭导航菜单' : '打开导航菜单'} className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#D7E4D9] text-[#365344] md:hidden">
+              {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
+            </button>
           </div>
         </div>
+        {mobileMenuOpen ? (
+          <nav className="border-t border-[#E5ECE5] bg-[#FCFBF7] px-5 py-4 md:hidden">
+            <div className="mx-auto grid max-w-7xl gap-1 text-sm font-semibold text-[#4F6759]">
+              <a href="#product" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 hover:bg-[#EEF4EE]">产品能力</a>
+              <a href="#moments" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 hover:bg-[#EEF4EE]">使用场景</a>
+              <a href="#how-it-works" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 hover:bg-[#EEF4EE]">使用方式</a>
+              <a href="#beta" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 hover:bg-[#EEF4EE]">内测计划</a>
+              <Link to="/login" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 text-[#215E43] hover:bg-[#EEF4EE]">管理后台</Link>
+            </div>
+          </nav>
+        ) : null}
       </header>
 
       <section className="relative">
@@ -111,7 +142,7 @@ export default function Landing() {
               食光烙记将食材库存、厨具、饮食记录和 AI 建议连接成一个轻量的日常系统，帮你在每一餐做出更适合自己的选择。
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-              <a href={appEntryUrl} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#215E43] px-6 py-3.5 text-sm font-bold text-white shadow-[0_12px_28px_rgba(33,94,67,0.22)] transition hover:-translate-y-0.5 hover:bg-[#184D36]">打开食光 App <ArrowRight size={17} /></a>
+              <a href="#beta" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#215E43] px-6 py-3.5 text-sm font-bold text-white shadow-[0_12px_28px_rgba(33,94,67,0.22)] transition hover:-translate-y-0.5 hover:bg-[#184D36]">申请加入内测 <ArrowRight size={17} /></a>
               <a href="#product" className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#D7E4D9] bg-white px-6 py-3.5 text-sm font-bold text-[#365344] transition hover:border-[#97BCA1] hover:bg-[#F8FBF8]"><CirclePlay size={17} className="text-[#2B7A58]" /> 先看看如何工作</a>
             </div>
             <p className="mt-4 text-xs font-medium text-[#7A897E]">还没有内测资格？<a href="#beta" className="ml-1 text-[#215E43] underline decoration-[#9FC5A7] underline-offset-4 transition-colors hover:text-[#184D36]">申请加入内测</a></p>
@@ -148,21 +179,24 @@ export default function Landing() {
             <div className="absolute -bottom-5 -left-5 hidden rounded-2xl border border-[#E1ECE3] bg-white p-3.5 shadow-lg sm:block"><div className="flex items-center gap-2.5"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#FFF3DD]"><CookingPot size={16} className="text-[#B98031]" /></div><div><p className="text-[10px] font-bold text-[#334C3B]">装备匹配完成</p><p className="mt-0.5 text-[9px] text-[#7D8C82]">已有 3 件可用厨具</p></div></div></div>
           </div>
         </div>
+        <a href="#product" aria-label="继续向下了解产品" className="absolute bottom-4 left-1/2 hidden -translate-x-1/2 flex-col items-center gap-1 text-[11px] font-semibold tracking-wide text-[#668073] transition hover:text-[#215E43] lg:flex">
+          继续了解<ChevronDown size={17} className="animate-bounce" />
+        </a>
       </section>
 
-      <section id="product" className="border-y border-[#E5ECE5] bg-white py-20 sm:py-28">
+      <section id="product" className="scroll-mt-20 border-y border-[#E5ECE5] bg-white py-20 sm:py-28">
         <div className="mx-auto max-w-7xl px-5 lg:px-8">
-          <div className="max-w-2xl"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#2B7A58]">A calmer health workflow</p><h2 className="mt-4 text-3xl font-extrabold tracking-[-0.035em] text-[#21332A] sm:text-4xl">不是另一个打卡工具，<br />而是你的饮食操作系统。</h2></div>
+          <div className="max-w-2xl"><p className="text-xs font-bold tracking-[0.16em] text-[#2B7A58]">更从容的健康日常</p><h2 className="mt-4 text-3xl font-extrabold tracking-[-0.035em] text-[#21332A] sm:text-4xl">不是另一个打卡工具，<br />而是你的饮食操作系统。</h2></div>
           <div className="mt-12 grid gap-4 md:grid-cols-3">
             {features.map(({ icon: Icon, title, description }, index) => <article key={title} className={`group rounded-[24px] border p-6 transition duration-300 hover:-translate-y-1 hover:shadow-xl ${index === 1 ? 'border-[#2B7A58] bg-[#215E43] text-white shadow-[0_16px_35px_rgba(33,94,67,0.18)]' : 'border-[#E2EBE3] bg-[#FCFDFB] text-[#21332A]'}`}><div className={`flex h-11 w-11 items-center justify-center rounded-xl ${index === 1 ? 'bg-white/15 text-white' : 'bg-[#EAF4EC] text-[#2B7A58]'}`}><Icon size={20} /></div><h3 className="mt-8 text-lg font-extrabold">{title}</h3><p className={`mt-3 text-sm leading-6 ${index === 1 ? 'text-[#D3E6D7]' : 'text-[#6E7E73]'}`}>{description}</p><div className={`mt-8 flex items-center gap-1 text-xs font-bold ${index === 1 ? 'text-white' : 'text-[#2B7A58]'}`}>了解更多 <ArrowRight size={14} className="transition-transform group-hover:translate-x-1" /></div></article>)}
           </div>
         </div>
       </section>
 
-      <section id="moments" className="bg-[#183F2D] px-5 py-20 text-white sm:py-28">
+      <section id="moments" className="scroll-mt-20 bg-[#183F2D] px-5 py-20 text-white sm:py-28">
         <div className="mx-auto max-w-7xl">
           <div className="max-w-2xl">
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A8D4B0]">Built for real days</p>
+            <p className="text-xs font-bold tracking-[0.16em] text-[#A8D4B0]">为真实的每一天设计</p>
             <h2 className="mt-4 text-3xl font-extrabold tracking-[-0.04em] sm:text-4xl">不是要求你更自律，<br />而是让选择更轻松。</h2>
             <p className="mt-5 max-w-xl text-sm leading-7 text-[#BFD3C4]">从冰箱里剩下什么，到今天到底吃了什么，食光把琐碎信息放回它该在的位置。</p>
           </div>
@@ -207,15 +241,15 @@ export default function Landing() {
         </div>
       </section>
 
-      <section id="how-it-works" className="bg-[#F4F8F3] py-20 sm:py-28">
-        <div className="mx-auto grid max-w-7xl gap-12 px-5 lg:grid-cols-[.82fr_1.18fr] lg:px-8"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#2B7A58]">How it works</p><h2 className="mt-4 text-3xl font-extrabold tracking-[-0.035em] text-[#21332A] sm:text-4xl">从“今天吃什么”，到可持续的日常。</h2><p className="mt-5 max-w-md text-sm leading-7 text-[#68796D]">少一些记录压力，多一点可用的反馈。每个模块都服务于下一顿更轻松的选择。</p></div><div className="divide-y divide-[#DCE7DE] border-y border-[#DCE7DE]">{steps.map(([number, title, description]) => <div key={number} className="grid grid-cols-[56px_1fr_auto] gap-3 py-6 sm:grid-cols-[72px_1fr_auto] sm:py-7"><span className="text-sm font-extrabold text-[#78A587]">{number}</span><div><h3 className="font-extrabold text-[#294535]">{title}</h3><p className="mt-2 text-sm leading-6 text-[#718175]">{description}</p></div><ChevronRight className="mt-1 h-5 w-5 text-[#97AA9B]" /></div>)}</div></div>
+      <section id="how-it-works" className="scroll-mt-20 bg-[#F4F8F3] py-20 sm:py-28">
+        <div className="mx-auto grid max-w-7xl gap-12 px-5 lg:grid-cols-[.82fr_1.18fr] lg:px-8"><div><p className="text-xs font-bold tracking-[0.16em] text-[#2B7A58]">使用方式</p><h2 className="mt-4 text-3xl font-extrabold tracking-[-0.035em] text-[#21332A] sm:text-4xl">从“今天吃什么”，到可持续的日常。</h2><p className="mt-5 max-w-md text-sm leading-7 text-[#68796D]">少一些记录压力，多一点可用的反馈。每个模块都服务于下一顿更轻松的选择。</p></div><div className="divide-y divide-[#DCE7DE] border-y border-[#DCE7DE]">{steps.map(([number, title, description]) => <div key={number} className="grid grid-cols-[56px_1fr_auto] gap-3 py-6 sm:grid-cols-[72px_1fr_auto] sm:py-7"><span className="text-sm font-extrabold text-[#78A587]">{number}</span><div><h3 className="font-extrabold text-[#294535]">{title}</h3><p className="mt-2 text-sm leading-6 text-[#718175]">{description}</p></div><ChevronRight className="mt-1 h-5 w-5 text-[#97AA9B]" /></div>)}</div></div>
       </section>
 
-      <section id="beta" className="px-5 py-20 sm:py-28">
-        <div className="mx-auto max-w-7xl overflow-hidden rounded-[32px] bg-[#215E43] px-6 py-12 text-center text-white shadow-[0_25px_60px_rgba(33,94,67,0.2)] sm:px-12 sm:py-16"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/12"><Sparkles size={21} /></div><h2 className="mt-6 text-3xl font-extrabold tracking-[-0.04em] sm:text-4xl">从今天这一餐开始</h2><p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-[#D5E7D8]">已有账号，直接打开食光 App 继续记录；还在观望，欢迎加入内测，和我们一起把它打磨得更贴近日常。</p><div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row"><a href={appEntryUrl} className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-extrabold text-[#215E43] transition hover:bg-[#EFF7F0]">打开食光 App <ArrowRight size={16} /></a><a href="mailto:adlinzhang@gmail.com?subject=%E9%A3%9F%E5%85%89%E7%83%99%E8%AE%B0%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7" className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/10"><Sparkles size={15} /> 申请内测名额</a></div></div>
+      <section id="beta" className="scroll-mt-20 px-5 py-20 sm:py-28">
+        <div className="mx-auto max-w-7xl overflow-hidden rounded-[32px] bg-[#215E43] px-6 py-12 text-center text-white shadow-[0_25px_60px_rgba(33,94,67,0.2)] sm:px-12 sm:py-16"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/12"><Sparkles size={21} /></div><h2 className="mt-6 text-3xl font-extrabold tracking-[-0.04em] sm:text-4xl">从今天这一餐开始</h2><p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-[#D5E7D8]">欢迎加入内测，和我们一起把食光烙记打磨得更贴近日常；管理人员可从独立入口进入控制台。</p><div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row"><a href="mailto:adlinzhang@gmail.com?subject=%E9%A3%9F%E5%85%89%E7%83%99%E8%AE%B0%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7" className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-extrabold text-[#215E43] transition hover:bg-[#EFF7F0]"><Sparkles size={15} /> 申请内测名额</a><Link to="/login" className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/10">进入管理后台 <ArrowRight size={16} /></Link></div></div>
       </section>
 
-      <footer className="border-t border-[#E2EAE3] px-5 py-7"><div className="mx-auto flex max-w-7xl flex-col gap-3 text-xs text-[#7A897E] sm:flex-row sm:items-center sm:justify-between"><span>© 2026 食光烙记 · Dietdigidose</span><div className="flex items-center gap-5"><a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 font-semibold text-[#4F6D59] transition hover:text-[#215E43]"><Github size={13} /> GitHub 开源仓库</a><span className="flex items-center gap-1.5"><ShieldCheck size={13} className="text-[#2B7A58]" /> 内测环境 · 数据安全优先</span></div></div></footer>
+      <footer className="border-t border-[#E2EAE3] px-5 py-7"><div className="mx-auto flex max-w-7xl flex-col gap-3 text-xs text-[#7A897E] sm:flex-row sm:items-center sm:justify-between"><div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4"><span>© 2026 食光烙记 · DietDigiDose</span>{filing.enabled && filing.text ? (filing.url ? <a href={filing.url} target="_blank" rel="noreferrer" className="font-semibold text-[#4F6D59] transition hover:text-[#215E43]">{filing.text}</a> : <span>{filing.text}</span>) : null}</div><div className="flex flex-wrap items-center gap-x-5 gap-y-2"><Link to="/privacy" className="font-semibold text-[#4F6D59] transition hover:text-[#215E43]">隐私政策</Link><Link to="/terms" className="font-semibold text-[#4F6D59] transition hover:text-[#215E43]">用户协议</Link><a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 font-semibold text-[#4F6D59] transition hover:text-[#215E43]"><Github size={13} /> GitHub 开源仓库</a><span className="flex items-center gap-1.5"><ShieldCheck size={13} className="text-[#2B7A58]" /> 内测环境 · 数据安全优先</span></div></div></footer>
     </main>
   );
 }

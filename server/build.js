@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 const pkg = require('./package.json');
 const rootPkg = require('../package.json');
 const dependencies = pkg.dependencies || {};
-const externalList = Object.keys(dependencies).filter(dep => dep !== 'dayjs');
+const externalList = Object.keys(dependencies).filter(dep => dep !== 'dayjs' && dep !== '@dietdigidose/contracts');
 try {
   rmSync(new URL('./dist/', import.meta.url), { recursive: true, force: true });
   await esbuild.build({

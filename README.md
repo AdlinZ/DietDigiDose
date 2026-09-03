@@ -15,7 +15,7 @@
 食光烙记是一款面向个人与小家庭的开源饮食管理应用。它以家庭食材库存和临期提醒为起点，将菜谱匹配、采购、烹饪扣减与饮食记录串成一条可验证的日常闭环，并提供健康档案、社区内容和带安全边界的 AI 辅助能力。
 
 > [!IMPORTANT]
-> 项目目前处于可信 Beta 收口阶段，尚未公开发布。营养估算与 AI 输出仅供日常参考，不能替代医疗诊断或治疗建议；当前版本也不应承载真实敏感健康数据。
+> 移动客户端目前仍处于可信 Beta 收口阶段，尚未公开发布。营养估算与 AI 输出仅供日常参考，不能替代医疗诊断或治疗建议；内测期间也不应承载真实敏感健康数据。
 
 ## 核心体验
 
@@ -39,14 +39,25 @@
 
 ## 当前版本与完成度
 
-- **产品版本：** `1.0.5`
-- **候选快照：** `26w37a`
+- **产品版本：** `1.0.6`
+- **发布周期：** `26w36`
+- **候选快照：** `26w36a`
 - **阶段：** 可信 Beta 收口
-- **最近更新：** 2026-08-27
+- **最近更新：** 2026-09-03
 
-三端代码、自动化测试、构建、版本元数据校验和生产依赖审计均已纳入 CI。仓库内候选基线已经通过；正式进入外部内测前，仍需完成 HTTPS staging 验收、同一提交的 iOS/Android 候选包、双端真机闭环及隔离备份恢复演练。
+三端代码、自动化测试、构建、版本元数据校验和生产依赖审计均已纳入 CI。官网、管理端、API 和 HTTPS 生产环境已上线；正式进入移动端外部内测前，仍需完成同一提交的 iOS/Android 候选包、双端真机闭环及隔离备份恢复演练。
 
-详见 [1.0.5 · 26w37a 候选验收记录](docs/release-candidate-26w37a.md)、[上一候选记录](docs/release-candidate-26w35a.md) 与 [真机验收清单](docs/device-beta-checklist.md)。
+详见 [候选验收记录](docs/release-candidate-26w37a.md)、[上一候选记录](docs/release-candidate-26w35a.md) 与 [真机验收清单](docs/device-beta-checklist.md)。候选记录保留当时的版本号，不随新版本回写。
+
+## 在线服务
+
+| 入口 | 地址 |
+| --- | --- |
+| 产品官网 | [dietdigidose.top](https://dietdigidose.top/) |
+| 管理端 | [dietdigidose.top/login](https://dietdigidose.top/login) |
+| API 健康检查 | [dietdigidose.top/api/v1/health](https://dietdigidose.top/api/v1/health) |
+
+官网页脚的 ICP 备案文案和链接由管理端“站点设置”统一配置，不写死在前端代码中。
 
 ## 技术架构
 
@@ -55,11 +66,11 @@
 | 模块 | 主要技术 | 用途 |
 | --- | --- | --- |
 | `client` | Expo 54、React Native、Expo Router、Uniwind | iOS、Android 与 Web 客户端 |
-| `server` | Express、TypeScript、SQLite、Drizzle、LangGraph | API、业务事务、数据与 AI Agent 运行时 |
+| `server` | Express、TypeScript、SQLite/PostgreSQL、Drizzle、LangGraph | API、业务事务、数据与 AI Agent 运行时 |
 | `admin` | React、Vite、Tailwind CSS | 运营审核与系统管理后台 |
-| `deploy` | Docker Compose、Caddy | HTTPS staging、持久化与恢复演练 |
+| `deploy` | Docker Compose、Caddy | HTTPS 部署、持久化与恢复演练 |
 
-SQLite 是当前实际运行时数据库；Supabase 用于可选的社区媒体对象存储。Postgres 相关能力属于后续容量演进预留，不代表当前生产数据源。
+本地开发默认使用 SQLite，当前生产环境使用 PostgreSQL；Supabase 用于可选的社区媒体对象存储。
 
 ## 仓库结构
 
@@ -169,7 +180,7 @@ pnpm dev:admin
 
 “食光烙记”的产品构想形成于 2025 年高校软件创新竞赛期间，曾获[第十八届全国大学生软件创新大赛·软件设计创新赛](https://www.swcontest.com.cn/information?activeTab=notice&detailId=d6d9f4a293ba48f59cec8824ca901332)西南赛区一等奖、全国赛三等奖。
 
-2026 年，项目以全新代码库重新启动。当前实现没有迁移、复制或参考早期参赛版本源码；仅延续项目名称、问题背景与产品愿景，技术架构、数据模型和工程实现均按当前需求重新设计。
+2026 年，项目以全新代码库重新启动。[早期参赛版本](https://github.com/heathcetide/shiguang-brand) 作为历史资料保留；当前实现仅延续项目名称、问题背景与产品愿景，技术架构、数据模型和工程实现均按当前需求重新设计。
 
 ## 参与项目
 

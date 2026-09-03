@@ -15,7 +15,7 @@
 DietDigiDose is an open-source food management application for individuals and small households. Starting with pantry inventory and expiry awareness, it connects recipe matching, shopping, cooking, stock deduction, and diet logging into one verifiable everyday workflow. Health profiles, community content, and safety-bounded AI assistance complement that core experience.
 
 > [!IMPORTANT]
-> The project is currently in its trusted Beta hardening phase and has not been publicly released. Nutrition estimates and AI output are for everyday reference only and are not medical diagnosis or treatment advice. The current build should not be used with real sensitive health data.
+> The mobile client remains in its trusted Beta hardening phase and has not been publicly released. Nutrition estimates and AI output are for everyday reference only and are not medical diagnosis or treatment advice. Beta builds should not be used with real sensitive health data.
 
 ## Core experience
 
@@ -39,14 +39,25 @@ The repository currently includes:
 
 ## Version and status
 
-- **Product version:** `1.0.5`
-- **Candidate snapshot:** `26w35a`
+- **Product version:** `1.0.6`
+- **Release cycle:** `26w36`
+- **Candidate snapshot:** `26w36a`
 - **Stage:** trusted Beta hardening
-- **Last updated:** August 27, 2026
+- **Last updated:** September 3, 2026
 
-Static checks, automated tests, builds, release metadata validation, and production dependency auditing for all three applications are enforced in CI. The in-repository candidate baseline has passed. Before external testing, the project still needs HTTPS staging acceptance, iOS and Android candidates built from the same commit, end-to-end testing on both platforms, and an isolated backup-restore exercise.
+Static checks, automated tests, builds, release metadata validation, and production dependency auditing for all three applications are enforced in CI. The website, admin console, API, and HTTPS production environment are live. Before external mobile testing, the project still needs iOS and Android candidates built from the same commit, end-to-end testing on both platforms, and an isolated backup-restore exercise.
 
-See the [1.0.5 candidate record](docs/release-candidate-26w35a.md) and [device Beta checklist](docs/device-beta-checklist.md) for the exact boundary.
+See the [candidate records](docs/release-candidate-26w37a.md) and [device Beta checklist](docs/device-beta-checklist.md) for the exact boundary. Candidate records retain their original version metadata and are not rewritten for later releases.
+
+## Live services
+
+| Entry | URL |
+| --- | --- |
+| Product website | [dietdigidose.top](https://dietdigidose.top/) |
+| Admin console | [dietdigidose.top/login](https://dietdigidose.top/login) |
+| API health check | [dietdigidose.top/api/v1/health](https://dietdigidose.top/api/v1/health) |
+
+The ICP filing text and destination shown in the website footer are configured through **Site settings** in the admin console instead of being hard-coded in the frontend.
 
 ## Architecture
 
@@ -55,11 +66,11 @@ This repository is a pnpm workspace monorepo:
 | Package | Main technologies | Purpose |
 | --- | --- | --- |
 | `client` | Expo 54, React Native, Expo Router, Uniwind | iOS, Android, and web client |
-| `server` | Express, TypeScript, SQLite, Drizzle, LangGraph | API, business transactions, data, and AI Agent runtime |
+| `server` | Express, TypeScript, SQLite/PostgreSQL, Drizzle, LangGraph | API, business transactions, data, and AI Agent runtime |
 | `admin` | React, Vite, Tailwind CSS | Moderation and system administration console |
-| `deploy` | Docker Compose, Caddy | HTTPS staging, persistence, and recovery exercises |
+| `deploy` | Docker Compose, Caddy | HTTPS deployment, persistence, and recovery exercises |
 
-SQLite is the current runtime database. Supabase is optional object storage for community media. PostgreSQL-related code is reserved for later capacity-driven evolution and does not describe the current production data source.
+Local development uses SQLite by default, while the current production environment uses PostgreSQL. Supabase remains optional object storage for community media.
 
 ## Repository layout
 
@@ -160,7 +171,7 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled source code, fo
 
 The DietDigiDose concept originated during a 2025 university software innovation competition. It received first prize in the Southwest regional round and third prize nationally in the [Software Design Innovation category of the 18th National College Student Software Innovation Competition](https://www.swcontest.com.cn/information?activeTab=notice&detailId=d6d9f4a293ba48f59cec8824ca901332).
 
-The project restarted in 2026 with a new codebase. The current implementation did not migrate, copy, or consult the earlier competition source code. It retains only the name, problem context, and product vision; the architecture, data model, and implementation were redesigned for the current requirements.
+The project restarted in 2026 with a new codebase. The [earlier competition repository](https://github.com/heathcetide/shiguang-brand) is preserved as historical material. The current implementation retains the name, problem context, and product vision, while its architecture, data model, and engineering implementation were redesigned for the current requirements.
 
 ## Contributing
 

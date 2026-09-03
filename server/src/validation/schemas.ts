@@ -700,3 +700,15 @@ export const adminAIConfigTestSchema = z.object({
   baseUrl: optionalUrlSchema,
   model: z.string().trim().min(1).max(200).optional(),
 }).strict();
+
+export const adminSiteSettingsSchema = z.object({
+  filingEnabled: z.boolean(),
+  filingText: z.string().trim().max(120, "备案展示内容不能超过 120 个字符"),
+  filingUrl: z.string().trim().max(2000, "备案链接不能超过 2000 个字符").refine(
+    (value) => !value || /^https?:\/\/\S+$/i.test(value),
+    "备案链接必须以 http:// 或 https:// 开头",
+  ),
+}).strict().refine(
+  (value) => !value.filingEnabled || value.filingText.length > 0,
+  { path: ["filingText"], message: "启用展示时必须填写备案内容" },
+);

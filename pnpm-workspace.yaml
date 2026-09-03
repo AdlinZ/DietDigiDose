@@ -4,6 +4,8 @@ packages:
   - admin
   - packages/*
 
+allowUnusedPatches: true
+
 allowBuilds:
   '@alicloud/openapi-core': true
   better-sqlite3: true

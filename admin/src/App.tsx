@@ -24,6 +24,8 @@ const AuthServicePlaceholder = lazy(() => import('./pages/AuthServicePlaceholder
 const UserLevelRule = lazy(() => import('./pages/UserLevelRule'));
 const MediaCleanup = lazy(() => import('./pages/MediaCleanup'));
 const VoicePacks = lazy(() => import('./pages/VoicePacks'));
+const SiteSettings = lazy(() => import('./pages/SiteSettings'));
+const Legal = lazy(() => import('./pages/Legal'));
 
 // Auth Guard
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -74,6 +76,8 @@ function App() {
       <Routes>
       {/* 面向公众的产品宣传官网主页 */}
       <Route path="/" element={<Landing />} />
+      <Route path="/privacy" element={<Legal kind="privacy" />} />
+      <Route path="/terms" element={<Legal kind="terms" />} />
 
       {/* 管理员登录 */}
       <Route path="/login" element={<Login />} />
@@ -110,6 +114,7 @@ function App() {
         <Route path="notifications" element={<Notifications />} />
         <Route path="media-cleanup" element={<MediaCleanup />} />
         <Route path="voice-packs" element={<VoicePacks />} />
+        <Route path="site-settings" element={<SiteSettings />} />
         <Route path="auth-services/sms" element={<AuthServiceSms />} />
         <Route path="auth-services/captcha" element={<AuthServicePlaceholder />} />
         <Route path="auth-services/phone" element={<AuthServicePlaceholder />} />

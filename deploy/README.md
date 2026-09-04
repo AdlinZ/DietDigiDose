@@ -1,11 +1,11 @@
 # Staging 部署与演练
 
-该目录提供独立 HTTPS staging 的可复现部署基线：Caddy 自动签发 TLS、PostgreSQL 16 持久卷、一次性 Drizzle migration、独立 API/worker，以及不会保留烟测账号的核心闭环验证。
+该目录提供独立 HTTPS staging 的可复现部署基线：Caddy 自动签发 TLS 并提供产品官网与管理端静态页面、PostgreSQL 16 持久卷、一次性 Drizzle migration、独立 API/worker，以及不会保留烟测账号的核心闭环验证。
 
 ## 部署
 
 1. 将 staging 域名的 DNS 指向 Linux 主机，开放 TCP 80/443 与 UDP 443。
-2. 在本目录复制 `.env.example` 为 `.env`，复制 `server.env.example` 为 `server.env`，填写真实密钥和允许的前端域名；这两个文件均被 Git 忽略。
+2. 在本目录复制 `.env.example` 为 `.env`，复制 `server.env.example` 为 `server.env`，填写真实密钥、官网“打开 App”链接和允许的前端域名；这两个文件均被 Git 忽略。
    `DATABASE_MIGRATION_URL` 与应用 `DATABASE_URL` 应使用不同账号；应用账号不应拥有 schema/role 管理权限。若 staging 使用 `DEPLOYMENT_PROFILE=global`，同时在独立 Supabase 项目中创建 public `community-media` bucket，填写 URL、anon key 与仅服务端可见的 service-role key；社区新图片只保存对象 URL。正式迁移前先核验 bucket 的上传、读取与删除策略。
 3. 执行：
 

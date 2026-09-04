@@ -5,7 +5,25 @@
 
 {$STAGING_DOMAIN} {
   encode zstd gzip
-  reverse_proxy api:9090
+
+  handle /api/* {
+    reverse_proxy api:9090
+  }
+
+  handle /media/* {
+    reverse_proxy api:9090
+  }
+
+  handle /share/* {
+    reverse_proxy api:9090
+  }
+
+  handle {
+    root * /srv/admin
+    try_files {path} /index.html
+    file_server
+  }
+
   header {
     -Server
     Strict-Transport-Security "max-age=31536000; includeSubDomains"

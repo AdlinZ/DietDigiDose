@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import api from '../services/api';
 import logoUrl from '../../../client/assets/logo.png';
@@ -17,6 +17,10 @@ export default function Login() {
         : '',
   );
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    document.title = '管理员登录｜食光烙记';
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

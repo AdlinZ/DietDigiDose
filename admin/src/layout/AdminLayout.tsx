@@ -19,6 +19,7 @@ import {
   Workflow,
   DatabaseZap,
   AudioLines,
+  Settings,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -38,6 +39,7 @@ export default function AdminLayout() {
   const [aiSectionOpen, setAiSectionOpen] = useState(aiSectionActive);
 
   useEffect(() => {
+    document.title = '管理控制台｜食光烙记';
     api.get('/auth/me').then(({ data }) => {
       if (data.role !== 'admin') {
         localStorage.removeItem('adminToken');
@@ -90,6 +92,7 @@ export default function AdminLayout() {
     { to: '/admin/community', icon: MessageSquare, label: '社区审核' },
   ];
   const finalNavItems = [
+    { to: '/admin/site-settings', icon: Settings, label: '网站设置' },
     { to: '/admin/notifications', icon: Bell, label: '通知中心' },
     { to: '/admin/media-cleanup', icon: DatabaseZap, label: '媒体清理' },
     { to: '/admin/security', icon: ShieldCheck, label: '安全审计' },

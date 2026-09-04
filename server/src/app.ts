@@ -11,6 +11,7 @@ import { requestLogger } from "./middleware/requestLogger.js";
 import { SERVER_BUILD_TIME, SERVER_VERSION } from "./version.js";
 import { recoverAgentRuntime } from "./services/agent/runtime.js";
 import { assertNoPublicServerSecrets, getProviderProfile } from "./providers/profiles.js";
+import { createSiteSettingsRouter } from "./routes/site-settings.js";
 
 const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -81,6 +82,7 @@ export async function createApp() {
     conversationRetentionDays: Math.max(1, Number(process.env.AI_CONVERSATION_RETENTION_DAYS) || 90),
     supportContact: process.env.PRIVACY_SUPPORT_CONTACT?.trim() || "应用商店开发者联系方式",
   }));
+  app.use("/api/v1/site-settings", createSiteSettingsRouter());
   app.use("/api/v1/auth", routes.auth);
   app.use("/api/v1/webhooks", routes.webhooks);
   app.use("/api/v1/inventory", routes.inventory);

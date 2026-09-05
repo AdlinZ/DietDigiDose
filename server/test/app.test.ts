@@ -232,7 +232,6 @@ describe("API security baseline", () => {
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 53").get() as { name: string }).name, "durable_media_cleanup_jobs");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 54").get() as { name: string }).name, "media_cleanup_job_leases");
     assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 59").get() as { name: string }).name, "independent_worker_task_runs");
-    assert.equal((db.prepare("SELECT name FROM schema_migrations WHERE version = 60").get() as { name: string }).name, "backfill_legacy_media_cleanup_references");
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'media_cleanup_jobs'").get());
     assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'worker_task_runs'").get());
     const mediaCleanupColumns = db.prepare("PRAGMA table_info(media_cleanup_jobs)").all() as Array<{ name: string }>;
@@ -409,34 +408,6 @@ describe("API security baseline", () => {
       .get(official.lastInsertRowid) as JsonObject;
     assert.deepEqual(officialRow, { quality_status: "trusted", nutrition_basis: "source" });
     db.prepare("DELETE FROM recipes WHERE id IN (?, ?)").run(fallback.lastInsertRowid, official.lastInsertRowid);
-  });
-
-  test("media cleanup migration backfills old origins and recovers completed legacy jobs", async () => {
-    const ownerId = 97_502;
-    const oldOrigin = "https://retired-project.example";
-    const url = `${oldOrigin}/storage/v1/object/public/legacy-media/community/${ownerId}/photo.png`;
-    const inserted = db.prepare(`INSERT INTO media_cleanup_jobs
-      (owner_user_id, urls_json, objects_json, status, completed_at)
-      VALUES (?, ?, NULL, 'completed', CURRENT_TIMESTAMP)`).run(ownerId, JSON.stringify([url]));
-    db.prepare("DELETE FROM schema_migrations WHERE version = 60").run();
-    const { runMigrations } = await import("../src/storage/migrations.js");
-
-    try {
-      runMigrations(db);
-      const row = db.prepare(`SELECT objects_json, status, completed_at, last_error
-        FROM media_cleanup_jobs WHERE id = ?`).get(inserted.lastInsertRowid) as JsonObject;
-      assert.deepEqual(JSON.parse(row.objects_json), [{
-        backend: "supabase",
-        origin: oldOrigin,
-        bucket: "legacy-media",
-        objectPath: `community/${ownerId}/photo.png`,
-      }]);
-      assert.equal(row.status, "pending");
-      assert.equal(row.completed_at, null);
-      assert.match(row.last_error, /等待重新验证删除/);
-    } finally {
-      db.prepare("DELETE FROM media_cleanup_jobs WHERE id = ?").run(inserted.lastInsertRowid);
-    }
   });
 
   test("governed import batches preserve audit history and rollback inserts and updates", async () => {
@@ -3100,7 +3071,7 @@ describe("core business authorization", () => {
     }
   });
 
-  test("remote media cleanup stays pending when object storage credentials are unavailable", async () => {
+  test("remote and legacy media cleanup jobs stay pending until storage configuration matches", async () => {
     const prior = {
       url: process.env.SUPABASE_URL,
       bucket: process.env.SUPABASE_MEDIA_BUCKET,
@@ -3134,6 +3105,24 @@ describe("core business authorization", () => {
       const recovered = db.prepare("SELECT status, attempts, last_error FROM media_cleanup_jobs WHERE id = ?")
         .get(jobId) as { status: string; attempts: number; last_error: string | null };
       assert.deepEqual(recovered, { status: "completed", attempts: 2, last_error: null });
+
+      const oldOrigin = "https://retired-project.example";
+      const legacyUrl = `${oldOrigin}/storage/v1/object/public/community-media/community/${ownerId}/legacy.png`;
+      const legacyJobId = Number(db.prepare(`INSERT INTO media_cleanup_jobs (owner_user_id, urls_json, objects_json)
+        VALUES (?, ?, NULL)`).run(ownerId, JSON.stringify([legacyUrl])).lastInsertRowid);
+      process.env.SUPABASE_URL = "https://replacement-project.example";
+      await assert.rejects(() => processMediaCleanupJob(legacyJobId), /无法定位任何存储对象/);
+      const blockedLegacy = db.prepare("SELECT status, attempts, last_error FROM media_cleanup_jobs WHERE id = ?")
+        .get(legacyJobId) as { status: string; attempts: number; last_error: string };
+      assert.equal(blockedLegacy.status, "pending");
+      assert.equal(blockedLegacy.attempts, 1);
+      assert.match(blockedLegacy.last_error, /保留等待重试/);
+
+      process.env.SUPABASE_URL = oldOrigin;
+      assert.equal(await processMediaCleanupJob(legacyJobId), true);
+      const retriedLegacy = db.prepare("SELECT status, attempts, last_error FROM media_cleanup_jobs WHERE id = ?")
+        .get(legacyJobId) as { status: string; attempts: number; last_error: string | null };
+      assert.deepEqual(retriedLegacy, { status: "completed", attempts: 2, last_error: null });
     } finally {
       globalThis.fetch = priorFetch;
       if (prior.url === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = prior.url;

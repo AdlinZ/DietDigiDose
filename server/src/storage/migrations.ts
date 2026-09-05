@@ -1,6 +1,5 @@
 import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { describeHistoricalStoredMediaUrls } from "../services/mediaStorage.js";
 import { assessRecipeQuality } from "../services/recipeQuality.js";
 
 type Migration = {
@@ -1997,42 +1996,6 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_worker_task_runs_status_started
           ON worker_task_runs(status, started_at DESC, id DESC);
       `);
-    },
-  },
-  {
-    version: 60,
-    name: "backfill_legacy_media_cleanup_references",
-    up(database) {
-      const rows = database.prepare(`SELECT id, owner_user_id, urls_json, status
-        FROM media_cleanup_jobs WHERE objects_json IS NULL`).all() as Array<{
-          id: number;
-          owner_user_id: number;
-          urls_json: string;
-          status: string;
-        }>;
-      const save = database.prepare(`UPDATE media_cleanup_jobs SET objects_json = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND objects_json IS NULL`);
-      const recoverCompleted = database.prepare(`UPDATE media_cleanup_jobs SET objects_json = ?, status = 'pending',
-        last_error = '历史媒体清理任务已恢复，等待重新验证删除', completed_at = NULL, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND objects_json IS NULL AND status = 'completed'`);
-
-      for (const row of rows) {
-        let urls: unknown;
-        try {
-          urls = JSON.parse(row.urls_json);
-        } catch {
-          continue;
-        }
-        if (!Array.isArray(urls) || urls.some((url) => typeof url !== "string")) continue;
-        const urlList = urls as string[];
-        const fullyDescribed = urlList.every((url) => !url.length
-          || describeHistoricalStoredMediaUrls(row.owner_user_id, [url]).length > 0);
-        if (!fullyDescribed) continue;
-        const references = describeHistoricalStoredMediaUrls(row.owner_user_id, urlList);
-        const serialized = JSON.stringify(references);
-        if (row.status === "completed" && references.length > 0) recoverCompleted.run(serialized, row.id);
-        else save.run(serialized, row.id);
-      }
     },
   },
 ];

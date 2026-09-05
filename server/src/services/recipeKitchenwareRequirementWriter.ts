@@ -1,5 +1,3 @@
-import type Database from "better-sqlite3";
-
 export type ResolvedKitchenware = {
   id: number;
   name: string;
@@ -17,11 +15,13 @@ export type RecipeKitchenwareWriteResult = {
 };
 
 type WriteOptions = {
-  role: "required" | "optional" | "convenience";
-  source: string;
   replace: boolean;
   resolve: (rawName: string) => ResolvedKitchenware | null;
   enqueueReview: (rawName: string, confidence: number) => void;
+  isAvailable: () => boolean;
+  prepareRemove: () => () => void;
+  prepareInsert: () => (resolved: ResolvedKitchenware, rawName: string) => boolean;
+  runAtomically: <T>(operation: () => T) => T;
 };
 
 function isSchemaDriftError(error: unknown) {
@@ -34,37 +34,21 @@ function isSchemaDriftError(error: unknown) {
   );
 }
 
-function tableExists(database: Database.Database, table: string) {
-  try {
-    return Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(table));
-  } catch {
-    return false;
-  }
-}
-
 export function writeRecipeKitchenwareRequirements(
-  database: Database.Database,
-  recipeId: number,
   names: string[],
   options: WriteOptions,
 ): RecipeKitchenwareWriteResult {
   const normalizedNames = [...new Set(names.map((name) => name.trim()).filter(Boolean))];
   const unavailable = { mapped: [], unresolved: normalizedNames };
-  if (!tableExists(database, "recipe_kitchenware_requirements")) return unavailable;
+  if (!options.isAvailable()) return unavailable;
 
   try {
-    const remove = options.replace
-      ? database.prepare("DELETE FROM recipe_kitchenware_requirements WHERE recipe_id = ? AND role = ?")
-      : null;
-    const insert = normalizedNames.length
-      ? database.prepare(`INSERT OR IGNORE INTO recipe_kitchenware_requirements
-          (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
-          VALUES (?, ?, NULL, ?, ?, ?, ?)`)
-      : null;
+    const remove = options.replace ? options.prepareRemove() : null;
+    const insert = normalizedNames.length ? options.prepareInsert() : null;
 
-    return database.transaction(() => {
+    return options.runAtomically(() => {
       const result: RecipeKitchenwareWriteResult = { mapped: [], unresolved: [] };
-      remove?.run(recipeId, options.role);
+      remove?.();
 
       for (const rawName of normalizedNames) {
         const resolved = options.resolve(rawName);
@@ -74,15 +58,7 @@ export function writeRecipeKitchenwareRequirements(
           continue;
         }
 
-        const write = insert?.run(
-          recipeId,
-          resolved.id,
-          options.role,
-          options.source,
-          resolved.confidence,
-          `映射自：${rawName}`,
-        );
-        if (!write || write.changes !== 1) {
+        if (!insert?.(resolved, rawName)) {
           throw new Error(`厨具需求未写入：${rawName}`);
         }
         result.mapped.push({
@@ -93,7 +69,7 @@ export function writeRecipeKitchenwareRequirements(
         });
       }
       return result;
-    })();
+    });
   } catch (error) {
     if (isSchemaDriftError(error)) return unavailable;
     throw error;

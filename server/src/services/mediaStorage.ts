@@ -116,12 +116,7 @@ function getPublicObjectPathForUser(url: string, userId: number, scope: "communi
   }
 }
 
-function getSupabaseReferenceForUser(
-  url: string,
-  userId: number,
-  scope: "community",
-  requireConfiguredOrigin: boolean,
-): StoredMediaReference | null {
+function getSupabaseReferenceForUser(url: string, userId: number, scope: "community"): StoredMediaReference | null {
   try {
     const candidate = new URL(url);
     if (candidate.protocol !== "https:") return null;
@@ -129,7 +124,7 @@ function getSupabaseReferenceForUser(
     const markerIndex = candidate.pathname.indexOf(marker);
     if (markerIndex < 0) return null;
     const configuredOrigin = process.env.SUPABASE_URL?.trim();
-    if (requireConfiguredOrigin && configuredOrigin && candidate.origin !== new URL(configuredOrigin).origin) return null;
+    if (configuredOrigin && candidate.origin !== new URL(configuredOrigin).origin) return null;
     const remainder = candidate.pathname.slice(markerIndex + marker.length);
     const slash = remainder.indexOf("/");
     if (slash <= 0) return null;
@@ -142,16 +137,12 @@ function getSupabaseReferenceForUser(
   }
 }
 
-function describeMediaUrls(
-  userId: number,
-  urls: Array<string | null | undefined>,
-  requireConfiguredOrigin: boolean,
-): StoredMediaReference[] {
+export function describeStoredMediaUrls(userId: number, urls: Array<string | null | undefined>): StoredMediaReference[] {
   const references = urls.flatMap((url): StoredMediaReference[] => {
     if (typeof url !== "string") return [];
     const localPath = getLocalMediaPathForUser(url, userId, "community");
     if (localPath) return [{ backend: "local", path: localPath }];
-    const remote = getSupabaseReferenceForUser(url, userId, "community", requireConfiguredOrigin);
+    const remote = getSupabaseReferenceForUser(url, userId, "community");
     return remote ? [remote] : [];
   });
   const seen = new Set<string>();
@@ -161,14 +152,6 @@ function describeMediaUrls(
     seen.add(key);
     return true;
   });
-}
-
-export function describeStoredMediaUrls(userId: number, urls: Array<string | null | undefined>) {
-  return describeMediaUrls(userId, urls, true);
-}
-
-export function describeHistoricalStoredMediaUrls(userId: number, urls: Array<string | null | undefined>) {
-  return describeMediaUrls(userId, urls, false);
 }
 
 export function isStoredMediaUrlForUser(url: string, userId: number, scope: "community" = "community") {

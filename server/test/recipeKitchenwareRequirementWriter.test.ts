@@ -24,12 +24,31 @@ const kitchenware = new Map([
 ]);
 
 function write(database: Database.Database, names: string[]) {
-  return writeRecipeKitchenwareRequirements(database, 42, names, {
-    role: "required",
-    source: "curated",
+  return writeRecipeKitchenwareRequirements(names, {
     replace: true,
     resolve: (name) => kitchenware.get(name) ?? null,
     enqueueReview: () => undefined,
+    isAvailable: () => true,
+    prepareRemove: () => {
+      const remove = database.prepare(
+        "DELETE FROM recipe_kitchenware_requirements WHERE recipe_id = ? AND role = ?",
+      );
+      return () => { remove.run(42, "required"); };
+    },
+    prepareInsert: () => {
+      const insert = database.prepare(`INSERT OR IGNORE INTO recipe_kitchenware_requirements
+        (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
+        VALUES (?, ?, NULL, ?, ?, ?, ?)`);
+      return (resolved, rawName) => insert.run(
+        42,
+        resolved.id,
+        "required",
+        "curated",
+        resolved.confidence,
+        `映射自：${rawName}`,
+      ).changes === 1;
+    },
+    runAtomically: (operation) => database.transaction(operation)(),
   });
 }
 

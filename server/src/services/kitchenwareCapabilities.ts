@@ -1,5 +1,6 @@
 import { db } from "../storage/db.js";
 import { normalizeContentTerm } from "./contentGovernance.js";
+import { writeRecipeKitchenwareRequirements } from "./recipeKitchenwareRequirementWriter.js";
 
 type Row = Record<string, unknown>;
 
@@ -43,10 +44,10 @@ export function resolveKitchenwareCatalog(rawName: string) {
 
   const rows = (() => {
     try {
-      if (tableHasColumn("kitchenware_catalog", "quality_status")) {
-        return db.prepare("SELECT * FROM kitchenware_catalog WHERE quality_status = 'trusted'").all() as Row[];
-      }
-      return db.prepare("SELECT * FROM kitchenware_catalog").all() as Row[];
+      const sql = tableHasColumn("kitchenware_catalog", "quality_status")
+        ? "SELECT * FROM kitchenware_catalog WHERE quality_status = 'trusted'"
+        : "SELECT * FROM kitchenware_catalog";
+      return db.prepare(sql).all() as Row[];
     } catch (error) {
       if (isSchemaDriftError(error)) {
         return [];
@@ -146,47 +147,32 @@ export function setRecipeKitchenwareRequirements(recipeId: number, names: string
   replace?: boolean;
 } = {}) {
   const role = input.role || "required";
-  const normalizedNames = [...new Set(names.map((name) => name.trim()).filter(Boolean))];
-  const mapped: Array<{ rawName: string; catalogId: number; catalogName: string; confidence: number }> = [];
-  const unresolved: string[] = [];
-
-  if (!tableExists("recipe_kitchenware_requirements")) {
-    return { mapped, unresolved: normalizedNames };
-  }
-
-  try {
-    if (input.replace !== false) {
-      db.prepare("DELETE FROM recipe_kitchenware_requirements WHERE recipe_id = ? AND role = ?").run(recipeId, role);
-    }
-  } catch (error) {
-    if (!isSchemaDriftError(error)) throw error;
-    return { mapped, unresolved: normalizedNames };
-  }
-
-  const insert = (() => {
-    try {
-      return db.prepare(`INSERT OR IGNORE INTO recipe_kitchenware_requirements
+  return writeRecipeKitchenwareRequirements(names, {
+    replace: input.replace !== false,
+    resolve: resolveKitchenwareCatalog,
+    isAvailable: () => tableExists("recipe_kitchenware_requirements"),
+    prepareRemove: () => {
+      const remove = db.prepare("DELETE FROM recipe_kitchenware_requirements WHERE recipe_id = ? AND role = ?");
+      return () => { remove.run(recipeId, role); };
+    },
+    prepareInsert: () => {
+      const insert = db.prepare(`INSERT OR IGNORE INTO recipe_kitchenware_requirements
         (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
-        VALUES (?, ?, NULL, ?, ?, ?, ?)`) ;
-    } catch (error) {
-      if (!isSchemaDriftError(error)) throw error;
-      return null;
-    }
-  })();
-
-  for (const rawName of normalizedNames) {
-    const resolved = resolveKitchenwareCatalog(rawName);
-    if (!resolved || resolved.confidence < 0.7) {
-      enqueueKitchenwareMappingReview(rawName, "recipe", recipeId, resolved?.confidence || 0);
-      unresolved.push(rawName);
-      continue;
-    }
-    if (insert) {
-      insert.run(recipeId, resolved.id, role, input.source || "curated", resolved.confidence, `映射自：${rawName}`);
-    }
-    mapped.push({ rawName, catalogId: resolved.id, catalogName: resolved.name, confidence: resolved.confidence });
-  }
-  return { mapped, unresolved };
+        VALUES (?, ?, NULL, ?, ?, ?, ?)`);
+      return (resolved, rawName) => insert.run(
+        recipeId,
+        resolved.id,
+        role,
+        input.source || "curated",
+        resolved.confidence,
+        `映射自：${rawName}`,
+      ).changes === 1;
+    },
+    runAtomically: (operation) => db.transaction(operation)(),
+    enqueueReview: (rawName, confidence) => {
+      enqueueKitchenwareMappingReview(rawName, "recipe", recipeId, confidence);
+    },
+  });
 }
 
 export function evaluateKitchenwareRequirements(userId: number, recipeId: number) {

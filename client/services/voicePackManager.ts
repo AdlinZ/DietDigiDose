@@ -16,6 +16,8 @@ import {
   VOICE_PREFERENCE_STORAGE_PREFIX,
 } from "@/services/voicePreferenceScope";
 import { KeyedSerialQueue } from "@/services/voiceOutputQueue";
+import { ScopedTaskCoordinator } from "@/services/scopedTaskCoordinator";
+import { loadVoiceOnnxRuntime } from "@/services/voiceOnnxRuntime";
 import {
   MAX_VOICE_PACK_RESOURCE_BYTES,
   MAX_VOICE_PACK_TOTAL_BYTES,
@@ -68,6 +70,8 @@ let activeDownload: FileSystem.DownloadResumable | null = null;
 let activeDownloadContext: VoicePackState["pausedDownload"] = null;
 let activeSound: Audio.Sound | null = null;
 let playbackGeneration = 0;
+let audioCacheTempSequence = 0;
+const audioCacheTasks = new ScopedTaskCoordinator();
 let localSession: null | { key: string; session: any; vocabulary: Record<string, number>;
   tokenMap: Record<string, string[]>; manifest: VoicePackManifest } = null;
 
@@ -353,15 +357,15 @@ async function localEngine(userId?: number) {
   if (localSession?.key === key) return localSession;
   const directory = `${packRoot}${manifest.voiceId}/${manifest.version}/`;
   const processor = manifest.model.textProcessor || { type: "character-v1" as const };
-  const [{ InferenceSession }, vocabularyText, tokenMapText] = await Promise.all([
-    import("onnxruntime-react-native"),
+  const [onnxRuntime, vocabularyText, tokenMapText] = await Promise.all([
+    loadVoiceOnnxRuntime(),
     FileSystem.readAsStringAsync(`${directory}${safeResourcePath(manifest.model.vocabularyPath)}`),
     processor.type === "token-map-v1"
       ? FileSystem.readAsStringAsync(`${directory}${safeResourcePath(processor.mappingPath)}`)
       : Promise.resolve("{}"),
   ]);
   const started = Date.now();
-  const session = await InferenceSession.create(`${directory}${safeResourcePath(manifest.model.path)}`);
+  const session = await onnxRuntime.InferenceSession.create(`${directory}${safeResourcePath(manifest.model.path)}`);
   localSession = { key, session, vocabulary: JSON.parse(vocabularyText), tokenMap: JSON.parse(tokenMapText), manifest };
   const device = await getDeviceState();
   if (!device.benchmarks[key]) await saveDeviceState({ ...device, benchmarks: { ...device.benchmarks, [key]: {
@@ -372,7 +376,7 @@ async function localEngine(userId?: number) {
 
 async function synthesizeLocal(text: string, userId?: number) {
   const engine = await localEngine(userId);
-  const { Tensor } = await import("onnxruntime-react-native");
+  const { Tensor } = await loadVoiceOnnxRuntime();
   const ids = tokenizeVoiceText(text, engine.vocabulary, engine.manifest.model.textProcessor, engine.tokenMap);
   const names = engine.manifest.model.inputNames;
   const feeds: Record<string, any> = {
@@ -440,11 +444,23 @@ async function trimAudioCache(index: Record<string, AudioCacheRow>) {
   await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
 }
 
-async function cachedAudio(text: string, userId: number | undefined, sensitive: boolean, producer: () => Promise<{ bytes: Uint8Array; extension: string }>) {
+class VoiceCacheTaskCancelledError extends Error {}
+
+function voiceCacheScope(userId: number | undefined, sensitive: boolean) {
+  return sensitive ? `user:${userId || "anonymous"}` : "public";
+}
+
+async function cachedAudio(
+  text: string,
+  userId: number | undefined,
+  sensitive: boolean,
+  producer: () => Promise<{ bytes: Uint8Array; extension: string }>,
+  task = audioCacheTasks.begin(voiceCacheScope(userId, sensitive)),
+) {
   const audioCacheRoot = requireNativeRoot(AUDIO_CACHE_ROOT);
   await ensureDirectory(audioCacheRoot);
   const state = await getVoicePackState(userId);
-  const scope = sensitive ? `user:${userId || "anonymous"}` : "public";
+  const scope = voiceCacheScope(userId, sensitive);
   const voiceKey = state.installed
     ? `${state.installed.voiceId}@${state.installed.version}`
     : state.selectedVoiceId && state.selectedVersion
@@ -452,30 +468,60 @@ async function cachedAudio(text: string, userId: number | undefined, sensitive: 
       : "server";
   const key = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,
     JSON.stringify({ schema: VOICE_CACHE_SCHEMA, voice: voiceKey, text, rate: 1, style: "default", format: "audio", scope }));
-  const index = await cacheIndex();
-  const existing = index[key];
-  if (existing?.expiresAt && existing.expiresAt <= Date.now()) {
-    await FileSystem.deleteAsync(existing.uri, { idempotent: true }).catch(() => undefined);
-    delete index[key];
-  } else if (existing && (await FileSystem.getInfoAsync(existing.uri)).exists) {
-    existing.accessedAt = Date.now();
-    await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
-    return existing.uri;
-  }
+  const cached = await audioCacheTasks.commit(task, async () => {
+    const index = await cacheIndex();
+    const existing = index[key];
+    if (existing?.expiresAt && existing.expiresAt <= Date.now()) {
+      await FileSystem.deleteAsync(existing.uri, { idempotent: true }).catch(() => undefined);
+      delete index[key];
+      await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
+    } else if (existing && (await FileSystem.getInfoAsync(existing.uri)).exists) {
+      existing.accessedAt = Date.now();
+      await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
+      if (!audioCacheTasks.isCurrent(task)) throw new VoiceCacheTaskCancelledError();
+      return existing.uri;
+    }
+    return null;
+  });
+  if (cached.status === "cancelled") throw new VoiceCacheTaskCancelledError();
+  if (cached.value) return cached.value;
+
   const output = await producer();
-  const uri = `${audioCacheRoot}${key}.${output.extension}`;
-  await FileSystem.writeAsStringAsync(uri, Base64.fromUint8Array(output.bytes), { encoding: "base64" });
-  index[key] = {
-    uri,
-    bytes: output.bytes.byteLength,
-    accessedAt: Date.now(),
-    expiresAt: sensitive ? Date.now() + 24 * 60 * 60 * 1000 : undefined,
-    sensitive,
-    userScope: scope,
-    voiceKey,
-  };
-  await trimAudioCache(index);
-  return uri;
+  const committed = await audioCacheTasks.commit(task, async () => {
+    const index = await cacheIndex();
+    const existing = index[key];
+    if (existing && (await FileSystem.getInfoAsync(existing.uri)).exists) return existing.uri;
+
+    const uri = `${audioCacheRoot}${key}.${output.extension}`;
+    const temporaryUri = `${uri}.tmp-${++audioCacheTempSequence}`;
+    try {
+      await FileSystem.writeAsStringAsync(temporaryUri, Base64.fromUint8Array(output.bytes), { encoding: "base64" });
+      if (!audioCacheTasks.isCurrent(task)) throw new VoiceCacheTaskCancelledError();
+      await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined);
+      await FileSystem.moveAsync({ from: temporaryUri, to: uri });
+      if (!audioCacheTasks.isCurrent(task)) {
+        await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined);
+        throw new VoiceCacheTaskCancelledError();
+      }
+      index[key] = {
+        uri,
+        bytes: output.bytes.byteLength,
+        accessedAt: Date.now(),
+        expiresAt: sensitive ? Date.now() + 24 * 60 * 60 * 1000 : undefined,
+        sensitive,
+        userScope: scope,
+        voiceKey,
+      };
+      await trimAudioCache(index);
+      if (!audioCacheTasks.isCurrent(task)) throw new VoiceCacheTaskCancelledError();
+      return uri;
+    } catch (error) {
+      await FileSystem.deleteAsync(temporaryUri, { idempotent: true }).catch(() => undefined);
+      throw error;
+    }
+  });
+  if (committed.status === "cancelled") throw new VoiceCacheTaskCancelledError();
+  return committed.value;
 }
 
 async function playUri(uri: string, generation: number) {
@@ -501,32 +547,37 @@ function sentences(text: string) {
 
 async function speakWithGeneration(apiFetch: ApiFetch, text: string,
   options: { userId?: number; sensitive?: boolean }, generation: number): Promise<VoiceSource> {
+  const cacheTask = audioCacheTasks.begin(voiceCacheScope(options.userId, Boolean(options.sensitive)));
   const state = await getVoicePackState(options.userId);
   if (state.preference !== "system-only" && state.installed && state.benchmark?.passed !== false) {
     try {
       for (const sentence of sentences(text)) {
         if (generation !== playbackGeneration) return "local";
-        const uri = await cachedAudio(sentence, options.userId, Boolean(options.sensitive), async () => ({ bytes: await synthesizeLocal(sentence, options.userId), extension: "wav" }));
+        const uri = await cachedAudio(sentence, options.userId, Boolean(options.sensitive), async () => ({ bytes: await synthesizeLocal(sentence, options.userId), extension: "wav" }), cacheTask);
         await playUri(uri, generation);
       }
       return "local";
-    } catch {
+    } catch (error) {
+      if (error instanceof VoiceCacheTaskCancelledError || generation !== playbackGeneration) return "local";
       // Continue to the configured server TTS.
     }
   }
   if (state.preference !== "system-only") {
     try {
+      if (generation !== playbackGeneration || !audioCacheTasks.isCurrent(cacheTask)) return "server";
       const response = await voicePackApi.synthesize(apiFetch, text, state.selectedVoiceId && state.selectedVersion
         ? { voiceId: state.selectedVoiceId, version: state.selectedVersion }
         : undefined);
+      if (generation !== playbackGeneration || !audioCacheTasks.isCurrent(cacheTask)) return "server";
       const uri = Platform.OS === "web"
         ? `data:${response.mimeType || "audio/mpeg"};base64,${response.audioBase64}`
         : await cachedAudio(text, options.userId, Boolean(options.sensitive), async () => ({
           bytes: Base64.toUint8Array(response.audioBase64), extension: "mp3",
-        }));
+        }), cacheTask);
       await playUri(uri, generation);
       return "server";
-    } catch {
+    } catch (error) {
+      if (error instanceof VoiceCacheTaskCancelledError || generation !== playbackGeneration) return "server";
       // The system voice is the final, offline-capable fallback.
     }
   }
@@ -575,20 +626,24 @@ export async function stopVoiceOutput() {
 }
 
 export async function purgeVoiceAudioCache() {
-  if (AUDIO_CACHE_ROOT) await FileSystem.deleteAsync(AUDIO_CACHE_ROOT, { idempotent: true });
-  await AsyncStorage.removeItem(CACHE_INDEX_KEY);
+  await audioCacheTasks.invalidateAll(async () => {
+    if (AUDIO_CACHE_ROOT) await FileSystem.deleteAsync(AUDIO_CACHE_ROOT, { idempotent: true });
+    await AsyncStorage.removeItem(CACHE_INDEX_KEY);
+  });
 }
 
 export async function purgeVoiceAudioCacheForUser(userId?: number | null) {
   if (!userId) return;
-  const index = await cacheIndex();
   const scope = `user:${userId}`;
-  for (const [key, row] of Object.entries(index)) {
-    if (row.userScope !== scope) continue;
-    await FileSystem.deleteAsync(row.uri, { idempotent: true }).catch(() => undefined);
-    delete index[key];
-  }
-  await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
+  await audioCacheTasks.invalidate(scope, async () => {
+    const index = await cacheIndex();
+    for (const [key, row] of Object.entries(index)) {
+      if (row.userScope !== scope) continue;
+      await FileSystem.deleteAsync(row.uri, { idempotent: true }).catch(() => undefined);
+      delete index[key];
+    }
+    await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
+  });
 }
 
 async function purgeVoiceAudioCacheForPack(
@@ -597,13 +652,17 @@ async function purgeVoiceAudioCacheForPack(
   userId: number | undefined,
   includeShared: boolean,
 ) {
-  const index = await cacheIndex();
   const voiceKey = `${voiceId}@${version}`;
   const userScope = `user:${userId || "anonymous"}`;
-  for (const [key, row] of Object.entries(index)) {
-    if (row.voiceKey !== voiceKey || (!includeShared && row.userScope !== userScope)) continue;
-    await FileSystem.deleteAsync(row.uri, { idempotent: true }).catch(() => undefined);
-    delete index[key];
-  }
-  await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
+  const purge = async () => {
+    const index = await cacheIndex();
+    for (const [key, row] of Object.entries(index)) {
+      if (row.voiceKey !== voiceKey || (!includeShared && row.userScope !== userScope)) continue;
+      await FileSystem.deleteAsync(row.uri, { idempotent: true }).catch(() => undefined);
+      delete index[key];
+    }
+    await AsyncStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index));
+  };
+  if (includeShared) await audioCacheTasks.invalidateAll(purge);
+  else await audioCacheTasks.invalidate(userScope, purge);
 }

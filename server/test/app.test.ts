@@ -3071,7 +3071,7 @@ describe("core business authorization", () => {
     }
   });
 
-  test("remote media cleanup stays pending when object storage credentials are unavailable", async () => {
+  test("remote and legacy media cleanup jobs stay pending until storage configuration matches", async () => {
     const prior = {
       url: process.env.SUPABASE_URL,
       bucket: process.env.SUPABASE_MEDIA_BUCKET,
@@ -3105,6 +3105,24 @@ describe("core business authorization", () => {
       const recovered = db.prepare("SELECT status, attempts, last_error FROM media_cleanup_jobs WHERE id = ?")
         .get(jobId) as { status: string; attempts: number; last_error: string | null };
       assert.deepEqual(recovered, { status: "completed", attempts: 2, last_error: null });
+
+      const oldOrigin = "https://retired-project.example";
+      const legacyUrl = `${oldOrigin}/storage/v1/object/public/community-media/community/${ownerId}/legacy.png`;
+      const legacyJobId = Number(db.prepare(`INSERT INTO media_cleanup_jobs (owner_user_id, urls_json, objects_json)
+        VALUES (?, ?, NULL)`).run(ownerId, JSON.stringify([legacyUrl])).lastInsertRowid);
+      process.env.SUPABASE_URL = "https://replacement-project.example";
+      await assert.rejects(() => processMediaCleanupJob(legacyJobId), /无法定位任何存储对象/);
+      const blockedLegacy = db.prepare("SELECT status, attempts, last_error FROM media_cleanup_jobs WHERE id = ?")
+        .get(legacyJobId) as { status: string; attempts: number; last_error: string };
+      assert.equal(blockedLegacy.status, "pending");
+      assert.equal(blockedLegacy.attempts, 1);
+      assert.match(blockedLegacy.last_error, /保留等待重试/);
+
+      process.env.SUPABASE_URL = oldOrigin;
+      assert.equal(await processMediaCleanupJob(legacyJobId), true);
+      const retriedLegacy = db.prepare("SELECT status, attempts, last_error FROM media_cleanup_jobs WHERE id = ?")
+        .get(legacyJobId) as { status: string; attempts: number; last_error: string | null };
+      assert.deepEqual(retriedLegacy, { status: "completed", attempts: 2, last_error: null });
     } finally {
       globalThis.fetch = priorFetch;
       if (prior.url === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = prior.url;

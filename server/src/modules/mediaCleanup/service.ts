@@ -27,7 +27,9 @@ export class MediaCleanupService{
   async process(jobId:number){const job=await this.claim(jobId);if(!job||!job.claim_token)return false;try{const urls=array(job.urls_json);
     if(!urls||urls.some(url=>typeof url!=="string"))throw new Error(`媒体清理任务 ${jobId} 的 URL 数据无效`);
     const stored=job.objects_json==null?null:array(job.objects_json);if(job.objects_json!=null&&!stored)throw new Error(`媒体清理任务 ${jobId} 的对象定位数据无效`);
-    const refs=(job.objects_json==null?describeStoredMediaUrls(Number(job.owner_user_id),urls as string[]):stored) as StoredMediaReference[];
+    const ownerUserId=Number(job.owner_user_id);const urlList=urls as string[];
+    const refs=(job.objects_json==null?describeStoredMediaUrls(ownerUserId,urlList):stored) as StoredMediaReference[];
+    if(urlList.some(url=>url.length>0)&&refs.length===0)throw new Error(`媒体清理任务 ${jobId} 无法定位任何存储对象，任务将保留等待重试`);
     await this.deleteReferences(refs);return this.repository.complete(jobId,job.claim_token);
   }catch(error){await this.repository.release(jobId,job.claim_token,sanitizeMediaCleanupError(error));throw error;}}
   async processPending(limit=25){const ids=await this.repository.pending(Math.max(1,Math.min(limit,100)),MEDIA_CLEANUP_STALE_MINUTES);let completed=0,failed=0;

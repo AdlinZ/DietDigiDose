@@ -116,7 +116,12 @@ function getPublicObjectPathForUser(url: string, userId: number, scope: "communi
   }
 }
 
-function getSupabaseReferenceForUser(url: string, userId: number, scope: "community"): StoredMediaReference | null {
+function getSupabaseReferenceForUser(
+  url: string,
+  userId: number,
+  scope: "community",
+  requireConfiguredOrigin: boolean,
+): StoredMediaReference | null {
   try {
     const candidate = new URL(url);
     if (candidate.protocol !== "https:") return null;
@@ -124,7 +129,7 @@ function getSupabaseReferenceForUser(url: string, userId: number, scope: "commun
     const markerIndex = candidate.pathname.indexOf(marker);
     if (markerIndex < 0) return null;
     const configuredOrigin = process.env.SUPABASE_URL?.trim();
-    if (configuredOrigin && candidate.origin !== new URL(configuredOrigin).origin) return null;
+    if (requireConfiguredOrigin && configuredOrigin && candidate.origin !== new URL(configuredOrigin).origin) return null;
     const remainder = candidate.pathname.slice(markerIndex + marker.length);
     const slash = remainder.indexOf("/");
     if (slash <= 0) return null;
@@ -137,12 +142,16 @@ function getSupabaseReferenceForUser(url: string, userId: number, scope: "commun
   }
 }
 
-export function describeStoredMediaUrls(userId: number, urls: Array<string | null | undefined>): StoredMediaReference[] {
+function describeMediaUrls(
+  userId: number,
+  urls: Array<string | null | undefined>,
+  requireConfiguredOrigin: boolean,
+): StoredMediaReference[] {
   const references = urls.flatMap((url): StoredMediaReference[] => {
     if (typeof url !== "string") return [];
     const localPath = getLocalMediaPathForUser(url, userId, "community");
     if (localPath) return [{ backend: "local", path: localPath }];
-    const remote = getSupabaseReferenceForUser(url, userId, "community");
+    const remote = getSupabaseReferenceForUser(url, userId, "community", requireConfiguredOrigin);
     return remote ? [remote] : [];
   });
   const seen = new Set<string>();
@@ -152,6 +161,14 @@ export function describeStoredMediaUrls(userId: number, urls: Array<string | nul
     seen.add(key);
     return true;
   });
+}
+
+export function describeStoredMediaUrls(userId: number, urls: Array<string | null | undefined>) {
+  return describeMediaUrls(userId, urls, true);
+}
+
+export function describeHistoricalStoredMediaUrls(userId: number, urls: Array<string | null | undefined>) {
+  return describeMediaUrls(userId, urls, false);
 }
 
 export function isStoredMediaUrlForUser(url: string, userId: number, scope: "community" = "community") {

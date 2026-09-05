@@ -45,4 +45,45 @@ describe("media cleanup module", () => {
     assert.equal(released.includes("private.example"), false);
     assert.match(sanitizeMediaCleanupError("/media/uploads/private.png"), /已隐藏媒体路径/);
   });
+
+  test("keeps legacy jobs pending across an origin change and retries after configuration is restored", async () => {
+    const previousUrl = process.env.SUPABASE_URL;
+    const oldOrigin = "https://old-project.example";
+    const url = `${oldOrigin}/storage/v1/object/public/community-media/community/3/photo.png`;
+    let attempt = 0;
+    let releasedError = "";
+    const deleted: unknown[] = [];
+    const completed: Array<[number, string]> = [];
+    const service = new MediaCleanupService(repository({
+      claim: async () => {
+        attempt += 1;
+        return { id: 8, owner_user_id: 3, urls_json: [url], objects_json: null, status: "processing", attempts: attempt,
+          last_error: null, created_at: new Date(), updated_at: new Date(), completed_at: null,
+          claim_token: `claim-${attempt}`, claimed_at: new Date() };
+      },
+      complete: async (id, token) => { completed.push([id, token]); return true; },
+      release: async (_id, _token, error) => { releasedError = error; },
+    }), async (references) => { deleted.push(...references); });
+
+    try {
+      process.env.SUPABASE_URL = "https://new-project.example";
+      await assert.rejects(() => service.process(8), /无法定位任何存储对象/);
+      assert.deepEqual(deleted, []);
+      assert.deepEqual(completed, []);
+      assert.match(releasedError, /保留等待重试/);
+
+      process.env.SUPABASE_URL = oldOrigin;
+      assert.equal(await service.process(8), true);
+      assert.deepEqual(deleted, [{
+        backend: "supabase",
+        origin: oldOrigin,
+        bucket: "community-media",
+        objectPath: "community/3/photo.png",
+      }]);
+      assert.deepEqual(completed, [[8, "claim-2"]]);
+    } finally {
+      if (previousUrl === undefined) delete process.env.SUPABASE_URL;
+      else process.env.SUPABASE_URL = previousUrl;
+    }
+  });
 });

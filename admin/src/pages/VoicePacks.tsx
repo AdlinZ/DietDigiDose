@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   Clock3,
@@ -15,6 +15,7 @@ import {
 import api from '../services/api';
 import {
   voicePackActions,
+  createLatestVoicePackRequest,
   voicePackManifestChecks,
   voicePackStatusPresentation,
   voicePackTransitionConfirmation,
@@ -78,19 +79,27 @@ export default function VoicePacks() {
   const [styleTags, setStyleTags] = useState('');
   const [providerVoice, setProviderVoice] = useState('');
   const [history, setHistory] = useState<{ item: VoicePackItem; rows: HistoryItem[] } | null>(null);
+  const latestRequest = useRef(createLatestVoicePackRequest());
 
   const load = useCallback(async () => {
+    const request = latestRequest.current.begin();
     setLoading(true); setError('');
     try {
       const response = await api.get<{ items: VoicePackItem[] }>('/admin/voice-packs', {
         params: { search: search.trim() || undefined, status: status === 'all' ? undefined : status },
+        signal: request.signal,
       });
-      setItems(response.data.items);
-    } catch (requestError) { setError(errorMessage(requestError)); }
-    finally { setLoading(false); }
+      if (request.isLatest()) setItems(response.data.items);
+    } catch (requestError) { if (request.isLatest()) setError(errorMessage(requestError)); }
+    finally { if (request.isLatest()) setLoading(false); }
   }, [search, status]);
 
-  useEffect(() => { const timer = window.setTimeout(() => void load(), 180); return () => window.clearTimeout(timer); }, [load]);
+  useEffect(() => {
+    latestRequest.current.cancel();
+    const timer = window.setTimeout(() => void load(), 180);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+  useEffect(() => () => latestRequest.current.cancel(), []);
 
   const parsedManifest = useMemo(() => {
     try { return JSON.parse(manifestText) as Manifest; } catch { return null; }

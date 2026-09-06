@@ -97,7 +97,11 @@ describe("candidate build transport policy", () => {
     expect(workflow.indexOf("git merge-base --is-ancestor")).toBeGreaterThan(0);
     expect(workflow.indexOf("git merge-base --is-ancestor")).toBeLessThan(workflow.indexOf("Restore release keystore"));
     expect(workflow).toContain("Verified source revision $GITHUB_SHA is reachable from origin/main");
-    expect(workflow).toContain("Generate isolated preview signing key");
+    expect(workflow).toContain("Restore persistent preview signing key");
+    expect(workflow).toContain("ANDROID_PREVIEW_KEYSTORE_BASE64");
+    expect(workflow).toContain("ANDROID_PREVIEW_CERT_SHA256");
+    expect(workflow).toContain("certificate SHA-256 digest: $EXPECTED_PREVIEW_CERT_SHA256");
+    expect(workflow).not.toContain("keytool -genkeypair");
     expect(workflow).toContain("com.dietdigidose.app.previewhttp");
     expect(workflow).toContain("if: env.EAS_BUILD_PROFILE != 'preview-http'");
   });

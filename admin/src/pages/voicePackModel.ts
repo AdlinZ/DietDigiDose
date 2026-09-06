@@ -1,5 +1,27 @@
 export type VoicePackStatus = 'draft' | 'published' | 'disabled' | 'revoked';
 
+export function createLatestVoicePackRequest() {
+  let generation = 0;
+  let activeController: AbortController | null = null;
+  return {
+    begin() {
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
+      const requestGeneration = ++generation;
+      return {
+        signal: controller.signal,
+        isLatest: () => requestGeneration === generation && !controller.signal.aborted,
+      };
+    },
+    cancel() {
+      generation += 1;
+      activeController?.abort();
+      activeController = null;
+    },
+  };
+}
+
 export const voicePackStatusPresentation: Record<VoicePackStatus, { label: string; className: string }> = {
   draft: { label: '草稿', className: 'bg-slate-100 text-slate-700' },
   published: { label: '已发布', className: 'bg-emerald-50 text-emerald-700' },

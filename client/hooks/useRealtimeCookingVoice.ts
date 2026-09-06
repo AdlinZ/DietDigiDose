@@ -6,7 +6,8 @@ import { useAudioRecorder, type AudioDataEvent, type AudioAnalysis } from "@site
 import { Base64 } from "js-base64";
 
 import { useAuthFetch } from "@/contexts/AuthContext";
-import { aiApi, realtimeVoiceApi, waitForAgentRun, type RealtimeVoiceSession } from "@/services/api";
+import { ApiError, aiApi, realtimeVoiceApi, waitForAgentRun, type RealtimeVoiceSession } from "@/services/api";
+import { heartbeatWithVersionRecovery, RealtimeVoiceSessionUpdater } from "@/services/realtimeVoiceSessionUpdater";
 
 type Options = {
   recipeId: number;
@@ -89,6 +90,13 @@ export function useRealtimeCookingVoice(options: Options) {
   const [state, setState] = useState<"off" | "connecting" | "listening" | "processing" | "reconnecting" | "muted" | "fallback">("off");
   const stateRef = useRef(state);
   const supported = Boolean(recognitionConstructor()) || Platform.OS === "android" || Platform.OS === "ios";
+  const sessionUpdaterRef = useRef<RealtimeVoiceSessionUpdater<RealtimeVoiceSession> | null>(null);
+  if (!sessionUpdaterRef.current) {
+    sessionUpdaterRef.current = new RealtimeVoiceSessionUpdater({
+      current: () => sessionRef.current,
+      commit: (updated) => { sessionRef.current = updated; setSession(updated); },
+    });
+  }
 
   useEffect(() => { optionsRef.current = options; }, [options]);
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -248,10 +256,21 @@ export function useRealtimeCookingVoice(options: Options) {
     }
   }, [flushNativeUtterance]);
 
+  const updateSession = useCallback((input: { muted?: boolean; reconnect?: boolean }) => (
+    sessionUpdaterRef.current!.enqueue((current) => heartbeatWithVersionRecovery(current, input, {
+      heartbeat: async (active, heartbeatInput) => (
+        await realtimeVoiceApi.heartbeat(authFetch, active.id, { version: active.version, ...heartbeatInput })
+      ).session,
+      refresh: async (sessionId) => (await realtimeVoiceApi.events(authFetch, sessionId, Number.MAX_SAFE_INTEGER)).session,
+      isVersionConflict: (error) => error instanceof ApiError && error.code === "REALTIME_VOICE_VERSION_CONFLICT",
+    }))
+  ), [authFetch]);
+
   const stop = useCallback(async () => {
     activeRef.current = false;
     mutedRef.current = false;
     responseGeneration.current += 1;
+    sessionUpdaterRef.current!.invalidate();
     if (heartbeatRef.current) clearInterval(heartbeatRef.current);
     heartbeatRef.current = null;
     try { recognitionRef.current?.abort(); } catch {}
@@ -274,24 +293,34 @@ export function useRealtimeCookingVoice(options: Options) {
   }, [authFetch, stopNativeRecording]);
 
   const toggleMute = useCallback(async () => {
-    const current = sessionRef.current;
-    if (!current || !activeRef.current) return false;
+    if (!sessionRef.current || !activeRef.current) return false;
+    const previousMuted = mutedRef.current;
     const nextMuted = !mutedRef.current;
-    mutedRef.current = nextMuted;
-    if (Platform.OS === "web") {
-      if (nextMuted) {
-        try { recognitionRef.current?.abort(); } catch {}
-      } else {
-        try { recognitionRef.current?.start(); } catch { setState("reconnecting"); }
+    try {
+      const updated = await updateSession({ muted: nextMuted, reconnect: false });
+      if (!updated || !activeRef.current) return previousMuted;
+      mutedRef.current = nextMuted;
+      try {
+        if (Platform.OS === "web") {
+          if (nextMuted) recognitionRef.current?.abort();
+          else recognitionRef.current?.start();
+        } else if (nextMuted) await pauseNativeRecording();
+        else await resumeNativeRecording();
+      } catch (error) {
+        mutedRef.current = previousMuted;
+        await updateSession({ muted: previousMuted, reconnect: false }).catch(() => undefined);
+        setState(previousMuted ? "muted" : "listening");
+        optionsRef.current.onError(error instanceof Error ? error.message : "麦克风静音状态切换失败");
+        return previousMuted;
       }
-    } else if (nextMuted) await pauseNativeRecording();
-    else await resumeNativeRecording();
-    const result = await realtimeVoiceApi.heartbeat(authFetch, current.id, { version: current.version, muted: nextMuted, reconnect: false });
-    sessionRef.current = result.session;
-    setSession(result.session);
-    setState(nextMuted ? "muted" : "listening");
-    return nextMuted;
-  }, [authFetch, pauseNativeRecording, resumeNativeRecording]);
+      setState(nextMuted ? "muted" : "listening");
+      return nextMuted;
+    } catch (error) {
+      if (activeRef.current) setState("reconnecting");
+      optionsRef.current.onError(error instanceof Error ? error.message : "静音状态同步失败，请重试");
+      return previousMuted;
+    }
+  }, [pauseNativeRecording, resumeNativeRecording, updateSession]);
 
   const start = useCallback(async () => {
     const RecognitionConstructor = recognitionConstructor();
@@ -360,27 +389,27 @@ export function useRealtimeCookingVoice(options: Options) {
           onAudioStream: handleNativeAudio, onAudioAnalysis: handleNativeAnalysis,
           onRecordingInterrupted: () => {
             if (activeRef.current) {
-              setState("fallback");
               optionsRef.current.onError("录音被系统中断，已停止持续监听");
+              void stop().then(() => setState("fallback"));
             }
           },
         });
         setState("listening");
       }
       heartbeatRef.current = setInterval(() => {
-        const activeSession = sessionRef.current;
-        if (!activeSession) return;
-        void realtimeVoiceApi.heartbeat(authFetch, activeSession.id, { version: activeSession.version, reconnect: false })
-          .then(({ session: latest }) => { sessionRef.current = latest; setSession(latest); })
-          .catch(() => setState("reconnecting"));
+        if (!sessionRef.current) return;
+        void updateSession({ reconnect: false }).catch(() => {
+          if (activeRef.current) setState("reconnecting");
+        });
       }, 20_000);
       return true;
     } catch (error) {
+      await stop();
       setState("fallback");
       optionsRef.current.onError(error instanceof Error ? error.message : "实时通道不可用，已切换按轮录音");
       return false;
     }
-  }, [authFetch, handleNativeAnalysis, handleNativeAudio, startNativeRecording, submitTurn]);
+  }, [authFetch, handleNativeAnalysis, handleNativeAudio, startNativeRecording, stop, submitTurn, updateSession]);
 
   useEffect(() => () => { void stop(); }, [stop]);
   useEffect(() => {

@@ -26,14 +26,6 @@
         "EXPO_PUBLIC_DEPLOYMENT_PROFILE": "global"
       }
     },
-    "preview-http": {
-      "extends": "preview",
-      "channel": "preview-http",
-      "env": {
-        "EXPO_PUBLIC_BACKEND_BASE_URL": "http://118.145.165.226:8088",
-        "EXPO_PUBLIC_ALLOW_INSECURE_HTTP": "1"
-      }
-    },
     "simulator": {
       "extends": "preview",
       "env": {

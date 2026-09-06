@@ -61,30 +61,24 @@ describe("candidate build transport policy", () => {
     expect(buildProperties[1].android.usesCleartextTraffic).toBe(false);
   });
 
-  it("allows explicit insecure HTTP for the controlled internal packaging profile", () => {
-    const httpPreview = easConfig.build["preview-http"] as { env?: Record<string, string> };
-    expect(httpPreview.env?.EXPO_PUBLIC_ALLOW_INSECURE_HTTP).toBe("1");
-    expect(httpPreview.env?.EXPO_PUBLIC_BACKEND_BASE_URL).toMatch(/^http:\/\//);
-
-    const config = loadExpoConfig(
-      "preview-http",
-      httpPreview.env!.EXPO_PUBLIC_BACKEND_BASE_URL,
-      httpPreview.env!.EXPO_PUBLIC_ALLOW_INSECURE_HTTP,
-    );
-    expect(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsArbitraryLoads).toBe(true);
-    expect(config.name).toContain("HTTP测试");
-    expect(config.android.package).toBe("com.dietdigidose.app.previewhttp");
-    expect(config.ios.bundleIdentifier).toBe("com.dietdigidose.app.previewhttp");
-    expect(config.extra.buildFlavor).toBe("preview-http");
-    const buildProperties = config.plugins.find((plugin: unknown) => Array.isArray(plugin) && plugin[0] === "expo-build-properties");
-    expect(buildProperties[1].android.usesCleartextTraffic).toBe(true);
+  it("retires the distributable HTTP preview profile", () => {
+    expect("preview-http" in easConfig.build).toBe(false);
+    expect(JSON.stringify(easConfig.build)).not.toContain("118.145.165.226:8088");
   });
 
-  it.each(["preview", "candidate", "production"])("keeps the formal package identity for %s", (profile) => {
+  it.each(["candidate", "production"])("keeps the formal package identity for %s", (profile) => {
     const config = loadExpoConfig(profile, "https://api.example.test");
     expect(config.name).toBe("食光烙记");
     expect(config.android.package).toBe("com.dietdigidose.app");
     expect(config.extra.buildFlavor).toBe("standard");
+  });
+
+  it("gives the HTTPS preview build an isolated identity", () => {
+    const config = loadExpoConfig("preview", "https://api.example.test");
+    expect(config.name).toBe("食光烙记 测试版");
+    expect(config.android.package).toBe("com.dietdigidose.app.preview");
+    expect(config.ios.bundleIdentifier).toBe("com.dietdigidose.app.preview");
+    expect(config.extra.buildFlavor).toBe("preview");
   });
 
   it("allows explicit insecure HTTP only for the local simulator profile", () => {
@@ -92,13 +86,20 @@ describe("candidate build transport policy", () => {
     expect(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsArbitraryLoads).toBe(true);
   });
 
-  it("verifies main ancestry before signing and isolates HTTP preview signing", () => {
+  it("verifies main ancestry before signing and isolates HTTPS preview signing", () => {
     const workflow = readFileSync(path.resolve(__dirname, "../../.github/workflows/android-apk.yml"), "utf8");
     expect(workflow.indexOf("git merge-base --is-ancestor")).toBeGreaterThan(0);
     expect(workflow.indexOf("git merge-base --is-ancestor")).toBeLessThan(workflow.indexOf("Restore release keystore"));
     expect(workflow).toContain("Verified source revision $GITHUB_SHA is reachable from origin/main");
-    expect(workflow).toContain("Generate isolated preview signing key");
-    expect(workflow).toContain("com.dietdigidose.app.previewhttp");
-    expect(workflow).toContain("if: env.EAS_BUILD_PROFILE != 'preview-http'");
+    expect(workflow).toContain("Restore persistent preview signing key");
+    expect(workflow).toContain("ANDROID_PREVIEW_KEYSTORE_BASE64");
+    expect(workflow).toContain("ANDROID_PREVIEW_CERT_SHA256");
+    expect(workflow).toContain("certificate SHA-256 digest: $EXPECTED_PREVIEW_CERT_SHA256");
+    expect(workflow).not.toContain("keytool -genkeypair");
+    expect(workflow).toContain("com.dietdigidose.app.preview");
+    expect(workflow).toContain("if: env.EAS_BUILD_PROFILE != 'preview'");
+    expect(workflow).not.toContain("preview-http");
+    expect(workflow).not.toContain("118.145.165.226:8088");
+    expect(workflow).not.toContain("EXPO_PUBLIC_ALLOW_INSECURE_HTTP=1");
   });
 });

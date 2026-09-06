@@ -150,7 +150,7 @@ The local SQLite database is created automatically at `server/data/dietdigidose.
 
 ## Release and security boundary
 
-`client/eas.json` contains iOS and Android preview and production profiles, both of which require an HTTPS API. The `preview-http` and simulator profiles exist only for controlled development testing. They must not be distributed as external Beta candidates or used with real sensitive data.
+`client/eas.json` contains iOS and Android preview and production profiles, and every distributable build requires an HTTPS API. Only local simulator development may explicitly use localhost HTTP, and it must not use real sensitive data.
 
 The production dependency audit currently has narrow temporary exceptions for `CVE-2025-71329` and `CVE-2025-71330` in the Expo/Metro build chain. No upstream fix is available yet, so the current state must not be described as “zero vulnerabilities.” These exceptions must be reviewed after every Expo/Metro upgrade and before every candidate release.
 

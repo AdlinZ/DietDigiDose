@@ -159,7 +159,7 @@ pnpm dev:admin
 
 ## 发布与安全边界
 
-`client/eas.json` 提供 iOS/Android 的 preview 与 production 配置，它们必须连接 HTTPS API。`preview-http` 和 simulator 配置只用于受控开发测试，不得作为外部 Beta 候选包，也不得使用真实敏感数据。
+`client/eas.json` 提供 iOS/Android 的 preview 与 production 配置，所有可分发构建都必须连接 HTTPS API。只有本机 simulator 调试可显式使用 localhost HTTP，不得使用真实敏感数据。
 
 生产依赖审计目前对 Expo/Metro 构建链中的 `CVE-2025-71329` 与 `CVE-2025-71330` 设置了精确临时例外；上游尚无修复版本，因此不能将当前状态描述为“零漏洞”。每次 Expo/Metro 升级及候选验收都必须重新检查。
 

@@ -8,11 +8,11 @@ if (!['china', 'global'].includes(deploymentProfile)) {
   throw new Error(`EXPO_PUBLIC_DEPLOYMENT_PROFILE must be china or global; received ${JSON.stringify(deploymentProfile)}`);
 }
 const easBuildProfile = process.env.EAS_BUILD_PROFILE;
-const isHttpPreview = easBuildProfile === 'preview-http';
-const appName = process.env.EXPO_PUBLIC_APP_NAME || (isHttpPreview ? '食光烙记 HTTP测试' : '食光烙记');
-const androidPackage = process.env.EXPO_PUBLIC_ANDROID_PACKAGE || (isHttpPreview ? 'com.dietdigidose.app.previewhttp' : 'com.dietdigidose.app');
-const iosBundleIdentifier = process.env.EXPO_PUBLIC_IOS_BUNDLE_IDENTIFIER || (isHttpPreview ? 'com.dietdigidose.app.previewhttp' : 'com.dietdigidose.app');
-const insecureHttpBuildProfiles = new Set(['preview-http', 'simulator']);
+const isPreview = ['preview', 'china-preview', 'global-preview'].includes(easBuildProfile);
+const appName = process.env.EXPO_PUBLIC_APP_NAME || (isPreview ? '食光烙记 测试版' : '食光烙记');
+const androidPackage = process.env.EXPO_PUBLIC_ANDROID_PACKAGE || (isPreview ? 'com.dietdigidose.app.preview' : 'com.dietdigidose.app');
+const iosBundleIdentifier = process.env.EXPO_PUBLIC_IOS_BUNDLE_IDENTIFIER || (isPreview ? 'com.dietdigidose.app.preview' : 'com.dietdigidose.app');
+const insecureHttpBuildProfiles = new Set(['simulator']);
 const allowInsecureHttp = (!easBuildProfile || insecureHttpBuildProfiles.has(easBuildProfile))
   && process.env.EXPO_PUBLIC_ALLOW_INSECURE_HTTP === '1';
 const appVersion = release.productVersion;
@@ -50,7 +50,7 @@ module.exports = ({ config }) => ({
     releaseSnapshot: release.snapshot,
     buildNumber,
     buildTime,
-    buildFlavor: isHttpPreview ? 'preview-http' : 'standard',
+    buildFlavor: isPreview ? 'preview' : 'standard',
     deploymentProfile,
     eas: {
       ...config.extra?.eas,

@@ -59,7 +59,7 @@
 - [ ] [#105](https://github.com/AdlinZ/DietDigiDose/issues/105) 部署独立、可持久化、仅通过 HTTPS 访问的 staging；验证 `DATABASE_PATH`、CORS、JWT、管理员初始密码和反向代理设置
 - [x] 移除候选配置中的明文 HTTP 地址与不安全网络开关；EAS 候选/生产构建缺少 HTTPS API 时直接失败
 - [x] 补齐 iOS bundle identifier、构建号与 EAS preview/production 双端配置；候选构建缺少 HTTPS API 时直接失败
-- [x] 独立 `preview-http` 与 simulator profile 才允许显式 HTTP，并由配置回归测试锁定正式 preview/production profile 的 HTTPS 约束；HTTP 包仅用于受控测试账号
+- [x] 淘汰可分发的 `preview-http` profile；所有 preview/production 构建强制 HTTPS，仅本机 simulator profile 可显式使用 localhost HTTP
 - [ ] [#107](https://github.com/AdlinZ/DietDigiDose/issues/107) 基于同一提交和同一 staging 后端生成 iOS/Android 双端候选包
 - [ ] [#106](https://github.com/AdlinZ/DietDigiDose/issues/106) 完成备份、隔离恢复、健康检查、登录、库存读取和管理统计演练，记录恢复时间与回滚步骤
 

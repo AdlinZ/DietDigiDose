@@ -32,7 +32,7 @@ Android `versionCode`：`263701`
 - [x] 原生持续录音按约 1 秒快照调用受控增量 ASR；服务端只持久化转写、字节数和延迟，不保存原始音频，句末失败自动降级到原 ASR Agent。
 - [x] 音色包具备数据库权威目录、管理端发布审计、HTTPS/SHA-256 校验、原子安装、暂停恢复、账号隔离、撤销清理和“本地 → 服务端 → 系统”三级降级实现。
 - [x] 远程媒体清理持久化后端、bucket 和对象路径；配置缺失或删除失败时任务保留为 pending，并覆盖配置恢复重试。
-- [x] `preview-http` 使用独立 applicationId、明显不同的应用名和临时测试签名；正式签名仅在候选 profile 的审批 Environment 中读取。
+- [x] HTTPS `preview` 使用独立 applicationId、明显不同的应用名和持久测试签名；正式签名仅在候选 profile 的审批 Environment 中读取。
 - [x] 管理端媒体清理列表取消旧请求并使用最新请求代次保护，乱序响应不能覆盖当前筛选。
 
 ## 仍需外部环境完成
@@ -44,8 +44,8 @@ Android `versionCode`：`263701`
 - [ ] Android/iOS 真机验证新增的增量 ASR 快照通道在前后台切换、弱网、回声和连续五轮下的延迟与稳定性。
 - [x] Agent 最终合成模型的真实 token stream 已解码为持久化短句增量，客户端按 turn 串行合成/播放；插话会取消旧 generation 和未播放队列。自动化已覆盖结构化 JSON 跨 token 解码、SQLite/PostgreSQL 增量去重和播放队列取消；实际模型首包延迟、扬声器/耳机回声与连续五轮仍须随 #62 真机验收。
 - [ ] 提供经说话人授权、发行许可审查且带固定发音回归结果的中文 ONNX 音色包，并在目标中端 Android 与 iOS 设备记录首段延迟、实时系数、峰值内存和连续合成结果。
-- [ ] 用实际 `preview-http` APK 与正式 APK 验证可并行安装、无法相互覆盖且签名摘要不同。
-- [ ] 在 GitHub 仓库配置受保护 `http-apk-*` 标签 Ruleset，并确认 `android-release` Environment 需要发布负责人审批。
+- [ ] 用实际 HTTPS `preview` APK 与正式 APK 验证可并行安装、无法相互覆盖且签名摘要不同。
+- [ ] 在 GitHub 仓库配置受保护 `preview-apk-*` 标签 Ruleset，并确认 `android-release` Environment 需要发布负责人审批。
 - [ ] 在共享设备执行 A/B 账号往返切换 10 次，并在第二台设备确认音色偏好同步与敏感缓存隔离。
 - [ ] 各 issue 完成外部验收后，从验收提交创建 `26w37a` tag 和 GitHub prerelease。
 

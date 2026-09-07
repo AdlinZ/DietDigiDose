@@ -14,7 +14,6 @@ export type LinkedRecipeSummary = {
 
 export function LinkedRecipeCard({
   recipe,
-  unavailable = false,
   compact = false,
   onPress,
 }: {
@@ -23,15 +22,7 @@ export function LinkedRecipeCard({
   compact?: boolean;
   onPress?: (event: GestureResponderEvent) => void;
 }) {
-  if (!recipe && !unavailable) return null;
-  if (!recipe) {
-    return (
-      <View className="mt-3 flex-row items-center rounded-2xl border border-line bg-background-secondary px-3 py-3">
-        <FontAwesome6 name="link-slash" size={12} colorClassName="accent-copy-muted" />
-        <Text className="ml-2 flex-1 text-[10px] font-bold text-copy-muted">原关联菜谱已下架，帖子内容仍可正常查看</Text>
-      </View>
-    );
-  }
+  if (!recipe) return null;
 
   return (
     <TouchableOpacity

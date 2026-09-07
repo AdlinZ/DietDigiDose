@@ -11,7 +11,7 @@ import {
   SectionList,
   Modal,
 } from 'react-native';
-import { withUniwind } from 'uniwind';
+import { withUniwind, useCSSVariable, useUniwind } from 'uniwind';
 import { useSafeAreaInsets, Edge } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useIsFocused } from '@react-navigation/native';
@@ -144,13 +144,15 @@ const KeyboardAwareScrollable = ({
 
 const RawScreen = ({
   children,
-  backgroundColor = 'var(--background)',
+  backgroundColor,
   statusBarStyle = 'auto',
   statusBarColor = 'transparent',
   safeAreaEdges = ['top', 'left', 'right', 'bottom'],
   style,
 }: ScreenProps) => {
   const insets = useSafeAreaInsets();
+  const themeBackground = useCSSVariable('--color-background') as string;
+  const { theme } = useUniwind();
   const isFocused = useIsFocused();
   const [keyboardShown, setKeyboardShown] = React.useState(false);
 
@@ -202,7 +204,7 @@ const RawScreen = ({
 
   const wrapperStyle: ViewStyle = {
     flex: 1,
-    backgroundColor,
+    backgroundColor: backgroundColor ?? themeBackground,
     paddingTop: hasTop ? insets.top : 0,
     paddingLeft: hasLeft ? insets.left : 0,
     paddingRight: hasRight ? insets.right : 0,
@@ -283,7 +285,7 @@ const RawScreen = ({
     >
       {/* 状态栏配置：强制透明背景 + 沉浸式，以支持背景图延伸 */}
       <StatusBar
-        style={statusBarStyle}
+        style={statusBarStyle === 'auto' ? (theme === 'dark' ? 'light' : 'dark') : statusBarStyle}
         backgroundColor={statusBarColor}
         translucent
       />

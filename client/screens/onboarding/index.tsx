@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import FontAwesome6 from '@/components/ThemedFontAwesome6';
+import { BirthdayPicker } from '@/components/BirthdayPicker';
+import { ageFromBirthday, normalizeBirthday } from '@/utils/birthday';
 import { Screen } from '@/components/Screen';
 import { useAuthFetch } from '@/contexts/AuthContext';
 import { useSafeRouter, useSafeSearchParams } from '@/hooks/useSafeRouter';
@@ -73,13 +75,14 @@ export default function OnboardingScreen() {
   const { returnTo: rawReturnTo } = useSafeSearchParams<{ returnTo?: unknown }>();
   const returnTo = validateAuthReturnTo(rawReturnTo);
   const [currentStep, setCurrentStep] = useState(1); const [goal, setGoal] = useState<HealthGoal | null>(null);
-  const [gender, setGender] = useState<Gender>('保密'); const [age, setAge] = useState(25); const [height, setHeight] = useState(165);
+  const [gender, setGender] = useState<Gender>('保密'); const [birthday, setBirthday] = useState(() => { const today = new Date(); return normalizeBirthday({ year: today.getFullYear() - 25, month: today.getMonth() + 1, day: today.getDate() }); });
+  const age = ageFromBirthday(birthday); const [height, setHeight] = useState(165);
   const [weight, setWeight] = useState(60); const [targetWeight, setTargetWeight] = useState(55); const [activityLevel, setActivityLevel] = useState<ActivityLevel>('moderate');
   const [preference, setPreference] = useState<(typeof PREFERENCES)[number]>('无特别偏好'); const [saving, setSaving] = useState(false); const [error, setError] = useState('');
   const [allergies, setAllergies] = useState<AllergyEntry[]>([]); const [medications, setMedications] = useState('');
   const [conditions, setConditions] = useState<string[]>([]); const [restrictions, setRestrictions] = useState<string[]>([]); const [dislikedFoods, setDislikedFoods] = useState('');
   const needsTargetWeight = goal === 'lose_weight' || goal === 'reduce_fat' || goal === 'gain_muscle';
-  const next = () => { if (currentStep === 1 && !goal) { setError('请选择你希望食光格记如何帮助你'); return; } setError(''); setCurrentStep((step) => Math.min(7, step + 1)); };
+  const next = () => { if (currentStep === 3 && (age < 14 || age > 80)) { setError('请选择 14–80 周岁范围内的生日'); return; } if (currentStep === 1 && !goal) { setError('请选择你希望食光格记如何帮助你'); return; } setError(''); setCurrentStep((step) => Math.min(7, step + 1)); };
   const back = () => { setError(''); setCurrentStep((step) => Math.max(1, step - 1)); };
   const finish = async () => {
     if (!goal) return; setError(''); setSaving(true);
@@ -92,14 +95,14 @@ export default function OnboardingScreen() {
       router.replace(returnTo || '/');
     } catch { setError('网络异常，请检查网络后重试'); } finally { setSaving(false); }
   };
-  const title = currentStep === 1 ? '你想从哪里开始？' : currentStep === 2 ? '你的性别是？' : currentStep === 3 ? '你今年多大？' : currentStep === 4 ? '你的身高是？' : currentStep === 5 ? '记录身体数据' : currentStep === 6 ? '打造你的饮食方案' : '确认饮食安全信息';
-  const subtitle = currentStep === 1 ? '选择最符合你现在需求的目标，之后随时都能修改。' : currentStep === 2 ? '用于更合适的营养估算，也可以选择保密。' : currentStep === 3 ? '拖动滑块选择年龄。' : currentStep === 4 ? '拖动滑块选择身高。' : currentStep === 5 ? '拖动滑块即可填写，不需要精确到每一天。' : currentStep === 6 ? '选择你的活动程度和饮食偏好。' : '用于菜谱、食材替换与 AI 对话的安全拦截；没有可直接完成。';
+  const title = currentStep === 1 ? '你想从哪里开始？' : currentStep === 2 ? '你的性别是？' : currentStep === 3 ? '你的生日是？' : currentStep === 4 ? '你的身高是？' : currentStep === 5 ? '记录身体数据' : currentStep === 6 ? '打造你的饮食方案' : '确认饮食安全信息';
+  const subtitle = currentStep === 1 ? '选择最符合你现在需求的目标，之后随时都能修改。' : currentStep === 2 ? '用于更合适的营养估算，也可以选择保密。' : currentStep === 3 ? '上下滑动选择出生年月日，自动计算周岁。' : currentStep === 4 ? '拖动滑块选择身高。' : currentStep === 5 ? '拖动滑块即可填写，不需要精确到每一天。' : currentStep === 6 ? '选择你的活动程度和饮食偏好。' : '用于菜谱、食材替换与 AI 对话的安全拦截；没有可直接完成。';
   return <Screen><KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><ScrollView style={styles.scrollView} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
     <View style={styles.progressTrack}><View style={[styles.progress, { width: `${(currentStep / 7) * 100}%` }]} /></View><Text style={styles.step}>第 {currentStep} 步，共 7 步</Text>
     <View style={styles.intro}><View style={styles.iconWrap}><FontAwesome6 name={currentStep === 1 ? 'compass' : currentStep === 2 ? 'user' : currentStep === 3 ? 'cake-candles' : currentStep === 4 ? 'ruler-vertical' : currentStep === 5 ? 'weight-scale' : currentStep === 6 ? 'seedling' : 'shield-halved'} size={28} colorClassName="accent-brand" /></View><Text style={styles.title}>{title}</Text><Text style={styles.subtitle}>{subtitle}</Text></View><View style={styles.selectionArea}>
     {currentStep === 1 ? <View style={styles.goalList}>{GOALS.map((item) => { const selected = goal === item.value; return <TouchableOpacity key={item.value} style={[styles.goalCard, selected && styles.goalCardActive]} onPress={() => { setGoal(item.value); setError(''); }}><View style={[styles.goalIcon, selected && styles.goalIconActive]}><FontAwesome6 name={item.icon as never} size={18} color={selected ? colors['on-brand'] : colors.brand} /></View><View style={styles.goalCopy}><Text style={styles.goalTitle}>{item.title}</Text><Text style={styles.goalDescription}>{item.description}</Text></View><View style={[styles.radio, selected && styles.radioActive]}>{selected && <View style={styles.radioDot} />}</View></TouchableOpacity>; })}</View> : null}
     {currentStep === 2 ? <View style={styles.card}><Text style={styles.sectionTitle}>性别</Text><View style={styles.options}>{(['男', '女', '保密'] as Gender[]).map((option) => <TouchableOpacity key={option} style={[styles.option, gender === option && styles.optionActive]} onPress={() => setGender(option)}><Text style={[styles.optionText, gender === option && styles.optionTextActive]}>{option}</Text></TouchableOpacity>)}</View></View> : null}
-    {currentStep === 3 ? <View style={styles.card}><ValueSlider label="年龄" value={age} unit="岁" minimumValue={14} maximumValue={80} step={1} onValueChange={setAge} /></View> : null}
+    {currentStep === 3 ? <View style={styles.card}><BirthdayPicker value={birthday} onChange={setBirthday} /></View> : null}
     {currentStep === 4 ? <View style={styles.card}><ValueSlider label="身高" value={height} unit="cm" minimumValue={130} maximumValue={220} step={1} onValueChange={setHeight} /></View> : null}
     {currentStep === 5 ? <View style={styles.card}><Text style={styles.sectionTitle}>身体数据</Text><ValueSlider label="当前体重" value={weight} unit="kg" minimumValue={30} maximumValue={180} step={0.5} onValueChange={setWeight} />{needsTargetWeight ? <ValueSlider label="目标体重" value={targetWeight} unit="kg" minimumValue={30} maximumValue={180} step={0.5} onValueChange={setTargetWeight} /> : <Text style={styles.hint}>你选择了“{GOALS.find((item) => item.value === goal)?.title}”，因此不需要设定目标体重。</Text>}</View> : null}
     {currentStep === 6 ? <View style={styles.card}><Text style={styles.sectionTitle}>日常活动</Text>{ACTIVITIES.map((item) => <TouchableOpacity key={item.value} style={[styles.choiceRow, activityLevel === item.value && styles.choiceRowActive]} onPress={() => setActivityLevel(item.value)}><View><Text style={styles.choiceTitle}>{item.title}</Text><Text style={styles.choiceDescription}>{item.description}</Text></View><View style={[styles.radio, activityLevel === item.value && styles.radioActive]}>{activityLevel === item.value && <View style={styles.radioDot} />}</View></TouchableOpacity>)}<Text style={[styles.sectionTitle, styles.preferenceTitle]}>饮食偏好</Text><View style={styles.preferenceWrap}>{PREFERENCES.map((item) => <TouchableOpacity key={item} style={[styles.preference, preference === item && styles.preferenceActive]} onPress={() => setPreference(item)}><Text style={[styles.preferenceText, preference === item && styles.preferenceTextActive]}>{item}</Text></TouchableOpacity>)}</View></View> : null}

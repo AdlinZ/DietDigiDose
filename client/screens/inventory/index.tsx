@@ -4,6 +4,7 @@ import {
   View,
   Text,
   ScrollView,
+  RefreshControl,
   TouchableOpacity,
   Image,
   ActivityIndicator,
@@ -16,6 +17,7 @@ import {
   PanResponder,
   useWindowDimensions,
 } from "react-native";
+import { useAppThemeColors } from "@/hooks/useAppThemeColors";
 import { Screen } from "@/components/Screen";
 import { RecipeCover } from "@/components/RecipeCover";
 import { useFocusEffect } from "expo-router";
@@ -80,6 +82,9 @@ const KITCHENWARE_STARTER_KITS = [
 export default function InventoryScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const colors = useAppThemeColors();
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshInFlight = useRef(false);
   const noticeCardWidth = Math.max(windowWidth - 40, 280);
   const [inventoryGridWidth, setInventoryGridWidth] = useState(0);
   const inventoryCardWidth = inventoryGridWidth > 0
@@ -1322,7 +1327,21 @@ export default function InventoryScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[0]}
-        contentContainerStyle={{ paddingBottom: 132 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 140 }}
+        refreshControl={<RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            if (refreshInFlight.current) return;
+            refreshInFlight.current = true;
+            setRefreshing(true);
+            void Promise.allSettled([fetchData(), refreshHouseholds()]).finally(() => {
+              refreshInFlight.current = false;
+              setRefreshing(false);
+            });
+          }}
+          tintColor={colors.brand}
+          colors={[colors.brand]}
+        />}
         className="bg-canvas"
       >
         {/* 三类资产是页面唯一顶栏，滚动时保持吸顶。 */}

@@ -75,7 +75,7 @@ describe("candidate build transport policy", () => {
 
   it("gives the HTTPS preview build an isolated identity", () => {
     const config = loadExpoConfig("preview", "https://api.example.test");
-    expect(config.name).toBe("食光烙记 测试版");
+    expect(config.name).toBe("食光烙记");
     expect(config.android.package).toBe("com.dietdigidose.app.preview");
     expect(config.ios.bundleIdentifier).toBe("com.dietdigidose.app.preview");
     expect(config.extra.buildFlavor).toBe("preview");

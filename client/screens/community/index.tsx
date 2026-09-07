@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { Screen } from "@/components/Screen";
 import { useFocusEffect } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
@@ -32,6 +33,9 @@ export default function CommunityScreen() {
   const { isAuthenticated } = useAuth();
   const authFetch = useAuthFetch();
   const colors = useAppThemeColors();
+  const insets = useSafeAreaInsets();
+  const requestInFlight = useRef(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(false);
@@ -76,7 +80,10 @@ export default function CommunityScreen() {
   const tabs = ["寻味", "榜单", "活动", "问答"];
 
   const fetchPosts = useCallback(async (forceRefresh = false, append = false) => {
+    if (append && (requestInFlight.current || !nextCursorRef.current)) return;
+    requestInFlight.current = true;
     const requestSequence = ++fetchRequestSequence.current;
+    if (forceRefresh) setRefreshing(true);
     try {
       setLoading(true);
       setFetchError(null);
@@ -111,7 +118,11 @@ export default function CommunityScreen() {
       }
       setFetchError(e instanceof Error ? e.message : "社区内容加载失败");
     } finally {
-      if (requestSequence === fetchRequestSequence.current) setLoading(false);
+      if (requestSequence === fetchRequestSequence.current) {
+        requestInFlight.current = false;
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [activeTab, authFetch]);
 
@@ -335,7 +346,7 @@ export default function CommunityScreen() {
             resizeMode="cover"
           />
         ) : (
-          <View className={`w-full ${imageHeight} bg-warm-soft justify-between p-4`}>
+          <View className="w-full bg-warm-soft gap-3 p-4 pt-8">
             <View className="w-9 h-9 rounded-full bg-brand/10 items-center justify-center self-end">
               <FontAwesome6 name="pen-nib" size={15} colorClassName="accent-brand" />
             </View>
@@ -351,7 +362,7 @@ export default function CommunityScreen() {
           {post.recommendation_reason ? (
             <View className="mb-2 flex-row items-center gap-1 self-start rounded-full bg-brand/10 px-2 py-1">
               <FontAwesome6 name="wand-magic-sparkles" size={9} colorClassName="accent-brand" />
-              <Text className="text-[9px] font-bold text-brand">{post.recommendation_reason}</Text>
+              <Text className="shrink text-[9px] font-bold text-brand">{post.recommendation_reason}</Text>
             </View>
           ) : null}
           {post.image_url ? <Text className="text-xs font-bold text-ink leading-5" numberOfLines={3}>{post.content}</Text> : null}
@@ -688,13 +699,19 @@ export default function CommunityScreen() {
         stickyHeaderIndices={[0]}
         refreshControl={
           <RefreshControl
-            refreshing={loading}
+            refreshing={refreshing}
             onRefresh={() => void fetchPosts(true)}
             tintColor={colors.brand}
             colors={[colors.brand]}
           />
         }
-        contentContainerStyle={{ paddingBottom: 120 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 140 }}
+        scrollEventThrottle={100}
+        onScroll={({ nativeEvent: { layoutMeasurement, contentOffset, contentSize } }) => {
+          if (hasMore && !loading && !fetchError && contentOffset.y + layoutMeasurement.height >= contentSize.height - 280) {
+            void fetchPosts(false, true);
+          }
+        }}
         className="bg-background-secondary"
       >
         {/* 单层频道栏：发布操作由底部动态 Dock 承担 */}
@@ -899,6 +916,7 @@ export default function CommunityScreen() {
           </View>
         )}
 
+        {loading && posts.length > 0 && !refreshing ? <ActivityIndicator className="py-4" color={colors.brand} /> : null}
         {hasMore && !loading ? (
           <View className="items-center px-4 py-4">
             <TouchableOpacity onPress={() => void fetchPosts(false, true)} className="rounded-full border border-brand bg-surface px-5 py-2.5 active:opacity-80">

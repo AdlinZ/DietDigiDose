@@ -14,6 +14,8 @@
     "staging:smoke": "node deploy/staging-smoke.mjs",
     "build:admin": "pnpm --dir ./admin build",
     "validate:toolchain": "node scripts/validate-toolchain.mjs",
+    "release:prepare": "node scripts/prepare-build-release.mjs",
+    "test:release": "node --test scripts/prepare-build-release.test.mjs",
     "validate:release": "node scripts/validate-release-metadata.mjs",
     "preinstall": "npx only-allow pnpm",
     "lint:client": "pnpm --dir ./client lint",
@@ -38,7 +40,7 @@
     "database:schema:check": "node scripts/generate-postgres-baseline.mjs --check && pnpm --dir ./server db:postgres:check",
     "database:boundary:update": "node scripts/check-sqlite-boundary.mjs --update",
     "database:boundary:check": "node scripts/check-sqlite-boundary.mjs",
-    "test:all": "pnpm test:upstream-security-watch && pnpm test:client && pnpm test:server && pnpm test:admin",
+    "test:all": "pnpm test:release && pnpm test:upstream-security-watch && pnpm test:client && pnpm test:server && pnpm test:admin",
     "quality:test-quarantine": "node scripts/check-test-quarantine.mjs",
     "quality:build-budgets": "node scripts/check-build-budgets.mjs",
     "audit:prod": "pnpm audit --prod --registry=https://registry.npmjs.org"

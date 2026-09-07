@@ -18,10 +18,10 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: android-apk-${{ github.ref }}
+  group: android-apk-build-number
   cancel-in-progress: false
 
 jobs:
@@ -91,6 +91,9 @@ jobs:
           else
             echo "EXPECTED_ANDROID_PACKAGE=com.dietdigidose.app" >> "$GITHUB_ENV"
           fi
+
+      - name: Reserve the next weekly build number
+        run: node scripts/prepare-build-release.mjs --publish
 
       - name: Load and validate release metadata
         run: |

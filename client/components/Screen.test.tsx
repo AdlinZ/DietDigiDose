@@ -8,7 +8,7 @@ jest.mock("@react-navigation/native", () => ({ useIsFocused: () => mockIsFocused
 jest.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
 }));
-jest.mock("uniwind", () => ({ withUniwind: (component: unknown) => component }));
+jest.mock("uniwind", () => ({ withUniwind: (component: unknown) => component, useCSSVariable: () => "#111713", useUniwind: () => ({ theme: "dark" }) }));
 jest.mock("expo-status-bar", () => ({ StatusBar: () => null }));
 jest.mock("react-native-keyboard-aware-scroll-view", () => {
   const ReactModule = require("react");
@@ -37,4 +37,12 @@ test("inactive screens hide their full accessibility tree", () => {
   const focusedWrapper = tree!.root.findAllByType(View)[0];
   expect(focusedWrapper.props.accessibilityElementsHidden).toBe(false);
   expect(focusedWrapper.props.importantForAccessibility).toBe("auto");
+});
+
+test("resolves the native page background to a concrete theme color", () => {
+  let tree: renderer.ReactTestRenderer;
+  renderer.act(() => { tree = renderer.create(<Screen><Text>深色页面</Text></Screen>); });
+  expect(tree!.root.findAllByType(View)[0].props.style.backgroundColor).toBe("#111713");
+  renderer.act(() => { tree!.update(<Screen backgroundColor="#123456"><Text>自定义背景</Text></Screen>); });
+  expect(tree!.root.findAllByType(View)[0].props.style.backgroundColor).toBe("#123456");
 });

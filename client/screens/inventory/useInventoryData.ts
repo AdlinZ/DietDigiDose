@@ -61,6 +61,8 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
   const [recipeQuery, setRecipeQuery] = useState<RecipeCatalogQuery>({});
 
   const inventoryQuery = useQuery({
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
     queryKey: personalInventoryKey,
     enabled: isAuthenticated,
     queryFn: async (): Promise<CachedResult<InventoryItem[]>> => {
@@ -81,6 +83,8 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
   });
 
   const recipesQuery = useInfiniteQuery({
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
     queryKey: inventoryQueryKeys.recipeCatalog(isAuthenticated ? userId : null, recipeQuery),
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }): Promise<RecipePage> => {
@@ -107,16 +111,22 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
   });
 
   const kitchenwareQuery = useQuery({
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
     queryKey: inventoryQueryKeys.kitchenware(userId),
     enabled: isAuthenticated,
     queryFn: () => kitchenwareApi.list<KitchenwareItem>(authFetch),
   });
   const kitchenwareCatalogQuery = useQuery({
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
     queryKey: inventoryQueryKeys.kitchenwareCatalog,
     enabled: isAuthenticated,
     queryFn: () => kitchenwareApi.catalog<KitchenwareCatalogItem>(authFetch),
   });
   const recipeLibrarySummaryQuery = useQuery({
+    refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
     queryKey: inventoryQueryKeys.recipeLibrarySummary(userId),
     enabled: isAuthenticated,
     queryFn: () => recipesApi.librarySummary(authFetch),

@@ -9,7 +9,7 @@ if (!['china', 'global'].includes(deploymentProfile)) {
 }
 const easBuildProfile = process.env.EAS_BUILD_PROFILE;
 const isPreview = ['preview', 'china-preview', 'global-preview'].includes(easBuildProfile);
-const appName = process.env.EXPO_PUBLIC_APP_NAME || (isPreview ? '食光烙记 测试版' : '食光烙记');
+const appName = process.env.EXPO_PUBLIC_APP_NAME || '食光烙记';
 const androidPackage = process.env.EXPO_PUBLIC_ANDROID_PACKAGE || (isPreview ? 'com.dietdigidose.app.preview' : 'com.dietdigidose.app');
 const iosBundleIdentifier = process.env.EXPO_PUBLIC_IOS_BUNDLE_IDENTIFIER || (isPreview ? 'com.dietdigidose.app.preview' : 'com.dietdigidose.app');
 const insecureHttpBuildProfiles = new Set(['simulator']);

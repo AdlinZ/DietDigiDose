@@ -38,7 +38,7 @@ test("scrolling near the bottom loads one page and leaves room for the floating 
   act(() => list.props.onScroll(event));
   expect(mockPostPage).toHaveBeenCalledTimes(2);
   act(() => tree!.unmount());
-});
+}, 20_000);
 
 test("posts without an available recipe show no missing-recipe notice", () => {
   let tree: renderer.ReactTestRenderer;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { currentDateKey } from "../src/utils/date.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -599,7 +600,7 @@ try {
   await Promise.all(concurrentHealthPreviews.map((preview, index) => aiWriteService.commit({ userId: householdMember,
     confirmationId: preview.confirmationId, idempotencyKey: `postgres-ai-write-health-concurrent-000${index + 2}` })));
   const concurrentHealth = (await pool.query(`SELECT COUNT(*)::int AS count,MAX(weight) AS weight,MAX(water_ml) AS water_ml
-    FROM health_logs WHERE user_id=$1 AND recorded_date=CURRENT_DATE::text`, [householdMember])).rows[0];
+    FROM health_logs WHERE user_id=$1 AND recorded_date=$2`, [householdMember, currentDateKey()])).rows[0];
   assert.deepEqual({ count: Number(concurrentHealth.count), weight: Number(concurrentHealth.weight), waterMl: Number(concurrentHealth.water_ml) },
     { count: 1, weight: 60.5, waterMl: 500 });
   assert.equal(Number((await pool.query("SELECT calories FROM diet_records WHERE user_id=$1 AND food_name=$2",

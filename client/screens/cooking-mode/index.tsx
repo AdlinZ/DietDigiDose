@@ -1,5 +1,5 @@
 import type { CookingQueueItem } from "@/services/api/cookingQueue";
-import { mealProductionSchema } from "@dietdigidose/contracts";
+
 import { MealProductionFields } from "@/components/MealProductionFields";
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
@@ -735,7 +735,7 @@ export default function CookingModeScreen() {
             : null,
         inventory_item_ids: [],
         inventory_consumptions: inventoryConsumptions,
-        production: mealProductionSchema.parse({
+        production: (await import("@dietdigidose/contracts")).mealProductionSchema.parse({
           food_name: title || "自制餐食",
           ...(queueContext?.plannedDate ? { planned_date: queueContext.plannedDate } : {}),
           produced_servings: Number(producedServings), eaten_servings: Number(eatenServings),

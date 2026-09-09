@@ -1,4 +1,4 @@
-import { replaceCookingPlanItemSchema, type ReplaceCookingPlanItemInput, cookingPlanDraftSchema, mealPlanRequirementsSchema, type MealPlanRequirementsInput, type CookingPlanDraft } from "@dietdigidose/contracts";
+import type { ReplaceCookingPlanItemInput, MealPlanRequirementsInput, CookingPlanDraft } from "@dietdigidose/contracts";
 import { requestJson, type ApiFetch } from "./client";
 
 export type RecommendationSurface = "home" | "inventory" | "ai" | "meal_plan";
@@ -40,12 +40,12 @@ export interface RecipeRecommendationPage<TRecipe> {
 }
 
 export const recommendationsApi = {
-  cookingPlan: (apiFetch: ApiFetch, input: MealPlanRequirementsInput) => requestJson<CookingPlanDraft>(apiFetch, "/api/v1/recommendations/cooking-plan", {
-    method: "POST", body: JSON.stringify(mealPlanRequirementsSchema.parse(input)),
-  }).then(value => cookingPlanDraftSchema.parse(value)),
-  replaceCookingItem: (apiFetch: ApiFetch, input: ReplaceCookingPlanItemInput) => requestJson<{ draft: CookingPlanDraft; conflicts: string[] }>(apiFetch, "/api/v1/recommendations/cooking-plan/replace", {
-    method: "POST", body: JSON.stringify(replaceCookingPlanItemSchema.parse(input)),
-  }).then(value => ({ ...value, draft: cookingPlanDraftSchema.parse(value.draft) })),
+  cookingPlan: async (apiFetch: ApiFetch, input: MealPlanRequirementsInput) => requestJson<CookingPlanDraft>(apiFetch, "/api/v1/recommendations/cooking-plan", {
+    method: "POST", body: JSON.stringify((await import("@dietdigidose/contracts")).mealPlanRequirementsSchema.parse(input)),
+  }).then(async value => (await import("@dietdigidose/contracts")).cookingPlanDraftSchema.parse(value)),
+  replaceCookingItem: async (apiFetch: ApiFetch, input: ReplaceCookingPlanItemInput) => requestJson<{ draft: CookingPlanDraft; conflicts: string[] }>(apiFetch, "/api/v1/recommendations/cooking-plan/replace", {
+    method: "POST", body: JSON.stringify((await import("@dietdigidose/contracts")).replaceCookingPlanItemSchema.parse(input)),
+  }).then(async value => ({ ...value, draft: (await import("@dietdigidose/contracts")).cookingPlanDraftSchema.parse(value.draft) })),
   recipes: <TRecipe>(apiFetch: ApiFetch, input: {
     surface: RecommendationSurface;
     category?: string;

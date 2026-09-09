@@ -1,4 +1,4 @@
-import { mealProductionSchema } from "@dietdigidose/contracts";
+
 import { MealProductionFields } from "@/components/MealProductionFields";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
@@ -164,7 +164,7 @@ export default function MealPlansScreen() {
       await mealPlansApi.complete(authFetch, selectedPlan.id, item.id, {
         version: item.version,
         idempotencyKey: executionKey("complete", item),
-        production: mealProductionSchema.parse({ food_name: item.title, produced_servings: Number(produced), eaten_servings: Number(eaten), meal_type: item.mealType, planned_date: item.plannedDate, nutrition_per_serving: {} }),
+        production: (await import("@dietdigidose/contracts")).mealProductionSchema.parse({ food_name: item.title, produced_servings: Number(produced), eaten_servings: Number(eaten), meal_type: item.mealType, planned_date: item.plannedDate, nutrition_per_serving: {} }),
       });
       await load();
       setDetailItem(null);

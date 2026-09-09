@@ -1,4 +1,4 @@
-import { normalizeInventoryScanItems } from "@dietdigidose/contracts";
+import { normalizeInventoryScanItems } from "@dietdigidose/contracts/inventory-scan";
 import type { DetectedFood } from "./types";
 
 export const MAX_AI_IMAGE_BASE64_LENGTH = 7_500_000;

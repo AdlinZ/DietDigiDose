@@ -1,4 +1,4 @@
-import { updateCookingPlanDraftSchema, type UpdateCookingPlanDraftInput, saveCookingPlanDraftSchema, type SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
+import type { UpdateCookingPlanDraftInput, SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
 import { requestJson, type ApiFetch } from "./client";
 
 export type MealPlanItemStatus = "planned" | "queued" | "cooking" | "completed" | "skipped";
@@ -50,10 +50,10 @@ const itemPath = (planId: string, itemId: string) =>
 export const mealPlansApi = {
   activateDraft: (apiFetch: ApiFetch, id: string, version: number) =>
     requestJson<{ plan: MealPlan; repeated: boolean }>(apiFetch, `/api/v1/meal-plans/${encodeURIComponent(id)}/activate`, { method: "POST", body: JSON.stringify({ version }) }),
-  updateDraft: (apiFetch: ApiFetch, id: string, input: UpdateCookingPlanDraftInput) =>
-    requestJson<{ plan: MealPlan; repeated: boolean }>(apiFetch, `/api/v1/meal-plans/${encodeURIComponent(id)}/draft`, { method: "PATCH", body: JSON.stringify(updateCookingPlanDraftSchema.parse(input)) }),
-  saveDraft: (apiFetch: ApiFetch, input: SaveCookingPlanDraftInput) =>
-    requestJson<{ plan: MealPlan; repeated: boolean }>(apiFetch, "/api/v1/meal-plans/drafts", { method: "POST", body: JSON.stringify(saveCookingPlanDraftSchema.parse(input)) }),
+  updateDraft: async (apiFetch: ApiFetch, id: string, input: UpdateCookingPlanDraftInput) =>
+    requestJson<{ plan: MealPlan; repeated: boolean }>(apiFetch, `/api/v1/meal-plans/${encodeURIComponent(id)}/draft`, { method: "PATCH", body: JSON.stringify((await import("@dietdigidose/contracts")).updateCookingPlanDraftSchema.parse(input)) }),
+  saveDraft: async (apiFetch: ApiFetch, input: SaveCookingPlanDraftInput) =>
+    requestJson<{ plan: MealPlan; repeated: boolean }>(apiFetch, "/api/v1/meal-plans/drafts", { method: "POST", body: JSON.stringify((await import("@dietdigidose/contracts")).saveCookingPlanDraftSchema.parse(input)) }),
   list: (apiFetch: ApiFetch, includeArchived = true) =>
     requestJson<MealPlan[]>(apiFetch, `/api/v1/meal-plans?includeArchived=${includeArchived}`),
   get: (apiFetch: ApiFetch, id: string) =>

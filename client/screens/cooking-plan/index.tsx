@@ -6,7 +6,7 @@ import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { recommendationsApi } from "@/services/api/recommendations";
 import { toLocalDateKey, addLocalDays } from "@/utils/date";
-import { cookingPlanDraftSchema, type CookingPlanDraft } from "@dietdigidose/contracts";
+import type { CookingPlanDraft } from "@dietdigidose/contracts";
 import * as Crypto from "expo-crypto";
 import { mealPlansApi } from "@/services/api/mealPlans";
 
@@ -44,10 +44,11 @@ export default function CookingPlanScreen() {
     const sequence = ++requestSequence.current;
     if (planId && owner) {
       setLoading(true);
-      void mealPlansApi.get(authFetch, planId).then(plan => {
+      void mealPlansApi.get(authFetch, planId).then(async plan => {
         if (account.current !== owner || requestSequence.current !== sequence) return;
         const snapshot = plan.constraints.savedCookingDraft as { draft?: unknown } | undefined;
-        const draft = cookingPlanDraftSchema.parse(plan.constraints.currentCookingDraft ?? snapshot?.draft);
+        const draft = (await import("@dietdigidose/contracts")).cookingPlanDraftSchema.parse(plan.constraints.currentCookingDraft ?? snapshot?.draft);
+        if (account.current !== owner || requestSequence.current !== sequence) return;
         if (plan.archived) throw new Error("此方案已归档");
         loadedContext.current = context;
         persistedPlan.current = { id: plan.id, version: plan.version };
@@ -130,7 +131,8 @@ export default function CookingPlanScreen() {
         : await mealPlansApi.saveDraft(authFetch, { id: saveId.current, title: `${result.meals[0].date} 备餐方案`, draft: result });
       if (account.current === owner && sequence === requestSequence.current) {
         const snapshot = response.plan.constraints.savedCookingDraft as { draft?: unknown } | undefined;
-        const actual = cookingPlanDraftSchema.parse(response.plan.constraints.currentCookingDraft ?? snapshot?.draft);
+        const actual = (await import("@dietdigidose/contracts")).cookingPlanDraftSchema.parse(response.plan.constraints.currentCookingDraft ?? snapshot?.draft);
+        if (account.current !== owner || requestSequence.current !== sequence) return;
         persistedPlan.current = { id: response.plan.id, version: response.plan.version };
         setResult(actual); setSaved(true);
       }

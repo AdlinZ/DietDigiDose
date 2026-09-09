@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, Modal, ScrollView, Text, TextInput, Touchable
 import { useFocusEffect } from "expo-router";
 import * as Crypto from "expo-crypto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { preparedMealEventSchema, type PreparedMeal, type PreparedMealEventInput } from "@dietdigidose/contracts";
+import type { PreparedMeal, PreparedMealEventInput } from "@dietdigidose/contracts";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
@@ -45,7 +45,7 @@ export default function PreparedMealsScreen() {
     busy.current = true; setSaving(true);
     const account = user.id;
     try {
-      const request = retry ?? { mealId: selection!.meal.id, input: preparedMealEventSchema.parse({
+      const request = retry ?? { mealId: selection!.meal.id, input: (await import("@dietdigidose/contracts")).preparedMealEventSchema.parse({
         idempotency_key: `prepared-meal:${Crypto.randomUUID()}`, version: selection!.meal.version, type: selection!.type,
         ...(selection!.type === "reschedule" ? { planned_date: date } : { servings: Number(servings), recorded_at: date }),
       }) };

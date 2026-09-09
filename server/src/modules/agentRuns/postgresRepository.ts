@@ -29,8 +29,8 @@ export class PostgresAgentRunsRepository implements AgentRunsRepository {
         const reusable = (await client.query(`SELECT id,session_id FROM agent_runs WHERE user_id=$1
           AND input_json->>'idempotencyKey'=$2
           AND status IN ('queued','running','awaiting_approval','completed')
-          AND created_at >= CURRENT_TIMESTAMP-INTERVAL '15 minutes' ORDER BY created_at DESC LIMIT 1`,
-        [userId, input.idempotencyKey])).rows[0] as Row | undefined;
+          AND (created_at >= CURRENT_TIMESTAMP-INTERVAL '15 minutes' OR ($3::boolean AND modality='inventory_scan')) ORDER BY created_at DESC LIMIT 1`,
+        [userId, input.idempotencyKey, input.modality === "inventory_scan" && input.idempotencyKey.startsWith("inventory-photo:")])).rows[0] as Row | undefined;
         if (reusable) return { id: String(reusable.id), sessionId: String(reusable.session_id) };
       }
       await client.query(`INSERT INTO agent_runs

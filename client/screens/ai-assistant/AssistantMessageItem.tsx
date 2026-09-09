@@ -25,6 +25,7 @@ type AssistantMessageItemProps = {
   handleOpenEditModal: (messageId: string, card: DietRecordActionCard) => void;
   toggleInventoryScanItem: (messageId: string, itemId: string) => void;
   openInventoryScanEditor: (messageId: string, item: InventoryScanFood) => void;
+  undoInventoryScanCard: (messageId: string, card: InventoryScanCard) => void | Promise<void>;
   confirmInventoryScanCard: (messageId: string, card: InventoryScanCard) => void | Promise<void>;
   handleSaveToShoppingList: (messageId: string, card: DietRecordMissingCard) => void | Promise<void>;
   handleSendMessage: (text: string) => void | Promise<void>;
@@ -48,6 +49,7 @@ export function AssistantMessageItem({
   toggleInventoryScanItem,
   openInventoryScanEditor,
   confirmInventoryScanCard,
+  undoInventoryScanCard,
   handleSaveToShoppingList,
   handleSendMessage,
   onStartCooking,
@@ -359,13 +361,13 @@ export function AssistantMessageItem({
                             <View>
                               <Text className="text-xs font-black text-ink">食材识别确认</Text>
                               <Text className="mt-0.5 text-[9px] text-copy-muted">
-                                {msg.inventoryScanCard.status === "processing" ? "后台识别中，可停留查看进度" : `共 ${msg.inventoryScanCard.items.length} 项，可逐项修改`}
+                                {msg.inventoryScanCard.status === "processing" ? "后台识别中，可停留查看进度" : msg.inventoryScanCard.status === "undone" ? "本次入库已撤销" : msg.inventoryScanCard.status === "saved" ? "识别项目已保存" : `待确认 ${msg.inventoryScanCard.items.length} 项，可逐项修改`}
                               </Text>
                             </View>
                           </View>
                           <View className="rounded-full bg-surface px-2 py-1">
                             <Text className="text-[9px] font-bold text-brand">
-                              {msg.inventoryScanCard.status === "processing" ? "识别中" : msg.inventoryScanCard.status === "saved" ? "已入库" : "待确认"}
+                              {msg.inventoryScanCard.status === "processing" ? "识别中" : msg.inventoryScanCard.status === "undone" ? "已撤销" : msg.inventoryScanCard.status === "saved" ? "已入库" : "待确认"}
                             </Text>
                           </View>
                         </View>
@@ -409,7 +411,7 @@ export function AssistantMessageItem({
                                 <View className="flex-1">
                                   <Text className="text-[11px] font-black text-ink" numberOfLines={1}>{item.foodName}</Text>
                                   <Text className="mt-0.5 text-[9px] text-copy-muted" numberOfLines={1}>
-                                    {item.quantity} · {item.suggestedStorageLocation} · {item.estimatedExpireDays} 天
+                                    {item.quantity || "数量待确认"}{item.fieldEvidence?.quantity?.status === "estimated" ? "（估计）" : ""} · {item.suggestedStorageLocation || "位置待确认"} · {item.estimatedExpireDays == null ? "期限待确认" : `建议 ${item.estimatedExpireDays} 天（待核对）`}
                                   </Text>
                                 </View>
                                 {msg.inventoryScanCard?.status === "review" ? (
@@ -423,7 +425,8 @@ export function AssistantMessageItem({
                               </View>
                             ))}
 
-                            {msg.inventoryScanCard.status === "saved" ? (
+                            {msg.inventoryScanCard.canUndo ? <TouchableOpacity onPress={() => undoInventoryScanCard(msg.id, msg.inventoryScanCard!)} className="my-2 rounded-xl border border-line p-3"><Text className="text-center text-xs text-critical">撤销本次入库</Text></TouchableOpacity> : null}
+                            {msg.inventoryScanCard.status === "undone" ? <Text className="py-2 text-xs text-copy-muted">已撤销，可到食材库查看当前库存。</Text> : msg.inventoryScanCard.status === "saved" ? (
                               <TouchableOpacity
                                 onPress={() => onOpenInventory()}
                                 className="mt-1 flex-row items-center justify-center gap-1.5 rounded-xl bg-success-soft py-2.5"

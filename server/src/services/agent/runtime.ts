@@ -1,3 +1,8 @@
+import { mealPlanRequirementsSchema } from "@dietdigidose/contracts";
+import { recommendationsService } from "../../modules/recommendations/runtime.js";
+import { hasPermanentPreferenceIntent } from "./preferencePayload.js";
+import { kitchenPreferencesSchema, resolveKitchenPreferences, type KitchenPreferences } from "@dietdigidose/contracts";
+import { InventoryActionClarificationError } from "./inventoryPayload.js";
 import { Annotation, Command, END, START, StateGraph, interrupt } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { createAgent, tool, toolCallLimitMiddleware } from "langchain";
@@ -50,6 +55,7 @@ const SupervisorState = Annotation.Root({
   userId: Annotation<number>(),
   input: Annotation<AgentInput>(),
   goal: Annotation<string>(),
+  kitchenOverride: Annotation<KitchenPreferences>(),
   specialists: Annotation<Array<(typeof specialistNames)[number]>>(),
   outputs: Annotation<Record<string, unknown>>(),
   actions: Annotation<AgentActionProposal[]>(),
@@ -250,11 +256,12 @@ async function assertRunActive(runId: string) {
   if (!row || row.status === "cancelled") throw new Error("AGENT_RUN_CANCELLED");
 }
 
-async function publicContext(userId: number) {
-  return buildAIPromptMessages(await buildUserContext(userId)).map((message) => message.content).join("\n\n");
+async function publicContext(userId: number, override: KitchenPreferences = {}) {
+  return buildAIPromptMessages(await buildUserContext(userId), override).map((message) => message.content).join("\n\n");
 }
 
 const supervisorSchema = z.object({
+  kitchenOverride: kitchenPreferencesSchema.default({}),
   goal: z.string().min(1).max(1000),
   specialists: z.array(z.enum(specialistNames)).min(1).max(5),
   // Some OpenAI-compatible providers materialize optional string fields as
@@ -266,7 +273,9 @@ async function supervisorNode(state: SupervisorGraphState) {
   await assertRunActive(state.runId);
   await appendAgentEvent(state.runId, state.userId, "Supervisor", "routing_started", "Supervisor 正在分析目标并分派专业 Agent");
   const inputText = promptText(state.input);
-  const safetyBlock = findAllergyConflict(inputText, await buildUserContext(state.userId));
+  const storedContext = await buildUserContext(state.userId);
+  const routingContext = JSON.stringify(resolveKitchenPreferences(storedContext.healthProfile?.kitchen_constraints));
+  const safetyBlock = findAllergyConflict(inputText, storedContext);
   if (safetyBlock) {
     await appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_detected", `检测到已记录的过敏限制：${safetyBlock.allergyName}`, {
       allergyName: safetyBlock.allergyName,
@@ -292,12 +301,13 @@ async function supervisorNode(state: SupervisorGraphState) {
     model: await modelFor("SUPERVISOR"),
     tools: [],
     systemPrompt: structuredSystemPrompt(`你是食光烙记的 Supervisor。只负责识别用户目标并选择专业 Agent，不直接回答。
+kitchenOverride 只提取当前用户明确说出的本次人数、时长、常用餐次、地点、携带及冷藏/加热条件；未提及字段省略，不猜测。它仅影响当前请求，不代表长期设置已保存。
 可选 Agent：NutritionPlanningAgent（营养与餐单）、RecipeCookingAgent（菜谱与烹饪）、VisionAgent（图片）、VoiceAgent（音频）、OperationsAgent（业务动作）。
 涉及记录、保存、修改、删除、计划落库或采购清单时必须包含 OperationsAgent。图片/音频 Agent 已由系统强制加入。
 只有缺少的信息会实质改变安全性或无法继续完成任务时才填写 needsInput，并提出一个简短问题；普通偏好缺失应采用保守默认值。`, supervisorSchema),
   });
   let decision = await invokeStructured(
-    () => routingAgent.invoke({ messages: [{ role: "user", content: inputText }] }, { recursionLimit: 6 }),
+    () => routingAgent.invoke({ messages: [{ role: "user", content: `${inputText}\n已有备餐偏好（不必重复询问已知字段）：${routingContext}` }] }, { recursionLimit: 6 }),
     supervisorSchema,
     { runId: state.runId, userId: state.userId, agentName: "Supervisor", phase: "routing", model: await modelNameFor("SUPERVISOR") },
   );
@@ -326,15 +336,24 @@ async function supervisorNode(state: SupervisorGraphState) {
     specialists,
     supplementalInput: supplementalInput || null,
   });
-  return { goal: decision.goal, specialists, supplementalInput };
+  return { goal: decision.goal, specialists, supplementalInput, kitchenOverride: decision.kitchenOverride };
 }
 
-function nutritionTools(userId: number) {
+function nutritionTools(userId: number, override: KitchenPreferences = {}) {
   return [
-    tool(async () => buildUserContext(userId), {
+    tool(async () => {
+      const context = await buildUserContext(userId);
+      return { ...context, requestPreferenceOverrides: override,
+        effectiveKitchenPreferences: resolveKitchenPreferences(context.healthProfile?.kitchen_constraints, override) };
+    }, {
       name: "get_user_nutrition_context",
       description: "读取当前用户的健康目标、今日摄入、库存、过敏与饮食限制",
       schema: z.object({}),
+    }),
+    tool(async (args) => recommendationsService().cookingPlan(userId, { ...args, preferences: { ...args.preferences, ...override } }), {
+      name: "calculate_meal_plan_requirements",
+      description: "多餐规划先调用：分配未保留待吃餐，计算补做份量、候选菜谱和共享原料预算；仅为方案草案，必须继续验证保鲜、过敏、加热、原料及整套耗时，不代表方案可执行，不扣库存或记录摄入。",
+      schema: mealPlanRequirementsSchema,
     }),
     tool(async (args) => executeAIQueryTool(userId, "lookup_food_nutrition", args), {
       name: "lookup_food_nutrition",
@@ -378,12 +397,13 @@ const visionChatResultSchema = z.object({
 async function runNutritionAgent(state: SupervisorGraphState): Promise<SpecialistOutput> {
   await appendAgentEvent(state.runId, state.userId, "NutritionPlanningAgent", "agent_started", "营养规划 Agent 正在分析约束");
   const agent = createAgent({
-    model: await modelFor("NUTRITION"), tools: nutritionTools(state.userId),
+    model: await modelFor("NUTRITION"), tools: nutritionTools(state.userId, state.kitchenOverride),
     middleware: [toolCallLimitMiddleware({ runLimit: 6 })],
     systemPrompt: structuredSystemPrompt(`你是 NutritionPlanningAgent。只提供营养分析、餐单内容和结构化产物，不执行写操作。
+本次条件优先于长期设置，长期设置优先于系统回退。冷藏/加热 false 表示不具备，null 或缺失表示未知；不得宣称依赖这些条件的方案符合要求，需只询问相关缺项。
 严格核对过敏、用药、疾病、今日摄入和目标；数据不足时明确指出。所有营养值标记为估算。`, specialistOutputSchema),
   });
-  const context = await publicContext(state.userId);
+  const context = await publicContext(state.userId, state.kitchenOverride);
   const result = await invokeStructured(
     () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${context}` }] }, { recursionLimit: 12 }),
     specialistOutputSchema,
@@ -400,9 +420,10 @@ async function runRecipeAgent(state: SupervisorGraphState): Promise<SpecialistOu
     model: await modelFor("RECIPE"), tools: recipeTools(state.userId),
     middleware: [toolCallLimitMiddleware({ runLimit: 6 })],
     systemPrompt: structuredSystemPrompt(`你是 RecipeCookingAgent。只提供菜谱、食材替换、火候与食品安全建议，不执行写操作。
+本次备餐条件优先于长期设置。冷藏/加热 false 表示不具备，未知条件不得视为具备；不能把不满足条件的方案标为符合。
 优先使用平台已审核菜谱和用户现有厨具；步骤必须可执行并包含时间或火候。`, specialistOutputSchema),
   });
-  const context = await publicContext(state.userId);
+  const context = await publicContext(state.userId, state.kitchenOverride);
   const result = await invokeStructured(
     () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${context}` }] }, { recursionLimit: 12 }),
     specialistOutputSchema,
@@ -421,7 +442,7 @@ async function runVisionAgent(state: SupervisorGraphState): Promise<SpecialistOu
   const modalityPrompt = state.input.modality === "receipt"
     ? "识别小票中的食品项目、数量、价格；仅返回 JSON，格式为 {items:[{name,quantity,price,category}],confidence,warnings}。"
     : state.input.modality === "inventory_scan"
-      ? "识别图片中的食材；仅返回 JSON，格式为 {items:[{foodName,quantity,suggestedStorageLocation,estimatedExpireDays}],confidence,warnings}。"
+      ? "识别图片中的食材；仅返回 JSON，格式为 {items:[{foodName,quantity,suggestedStorageLocation,estimatedExpireDays,confidence}],confidence,warnings}。数量无法可靠识别时 quantity 返回空字符串；存放位置无法确认时 suggestedStorageLocation 返回 null；没有可靠到期依据时 estimatedExpireDays 返回 null。不得用固定的 1 份、冷藏或 7 天补齐未知信息。期限推算属于建议，在 warnings 中说明依据与不确定性。"
       : isChatAttachment
         ? `用户问题：${state.input.prompt || "请描述并分析这张图片"}。先客观观察图片，再提取回答问题所需的信息；不确定的内容必须标注。只返回严格 JSON，不要使用 Markdown。输出必须符合以下 JSON Schema：${JSON.stringify(z.toJSONSchema(visionChatResultSchema))}`
         : `${state.input.prompt || "识别食物与分量并估算营养"}。只返回严格 JSON，不要使用 Markdown 或附加说明。输出必须符合以下 JSON Schema：${JSON.stringify(z.toJSONSchema(visionFoodResultSchema))}`;
@@ -464,6 +485,7 @@ async function runVoiceAgent(state: SupervisorGraphState): Promise<SpecialistOut
 async function dispatchNode(state: SupervisorGraphState) {
   await assertRunActive(state.runId);
   const specialistSet = new Set(state.specialists);
+  let kitchenOverride = state.kitchenOverride || {};
   const mediaEntries: Array<readonly [string, SpecialistOutput]> = [];
   if (specialistSet.has("VisionAgent")) mediaEntries.push(["VisionAgent", await runVisionAgent(state)] as const);
   if (specialistSet.has("VoiceAgent")) mediaEntries.push(["VoiceAgent", await runVoiceAgent(state)] as const);
@@ -473,7 +495,8 @@ async function dispatchNode(state: SupervisorGraphState) {
     const routingAgent = createAgent({
       model: await modelFor("SUPERVISOR"), tools: [],
       systemPrompt: structuredSystemPrompt(`你是 Supervisor。根据视觉或语音识别结果选择后续专业 Agent：NutritionPlanningAgent、RecipeCookingAgent、OperationsAgent。
-只有用户明确要求保存、记录、更新或删除数据时才选择 OperationsAgent。不要再次选择 VisionAgent 或 VoiceAgent。`, supervisorSchema),
+只有用户明确要求保存、记录、更新或删除数据时才选择 OperationsAgent。不要再次选择 VisionAgent 或 VoiceAgent。
+kitchenOverride 只提取用户语音明确指定的本次备餐条件，缺少字段省略，未知条件用 null，不猜测；本次覆盖不会保存到长期档案。`, supervisorSchema),
     });
     const recognized = Object.fromEntries(mediaEntries);
     const routed = await invokeStructured(
@@ -481,6 +504,7 @@ async function dispatchNode(state: SupervisorGraphState) {
       supervisorSchema,
       { runId: state.runId, userId: state.userId, agentName: "Supervisor", phase: "media_routing", model: await modelNameFor("SUPERVISOR") },
     );
+    kitchenOverride = { ...kitchenOverride, ...routed.kitchenOverride };
     for (const specialist of routed.specialists) specialistSet.add(specialist);
     await appendAgentEvent(state.runId, state.userId, "Supervisor", "media_routing_completed", `识别后分派：${[...specialistSet].join("、")}`);
   }
@@ -489,6 +513,7 @@ async function dispatchNode(state: SupervisorGraphState) {
   const mediaArtifacts: AgentArtifact[] = mediaEntries.flatMap(([, output]) => output.artifacts || []);
   const downstreamState = {
     ...state,
+    kitchenOverride,
     specialists: [...specialistSet],
     outputs: { ...state.outputs, ...mediaOutputs },
     artifacts: [...state.artifacts, ...mediaArtifacts],
@@ -501,7 +526,7 @@ async function dispatchNode(state: SupervisorGraphState) {
   const outputs = { ...state.outputs, ...Object.fromEntries(entries) };
   const artifacts = [...state.artifacts, ...entries.flatMap(([, output]) => output.artifacts || [])];
   const transcript = (outputs.VoiceAgent as { transcript?: string } | undefined)?.transcript;
-  return { specialists: [...specialistSet], outputs, artifacts, transcript };
+  return { specialists: [...specialistSet], outputs, artifacts, transcript, kitchenOverride };
 }
 
 async function preflightPolicyNode(state: SupervisorGraphState) {
@@ -560,7 +585,7 @@ async function specialistResultPolicyNode(state: SupervisorGraphState) {
 
 const operationSchema = z.object({
   actions: z.array(z.object({
-    actionType: z.enum(["create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item", "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item", "update_inventory_item", "consume_inventory_items", "add_kitchenware_item", "submit_recipe", "record_health_log"]),
+    actionType: z.enum(["create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item", "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item", "update_inventory_item", "consume_inventory_items", "produce_meal", "record_prepared_meal_event", "add_kitchenware_item", "submit_recipe", "update_kitchen_preferences", "record_health_log"]),
     summary: z.string().min(1).max(300),
     payload: z.record(z.string(), z.unknown()),
   })).max(150).default([]),
@@ -574,21 +599,31 @@ async function operationsNode(state: SupervisorGraphState) {
     return { actions: [], outputs: { ...state.outputs, PolicyGate: { warning } } };
   }
   await appendAgentEvent(state.runId, state.userId, "OperationsAgent", "agent_started", "业务操作 Agent 正在生成类型化动作");
+  const mealContext = await buildUserContext(state.userId);
+  const inventoryContext = mealContext.inventory;
   const agent = createAgent({
     model: await modelFor("OPERATIONS"), tools: [],
     systemPrompt: structuredSystemPrompt(`你是 OperationsAgent。只根据用户明确表达的意图生成业务动作，不补充用户未要求的写入。
 餐单和采购新增/更新可直接执行；删除、饮食打卡、库存、厨具、菜谱和健康记录必须形成高风险提案。
+制作完成用 produce_meal，payload 是 {recipe_id?,inventory_consumptions?:[{item_id,version,mode,amount_value?,unit?}],production:{food_name,produced_servings,eaten_servings,nutrition_per_serving?,planned_date?,meal_type?,queue_item_id?,queue_version?,plan_item_id?,plan_version?}}。只有本人明确实际吃的份量才填 eaten_servings，否则为 0；未知每份营养留空，不能根据多人产出猜测个人摄入。已有待吃餐食用、丢弃或延期使用 record_prepared_meal_event，payload 为 {mealId,version,type:"eat"|"discard"|"reschedule",servings?,recorded_at?,planned_date?,meal_type?}；延期不改变份量。不得把制作或已有关联待吃餐再次用 record_diet_meal 记账；对象不明只追问，不任选同名餐。
+库存新增/修正使用 {name?,itemId?,version?,quantity?,quantityValue?,quantityUnit?,expirationDate?,location?}，修正必须带读取到的批次 ID 和版本；数量修正为剩余量。消耗使用 {reason:"used"|"discarded",items:[{itemId,version,mode:"amount"|"all",amountValue?,unit?}]}，部分使用必须提供数量和单位；仅明确全部用完才用 all。单位为 g/kg/ml/l/piece/serving/bag/box/bottle/can，不将袋自动换算为克。批次重名、数量或单位不明时不提写入动作，由最终回答只追问缺失条件。不得猜测 ID、版本或把丢弃记为饮食。
+长期厨房偏好使用 update_kitchen_preferences，payload 为 {scope:"persistent",preferences:{...}}，preferences 字段使用 kitchen_constraints 的原有命名。仅用户明确说以后、长期或设为默认时提案，必须确认后保存；今天、本次人数或条件仅使用本次覆盖，禁止形成长期修改提案。只包含明确改动字段，不补齐未知字段，不触碰过敏、忌口。
+用户说待吃餐“这份留着”时使用 record_prepared_meal_event 的 type:"reschedule",is_reserved:true；解除保留为 false。保留不改变份量，不算食用。
 字段使用 camelCase。餐单 create_meal_plan payload 为 {title,startDate,endDate,constraints,items:[{date,mealType,title,ingredients,steps,calories,protein,carbs,fat}]}；采购 add_shopping_items payload 为 {items:[{name,amount,category}]}；饮食打卡 record_diet_meal payload 必须为 {foodName,mealType,amount,recordedAt?,recordedTime?,calories?,protein?,carbs?,fat?}，禁止使用 dishName、portion 或 date 代替这些字段。`, operationSchema),
   });
   const result = await invokeStructured(
-    () => agent.invoke({ messages: [{ role: "user", content: `用户完整请求：${requestText(state)}\n目标：${state.goal}\n专业 Agent 结果：${JSON.stringify(state.outputs)}` }] }, { recursionLimit: 6 }),
+    () => agent.invoke({ messages: [{ role: "user", content: `用户完整请求：${requestText(state)}\n目标：${state.goal}\n专业 Agent 结果：${JSON.stringify(state.outputs)}\n本次有效备餐条件：${JSON.stringify(resolveKitchenPreferences(mealContext.healthProfile?.kitchen_constraints, state.kitchenOverride))}\n当前库存批次：${JSON.stringify(inventoryContext)}\n待吃餐：${JSON.stringify(mealContext.preparedMeals || [])}` }] }, { recursionLimit: 6 }),
     operationSchema,
     { runId: state.runId, userId: state.userId, agentName: "OperationsAgent", phase: "operations", model: await modelNameFor("OPERATIONS") },
   );
   let actions: AgentActionProposal[];
   try {
-    actions = validateAgentActions(result.actions || [], await buildUserContext(state.userId));
+    actions = validateAgentActions((result.actions || []).filter(action => action.actionType !== "update_kitchen_preferences"
+      || hasPermanentPreferenceIntent(requestText(state) + "\n" + (state.transcript || ""))), await buildUserContext(state.userId));
   } catch (error) {
+    if (error instanceof InventoryActionClarificationError) {
+      return { actions: [], outputs: { ...state.outputs, PolicyGate: { warning: error.message } } };
+    }
     if (!(error instanceof AgentSafetyConflictError)) throw error;
     await appendAgentEvent(state.runId, state.userId, "PolicyGate", "health_constraint_blocked", "业务动作命中过敏限制，已在审批和写入前阻断", {
       allergyName: error.block.allergyName,

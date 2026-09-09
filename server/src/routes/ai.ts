@@ -1,3 +1,5 @@
+import { inventoryPhotoKey } from "../modules/inventory/scanIdentity.js";
+import { normalizeInventoryScanItems } from "@dietdigidose/contracts";
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
@@ -42,13 +44,6 @@ router.use((req, res, next) => {
   return aiRateLimit(req, res, next);
 });
 
-type InventoryScanItem = {
-  foodName: string;
-  quantity: string;
-  suggestedStorageLocation: "冷藏" | "冷冻" | "常温";
-  estimatedExpireDays: number;
-};
-
 type HomeRecommendation = {
   title: string;
   tag: string;
@@ -88,19 +83,6 @@ const parseHomeRecommendations = (reply: string): HomeRecommendation[] => {
   }
   return [];
 };
-
-const normalizeInventoryScanItems = (raw: unknown): InventoryScanItem[] =>
-  (Array.isArray(raw) ? raw : [])
-    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && typeof item.foodName === "string" && item.foodName.trim().length > 0)
-    .slice(0, 30)
-    .map((item) => ({
-      foodName: String(item.foodName).trim(),
-      quantity: typeof item.quantity === "string" && item.quantity.trim() ? item.quantity.trim() : "1份",
-      suggestedStorageLocation: ["冷藏", "冷冻", "常温"].includes(String(item.suggestedStorageLocation))
-        ? item.suggestedStorageLocation as InventoryScanItem["suggestedStorageLocation"]
-        : "冷藏",
-      estimatedExpireDays: Math.max(1, Math.min(Number(item.estimatedExpireDays) || 7, 365)),
-    }));
 
 export const recordChatTurn = async (turn: ChatTurnAudit) => {
   try { return await aiConversationsService().recordTurn(turn); }
@@ -313,8 +295,8 @@ router.post("/inventory-scan-jobs", validateBody(aiImageSchema), async (req: Aut
   }
 
   try {
-    const response = await startSupervisorRun(req.userId!, { modality: "inventory_scan", source: "inventory", image, prompt: "识别所有可加入家庭库存的食品条目、数量、保存位置与保守保质期" }, 0);
-    return res.status(202).json({ mode: "agent", run: response.run, jobId: response.run.id, status: "queued", deduplicated: false });
+    const response = await startSupervisorRun(req.userId!, { modality: "inventory_scan", source: "inventory", image, idempotencyKey: inventoryPhotoKey(image), prompt: "识别所有可加入家庭库存的食品条目、数量、保存位置与保守保质期" }, 0);
+    return res.status(202).json({ mode: "agent", run: response.run, jobId: response.run.id, status: response.run.status === "completed" ? "completed" : "queued" });
   } catch (error) {
     console.error("[Agent Inventory Scan Start Error]", error);
     return res.status(500).json({ error: "创建识别任务失败", code: "INVENTORY_AGENT_START_FAILED" });

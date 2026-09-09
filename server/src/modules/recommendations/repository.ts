@@ -14,6 +14,7 @@ export type RecommendationRequestWrite = {
 };
 
 export interface RecommendationsRepository {
+  preparedMeals(userId: number): Promise<Row[]>;
   profile(userId: number): Promise<Row | null>;
   inventory(userId: number): Promise<Row[]>;
   kitchenware(userId: number): Promise<Row[]>;

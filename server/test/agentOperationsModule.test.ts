@@ -1,3 +1,5 @@
+import { InventoryService } from "../src/modules/inventory/service.js";
+import { SqliteInventoryRepository } from "../src/modules/inventory/sqliteRepository.js";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import Database from "better-sqlite3";
@@ -78,4 +80,71 @@ describe("Agent operations module", () => {
       database.close();
     }
   });
+});
+
+test("Agent inventory uses quantity transactions, versions, history and rollback", async (t) => {
+  const db = new Database(":memory:");
+  t.after(() => db.close());
+  db.exec(`
+    CREATE TABLE agent_runs(id TEXT PRIMARY KEY,user_id INTEGER,status TEXT);
+    CREATE TABLE agent_actions(id TEXT PRIMARY KEY,run_id TEXT,user_id INTEGER,action_type TEXT,status TEXT,
+      before_json TEXT,result_json TEXT,executed_at TEXT,undone_at TEXT,updated_at TEXT);
+    CREATE TABLE inventory_items(id INTEGER PRIMARY KEY,user_id INTEGER,food_name TEXT,category TEXT,quantity TEXT,
+      expiration_date TEXT,storage_location TEXT,image_url TEXT,is_available INTEGER DEFAULT 1,
+      quantity_value REAL,quantity_unit TEXT,package_size_value REAL,package_size_unit TEXT,batch_code TEXT,
+      version INTEGER DEFAULT 1,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,deleted_at TEXT);
+    CREATE TABLE inventory_change_logs(id INTEGER PRIMARY KEY,user_id INTEGER,inventory_item_id INTEGER,
+      action TEXT,source TEXT,quantity_before REAL,quantity_after REAL,quantity_unit TEXT,delta_value REAL,
+      idempotency_key TEXT,metadata_json TEXT DEFAULT '{}',created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,idempotency_key));
+    CREATE TABLE inventory_consumption_requests(user_id INTEGER,idempotency_key TEXT,result_json TEXT,
+      UNIQUE(user_id,idempotency_key));
+    INSERT INTO agent_runs VALUES('inventory-run',42,'running');
+  `);
+  const repo = new SqliteAgentOperationsRepository(db);
+  let sequence = 0;
+  function proposal(actionType: "add_inventory_item" | "update_inventory_item" | "consume_inventory_items", payload: Record<string, unknown>) {
+    const id = `inventory-action-${++sequence}`;
+    db.prepare("INSERT INTO agent_actions(id,run_id,user_id,action_type,status) VALUES(?,'inventory-run',42,?,'proposed')").run(id, actionType);
+    return { id, actionType, payload, riskLevel: "high" as const, summary: "库存操作" };
+  }
+  const run = (actions: ReturnType<typeof proposal>[]) => repo.executeActions(42, "inventory-run", actions);
+  const row = () => db.prepare("SELECT quantity,quantity_value,quantity_unit,is_available,version FROM inventory_items WHERE id=1").get();
+  await run([proposal("add_inventory_item", { name: "鸡蛋", quantity: "十枚", expirationDate: "2026-09-20" })]);
+  assert.deepEqual(row(), { quantity: "10个", quantity_value: 10, quantity_unit: "piece", is_available: 1, version: 1 });
+  const consume = proposal("consume_inventory_items", { items: [{ itemId: 1, version: 1, mode: "amount", amountValue: 2, unit: "piece" }] });
+  const result = await run([consume]);
+  assert.deepEqual(await run([consume]), result);
+  assert.deepEqual(row(), { quantity: "8个", quantity_value: 8, quantity_unit: "piece", is_available: 1, version: 2 });
+  const discard = proposal("consume_inventory_items", { reason: "discarded", items: [{ itemId: 1, version: 2, mode: "amount", amountValue: 2, unit: "piece" }] });
+  await run([discard]);
+  const history = db.prepare("SELECT source,metadata_json FROM inventory_change_logs WHERE action='consume_partial' ORDER BY id").all() as Array<{ source: string; metadata_json: string }>;
+  assert.equal(history.length, 2);
+  assert.equal(history[1].source, "ai");
+  assert.equal(JSON.parse(history[1].metadata_json).reason, "discarded");
+  await assert.rejects(() => run([proposal("consume_inventory_items", { itemIds: [1] })]), /确认/);
+  for (const item of [
+    { itemId: 1, version: 2, mode: "amount", amountValue: 1, unit: "piece" },
+    { itemId: 1, version: 3, mode: "amount", amountValue: 1, unit: "g" },
+    { itemId: 1, version: 3, mode: "amount", amountValue: 7, unit: "piece" },
+    { itemId: 999, version: 1, mode: "all" },
+  ]) await assert.rejects(() => run([proposal("consume_inventory_items", { items: [item] })]));
+  await assert.rejects(() => run([
+    proposal("consume_inventory_items", { items: [{ itemId: 1, version: 3, mode: "amount", amountValue: 1, unit: "piece" }] }),
+    proposal("update_inventory_item", { itemId: 999, version: 1, quantity: "5个" }),
+  ]));
+  assert.deepEqual(row(), { quantity: "6个", quantity_value: 6, quantity_unit: "piece", is_available: 1, version: 3 });
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_consumption_requests").get() as { n: number }).n, 2);
+  await run([proposal("update_inventory_item", { itemId: 1, version: 3, quantity: "半袋" })]);
+  assert.deepEqual(row(), { quantity: "0.5袋", quantity_value: 0.5, quantity_unit: "bag", is_available: 1, version: 4 });
+  const inventoryService = new InventoryService(new SqliteInventoryRepository(db));
+  const preview = await inventoryService.previewConsumption(42, { items: [{ food_name: "鸡蛋", amount_value: 1, unit: "bag" }] });
+  assert.equal(preview.items[0].covered_value, 0.5);
+  assert.equal(preview.items[0].fully_covered, false);
+  assert.equal(preview.items[0].deductions[0].version, 4);
+  await run([proposal("update_inventory_item", { itemId: 1, version: 4, quantity: "数量未知" })]);
+  assert.deepEqual(row(), { quantity: "数量未知", quantity_value: null, quantity_unit: null, is_available: 1, version: 5 });
+  await assert.rejects(() => run([proposal("consume_inventory_items", { items: [{ itemId: 1, version: 5, mode: "amount", amountValue: 1, unit: "piece" }] })]), /结构化数量/);
+  await run([proposal("consume_inventory_items", { items: [{ itemId: 1, version: 5, mode: "all" }] })]);
+  assert.deepEqual(row(), { quantity: "数量未知", quantity_value: null, quantity_unit: null, is_available: 0, version: 6 });
 });

@@ -1,3 +1,4 @@
+import { mealProductionSchema, kitchenPreferencesSchema } from "@dietdigidose/contracts";
 import { z } from "zod";
 import { inventoryConsumptionItemSchema } from "@dietdigidose/contracts";
 
@@ -132,8 +133,11 @@ export const cookingCompletionSchema = z.object({
   recipe_id: z.number().int().positive().nullable().optional(),
   inventory_item_ids: z.array(z.number().int().positive()).max(100).default([]),
   inventory_consumptions: z.array(inventoryConsumptionItemSchema).max(100).default([]),
-  diet_record: dietRecordCreateSchema,
+  diet_record: dietRecordCreateSchema.optional(),
+  production: mealProductionSchema.optional(),
 }).strict().superRefine((value, context) => {
+  if (Boolean(value.production) === Boolean(value.diet_record)) context.addIssue({ code: "custom", path: ["production"], message: "请提供制作分配或旧版饮食记录，不能同时提交" });
+  if (new Set(value.inventory_consumptions.map(item => item.item_id)).size !== value.inventory_consumptions.length) context.addIssue({ code: "custom", path: ["inventory_consumptions"], message: "同一批次不能重复扣减" });
   if (value.inventory_item_ids.length && value.inventory_consumptions.length) {
     context.addIssue({ code: "custom", path: ["inventory_consumptions"], message: "不能同时使用旧版整项扣减和结构化扣减" });
   }
@@ -212,13 +216,7 @@ export const healthProfileSchema = z.object({
   medical_notes: z.string().trim().max(1000).optional(),
   dietary_restrictions: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
   disliked_foods: z.string().trim().max(1000).optional(),
-  kitchen_constraints: z.object({
-    meal_time_minutes: z.number().int().min(5).max(300).nullable().optional(),
-    budget_per_meal: z.number().finite().min(0).max(100_000).nullable().optional(),
-    cooking_level: z.enum(["beginner", "intermediate", "advanced"]).nullable().optional(),
-    servings: z.number().int().min(1).max(30).nullable().optional(),
-    eating_out_frequency: z.enum(["rarely", "sometimes", "often"]).nullable().optional(),
-  }).strict().optional(),
+  kitchen_constraints: kitchenPreferencesSchema.optional(),
   nutrition_targets: z.object({
     calories_kcal: z.number().finite().min(500).max(10_000).nullable().optional(),
     protein_g: z.number().finite().min(0).max(1000).nullable().optional(),
@@ -427,8 +425,8 @@ const agentActionEditSchema = z.object({
   actionType: z.enum([
     "create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item",
     "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item",
-    "update_inventory_item", "consume_inventory_items", "add_kitchenware_item", "submit_recipe",
-    "record_health_log",
+    "update_inventory_item", "consume_inventory_items", "produce_meal", "record_prepared_meal_event", "add_kitchenware_item", "submit_recipe",
+    "update_kitchen_preferences", "record_health_log",
   ]),
   summary: z.string().trim().min(1).max(300),
   payload: z.record(z.string(), z.unknown()),
@@ -503,6 +501,8 @@ export const mealPlanShoppingSchema = mealPlanExecutionBaseSchema;
 export const mealPlanQueueSchema = mealPlanExecutionBaseSchema;
 export const mealPlanCompleteSchema = mealPlanExecutionBaseSchema.extend({
   dietRecordId: z.number().int().positive().optional(),
+  production: mealProductionSchema.optional(),
+  inventory_consumptions: z.array(inventoryConsumptionItemSchema).max(100).optional(),
 }).strict();
 
 export const householdShoppingCreateSchema = z.object({

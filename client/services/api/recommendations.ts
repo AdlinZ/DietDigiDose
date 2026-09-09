@@ -1,3 +1,4 @@
+import { replaceCookingPlanItemSchema, type ReplaceCookingPlanItemInput, cookingPlanDraftSchema, mealPlanRequirementsSchema, type MealPlanRequirementsInput, type CookingPlanDraft } from "@dietdigidose/contracts";
 import { requestJson, type ApiFetch } from "./client";
 
 export type RecommendationSurface = "home" | "inventory" | "ai" | "meal_plan";
@@ -14,6 +15,8 @@ export interface RecipeRecommendationItem<TRecipe> {
     matchedIngredients: Array<{ name: string; amount?: string }>;
     expiringIngredients: Array<{ name: string; daysLeft: number }>;
     missingIngredients: Array<{ name: string; amount?: string }>;
+    uncertainIngredients?: Array<{ name: string; amount?: string }>;
+    nameMatchedIngredients?: Array<{ name: string; amount?: string }>;
     timeBudgetMinutes: number | null;
     estimatedTimeMinutes: number;
     nutritionFit: number;
@@ -37,6 +40,12 @@ export interface RecipeRecommendationPage<TRecipe> {
 }
 
 export const recommendationsApi = {
+  cookingPlan: (apiFetch: ApiFetch, input: MealPlanRequirementsInput) => requestJson<CookingPlanDraft>(apiFetch, "/api/v1/recommendations/cooking-plan", {
+    method: "POST", body: JSON.stringify(mealPlanRequirementsSchema.parse(input)),
+  }).then(value => cookingPlanDraftSchema.parse(value)),
+  replaceCookingItem: (apiFetch: ApiFetch, input: ReplaceCookingPlanItemInput) => requestJson<{ draft: CookingPlanDraft; conflicts: string[] }>(apiFetch, "/api/v1/recommendations/cooking-plan/replace", {
+    method: "POST", body: JSON.stringify(replaceCookingPlanItemSchema.parse(input)),
+  }).then(value => ({ ...value, draft: cookingPlanDraftSchema.parse(value.draft) })),
   recipes: <TRecipe>(apiFetch: ApiFetch, input: {
     surface: RecommendationSurface;
     category?: string;

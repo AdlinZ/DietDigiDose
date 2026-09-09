@@ -8,8 +8,9 @@ export class SqliteAiContextRepository implements AiContextRepository {
 
   async load(userId: number, date: string): Promise<AiContextRows> {
     const user = this.database.prepare("SELECT username, daily_calories_target FROM users WHERE id = ?").get(userId) as Row | undefined;
-    const inventory = this.database.prepare(`SELECT food_name, quantity, expiration_date, storage_location FROM inventory_items
-      WHERE user_id = ? AND is_available = 1 ORDER BY expiration_date ASC LIMIT 15`).all(userId) as Row[];
+    const inventory = this.database.prepare(`SELECT id, version, quantity_value, quantity_unit, batch_code, food_name, quantity, expiration_date, storage_location FROM inventory_items
+      WHERE user_id = ? AND is_available = 1 AND deleted_at IS NULL ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date ASC LIMIT 15`).all(userId) as Row[];
+    const preparedMeals = this.database.prepare("SELECT * FROM prepared_meals WHERE user_id=? AND remaining_servings>0 ORDER BY produced_at LIMIT 30").all(userId) as Row[];
     const kitchenware = this.database.prepare(`SELECT name, category, status FROM kitchenware_items
       WHERE user_id = ? AND deleted_at IS NULL AND status <> '维修中' ORDER BY updated_at DESC LIMIT 20`).all(userId) as Row[];
     const todayDiet = this.database.prepare(`SELECT meal_type, food_name, calories, protein, carbs, fat FROM diet_records
@@ -20,7 +21,7 @@ export class SqliteAiContextRepository implements AiContextRepository {
       medical_notes, dietary_restrictions_json, disliked_foods, kitchen_constraints_json, nutrition_targets_json
       FROM user_health_profiles WHERE user_id = ?`).get(userId) as Row | undefined;
     const setting = this.database.prepare("SELECT value FROM system_settings WHERE key = 'AI_SYSTEM_PROMPT'").get() as { value: string } | undefined;
-    return { user: user || null, inventory, kitchenware, todayDiet, latestHealth: latestHealth || null,
+    return { user: user || null, inventory, preparedMeals, kitchenware, todayDiet, latestHealth: latestHealth || null,
       healthProfile: healthProfile || null, personaPrompt: setting?.value || "" };
   }
 }

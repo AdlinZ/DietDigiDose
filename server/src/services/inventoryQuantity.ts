@@ -1,3 +1,4 @@
+import { currentDateKey } from "../utils/date.js";
 import type Database from "better-sqlite3";
 
 export const INVENTORY_UNITS = ["g", "kg", "ml", "l", "piece", "serving", "bag", "box", "bottle", "can"] as const;
@@ -205,7 +206,7 @@ export function buildFefoConsumptionPreview(
     SELECT id, food_name, quantity_value, quantity_unit, expiration_date, batch_code, version
     FROM inventory_items
     WHERE user_id = ? AND is_available = 1 AND deleted_at IS NULL
-    ORDER BY expiration_date ASC, id ASC
+    ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date ASC, id ASC
   `).all(userId) as Array<{
     id: unknown;
     food_name: unknown;
@@ -216,11 +217,12 @@ export function buildFefoConsumptionPreview(
     version: unknown;
   }>;
 
-  return buildFefoConsumptionPreviewFromCandidates(inventory, requests);
+  return buildFefoConsumptionPreviewFromCandidates(inventory, requests, currentDateKey());
 }
 
 export function buildFefoConsumptionPreviewFromCandidates(
   inventory: Array<{
+    quantity_evidence_status?: "known" | "estimated" | "unknown";
     id: unknown;
     food_name: unknown;
     quantity_value: unknown;
@@ -230,25 +232,39 @@ export function buildFefoConsumptionPreviewFromCandidates(
     version: unknown;
   }>,
   requests: Array<{ food_name: string; amount_value: number; unit: InventoryUnit }>,
+  asOfDate?: string,
 ) {
+  const available = new Map(inventory.map(item => [Number(item.id), Number(item.quantity_value)]));
   return requests.map((request) => {
     let remaining = request.amount_value;
+    let nameAvailable = false;
+    let uncertainQuantity = false;
     const deductions: Array<Record<string, unknown>> = [];
     const requestName = normalizeFoodName(request.food_name);
     for (const item of inventory) {
       if (remaining <= 0.0001) break;
+      if (asOfDate && typeof item.expiration_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.expiration_date) && item.expiration_date < asOfDate) continue;
       const candidateName = normalizeFoodName(String(item.food_name));
       if (!(candidateName.includes(requestName) || requestName.includes(candidateName))) continue;
+      nameAvailable = true;
+      if (item.quantity_evidence_status && item.quantity_evidence_status !== "known") { uncertainQuantity = true; continue; }
       const unit = item.quantity_unit as InventoryUnit | null;
-      const value = Number(item.quantity_value);
-      if (!unit || !INVENTORY_UNITS.includes(unit) || !Number.isFinite(value) || value <= 0) continue;
+      const value = available.get(Number(item.id)) ?? 0;
+      if (item.quantity_value == null || !unit || !INVENTORY_UNITS.includes(unit) || !Number.isFinite(value)) {
+        uncertainQuantity = true;
+        continue;
+      }
+      if (value <= 0) continue;
       let availableInRequestUnit: number;
       try {
         availableInRequestUnit = convert(value, unit, request.unit);
       } catch {
+        uncertainQuantity = true;
         continue;
       }
       const amount = Math.min(remaining, availableInRequestUnit);
+      const allocated = roundQuantity(convert(amount, request.unit, unit));
+      available.set(Number(item.id), roundQuantity(value - allocated));
       deductions.push({
         item_id: Number(item.id),
         version: Number(item.version),
@@ -256,8 +272,8 @@ export function buildFefoConsumptionPreviewFromCandidates(
         expiration_date: String(item.expiration_date),
         batch_code: item.batch_code ? String(item.batch_code) : null,
         mode: amount >= availableInRequestUnit - 0.0001 ? "all" : "amount",
-        amount_value: roundQuantity(amount),
-        unit: request.unit,
+        amount_value: allocated,
+        unit,
       });
       remaining = roundQuantity(remaining - amount);
     }
@@ -268,6 +284,9 @@ export function buildFefoConsumptionPreviewFromCandidates(
       covered_value: roundQuantity(request.amount_value - remaining),
       missing_value: Math.max(0, remaining),
       fully_covered: remaining <= 0.0001,
+      name_available: nameAvailable,
+      quantity_status: remaining <= 0.0001 ? "sufficient" as const : uncertainQuantity ? "unknown" as const
+        : nameAvailable ? "insufficient" as const : "unavailable" as const,
       deductions,
     };
   });

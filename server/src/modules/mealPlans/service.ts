@@ -1,3 +1,4 @@
+import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@dietdigidose/contracts";
 import { MealPlansError } from "./errors.js";
 import type { MealPlansRepository } from "./repository.js";
 import type { MealPlanCompleteInput, MealPlanExecutionInput, MealPlanItemUpdateInput, MealPlanUpdateInput } from "./types.js";
@@ -7,6 +8,23 @@ export class MealPlansService {
 
   constructor(repository: MealPlansRepository) { this.repository = repository; }
 
+  async activateDraft(userId: number, id: string, version: number) {
+    const result = await this.repository.activateDraft(userId, id, version);
+    if (result.kind === "not_found") throw new MealPlansError(404, "草案不存在", "MEAL_PLAN_NOT_FOUND");
+    if (result.kind !== "updated") throw new MealPlansError(409, "草案有未解决餐次、版本变化或菜谱已不可用，请重新核对", "MEAL_PLAN_ACTIVATION_CONFLICT");
+    return result.value;
+  }
+  async updateDraft(userId: number, id: string, input: UpdateCookingPlanDraftInput) {
+    const result = await this.repository.updateDraft(userId, id, input);
+    if (result.kind === "not_found") throw new MealPlansError(404, "草案不存在", "MEAL_PLAN_NOT_FOUND");
+    if (result.kind !== "updated") throw new MealPlansError(409, "草案已变化或已进入执行，请刷新后重试", "MEAL_PLAN_VERSION_CONFLICT");
+    return result.value;
+  }
+  async saveDraft(userId: number, input: SaveCookingPlanDraftInput) {
+    const value = await this.repository.saveDraft(userId, input);
+    if (!value) throw new MealPlansError(409, "保存编号已被使用，请刷新后重新保存", "MEAL_PLAN_DRAFT_CONFLICT");
+    return value;
+  }
   list(userId: number, includeArchived: boolean) { return this.repository.list(userId, includeArchived); }
   async find(userId: number, id: string, includeArchived: boolean) {
     const plan = await this.repository.find(userId, id, includeArchived);

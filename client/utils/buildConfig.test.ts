@@ -73,6 +73,19 @@ describe("candidate build transport policy", () => {
     expect(config.extra.buildFlavor).toBe("standard");
   });
 
+  it.each(["preview", "china-preview", "global-preview", "candidate", "production"])("preserves %s identity after standard example initialization", (profile) => {
+    const example = readFileSync(path.resolve(__dirname, "../.env.example"), "utf8");
+    for (const line of example.split(/\r?\n/)) {
+      const match = line.match(/^([A-Z_]+)=(.*)$/);
+      if (match) process.env[match[1]] = match[2];
+    }
+    const config = loadExpoConfig(profile, "https://api.example.test");
+    const identifier = profile.includes("preview") ? "com.dietdigidose.app.preview" : "com.dietdigidose.app";
+    expect(config.android.package).toBe(identifier);
+    expect(config.ios.bundleIdentifier).toBe(identifier);
+    expect(config.name).toBe("食光烙记");
+  });
+
   it("gives the HTTPS preview build an isolated identity", () => {
     const config = loadExpoConfig("preview", "https://api.example.test");
     expect(config.name).toBe("食光烙记");

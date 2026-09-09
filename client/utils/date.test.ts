@@ -1,5 +1,5 @@
 import { addLocalDays, parseDateKey, toLocalDateKey, toLocalTimeKey } from "./date";
-import { daysUntilDateKey, getInventoryStatus } from "./inventory";
+import { daysUntilDateKey, getInventoryStatus, getExpirationBadgeConfig } from "./inventory";
 
 describe("local calendar dates", () => {
   test("formats without UTC date shifting", () => {
@@ -28,4 +28,10 @@ describe("inventory freshness", () => {
     expect(getInventoryStatus({ expiration_date: "2026-08-02", is_available: true }, today).freshness).toBe("expired");
     expect(getInventoryStatus({ expiration_date: "2026-08-10", is_available: false }, today).freshness).toBe("used_up");
   });
+});
+
+ test("unknown expiry is displayed without claiming freshness", () => {
+  const status = getInventoryStatus({ expiration_date: "", is_available: true });
+  expect(status.daysRemaining).toBeNull();
+  expect(getExpirationBadgeConfig(status).label).toBe("日期未知");
 });

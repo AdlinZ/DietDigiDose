@@ -85,7 +85,11 @@ export class SqliteHealthRepository implements HealthRepository {
   }
 
   async upsertProfile(userId: number, input: HealthProfilePatch) {
-    const existing = this.database.prepare("SELECT id FROM user_health_profiles WHERE user_id = ?").get(userId);
+    return this.database.transaction(() => {
+    const existing = this.database.prepare("SELECT id,kitchen_constraints_json FROM user_health_profiles WHERE user_id = ?").get(userId) as { id: number; kitchen_constraints_json: string } | undefined;
+    if (input.kitchen_constraints_json !== undefined && existing) input = { ...input,
+      kitchen_constraints_json: { ...JSON.parse(existing.kitchen_constraints_json || "{}"), ...input.kitchen_constraints_json } };
+
     const values = [
       optional(input.gender), optional(input.age), optional(input.height), optional(input.weight), optional(input.target_weight),
       optional(input.health_goal), optional(input.activity_level), optional(input.dietary_preference), json(input.allergies_json),
@@ -125,5 +129,6 @@ export class SqliteHealthRepository implements HealthRepository {
       );
     }
     return this.database.prepare("SELECT * FROM user_health_profiles WHERE user_id = ?").get(userId) as Record<string, unknown>;
+    })();
   }
 }

@@ -21,6 +21,9 @@ const view = formatMealPlan({
 
 function fakeRepository(overrides: Partial<MealPlansRepository> = {}): MealPlansRepository {
   return {
+    activateDraft: async () => ({ kind: "updated", value: { plan: view, repeated: false } }),
+    updateDraft: async () => ({ kind: "updated", value: { plan: view, repeated: false } }),
+    saveDraft: async () => ({ plan: view, repeated: false }),
     list: async () => [view], find: async () => view,
     updatePlan: async () => ({ kind: "updated", value: { ...view, version: 2 } }),
     removePlan: async () => "removed", updateItem: async () => ({ kind: "updated", value: formatMealPlanItem(item) }),

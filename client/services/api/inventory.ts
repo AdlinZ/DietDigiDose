@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { requestJson, type ApiFetch } from "./client";
 import type {
   InventoryBulkIntakeInput,
@@ -11,6 +12,14 @@ export type InventoryInput = InventoryCreateInput;
 const loadInventoryContracts = () => import("@dietdigidose/contracts");
 
 export const inventoryApi = {
+  undoScan: async (apiFetch: ApiFetch, jobId: string) => requestJson(apiFetch,
+    `/api/v1/inventory/scan-jobs/${encodeURIComponent(jobId)}/undo`, { method: "POST" },
+    z.object({ undone: z.number().int().nonnegative(), repeated: z.boolean() })),
+  acceptScan: async (apiFetch: ApiFetch, jobId: string) => {
+    const { inventoryBulkIntakeResponseSchema } = await loadInventoryContracts();
+    return requestJson(apiFetch, `/api/v1/inventory/scan-jobs/${encodeURIComponent(jobId)}/accept`, { method: "POST" },
+      inventoryBulkIntakeResponseSchema.extend({ jobId: z.string(), savedSourceItemIds: z.array(z.string()), undoneSourceItemIds: z.array(z.string()) }));
+  },
   list: async (apiFetch: ApiFetch) => {
     const { inventoryListResponseSchema } = await loadInventoryContracts();
     return requestJson(apiFetch, "/api/v1/inventory", {}, inventoryListResponseSchema);

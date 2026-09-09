@@ -1,3 +1,6 @@
+import { currentDateKey } from "../../utils/date.js";
+import { getAgentRunRow, toAgentRunSummary } from "../../services/agent/repository.js";
+import { classifyScanAcceptance } from "./scanAcceptance.js";
 import {
   inventoryBulkIntakeResponseSchema,
   inventoryConsumptionPreviewResponseSchema,
@@ -30,6 +33,38 @@ export class InventoryService {
 
   constructor(repository: InventoryRepository) { this.repository = repository; }
 
+  async reviewScan(userId: number, jobId: string) {
+    const row = await getAgentRunRow(jobId, userId);
+    if (!row || row.modality !== "inventory_scan") throw new InventoryDomainError("INVENTORY_NOT_FOUND", "识别任务不存在或无权访问");
+    const run = toAgentRunSummary(row);
+    if (run.status !== "completed") throw new InventoryDomainError("INVENTORY_CONFLICT", "识别尚未完成，请稍后重试");
+    const vision = run.artifacts.find(artifact => artifact.type === "vision")?.data as { items?: unknown } | undefined;
+    const inventory = await this.repository.list(userId);
+    return { jobId, items: classifyScanAcceptance(jobId, vision?.items, inventory.filter(item => item.is_available).map(item => item.food_name)) };
+  }
+
+  async undoScan(userId: number, jobId: string) {
+    await this.reviewScan(userId, jobId);
+    return this.repository.undoScan(userId, jobId);
+  }
+
+  async acceptScan(userId: number, jobId: string) {
+    const review = await this.reviewScan(userId, jobId);
+    const candidates = review.items.filter(item => item.acceptance === "automatic");
+    const response = await this.repository.bulkIntake(userId, {
+      idempotency_key: `automatic-scan:${jobId}`, source: "image", source_reference: jobId,
+      items: candidates.map(item => ({ food_name: item.foodName, category: "其他", quantity: item.quantity,
+        expiration_date: "", storage_location: item.suggestedStorageLocation as "冷藏" | "冷冻" | "常温",
+        confirmed: false, source: "image", source_item_id: item.sourceItemId, confidence: item.confidence,
+        field_evidence: { ...item.fieldEvidence, expiration_date: { status: "unknown", source: "unknown" } },
+      })),
+    }, "inventory-scan-v1");
+    const saved = await this.repository.savedScanItems(userId, jobId);
+    const undone = new Set(await this.repository.undoneScanItemIds(userId, jobId));
+    return { ...response, items: [...saved.values()].filter(item => !undone.has(item.id)), jobId, savedSourceItemIds: [...saved.keys()],
+      undoneSourceItemIds: [...saved].filter(([,item]) => undone.has(item.id)).map(([sourceId]) => sourceId) };
+  }
+
   async list(userId: number) {
     return inventoryListResponseSchema.parse(await this.repository.list(userId));
   }
@@ -55,7 +90,7 @@ export class InventoryService {
   async previewConsumption(userId: number, input: InventoryConsumptionPreviewData) {
     const candidates = await this.repository.listPreviewCandidates(userId);
     return inventoryConsumptionPreviewResponseSchema.parse({
-      items: buildFefoConsumptionPreviewFromCandidates(candidates, input.items),
+      items: buildFefoConsumptionPreviewFromCandidates(candidates, input.items, currentDateKey()),
     });
   }
 

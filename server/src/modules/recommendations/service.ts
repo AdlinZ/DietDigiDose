@@ -1,3 +1,8 @@
+import { buildCookingDraft, replaceCookingDraft } from "./plan.js";
+import { cookingPlanDraftSchema, replaceCookingPlanItemSchema, mealPlanRequirementsSchema, type ReplaceCookingPlanItemInput, type MealPlanRequirementsInput } from "@dietdigidose/contracts";
+import { formatPreparedMeal } from "../dietRecords/preparedMeals.js";
+import { allocatePreparedMeals } from "./requirements.js";
+import { resolveKitchenPreferences, type KitchenPreferences } from "@dietdigidose/contracts";
 import { createHash, randomUUID } from "node:crypto";
 import type { KitchenwareService } from "../kitchenware/service.js";
 import { currentDateKey } from "../../utils/date.js";
@@ -15,12 +20,30 @@ export class RecommendationsService {
     this.kitchenware = kitchenware;
   }
 
+  async planRequirements(userId: number, input: MealPlanRequirementsInput) {
+    const request = mealPlanRequirementsSchema.parse(input);
+    return allocatePreparedMeals(request, (await this.repository.preparedMeals(userId)).map(formatPreparedMeal));
+  }
+
+  async cookingPlan(userId: number, input: MealPlanRequirementsInput) {
+    const requirements = await this.planRequirements(userId, input);
+    const candidates = await this.compute(userId, { surface: "meal_plan" }, input.preferences);
+    return cookingPlanDraftSchema.parse({ ...buildCookingDraft(requirements, candidates.results, await this.repository.inventory(userId), candidates.timeBudget!),
+      effectivePreferences: candidates.profile.kitchen });
+  }
+
+  async replaceCookingItem(userId: number, input: ReplaceCookingPlanItemInput) {
+    const request = replaceCookingPlanItemSchema.parse(input);
+    const candidates = await this.compute(userId, { surface: "meal_plan" }, request.draft.effectivePreferences);
+    return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId));
+  }
+
   versions() { return { scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION }; }
 
-  async compute(userId: number, input: Omit<RecommendationInput, "cursor" | "pageSize">) {
+  async compute(userId: number, input: Omit<RecommendationInput, "cursor" | "pageSize">, override: KitchenPreferences = {}) {
     const profile = formatRecommendationProfile(await this.repository.profile(userId));
-    const configuredTime = Number(profile.kitchen.meal_time_minutes);
-    const timeBudget = input.maxCookTime || (Number.isFinite(configuredTime) && configuredTime > 0 ? configuredTime : null);
+    profile.kitchen = resolveKitchenPreferences(profile.kitchen, override);
+    const timeBudget = input.maxCookTime ?? resolveKitchenPreferences(profile.kitchen).meal_time_minutes;
     const [inventory, kitchenware, recipes, favoriteIds, recentIds, skippedIds, diet, dailyCaloriesTarget] = await Promise.all([
       this.repository.inventory(userId), this.repository.kitchenware(userId), this.repository.recipes({
         category: input.category, search: input.search, timeBudget,

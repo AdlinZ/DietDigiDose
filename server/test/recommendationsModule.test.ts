@@ -7,7 +7,7 @@ import { RecommendationsService } from "../src/modules/recommendations/service.j
 
 function repository(overrides: Partial<RecommendationsRepository> = {}) {
   return {
-    profile: async () => null, inventory: async () => [], kitchenware: async () => [],
+    preparedMeals: async () => [], profile: async () => null, inventory: async () => [], kitchenware: async () => [],
     recipes: async () => [{ id: 1, title: "番茄汤", ingredients_json: [{ name: "番茄" }], steps_json: ["煮熟"], status: "approved" }],
     favoriteRecipeIds: async () => [], recentRecipeIds: async () => [], skippedRecipeIds: async () => [],
     dietTotals: async () => ({ calories: 0, protein: 0 }), dailyCaloriesTarget: async () => 2000,
@@ -53,4 +53,157 @@ describe("recommendations module", () => {
       assert(error instanceof RecommendationsError); assert.equal(error.code, "RECOMMENDATION_VERSION_MISMATCH"); return true;
     });
   });
+});
+
+test("recommendations apply the shared default time and never claim whole-plan feasibility from cook time", async () => {
+  const recipe = { id: 1, title: "准备较久的汤", ingredients_json: [{ name: "番茄", amount: "2个" }],
+    steps_json: ["煮熟"], status: "approved", cook_time: 20, prep_time: 20, serving_size: 3 };
+  const defaults = new RecommendationsService(repository({ recipes: async () => [recipe] }), kitchenware);
+  assert.equal((await defaults.compute(7, { surface: "meal_plan" })).timeBudget, 30);
+  assert.equal((await defaults.compute(7, { surface: "meal_plan" })).results.length, 0);
+  const saved = new RecommendationsService(repository({ recipes: async () => [recipe],
+    profile: async () => ({ kitchen_constraints_json: { meal_time_minutes: 45 } }),
+  }), kitchenware);
+  const result = await saved.compute(7, { surface: "meal_plan" });
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].recipe.serving_size, 3);
+  assert.equal(result.results[0].recipe.prep_time, 20);
+  assert(result.results[0].degraded.includes("whole_plan_time_unverified"));
+  assert.doesNotMatch(result.results[0].reasons.join(" "), /符合.*分钟/);
+  assert.equal((await saved.compute(7, { surface: "meal_plan", maxCookTime: 30 })).results.length, 0);
+});
+
+test("cooking drafts scale portions and share stock across meals without claiming time feasibility", async () => {
+  const recipe = { id: 1, title: "蒸蛋", ingredients_json: [{ name: "鸡蛋", amount: "2枚" }],
+    steps_json: ["蒸熟"], status: "approved", cook_time: 15, prep_time: 5, serving_size: 1 };
+  const stock = { id: 1, food_name: "鸡蛋", quantity_value: 3, quantity_unit: "piece", expiration_date: "2030-09-20", version: 1, batch_code: "egg" };
+  const service = new RecommendationsService(repository({ recipes: async () => [recipe], inventory: async () => [stock] }), kitchenware);
+  const result = await service.cookingPlan(7, { excludedPreparedMealIds: [], meals: [
+    { id: "lunch", date: "2030-09-09", mealType: "lunch", servings: 1 },
+    { id: "dinner", date: "2030-09-09", mealType: "dinner", servings: 1 },
+  ] });
+  assert.equal(result.cooking.length, 2);
+  assert.deepEqual(result.ingredientBudget.map(item => item.covered_value), [2,1]);
+  assert.equal(result.ingredientBudget[1].missing_value, 1);
+  assert.equal(result.time.knownSequentialMinutes, 40);
+  assert.equal(result.time.exceedsBudget, true);
+  assert.equal(result.status, "requires_validation");
+  assert.equal(stock.quantity_value, 3);
+  const unknownYield = new RecommendationsService(repository({ recipes: async () => [{ ...recipe, serving_size: null }] }), kitchenware);
+  const unavailable = await unknownYield.cookingPlan(7, { excludedPreparedMealIds: [], meals: [
+    { id: "lunch", date: "2030-09-09", mealType: "lunch", servings: 3 },
+  ] });
+  assert.equal(unavailable.cooking.length, 0);
+  assert.equal(unavailable.unresolved.length, 1);
+});
+
+test("one-time plan preferences reach candidate filtering and do not replace long-term defaults", async () => {
+  const stored = { kitchen_constraints_json: { meal_time_minutes: 45, servings: 1, refrigeration_available: true } };
+  const recipe = { id: 1, title: "慢炖汤", ingredients_json: [{ name: "番茄", amount: "2个" }],
+    steps_json: ["煮熟"], status: "approved", cook_time: 30, prep_time: 5, serving_size: 1 };
+  const service = new RecommendationsService(repository({ profile: async () => stored, recipes: async () => [recipe] }), kitchenware);
+  const request = { excludedPreparedMealIds: [], meals: [{ id: "lunch", date: "2030-09-09", mealType: "lunch" as const, servings: 1 }] };
+  const overridden = await service.cookingPlan(7, { ...request, preferences: { meal_time_minutes: 20, refrigeration_available: false } });
+  assert.equal(overridden.time.budgetMinutes, 20);
+  assert.equal(overridden.cooking.length, 0);
+  assert.equal(overridden.effectivePreferences.refrigeration_available, false);
+  const next = await service.cookingPlan(7, request);
+  assert.equal(next.time.budgetMinutes, 45);
+  assert.equal(next.cooking.length, 1);
+  assert.equal(next.effectivePreferences.refrigeration_available, true);
+  assert.deepEqual(stored.kitchen_constraints_json, { meal_time_minutes: 45, servings: 1, refrigeration_available: true });
+});
+
+test("local replacement preserves other cooking entries and allocations while recomputing shared stock and time", async () => {
+  const recipes = [
+    { id: 1, title: "蒸蛋", ingredients_json: [{ name: "鸡蛋", amount: "2枚" }], steps_json: ["蒸熟"], status: "approved", cook_time: 10, prep_time: 5, serving_size: 1 },
+    { id: 2, title: "厚蛋烧", ingredients_json: [{ name: "鸡蛋", amount: "3枚" }], steps_json: ["煎熟"], status: "approved", cook_time: 15, prep_time: 5, serving_size: 1 },
+  ];
+  const stock = { id: 1, food_name: "鸡蛋", quantity_value: 4, quantity_unit: "piece", expiration_date: "2030-09-20", version: 1, batch_code: "egg" };
+  let offerReplacement = false;
+  const service = new RecommendationsService(repository({ recipes: async () => offerReplacement ? recipes : [recipes[0]], inventory: async () => [stock] }), kitchenware);
+  const generated = await service.cookingPlan(7, { excludedPreparedMealIds: [], meals: [
+    { id: "lunch", date: "2030-09-09", mealType: "lunch", servings: 1 },
+    { id: "dinner", date: "2030-09-09", mealType: "dinner", servings: 1 },
+  ] });
+  const { cookingPlanDraftSchema } = await import("@dietdigidose/contracts");
+  const draft = cookingPlanDraftSchema.parse(generated);
+  assert.deepEqual(draft.cooking.map(item => item.recipeId), [1, 1]);
+  draft.meals[0].servings = 1.5;
+  draft.meals[0].preparedServings = 0.5;
+  draft.meals[0].allocations = [{ preparedMealId: "52a6a5f0-4fa8-45a2-812f-8dbb1461d194", version: 3,
+    foodName: "昨天的待吃餐", servings: 0.5, validationRequired: true }];
+  draft.excludedPreparedMealIds = ["a7ed002b-e9c1-428a-851d-44d27ae68194"];
+  const original = structuredClone(draft);
+  offerReplacement = true;
+  const replaced = await service.replaceCookingItem(7, { draft, targetMealId: "dinner", recipeId: 2 });
+  assert.equal(replaced.draft.cooking[1].recipeId, 2);
+  assert.deepEqual(replaced.draft.cooking[0], original.cooking[0]);
+  assert.deepEqual(replaced.draft.meals, original.meals);
+  assert.deepEqual(replaced.draft.excludedPreparedMealIds, original.excludedPreparedMealIds);
+  assert.equal(replaced.draft.ingredientBudget[1].missing_value, 1);
+  assert.equal(replaced.draft.time.knownSequentialMinutes, 35);
+  assert.equal(replaced.draft.time.exceedsBudget, true);
+  assert(replaced.conflicts.some(message => message.includes("鸡蛋")));
+  assert(replaced.conflicts.some(message => message.includes("35")));
+  assert.deepEqual(draft, original);
+  assert.equal(stock.quantity_value, 4);
+  await assert.rejects(service.replaceCookingItem(7, { draft, targetMealId: "missing" }), (error: unknown) => {
+    assert(error instanceof RecommendationsError); assert.equal(error.code, "COOKING_PLAN_TARGET_AMBIGUOUS"); return true;
+  });
+  await assert.rejects(service.replaceCookingItem(7, { draft, targetMealId: "dinner", recipeId: 999 }), (error: unknown) => {
+    assert(error instanceof RecommendationsError); assert.equal(error.code, "COOKING_PLAN_NO_REPLACEMENT"); return true;
+  });
+  assert.deepEqual(draft, original);
+});
+
+
+test("cooking drafts do not count estimated inventory as a certain supply", async () => {
+  const service = new RecommendationsService(repository({
+    recipes: async () => [{ id: 1, title: "蒸蛋", ingredients_json: [{ name: "鸡蛋", amount: "2枚" }],
+      steps_json: ["蒸熟"], status: "approved", cook_time: 10, prep_time: 5, serving_size: 1 }],
+    inventory: async () => [{ id: 1, food_name: "鸡蛋", quantity_value: 10, quantity_unit: "piece", expiration_date: "2030-09-20",
+      version: 1, batch_code: "scan", quantity_evidence_status: "estimated" }],
+  }), kitchenware);
+  const draft = await service.cookingPlan(7, { excludedPreparedMealIds: [], meals: [{ id: "dinner", date: "2030-09-09", mealType: "dinner", servings: 1 }] });
+  assert.equal(draft.ingredientBudget[0].quantity_status, "unknown");
+  assert.equal(draft.ingredientBudget[0].fully_covered, false);
+  assert.equal(draft.ingredientBudget[0].covered_value, 0);
+});
+
+test("full-stock recommendations require enough known quantities for the requested portions", async () => {
+  let stock: Record<string, unknown> = { id: 1, food_name: "鸡蛋", quantity_value: 1, quantity_unit: "piece", expiration_date: "2030-09-20", version: 1 };
+  const service = new RecommendationsService(repository({
+    recipes: async () => [{ id: 1, title: "蒸蛋", ingredients_json: [{ name: "鸡蛋", amount: "2枚" }], steps_json: ["蒸熟"],
+      status: "approved", cook_time: 10, prep_time: 5, serving_size: 1 }], inventory: async () => [stock],
+  }), kitchenware);
+  assert.equal((await service.compute(7, { surface: "inventory", matchStatus: "full" })).results.length, 0);
+  assert.equal((await service.compute(7, { surface: "inventory", matchStatus: "missing_few" })).results.length, 1);
+  stock = { ...stock, quantity_value: 2 };
+  const full = await service.compute(7, { surface: "inventory", matchStatus: "full" });
+  assert.equal(full.results.length, 1);
+  assert.equal(full.results[0].features.inventoryCoverage, 100);
+  assert.equal((await service.compute(7, { surface: "inventory", matchStatus: "full" }, { servings: 2 })).results.length, 0);
+  stock = { ...stock, expiration_date: "2000-01-01" };
+  assert.equal((await service.compute(7, { surface: "inventory", matchStatus: "full" })).results.length, 0);
+  const expired = await service.compute(7, { surface: "inventory" });
+  assert.equal(expired.results[0].features.inventoryCoverage, 0);
+  assert.deepEqual(expired.results[0].features.missingIngredients, [{ name: "鸡蛋", amount: "2枚" }]);
+  stock = { ...stock, expiration_date: "2030-09-20" };
+  stock = { ...stock, quantity_evidence_status: "estimated" };
+  assert.equal((await service.compute(7, { surface: "inventory", matchStatus: "full" })).results.length, 0);
+  assert.equal((await service.compute(7, { surface: "inventory", matchStatus: "missing_few" })).results.length, 0);
+  const unknown = await service.compute(7, { surface: "inventory" });
+  assert.equal(unknown.results[0].features.uncertainIngredients.length, 1);
+  assert.equal(unknown.results[0].features.missingIngredients.length, 0);
+});
+
+test("cooking drafts do not allocate expired raw ingredients", async () => {
+  const service = new RecommendationsService(repository({
+    recipes: async () => [{ id: 1, title: "蒸蛋", ingredients_json: [{ name: "鸡蛋", amount: "2枚" }], steps_json: ["蒸熟"], status: "approved", cook_time: 10, prep_time: 5, serving_size: 1 }],
+    inventory: async () => [{ id: 1, food_name: "鸡蛋", quantity_value: 100, quantity_unit: "piece", expiration_date: "2000-01-01", version: 1 }],
+  }), kitchenware);
+  const draft = await service.cookingPlan(7, { excludedPreparedMealIds: [], meals: [{ id: "dinner", date: "2030-09-10", mealType: "dinner", servings: 1 }] });
+  assert.equal(draft.ingredientBudget[0].fully_covered, false);
+  assert.deepEqual(draft.ingredientBudget[0].deductions, []);
 });

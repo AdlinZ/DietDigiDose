@@ -35,6 +35,12 @@ export function createInventoryRouter(service: InventoryService) {
     return res.status(response.repeated ? 200 : 201).json(response);
   }));
 
+  router.post("/scan-jobs/:jobId/undo", handle(async (req, res) => res.json(await service.undoScan(req.userId!, String(req.params.jobId)))));
+
+  router.post("/scan-jobs/:jobId/accept", handle(async (req, res) => res.json(await service.acceptScan(req.userId!, String(req.params.jobId)))));
+
+  router.get("/scan-jobs/:jobId/review", handle(async (req, res) => res.json(await service.reviewScan(req.userId!, String(req.params.jobId)))));
+
   router.get("/", handle(async (req, res) => res.json(await service.list(req.userId!))));
 
   router.post("/", validateBody(inventoryCreateSchema), handle(async (req, res) => {

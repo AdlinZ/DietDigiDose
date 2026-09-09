@@ -1,3 +1,6 @@
+import type { CookingQueueItem } from "@/services/api/cookingQueue";
+import { mealProductionSchema } from "@dietdigidose/contracts";
+import { MealProductionFields } from "@/components/MealProductionFields";
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
@@ -64,6 +67,7 @@ export default function CookingModeScreen() {
   const { user } = useAuth();
   const [cookingChatSessionId] = useState(() => `cooking-${Date.now()}`);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
+  const [queueContext, setQueueContext] = useState<CookingQueueItem | null>(null);
   const [recipeLoading, setRecipeLoading] = useState(true);
   const [recipeError, setRecipeError] = useState("");
   const title = recipe?.title;
@@ -89,6 +93,8 @@ export default function CookingModeScreen() {
   // View Controls
   const [viewMode, setViewMode] = useState<"hero" | "timeline">("hero");
   const [showIngredientsDrawer, setShowIngredientsDrawer] = useState(false);
+  const [producedServings, setProducedServings] = useState("1");
+  const [eatenServings, setEatenServings] = useState("0");
   const [showFinishModal, setShowFinishModal] = useState(false);
   const [inventoryConsumptionMode, setInventoryConsumptionMode] = useState<"estimated" | "actual" | "all">("estimated");
   const [actualConsumptionAmounts, setActualConsumptionAmounts] = useState<Record<string, string>>({});
@@ -232,8 +238,13 @@ export default function CookingModeScreen() {
     let active = true;
     setRecipeLoading(true);
     setRecipeError("");
-    void recipesApi.detail(id).then((latestRecipe) => {
+    void Promise.all([recipesApi.detail(id), queueItemId ? cookingQueueApi.list(authFetch) : Promise.resolve([])]).then(([latestRecipe, queue]) => {
       if (!active) return;
+      const queued = queueItemId ? queue.find(item => item.id === queueItemId && item.recipeId === id) : null;
+      if (queueItemId && !queued) throw new Error("队列项目已变化，请返回队列重新开始");
+      setQueueContext(queued ?? null);
+      setProducedServings(String(queued?.plannedServings ?? 1));
+      setEatenServings("0");
       const parsedSteps: CookingStep[] = (latestRecipe.steps || []).map((s: string) => ({
         text: s,
         duration: estimateStepDuration(s),
@@ -243,7 +254,7 @@ export default function CookingModeScreen() {
       setRecipe(latestRecipe);
       setCookingSteps(parsedSteps);
       setIngredients(
-        latestRecipe.ingredients.map((i) => ({
+        (queued?.sourcePlanItemId ? queued.ingredients : latestRecipe.ingredients).map((i) => ({
           ...i,
           checked: false,
         }))
@@ -257,7 +268,7 @@ export default function CookingModeScreen() {
       setRecipeError(error instanceof Error ? error.message : "菜谱读取失败");
     }).finally(() => { if (active) setRecipeLoading(false); });
     return () => { active = false; };
-  }, [recipeId]);
+  }, [recipeId, queueItemId, authFetch]);
 
   // Step change reaction: TTS + reset timer
   useEffect(() => {
@@ -634,6 +645,7 @@ export default function CookingModeScreen() {
     items: Array<{
       food_name: string;
       fully_covered: boolean;
+      quantity_status?: "sufficient" | "insufficient" | "unknown" | "unavailable";
       missing_value: number;
       unit: StructuredUnit;
       deductions: Array<{
@@ -668,7 +680,8 @@ export default function CookingModeScreen() {
     const uncovered = preview.items.filter((item) => !item.fully_covered);
     if (uncovered.length) {
       const description = uncovered.slice(0, 3).map((item) => (
-        `${item.food_name}缺 ${item.missing_value}${structuredUnitLabel(item.unit)}`
+        item.quantity_status === "unknown" ? `${item.food_name}数量或换算依据未知，请核对实际用量`
+          : `${item.food_name}缺 ${item.missing_value}${structuredUnitLabel(item.unit)}`
       )).join("、");
       throw new Error(`库存不足或单位不可换算：${description}`);
     }
@@ -692,22 +705,6 @@ export default function CookingModeScreen() {
     return [...combined.values()];
   };
 
-  const completeQueueItem = async () => {
-    if (!fromQueue || !queueItemId) return;
-    const version = Number(queueVersion);
-    try {
-      await cookingQueueApi.complete(authFetch, queueItemId, version);
-    } catch (error) {
-      const latest = (await cookingQueueApi.list(authFetch, true)).find((item) => item.id === queueItemId);
-      if (latest?.status === "completed") return;
-      if (latest?.status === "cooking") {
-        await cookingQueueApi.complete(authFetch, latest.id, latest.version);
-        return;
-      }
-      throw error;
-    }
-  };
-
   const finishCooking = async (consumeInventory: boolean) => {
     if (isCompleting) return;
     try {
@@ -718,13 +715,14 @@ export default function CookingModeScreen() {
         if (inventoryConsumptions.length === 0) {
           Alert.alert(
             "未匹配到库存",
-            "没有找到已勾选且名称匹配的库存食材，仍可继续记录这餐。",
-            [{ text: "继续记录", onPress: () => void finishCooking(false) }]
+            "没有找到已勾选且名称匹配的库存食材。可确认本次未使用库存原料后保存制作。",
+            [{ text: "不扣库存，保存制作", onPress: () => void finishCooking(false) }]
           );
           return;
         }
       }
       const nutritionNumber = (value: unknown) => {
+        if (value == null || value === "") return null;
         const parsed = Number(value);
         return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
       };
@@ -737,26 +735,23 @@ export default function CookingModeScreen() {
             : null,
         inventory_item_ids: [],
         inventory_consumptions: inventoryConsumptions,
-        diet_record: {
-          meal_type: getMealType(),
+        production: mealProductionSchema.parse({
           food_name: title || "自制餐食",
-          amount: "1份",
-          calories: nutritionNumber(calories),
-          protein: nutritionNumber(protein),
-          carbs: nutritionNumber(carbs),
-          fat: nutritionNumber(fat),
-          recorded_at: toLocalDateKey(),
-          recorded_time: toLocalTimeKey(),
-          image_url: null,
-        },
+          ...(queueContext?.plannedDate ? { planned_date: queueContext.plannedDate } : {}),
+          produced_servings: Number(producedServings), eaten_servings: Number(eatenServings),
+          meal_type: getMealType(), eaten_at: toLocalDateKey(), eaten_time: toLocalTimeKey(),
+          // Existing recipe nutrition has no verified serving basis for a multi-serving batch.
+          nutrition_per_serving: Number(producedServings) === 1 ? {
+            calories: nutritionNumber(calories), protein: nutritionNumber(protein), carbs: nutritionNumber(carbs), fat: nutritionNumber(fat),
+          } : {},
+          ...(queueItemId && (queueContext?.version || queueVersion) ? { queue_item_id: queueItemId, queue_version: queueContext?.version ?? Number(queueVersion) } : {}),
+        }),
       });
-
-      await completeQueueItem();
 
       setShowFinishModal(false);
       Alert.alert(
         result.repeated ? "已完成" : "烹饪完成！",
-        `饮食记录已保存${
+        `制作已保存，${result.prepared_meal?.remaining_servings ?? 0} 份留待吃${result.diet_record ? "，实际食用已记入饮食" : "，尚未新增摄入"}${
           result.consumed_inventory_item_ids.length
             ? `，并自动扣减了 ${result.consumed_inventory_item_ids.length} 项库存食材`
             : ""
@@ -764,9 +759,9 @@ export default function CookingModeScreen() {
         fromQueue
           ? [
             { text: "继续下一道", onPress: () => router.replace("/cooking-queue") },
-            { text: "查看饮食记录", onPress: () => router.replace("/diet-record") },
+            { text: "查看待吃餐", onPress: () => router.replace("/prepared-meals") },
           ]
-          : [{ text: "查看饮食记录", onPress: () => router.replace("/diet-record") }]
+          : [{ text: "查看待吃餐", onPress: () => router.replace("/prepared-meals") }]
       );
     } catch (error) {
       Alert.alert("完成失败", error instanceof Error ? error.message : "请稍后重试");
@@ -1489,7 +1484,7 @@ export default function CookingModeScreen() {
         onRequestClose={() => setShowFinishModal(false)}
       >
         <View className="flex-1 bg-black/70 justify-center px-6">
-          <View className="bg-surface rounded-[32px] p-6 items-center shadow-2xl">
+          <ScrollView className="max-h-[90%] rounded-[32px] bg-surface" contentContainerClassName="p-6 items-center" keyboardShouldPersistTaps="handled">
             <View className="w-20 h-20 rounded-full bg-highlight items-center justify-center mb-4 shadow-amber-glow">
               <FontAwesome6 name="trophy" size={36} colorClassName="accent-ink" />
             </View>
@@ -1499,11 +1494,12 @@ export default function CookingModeScreen() {
               您已成功完成了【{title || "自制菜品"}】的全部 {cookingSteps.length} 个步骤！
             </Text>
 
+            <MealProductionFields produced={producedServings} eaten={eatenServings} onProducedChange={setProducedServings} onEatenChange={setEatenServings} />
             {/* Nutrition Cards Preview */}
             {(calories || protein || carbs || fat) ? (
               <View className="w-full bg-background-secondary rounded-2xl p-4 border border-line mb-5">
                 <Text className="text-xs font-bold text-brand-strong mb-3 text-center">
-                  预计摄入营养成分总览
+                  菜谱营养参考（多份制作的每份营养待核实）
                 </Text>
                 <View className="flex-row justify-around">
                   {calories ? (
@@ -1585,7 +1581,7 @@ export default function CookingModeScreen() {
                   <>
                     <FontAwesome6 name="boxes-packing" size={15} colorClassName="accent-ink" />
                     <Text className="text-ink font-black text-sm">
-                      {inventoryConsumptionMode === "estimated" ? "按预计扣减并记录本餐" : inventoryConsumptionMode === "actual" ? "按实际用量扣减并记录" : "整项用完并记录本餐"}
+                      {inventoryConsumptionMode === "estimated" ? "按预计扣减并保存制作" : inventoryConsumptionMode === "actual" ? "按实际用量扣减并保存" : "整项用完并保存制作"}
                     </Text>
                   </>
                 )}
@@ -1597,28 +1593,18 @@ export default function CookingModeScreen() {
                 className="bg-brand-fill py-3.5 rounded-2xl items-center justify-center flex-row gap-2 shadow-md active:opacity-90"
               >
                 <FontAwesome6 name="utensils" size={14} colorClassName="accent-on-brand" />
-                <Text className="text-white font-bold text-sm">仅记录本餐饮食</Text>
+                <Text className="text-white font-bold text-sm">保存制作，不扣原料</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                onPress={() => void (async () => {
-                  await completeQueueItem();
-                  setShowFinishModal(false);
-                  if (fromQueue) {
-                    router.replace("/cooking-queue");
-                  } else if (router.canGoBack()) {
-                    router.back();
-                  } else {
-                    router.replace("/(tabs)");
-                  }
-                })()}
+                onPress={() => setShowFinishModal(false)}
                 disabled={isCompleting}
                 className="py-2.5 items-center justify-center active:opacity-70"
               >
-                <Text className="text-copy-muted text-xs font-semibold">{fromQueue ? "不记录，完成并返回队列" : "不记录，直接退出"}</Text>
+                <Text className="text-copy-muted text-xs font-semibold">稍后保存</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
 

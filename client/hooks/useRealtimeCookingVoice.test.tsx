@@ -77,6 +77,11 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
   beforeEach(async () => {
     Object.defineProperty(Platform, "OS", { value: "android", configurable: true });
     jest.clearAllMocks();
+    mockPauseNativeRecording.mockResolvedValue(undefined);
+    mockResumeNativeRecording.mockResolvedValue(undefined);
+    mockStartNativeRecording.mockResolvedValue(undefined);
+    jest.mocked(Audio.requestPermissionsAsync).mockResolvedValue({ granted: true } as never);
+    jest.mocked(realtimeVoiceApi.heartbeat).mockImplementation(async (_fetch, _id, input) => ({ session: { ...createdSession, version: input.version + 1, status: input.muted ? "muted" : "active" } }));
     mockStopNativeRecording.mockResolvedValue(undefined);
     jest.mocked(realtimeVoiceApi.create).mockResolvedValue({ session: createdSession, repeated: false });
     jest.mocked(realtimeVoiceApi.close).mockResolvedValue({ session: { ...createdSession, status: "closed" } });
@@ -117,4 +122,65 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
     expect(voice.state).toBe("fallback");
     expect(options.onError).toHaveBeenCalledWith("native recorder failed");
   });
+  it("pauses the native microphone immediately even while the heartbeat hangs or fails", async () => {
+    let recording = false;
+    mockStartNativeRecording.mockImplementation(async () => { recording = true; });
+    mockPauseNativeRecording.mockImplementation(async () => { recording = false; });
+    await act(async () => { await voice.start(); });
+    expect(recording).toBe(true);
+    let reject!: (error: Error) => void;
+    jest.mocked(realtimeVoiceApi.heartbeat).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = voice.toggleMute(); });
+    expect(recording).toBe(false);
+    expect(voice.muted).toBe(true);
+    await act(async () => { reject(new Error("offline")); await pending; });
+    expect(recording).toBe(false);
+    expect(voice.muted).toBe(true);
+  });
+
+  it("coalesces rapid Web resume taps and never restarts after stop", async () => {
+    Object.defineProperty(Platform, "OS", { value: "web", configurable: true });
+    let recording = false;
+    const start = jest.fn(() => { if (recording) throw new Error("already started"); recording = true; });
+    const abort = jest.fn(() => { recording = false; });
+    Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: class {
+      start = start;
+      abort = abort;
+    } });
+    try {
+      await act(async () => { await voice.start(); await voice.toggleMute(); });
+      expect(recording).toBe(false);
+      let resolve!: (value: Awaited<ReturnType<typeof realtimeVoiceApi.heartbeat>>) => void;
+      jest.mocked(realtimeVoiceApi.heartbeat).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+      let first!: Promise<boolean>;
+      await act(async () => { first = voice.toggleMute(); await voice.toggleMute(); });
+      await act(async () => { resolve({ session: { ...createdSession, version: 3 } }); await first; });
+      expect(recording).toBe(true);
+      expect(voice.muted).toBe(false);
+      expect(start).toHaveBeenCalledTimes(2);
+      await act(async () => { await voice.toggleMute(); });
+      jest.mocked(realtimeVoiceApi.heartbeat).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+      await act(async () => { first = voice.toggleMute(); });
+      await act(async () => { await voice.stop(); });
+      await act(async () => { resolve({ session: { ...createdSession, version: 5 } }); await first; });
+      expect(recording).toBe(false);
+      expect(voice.state).toBe("off");
+      expect(start).toHaveBeenCalledTimes(2);
+    } finally {
+      Reflect.deleteProperty(window, "SpeechRecognition");
+    }
+  });
+
+  it("stops a partially resumed native recorder if resume throws", async () => {
+    let recording = false;
+    mockStartNativeRecording.mockImplementation(async () => { recording = true; });
+    mockPauseNativeRecording.mockImplementation(async () => { recording = false; });
+    mockResumeNativeRecording.mockImplementation(async () => { recording = true; throw new Error("resume failed"); });
+    await act(async () => { await voice.start(); await voice.toggleMute(); });
+    await act(async () => { await voice.toggleMute(); });
+    expect(recording).toBe(false);
+    expect(voice.muted).toBe(true);
+  });
+
 });

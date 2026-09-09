@@ -1,3 +1,4 @@
+import type { SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
 import assert from "node:assert/strict";
 import { currentDateKey } from "../src/utils/date.js";
 import fs from "node:fs";
@@ -163,6 +164,30 @@ try {
   `);
   assert.equal(existing.rows[0]?.count, 0, "PostgreSQL migration integration database must be empty");
 
+  const legacyQueueClient = await pool.connect();
+  try {
+    await legacyQueueClient.query("BEGIN");
+    await legacyQueueClient.query(`CREATE TEMP TABLE cooking_queue_items(id text PRIMARY KEY,user_id integer,recipe_id integer,status text,
+      deleted_at timestamp,recipe_snapshot_json jsonb,version integer,updated_at timestamp);
+      CREATE UNIQUE INDEX idx_cooking_queue_active_recipe ON cooking_queue_items(user_id,recipe_id);
+      CREATE TEMP TABLE meal_plan_items(id text PRIMARY KEY,user_id integer,queue_item_id text,status text,
+        deleted_at timestamp,version integer,updated_at timestamp,ingredients_json jsonb,planned_date text);
+      INSERT INTO cooking_queue_items VALUES('q',1,10,'cooking',NULL,'{}',4,NULL);
+      INSERT INTO meal_plan_items VALUES('a',1,'q','queued',NULL,2,NULL,'[{"name":"蛋","amount":"6个"}]','2026-09-10');
+      INSERT INTO meal_plan_items VALUES('b',1,'q','queued',NULL,3,NULL,'[]','2026-09-11');`);
+    await legacyQueueClient.query(fs.readFileSync(path.join(serverRoot, "drizzle/0004_chief_loki.sql"), "utf8"));
+    const legacyQueue = (await legacyQueueClient.query("SELECT * FROM cooking_queue_items")).rows[0];
+    assert.equal(legacyQueue.source_plan_item_id, "a");
+    assert.equal(legacyQueue.status, "cooking");
+    assert.equal(legacyQueue.version, 5);
+    assert.deepEqual(legacyQueue.recipe_snapshot_json.ingredients, [{ name: "蛋", amount: "6个" }]);
+    assert.deepEqual((await legacyQueueClient.query("SELECT queue_item_id,status,version FROM meal_plan_items WHERE id='b'")).rows[0],
+      { queue_item_id: null, status: "planned", version: 4 });
+  } finally {
+    await legacyQueueClient.query("ROLLBACK");
+    legacyQueueClient.release();
+  }
+
   await migrate(drizzle(pool), { migrationsFolder: path.join(serverRoot, "drizzle") });
   const first = await pool.connect();
   try {
@@ -187,7 +212,7 @@ try {
     validationClient.release();
   }
   assert.equal(report.ok, true, report.failures.join("\n"));
-  assert.equal(report.tableCount, 92);
+  assert.equal(report.tableCount, 94);
   assert.equal(report.criticalMetrics["inventory.quantity_value"], 250);
   assert.equal(report.criticalMetrics["diet.calories"], 45);
   assert.equal(report.criticalMetrics["health.weight"], 62.5);
@@ -260,6 +285,47 @@ try {
   assert(history?.some((entry) => entry.action === "consume_partial"));
   assert.deepEqual(await inventoryRepository.remove(user.id, created), { kind: "removed" });
 
+  const unknownExpiry = await inventoryRepository.create(user.id, {
+    food_name: "未知日期大米", category: "粮油干货", quantity: "一袋", expiration_date: "", storage_location: "常温",
+  });
+  const unknownSaved = (await inventoryRepository.list(user.id)).find(item => Number(item.id) === unknownExpiry.id)!;
+  assert.equal(unknownSaved.expiration_date, "");
+  assert.equal(unknownSaved.quantity_value, null);
+  assert.equal((await pool.query("SELECT COUNT(*)::integer n FROM inventory_items WHERE id=$1 AND expiration_date >= '2026-09-09' AND expiration_date <= '2026-09-12'", [unknownExpiry.id])).rows[0].n, 0);
+  await inventoryRepository.remove(user.id, unknownExpiry);
+
+  const autoResults = await Promise.all(["one", "two"].map(key => inventoryRepository.bulkIntake(user.id, {
+    idempotency_key: `pg-automatic-scan-${key}`, source: "image", source_reference: `pg-auto-job-${key}`,
+    items: [{ food_name: "自动入库并发米", category: "其他", quantity: "1袋", expiration_date: "", storage_location: "常温",
+      confirmed: false, source: "image", source_item_id: `pg-auto-job-${key}:0` }],
+  }, "inventory-scan-v1")));
+  assert.deepEqual(autoResults.map(result => result.items.length).sort(), [0, 1]);
+  const restoredAuto = await Promise.all(["one", "two"].map(key => inventoryRepository.savedScanItems(user.id, `pg-auto-job-${key}`)));
+  assert.deepEqual(restoredAuto.map(items => items.size).sort(), [0, 1]);
+  for (let index = 0; index < restoredAuto.length; index++) {
+    if (restoredAuto[index]!.size) assert(restoredAuto[index]!.has(`pg-auto-job-${index === 0 ? "one" : "two"}:0`));
+  }
+  const autoItem = autoResults.flatMap(result => result.items)[0]!;
+  const autoLog = (await pool.query("SELECT metadata_json FROM inventory_change_logs WHERE inventory_item_id=$1", [autoItem.id])).rows[0];
+  assert.equal(autoLog.metadata_json.acceptance, "automatic");
+  const winningJob = `pg-auto-job-${restoredAuto[0]!.size ? "one" : "two"}`;
+  const undoResults = await Promise.all([inventoryRepository.undoScan(user.id, winningJob), inventoryRepository.undoScan(user.id, winningJob)]);
+  assert.deepEqual(undoResults.map(result => result.undone).sort(), [0, 1]);
+  assert.deepEqual(await inventoryRepository.undoneScanItemIds(user.id, winningJob), [autoItem.id]);
+  const conflictBatch = await inventoryRepository.bulkIntake(user.id, { idempotency_key: "pg-undo-conflict-batch", source: "image", source_reference: "pg-undo-conflict",
+    items: [0,1].map(index => ({ source_item_id: `pg-undo-conflict:${index}`, food_name: `PG撤销冲突${index}`, category: "其他", quantity: "2个", quantity_value: 2,
+      quantity_unit: "piece" as const, expiration_date: "", storage_location: "常温" as const, source: "image" as const, confirmed: true })) });
+  await inventoryRepository.update(user.id, conflictBatch.items[1]!.id, 1, { patch: { quantity: "1个" }, nextQuantityValue: 1, nextQuantityUnit: "piece" });
+  await assert.rejects(() => inventoryRepository.undoScan(user.id, "pg-undo-conflict"), /整批未撤销/);
+  const conflictRows = (await pool.query("SELECT version,deleted_at,quantity_value FROM inventory_items WHERE id=ANY($1::integer[]) ORDER BY id", [conflictBatch.items.map(item => item.id)])).rows;
+  assert.equal(conflictRows[0].version, 1);
+  assert(conflictRows.every(row => row.deleted_at === null));
+  for (const original of conflictBatch.items) {
+    const current = await inventoryRepository.findOwned(user.id,original.id);
+    if (current) await inventoryRepository.remove(user.id,current);
+  }
+
+
   const dietInventory = await inventoryRepository.create(user.id, {
     food_name: "烹饪事务土豆",
     category: "蔬菜",
@@ -317,6 +383,51 @@ try {
   });
   assert.equal(await dietRepository.remove(user.id + 1, Number(manualDietRecord.id)), false);
   assert.equal(await dietRepository.remove(user.id, Number(manualDietRecord.id)), true);
+
+  const production = await dietService.completeCooking(user.id, {
+    idempotency_key: "postgres-prepared-production-190", inventory_item_ids: [], inventory_consumptions: [],
+    production: { food_name: "Postgres 三份待吃餐", produced_servings: 3, eaten_servings: 1,
+      meal_type: "晚餐", eaten_at: "2026-09-08", nutrition_per_serving: { calories: 100, protein: null } },
+  });
+  const prepared = production.prepared_meal as { id: string; remaining_servings: number };
+  assert.equal(prepared.remaining_servings, 2);
+  const halfMeal = { idempotency_key: "postgres-prepared-half-190", version: 1, type: "eat" as const,
+    servings: 0.5, recorded_at: "2026-09-09" };
+  const halves = await Promise.all([dietService.applyMealEvent(user.id, prepared.id, halfMeal), dietService.applyMealEvent(user.id, prepared.id, halfMeal)]);
+  assert.deepEqual(halves.map(result => result.repeated).sort(), [false, true]);
+  const halfRecord = halves[0].diet_record as { calories: number; protein: number | null };
+  assert.equal(halfRecord.calories, 50);
+  assert.equal(halfRecord.protein, null);
+  const discardedMeal = await dietService.applyMealEvent(user.id, prepared.id, {
+    idempotency_key: "postgres-prepared-discard-190", version: 2, type: "discard", servings: 0.5,
+  });
+  assert.equal(discardedMeal.diet_record, null);
+  const raceMeals = await Promise.allSettled(["a", "b"].map(key => dietService.applyMealEvent(user.id, prepared.id, {
+    idempotency_key: `postgres-prepared-race-190-${key}`, version: 3, type: "eat", servings: 1, recorded_at: "2026-09-10",
+  })));
+  assert.equal(raceMeals.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === prepared.id)?.remaining_servings, 0);
+
+  const intakeItem = { field_evidence: { quantity: { status: "estimated" as const, source: "recognition" as const } }, source_item_id: "postgres-scan:0", food_name: "PG 恢复入库米", category: "粮油干货",
+    quantity: "1袋", expiration_date: "2026-10-01", storage_location: "常温" as const, source: "image" as const, confirmed: true };
+  const concurrentSourceIntakes = await Promise.all(["a", "b"].map(key => inventoryRepository.bulkIntake(user.id, {
+    idempotency_key: `postgres-source-intake-191-${key}`, source: "image", source_reference: "postgres-scan", items: [intakeItem],
+  })));
+  assert.deepEqual(concurrentSourceIntakes.map(result => result.repeated).sort(), [false, true]);
+  assert.equal(concurrentSourceIntakes[0].items[0].id, concurrentSourceIntakes[1].items[0].id);
+  const partialIntake = await inventoryRepository.bulkIntake(user.id, {
+    idempotency_key: "postgres-source-intake-191-partial", source: "image", source_reference: "postgres-scan",
+    items: [intakeItem, { ...intakeItem, source_item_id: "postgres-scan:1" }],
+  });
+  assert.equal(partialIntake.items[0].id, concurrentSourceIntakes[0].items[0].id);
+  assert.notEqual(partialIntake.items[0].id, partialIntake.items[1].id);
+  const intakeEvidence = await pool.query("SELECT metadata_json FROM inventory_change_logs WHERE inventory_item_id=$1 AND action='created'", [partialIntake.items[0].id]);
+  assert.equal(intakeEvidence.rows.length, 1);
+  assert.deepEqual(intakeEvidence.rows[0].metadata_json.field_evidence.quantity, { status: "estimated", source: "recognition" });
+  assert.equal((await inventoryRepository.listPreviewCandidates(user.id)).find(item => item.id === partialIntake.items[0].id)?.quantity_evidence_status, "estimated");
+  assert.equal((await new PostgresRecommendationsRepository(pool).inventory(user.id)).find(item => Number(item.id) === partialIntake.items[0].id)?.quantity_evidence_status, "estimated");
+  await pool.query("UPDATE inventory_items SET version=version+1 WHERE id=$1", [partialIntake.items[0].id]);
+  assert.equal((await inventoryRepository.listPreviewCandidates(user.id)).find(item => item.id === partialIntake.items[0].id)?.quantity_evidence_status, "unknown");
 
   const insightInventory = await inventoryRepository.create(user.id, {
     food_name: "Postgres 周报菠菜",
@@ -680,6 +791,13 @@ try {
     "data:image/png;base64,cG9zdGdyZXMtc2VjcmV0");
   assert.equal(await agentRunsService.run(agentRun.id, householdMember), undefined);
   assert.equal((await agentRunsService.reusableRun(user.id, "postgres-agent-runs-key"))?.id, agentRun.id);
+  const durablePhotoInput = { modality: "inventory_scan" as const, image: "cGhvdG8=", idempotencyKey: "inventory-photo:pg-test" };
+  const durablePhoto = await agentRunsService.createRun(user.id, durablePhotoInput);
+  await pool.query("UPDATE agent_runs SET status='completed',created_at=CURRENT_TIMESTAMP-INTERVAL '2 days' WHERE id=$1", [durablePhoto.id]);
+  const repeatedPhoto = await Promise.all([agentRunsService.createRun(user.id,durablePhotoInput),agentRunsService.createRun(user.id,durablePhotoInput)]);
+  assert(repeatedPhoto.every(run => run.id === durablePhoto.id));
+  assert.notEqual((await agentRunsService.createRun(householdMember,durablePhotoInput)).id, durablePhoto.id);
+
   const checkpointRun = await agentRunsService.createRun(user.id, {
     modality: "text", prompt: "验证 PostgreSQL checkpoint", idempotencyKey: "postgres-checkpoint-key",
   });
@@ -841,7 +959,27 @@ try {
   assert.equal((await pool.query(`SELECT status FROM agent_actions WHERE id=$1`, [operationsActionId])).rows[0]?.status, "undone");
   assert.equal((await pool.query(`SELECT deleted_at IS NOT NULL AS deleted,version FROM shopping_list_items
     WHERE source_run_id=$1`, [operationsRunId])).rows[0]?.deleted, true);
-  await assert.rejects(() => operationsService.undoActions(user.id, operationsRunId), /没有可撤销/);
+  assert.deepEqual(await operationsService.undoActions(user.id, operationsRunId), { undone: 0 });
+
+  const groupedUndoRun = `postgres-grouped-undo-${user.id}`;
+  await pool.query(`INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id)
+    VALUES($1,$2,$1,'text','assistant','running','{}'::jsonb,$1)`, [groupedUndoRun, user.id]);
+  const groupedExecute = async (suffix: string, actionType: ExecutableAgentAction["actionType"], payload: Record<string, unknown>) => {
+    const id = `${groupedUndoRun}-${suffix}`;
+    await pool.query(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+      VALUES($1,$2,$3,$4,'high','proposed',$5,$1)`, [id, groupedUndoRun, user.id, actionType, payload]);
+    return operationsService.executeActions(user.id, groupedUndoRun, [{ id, actionType, payload, riskLevel: "high", summary: "分组撤销" }]);
+  };
+  const groupedAdded = await groupedExecute("z", "add_inventory_item", { name: "PG 连续修正鸡蛋", quantity: "10个", expirationDate: "2026-09-20" });
+  const groupedItemId = Number((groupedAdded[0].result as Record<string, unknown>).inventoryItemId);
+  await groupedExecute("b", "update_inventory_item", { itemId: groupedItemId, version: 1, quantity: "8个" });
+  await groupedExecute("a", "update_inventory_item", { itemId: groupedItemId, version: 2, quantity: "6个" });
+  assert.deepEqual(await operationsService.undoActions(user.id, groupedUndoRun), { undone: 3 });
+  assert.deepEqual(await operationsService.undoActions(user.id, groupedUndoRun), { undone: 0 });
+  const groupedRestored = (await pool.query("SELECT quantity_value,version,deleted_at IS NOT NULL AS deleted FROM inventory_items WHERE id=$1", [groupedItemId])).rows[0];
+  assert.equal(Number(groupedRestored.quantity_value), 10);
+  assert.equal(groupedRestored.version, 6);
+  assert.equal(groupedRestored.deleted, true);
 
   const failedOperationsRunId = `postgres-agent-operations-failed-${user.id}`;
   const failedOperationsActionIds = ["first", "second"].map((suffix) => `${failedOperationsRunId}-${suffix}`);
@@ -899,9 +1037,9 @@ try {
     { id: `${operationTypesRunId}-shopping-update`, actionType: "update_shopping_item", riskLevel: "low", summary: "更新采购项",
       payload: { itemId: createdShopping.id, amount: "3个", checked: true } },
     { id: `${operationTypesRunId}-inventory-update`, actionType: "update_inventory_item", riskLevel: "high", summary: "更新库存",
-      payload: { itemId: createdInventory.id, name: "PostgreSQL Agent 新土豆" } },
+      payload: { itemId: createdInventory.id, version: 1, name: "PostgreSQL Agent 新土豆" } },
     { id: `${operationTypesRunId}-inventory-consume`, actionType: "consume_inventory_items", riskLevel: "high", summary: "消耗库存",
-      payload: { itemIds: [createdInventory.id] } },
+      payload: { items: [{ itemId: createdInventory.id, version: 2, mode: "all" }] } },
     { id: `${operationTypesRunId}-plan-delete`, actionType: "delete_meal_plan", riskLevel: "high", summary: "删除餐单",
       payload: { planId: createdPlan.id } },
     { id: `${operationTypesRunId}-shopping-delete`, actionType: "delete_shopping_item", riskLevel: "high", summary: "删除采购项",
@@ -917,6 +1055,51 @@ try {
     { food_name: "PostgreSQL Agent 新土豆", is_available: false });
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM agent_actions
     WHERE run_id=$1 AND status='executed'`, [operationTypesRunId])).rows[0]?.count), 12);
+  let inventoryActionSequence = 0;
+  const inventoryAction = (actionType: ExecutableAgentAction["actionType"], payload: Record<string, unknown>): ExecutableAgentAction => ({
+    id: `${operationTypesRunId}-quantity-${++inventoryActionSequence}`, actionType, payload, riskLevel: "high", summary: "库存数量回归",
+  });
+  const runInventoryActions = async (actions: ExecutableAgentAction[]) => {
+    await insertOperationProposals(actions);
+    return operationsService.executeActions(user.id, operationTypesRunId, actions);
+  };
+  const eggCreated = await runInventoryActions([inventoryAction("add_inventory_item", { name: "数量回归鸡蛋", quantity: "十枚" })]);
+  const eggId = (eggCreated[0].result as { inventoryItemId: number }).inventoryItemId;
+  const eggState = async () => (await pool.query("SELECT quantity,quantity_value,quantity_unit,is_available,version FROM inventory_items WHERE id=$1", [eggId])).rows[0];
+  const eatTwo = inventoryAction("consume_inventory_items", { items: [{ itemId: eggId, version: 1, mode: "amount", amountValue: 2, unit: "piece" }] });
+  const eaten = await runInventoryActions([eatTwo]);
+  assert.deepEqual(await operationsService.executeActions(user.id, operationTypesRunId, [eatTwo]), eaten);
+  assert.equal((await eggState()).quantity, "8个");
+  assert.equal(Number((await eggState()).quantity_value), 8);
+  assert.equal((await eggState()).is_available, true);
+  const discardTwo = inventoryAction("consume_inventory_items", { reason: "discarded", items: [{ itemId: eggId, version: 2, mode: "amount", amountValue: 2, unit: "piece" }] });
+  await runInventoryActions([discardTwo]);
+  const discardHistory = (await pool.query("SELECT source,metadata_json FROM inventory_change_logs WHERE inventory_item_id=$1 AND action='consume_partial' ORDER BY id", [eggId])).rows;
+  assert.equal(discardHistory.length, 2);
+  assert.equal(discardHistory[1].source, "ai");
+  assert.equal(discardHistory[1].metadata_json.reason, "discarded");
+  for (const consumption of [
+    { itemId: eggId, version: 2, mode: "amount", amountValue: 1, unit: "piece" },
+    { itemId: eggId, version: 3, mode: "amount", amountValue: 1, unit: "g" },
+    { itemId: eggId, version: 3, mode: "amount", amountValue: 7, unit: "piece" },
+  ]) await assert.rejects(() => runInventoryActions([inventoryAction("consume_inventory_items", { items: [consumption] })]));
+  await assert.rejects(() => runInventoryActions([inventoryAction("consume_inventory_items", { itemIds: [eggId] })]));
+  await assert.rejects(() => runInventoryActions([
+    inventoryAction("consume_inventory_items", { items: [{ itemId: eggId, version: 3, mode: "amount", amountValue: 1, unit: "piece" }] }),
+    inventoryAction("update_inventory_item", { itemId: 2147483647, version: 1, quantity: "2个" }),
+  ]));
+  assert.equal((await eggState()).quantity, "6个");
+  assert.equal(Number((await eggState()).version), 3);
+  await runInventoryActions([inventoryAction("update_inventory_item", { itemId: eggId, version: 3, quantity: "半袋" })]);
+  assert.equal(Number((await eggState()).quantity_value), 0.5);
+  assert.equal((await eggState()).quantity_unit, "bag");
+  await runInventoryActions([inventoryAction("update_inventory_item", { itemId: eggId, version: 4, quantity: "数量未知" })]);
+  assert.equal((await eggState()).quantity_value, null);
+  assert.equal((await eggState()).quantity_unit, null);
+  await assert.rejects(() => runInventoryActions([inventoryAction("consume_inventory_items", { items: [{ itemId: eggId, version: 5, mode: "amount", amountValue: 1, unit: "piece" }] })]));
+  await runInventoryActions([inventoryAction("consume_inventory_items", { items: [{ itemId: eggId, version: 5, mode: "all" }] })]);
+  assert.equal((await eggState()).is_available, false);
+
   const healthOperationRunId = `postgres-agent-operation-health-${householdMember}`;
   const healthOperationActionId = `${healthOperationRunId}-action`;
   await pool.query(`INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id)
@@ -1026,6 +1209,67 @@ try {
   assert.equal(await cookingQueueRepository.cancel("66666666-6666-4666-8666-666666666666", user.id), true);
 
   const mealPlanRepository = new PostgresMealPlansRepository(pool);
+  const savedDraftInput: SaveCookingPlanDraftInput = {
+    id: "7cd0c614-438c-45ab-a3cc-50507798a194", title: "可恢复草案",
+    draft: { status: "requires_validation", meals: [{ id: "dinner", date: "2026-09-09", mealType: "dinner",
+      servings: 1, preparedServings: 0, cookServings: 1, allocations: [] }], totalCookServings: 1,
+    cooking: [], unresolved: [{ targetMealId: "dinner", reason: "待选菜" }], ingredientBudget: [],
+    time: { budgetMinutes: 30, knownSequentialMinutes: 0, exceedsBudget: false, isEstimate: true, incomplete: true, missing: ["cleanup"] },
+    checksPending: ["whole_plan_time"], excludedPreparedMealIds: [], effectivePreferences: {} },
+  };
+  const concurrentDraftSaves = await Promise.all([
+    mealPlanRepository.saveDraft(user.id, savedDraftInput), mealPlanRepository.saveDraft(user.id, savedDraftInput),
+  ]);
+  assert.deepEqual(concurrentDraftSaves.map(value => value?.repeated).sort(), [false, true]);
+  assert.equal(await mealPlanRepository.saveDraft(user.id, { ...savedDraftInput, title: "不同请求" }), null);
+  const restoredDraft = await new PostgresMealPlansRepository(pool).find(user.id, savedDraftInput.id, false);
+  assert.deepEqual((restoredDraft?.constraints as Record<string, unknown>).savedCookingDraft,
+    { title: savedDraftInput.title, draft: savedDraftInput.draft });
+  const draftUpdateInput = { version: Number(restoredDraft!.version), idempotencyKey: "492b38e1-9535-415a-a12a-a64c5595c194",
+    draft: { ...savedDraftInput.draft, meals: savedDraftInput.draft.meals.map(meal => ({ ...meal, date: "2026-09-10" })) } };
+  const duplicateDraftUpdates = await Promise.all([
+    mealPlanRepository.updateDraft(user.id, savedDraftInput.id, draftUpdateInput),
+    mealPlanRepository.updateDraft(user.id, savedDraftInput.id, draftUpdateInput),
+  ]);
+  assert(duplicateDraftUpdates.every(result => result.kind === "updated"));
+  assert.deepEqual(duplicateDraftUpdates.map(result => result.kind === "updated" ? result.value.repeated : null).sort(), [false, true]);
+  assert.equal((await mealPlanRepository.updateDraft(user.id, savedDraftInput.id,
+    { ...draftUpdateInput, idempotencyKey: "512e3d42-ea82-4d4f-8932-11f96dace194" })).kind, "version_conflict");
+  const updatedDraftPlan = await mealPlanRepository.find(user.id, savedDraftInput.id, false);
+  assert.equal(updatedDraftPlan!.version, Number(restoredDraft!.version) + 1);
+  assert.deepEqual((updatedDraftPlan!.constraints as Record<string, unknown>).currentCookingDraft, draftUpdateInput.draft);
+
+
+  const activationInput: SaveCookingPlanDraftInput = { ...savedDraftInput, id: "1b5e226a-8e80-413b-bf8e-bfe60cf43194",
+    draft: { ...savedDraftInput.draft, unresolved: [], cooking: [{ targetMealId: "dinner", recipeId: Number(secondRecipe.id),
+      title: String(secondRecipe.title), servings: 1, recipeYield: 1, demands: [{ food_name: "番茄", amount_value: 200, unit: "g" }] }] } };
+  await mealPlanRepository.saveDraft(user.id, activationInput);
+  const activatedDrafts = await Promise.all([
+    mealPlanRepository.activateDraft(user.id, activationInput.id, 1), mealPlanRepository.activateDraft(user.id, activationInput.id, 1),
+  ]);
+  assert(activatedDrafts.every(result => result.kind === "updated"));
+  assert.deepEqual(activatedDrafts.map(result => result.kind === "updated" ? result.value.repeated : null).sort(), [false,true]);
+  const activatedPlan = await mealPlanRepository.find(user.id, activationInput.id, false);
+  assert.equal(activatedPlan?.status, "active");
+  assert.equal((activatedPlan?.items as Array<Record<string, unknown>>).length, 1);
+  assert.equal((activatedPlan?.items as Array<Record<string, unknown>>)[0].plannedServings, 1);
+
+  const activatedItem = (activatedPlan!.items as Array<Record<string, unknown>>)[0]!;
+  const firstPlanQueue = await mealPlanRepository.enqueue(user.id, activationInput.id, String(activatedItem.id),
+    { version: Number(activatedItem.version), idempotencyKey: "pg-activated-first-queue" });
+  assert.equal(firstPlanQueue.kind, "completed");
+  const anotherActivation = { ...activationInput, id: "68505c87-3aac-43bc-9bdd-53402ed66194" };
+  await mealPlanRepository.saveDraft(user.id, anotherActivation);
+  await mealPlanRepository.activateDraft(user.id, anotherActivation.id, 1);
+  const anotherPlan = await mealPlanRepository.find(user.id, anotherActivation.id, false);
+  const anotherItem = (anotherPlan!.items as Array<Record<string, unknown>>)[0]!;
+  assert.equal((await mealPlanRepository.enqueue(user.id, anotherActivation.id, String(anotherItem.id),
+    { version: Number(anotherItem.version), idempotencyKey: "pg-activated-second-queue" })).kind, "completed");
+  const separateQueues = await pool.query("SELECT * FROM cooking_queue_items WHERE source_plan_item_id = ANY($1::text[])",
+    [[activatedItem.id, anotherItem.id]]);
+  assert.equal(separateQueues.rows.length, 2);
+  assert(separateQueues.rows.every(row => row.recipe_snapshot_json.plannedServings === 1));
+
   const mealPlanId = "77777777-7777-4777-8777-777777777777";
   const mealPlanItemId = "88888888-8888-4888-8888-888888888888";
   await pool.query(`INSERT INTO meal_plans
@@ -1828,6 +2072,24 @@ try {
   assert.deepEqual(deletedMediaReferences, [{ backend: "local", path: "/tmp/postgres-cleanup.png" }]);
   const mediaCleanupPage = await mediaCleanupService.list({ status: "completed", page: 1, pageSize: 10 });
   assert(mediaCleanupPage.items.some((job) => job.id === mediaJobId && job.urlCount === 1));
+
+  // Failed legacy rows must not monopolize the default batch after an origin change.
+  const legacyCleanupIds: number[] = [];
+  for (let index = 0; index < 25; index += 1) {
+    const result = await pool.query("INSERT INTO media_cleanup_jobs(owner_user_id,urls_json) VALUES($1,$2::jsonb) RETURNING id",
+      [user.id, JSON.stringify([`https://retired.example/${index}.png`])]);
+    legacyCleanupIds.push(Number(result.rows[0].id));
+  }
+  const nextCleanupId = await mediaCleanupRepository.enqueue(user.id, ["/media/uploads/next.png"], [{ backend: "local", path: "/tmp/next.png" }]);
+  for (const id of legacyCleanupIds) await assert.rejects(() => mediaCleanupService.process(id), /无法定位/);
+  assert.ok((await mediaCleanupRepository.pending(25, 30)).includes(nextCleanupId));
+  assert.equal(await mediaCleanupService.process(nextCleanupId), true);
+  for (const id of legacyCleanupIds) {
+    assert.equal((await mediaCleanupRepository.job(id, 30))?.status, "pending");
+    await pool.query("UPDATE media_cleanup_jobs SET objects_json=$1::jsonb WHERE id=$2",
+      [JSON.stringify([{ backend: "local", path: `/tmp/recovered-${id}.png` }]), id]);
+    assert.equal(await mediaCleanupService.process(id), true);
+  }
 
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);

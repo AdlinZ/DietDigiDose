@@ -49,7 +49,7 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
         : undefined;
       const activeId = (this.database.prepare(`
         SELECT id FROM cooking_queue_items
-        WHERE user_id = ? AND recipe_id = ? AND deleted_at IS NULL AND status IN (${activeStatuses})
+        WHERE user_id = ? AND recipe_id = ? AND source_plan_item_id IS NULL AND deleted_at IS NULL AND status IN (${activeStatuses})
       `).get(input.userId, input.recipeId) as { id: string } | undefined)?.id;
       const foundId = existingId || activeId;
       if (foundId) {

@@ -1,3 +1,4 @@
+import { formatPreparedMeal } from "../dietRecords/preparedMeals.js";
 import type { AiContextRepository } from "./repository.js";
 import type { AiContextSnapshot, Row } from "./types.js";
 
@@ -24,7 +25,11 @@ export class AiContextService {
     return {
       username: String(rows.user?.username || "用户"),
       dailyCaloriesTarget: Number(rows.user?.daily_calories_target || 2000),
+      preparedMeals: (rows.preparedMeals || []).map(formatPreparedMeal),
       inventory: rows.inventory.map((row) => ({
+        id: optionalNumber(row.id), version: optionalNumber(row.version),
+        quantity_value: optionalNumber(row.quantity_value) ?? null, quantity_unit: row.quantity_unit == null ? null : String(row.quantity_unit),
+        batch_code: row.batch_code == null ? null : String(row.batch_code),
         food_name: String(row.food_name || ""), quantity: String(row.quantity || ""),
         expiration_date: String(row.expiration_date || ""), storage_location: String(row.storage_location || ""),
       })),

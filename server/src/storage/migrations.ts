@@ -1998,6 +1998,85 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 60,
+    name: "prepared_meals_and_actual_consumption",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS prepared_meals (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL,
+          recipe_id INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+          food_name TEXT NOT NULL,
+          produced_servings REAL NOT NULL CHECK(produced_servings > 0),
+          remaining_servings REAL NOT NULL CHECK(remaining_servings >= 0 AND remaining_servings <= produced_servings),
+          nutrition_per_serving_json TEXT NOT NULL DEFAULT '{}',
+          planned_date TEXT,
+          meal_type TEXT NOT NULL DEFAULT '',
+          storage_location TEXT,
+          queue_item_id TEXT REFERENCES cooking_queue_items(id) ON DELETE SET NULL,
+          plan_item_id TEXT REFERENCES meal_plan_items(id) ON DELETE SET NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          produced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          result_json TEXT NOT NULL DEFAULT '{}',
+          UNIQUE(user_id,idempotency_key), UNIQUE(user_id,queue_item_id), UNIQUE(user_id,plan_item_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_prepared_meals_user_remaining ON prepared_meals(user_id,remaining_servings);
+        CREATE TABLE IF NOT EXISTS prepared_meal_events (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          prepared_meal_id TEXT NOT NULL REFERENCES prepared_meals(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL,
+          event_type TEXT NOT NULL CHECK(event_type IN ('eat','discard','reschedule')),
+          servings REAL,
+          recorded_at TEXT NOT NULL,
+          diet_record_id INTEGER REFERENCES diet_records(id) ON DELETE SET NULL,
+          result_json TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id,idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_prepared_meal_events_meal ON prepared_meal_events(prepared_meal_id,created_at);
+      `);
+    },
+  },
+  {
+    version: 61,
+    name: "prepared_meal_reservations",
+    up(database) {
+      database.exec("ALTER TABLE prepared_meals ADD COLUMN is_reserved INTEGER NOT NULL DEFAULT 0");
+    },
+  },
+
+  {
+    version: 62,
+    name: "cooking_queue_plan_identity",
+    up(database) {
+      database.exec(`ALTER TABLE cooking_queue_items ADD COLUMN source_plan_item_id TEXT;
+        UPDATE cooking_queue_items AS q SET source_plan_item_id = (
+          SELECT MIN(i.id) FROM meal_plan_items i WHERE i.queue_item_id=q.id AND i.user_id=q.user_id
+            AND i.deleted_at IS NULL AND i.status='queued')
+          WHERE q.deleted_at IS NULL AND q.status IN ('waiting','preparing','ready','cooking');
+        UPDATE meal_plan_items AS i SET queue_item_id=NULL, status='planned', version=version+1,
+          updated_at=CURRENT_TIMESTAMP
+          WHERE i.deleted_at IS NULL AND i.status='queued' AND EXISTS (
+            SELECT 1 FROM cooking_queue_items q WHERE q.id=i.queue_item_id AND q.user_id=i.user_id
+              AND q.source_plan_item_id IS NOT NULL AND q.source_plan_item_id<>i.id);
+        UPDATE cooking_queue_items AS q SET recipe_snapshot_json=json_set(q.recipe_snapshot_json,
+          '$.ingredients',json((SELECT i.ingredients_json FROM meal_plan_items i WHERE i.id=q.source_plan_item_id)),
+          '$.planItemId',q.source_plan_item_id,
+          '$.plannedDate',(SELECT i.planned_date FROM meal_plan_items i WHERE i.id=q.source_plan_item_id)),
+          version=version+1, updated_at=CURRENT_TIMESTAMP
+          WHERE q.source_plan_item_id IS NOT NULL;
+        DROP INDEX idx_cooking_queue_active_recipe;
+        CREATE UNIQUE INDEX idx_cooking_queue_active_recipe ON cooking_queue_items(user_id,recipe_id)
+          WHERE source_plan_item_id IS NULL AND deleted_at IS NULL AND status IN ('waiting','preparing','ready','cooking');
+        CREATE UNIQUE INDEX idx_cooking_queue_active_plan_item ON cooking_queue_items(user_id,source_plan_item_id)
+          WHERE source_plan_item_id IS NOT NULL AND deleted_at IS NULL AND status IN ('waiting','preparing','ready','cooking');`);
+    },
+  },
+
 ];
 
 export function runMigrations(database: Database.Database) {

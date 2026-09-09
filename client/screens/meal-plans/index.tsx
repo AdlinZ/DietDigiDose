@@ -1,3 +1,5 @@
+import { mealProductionSchema } from "@dietdigidose/contracts";
+import { MealProductionFields } from "@/components/MealProductionFields";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
@@ -39,7 +41,15 @@ export default function MealPlansScreen() {
   const [viewDays, setViewDays] = useState<3 | 7>(7);
   const [loading, setLoading] = useState(true);
   const [savingAction, setSavingAction] = useState<string | null>(null);
+  const [produced, setProduced] = useState("1");
+  const [eaten, setEaten] = useState("0");
+  const [withoutStock, setWithoutStock] = useState(false);
   const [detailItem, setDetailItem] = useState<MealPlanItem | null>(null);
+  useEffect(() => {
+    setProduced(String(detailItem?.plannedServings ?? 1));
+    setEaten("0");
+    setWithoutStock(false);
+  }, [detailItem?.id]);
   const [replacementRecipes, setReplacementRecipes] = useState<Recipe[]>([]);
   const [replacementOpen, setReplacementOpen] = useState(false);
 
@@ -148,17 +158,19 @@ export default function MealPlansScreen() {
 
   const complete = async (item: MealPlanItem) => {
     if (!selectedPlan || savingAction || item.status === "completed") return;
+    if (!withoutStock) { Alert.alert("先确认原料", "使用库存食材时请从烹饪入口确认扣减；此处只保存未使用库存原料的制作。"); return; }
     setSavingAction(`complete:${item.id}`);
     try {
       await mealPlansApi.complete(authFetch, selectedPlan.id, item.id, {
         version: item.version,
         idempotencyKey: executionKey("complete", item),
+        production: mealProductionSchema.parse({ food_name: item.title, produced_servings: Number(produced), eaten_servings: Number(eaten), meal_type: item.mealType, planned_date: item.plannedDate, nutrition_per_serving: {} }),
       });
       await load();
       setDetailItem(null);
-      Alert.alert("餐次已完成", "已关联到饮食记录，同一餐次重复提交不会重复记账", [
+      Alert.alert("餐次已完成", "制作已保存，剩余份量留待吃；只有实际食用计入摄入", [
         { text: "完成" },
-        { text: "查看记录", onPress: () => router.push("/diet-record") },
+        { text: "查看待吃餐", onPress: () => router.push("/prepared-meals") },
       ]);
     } catch (error) {
       Alert.alert("记录失败", error instanceof Error ? error.message : "请刷新后重试");
@@ -230,6 +242,8 @@ export default function MealPlansScreen() {
           </View>
         ) : null}
 
+        <TouchableOpacity onPress={() => router.push("/cooking-plan")} className="mx-5 mt-4 rounded-2xl bg-brand-soft p-4"><Text className="font-black text-brand">按待吃餐和库存计算这次备餐</Text></TouchableOpacity>
+        {selectedPlan?.constraints.savedCookingDraft && !selectedPlan.archived ? <TouchableOpacity onPress={() => router.push({ pathname: "/cooking-plan", params: { planId: selectedPlan.id } })} className="mx-5 rounded-2xl bg-brand-soft p-4"><Text className="font-bold text-brand">恢复备餐方案草案 · 查看份量、原料与时间</Text></TouchableOpacity> : null}
         {!selectedPlan ? (
           <View className="mx-5 mt-10 items-center rounded-3xl border border-dashed border-line bg-surface p-8">
             <FontAwesome6 name="calendar-plus" size={34} colorClassName="accent-copy-muted" />
@@ -241,6 +255,11 @@ export default function MealPlansScreen() {
           <View className="mx-5 mt-5 rounded-3xl border border-line bg-background-secondary p-5">
             <Text className="font-black text-copy-muted">该 Agent 餐单已撤销</Text>
             <Text className="mt-2 text-xs leading-5 text-copy-muted">保留只读状态用于审计；不会再进入采购、烹饪或记录流程。</Text>
+          </View>
+        ) : selectedPlan.constraints.savedCookingDraft && selectedPlan.items.length === 0 ? (
+          <View className="mx-5 mt-5 rounded-3xl border border-line bg-surface p-5">
+            <Text className="font-black text-ink">备餐草案已保存</Text>
+            <Text className="mt-2 text-xs leading-5 text-copy-muted">打开上方方案查看待吃餐分配、补做份量和原料预算。执行前需按最新库存核对。</Text>
           </View>
         ) : (
           <>
@@ -334,7 +353,11 @@ export default function MealPlansScreen() {
                   <TouchableOpacity onPress={() => void addShopping(detailItem)} className="flex-1 items-center rounded-2xl bg-warm-soft py-3"><Text className="text-xs font-black text-warm">生成缺失采购</Text></TouchableOpacity>
                   <TouchableOpacity onPress={() => void addQueue(detailItem, true)} className="flex-1 items-center rounded-2xl bg-brand-soft py-3"><Text className="text-xs font-black text-brand">开始烹饪</Text></TouchableOpacity>
                 </View>
-                {detailItem.status !== "completed" ? <TouchableOpacity onPress={() => void complete(detailItem)} className="mb-4 mt-3 items-center rounded-2xl bg-brand-fill py-3.5"><Text className="font-black text-white">标记完成并记入饮食</Text></TouchableOpacity> : <View className="mb-4 mt-3 items-center rounded-2xl bg-brand-soft py-3.5"><Text className="font-black text-brand">已关联饮食记录 #{detailItem.dietRecordId}</Text></View>}
+                {detailItem.status !== "completed" ? <>
+                  <MealProductionFields produced={produced} eaten={eaten} onProducedChange={setProduced} onEatenChange={setEaten} />
+                  <TouchableOpacity onPress={() => setWithoutStock(value => !value)}><Text className="text-brand">{withoutStock ? "已确认：" : "点击确认："} 本次未使用库存原料</Text></TouchableOpacity>
+                </> : null}
+                {detailItem.status !== "completed" ? <TouchableOpacity onPress={() => void complete(detailItem)} className="mb-4 mt-3 items-center rounded-2xl bg-brand-fill py-3.5"><Text className="font-black text-white">保存制作与食用分配</Text></TouchableOpacity> : <View className="mb-4 mt-3 items-center rounded-2xl bg-brand-soft py-3.5"><Text className="font-black text-brand">{detailItem.dietRecordId ? `已关联饮食记录 #${detailItem.dietRecordId}` : "制作已保存，请到待吃餐确认食用"}</Text></View>}
               </ScrollView>
             </View>
           ) : null}

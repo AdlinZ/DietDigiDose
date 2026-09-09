@@ -126,7 +126,7 @@ export class PostgresHealthRepository implements HealthRepository {
           medical_notes = COALESCE($12, medical_notes),
           dietary_restrictions_json = COALESCE($13::jsonb, dietary_restrictions_json),
           disliked_foods = COALESCE($14, disliked_foods),
-          kitchen_constraints_json = COALESCE($15::jsonb, kitchen_constraints_json),
+          kitchen_constraints_json = COALESCE(kitchen_constraints_json, '{}'::jsonb) || COALESCE($15::jsonb, '{}'::jsonb),
           nutrition_targets_json = COALESCE($16::jsonb, nutrition_targets_json),
           tracking_enabled = COALESCE($17, tracking_enabled), updated_at = CURRENT_TIMESTAMP
         WHERE user_id = $18 RETURNING *

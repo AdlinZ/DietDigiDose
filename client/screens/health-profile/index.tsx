@@ -1,3 +1,4 @@
+import type { KitchenPreferences } from "@dietdigidose/contracts";
 import { useCallback, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import {
   ActivityIndicator,
@@ -72,6 +73,7 @@ export default function HealthProfileScreen() {
   const [medicalNotes, setMedicalNotes] = useState("");
   const [restrictions, setRestrictions] = useState<string[]>([]);
   const [dislikedFoods, setDislikedFoods] = useState("");
+  const [mealPreparation, setMealPreparation] = useState<KitchenPreferences>({});
   const [mealTime, setMealTime] = useState("");
   const [budget, setBudget] = useState("");
   const [cookingLevel, setCookingLevel] = useState<"beginner" | "intermediate" | "advanced" | null>(null);
@@ -134,7 +136,8 @@ export default function HealthProfileScreen() {
     setRestrictions(Array.isArray(profile.dietary_restrictions) ? profile.dietary_restrictions : []);
     setDislikedFoods(profile.disliked_foods || "");
     const kitchen = profile.kitchen_constraints || {};
-    setMealTime(kitchen.meal_time_minutes == null ? "" : String(kitchen.meal_time_minutes));
+    setMealPreparation(kitchen);
+    setMealTime(String(kitchen.meal_time_minutes ?? 30));
     setBudget(kitchen.budget_per_meal == null ? "" : String(kitchen.budget_per_meal));
     setCookingLevel(kitchen.cooking_level || null);
     setServings(kitchen.servings == null ? "" : String(kitchen.servings));
@@ -216,6 +219,7 @@ export default function HealthProfileScreen() {
         dietary_restrictions: restrictions,
         disliked_foods: dislikedFoods,
         kitchen_constraints: {
+          ...mealPreparation,
           meal_time_minutes: numberOrNull(mealTime),
           budget_per_meal: numberOrNull(budget),
           cooking_level: cookingLevel,
@@ -673,6 +677,24 @@ export default function HealthProfileScreen() {
                 <NumberField label="就餐人数" unit="人" icon="users" value={servings} onChangeText={setServings} />
                 <View className="flex-1" />
               </View>
+              <View className="mt-4">
+                <Text className="mb-2 text-xs font-bold text-copy-muted">常用餐次（可多选）</Text>
+                <View className="flex-row gap-2">
+                  {([['breakfast', '早餐'], ['lunch', '午餐'], ['dinner', '晚餐'], ['snack', '加餐']] as const).map(([value, label]) => (
+                    <Segment key={value} label={label} selected={mealPreparation.usual_meals?.includes(value) ?? false}
+                      onPress={() => setMealPreparation(current => ({ ...current, usual_meals: current.usual_meals?.includes(value)
+                        ? current.usual_meals.filter(meal => meal !== value) : [...(current.usual_meals ?? []), value] }))} />
+                  ))}
+                </View>
+              </View>
+              <ChoiceRow label="通常在哪里吃" value={mealPreparation.eating_location ?? null}
+                options={[{ value: 'home', label: '家里' }, { value: 'work', label: '单位' }, { value: 'school', label: '学校' }, { value: 'other', label: '其他' }]}
+                onChange={eating_location => setMealPreparation(current => ({ ...current, eating_location }))} />
+              {([['carry_meals', '需要携带饭菜'], ['refrigeration_available', '用餐前可冷藏'], ['reheating_available', '用餐时可加热']] as const).map(([field, label]) => (
+                <ChoiceRow key={field} label={label} value={mealPreparation[field] == null ? 'unknown' : mealPreparation[field] ? 'yes' : 'no'}
+                  options={[{ value: 'yes', label: '可以 / 是' }, { value: 'no', label: '不可以 / 否' }, { value: 'unknown', label: '尚不确定' }]}
+                  onChange={value => setMealPreparation(current => ({ ...current, [field]: value === 'unknown' ? null : value === 'yes' }))} />
+              ))}
               <ChoiceRow
                 label="外食频率"
                 options={[

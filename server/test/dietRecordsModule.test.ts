@@ -7,6 +7,8 @@ function fakeRepository(overrides: Partial<DietRecordsRepository> = {}): DietRec
   return {
     recordFunnelEvent: async () => undefined,
     list: async () => [],
+    listPreparedMeals: async () => [],
+    applyMealEvent: async () => ({ repeated: false }),
     create: async (_userId, record) => ({ id: 1, ...record }),
     remove: async () => true,
     completeCooking: async (_userId, input) => ({

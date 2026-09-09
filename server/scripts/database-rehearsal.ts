@@ -316,12 +316,21 @@ async function main() {
     const legacyDatabase = new Database(legacyPath);
     const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
       .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => migration.version !== 59);
+    const unsupportedVersions = newerVersions.filter((migration) => ![59, 60, 61, 62].includes(migration.version));
     if (unsupportedVersions.length) {
       legacyDatabase.close();
       throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
     }
     for (const migration of newerVersions) {
+      if (migration.version === 62) legacyDatabase.exec(`
+        DROP INDEX idx_cooking_queue_active_plan_item;
+        DROP INDEX idx_cooking_queue_active_recipe;
+        ALTER TABLE cooking_queue_items DROP COLUMN source_plan_item_id;
+        CREATE UNIQUE INDEX idx_cooking_queue_active_recipe ON cooking_queue_items(user_id,recipe_id)
+          WHERE deleted_at IS NULL AND status IN ('waiting','preparing','ready','cooking');
+      `);
+      if (migration.version === 61) legacyDatabase.exec("ALTER TABLE prepared_meals DROP COLUMN is_reserved");
+      if (migration.version === 60) legacyDatabase.exec("DROP TABLE prepared_meal_events; DROP TABLE prepared_meals;");
       if (migration.version === 59) legacyDatabase.exec("DROP TABLE IF EXISTS worker_task_runs; DROP TABLE IF EXISTS worker_task_leases;");
       legacyDatabase.prepare("DELETE FROM schema_migrations WHERE version = ?").run(migration.version);
     }

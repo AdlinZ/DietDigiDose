@@ -1,7 +1,12 @@
+import { permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
+import { SqliteDietRecordsRepository } from "../dietRecords/sqliteRepository.js";
+import { agentMealProduction, agentPreparedMealEvent } from "../../services/agent/mealPayload.js";
+import { agentInventoryCreate, agentInventoryUpdate, agentInventoryConsumption } from "../../services/agent/inventoryPayload.js";
+import { SqliteInventoryRepository } from "../inventory/sqliteRepository.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { currentDateKey, currentTimeKey, dateKeyAfterDays } from "../../utils/date.js";
-import { arrayValue, nonNegativeInteger, nonNegativeNumber, reversibleAgentActions, stringValue, timestampMs } from "./helpers.js";
+import { currentDateKey, currentTimeKey } from "../../utils/date.js";
+import { inventoryUndoOrder, InventoryUndoVersions, inventoryUndoFields, arrayValue, nonNegativeInteger, nonNegativeNumber, reversibleAgentActions, stringValue, timestampMs } from "./helpers.js";
 import type { AgentOperationsRepository, ExecutableAgentAction } from "./repository.js";
 
 type StoredAction = {
@@ -45,14 +50,37 @@ export class SqliteAgentOperationsRepository implements AgentOperationsRepositor
     const rows = this.database.prepare(`SELECT id,action_type,status,before_json,result_json,executed_at,created_at
       FROM agent_actions WHERE run_id = ? AND user_id = ? ORDER BY created_at,id`).all(runId, userId) as StoredAction[];
     const actions = rows.filter((row) => row.status === "executed" && reversibleAgentActions.has(row.action_type));
-    if (!actions.length) throw new Error("没有可撤销的 Agent 操作");
+    if (!actions.length) {
+      if (rows.some(row => row.status === "undone" && reversibleAgentActions.has(row.action_type))) return { undone: 0 };
+      throw new Error("没有可撤销的 Agent 操作");
+    }
     const latest = Math.max(...actions.map((action) => timestampMs(action.executed_at || action.created_at)));
     if (!Number.isFinite(latest) || Date.now() - latest > 10 * 60_000) throw new Error("撤销窗口已过期");
     return this.database.transaction(() => {
-      for (const action of [...actions].reverse()) {
+      const undoVersions = new InventoryUndoVersions();
+      for (const action of inventoryUndoOrder(actions)) {
         const result = this.parseObject(action.result_json);
         const before = this.parseObject(action.before_json);
-        if (action.action_type === "create_meal_plan" && result?.planId) {
+        if ((action.action_type === "add_inventory_item" || action.action_type === "update_inventory_item") && result?.inventoryItemId) {
+          const item = result.item as Record<string, unknown> | undefined;
+          if (!item?.version) throw new Error("库存操作缺少版本证据，无法安全撤销");
+          const current = this.database.prepare("SELECT * FROM inventory_items WHERE id=? AND user_id=? AND version=? AND deleted_at IS NULL")
+            .get(result.inventoryItemId, userId, undoVersions.expected(result.inventoryItemId, item.version)) as Record<string, unknown> | undefined;
+          if (!current) throw new Error("库存已有后续消耗或修改，请在库存页纠正，无法安全撤销");
+          if (action.action_type === "add_inventory_item") {
+            this.database.prepare("UPDATE inventory_items SET deleted_at=CURRENT_TIMESTAMP,is_available=0,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?")
+              .run(result.inventoryItemId, userId);
+          } else {
+            if (!before || before.id !== result.inventoryItemId) throw new Error("缺少库存原始状态，无法撤销");
+            this.database.prepare(`UPDATE inventory_items SET ${inventoryUndoFields.map(field => `${field}=?`).join(",")},version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`)
+              .run(...inventoryUndoFields.map(field => before[field] ?? null), result.inventoryItemId, userId);
+          }
+          if (action.action_type === "update_inventory_item") undoVersions.restored(result.inventoryItemId, current.version, before?.version);
+          this.database.prepare(`INSERT INTO inventory_change_logs(user_id,inventory_item_id,action,source,quantity_before,quantity_after,quantity_unit,idempotency_key,metadata_json)
+            VALUES(?,?,'undo','ai',?,?,?,?,?)`).run(userId,result.inventoryItemId,current.quantity_value,
+              action.action_type === "add_inventory_item" ? null : before?.quantity_value ?? null,current.quantity_unit,
+              `agent-undo:${action.id}`,JSON.stringify({ actionId: action.id, runId, actionType: action.action_type }));
+        } else if (action.action_type === "create_meal_plan" && result?.planId) {
           const changed = this.database.prepare(`UPDATE meal_plans SET deleted_at = CURRENT_TIMESTAMP,status = 'cancelled',version = version + 1
             WHERE id = ? AND user_id = ? AND created_by_run_id = ? AND version = 1 AND deleted_at IS NULL`)
             .run(result.planId, userId, runId).changes;
@@ -193,6 +221,16 @@ export class SqliteAgentOperationsRepository implements AgentOperationsRepositor
         result = { itemId };
         break;
       }
+      case "produce_meal": {
+        const input = agentMealProduction(payload, `agent-production:${action.id}`);
+        result = new SqliteDietRecordsRepository(this.database).completeCookingInTransaction(userId, input);
+        break;
+      }
+      case "record_prepared_meal_event": {
+        const { mealId, input } = agentPreparedMealEvent(payload, `agent-meal-event:${action.id}`);
+        result = new SqliteDietRecordsRepository(this.database).applyMealEventInTransaction(userId, mealId, input);
+        break;
+      }
       case "record_diet_meal": {
         const foodName = stringValue(payload.foodName);
         if (!foodName) throw new Error("缺少食物名称");
@@ -209,39 +247,45 @@ export class SqliteAgentOperationsRepository implements AgentOperationsRepositor
         break;
       }
       case "add_inventory_item": {
-        const name = stringValue(payload.name);
-        if (!name) throw new Error("缺少库存食材名称");
-        const days = Math.max(1, Math.min(Number(payload.expireDays) || 7, 365));
-        const inserted = this.database.prepare(`INSERT INTO inventory_items
-          (user_id,food_name,category,quantity,expiration_date,storage_location,is_available) VALUES (?, ?, ?, ?, ?, ?, 1)`)
-          .run(userId, name, stringValue(payload.category, "其他"), stringValue(payload.quantity, "1份"),
-            dateKeyAfterDays(days), stringValue(payload.location, "冷藏"));
-        result = { inventoryItemId: Number(inserted.lastInsertRowid) };
+        const inventory = new SqliteInventoryRepository(this.database);
+        const input = agentInventoryCreate(payload);
+        const item = inventory.createInTransaction(userId, input, "ai");
+        result = { inventoryItemId: item.id, item };
         break;
       }
       case "update_inventory_item": {
-        const itemId = Number(payload.itemId);
-        if (!Number.isInteger(itemId) || itemId <= 0) throw new Error("库存食材不存在或无权修改");
-        before = this.database.prepare("SELECT * FROM inventory_items WHERE id = ? AND user_id = ?").get(itemId, userId);
-        if (!before) throw new Error("库存食材不存在或无权修改");
-        this.database.prepare(`UPDATE inventory_items SET food_name = COALESCE(?,food_name),category = COALESCE(?,category),
-          quantity = COALESCE(?,quantity),expiration_date = COALESCE(?,expiration_date),storage_location = COALESCE(?,storage_location),
-          is_available = COALESCE(?,is_available) WHERE id = ? AND user_id = ?`).run(
-            payload.name ? stringValue(payload.name) : null, payload.category ? stringValue(payload.category) : null,
-            payload.quantity ? stringValue(payload.quantity) : null, payload.expirationDate ? stringValue(payload.expirationDate) : null,
-            payload.location ? stringValue(payload.location) : null,
-            typeof payload.isAvailable === "boolean" ? (payload.isAvailable ? 1 : 0) : null, itemId, userId,
-          );
-        result = { inventoryItemId: itemId };
+        const inventory = new SqliteInventoryRepository(this.database);
+        const { itemId, version, patch } = agentInventoryUpdate(payload);
+        const current = this.database.prepare("SELECT * FROM inventory_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(itemId, userId) as Record<string, unknown> | undefined;
+        if (!current) throw new Error("库存食材不存在或无权修改");
+        before = current;
+        const hasQuantity = Object.prototype.hasOwnProperty.call(patch, "quantity_value");
+        const persistence = {
+          patch,
+          nextQuantityValue: hasQuantity ? patch.quantity_value ?? null : current.quantity_value == null ? null : Number(current.quantity_value),
+          nextQuantityUnit: hasQuantity ? patch.quantity_unit ?? null : current.quantity_unit as typeof patch.quantity_unit ?? null,
+        };
+        const updated = inventory.updateInTransaction(userId, itemId, version, persistence, "ai");
+        if (updated.kind === "conflict") throw new Error("库存已在其他设备更新，请刷新后重试");
+        result = { inventoryItemId: itemId, item: updated.item };
         break;
       }
       case "consume_inventory_items": {
-        const ids = arrayValue(payload.itemIds).map(Number).filter((id) => Number.isInteger(id) && id > 0).slice(0, 100);
-        if (!ids.length) throw new Error("缺少需要消耗的库存项");
-        const placeholders = ids.map(() => "?").join(",");
-        before = this.database.prepare(`SELECT * FROM inventory_items WHERE user_id = ? AND id IN (${placeholders})`).all(userId, ...ids);
-        this.database.prepare(`UPDATE inventory_items SET is_available = 0 WHERE user_id = ? AND id IN (${placeholders})`).run(userId, ...ids);
-        result = { inventoryItemIds: ids };
+        const inventory = new SqliteInventoryRepository(this.database);
+        const { input, reason } = agentInventoryConsumption(payload, `agent-inventory:${runId}:${action.id}`);
+        const consumed = inventory.consumeInTransaction(userId, input, { reason, runId });
+        result = { inventoryItemIds: input.items.map(item => item.item_id), ...consumed, reason };
+        break;
+      }
+      case "update_kitchen_preferences": {
+        const { preferences } = permanentPreferencePayloadSchema.parse(payload);
+        this.database.prepare("INSERT OR IGNORE INTO user_health_profiles(user_id) VALUES(?)").run(userId);
+        const stored = this.database.prepare("SELECT kitchen_constraints_json FROM user_health_profiles WHERE user_id=?").get(userId) as { kitchen_constraints_json: string };
+        before = JSON.parse(stored.kitchen_constraints_json || "{}");
+        const effective = { ...(before as Record<string, unknown>), ...preferences };
+        this.database.prepare("UPDATE user_health_profiles SET kitchen_constraints_json=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?")
+          .run(JSON.stringify(effective), userId);
+        result = { kitchenPreferences: effective, scope: "persistent" };
         break;
       }
       case "add_kitchenware_item": {

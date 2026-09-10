@@ -60,7 +60,8 @@ describe("AI context module", () => {
     database.exec(`
       CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, daily_calories_target INTEGER);
       CREATE TABLE inventory_items (id INTEGER PRIMARY KEY, user_id INTEGER, food_name TEXT, quantity TEXT,
-        expiration_date TEXT, storage_location TEXT, is_available INTEGER);
+        expiration_date TEXT, storage_location TEXT, is_available INTEGER, version INTEGER DEFAULT 1, quantity_value REAL, quantity_unit TEXT, batch_code TEXT, deleted_at TEXT);
+      CREATE TABLE prepared_meals (id TEXT PRIMARY KEY,user_id INTEGER,remaining_servings REAL,produced_at TEXT);
       CREATE TABLE kitchenware_items (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, category TEXT, status TEXT,
         deleted_at TEXT, updated_at TEXT);
       CREATE TABLE diet_records (id INTEGER PRIMARY KEY, user_id INTEGER, meal_type TEXT, food_name TEXT,
@@ -71,8 +72,8 @@ describe("AI context module", () => {
         dietary_restrictions_json TEXT, disliked_foods TEXT, kitchen_constraints_json TEXT, nutrition_targets_json TEXT);
       CREATE TABLE system_settings (key TEXT PRIMARY KEY, value TEXT);
       INSERT INTO users VALUES (1, '小林', 1900);
-      INSERT INTO inventory_items VALUES (1, 1, '番茄', '2个', '2026-09-02', '冷藏', 1);
-      INSERT INTO inventory_items VALUES (2, 1, '过期隐藏', '1个', '2026-09-01', '冷藏', 0);
+      INSERT INTO inventory_items(id,user_id,food_name,quantity,expiration_date,storage_location,is_available) VALUES (1, 1, '番茄', '2个', '2026-09-02', '冷藏', 1);
+      INSERT INTO inventory_items(id,user_id,food_name,quantity,expiration_date,storage_location,is_available) VALUES (2, 1, '过期隐藏', '1个', '2026-09-01', '冷藏', 0);
       INSERT INTO kitchenware_items VALUES (1, 1, '炒锅', '锅具', '正常', NULL, '2026-09-01');
       INSERT INTO kitchenware_items VALUES (2, 1, '坏锅', '锅具', '维修中', NULL, '2026-09-01');
       INSERT INTO diet_records VALUES (1, 1, '午餐', '番茄蛋', 320, 18, 20, 11, '2026-09-01 12:00');
@@ -83,6 +84,9 @@ describe("AI context module", () => {
     const service = new AiContextService(new SqliteAiContextRepository(database));
     const result = await service.load(1, "2026-09-01");
     assert.equal(result.inventory.length, 1);
+    assert.equal(result.inventory[0].id, 1);
+    assert.equal(result.inventory[0].version, 1);
+    assert.equal(result.inventory[0].quantity_value, null);
     assert.equal(result.kitchenware.length, 1);
     assert.equal(result.todayDiet[0]?.calories, 320);
     assert.deepEqual(result.healthProfile?.dietary_restrictions, ["低盐"]);

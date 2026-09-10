@@ -22,6 +22,7 @@ const BOOLEAN_COLUMNS = new Set([
   "household_inventory_items.is_available",
   "household_shopping_items.checked",
   "inventory_items.is_available",
+  "prepared_meals.is_reserved",
   "push_devices.is_active",
   "realtime_voice_transcript_chunks.is_final",
   "shopping_list_items.checked",

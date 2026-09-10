@@ -1425,8 +1425,9 @@ describe("user data isolation", () => {
         storage_location: "常温",
       }),
     });
-    const earlier = await createBatch("2026-09-01", "BATCH-EARLY");
-    const later = await createBatch("2026-10-01", "BATCH-LATE");
+    const { dateKeyAfterDays } = await import("../src/utils/date.js");
+    const earlier = await createBatch(dateKeyAfterDays(1), "BATCH-EARLY");
+    const later = await createBatch(dateKeyAfterDays(30), "BATCH-LATE");
     assert.equal(earlier.response.status, 201);
     assert.equal(later.response.status, 201);
 
@@ -1935,7 +1936,9 @@ describe("user data isolation", () => {
     assert.match(firstBody.scoringVersion, /^rules-/);
     assert.ok(firstBody.nextCursor);
     assert.ok([safeA, safeB].includes(firstBody.items[0].recipeId));
-    assert.ok(firstBody.items[0].reasons.some((reason: string) => /库存覆盖|临期/.test(reason)));
+    assert.ok(firstBody.items[0].reasons.some((reason: string) => /数量待核对/.test(reason)));
+    assert.equal(firstBody.items[0].features.inventoryCoverage, 0);
+    assert.ok(firstBody.items[0].degraded.includes("inventory_quantity_unknown"));
     assert.equal(firstBody.items[0].features.timeBudgetMinutes, 20);
     assert.deepEqual(firstBody.items[0].hardConstraints.unmet, []);
     assert.ok(![allergyRecipe, slowRecipe, toolRecipe].includes(firstBody.items[0].recipeId));
@@ -3342,4 +3345,552 @@ describe("core business authorization", () => {
       else process.env.OPENAI_API_KEY = previousOpenAiKey;
     }
   });
+});
+
+test("prepared meals separate production, later eating and discard atomically", async () => {
+  const first = await register("prepared-190-first@example.com");
+  const second = await register("prepared-190-second@example.com");
+  const stock = await api("/api/v1/inventory", { token: first.token, method: "POST", body: JSON.stringify({
+    food_name: "份量回归鸡蛋", category: "蛋类", quantity: "10个", quantity_value: 10, quantity_unit: "piece", expiration_date: "2026-09-20", storage_location: "冷藏",
+  }) });
+  assert.equal(stock.response.status, 201);
+  const stockId = (stock.body as JsonObject).id;
+  const payload = {
+    idempotency_key: "production-190-three-servings", inventory_consumptions: [{ item_id: stockId, version: 1, mode: "amount", amount_value: 3, unit: "piece" }],
+    production: { food_name: "三份蛋羹", produced_servings: 3, eaten_servings: 1, eaten_at: "2026-09-08", meal_type: "晚餐", nutrition_per_serving: { calories: 100, protein: null }, planned_date: "2026-09-09" },
+  };
+  const produce = () => api("/api/v1/diet-records/cooking-completions", { token: first.token, method: "POST", body: JSON.stringify(payload) });
+  const made = await produce();
+  assert.equal(made.response.status, 201);
+  const meal = (made.body as JsonObject).prepared_meal;
+  assert.equal(meal.remaining_servings, 2);
+  assert.equal((made.body as JsonObject).diet_record.amount, "1份");
+  assert.equal((made.body as JsonObject).diet_record.calories, 100);
+  assert.equal((made.body as JsonObject).diet_record.protein, null);
+  assert.equal((await produce()).response.status, 200);
+  const event = (body: JsonObject, token = first.token) => api(`/api/v1/diet-records/prepared-meals/${meal.id}/events`, { token, method: "POST", body: JSON.stringify(body) });
+  const eatenInput = { idempotency_key: "prepared-eat-190-half", version: 1, type: "eat", servings: 0.5, recorded_at: "2026-09-09", meal_type: "午餐" };
+  assert.equal((await event(eatenInput, second.token)).response.status, 409);
+  const eaten = await event(eatenInput);
+  assert.equal(eaten.response.status, 201);
+  assert.equal((eaten.body as JsonObject).prepared_meal.remaining_servings, 1.5);
+  assert.equal((eaten.body as JsonObject).diet_record.recorded_at, "2026-09-09");
+  assert.equal((eaten.body as JsonObject).diet_record.calories, 50);
+  assert.equal((await event(eatenInput)).response.status, 200);
+  const discarded = await event({ idempotency_key: "prepared-discard-190-half", version: 2, type: "discard", servings: 0.5 });
+  assert.equal(discarded.response.status, 201);
+  assert.equal((discarded.body as JsonObject).diet_record, null);
+  assert.equal((discarded.body as JsonObject).prepared_meal.remaining_servings, 1);
+  const postponed = await event({ idempotency_key: "prepared-postpone-190", version: 3, type: "reschedule", planned_date: "2026-09-10", meal_type: "晚餐" });
+  assert.equal(postponed.response.status, 201);
+  assert.equal((postponed.body as JsonObject).prepared_meal.remaining_servings, 1);
+  const competing = await Promise.all(["a", "b"].map(key => event({ idempotency_key: `prepared-concurrent-190-${key}`, version: 4, type: "eat", servings: 1, recorded_at: "2026-09-10" })));
+  assert.deepEqual(competing.map(value => value.response.status).sort(), [201, 409]);
+  const remainingStock = db.prepare("SELECT quantity_value,version FROM inventory_items WHERE id=?").get(stockId) as JsonObject;
+  assert.equal(remainingStock.quantity_value, 7);
+  assert.equal(remainingStock.version, 2);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=? AND food_name='三份蛋羹'").get(first.user.id) as JsonObject).n, 3);
+  const saved = await api("/api/v1/diet-records/prepared-meals", { token: first.token });
+  assert.equal((saved.body as JsonObject[]).find(item => item.id === meal.id)?.remaining_servings, 0);
+
+  db.exec("CREATE TRIGGER fail_prepared_meal_test BEFORE INSERT ON prepared_meals WHEN NEW.food_name='强制回滚制作' BEGIN SELECT RAISE(ABORT,'test production failure'); END");
+  try {
+    const failed = await api("/api/v1/diet-records/cooking-completions", { token: first.token, method: "POST", body: JSON.stringify({
+      ...payload, idempotency_key: "production-190-rollback", inventory_consumptions: [{ item_id: stockId, version: 2, mode: "amount", amount_value: 1, unit: "piece" }],
+      production: { food_name: "强制回滚制作", produced_servings: 1, eaten_servings: 0 },
+    }) });
+    assert.equal(failed.response.status, 500);
+    assert.equal((db.prepare("SELECT quantity_value FROM inventory_items WHERE id=?").get(stockId) as JsonObject).quantity_value, 7);
+  } finally { db.exec("DROP TRIGGER fail_prepared_meal_test"); }
+  const stored = await api("/api/v1/diet-records/cooking-completions", { token: first.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "production-190-store-all", production: { food_name: "全部留待明天", produced_servings: 3, eaten_servings: 0, planned_date: "2026-09-09" },
+  }) });
+  assert.equal(stored.response.status, 201);
+  assert.equal((stored.body as JsonObject).diet_record, null);
+  assert.equal((stored.body as JsonObject).prepared_meal.remaining_servings, 3);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE food_name='全部留待明天'").get() as JsonObject).n, 0);
+});
+
+
+test("Agent prepared meals share production transactions and roll back failed bundles", async () => {
+  const { SqliteAgentOperationsRepository } = await import("../src/modules/agentOperations/sqliteRepository.js");
+  const account = await register("prepared-agent-190@example.com");
+  const runId = "prepared-agent-run-190";
+  db.prepare(`INSERT INTO agent_runs(id,user_id,session_id,modality,status,input_json,checkpoint_thread_id)
+    VALUES(?,?,'prepared-test','text','running','{}','prepared-test')`).run(runId, account.user.id);
+  const repo = new SqliteAgentOperationsRepository(db);
+  let sequence = 0;
+  function proposal(actionType: "produce_meal" | "record_prepared_meal_event", payload: Record<string, unknown>) {
+    const id = `prepared-agent-action-${++sequence}`;
+    db.prepare(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+      VALUES(?,?,?,?,'high','proposed',?,?)`).run(id,runId,account.user.id,actionType,JSON.stringify(payload),id);
+    return { id, actionType, payload, riskLevel: "high" as const, summary: "制作与食用" };
+  }
+  const make = proposal("produce_meal", { production: { food_name: "Agent 待吃餐", produced_servings: 3, eaten_servings: 0 } });
+  const first = await repo.executeActions(account.user.id, runId, [make]);
+  assert.deepEqual(await repo.executeActions(account.user.id, runId, [make]), first);
+  const meal = db.prepare("SELECT id,remaining_servings FROM prepared_meals WHERE user_id=?").get(account.user.id) as JsonObject;
+  assert.equal(meal.remaining_servings, 3);
+  const eat = proposal("record_prepared_meal_event", { mealId: meal.id, version: 1, type: "eat", servings: 0.5, recorded_at: "2026-09-09" });
+  await repo.executeActions(account.user.id, runId, [eat]);
+  assert.equal((db.prepare("SELECT amount FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).amount, "0.5份");
+  await assert.rejects(() => repo.executeActions(account.user.id, runId, [
+    proposal("produce_meal", { production: { food_name: "Agent 回滚待吃餐", produced_servings: 2, eaten_servings: 1 } }),
+    proposal("record_prepared_meal_event", { mealId: meal.id, version: 1, type: "eat", servings: 1 }),
+  ]));
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM prepared_meals WHERE user_id=?").get(account.user.id) as JsonObject).n, 1);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).n, 1);
+  assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 2.5);
+});
+
+test("prepared meals complete linked plans and queues once across old and new clients", async () => {
+  const account = await register("prepared-plan-190@example.com");
+  const recipe = db.prepare("SELECT id FROM recipes WHERE status='approved' AND deleted_at IS NULL LIMIT 1").get() as JsonObject;
+  const planId = "55555555-5555-4555-8555-555555550190";
+  const itemId = "55555555-5555-4555-8555-555555550191";
+  db.prepare(`INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status,source,constraints_json)
+    VALUES(?,?,'制作关联测试','2026-09-08','2026-09-10','active','agent','{}')`).run(planId,account.user.id);
+  db.prepare(`INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json)
+    VALUES(?,?,?,'2026-09-09','午餐','制作关联测试',?,'[]','[]')`).run(itemId,planId,account.user.id,recipe.id);
+  const path = `/api/v1/meal-plans/${planId}/items/${itemId}`;
+  const post = (url: string, body: JsonObject) => api(url,{ token: account.token, method: "POST", body: JSON.stringify(body) });
+  const queue = await post(`${path}/queue`, { version: 1, idempotencyKey: "prepared-plan-queue-190" });
+  assert.equal(queue.response.status, 201);
+  const queueId = (queue.body as JsonObject).queueItemId;
+  const production = { food_name: "关联待吃餐", produced_servings: 3, eaten_servings: 0, planned_date: "2026-09-09" };
+  const stale = await post(`${path}/complete`, { version: 1, idempotencyKey: "prepared-plan-stale-190", production });
+  assert.equal(stale.response.status, 409);
+  const cooked = await post("/api/v1/diet-records/cooking-completions", {
+    idempotency_key: "prepared-linked-cook-190", recipe_id: recipe.id,
+    production: { ...production, queue_item_id: queueId, queue_version: 1 },
+  });
+  assert.equal(cooked.response.status, 201);
+  assert.equal((cooked.body as JsonObject).prepared_meal.plan_item_id, itemId);
+  assert.equal((db.prepare("SELECT status FROM meal_plan_items WHERE id=?").get(itemId) as JsonObject).status, "completed");
+  assert.equal((db.prepare("SELECT status FROM cooking_queue_items WHERE id=?").get(queueId) as JsonObject).status, "completed");
+  for (const body of [
+    { version: 2, idempotencyKey: "prepared-plan-repeat-190", production },
+    { version: 3, idempotencyKey: "prepared-plan-old-client-190" },
+  ]) {
+    const repeated = await post(`${path}/complete`, body);
+    assert.equal(repeated.response.status, 200);
+    assert.equal((repeated.body as JsonObject).prepared_meal.id, (cooked.body as JsonObject).prepared_meal.id);
+  }
+  const oldCookingRetry = await post("/api/v1/diet-records/cooking-completions", {
+    idempotency_key: "prepared-linked-cook-190", diet_record: { food_name: "不得重复记入", meal_type: "午餐", amount: "1份" },
+  });
+  assert.equal(oldCookingRetry.response.status, 200);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM prepared_meals WHERE user_id=?").get(account.user.id) as JsonObject).n, 1);
+});
+
+test("Agent inventory undo preserves later changes and records a single compensating operation", async () => {
+  const { SqliteAgentOperationsRepository } = await import("../src/modules/agentOperations/sqliteRepository.js");
+  const account = await register("inventory-undo-191@example.com");
+  const repo = new SqliteAgentOperationsRepository(db);
+  let sequence = 0;
+  async function execute(actionType: "add_inventory_item" | "update_inventory_item", payload: JsonObject) {
+    const runId = `undo-191-run-${++sequence}`;
+    db.prepare(`INSERT INTO agent_runs(id,user_id,session_id,modality,status,input_json,checkpoint_thread_id)
+      VALUES(?,?,'undo-test','text','running','{}','undo-test')`).run(runId,account.user.id);
+    db.prepare(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+      VALUES(?,?,?,?,'high','proposed',?,?)`).run(runId,runId,account.user.id,actionType,JSON.stringify(payload),runId);
+    const result = await repo.executeActions(account.user.id, runId, [{ id: runId, actionType, payload, riskLevel: "high", summary: "撤销测试" }]);
+    return { runId, itemId: (result[0].result as JsonObject).inventoryItemId };
+  }
+  const added = await execute("add_inventory_item", { name: "可撤销鸡蛋", quantity: "10个", expirationDate: "2026-09-20" });
+  const corrected = await execute("update_inventory_item", { itemId: added.itemId, version: 1, quantity: "6个" });
+  assert.deepEqual(await repo.undoActions(account.user.id, corrected.runId), { undone: 1 });
+  assert.deepEqual(db.prepare("SELECT quantity_value,quantity,version FROM inventory_items WHERE id=?").get(added.itemId),
+    { quantity_value: 10, quantity: "10个", version: 3 });
+  assert.deepEqual(await repo.undoActions(account.user.id, corrected.runId), { undone: 0 });
+  await assert.rejects(() => repo.undoActions(account.user.id, added.runId), /后续消耗或修改/);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE inventory_item_id=? AND action='undo'").get(added.itemId) as JsonObject).n, 1);
+  const untouched = await execute("add_inventory_item", { name: "撤销新批次", quantity: "1袋", expirationDate: "2026-09-20" });
+  assert.deepEqual(await repo.undoActions(account.user.id, untouched.runId), { undone: 1 });
+  assert.deepEqual(db.prepare("SELECT is_available,deleted_at IS NOT NULL AS deleted,version FROM inventory_items WHERE id=?").get(untouched.itemId),
+    { is_available: 0, deleted: 1, version: 2 });
+  assert.deepEqual(await repo.undoActions(account.user.id, untouched.runId), { undone: 0 });
+  await assert.rejects(() => repo.undoActions(account.user.id + 1, untouched.runId), /没有可撤销/);
+  await assert.rejects(() => repo.undoActions(account.user.id, "unknown-run"), /没有可撤销/);
+});
+
+test("inventory intake resumes source items without duplicating previously saved batches", async () => {
+  const account = await register("intake-identity-191@example.com");
+  const other = await register("intake-identity-other-191@example.com");
+  const item = (id: string) => ({ field_evidence: { quantity: { status: "estimated", source: "recognition" } }, source_item_id: id, food_name: "同名大米", quantity: "1袋", quantity_value: 1, quantity_unit: "bag", category: "粮油干货",
+    expiration_date: "2026-10-01", storage_location: "常温", confirmed: true, source: "image" });
+  const submit = (key: string, items: JsonObject[], token = account.token) => api("/api/v1/inventory/bulk-intake", {
+    token, method: "POST", body: JSON.stringify({ idempotency_key: key, source: "image", source_reference: "scan-job-191", items }),
+  });
+  const first = await submit("intake-partial-191-first", [item("scan-job-191:0")]);
+  assert.equal(first.response.status, 201);
+  const resumed = await submit("intake-partial-191-restored", [item("scan-job-191:0"), item("scan-job-191:1")]);
+  assert.equal(resumed.response.status, 201);
+  assert.equal((resumed.body as JsonObject).items[0].id, (first.body as JsonObject).items[0].id);
+  assert.notEqual((resumed.body as JsonObject).items[0].id, (resumed.body as JsonObject).items[1].id);
+  const repeated = await submit("intake-partial-191-retry-new-key", [item("scan-job-191:0"), item("scan-job-191:1")]);
+  assert.equal(repeated.response.status, 200);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_items WHERE user_id=?").get(account.user.id) as JsonObject).n, 2);
+  const isolated = await submit("intake-partial-191-other-user", [item("scan-job-191:0")], other.token);
+  assert.equal(isolated.response.status, 201);
+  assert.notEqual((isolated.body as JsonObject).items[0].id, (first.body as JsonObject).items[0].id);
+  const duplicate = await submit("intake-partial-191-duplicate", [item("same"), item("same")]);
+  assert.equal(duplicate.response.status, 400);
+  const audit = db.prepare("SELECT metadata_json FROM inventory_change_logs WHERE user_id=? AND action='created'").all(account.user.id) as JsonObject[];
+  assert.equal(audit.length, 2);
+  assert.deepEqual(JSON.parse(audit[0].metadata_json).field_evidence.quantity, { status: "estimated", source: "recognition" });
+  const history = await api(`/api/v1/inventory/${(first.body as JsonObject).items[0].id}/history`, { token: account.token });
+  assert.equal(history.response.status, 200);
+  assert.deepEqual((history.body as JsonObject[])[0].metadata.field_evidence.quantity, { status: "estimated", source: "recognition" });
+  const preview = () => api("/api/v1/inventory/consumption-preview", { token: account.token, method: "POST",
+    body: JSON.stringify({ items: [{ food_name: "同名大米", amount_value: 1, unit: "bag" }] }) });
+  assert.equal(((await preview()).body as JsonObject).items[0].quantity_status, "unknown");
+  const itemId = (first.body as JsonObject).items[0].id;
+  const corrected = await api(`/api/v1/inventory/${itemId}`, { token: account.token, method: "PUT",
+    body: JSON.stringify({ version: 1, quantity: "2袋", quantity_value: 2, quantity_unit: "bag" }) });
+  assert.equal(corrected.response.status, 200, JSON.stringify(corrected.body));
+  assert.equal(((await preview()).body as JsonObject).items[0].quantity_status, "sufficient");
+  const renamed = await api(`/api/v1/inventory/${itemId}`, { token: account.token, method: "PUT",
+    body: JSON.stringify({ version: 2, food_name: "同名大米新版" }) });
+  assert.equal(renamed.response.status, 200);
+  assert.equal(((await preview()).body as JsonObject).items[0].quantity_status, "unknown");
+});
+
+test("meal preferences patch preserves existing kitchen and allergy data", async () => {
+  const account = await register("meal-preferences-192@example.com");
+  const save = (body: JsonObject) => api("/api/v1/health-data/profile", { token: account.token, method: "PUT", body: JSON.stringify(body) });
+  const allergy = { name: "花生", type: "allergy", severity: "severe" };
+  assert.equal((await save({ allergies: [allergy], dietary_restrictions: ["不吃猪肉"], kitchen_constraints: {
+    meal_time_minutes: 45, servings: 1, cooking_level: "beginner", refrigeration_available: false,
+  } })).response.status, 200);
+  const patched = await save({ kitchen_constraints: { servings: 2, carry_meals: true, reheating_available: null, usual_meals: ["lunch"], eating_location: "work" } });
+  assert.equal(patched.response.status, 200);
+  const loaded = await api("/api/v1/health-data/profile", { token: account.token });
+  assert.deepEqual((loaded.body as JsonObject).allergies, [allergy]);
+  assert.deepEqual((loaded.body as JsonObject).dietary_restrictions, ["不吃猪肉"]);
+  assert.deepEqual((loaded.body as JsonObject).kitchen_constraints, { meal_time_minutes: 45, servings: 2, cooking_level: "beginner",
+    refrigeration_available: false, carry_meals: true, reheating_available: null, usual_meals: ["lunch"], eating_location: "work" });
+});
+
+test("request kitchen overrides reach AI context without changing saved preferences", async () => {
+  const { buildAIPromptMessages, buildUserContext } = await import("../src/services/contextBuilder.js");
+  const account = await register("meal-override-192@example.com");
+  await api("/api/v1/health-data/profile", { token: account.token, method: "PUT", body: JSON.stringify({ kitchen_constraints: {
+    servings: 1, meal_time_minutes: 45, refrigeration_available: true, reheating_available: false,
+  } }) });
+  const storedContext = await buildUserContext(account.user.id);
+  const context = (override = {}) => JSON.parse(buildAIPromptMessages(storedContext, override).at(-1)!.content.split("\n")[1]) as JsonObject;
+  const current = context({ servings: 2, meal_time_minutes: 20, refrigeration_available: false });
+  assert.equal(current.servings, 2);
+  assert.equal(current.available_time_minutes, 20);
+  assert.equal(current.meal_preparation_preferences.refrigeration_available, false);
+  assert.equal(current.meal_preparation_preferences.reheating_available, false);
+  assert.equal(current.stored_meal_preferences.servings, 1);
+  assert.equal(context().servings, 1);
+  assert.equal(context().available_time_minutes, 45);
+  const saved = await api("/api/v1/health-data/profile", { token: account.token });
+  assert.equal((saved.body as JsonObject).kitchen_constraints.servings, 1);
+  assert.equal((saved.body as JsonObject).kitchen_constraints.refrigeration_available, true);
+});
+
+test("Agent permanent kitchen preferences preserve profile fields and replay idempotently", async () => {
+  const { SqliteAgentOperationsRepository } = await import("../src/modules/agentOperations/sqliteRepository.js");
+  const account = await register("permanent-preferences-192@example.com");
+  const allergy = { name: "花生", type: "allergy", severity: "severe" };
+  await api("/api/v1/health-data/profile", { token: account.token, method: "PUT", body: JSON.stringify({
+    allergies: [allergy], kitchen_constraints: { meal_time_minutes: 45, servings: 1, refrigeration_available: false },
+  }) });
+  const runId = "permanent-preferences-192-run";
+  db.prepare(`INSERT INTO agent_runs(id,user_id,session_id,modality,status,input_json,checkpoint_thread_id)
+    VALUES(?,?,'preferences-test','text','running','{}','preferences-test')`).run(runId,account.user.id);
+  db.prepare(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+    VALUES(?,?,?,'update_kitchen_preferences','high','awaiting_approval','{}',?)`).run(runId,runId,account.user.id,runId);
+  const proposal = { id: runId, actionType: "update_kitchen_preferences" as const, riskLevel: "high" as const, summary: "以后都按两个人",
+    payload: { scope: "persistent", preferences: { servings: 2, reheating_available: false } } };
+  const repo = new SqliteAgentOperationsRepository(db);
+  const saved = await repo.executeActions(account.user.id, runId, [proposal]);
+  assert.deepEqual(await repo.executeActions(account.user.id, runId, [proposal]), saved);
+  const profile = await api("/api/v1/health-data/profile", { token: account.token });
+  assert.deepEqual((profile.body as JsonObject).allergies, [allergy]);
+  assert.deepEqual((profile.body as JsonObject).kitchen_constraints, { meal_time_minutes: 45, servings: 2,
+    refrigeration_available: false, reheating_available: false });
+});
+
+test("prepared meal reservations persist without consumption and leave automatic allocation context", async () => {
+  const { buildAIPromptMessages, buildUserContext } = await import("../src/services/contextBuilder.js");
+  const account = await register("prepared-reserved-193@example.com");
+  const made = await api("/api/v1/diet-records/cooking-completions", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "prepared-reservation-produce-193", production: { food_name: "留着的饭", produced_servings: 1, eaten_servings: 0, planned_date: "2026-09-10" },
+  }) });
+  const meal = (made.body as JsonObject).prepared_meal;
+  const reserve = (body: JsonObject) => api(`/api/v1/diet-records/prepared-meals/${meal.id}/events`, { token: account.token, method: "POST", body: JSON.stringify(body) });
+  const input = { idempotency_key: "prepared-reservation-event-193", version: 1, type: "reschedule", is_reserved: true };
+  assert.equal((await reserve(input)).response.status, 201);
+  assert.equal((await reserve(input)).response.status, 200);
+  const list = await api("/api/v1/diet-records/prepared-meals", { token: account.token });
+  const reserved = (list.body as JsonObject[])[0];
+  assert.equal(reserved.is_reserved, true);
+  assert.equal(reserved.remaining_servings, 1);
+  assert.equal(reserved.planned_date, "2026-09-10");
+  const context = JSON.parse(buildAIPromptMessages(await buildUserContext(account.user.id)).at(-1)!.content.split("\n")[1]);
+  assert.equal(context.prepared_meals.length, 0);
+  assert.equal(context.reserved_prepared_meals[0].id, meal.id);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
+  assert.equal((await reserve({ ...input, idempotency_key: "prepared-reservation-unreserve-193", version: 2, is_reserved: false })).response.status, 201);
+});
+
+test("multi-meal requirements share prepared portions and respect exclusions without writes", async () => {
+  const account = await register("plan-requirements-193@example.com");
+  const other = await register("plan-other-193@example.com");
+  const made = await api("/api/v1/diet-records/cooking-completions", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "plan-requirements-production-193", production: { food_name: "已有一份", produced_servings: 1, eaten_servings: 0 },
+  }) });
+  const mealId = (made.body as JsonObject).prepared_meal.id;
+  const meals = [{ id: "lunch", date: "2030-09-09", mealType: "lunch", servings: 3 }];
+  const compute = (body: JsonObject, token = account.token) => api("/api/v1/recommendations/plan-requirements", { token, method: "POST", body: JSON.stringify(body) });
+  const first = await compute({ meals });
+  assert.equal(first.response.status, 200);
+  assert.equal((first.body as JsonObject).totalCookServings, 2);
+  assert.equal((first.body as JsonObject).status, "requires_validation");
+  assert.equal((first.body as JsonObject).meals[0].allocations[0].preparedMealId, mealId);
+  const shared = await compute({ meals: [...meals, { ...meals[0], id: "dinner", mealType: "dinner", servings: 2 }] });
+  assert.equal((shared.body as JsonObject).totalCookServings, 4);
+  assert.equal((shared.body as JsonObject).meals[1].preparedServings, 0);
+  const excluded = await compute({ meals, excludedPreparedMealIds: [mealId] });
+  assert.equal((excluded.body as JsonObject).totalCookServings, 3);
+  assert.equal((await compute({ meals }, other.token)).response.status, 200);
+  assert.equal(((await compute({ meals }, other.token)).body as JsonObject).totalCookServings, 3);
+  assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(mealId) as JsonObject).remaining_servings, 1);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
+});
+
+test("cooking drafts persist in meal plans with retry identity and account isolation", async () => {
+  const account = await register("saved-cooking-draft@example.com");
+  const other = await register("saved-cooking-draft-other@example.com");
+  const generated = await api("/api/v1/recommendations/cooking-plan", { token: account.token, method: "POST", body: JSON.stringify({
+    meals: [{ id: "dinner", date: "2026-09-09", mealType: "dinner", servings: 2 }],
+  }) });
+  assert.equal(generated.response.status, 200);
+  (generated.body as JsonObject).ingredientBudget = [{ food_name: "鸡蛋", requested_value: 2, covered_value: 1, missing_value: 1,
+    unit: "piece", fully_covered: false, quantity_status: "insufficient", name_available: true,
+    deductions: [{ item_id: 1, version: 1, food_name: "鸡蛋", expiration_date: "2026-09-11", batch_code: null, mode: "all", amount_value: 1, unit: "piece" }] }];
+  const input = { id: "ed7da244-15a2-43df-9a59-9d1cda833194", title: "今晚与明日", draft: generated.body };
+  const save = (body = input, token = account.token) => api("/api/v1/meal-plans/drafts", { token, method: "POST", body: JSON.stringify(body) });
+  const malformed = await save({ ...input, draft: { ...(input.draft as JsonObject), totalCookServings: 999 } } as typeof input);
+  assert.equal(malformed.response.status, 400);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plans WHERE id=?").get(input.id) as JsonObject).n, 0);
+  const firstSave = await save();
+  assert.equal(firstSave.response.status, 201, JSON.stringify(firstSave.body));
+  const saved = (firstSave.body as JsonObject).plan;
+  assert.equal(saved.status, "draft");
+  assert.equal(saved.constraints.savedCookingDraft.draft.status, "requires_validation");
+  assert.deepEqual(saved.constraints.savedCookingDraft.draft.meals, (generated.body as JsonObject).meals);
+  assert.deepEqual(saved.constraints.savedCookingDraft.draft.ingredientBudget, (generated.body as JsonObject).ingredientBudget);
+  const replay = await save();
+  assert.equal(replay.response.status, 200);
+  assert.equal((replay.body as JsonObject).repeated, true);
+  assert.equal((await save({ ...input, title: "改变请求" })).response.status, 409);
+  assert.equal((await save(input, other.token)).response.status, 409);
+  const recovered = await api(`/api/v1/meal-plans/${input.id}`, { token: account.token });
+  assert.deepEqual((recovered.body as JsonObject).constraints, saved.constraints);
+  const otherRead = await api(`/api/v1/meal-plans/${input.id}`, { token: other.token });
+  assert.equal(otherRead.response.status, 404);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plans WHERE id=?").get(input.id) as JsonObject).n, 1);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM cooking_queue_items WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
+  const updatedDraft = structuredClone(saved.constraints.savedCookingDraft.draft);
+  updatedDraft.meals[0].date = "2026-09-10";
+  const updateInput = { version: saved.version, idempotencyKey: "c80bc701-cb1c-4ee2-a5c2-c4b846e87194", draft: updatedDraft };
+  const update = (body = updateInput, token = account.token) => api(`/api/v1/meal-plans/${input.id}/draft`, { token, method: "PATCH", body: JSON.stringify(body) });
+  const competing = await Promise.all([update(), update()]);
+  assert.deepEqual(competing.map(value => value.response.status), [200, 200]);
+  assert.deepEqual(competing.map(value => (value.body as JsonObject).repeated).sort(), [false, true]);
+  const updatedPlan = (competing[0].body as JsonObject).plan;
+  assert.equal(updatedPlan.id, input.id);
+  assert.equal(updatedPlan.version, saved.version + 1);
+  assert.equal(updatedPlan.startDate, "2026-09-10");
+  assert.deepEqual(updatedPlan.constraints.currentCookingDraft, updatedDraft);
+  assert.deepEqual(updatedPlan.constraints.savedCookingDraft, saved.constraints.savedCookingDraft);
+  assert.equal((await update({ ...updateInput, draft: { ...updatedDraft, checksPending: ["different"] } })).response.status, 409);
+  assert.equal((await update({ ...updateInput, idempotencyKey: "782e0efb-c5b8-45f5-a622-383b10eb7194" })).response.status, 409);
+  assert.equal((await update(updateInput, other.token)).response.status, 404);
+  const finalRead = await api(`/api/v1/meal-plans/${input.id}`, { token: account.token });
+  assert.deepEqual((finalRead.body as JsonObject).constraints.currentCookingDraft, updatedDraft);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plans WHERE id=?").get(input.id) as JsonObject).n, 1);
+});
+
+test("Agent grouped inventory undo follows versions and rolls back across intervening writes", async () => {
+  const { SqliteAgentOperationsRepository } = await import("../src/modules/agentOperations/sqliteRepository.js");
+  const account = await register("inventory-group-undo-191@example.com");
+  const repository = new SqliteAgentOperationsRepository(db);
+  const createRun = (runId: string) => db.prepare(`INSERT INTO agent_runs(id,user_id,session_id,modality,status,input_json,checkpoint_thread_id)
+    VALUES(?,?,'group-undo','text','running','{}','group-undo')`).run(runId, account.user.id);
+  const execute = async (runId: string, id: string, actionType: "add_inventory_item" | "update_inventory_item", payload: JsonObject) => {
+    db.prepare(`INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,idempotency_key)
+      VALUES(?,?,?,?,'high','proposed',?,?)`).run(id, runId, account.user.id, actionType, JSON.stringify(payload), id);
+    const results = await repository.executeActions(account.user.id, runId, [{ id, actionType, payload, riskLevel: "high", summary: "分组撤销" }]);
+    return (results[0].result as JsonObject).inventoryItemId as number;
+  };
+  const runId = "group-undo-191";
+  createRun(runId);
+  const itemId = await execute(runId, `${runId}-z`, "add_inventory_item", { name: "鸡蛋", quantity: "10个", expirationDate: "2026-09-20" });
+  await execute(runId, `${runId}-b`, "update_inventory_item", { itemId, version: 1, quantity: "8个" });
+  await execute(runId, `${runId}-a`, "update_inventory_item", { itemId, version: 2, quantity: "6个" });
+  assert.deepEqual(await repository.undoActions(account.user.id, runId), { undone: 3 });
+  assert.deepEqual(db.prepare("SELECT quantity_value,version,deleted_at IS NOT NULL AS deleted FROM inventory_items WHERE id=?").get(itemId),
+    { quantity_value: 10, version: 6, deleted: 1 });
+  assert.deepEqual(await repository.undoActions(account.user.id, runId), { undone: 0 });
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE inventory_item_id=? AND action='undo'").get(itemId) as JsonObject).n, 3);
+  const conflictRun = "group-undo-intervening-191";
+  createRun(conflictRun);
+  const conflictId = await execute(conflictRun, `${conflictRun}-z`, "add_inventory_item", { name: "被修改的鸡蛋", quantity: "10个", expirationDate: "2026-09-20" });
+  db.prepare("UPDATE inventory_items SET quantity='9个',quantity_value=9,version=version+1 WHERE id=?").run(conflictId);
+  await execute(conflictRun, `${conflictRun}-a`, "update_inventory_item", { itemId: conflictId, version: 2, quantity: "8个" });
+  await assert.rejects(repository.undoActions(account.user.id, conflictRun), /其他操作/);
+  assert.deepEqual(db.prepare("SELECT quantity_value,version,deleted_at IS NOT NULL AS deleted FROM inventory_items WHERE id=?").get(conflictId),
+    { quantity_value: 8, version: 3, deleted: 0 });
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE inventory_item_id=? AND action='undo'").get(conflictId) as JsonObject).n, 0);
+});
+
+test("saved cooking drafts activate into portioned meal items exactly once", async () => {
+  const account = await register("activate-cooking-draft@example.com");
+  const recipeId = Number(db.prepare(`INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size)
+    VALUES('激活草案蒸蛋','[{"name":"鸡蛋","amount":"2个"}]','["蒸熟"]','approved',1)`).run().lastInsertRowid);
+  const draft = { status: "requires_validation", meals: [{ id: "dinner", date: "2026-09-10", mealType: "dinner", servings: 3,
+    preparedServings: 0, cookServings: 3, allocations: [] }], totalCookServings: 3,
+    cooking: [{ targetMealId: "dinner", recipeId, title: "激活草案蒸蛋", servings: 3, recipeYield: 1,
+      demands: [{ food_name: "鸡蛋", amount_value: 6, unit: "piece" }] }], unresolved: [], ingredientBudget: [],
+    time: { budgetMinutes: 30, knownSequentialMinutes: 15, exceedsBudget: false, isEstimate: true, incomplete: true, missing: ["cleanup"] },
+    checksPending: ["storage"], excludedPreparedMealIds: [], effectivePreferences: {} };
+  const id = "732adb68-3a62-4c02-a2ac-9e8447877194";
+  const save = await api("/api/v1/meal-plans/drafts", { token: account.token, method: "POST", body: JSON.stringify({ id, title: "三份备餐", draft }) });
+  assert.equal(save.response.status, 201);
+  const activate = (version = 1) => api(`/api/v1/meal-plans/${id}/activate`, { token: account.token, method: "POST", body: JSON.stringify({ version }) });
+  const values = await Promise.all([activate(), activate()]);
+  assert.deepEqual(values.map(value => value.response.status), [200,200]);
+  assert.deepEqual(values.map(value => (value.body as JsonObject).repeated).sort(), [false,true]);
+  const plan = (values[0].body as JsonObject).plan;
+  assert.equal(plan.status, "active"); assert.equal(plan.version, 2);
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.items[0].plannedServings, 3);
+  assert.equal(plan.items[0].mealType, "晚餐");
+  assert.deepEqual(plan.items[0].ingredients, [{ name: "鸡蛋", amount: "6个" }]);
+  assert.equal((await activate(2)).response.status, 409);
+  const queued = await api(`/api/v1/meal-plans/${id}/items/${plan.items[0].id}/queue`, { token: account.token, method: "POST",
+    body: JSON.stringify({ version: plan.items[0].version, idempotencyKey: "activate-draft-queue-test" }) });
+  assert.equal(queued.response.status, 201);
+  const queueRows = await api("/api/v1/cooking-queue", { token: account.token });
+  const queuedRow = (queueRows.body as JsonObject[]).find((item: JsonObject) => item.sourcePlanItemId === plan.items[0].id);
+  assert(queuedRow);
+  assert.equal(queuedRow.plannedServings, 3);
+  assert.deepEqual(queuedRow.ingredients, [{ name: "鸡蛋", amount: "6个" }]);
+  const secondId = "bfae3b34-1434-47eb-985c-e33bfe8e2194";
+  await api("/api/v1/meal-plans/drafts", { token: account.token, method: "POST", body: JSON.stringify({ id: secondId, title: "另一餐", draft }) });
+  const second = await api(`/api/v1/meal-plans/${secondId}/activate`, { token: account.token, method: "POST", body: JSON.stringify({ version: 1 }) });
+  const secondItem = (second.body as JsonObject).plan.items[0];
+  const secondQueued = await api(`/api/v1/meal-plans/${secondId}/items/${secondItem.id}/queue`, { token: account.token, method: "POST",
+    body: JSON.stringify({ version: secondItem.version, idempotencyKey: "second-draft-queue-test" }) });
+  assert.equal(secondQueued.response.status, 201);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM cooking_queue_items WHERE user_id=? AND recipe_id=?").get(account.user.id, recipeId) as JsonObject).n, 2);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=?").get(id) as JsonObject).n, 1);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
+  const invalidId = "83fb2c6e-c7cc-4f50-93ec-4990ef064194";
+  await api("/api/v1/meal-plans/drafts", { token: account.token, method: "POST", body: JSON.stringify({ id: invalidId, title: "失效菜谱",
+    draft: { ...draft, cooking: [{ ...draft.cooking[0], recipeId: 2147483647 }] } }) });
+  const invalid = await api(`/api/v1/meal-plans/${invalidId}/activate`, { token: account.token, method: "POST", body: JSON.stringify({ version: 1 }) });
+  assert.equal(invalid.response.status, 409);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=?").get(invalidId) as JsonObject).n, 0);
+  assert.equal((db.prepare("SELECT version FROM meal_plans WHERE id=?").get(invalidId) as JsonObject).version, 1);
+});
+
+test("unknown expiry and rough quantities survive intake without becoming usable grams", async () => {
+  const account = await register("unknown-expiry@example.com");
+  const saved = await api("/api/v1/inventory/bulk-intake", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "unknown-expiry-intake", source: "image", source_reference: "unknown-expiry-photo",
+    items: [{ source_item_id: "rice", food_name: "一袋米测试", category: "粮油干货", quantity: "一袋",
+      expiration_date: "", storage_location: "常温", confirmed: true, source: "image",
+      field_evidence: { expiration_date: { status: "unknown", source: "unknown" } } }],
+  }) });
+  assert.equal(saved.response.status, 201, JSON.stringify(saved.body));
+  const item = (saved.body as JsonObject).items[0];
+  assert.equal(item.expiration_date, "");
+  assert.equal(item.quantity, "一袋");
+  assert.equal(item.quantity_value, null);
+  const preview = await api("/api/v1/inventory/consumption-preview", { token: account.token, method: "POST",
+    body: JSON.stringify({ items: [{ food_name: "一袋米测试", amount_value: 200, unit: "g" }] }) });
+  assert.equal((preview.body as JsonObject).items[0].quantity_status, "unknown");
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_items WHERE user_id=? AND expiration_date >= '2026-09-09' AND expiration_date <= '2026-09-12'").get(account.user.id) as JsonObject).n, 0);
+  const invalid = await api(`/api/v1/inventory/${item.id}`, { token: account.token, method: "PUT",
+    body: JSON.stringify({ version: 1, expiration_date: "明天" }) });
+  assert.equal(invalid.response.status, 400);
+});
+
+test("scan review uses owned completed server artifacts and performs no implicit write", async () => {
+  const account = await register("scan-review-policy@example.com");
+  const jobId = "scan-review-policy-job";
+  db.prepare(`INSERT INTO agent_runs(id,user_id,session_id,modality,status,input_json,checkpoint_thread_id,result_json)
+    VALUES(?,?,'scan-policy','inventory_scan','completed','{}','scan-policy',?)`).run(jobId, account.user.id,
+    JSON.stringify({ artifacts: [{ type: "vision", data: { items: [{ foodName: "政策鸡蛋", quantity: "6个", suggestedStorageLocation: "冷藏", confidence: 0.99 }, { foodName: "待确认米", quantity: "一袋", confidence: 0.4 }] } }] }));
+  const result = await api(`/api/v1/inventory/scan-jobs/${jobId}/review`, { token: account.token });
+  assert.equal(result.response.status, 200, JSON.stringify(result.body));
+  assert.equal((result.body as JsonObject).items[0].acceptance, "automatic");
+  assert.equal((result.body as JsonObject).items[0].sourceItemId, `${jobId}:0`);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_items WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
+  assert.equal((await api(`/api/v1/inventory/scan-jobs/${jobId}/review`, { token: first.token })).response.status, 404);
+  const accept = () => api(`/api/v1/inventory/scan-jobs/${jobId}/accept`, { token: account.token, method: "POST" });
+  const accepted = await Promise.all([accept(), accept()]);
+  assert(accepted.every(value => value.response.status === 200));
+  assert.deepEqual(accepted.map(value => (value.body as JsonObject).repeated).sort(), [false, true]);
+  assert.equal((accepted[0].body as JsonObject).items.length, 1);
+  assert.deepEqual((accepted[0].body as JsonObject).savedSourceItemIds, [`${jobId}:0`]);
+  assert.deepEqual((accepted[1].body as JsonObject).savedSourceItemIds, [`${jobId}:0`]);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_items WHERE user_id=?").get(account.user.id) as JsonObject).n, 1);
+  const payload = JSON.parse((db.prepare("SELECT confirmed_payload_json FROM inventory_intake_batches WHERE user_id=?").get(account.user.id) as JsonObject).confirmed_payload_json);
+  assert.equal(payload[0].confirmed, false);
+  assert.equal(payload[0].acceptance, "automatic");
+  const audit = JSON.parse((db.prepare("SELECT metadata_json FROM inventory_change_logs WHERE user_id=?").get(account.user.id) as JsonObject).metadata_json);
+  assert.equal(audit.acceptance_rule, "inventory-scan-v1");
+  assert.equal(audit.field_evidence.expiration_date.status, "unknown");
+  const manual = await api("/api/v1/inventory/bulk-intake", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "scan-policy-manual-rest", source: "image", source_reference: jobId,
+    items: [{ source_item_id: `${jobId}:1`, food_name: "已纠正名称的小米", category: "粮油干货", quantity: "一袋",
+      expiration_date: "", storage_location: "常温", source: "image", confirmed: true }],
+  }) });
+  assert.equal(manual.response.status, 201);
+  const restored = await accept();
+  assert.deepEqual((restored.body as JsonObject).savedSourceItemIds.sort(), [`${jobId}:0`, `${jobId}:1`]);
+  assert.equal((restored.body as JsonObject).items.length, 2);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_items WHERE user_id=?").get(account.user.id) as JsonObject).n, 2);
+  const undo = () => api(`/api/v1/inventory/scan-jobs/${jobId}/undo`, { token: account.token, method: "POST" });
+  assert.deepEqual((await undo()).body, { undone: 2, repeated: false });
+  assert.deepEqual((await undo()).body, { undone: 0, repeated: true });
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_items WHERE user_id=? AND deleted_at IS NULL").get(account.user.id) as JsonObject).n, 0);
+  const afterUndo = await accept();
+  assert.equal((afterUndo.body as JsonObject).items.length, 0);
+  assert.deepEqual((afterUndo.body as JsonObject).undoneSourceItemIds.sort(), [`${jobId}:0`, `${jobId}:1`]);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_items WHERE user_id=? AND deleted_at IS NULL").get(account.user.id) as JsonObject).n, 0);
+  db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(jobId);
+  assert.equal((await api(`/api/v1/inventory/scan-jobs/${jobId}/review`, { token: account.token })).response.status, 409);
+});
+
+
+test("scan undo conflicts roll back the entire batch when a later item was changed", async () => {
+  const account = await register("scan-undo-conflict@example.com");
+  const jobId = "scan-undo-conflict-job";
+  db.prepare(`INSERT INTO agent_runs(id,user_id,session_id,modality,status,input_json,checkpoint_thread_id,result_json)
+    VALUES(?,?,'scan-undo','inventory_scan','completed','{}','scan-undo','{}')`).run(jobId,account.user.id);
+  const saved = await api("/api/v1/inventory/bulk-intake", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "scan-undo-conflict-intake", source: "image", source_reference: jobId,
+    items: [0,1].map(index => ({ source_item_id: `${jobId}:${index}`, food_name: `撤销测试${index}`, category: "其他",
+      quantity: "2个", quantity_value: 2, quantity_unit: "piece", expiration_date: "", storage_location: "常温", source: "image", confirmed: true })),
+  }) });
+  const items = (saved.body as JsonObject).items;
+  await api(`/api/v1/inventory/${items[1].id}`, { token: account.token, method: "PUT",
+    body: JSON.stringify({ version: 1, quantity: "1个", quantity_value: 1, quantity_unit: "piece" }) });
+  const undone = await api(`/api/v1/inventory/scan-jobs/${jobId}/undo`, { token: account.token, method: "POST" });
+  assert.equal(undone.response.status, 409);
+  const current = db.prepare("SELECT version,deleted_at,quantity_value FROM inventory_items WHERE user_id=? ORDER BY id").all(account.user.id);
+  assert.deepEqual(current, [{ version: 1, deleted_at: null, quantity_value: 2 }, { version: 2, deleted_at: null, quantity_value: 1 }]);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE user_id=? AND idempotency_key LIKE 'intake-undo:%'").get(account.user.id) as JsonObject).n, 0);
 });

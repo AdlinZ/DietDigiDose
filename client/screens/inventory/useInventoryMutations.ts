@@ -11,6 +11,14 @@ export function useInventoryMutations(authFetch: ApiFetch, userId?: number | nul
   const invalidateKitchenware = () => invalidateInventoryServerState(queryClient, "kitchenware", userId);
 
   return {
+    acceptScan: useMutation({
+      mutationFn: (jobId: string) => inventoryApi.acceptScan(authFetch, jobId),
+      onSuccess: invalidateInventory,
+    }),
+    undoScan: useMutation({
+      mutationFn: (jobId: string) => inventoryApi.undoScan(authFetch, jobId),
+      onSuccess: invalidateInventory,
+    }),
     createInventory: useMutation({
       mutationFn: (input: InventoryCreateInput) => inventoryApi.create(authFetch, input),
       onSuccess: invalidateInventory,

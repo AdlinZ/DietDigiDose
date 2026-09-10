@@ -12,6 +12,9 @@ export function formatQueueItem(row: QueueRow) {
   const snapshot = parseJson<Record<string, unknown>>(row.recipe_snapshot_json, {});
   const currentIngredients = parseJson<unknown[]>(row.current_ingredients_json, []);
   return {
+    plannedServings: Number(snapshot.plannedServings) > 0 ? Number(snapshot.plannedServings) : null,
+    sourcePlanItemId: row.source_plan_item_id ? String(row.source_plan_item_id) : null,
+    plannedDate: typeof snapshot.plannedDate === "string" ? snapshot.plannedDate : null,
     id: String(row.id),
     recipeId: Number(row.recipe_id),
     position: Number(row.position),
@@ -26,7 +29,7 @@ export function formatQueueItem(row: QueueRow) {
     cookTime: Number(row.current_cook_time ?? snapshot.cookTime ?? 0),
     calories: Number(row.current_calories ?? snapshot.calories ?? 0),
     difficulty: String(row.current_difficulty || snapshot.difficulty || "难度未知"),
-    ingredients: currentIngredients.length ? currentIngredients : Array.isArray(snapshot.ingredients) ? snapshot.ingredients : [],
+    ingredients: row.source_plan_item_id && Array.isArray(snapshot.ingredients) ? snapshot.ingredients : currentIngredients.length ? currentIngredients : Array.isArray(snapshot.ingredients) ? snapshot.ingredients : [],
     preparedIngredientNames: parseJson<string[]>(row.prepared_ingredients_json, []),
     shoppingListSyncedAt: row.shopping_list_synced_at ? String(row.shopping_list_synced_at) : null,
     recipeAvailable: Boolean(row.current_title),

@@ -1,3 +1,4 @@
+import type { InventoryFieldEvidence } from "@dietdigidose/contracts";
 export type { InventoryItem } from "@dietdigidose/contracts";
 
 export type StorageLocation = "冷藏" | "冷冻" | "常温";
@@ -43,11 +44,12 @@ export interface KitchenwareCatalogItem {
 }
 
 export interface DetectedFood {
+  fieldEvidence?: InventoryFieldEvidence;
   id: string;
   foodName: string;
   quantity: string;
   suggestedStorageLocation: string;
-  estimatedExpireDays: number;
+  estimatedExpireDays: number | null;
   selected: boolean;
   source?: "barcode" | "receipt" | "image" | "manual" | "recent";
   confidence?: number | null;

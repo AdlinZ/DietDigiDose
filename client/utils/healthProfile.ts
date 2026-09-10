@@ -7,13 +7,7 @@ export type AllergyEntry = {
   severity: AllergySeverity;
 };
 
-export type KitchenConstraints = {
-  meal_time_minutes?: number | null;
-  budget_per_meal?: number | null;
-  cooking_level?: "beginner" | "intermediate" | "advanced" | null;
-  servings?: number | null;
-  eating_out_frequency?: "rarely" | "sometimes" | "often" | null;
-};
+export type KitchenConstraints = import("@dietdigidose/contracts").KitchenPreferences;
 
 export type NutritionTargets = {
   calories_kcal?: number | null;

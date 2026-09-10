@@ -1,3 +1,5 @@
+import type { MealProduction } from "@dietdigidose/contracts";
+import type { InventoryConsumption } from "../../services/inventoryQuantity.js";
 export type MealPlanUpdateInput = {
   version: number;
   title?: string;
@@ -15,7 +17,7 @@ export type MealPlanItemUpdateInput = {
 };
 
 export type MealPlanExecutionInput = { version: number; idempotencyKey: string };
-export type MealPlanCompleteInput = MealPlanExecutionInput & { dietRecordId?: number };
+export type MealPlanCompleteInput = MealPlanExecutionInput & { dietRecordId?: number; production?: MealProduction; inventory_consumptions?: InventoryConsumption[] };
 export type MealPlanView = Record<string, unknown> & { id: string; version: number };
 export type MealPlanItemView = Record<string, unknown> & { id: string; version: number };
 export type ExecutionResult = Record<string, unknown> & { repeated: boolean };

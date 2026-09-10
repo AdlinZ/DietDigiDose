@@ -1,8 +1,10 @@
+import type { PreparedMeal } from "@dietdigidose/contracts";
 export type Row = Record<string, unknown>;
 
 export interface AiContextRows {
   user: Row | null;
   inventory: Row[];
+  preparedMeals?: Row[];
   kitchenware: Row[];
   todayDiet: Row[];
   latestHealth: Row | null;
@@ -11,9 +13,10 @@ export interface AiContextRows {
 }
 
 export interface AiContextSnapshot {
+  preparedMeals?: PreparedMeal[];
   username: string;
   dailyCaloriesTarget: number;
-  inventory: Array<{ food_name: string; quantity: string; expiration_date: string; storage_location: string }>;
+  inventory: Array<{ id?: number; version?: number; quantity_value?: number | null; quantity_unit?: string | null; batch_code?: string | null; food_name: string; quantity: string; expiration_date: string; storage_location: string }>;
   kitchenware: Array<{ name: string; category: string; status: string }>;
   todayDiet: Array<{ meal_type: string; food_name: string; calories: number; protein: number; carbs: number; fat: number }>;
   latestHealth?: { weight?: number; body_fat?: number; water_ml?: number };

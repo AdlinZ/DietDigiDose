@@ -168,7 +168,7 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
           )}
           {onMergeDuplicates ? (
             <TouchableOpacity onPress={onMergeDuplicates} className="mt-2 self-start rounded-full bg-background-secondary px-3 py-2">
-              <Text className="text-[10px] font-black text-copy-muted">合并同名项目</Text>
+              <Text className="text-[10px] font-black text-copy-muted">检查重复项目（同名批次分别保留）</Text>
             </TouchableOpacity>
           ) : null}
 
@@ -189,7 +189,7 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
                   </TouchableOpacity>
                   <TextInput
                     value={item.foodName}
-                    onChangeText={(foodName) => onChange(foods.map((food) => food.id === item.id ? { ...food, foodName } : food))}
+                    onChangeText={(foodName) => onChange(foods.map((food) => food.id === item.id ? { ...food, foodName, fieldEvidence: { ...food.fieldEvidence, food_name: { status: "known", source: "user" } } } : food))}
                     editable={item.selected}
                     className="h-10 min-w-0 flex-1 text-body font-black text-ink"
                     accessibilityLabel="食材名称"
@@ -202,10 +202,10 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
                   <View className="mt-2 gap-2">
                     <View className="flex-row gap-2">
                       <View className="flex-1 rounded-xl bg-surface px-3">
-                        <Text className="pt-2 text-[9px] font-bold text-copy-muted">数量与单位</Text>
+                        <Text className="pt-2 text-[9px] font-bold text-copy-muted">{item.fieldEvidence?.quantity?.status === "estimated" ? "数量与单位（识别估计）" : "数量与单位"}</Text>
                         <TextInput
                           value={item.quantity}
-                          onChangeText={(quantity) => onChange(foods.map((food) => food.id === item.id ? { ...food, quantity } : food))}
+                          onChangeText={(quantity) => onChange(foods.map((food) => food.id === item.id ? { ...food, quantity, fieldEvidence: { ...food.fieldEvidence, quantity: { status: "known", source: "user" } }, missingFields: quantity.trim() ? food.missingFields?.filter(field => field !== "数量") : food.missingFields } : food))}
                           placeholder="如 500g"
                           placeholderTextColorClassName="accent-copy-muted"
                           className="h-9 text-xs font-black text-ink"
@@ -213,10 +213,10 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
                       </View>
                       <View className="flex-1">
                         <SmartDateInput
-                          label="到期日期"
+                          label={item.fieldEvidence?.expiration_date?.status === "estimated" ? "到期日期（建议）" : "到期日期"}
                           value={item.expirationDate || ""}
-                          onChange={(expirationDate) => onChange(foods.map((food) => food.id === item.id ? { ...food, expirationDate } : food))}
-                          placeholder="必须确认"
+                          onChange={(expirationDate) => onChange(foods.map((food) => food.id === item.id ? { ...food, expirationDate, fieldEvidence: { ...food.fieldEvidence, expiration_date: { status: expirationDate ? "known" : "unknown", source: "user" } }, missingFields: expirationDate ? food.missingFields?.filter(field => !["保质期", "到期日期"].includes(field)) : food.missingFields } : food))}
+                          placeholder="未知可留空"
                           labelStyle={{ fontSize: 9 }}
                         />
                       </View>
@@ -225,7 +225,7 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
                       {(["冷藏", "冷冻", "常温"] as const).map((location) => (
                         <TouchableOpacity
                           key={location}
-                          onPress={() => onChange(foods.map((food) => food.id === item.id ? { ...food, suggestedStorageLocation: location } : food))}
+                          onPress={() => onChange(foods.map((food) => food.id === item.id ? { ...food, suggestedStorageLocation: location, fieldEvidence: { ...food.fieldEvidence, storage_location: { status: "known", source: "user" } }, missingFields: food.missingFields?.filter(field => field !== "存放位置") } : food))}
                           className={`rounded-full px-3 py-1.5 ${item.suggestedStorageLocation === location ? "bg-brand-fill" : "bg-surface"}`}
                         >
                           <Text className={`text-[9px] font-black ${item.suggestedStorageLocation === location ? "text-white" : "text-copy-muted"}`}>{location}</Text>

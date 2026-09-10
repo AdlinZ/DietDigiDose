@@ -437,6 +437,7 @@ export default function DietRecordScreen() {
             </TouchableOpacity>
             <View className="ml-3 flex-1">
               <Text className="text-lg font-black text-ink">饮食记录</Text>
+              <TouchableOpacity onPress={() => router.push("/prepared-meals")}><Text className="text-brand text-sm">查看待吃餐</Text></TouchableOpacity>
               <Text className="mt-0.5 text-[11px] font-medium text-copy-muted">{formattedSelectedDateText()}</Text>
             </View>
             {selectedDate !== todayStr ? (

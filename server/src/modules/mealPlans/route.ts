@@ -1,3 +1,5 @@
+import { updateCookingPlanDraftSchema, saveCookingPlanDraftSchema } from "@dietdigidose/contracts";
+import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { Router, type NextFunction, type Response } from "express";
 import { authMiddleware, type AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
@@ -11,6 +13,7 @@ import { MealPlansError } from "./errors.js";
 import type { MealPlansService } from "./service.js";
 
 function handleError(error: unknown, res: Response, next: NextFunction) {
+  if (error instanceof InventoryQuantityError) return sendError(res, 409, error.message, error.code);
   return error instanceof MealPlansError ? sendError(res, error.status, error.message, error.code) : next(error);
 }
 
@@ -19,6 +22,18 @@ export function createMealPlansRouter(service: MealPlansService) {
   router.use(authMiddleware);
   router.param("id", uuidParam);
   router.param("itemId", uuidParam);
+  router.post("/:id/activate", validateBody(mealPlanVersionSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
+    void service.activateDraft(req.userId!, String(req.params.id), req.body.version).then(value => res.json(value))
+      .catch((error: unknown) => handleError(error, res, next));
+  });
+  router.patch("/:id/draft", validateBody(updateCookingPlanDraftSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
+    void service.updateDraft(req.userId!, String(req.params.id), req.body).then(value => res.json(value))
+      .catch((error: unknown) => handleError(error, res, next));
+  });
+  router.post("/drafts", validateBody(saveCookingPlanDraftSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
+    void service.saveDraft(req.userId!, req.body).then(value => res.status(value.repeated ? 200 : 201).json(value))
+      .catch((error: unknown) => handleError(error, res, next));
+  });
   router.get("/", (req: AuthRequest, res, next) => {
     void service.list(req.userId!, req.query.includeArchived === "true").then((value) => res.json(value)).catch(next);
   });

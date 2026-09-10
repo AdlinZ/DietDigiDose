@@ -648,6 +648,25 @@ export default function InventoryScreen() {
 
   const suggestedDate = (days: number) => dateKeyAfterDays(days);
 
+  const presentScanRecognition = async (recognized: DetectedFood[], jobId: string, isActive = () => true) => {
+    const accepted = await inventoryMutations.acceptScan.mutateAsync(jobId);
+    if (!isActive()) return;
+    if (accepted.items.length) void fetchData();
+    const savedIds = new Set(accepted.savedSourceItemIds);
+    const remaining = recognized.filter(item => !savedIds.has(item.id));
+    if (accepted.items.length) Alert.alert("识别项目已保存", `${accepted.items.map(item => item.food_name).join("、")}已保存。${remaining.length ? `还有 ${remaining.length} 项需要确认。` : "本次项目已全部保存。"}`, [
+      { text: "关闭", style: "cancel" },
+      { text: "撤销本次入库", onPress: () => { void inventoryMutations.undoScan.mutateAsync(jobId).then(() => {
+        if (!isActive()) return;
+        void fetchData();
+        Alert.alert("已撤销", "本次已入库食材已撤销。");
+      }).catch(error => { if (isActive()) Alert.alert("未能撤销", error instanceof Error ? error.message : "请检查网络后重试"); }); } },
+    ]);
+    else if (accepted.undoneSourceItemIds.length) Alert.alert("本次入库已撤销", remaining.length ? `还有 ${remaining.length} 项尚未确认。` : "未重新添加已撤销的项目。");
+    if (remaining.length) presentRecognition(remaining, true);
+    else if (!recognized.length) presentRecognition([], true);
+  };
+
   const getScanJob = async (jobId: string) => {
     return aiApi.inventoryScan<{ status: string; items?: unknown; error?: string }>(authFetch, jobId);
   };
@@ -657,7 +676,7 @@ export default function InventoryScreen() {
     while (Date.now() < deadline) {
       const job = await getScanJob(jobId);
       if (job.status === "completed") {
-        return normalizeDetectedFoods(job.items);
+        return normalizeDetectedFoods(job.items, jobId);
       }
       if (job.status === "failed") {
         if (inventoryScanJobStorageKey) {
@@ -714,14 +733,14 @@ export default function InventoryScreen() {
         const job = await getScanJob(jobId);
         if (!active) return;
         if (job.status === "completed") {
-          presentRecognition(normalizeDetectedFoods(job.items), true);
+          await presentScanRecognition(normalizeDetectedFoods(job.items, jobId), jobId, () => active);
         } else if (job.status === "failed") {
           await AsyncStorage.removeItem(inventoryScanJobStorageKey);
           setPendingScanJobId(null);
           Alert.alert("上次图片识别失败", job.error || "请换一张更清晰的图片重试。");
         } else {
           const recognized = await waitForScanJob(jobId);
-          if (active) presentRecognition(recognized, true);
+          if (active) await presentScanRecognition(recognized, jobId, () => active);
         }
       } catch {
         // Keep the job id: a temporary network failure must not discard a recoverable result.
@@ -733,7 +752,7 @@ export default function InventoryScreen() {
     return () => { active = false; };
   }, [isAuthenticated, inventoryScanJobStorageKey]);
 
-  const presentRecognition = (recognized: DetectedFood[], openManualForm = false) => {
+  const presentRecognition = (recognized: DetectedFood[], _openManualForm = false) => {
     if (recognized.length === 0) {
       Alert.alert("暂未识别到食材", "请确认图片清晰、商品名称可见；你也可以改为手动录入。");
       return;
@@ -741,21 +760,9 @@ export default function InventoryScreen() {
     const prepared = recognized.map((item) => ({
       ...item,
       source: item.source || pendingIntakeSource,
-      expirationDate: item.expirationDate || suggestedDate(item.estimatedExpireDays),
+      expirationDate: item.expirationDate || (item.estimatedExpireDays == null ? "" : suggestedDate(item.estimatedExpireDays)),
     }));
     setIntakeBatchKey(`inventory-intake-${pendingScanJobId || Date.now()}`);
-    if (prepared.length === 1 && !openManualForm) {
-      const suggestion = prepared[0];
-      setFoodName(suggestion.foodName);
-      setCategory(inferFoodCategory(suggestion.foodName));
-      setQuantity(suggestion.quantity);
-      setStorageLocation(suggestion.suggestedStorageLocation);
-      setExpirationDate(suggestedDate(suggestion.estimatedExpireDays));
-      setEntryMode("manual");
-      if (openManualForm) setModalVisible(true);
-      Alert.alert("AI 已补全", "已填写食材名称、数量、存放位置和建议到期日；请确认后入库。");
-      return;
-    }
 
     setDetectedFoods(prepared);
     setModalVisible(false);
@@ -817,7 +824,7 @@ export default function InventoryScreen() {
     try {
       const job = await getScanJob(pendingScanJobId);
       if (job.status === "completed") {
-        presentRecognition(normalizeDetectedFoods(job.items), true);
+        await presentScanRecognition(normalizeDetectedFoods(job.items, pendingScanJobId), pendingScanJobId);
       } else if (job.status === "failed") {
         if (inventoryScanJobStorageKey) {
           await AsyncStorage.removeItem(inventoryScanJobStorageKey);
@@ -825,7 +832,7 @@ export default function InventoryScreen() {
         setPendingScanJobId(null);
         Alert.alert("图片识别失败", job.error || "请换一张更清晰的图片重试。");
       } else {
-        presentRecognition(await waitForScanJob(pendingScanJobId), true);
+        await presentScanRecognition(await waitForScanJob(pendingScanJobId), pendingScanJobId);
       }
     } catch (error) {
       Alert.alert("识别仍在处理中", error instanceof Error ? error.message : "请稍后再查看结果。");
@@ -840,8 +847,8 @@ export default function InventoryScreen() {
       Alert.alert("请至少选择一项", "勾选需要加入食材库的食材后再保存。");
       return;
     }
-    if (selectedFoods.some((item) => !item.foodName.trim() || !item.quantity.trim() || !item.expirationDate)) {
-      Alert.alert("请补全待确认字段", "每项都需要名称、数量/单位和明确的到期日期后才能入库。");
+    if (selectedFoods.some((item) => !item.foodName.trim() || !item.quantity.trim() || !["冷藏", "冷冻", "常温"].includes(item.suggestedStorageLocation))) {
+      Alert.alert("请补全待确认字段", "请补全名称、数量，并选择存放位置；到期日期可以留空。");
       return;
     }
 
@@ -849,26 +856,28 @@ export default function InventoryScreen() {
     try {
       const itemsToImport = selectedFoods.map((item) => {
         const defaults = inferIngredientDefaults(item.foodName, item.suggestedStorageLocation as StorageLocation);
-        const quantity = item.quantity || defaults.defaultQuantity;
+        const quantity = item.quantity;
         const parsedQuantity = parseStructuredQuantity(quantity);
         return {
           food_name: item.foodName,
           category: defaults.category,
           quantity,
-          expiration_date: item.expirationDate!,
-          storage_location: (item.suggestedStorageLocation || defaults.storageLocation) as StorageLocation,
+          expiration_date: item.expirationDate || "",
+          storage_location: item.suggestedStorageLocation as StorageLocation,
           image_url: null,
           ...(parsedQuantity ? { quantity_value: parsedQuantity.amount, quantity_unit: parsedQuantity.unit } : {}),
+          ...(pendingScanJobId ? { source_item_id: item.id } : {}),
+          field_evidence: item.fieldEvidence,
           confidence: item.confidence ?? null,
           confirmed: true,
-          source: item.source || pendingIntakeSource,
+          source: pendingScanJobId ? "image" as const : item.source || pendingIntakeSource,
           barcode: item.barcode ?? null,
         };
       });
 
       await inventoryMutations.bulkIntake.mutateAsync({
         idempotency_key: intakeBatchKey,
-        source: pendingIntakeSource,
+        source: pendingScanJobId ? "image" : pendingIntakeSource,
         source_reference: pendingScanJobId,
         items: itemsToImport,
       });
@@ -2056,9 +2065,19 @@ export default function InventoryScreen() {
               ) : (
                 <View className="flex-row flex-wrap justify-between gap-y-3.5">
                   {visibleRecipes.map((recipe) => {
-                    const analysis = analyzeRecipeInventoryMatch(recipe, items, { healthProfile, kitchenware });
-                    const expiringMatch = analysis.expiringIngredients[0];
+                    const localAnalysis = analyzeRecipeInventoryMatch(recipe, items, { healthProfile, kitchenware });
                     const recommendation = recommendationItems.find((item) => item.recipeId === recipe.id);
+                    const uncertainQuantity = !recommendation || !Array.isArray(recommendation.features.uncertainIngredients) || !!recommendation.features.uncertainIngredients?.length
+                      || recommendation.degraded.includes("inventory_quantity_unknown");
+                    const analysis = recommendation ? { ...localAnalysis,
+                      matchedIngredients: recommendation.features.matchedIngredients,
+                      missingIngredients: recommendation.features.missingIngredients,
+                      expiringIngredients: recommendation.features.expiringIngredients,
+                      coveragePercent: recommendation.features.inventoryCoverage,
+                      matchStatus: !uncertainQuantity && recommendation.features.inventoryCoverage === 100 ? "full" as const : "partial" as const,
+                      availableSubstitutes: [],
+                    } : localAnalysis;
+                    const expiringMatch = analysis.expiringIngredients[0];
 
                     return (
                       <View
@@ -2098,7 +2117,9 @@ export default function InventoryScreen() {
                             </View>
 
                             {/* 冰箱食材匹配角标 (左下角: 优先展示临期 > 完全可做 > 缺少X种) */}
-                            {expiringMatch ? (
+                            {uncertainQuantity ? (
+                              <View className="absolute bottom-2 left-2 rounded-full bg-black/65 px-2 py-0.5"><Text className="text-[9px] font-bold text-amber-200">原料用量待核对</Text></View>
+                            ) : expiringMatch ? (
                               <View className="absolute bottom-2 left-2 flex-row items-center gap-1 rounded-full bg-warm-fill px-2 py-0.5 shadow-2xs">
                                 <FontAwesome6 name="clock-rotate-left" size={8} colorClassName="accent-on-brand" />
                                 <Text className="text-[9px] font-black text-white">
@@ -2107,7 +2128,7 @@ export default function InventoryScreen() {
                               </View>
                             ) : analysis.matchStatus === "full" ? (
                               <View className="absolute bottom-2 left-2 rounded-full bg-brand-fill px-2 py-0.5 shadow-2xs">
-                                <Text className="text-[9px] font-black text-white">完全可做</Text>
+                                <Text className="text-[9px] font-black text-white">已知原料足量</Text>
                               </View>
                             ) : analysis.missingIngredients.length > 0 ? (
                               <View className="absolute bottom-2 left-2 rounded-full bg-black/65 px-2 py-0.5">
@@ -2144,7 +2165,7 @@ export default function InventoryScreen() {
                               </Text>
                             ) : analysis.matchedIngredients.length > 0 ? (
                               <Text className="mt-1.5 text-[10px] font-medium text-brand" numberOfLines={1}>
-                                已备: {analysis.matchedIngredients.map((i) => i.name).slice(0, 2).join("、")}
+                                {recommendation ? "已知足量" : "名称匹配"}: {analysis.matchedIngredients.map((i) => i.name).slice(0, 2).join("、")}
                               </Text>
                             ) : null}
                             {analysis.availableSubstitutes.length ? (
@@ -2209,7 +2230,7 @@ export default function InventoryScreen() {
                             </TouchableOpacity>
                             <TouchableOpacity
                               onPress={() => void handleRecipeExecution(recipe, analysis, true)}
-                              disabled={analysis.blocked || analysis.missingIngredients.length > 0}
+                              disabled={analysis.blocked || analysis.missingIngredients.length > 0 || uncertainQuantity}
                               className="flex-1 items-center rounded-xl bg-brand-fill py-2 disabled:opacity-40"
                             >
                               <Text className="text-[9px] font-black text-white">直接开做</Text>

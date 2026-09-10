@@ -31,6 +31,7 @@ export type {
 };
 
 export type InventoryPreviewCandidate = {
+  quantity_evidence_status?: "known" | "estimated" | "unknown";
   id: number;
   food_name: string;
   quantity_value: number | null;

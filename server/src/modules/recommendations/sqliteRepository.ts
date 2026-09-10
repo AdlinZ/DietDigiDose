@@ -1,3 +1,4 @@
+import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type Database from "better-sqlite3";
 import type { RecommendationRequestWrite, RecipeQuery, RecommendationsRepository } from "./repository.js";
 import type { RecommendationEventInput, Row } from "./types.js";
@@ -5,10 +6,11 @@ import type { RecommendationEventInput, Row } from "./types.js";
 export class SqliteRecommendationsRepository implements RecommendationsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+  async preparedMeals(userId: number) { return this.database.prepare("SELECT * FROM prepared_meals WHERE user_id=? AND remaining_servings>0 ORDER BY produced_at,id").all(userId) as Row[]; }
   async profile(userId: number) { return (this.database.prepare(`SELECT allergies_json, dietary_restrictions_json, disliked_foods,
     kitchen_constraints_json, nutrition_targets_json, updated_at FROM user_health_profiles WHERE user_id = ?`).get(userId) as Row | undefined) || null; }
-  async inventory(userId: number) { return this.database.prepare(`SELECT id, food_name, expiration_date, updated_at FROM inventory_items
-    WHERE user_id = ? AND is_available = 1 AND deleted_at IS NULL ORDER BY expiration_date, id`).all(userId) as Row[]; }
+  async inventory(userId: number): Promise<Row[]> { const rows = this.database.prepare(`SELECT id, food_name, expiration_date, updated_at, quantity_value, quantity_unit, batch_code, version, (SELECT metadata_json FROM inventory_change_logs e WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id AND json_extract(e.metadata_json,'$.field_evidence.quantity.status') IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence FROM inventory_items
+    WHERE user_id = ? AND is_available = 1 AND deleted_at IS NULL ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date, id`).all(userId) as Row[]; return rows.map(row => ({ ...row, quantity_evidence_status: quantityEvidenceStatus(row.quantity_evidence, row.version) })); }
   async kitchenware(userId: number) { return this.database.prepare(`SELECT name, updated_at FROM kitchenware_items
     WHERE user_id = ? AND deleted_at IS NULL AND status <> '维修中' ORDER BY id`).all(userId) as Row[]; }
   async recipes(query: RecipeQuery) {

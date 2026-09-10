@@ -1,3 +1,4 @@
+import { inventoryFieldEvidenceSchema } from "./inventoryScan.ts";
 import { z } from "zod";
 
 const trimmedString = (min: number, max: number, label: string) =>
@@ -18,7 +19,8 @@ const inventoryCreateObject = z.object({
   food_name: trimmedString(1, 100, "食材名称"),
   category: trimmedString(1, 40, "分类"),
   quantity: trimmedString(1, 40, "数量").default("1份"),
-  expiration_date: isoDate,
+  // Empty explicitly means unknown; no synthetic expiry date is stored.
+  expiration_date: z.union([isoDate, z.literal("")]),
   storage_location: inventoryStorageLocationSchema.default("冷藏"),
   image_url: optionalImage,
   quantity_value: z.number().finite().positive().max(1_000_000).nullable().optional(),
@@ -60,7 +62,8 @@ export const inventoryItemSchema = z.object({
   food_name: z.string(),
   category: z.string(),
   quantity: z.string(),
-  expiration_date: isoDate,
+  // Empty explicitly means unknown; no synthetic expiry date is stored.
+  expiration_date: z.union([isoDate, z.literal("")]),
   storage_location: inventoryStorageLocationSchema,
   image_url: z.string().nullable(),
   is_available: z.boolean(),
@@ -112,6 +115,8 @@ export const shoppingInventoryImportSchema = z.object({
 }).strict();
 
 const inventoryIntakeItemSchema = inventoryCreateObject.extend({
+  field_evidence: inventoryFieldEvidenceSchema.optional(),
+  source_item_id: z.string().trim().min(1).max(200).optional(),
   confidence: z.number().finite().min(0).max(1).nullable().optional(),
   confirmed: z.boolean(),
   source: z.enum(["barcode", "receipt", "image", "manual", "recent"]),
@@ -124,7 +129,14 @@ export const inventoryBulkIntakeSchema = z.object({
   source_reference: z.string().trim().max(200).nullable().optional(),
   items: z.array(inventoryIntakeItemSchema).min(1).max(100),
 }).strict().superRefine((value, context) => {
+  const identities = new Set<string>();
   value.items.forEach((item, index) => {
+    if (item.source_item_id) {
+      if (!value.source_reference || identities.has(item.source_item_id)) {
+        context.addIssue({ code: "custom", path: ["items", index, "source_item_id"], message: "项目标识需要来源引用且同批不可重复" });
+      }
+      identities.add(item.source_item_id);
+    }
     if (!item.confirmed) {
       context.addIssue({ code: "custom", path: ["items", index, "confirmed"], message: "每项都必须由用户确认后才能入库" });
     }
@@ -161,6 +173,8 @@ export const inventoryConsumptionPreviewResponseSchema = z.object({
     covered_value: z.number().nonnegative(),
     missing_value: z.number().nonnegative(),
     fully_covered: z.boolean(),
+    name_available: z.boolean().optional(),
+    quantity_status: z.enum(["sufficient", "insufficient", "unknown", "unavailable"]).optional(),
     deductions: z.array(inventoryPreviewDeductionSchema),
   }).strict()),
 }).strict();

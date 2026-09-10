@@ -1,3 +1,6 @@
+import { InventoryDomainError } from "./errors.js";
+import { quantityEvidenceStatus } from "./evidence.js";
+import { savedIntakeItems } from "./intakeIdentity.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
@@ -61,7 +64,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     const rows = this.database.prepare(`
       SELECT * FROM inventory_items
       WHERE user_id = ? AND deleted_at IS NULL
-      ORDER BY expiration_date ASC
+      ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date ASC
     `).all(userId) as Array<Record<string, unknown>>;
     return inventoryListResponseSchema.parse(rows.map(formatInventoryItem));
   }
@@ -75,14 +78,19 @@ export class SqliteInventoryRepository implements InventoryRepository {
   }
 
   async create(userId: number, input: InventoryCreateData) {
+    return this.createInTransaction(userId, input);
+  }
+
+  /** Synchronous entry point for an enclosing business transaction. */
+  createInTransaction(userId: number, input: InventoryCreateData, source: "manual" | "ai" = "manual") {
     return this.database.transaction(() => {
       const newItem = this.insertInventoryItem(userId, input);
       this.database.prepare(`
         INSERT INTO inventory_change_logs
           (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key)
-        VALUES (?, ?, 'created', 'manual', NULL, ?, ?, ?, ?)
+        VALUES (?, ?, 'created', ?, NULL, ?, ?, ?, ?)
       `).run(
-        userId, newItem.id, newItem.quantity_value ?? null, newItem.quantity_unit ?? null,
+        userId, newItem.id, source, newItem.quantity_value ?? null, newItem.quantity_unit ?? null,
         newItem.quantity_value ?? null, `create:${newItem.id}`,
       );
       return formatInventoryItem(newItem);
@@ -106,7 +114,35 @@ export class SqliteInventoryRepository implements InventoryRepository {
     })();
   }
 
-  async bulkIntake(userId: number, input: InventoryBulkIntakeData) {
+  async undoScan(userId: number, jobId: string) {
+    return this.database.transaction(() => {
+      const saved = savedIntakeItems(this.database.prepare(`SELECT confirmed_payload_json,result_json FROM inventory_intake_batches
+        WHERE user_id=? AND source='image' AND source_reference=? ORDER BY created_at,id`).all(userId,jobId) as Array<{ confirmed_payload_json: unknown; result_json: unknown }>);
+      let undone = 0;
+      for (const item of new Map([...saved.values()].map(item => [item.id,item])).values()) {
+        const key = `intake-undo:${jobId}:${item.id}`;
+        if (this.database.prepare("SELECT id FROM inventory_change_logs WHERE user_id=? AND idempotency_key=?").get(userId,key)) continue;
+        const current = this.database.prepare("SELECT version,deleted_at FROM inventory_items WHERE id=? AND user_id=?").get(item.id,userId) as { version: number; deleted_at: string | null } | undefined;
+        if (!current || current.deleted_at || current.version !== item.version) throw new InventoryDomainError("INVENTORY_VERSION_CONFLICT", "部分食材已被消耗或修改，整批未撤销。请到库存查看当前数量后手动纠正。");
+        this.database.prepare("UPDATE inventory_items SET deleted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,version=version+1 WHERE id=? AND user_id=?").run(item.id,userId);
+        this.database.prepare(`INSERT INTO inventory_change_logs(user_id,inventory_item_id,action,source,quantity_before,quantity_after,quantity_unit,delta_value,idempotency_key,metadata_json)
+          VALUES(?,?,'removed','manual',?,?,?,?,?,?)`).run(userId,item.id,item.quantity_value ?? null,item.quantity_value ?? null,item.quantity_unit ?? null,0,key,JSON.stringify({ intake_undo_job: jobId }));
+        undone++;
+      }
+      return { undone, repeated: undone === 0 };
+    })();
+  }
+
+  async undoneScanItemIds(userId: number, jobId: string) {
+    return (this.database.prepare("SELECT inventory_item_id FROM inventory_change_logs WHERE user_id=? AND json_extract(metadata_json,'$.intake_undo_job')=?").all(userId,jobId) as Array<{ inventory_item_id: number }>).map(row => row.inventory_item_id);
+  }
+
+  async savedScanItems(userId: number, jobId: string) {
+    return savedIntakeItems(this.database.prepare(`SELECT confirmed_payload_json,result_json FROM inventory_intake_batches
+      WHERE user_id=? AND source='image' AND source_reference=? ORDER BY created_at,id`).all(userId,jobId) as Array<{ confirmed_payload_json: unknown; result_json: unknown }>);
+  }
+
+  async bulkIntake(userId: number, input: InventoryBulkIntakeData, automaticRule?: string) {
     return this.database.transaction(() => {
       const existing = this.database.prepare(`
         SELECT result_json FROM inventory_intake_batches
@@ -119,15 +155,34 @@ export class SqliteInventoryRepository implements InventoryRepository {
         });
       }
 
-      const items = input.items.map((item) => formatInventoryItem(this.insertInventoryItem(userId, item)));
-      const result = inventoryBulkIntakeResponseSchema.parse({ batch_id: randomUUID(), items, repeated: false });
+      const previous = input.source_reference ? (this.database.prepare(`SELECT confirmed_payload_json,result_json FROM inventory_intake_batches
+        WHERE user_id=? AND source=? AND source_reference=? ORDER BY created_at,id`).all(userId,input.source,input.source_reference) as Array<{ confirmed_payload_json: unknown; result_json: unknown }>) : [];
+      const saved = savedIntakeItems(previous);
+      const ownedNames = automaticRule ? (this.database.prepare("SELECT food_name FROM inventory_items WHERE user_id=? AND deleted_at IS NULL AND is_available=1").all(userId) as Array<{ food_name: string }>).map(row => row.food_name.trim().toLocaleLowerCase().replace(/\s+/g, "")) : [];
+      const acceptedItems = automaticRule ? input.items.filter(item => (item.source_item_id && saved.has(item.source_item_id)) || !ownedNames.includes(item.food_name.trim().toLocaleLowerCase().replace(/\s+/g, ""))) : input.items;
+
+      let added = 0;
+      const items = acceptedItems.map(item => {
+        const existingItem = item.source_item_id ? saved.get(item.source_item_id) : undefined;
+        if (existingItem) return existingItem;
+        added += 1;
+        const created = formatInventoryItem(this.insertInventoryItem(userId, item));
+        this.database.prepare(`INSERT INTO inventory_change_logs
+          (user_id,inventory_item_id,action,source,quantity_after,quantity_unit,delta_value,idempotency_key,metadata_json)
+          VALUES(?,?,'created',?,?,?,?,?,?)`).run(userId, created.id, input.source === "image" || input.source === "receipt" ? "ai" : "manual",
+          created.quantity_value, created.quantity_unit, created.quantity_value, `intake:${created.id}`,
+          JSON.stringify({ acceptance: automaticRule ? "automatic" : "manual", acceptance_rule: automaticRule ?? null, inventory_version: created.version, source: item.source, source_reference: input.source_reference ?? null,
+            source_item_id: item.source_item_id ?? null, confidence: item.confidence ?? null, field_evidence: item.field_evidence ?? {} }));
+        return created;
+      });
+      const result = inventoryBulkIntakeResponseSchema.parse({ batch_id: randomUUID(), items, repeated: added === 0 });
       this.database.prepare(`
         INSERT INTO inventory_intake_batches
           (id, user_id, idempotency_key, source, source_reference, confirmed_payload_json, result_json)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run(
         result.batch_id, userId, input.idempotency_key, input.source,
-        input.source_reference ?? null, JSON.stringify(input.items), JSON.stringify(result),
+        input.source_reference ?? null, JSON.stringify(acceptedItems.map(item => ({ ...item, acceptance: automaticRule ? "automatic" : "manual", acceptance_rule: automaticRule ?? null }))), JSON.stringify(result),
       );
       return result;
     })();
@@ -135,10 +190,10 @@ export class SqliteInventoryRepository implements InventoryRepository {
 
   async listPreviewCandidates(userId: number): Promise<InventoryPreviewCandidate[]> {
     const rows = this.database.prepare(`
-      SELECT id, food_name, quantity_value, quantity_unit, expiration_date, batch_code, version
+      SELECT id, food_name, quantity_value, quantity_unit, expiration_date, batch_code, version, (SELECT metadata_json FROM inventory_change_logs e WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id AND json_extract(e.metadata_json,'$.field_evidence.quantity.status') IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence
       FROM inventory_items
       WHERE user_id = ? AND is_available = 1 AND deleted_at IS NULL
-      ORDER BY expiration_date ASC, id ASC
+      ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date ASC, id ASC
     `).all(userId) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       id: Number(row.id),
@@ -148,10 +203,16 @@ export class SqliteInventoryRepository implements InventoryRepository {
       expiration_date: String(row.expiration_date),
       batch_code: row.batch_code == null ? null : String(row.batch_code),
       version: Number(row.version),
+      quantity_evidence_status: quantityEvidenceStatus(row.quantity_evidence, row.version),
     }));
   }
 
   async consume(userId: number, input: InventoryConsumptionData) {
+    return this.consumeInTransaction(userId, input);
+  }
+
+  /** Synchronous entry point for an enclosing business transaction. */
+  consumeInTransaction(userId: number, input: InventoryConsumptionData, metadata: Record<string, unknown> = {}) {
     return this.database.transaction(() => {
       const existing = this.database.prepare(`
         SELECT result_json FROM inventory_consumption_requests
@@ -167,6 +228,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
       const changes = applyInventoryConsumptions(this.database, userId, input.items as InventoryConsumption[], {
         idempotencyKey: input.idempotency_key,
         source: input.source,
+        metadata,
       });
       const items = input.items.map((item) => formatInventoryItem(
         this.database.prepare("SELECT * FROM inventory_items WHERE id = ? AND user_id = ?").get(item.item_id, userId) as Record<string, unknown>,
@@ -198,12 +260,12 @@ export class SqliteInventoryRepository implements InventoryRepository {
     }));
   }
 
-  async update(
-    userId: number,
-    itemId: number,
-    expectedVersion: number,
-    input: InventoryUpdatePersistence,
-  ) {
+  async update(userId: number, itemId: number, expectedVersion: number, input: InventoryUpdatePersistence) {
+    return this.updateInTransaction(userId, itemId, expectedVersion, input);
+  }
+
+  /** Synchronous entry point for an enclosing business transaction. */
+  updateInTransaction(userId: number, itemId: number, expectedVersion: number, input: InventoryUpdatePersistence, source: "manual" | "ai" = "manual") {
     return this.database.transaction(() => {
       const current = this.database.prepare(`
         SELECT * FROM inventory_items
@@ -250,14 +312,16 @@ export class SqliteInventoryRepository implements InventoryRepository {
       if (current.quantity_value !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit || currentAvailable !== updated.is_available) {
         this.database.prepare(`
           INSERT OR IGNORE INTO inventory_change_logs
-            (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key)
-          VALUES (?, ?, 'adjusted', 'manual', ?, ?, ?, ?, ?)
+            (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key, metadata_json)
+          VALUES (?, ?, 'adjusted', ?, ?, ?, ?, ?, ?, ?)
         `).run(
-          userId, itemId, current.quantity_value, updated.quantity_value, updated.quantity_unit,
+          userId, itemId, source, current.quantity_value, updated.quantity_value, updated.quantity_unit,
           current.quantity_value == null || updated.quantity_value == null
             ? null
             : Number(updated.quantity_value) - Number(current.quantity_value),
           `manual-update:${itemId}:${expectedVersion}`,
+          JSON.stringify({ inventory_version: updated.version, field_evidence: source === "manual" && (current.quantity_value !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit)
+            ? { quantity: { status: "known", source: "user" } } : {} }),
         );
       }
       return { kind: "updated", item: updated } as const;

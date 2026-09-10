@@ -1,3 +1,4 @@
+import type { InventoryFieldEvidence } from "@dietdigidose/contracts";
 export interface DietRecordActionCard {
   mealType: string;
   foodName: string;
@@ -44,17 +45,19 @@ export interface SolutionCard {
 }
 
 export interface InventoryScanFood {
+  fieldEvidence?: InventoryFieldEvidence;
   id: string;
   foodName: string;
   quantity: string;
-  suggestedStorageLocation: "冷藏" | "冷冻" | "常温";
-  estimatedExpireDays: number;
+  suggestedStorageLocation: "冷藏" | "冷冻" | "常温" | "";
+  estimatedExpireDays: number | null;
   selected: boolean;
 }
 
 export interface InventoryScanCard {
   jobId: string;
-  status: "processing" | "review" | "saving" | "saved" | "failed";
+  status: "processing" | "review" | "saving" | "saved" | "failed" | "undone";
+  canUndo?: boolean;
   items: InventoryScanFood[];
   error?: string;
   lowConfidence?: boolean;

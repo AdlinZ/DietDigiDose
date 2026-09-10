@@ -561,8 +561,16 @@
             "type": "string"
           },
           "expiration_date": {
-            "type": "string",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
           },
           "storage_location": {
             "type": "string",
@@ -709,8 +717,16 @@
               "type": "string"
             },
             "expiration_date": {
-              "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                {
+                  "type": "string",
+                  "const": ""
+                }
+              ]
             },
             "storage_location": {
               "type": "string",
@@ -858,8 +874,16 @@
             "maxLength": 40
           },
           "expiration_date": {
-            "type": "string",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
           },
           "storage_location": {
             "default": "冷藏",
@@ -990,8 +1014,16 @@
             "maxLength": 40
           },
           "expiration_date": {
-            "type": "string",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ]
           },
           "storage_location": {
             "type": "string",
@@ -1135,8 +1167,16 @@
                   "maxLength": 40
                 },
                 "expiration_date": {
-                  "type": "string",
-                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    {
+                      "type": "string",
+                      "const": ""
+                    }
+                  ]
                 },
                 "storage_location": {
                   "default": "冷藏",
@@ -1279,8 +1319,16 @@
                   "type": "string"
                 },
                 "expiration_date": {
-                  "type": "string",
-                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    {
+                      "type": "string",
+                      "const": ""
+                    }
+                  ]
                 },
                 "storage_location": {
                   "type": "string",
@@ -1471,8 +1519,16 @@
                   "maxLength": 40
                 },
                 "expiration_date": {
-                  "type": "string",
-                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    {
+                      "type": "string",
+                      "const": ""
+                    }
+                  ]
                 },
                 "storage_location": {
                   "default": "冷藏",
@@ -1573,6 +1629,145 @@
                     }
                   ]
                 },
+                "field_evidence": {
+                  "type": "object",
+                  "properties": {
+                    "food_name": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "known",
+                            "estimated",
+                            "unknown"
+                          ]
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "recognition",
+                            "barcode",
+                            "rule",
+                            "unknown"
+                          ]
+                        },
+                        "note": {
+                          "type": "string",
+                          "maxLength": 200
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "quantity": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "known",
+                            "estimated",
+                            "unknown"
+                          ]
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "recognition",
+                            "barcode",
+                            "rule",
+                            "unknown"
+                          ]
+                        },
+                        "note": {
+                          "type": "string",
+                          "maxLength": 200
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "storage_location": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "known",
+                            "estimated",
+                            "unknown"
+                          ]
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "recognition",
+                            "barcode",
+                            "rule",
+                            "unknown"
+                          ]
+                        },
+                        "note": {
+                          "type": "string",
+                          "maxLength": 200
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "expiration_date": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "known",
+                            "estimated",
+                            "unknown"
+                          ]
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "recognition",
+                            "barcode",
+                            "rule",
+                            "unknown"
+                          ]
+                        },
+                        "note": {
+                          "type": "string",
+                          "maxLength": 200
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "source_item_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
                 "confidence": {
                   "anyOf": [
                     {
@@ -1659,8 +1854,16 @@
                   "type": "string"
                 },
                 "expiration_date": {
-                  "type": "string",
-                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    {
+                      "type": "string",
+                      "const": ""
+                    }
+                  ]
                 },
                 "storage_location": {
                   "type": "string",
@@ -1890,6 +2093,18 @@
                 },
                 "fully_covered": {
                   "type": "boolean"
+                },
+                "name_available": {
+                  "type": "boolean"
+                },
+                "quantity_status": {
+                  "type": "string",
+                  "enum": [
+                    "sufficient",
+                    "insufficient",
+                    "unknown",
+                    "unavailable"
+                  ]
                 },
                 "deductions": {
                   "type": "array",
@@ -2167,8 +2382,16 @@
                   "type": "string"
                 },
                 "expiration_date": {
-                  "type": "string",
-                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    {
+                      "type": "string",
+                      "const": ""
+                    }
+                  ]
                 },
                 "storage_location": {
                   "type": "string",

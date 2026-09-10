@@ -10,7 +10,7 @@ const item: InventoryItem = {
   food_name: "番茄",
   category: "蔬菜",
   quantity: "2g",
-  expiration_date: "2026-09-05",
+  expiration_date: "2030-09-05",
   storage_location: "冷藏",
   image_url: null,
   is_available: true,
@@ -29,6 +29,9 @@ function fakeRepository(overrides: Partial<InventoryRepository> = {}): Inventory
     findOwned: async () => item,
     create: async () => item,
     importShoppingList: async () => ({ items: [item], repeated: false }),
+    undoScan: async () => ({ undone: 0, repeated: true }),
+    undoneScanItemIds: async () => [],
+    savedScanItems: async () => new Map(),
     bulkIntake: async () => ({ batch_id: "11111111-1111-4111-8111-111111111111", items: [item], repeated: false }),
     listPreviewCandidates: async () => [{
       id: item.id,
@@ -57,7 +60,7 @@ describe("inventory module service", () => {
       food_name: "番茄",
       category: "蔬菜",
       quantity: "2g",
-      expiration_date: "2026-09-05",
+      expiration_date: "2030-09-05",
       storage_location: "冷藏",
     })).id, 1);
     assert.deepEqual(events, [42]);
@@ -103,7 +106,7 @@ describe("inventory module service", () => {
         food_name: "番茄",
         category: "蔬菜",
         quantity: "2g",
-        expiration_date: "2026-09-05",
+        expiration_date: "2030-09-05",
         storage_location: "冷藏",
       }],
     });
@@ -119,4 +122,45 @@ describe("inventory module service", () => {
     assert.equal(preview.items[0].fully_covered, true);
     assert.equal(preview.items[0].deductions[0].item_id, 1);
   });
+});
+
+test("one FEFO preview shares inventory across requests and normalizes mixed-unit deductions", async () => {
+  const { buildFefoConsumptionPreviewFromCandidates } = await import("../src/services/inventoryQuantity.js");
+  const eggs = { id: 1, food_name: "鸡蛋", quantity_value: 3, quantity_unit: "piece", expiration_date: "2026-09-20", batch_code: "batch-a", version: 1 };
+  const request = { food_name: "鸡蛋", amount_value: 2, unit: "piece" as const };
+  const preview = buildFefoConsumptionPreviewFromCandidates([eggs], [request, request]);
+  assert.deepEqual(preview.map(item => item.covered_value), [2, 1]);
+  assert.deepEqual(preview.map(item => item.fully_covered), [true, false]);
+  assert.equal(preview[1].missing_value, 1);
+  assert.equal(eggs.quantity_value, 3);
+  const flour = { ...eggs, food_name: "面粉", quantity_value: 1000, quantity_unit: "g" };
+  const mixed = buildFefoConsumptionPreviewFromCandidates([flour], [
+    { food_name: "面粉", amount_value: 0.2, unit: "kg" }, { food_name: "面粉", amount_value: 300, unit: "g" },
+  ]);
+  assert.deepEqual(mixed.flatMap(item => item.deductions).map(item => [item.amount_value,item.unit]), [[200,"g"],[300,"g"]]);
+  assert.deepEqual(mixed.map(item => item.fully_covered), [true,true]);
+});
+
+test("preview distinguishes matching names with unknown quantities from known shortages", async () => {
+  const { buildFefoConsumptionPreviewFromCandidates } = await import("../src/services/inventoryQuantity.js");
+  const batch = { id: 1, food_name: "大米", quantity_value: null, quantity_unit: null, expiration_date: "2026-09-20", batch_code: "rice", version: 1 };
+  const request = [{ food_name: "大米", amount_value: 500, unit: "g" as const }];
+  const preview = (items: Array<typeof batch | (Omit<typeof batch, "quantity_value" | "quantity_unit"> & { quantity_value: number; quantity_unit: string })>) => buildFefoConsumptionPreviewFromCandidates(items, request)[0];
+  assert.equal(preview([batch]).quantity_status, "unknown");
+  assert.equal(preview([batch]).name_available, true);
+  assert.equal(preview([batch]).fully_covered, false);
+  assert.equal(preview([{ ...batch, quantity_value: 1, quantity_unit: "bag" }]).quantity_status, "unknown");
+  assert.equal(preview([{ ...batch, quantity_value: 300, quantity_unit: "g" }]).quantity_status, "insufficient");
+  assert.equal(preview([{ ...batch, quantity_value: 600, quantity_unit: "g" }]).quantity_status, "sufficient");
+  assert.equal(preview([]).quantity_status, "unavailable");
+});
+
+test("cooking preview excludes expired stock but keeps today and unknown dates distinct", async () => {
+  const { buildFefoConsumptionPreviewFromCandidates } = await import("../src/services/inventoryQuantity.js");
+  const base = { id: 1, food_name: "米", quantity_value: 500, quantity_unit: "g", batch_code: null, version: 1 };
+  const items = [{ food_name: "米", amount_value: 100, unit: "g" as const }];
+  assert.equal(buildFefoConsumptionPreviewFromCandidates([{ ...base, expiration_date: "2026-09-08" }], items, "2026-09-09")[0].quantity_status, "unavailable");
+  assert.equal(buildFefoConsumptionPreviewFromCandidates([{ ...base, expiration_date: "2026-09-09" }], items, "2026-09-09")[0].fully_covered, true);
+  const unknown = buildFefoConsumptionPreviewFromCandidates([{ ...base, expiration_date: "" }], items, "2026-09-09")[0];
+  assert.equal(unknown.deductions[0].expiration_date, "");
 });

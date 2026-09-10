@@ -18,11 +18,14 @@ import type { FunnelEventName } from "../../services/funnelEvents.js";
 /** Driver-neutral persistence port. Implementations own atomic database transactions. */
 export interface InventoryRepository {
   recordFunnelEvent(eventName: FunnelEventName, actorHash: string): Promise<void>;
+  undoScan(userId: number, jobId: string): Promise<{ undone: number; repeated: boolean }>;
+  undoneScanItemIds(userId: number, jobId: string): Promise<number[]>;
+  savedScanItems(userId: number, jobId: string): Promise<Map<string, InventoryItem>>;
   list(userId: number): Promise<InventoryItem[]>;
   findOwned(userId: number, itemId: number): Promise<InventoryItem | null>;
   create(userId: number, input: InventoryCreateData): Promise<InventoryItem>;
   importShoppingList(userId: number, input: InventoryImportData): Promise<InventoryImportResponse>;
-  bulkIntake(userId: number, input: InventoryBulkIntakeData): Promise<InventoryBulkIntakeResponse>;
+  bulkIntake(userId: number, input: InventoryBulkIntakeData, automaticRule?: string): Promise<InventoryBulkIntakeResponse>;
   listPreviewCandidates(userId: number): Promise<InventoryPreviewCandidate[]>;
   consume(userId: number, input: InventoryConsumptionData): Promise<InventoryConsumptionResponse>;
   history(userId: number, itemId: number): Promise<InventoryHistoryItem[] | null>;

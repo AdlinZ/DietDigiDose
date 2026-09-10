@@ -25,8 +25,8 @@ export class SqliteAgentRunsRepository implements AgentRunsRepository {
         const reusable = this.database.prepare(`SELECT id,session_id FROM agent_runs WHERE user_id=?
           AND json_extract(input_json,'$.idempotencyKey')=?
           AND status IN ('queued','running','awaiting_approval','completed')
-          AND created_at >= datetime('now','-15 minutes') ORDER BY created_at DESC LIMIT 1`)
-          .get(userId, input.idempotencyKey) as { id: string; session_id: string } | undefined;
+          AND (created_at >= datetime('now','-15 minutes') OR (?=1 AND modality='inventory_scan')) ORDER BY created_at DESC LIMIT 1`)
+          .get(userId, input.idempotencyKey, input.modality === "inventory_scan" && input.idempotencyKey.startsWith("inventory-photo:") ? 1 : 0) as { id: string; session_id: string } | undefined;
         if (reusable) return { id: reusable.id, sessionId: reusable.session_id };
       }
       this.database.prepare(`INSERT INTO agent_runs

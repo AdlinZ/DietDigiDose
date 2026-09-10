@@ -1,12 +1,15 @@
+import { resolveKitchenPreferences, type KitchenPreferences } from "@dietdigidose/contracts";
+import type { PreparedMeal } from "@dietdigidose/contracts";
 import dayjs from "dayjs";
 import { aiContextService } from "../modules/aiContext/runtime.js";
 import { recommendationsService } from "../modules/recommendations/runtime.js";
 
 export interface UserContext {
   userId: number;
+  preparedMeals?: PreparedMeal[];
   username?: string;
   dailyCaloriesTarget: number;
-  inventory: Array<{ food_name: string; quantity: string; expiration_date: string; storage_location: string }>;
+  inventory: Array<{ id?: number; version?: number; quantity_value?: number | null; quantity_unit?: string | null; batch_code?: string | null; food_name: string; quantity: string; expiration_date: string; storage_location: string }>;
   kitchenware: Array<{ name: string; category: string; status: string }>;
   todayDiet: Array<{ meal_type: string; food_name: string; calories: number; protein: number; carbs: number; fat: number }>;
   latestHealth?: { weight?: number; body_fat?: number; water_ml?: number };
@@ -95,11 +98,12 @@ export function generateSystemPrompt(ctx: UserContext): string {
 }
 
 /** 将可编辑人设、固定规则和每次请求的真实数据拆为独立 System 消息。 */
-export function buildAIPromptMessages(ctx: UserContext): Array<{ role: "system"; content: string }> {
+export function buildAIPromptMessages(ctx: UserContext, requestPreferences: KitchenPreferences = {}): Array<{ role: "system"; content: string }> {
   const totalCaloriesToday = ctx.todayDiet.reduce((sum, item) => sum + (item.calories || 0), 0);
   const totalProteinToday = ctx.todayDiet.reduce((sum, item) => sum + (item.protein || 0), 0);
   const personaPrompt = ctx.personaPrompt?.trim() || DEFAULT_AI_PERSONA_PROMPT;
   const nutritionTargets = ctx.healthProfile?.nutrition_targets || {};
+  const kitchen = resolveKitchenPreferences(ctx.healthProfile?.kitchen_constraints, requestPreferences);
   const runtimeContext = {
     current_time: dayjs().format(),
     user_profile: {
@@ -132,13 +136,18 @@ export function buildAIPromptMessages(ctx: UserContext): Array<{ role: "system";
       fat_g: ctx.todayDiet.reduce((sum, item) => sum + (item.fat || 0), 0),
       records_complete: false, records: ctx.todayDiet,
     },
-    inventory: ctx.inventory.map((item) => ({ name: item.food_name, quantity: item.quantity, storage: item.storage_location, expiry_date: item.expiration_date, opened: null })),
+    inventory: ctx.inventory.map((item) => ({ id: item.id, version: item.version, quantity_value: item.quantity_value, quantity_unit: item.quantity_unit, batch_code: item.batch_code, name: item.food_name, quantity: item.quantity, storage: item.storage_location, expiry_date: item.expiration_date, opened: null })),
+    prepared_meals: (ctx.preparedMeals || []).filter(meal => !meal.is_reserved),
+    reserved_prepared_meals: (ctx.preparedMeals || []).filter(meal => meal.is_reserved),
     available_cookware: ctx.kitchenware.map((item) => ({ name: item.name, category: item.category, status: item.status })),
-    available_time_minutes: ctx.healthProfile?.kitchen_constraints?.meal_time_minutes ?? null,
-    budget_per_meal: ctx.healthProfile?.kitchen_constraints?.budget_per_meal ?? null,
-    cooking_level: ctx.healthProfile?.kitchen_constraints?.cooking_level ?? null,
-    servings: ctx.healthProfile?.kitchen_constraints?.servings ?? null,
-    eating_out_frequency: ctx.healthProfile?.kitchen_constraints?.eating_out_frequency ?? null,
+    available_time_minutes: kitchen.meal_time_minutes,
+    budget_per_meal: kitchen.budget_per_meal ?? null,
+    cooking_level: kitchen.cooking_level ?? null,
+    servings: kitchen.servings ?? null,
+    eating_out_frequency: kitchen.eating_out_frequency ?? null,
+    meal_preparation_preferences: kitchen,
+    request_preference_overrides: requestPreferences,
+    stored_meal_preferences: ctx.healthProfile?.kitchen_constraints || {},
     taste_preferences: [], recent_meals: [], favorite_recipes: [],
     recommendation_candidates: ctx.recommendedRecipes,
   };

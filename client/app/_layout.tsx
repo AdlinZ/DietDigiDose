@@ -21,6 +21,8 @@ export default function RootLayout() {
             <Stack.Screen name="following" />
             <Stack.Screen name="user-profile" />
             <Stack.Screen name="diet-record" />
+            <Stack.Screen name="prepared-meals" />
+            <Stack.Screen name="cooking-plan" />
             <Stack.Screen name="health-data" />
             <Stack.Screen name="health-profile" />
             <Stack.Screen name="cooking-queue" />

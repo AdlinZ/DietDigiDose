@@ -1,3 +1,4 @@
+import type { MealProduction } from "@dietdigidose/contracts";
 import type { InventoryConsumption } from "../../services/inventoryQuantity.js";
 
 export type DietRecordInput = {
@@ -23,12 +24,13 @@ export type CookingCompletionInput = {
   recipe_id?: number | null;
   inventory_item_ids: number[];
   inventory_consumptions: InventoryConsumption[];
-  diet_record: DietRecordInput;
+  diet_record?: DietRecordInput;
+  production?: MealProduction;
 };
 
 export type PreparedCookingCompletion = Omit<CookingCompletionInput, "diet_record"> & {
   inventory_item_ids: number[];
-  diet_record: PreparedDietRecord;
+  diet_record?: PreparedDietRecord;
 };
 
 export type CookingCompletionResult = Record<string, unknown> & { repeated: boolean };

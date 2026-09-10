@@ -1,3 +1,6 @@
+import { InventoryDomainError } from "./errors.js";
+import { quantityEvidenceStatus } from "./evidence.js";
+import { savedIntakeItems } from "./intakeIdentity.js";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import {
@@ -44,6 +47,7 @@ export async function consumeInventoryWithPostgresClient(
   client: PoolClient,
   userId: number,
   input: InventoryConsumptionData,
+  metadata: Record<string, unknown> = {},
 ) {
   await lockInventoryIdempotency(client, "consume", userId, input.idempotency_key);
   const existing = await client.query(`
@@ -76,7 +80,7 @@ export async function consumeInventoryWithPostgresClient(
       userId, consumption.item_id, consumption.mode === "all" ? "consume_all" : "consume_partial",
       input.source, transition.storedValue, transition.storedValue === null ? null : transition.remaining,
       transition.storedUnit, transition.amountUsed === null ? null : -Math.round((transition.amountUsed + Number.EPSILON) * 1000) / 1000,
-      `${input.idempotency_key}:${consumption.item_id}:${index}`, "{}",
+      `${input.idempotency_key}:${consumption.item_id}:${index}`, JSON.stringify(metadata),
     ]);
     changes.push({
       item_id: consumption.item_id,
@@ -151,7 +155,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
     const result = await this.pool.query(`
       SELECT * FROM inventory_items
       WHERE user_id = $1 AND deleted_at IS NULL
-      ORDER BY expiration_date ASC
+      ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date ASC
     `, [userId]);
     return inventoryListResponseSchema.parse(result.rows.map(formatInventoryItem));
   }
@@ -165,15 +169,18 @@ export class PostgresInventoryRepository implements InventoryRepository {
   }
 
   async create(userId: number, input: InventoryCreateData) {
-    return this.transaction(async (client) => {
-      const item = await this.insertInventoryItem(client, userId, input);
-      await client.query(`
-        INSERT INTO inventory_change_logs
-          (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key)
-        VALUES ($1, $2, 'created', 'manual', NULL, $3, $4, $3, $5)
-      `, [userId, item.id, item.quantity_value ?? null, item.quantity_unit ?? null, `create:${item.id}`]);
-      return item;
-    });
+    return this.transaction(client => this.createWithClient(client, userId, input));
+  }
+
+  /** Uses the caller's transaction; does not commit or release its connection. */
+  async createWithClient(client: PoolClient, userId: number, input: InventoryCreateData, source: "manual" | "ai" = "manual") {
+    const item = await this.insertInventoryItem(client, userId, input);
+    await client.query(`
+      INSERT INTO inventory_change_logs
+        (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key)
+      VALUES ($1, $2, 'created', $6, NULL, $3, $4, $3, $5)
+    `, [userId, item.id, item.quantity_value ?? null, item.quantity_unit ?? null, `create:${item.id}`, source]);
+    return item;
   }
 
   async importShoppingList(userId: number, input: InventoryImportData) {
@@ -192,23 +199,75 @@ export class PostgresInventoryRepository implements InventoryRepository {
     });
   }
 
-  async bulkIntake(userId: number, input: InventoryBulkIntakeData) {
+  async undoScan(userId: number, jobId: string) {
+    return this.transaction(async client => {
+      await this.lockIdempotency(client, "intake-source", userId, `image:${jobId}`);
+      const saved = savedIntakeItems((await client.query(`SELECT confirmed_payload_json,result_json FROM inventory_intake_batches
+        WHERE user_id=$1 AND source='image' AND source_reference=$2 ORDER BY created_at,id`, [userId,jobId])).rows);
+      let undone = 0;
+      for (const item of [...new Map([...saved.values()].map(item => [item.id,item])).values()].sort((a,b) => a.id-b.id)) {
+        const key = `intake-undo:${jobId}:${item.id}`;
+        if ((await client.query("SELECT id FROM inventory_change_logs WHERE user_id=$1 AND idempotency_key=$2", [userId,key])).rows[0]) continue;
+        const current = (await client.query("SELECT version,deleted_at FROM inventory_items WHERE id=$1 AND user_id=$2 FOR UPDATE", [item.id,userId])).rows[0];
+        if (!current || current.deleted_at || Number(current.version) !== item.version) throw new InventoryDomainError("INVENTORY_VERSION_CONFLICT", "部分食材已被消耗或修改，整批未撤销。请到库存查看当前数量后手动纠正。");
+        await client.query("UPDATE inventory_items SET deleted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,version=version+1 WHERE id=$1 AND user_id=$2", [item.id,userId]);
+        await client.query(`INSERT INTO inventory_change_logs(user_id,inventory_item_id,action,source,quantity_before,quantity_after,quantity_unit,delta_value,idempotency_key,metadata_json)
+          VALUES($1,$2,'removed','manual',$3,$3,$4,0,$5,$6::jsonb)`, [userId,item.id,item.quantity_value ?? null,item.quantity_unit ?? null,key,JSON.stringify({ intake_undo_job: jobId })]);
+        undone++;
+      }
+      return { undone, repeated: undone === 0 };
+    });
+  }
+
+  async undoneScanItemIds(userId: number, jobId: string) {
+    return (await this.pool.query("SELECT inventory_item_id FROM inventory_change_logs WHERE user_id=$1 AND metadata_json->>'intake_undo_job'=$2", [userId,jobId])).rows.map(row => Number(row.inventory_item_id));
+  }
+
+  async savedScanItems(userId: number, jobId: string) {
+    return savedIntakeItems((await this.pool.query(`SELECT confirmed_payload_json,result_json FROM inventory_intake_batches
+      WHERE user_id=$1 AND source='image' AND source_reference=$2 ORDER BY created_at,id`, [userId,jobId])).rows);
+  }
+
+  async bulkIntake(userId: number, input: InventoryBulkIntakeData, automaticRule?: string) {
     return this.transaction(async (client) => {
+      if (automaticRule) await this.lockIdempotency(client, "automatic-intake-user", userId, String(userId));
       await this.lockIdempotency(client, "intake", userId, input.idempotency_key);
       const existing = await client.query(`
         SELECT result_json FROM inventory_intake_batches WHERE user_id = $1 AND idempotency_key = $2
       `, [userId, input.idempotency_key]);
       if (existing.rows[0]) return inventoryBulkIntakeResponseSchema.parse({ ...existing.rows[0].result_json, repeated: true });
+      if (input.source_reference) await this.lockIdempotency(client, "intake-source", userId, `${input.source}:${input.source_reference}`);
+      const previous = input.source_reference ? (await client.query(`SELECT confirmed_payload_json,result_json FROM inventory_intake_batches
+        WHERE user_id=$1 AND source=$2 AND source_reference=$3 ORDER BY created_at,id`, [userId,input.source,input.source_reference])).rows : [];
+      const saved = savedIntakeItems(previous);
+      const ownedNames = automaticRule ? (await client.query("SELECT food_name FROM inventory_items WHERE user_id=$1 AND deleted_at IS NULL AND is_available=TRUE", [userId])).rows.map(row => String(row.food_name).trim().toLocaleLowerCase().replace(/\s+/g, "")) : [];
+      const acceptedItems = automaticRule ? input.items.filter(item => (item.source_item_id && saved.has(item.source_item_id)) || !ownedNames.includes(item.food_name.trim().toLocaleLowerCase().replace(/\s+/g, ""))) : input.items;
+
       const items = [];
-      for (const item of input.items) items.push(await this.insertInventoryItem(client, userId, item));
-      const response = inventoryBulkIntakeResponseSchema.parse({ batch_id: randomUUID(), items, repeated: false });
+      let added = 0;
+      for (const item of acceptedItems) {
+        const existingItem = item.source_item_id ? saved.get(item.source_item_id) : undefined;
+        if (existingItem) items.push(existingItem);
+        else {
+          added += 1;
+          const created = await this.insertInventoryItem(client, userId, item);
+          await client.query(`INSERT INTO inventory_change_logs
+            (user_id,inventory_item_id,action,source,quantity_after,quantity_unit,delta_value,idempotency_key,metadata_json)
+            VALUES($1,$2,'created',$3,$4,$5,$4,$6,$7::jsonb)`, [userId,created.id,
+            input.source === "image" || input.source === "receipt" ? "ai" : "manual", created.quantity_value,created.quantity_unit,
+            `intake:${created.id}`, JSON.stringify({ acceptance: automaticRule ? "automatic" : "manual", acceptance_rule: automaticRule ?? null, inventory_version: created.version, source: item.source, source_reference: input.source_reference ?? null,
+              source_item_id: item.source_item_id ?? null, confidence: item.confidence ?? null, field_evidence: item.field_evidence ?? {} })]);
+          items.push(created);
+        }
+      }
+      const response = inventoryBulkIntakeResponseSchema.parse({ batch_id: randomUUID(), items, repeated: added === 0 });
       await client.query(`
         INSERT INTO inventory_intake_batches
           (id, user_id, idempotency_key, source, source_reference, confirmed_payload_json, result_json)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
       `, [
         response.batch_id, userId, input.idempotency_key, input.source, input.source_reference ?? null,
-        JSON.stringify(input.items), JSON.stringify(response),
+        JSON.stringify(acceptedItems.map(item => ({ ...item, acceptance: automaticRule ? "automatic" : "manual", acceptance_rule: automaticRule ?? null }))), JSON.stringify(response),
       ]);
       return response;
     });
@@ -216,10 +275,10 @@ export class PostgresInventoryRepository implements InventoryRepository {
 
   async listPreviewCandidates(userId: number): Promise<InventoryPreviewCandidate[]> {
     const result = await this.pool.query(`
-      SELECT id, food_name, quantity_value, quantity_unit, expiration_date, batch_code, version
+      SELECT id, food_name, quantity_value, quantity_unit, expiration_date, batch_code, version, (SELECT metadata_json FROM inventory_change_logs e WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id AND e.metadata_json->'field_evidence'->>'quantity' IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence
       FROM inventory_items
       WHERE user_id = $1 AND is_available = TRUE AND deleted_at IS NULL
-      ORDER BY expiration_date ASC, id ASC
+      ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date ASC, id ASC
     `, [userId]);
     return result.rows.map((row) => ({
       id: Number(row.id),
@@ -229,6 +288,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
       expiration_date: String(row.expiration_date),
       batch_code: row.batch_code == null ? null : String(row.batch_code),
       version: Number(row.version),
+      quantity_evidence_status: quantityEvidenceStatus(row.quantity_evidence, row.version),
     }));
   }
 
@@ -258,46 +318,51 @@ export class PostgresInventoryRepository implements InventoryRepository {
   }
 
   async update(userId: number, itemId: number, expectedVersion: number, input: InventoryUpdatePersistence) {
-    return this.transaction(async (client) => {
-      const currentResult = await client.query(`
-        SELECT * FROM inventory_items WHERE id = $1 AND user_id = $2 AND version = $3 AND deleted_at IS NULL FOR UPDATE
-      `, [itemId, userId, expectedVersion]);
-      const current = currentResult.rows[0];
-      if (!current) return { kind: "conflict" } as const;
-      const { patch } = input;
-      const has = (key: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, key);
-      const updatedResult = await client.query(`
-        UPDATE inventory_items SET
-          food_name = COALESCE($1, food_name), category = COALESCE($2, category), quantity = COALESCE($3, quantity),
-          expiration_date = COALESCE($4, expiration_date), storage_location = COALESCE($5, storage_location),
-          image_url = COALESCE($6, image_url), is_available = COALESCE($7, is_available),
-          quantity_value = $8, quantity_unit = $9, package_size_value = $10, package_size_unit = $11,
-          batch_code = $12, version = version + 1, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $13 AND user_id = $14 AND version = $15 AND deleted_at IS NULL RETURNING *
+    return this.transaction(client => this.updateWithClient(client, userId, itemId, expectedVersion, input));
+  }
+
+  /** Uses the caller's transaction; does not commit or release its connection. */
+  async updateWithClient(client: PoolClient, userId: number, itemId: number, expectedVersion: number, input: InventoryUpdatePersistence, source: "manual" | "ai" = "manual") {
+    const currentResult = await client.query(`
+      SELECT * FROM inventory_items WHERE id = $1 AND user_id = $2 AND version = $3 AND deleted_at IS NULL FOR UPDATE
+    `, [itemId, userId, expectedVersion]);
+    const current = currentResult.rows[0];
+    if (!current) return { kind: "conflict" } as const;
+    const { patch } = input;
+    const has = (key: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, key);
+    const updatedResult = await client.query(`
+      UPDATE inventory_items SET
+        food_name = COALESCE($1, food_name), category = COALESCE($2, category), quantity = COALESCE($3, quantity),
+        expiration_date = COALESCE($4, expiration_date), storage_location = COALESCE($5, storage_location),
+        image_url = COALESCE($6, image_url), is_available = COALESCE($7, is_available),
+        quantity_value = $8, quantity_unit = $9, package_size_value = $10, package_size_unit = $11,
+        batch_code = $12, version = version + 1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $13 AND user_id = $14 AND version = $15 AND deleted_at IS NULL RETURNING *
+    `, [
+      patch.food_name, patch.category, patch.quantity, patch.expiration_date, patch.storage_location,
+      patch.image_url, patch.is_available, input.nextQuantityValue, input.nextQuantityUnit,
+      has("package_size_value") ? patch.package_size_value : current.package_size_value,
+      has("package_size_unit") ? patch.package_size_unit : current.package_size_unit,
+      has("batch_code") ? patch.batch_code : current.batch_code, itemId, userId, expectedVersion,
+    ]);
+    if (!updatedResult.rows[0]) return { kind: "conflict" } as const;
+    const updated = formatInventoryItem(updatedResult.rows[0]);
+    const currentQuantity = current.quantity_value == null ? null : Number(current.quantity_value);
+    if (currentQuantity !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit || Boolean(current.is_available) !== updated.is_available) {
+      await client.query(`
+        INSERT INTO inventory_change_logs
+          (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key, metadata_json)
+        VALUES ($1, $2, 'adjusted', $8, $3, $4, $5, $6, $7, $9::jsonb)
+        ON CONFLICT (user_id, idempotency_key) DO NOTHING
       `, [
-        patch.food_name, patch.category, patch.quantity, patch.expiration_date, patch.storage_location,
-        patch.image_url, patch.is_available, input.nextQuantityValue, input.nextQuantityUnit,
-        has("package_size_value") ? patch.package_size_value : current.package_size_value,
-        has("package_size_unit") ? patch.package_size_unit : current.package_size_unit,
-        has("batch_code") ? patch.batch_code : current.batch_code, itemId, userId, expectedVersion,
+        userId, itemId, current.quantity_value, updated.quantity_value, updated.quantity_unit,
+        current.quantity_value == null || updated.quantity_value == null ? null : Number(updated.quantity_value) - Number(current.quantity_value),
+        `manual-update:${itemId}:${expectedVersion}`, source,
+        JSON.stringify({ inventory_version: updated.version, field_evidence: source === "manual" && (currentQuantity !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit)
+            ? { quantity: { status: "known", source: "user" } } : {} }),
       ]);
-      if (!updatedResult.rows[0]) return { kind: "conflict" } as const;
-      const updated = formatInventoryItem(updatedResult.rows[0]);
-      const currentQuantity = current.quantity_value == null ? null : Number(current.quantity_value);
-      if (currentQuantity !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit || Boolean(current.is_available) !== updated.is_available) {
-        await client.query(`
-          INSERT INTO inventory_change_logs
-            (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key)
-          VALUES ($1, $2, 'adjusted', 'manual', $3, $4, $5, $6, $7)
-          ON CONFLICT (user_id, idempotency_key) DO NOTHING
-        `, [
-          userId, itemId, current.quantity_value, updated.quantity_value, updated.quantity_unit,
-          current.quantity_value == null || updated.quantity_value == null ? null : Number(updated.quantity_value) - Number(current.quantity_value),
-          `manual-update:${itemId}:${expectedVersion}`,
-        ]);
-      }
-      return { kind: "updated", item: updated } as const;
-    });
+    }
+    return { kind: "updated", item: updated } as const;
   }
 
   async remove(userId: number, item: InventoryItem) {

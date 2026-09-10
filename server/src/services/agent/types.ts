@@ -51,8 +51,11 @@ export type AgentActionType =
   | "add_inventory_item"
   | "update_inventory_item"
   | "consume_inventory_items"
+  | "produce_meal"
+  | "record_prepared_meal_event"
   | "add_kitchenware_item"
   | "submit_recipe"
+  | "update_kitchen_preferences"
   | "record_health_log";
 
 export type AgentActionProposal = {

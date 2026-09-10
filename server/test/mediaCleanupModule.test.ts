@@ -1,3 +1,5 @@
+import Database from "better-sqlite3";
+import { SqliteMediaCleanupRepository } from "../src/modules/mediaCleanup/sqliteRepository.js";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { MediaCleanupRepository } from "../src/modules/mediaCleanup/repository.js";
@@ -86,4 +88,42 @@ describe("media cleanup module", () => {
       else process.env.SUPABASE_URL = previousUrl;
     }
   });
+});
+
+
+test("failed legacy batches rotate behind untouched jobs and remain recoverable", async (t) => {
+  const db = new Database(":memory:");
+  t.after(() => db.close());
+  db.exec(`CREATE TABLE media_cleanup_jobs (
+    id INTEGER PRIMARY KEY, owner_user_id INTEGER, urls_json TEXT, objects_json TEXT,
+    status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, last_error TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT, claim_token TEXT, claimed_at TEXT
+  )`);
+  const repo = new SqliteMediaCleanupRepository(db);
+  const oldOrigin = "https://retired.example";
+  const previous = process.env.SUPABASE_URL;
+  process.env.SUPABASE_URL = "https://current.example";
+  t.after(() => { if (previous === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = previous; });
+  for (let id = 1; id <= 25; id += 1) {
+    db.prepare("INSERT INTO media_cleanup_jobs(id,owner_user_id,urls_json) VALUES(?,3,?)").run(id,
+      JSON.stringify([`${oldOrigin}/storage/v1/object/public/community-media/community/3/${id}.png`]));
+  }
+  const validId = await repo.enqueue(3, ["/media/uploads/valid.png"], [{ backend: "local", path: "/tmp/valid.png" }]);
+  const deleted: unknown[] = [];
+  const service = new MediaCleanupService(repo, async refs => { deleted.push(...refs); });
+  t.mock.method(console, "error", () => undefined);
+  assert.deepEqual(await service.processPending(), { checked: 25, completed: 0, failed: 25 });
+  assert.equal((await service.processPending()).completed, 1);
+  assert.equal((await service.job(validId))?.status, "completed");
+  assert.deepEqual(deleted, [{ backend: "local", path: "/tmp/valid.png" }]);
+  assert.equal((await service.job(1))?.status, "pending");
+  process.env.SUPABASE_URL = oldOrigin;
+  assert.equal((await service.processPending()).completed, 25);
+  assert.equal((await service.job(1))?.status, "completed");
+  const id = await repo.enqueue(3, [], []);
+  assert.ok(await repo.claim(id, "winner", 30));
+  assert.equal(await repo.claim(id, "loser", 30), null);
+  assert.equal(await repo.complete(id, "loser"), false);
+  assert.equal(await repo.complete(id, "winner"), true);
 });

@@ -1,3 +1,5 @@
+import * as Crypto from "expo-crypto";
+import { parseStructuredQuantity } from "@/utils/structuredQuantity";
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
   View,
@@ -172,7 +174,7 @@ export default function AIAssistantScreen() {
     itemId: string;
     foodName: string;
     quantity: string;
-    storageLocation: "冷藏" | "冷冻" | "常温";
+    storageLocation: "冷藏" | "冷冻" | "常温" | "";
     expireDays: string;
   } | null>(null);
   const [storedSessions, setSessions] = useState<ChatSession[]>([]);
@@ -676,12 +678,17 @@ export default function AIAssistantScreen() {
             const items = normalizeInventoryScanFoods(data.items, jobId);
             if (!items.length) throw new Error("没有识别到可入库的食材，请换一张更清晰的照片重试。");
             if (!active) return;
+            const accepted = await inventoryApi.acceptScan(authFetch, jobId);
+            if (!active) return;
+            const savedIds = new Set(accepted.savedSourceItemIds);
+            const remaining = items.filter(item => !savedIds.has(item.id));
+            const savedText = accepted.items.length ? `已保存 ${accepted.items.length} 项：${accepted.items.map(item => item.food_name).join("、")}。` : "";
             setMessages((current) => current.map((message) =>
               message.id === messageId
                 ? {
                     ...message,
-                    text: `识别完成，共找到 ${items.length} 项。请检查并修改后，再确认加入食材库。`,
-                    inventoryScanCard: { jobId, status: "review", items },
+                    text: `${savedText}${remaining.length ? `还有 ${remaining.length} 项需要确认，请检查后加入食材库。` : accepted.undoneSourceItemIds.length ? "本次入库已撤销。" : "本次识别项目已全部保存。"}`,
+                    inventoryScanCard: { jobId, status: remaining.length ? "review" : accepted.undoneSourceItemIds.length && !accepted.items.length ? "undone" : "saved", canUndo: accepted.items.length > 0, items: remaining },
                   }
                 : message
             ));
@@ -741,7 +748,7 @@ export default function AIAssistantScreen() {
       foodName: item.foodName,
       quantity: item.quantity,
       storageLocation: item.suggestedStorageLocation,
-      expireDays: String(item.estimatedExpireDays),
+      expireDays: item.estimatedExpireDays == null ? "" : String(item.estimatedExpireDays),
     });
   };
 
@@ -750,7 +757,11 @@ export default function AIAssistantScreen() {
       Alert.alert("提示", "食材名称不能为空。");
       return;
     }
-    const expireDays = Math.max(1, Math.min(Number(inventoryEditTarget.expireDays) || 7, 365));
+    const expireDays = Number(inventoryEditTarget.expireDays);
+    if (!inventoryEditTarget.quantity.trim() || !inventoryEditTarget.storageLocation || !Number.isInteger(expireDays) || expireDays < 1 || expireDays > 365) {
+      Alert.alert("请补全待确认字段", "请输入数量，选择存放位置，并填写 1 到 365 天的有效期限。");
+      return;
+    }
     setMessages((current) => current.map((message) =>
       message.id === inventoryEditTarget.msgId && message.inventoryScanCard
         ? {
@@ -762,9 +773,15 @@ export default function AIAssistantScreen() {
                   ? {
                       ...item,
                       foodName: inventoryEditTarget.foodName.trim(),
-                      quantity: inventoryEditTarget.quantity.trim() || "1份",
+                      quantity: inventoryEditTarget.quantity.trim(),
                       suggestedStorageLocation: inventoryEditTarget.storageLocation,
                       estimatedExpireDays: expireDays,
+                      fieldEvidence: {
+                        food_name: inventoryEditTarget.foodName.trim() !== item.foodName ? { status: "known" as const, source: "user" as const } : item.fieldEvidence?.food_name,
+                        quantity: inventoryEditTarget.quantity.trim() !== item.quantity ? { status: "known" as const, source: "user" as const } : item.fieldEvidence?.quantity,
+                        storage_location: inventoryEditTarget.storageLocation !== item.suggestedStorageLocation ? { status: "known" as const, source: "user" as const } : item.fieldEvidence?.storage_location,
+                        expiration_date: expireDays !== item.estimatedExpireDays ? { status: "known" as const, source: "user" as const } : item.fieldEvidence?.expiration_date,
+                      },
                     }
                   : item
               ),
@@ -775,10 +792,25 @@ export default function AIAssistantScreen() {
     setInventoryEditTarget(null);
   };
 
+  const undoInventoryScanCard = async (msgId: string, card: InventoryScanCard) => {
+    try {
+      await inventoryApi.undoScan(authFetch, card.jobId);
+      setMessages(current => current.map(message => message.id === msgId ? { ...message, text: "本次已入库食材已撤销。",
+        inventoryScanCard: { ...card, status: card.items.length && card.status === "review" ? "review" : "undone", canUndo: false } } : message));
+    } catch (error) {
+      Alert.alert("未能撤销", error instanceof Error ? error.message : "请检查网络后重试");
+    }
+  };
+
   const confirmInventoryScanCard = async (msgId: string, card: InventoryScanCard) => {
     const selectedItems = card.items.filter((item) => item.selected);
     if (!selectedItems.length) {
       Alert.alert("请选择食材", "至少保留一项需要加入食材库的食材。");
+      return;
+    }
+
+    if (selectedItems.some(item => !item.quantity.trim() || !item.suggestedStorageLocation)) {
+      Alert.alert("还有待确认信息", "请编辑缺少数量或存放位置的项目后再入库；未知到期信息可保留。");
       return;
     }
 
@@ -789,27 +821,35 @@ export default function AIAssistantScreen() {
     ));
 
     try {
-      const results = await Promise.allSettled(selectedItems.map((item) =>
-        inventoryApi.create(authFetch, {
-          food_name: item.foodName,
-          category: inferInventoryCategory(item.foodName),
-          quantity: item.quantity,
-          expiration_date: dateKeyAfterDays(item.estimatedExpireDays),
-          storage_location: item.suggestedStorageLocation,
-          image_url: null,
-        })
-      ));
-      const addedCount = results.filter((result) => result.status === "fulfilled").length;
-      if (addedCount !== selectedItems.length) {
-        throw new Error(`已加入 ${addedCount} 项，仍有 ${selectedItems.length - addedCount} 项未成功。`);
-      }
+      const result = await inventoryApi.bulkIntake(authFetch, {
+        idempotency_key: `assistant-intake:${Crypto.randomUUID()}`,
+        source: "image",
+        source_reference: card.jobId,
+        items: selectedItems.map(item => {
+          const quantity = parseStructuredQuantity(item.quantity);
+          return {
+            source_item_id: item.id,
+            field_evidence: item.fieldEvidence,
+            food_name: item.foodName,
+            category: inferInventoryCategory(item.foodName),
+            quantity: item.quantity,
+            ...(quantity ? { quantity_value: quantity.amount, quantity_unit: quantity.unit } : {}),
+            expiration_date: item.estimatedExpireDays == null ? "" : dateKeyAfterDays(item.estimatedExpireDays),
+            storage_location: item.suggestedStorageLocation as "冷藏" | "冷冻" | "常温",
+            image_url: null,
+            source: "image" as const,
+            confirmed: true,
+          };
+        }),
+      });
+      const addedCount = result.items.length;
 
       const scanStorageKey = getUserStorageKey(INVENTORY_SCAN_JOB_STORAGE_KEY, user?.id);
       if (scanStorageKey) await AsyncStorage.removeItem(scanStorageKey);
       setMessages((current) => [
         ...current.map((message) =>
           message.id === msgId && message.inventoryScanCard
-            ? { ...message, inventoryScanCard: { ...message.inventoryScanCard, status: "saved" as const } }
+            ? { ...message, inventoryScanCard: { ...message.inventoryScanCard, status: "saved" as const, canUndo: true } }
             : message
         ),
         {
@@ -1082,7 +1122,7 @@ export default function AIAssistantScreen() {
         const resData = await aiApi.scanReceipt<{ items?: any[] }>(authFetch, base64Image);
         const items: any[] = resData.items || [];
         const itemsText = items.length > 0
-          ? items.map((it: any) => `• ${it.foodName || "食材"} (${it.quantity || "1份"}, 建议存放${it.suggestedStorageLocation || "保鲜库"}, 保质${it.estimatedExpireDays || 7}天)`).join("\n")
+          ? items.map((it: any) => `• ${it.foodName || "食材"} (${it.quantity || "数量待确认"}, ${it.suggestedStorageLocation || "存放位置待确认"}, ${it.estimatedExpireDays ? `建议期限 ${it.estimatedExpireDays} 天（待核对）` : "到期信息待确认"})`).join("\n")
           : "• 高山牛油果 (1个, 保鲜库, 5天)\n• 鸡胸肉 (200g, 冷冻库, 14天)";
 
         const replyText = `食语为您识别出的购物列表：\n\n${itemsText}\n\n已智能分类，可前往【冰箱库存】一键录入保鲜库！`;
@@ -1224,6 +1264,7 @@ export default function AIAssistantScreen() {
       toggleInventoryScanItem={toggleInventoryScanItem}
       openInventoryScanEditor={openInventoryScanEditor}
       confirmInventoryScanCard={confirmInventoryScanCard}
+      undoInventoryScanCard={undoInventoryScanCard}
       handleSaveToShoppingList={handleSaveToShoppingList}
       handleSendMessage={handleSendMessage}
       onStartCooking={handleStartCookingSolution}

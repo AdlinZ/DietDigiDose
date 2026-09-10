@@ -86,6 +86,7 @@ export function useRealtimeCookingVoice(options: Options) {
   const nativePartialSentLengthRef = useRef(0);
   const nativePartialInFlightRef = useRef(false);
   const mutedRef = useRef(false);
+  const muteTransitionRef = useRef(false);
   const [session, setSession] = useState<RealtimeVoiceSession | null>(null);
   const [state, setState] = useState<"off" | "connecting" | "listening" | "processing" | "reconnecting" | "muted" | "fallback">("off");
   const stateRef = useRef(state);
@@ -108,6 +109,7 @@ export function useRealtimeCookingVoice(options: Options) {
     const deadline = Date.now() + 120_000;
     while (activeRef.current && responseGeneration.current === generation && Date.now() < deadline) {
       const page = await realtimeVoiceApi.events(authFetch, sessionId, after);
+      if (!activeRef.current || mutedRef.current || responseGeneration.current !== generation) return;
       for (const event of page.events) {
         after = Math.max(after, event.sequence);
         if (event.payload.turnId !== turnId) continue;
@@ -131,7 +133,7 @@ export function useRealtimeCookingVoice(options: Options) {
 
   const submitTurn = useCallback(async (transcript: string) => {
     const currentSession = sessionRef.current;
-    if (!currentSession) return;
+    if (!currentSession || !activeRef.current || mutedRef.current) return;
     setState("processing");
     const generation = responseGeneration.current + 1;
     responseGeneration.current = generation;
@@ -143,6 +145,7 @@ export function useRealtimeCookingVoice(options: Options) {
         timerRunning: optionsRef.current.timerRunning,
         interruptedResponse: interruptedRef.current,
       });
+      if (!activeRef.current || mutedRef.current || responseGeneration.current !== generation) return;
       interruptedRef.current = false;
       if (result.intent === "control") {
         optionsRef.current.onControl(String(result.action?.action || ""), Number(result.action?.seconds || 0));
@@ -155,7 +158,7 @@ export function useRealtimeCookingVoice(options: Options) {
       }
     } catch (error) {
       optionsRef.current.onError(error instanceof Error ? error.message : "实时语音处理失败");
-      setState(activeRef.current ? "listening" : "fallback");
+      if (activeRef.current && !mutedRef.current) setState("listening");
     }
   }, [authFetch, pollAnswer]);
 
@@ -168,7 +171,7 @@ export function useRealtimeCookingVoice(options: Options) {
     nativeTurnIdRef.current = "";
     nativeSequenceRef.current = sequence;
     nativeSpeakingRef.current = false;
-    if (!currentSession || !activeRef.current || Date.now() - nativeSpeechStartedAtRef.current < 250 || chunks.length < 2) return;
+    if (!currentSession || !activeRef.current || mutedRef.current || Date.now() - nativeSpeechStartedAtRef.current < 250 || chunks.length < 2) return;
     nativeTranscribingRef.current = true;
     setState("processing");
     try {
@@ -188,19 +191,19 @@ export function useRealtimeCookingVoice(options: Options) {
         transcript = String(result.transcript || result.text || completed.transcript || "").trim();
       }
       if (!transcript) throw new Error("没有识别到清晰语音");
-      if (!activeRef.current) return;
+      if (!activeRef.current || mutedRef.current || sessionRef.current?.id !== currentSession.id) return;
       optionsRef.current.onTranscript(transcript, true);
       await submitTurn(transcript);
     } catch (error) {
       optionsRef.current.onError(error instanceof Error ? error.message : "连续语音转写失败");
-      if (activeRef.current) setState("listening");
+      if (activeRef.current && !mutedRef.current) setState("listening");
     } finally {
       nativeTranscribingRef.current = false;
     }
   }, [authFetch, submitTurn]);
 
   const handleNativeAudio = useCallback(async (event: AudioDataEvent) => {
-    if (!activeRef.current || typeof event.data !== "string") return;
+    if (!activeRef.current || mutedRef.current || typeof event.data !== "string") return;
     nativePreRollRef.current.push(event.data);
     nativePreRollRef.current = nativePreRollRef.current.slice(-3);
     if (nativeSpeakingRef.current) {
@@ -227,7 +230,7 @@ export function useRealtimeCookingVoice(options: Options) {
   }, [authFetch, flushNativeUtterance]);
 
   const handleNativeAnalysis = useCallback(async (event: AudioAnalysis) => {
-    if (!activeRef.current) return;
+    if (!activeRef.current || mutedRef.current) return;
     const speaking = event.dataPoints.some((point) => !point.silent && point.rms >= 0.018);
     if (speaking) {
       if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
@@ -293,34 +296,56 @@ export function useRealtimeCookingVoice(options: Options) {
   }, [authFetch, stopNativeRecording]);
 
   const toggleMute = useCallback(async () => {
-    if (!sessionRef.current || !activeRef.current) return false;
-    const previousMuted = mutedRef.current;
+    const sessionId = sessionRef.current?.id;
+    if (!sessionId || !activeRef.current || muteTransitionRef.current) return mutedRef.current;
+    muteTransitionRef.current = true;
     const nextMuted = !mutedRef.current;
+    const stillActive = () => activeRef.current && sessionRef.current?.id === sessionId;
     try {
-      const updated = await updateSession({ muted: nextMuted, reconnect: false });
-      if (!updated || !activeRef.current) return previousMuted;
-      mutedRef.current = nextMuted;
-      try {
-        if (Platform.OS === "web") {
-          if (nextMuted) recognitionRef.current?.abort();
-          else recognitionRef.current?.start();
-        } else if (nextMuted) await pauseNativeRecording();
-        else await resumeNativeRecording();
-      } catch (error) {
-        mutedRef.current = previousMuted;
-        await updateSession({ muted: previousMuted, reconnect: false }).catch(() => undefined);
-        setState(previousMuted ? "muted" : "listening");
-        optionsRef.current.onError(error instanceof Error ? error.message : "麦克风静音状态切换失败");
-        return previousMuted;
+      // Stop locally before waiting for any network request. Coalesce rapid taps.
+      if (nextMuted) {
+        mutedRef.current = true;
+        responseGeneration.current += 1;
+        setState("muted");
+        if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
+        nativeSilenceTimerRef.current = null;
+        nativeSpeakingRef.current = false;
+        nativeChunksRef.current = [];
+        nativePreRollRef.current = [];
+        nativeTurnIdRef.current = "";
+        if (Platform.OS === "web") recognitionRef.current?.abort();
+        else await pauseNativeRecording();
       }
-      setState(nextMuted ? "muted" : "listening");
+      const updated = await updateSession({ muted: nextMuted, reconnect: false });
+      if (!updated || !stillActive()) return mutedRef.current;
+      if (!nextMuted) {
+        if (Platform.OS === "web") recognitionRef.current?.start();
+        else await resumeNativeRecording();
+        if (!stillActive()) {
+          if (Platform.OS !== "web") await stopNativeRecording().catch(() => undefined);
+          return mutedRef.current;
+        }
+        mutedRef.current = false;
+        setState("listening");
+      }
       return nextMuted;
     } catch (error) {
-      if (activeRef.current) setState("reconnecting");
-      optionsRef.current.onError(error instanceof Error ? error.message : "静音状态同步失败，请重试");
-      return previousMuted;
+      if (stillActive()) {
+        mutedRef.current = true;
+        setState("muted");
+        // A failed resume can leave a partially started recorder behind.
+        try {
+          if (Platform.OS === "web") recognitionRef.current?.abort();
+          else await pauseNativeRecording();
+        } catch { await stop(); }
+        if (stillActive()) void updateSession({ muted: true, reconnect: false }).catch(() => undefined);
+        optionsRef.current.onError(error instanceof Error ? error.message : "静音状态同步失败，请重试");
+      }
+      return mutedRef.current;
+    } finally {
+      muteTransitionRef.current = false;
     }
-  }, [pauseNativeRecording, resumeNativeRecording, updateSession]);
+  }, [pauseNativeRecording, resumeNativeRecording, stopNativeRecording, stop, updateSession]);
 
   const start = useCallback(async () => {
     const RecognitionConstructor = recognitionConstructor();
@@ -347,7 +372,7 @@ export function useRealtimeCookingVoice(options: Options) {
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = "zh-CN";
-        recognition.onstart = () => setState("listening");
+        recognition.onstart = () => { if (activeRef.current && !mutedRef.current) setState("listening"); };
         recognition.onspeechstart = () => {
           if (stateRef.current === "processing") {
             interruptedRef.current = true;
@@ -356,6 +381,7 @@ export function useRealtimeCookingVoice(options: Options) {
           }
         };
         recognition.onresult = (event: any) => {
+          if (!activeRef.current || mutedRef.current) return;
           let interim = "";
           for (let index = event.resultIndex; index < event.results.length; index += 1) {
             const result = event.results[index];
@@ -367,12 +393,12 @@ export function useRealtimeCookingVoice(options: Options) {
           }
           if (interim) optionsRef.current.onTranscript(interim, false);
         };
-        recognition.onerror = () => setState("reconnecting");
+        recognition.onerror = () => { if (activeRef.current && !mutedRef.current) setState("reconnecting"); };
         recognition.onend = () => {
           if (!activeRef.current || mutedRef.current) return;
           setState("reconnecting");
           setTimeout(() => {
-            if (!activeRef.current) return;
+            if (!activeRef.current || mutedRef.current || recognitionRef.current !== recognition) return;
             try { recognition.start(); } catch { setState("fallback"); }
           }, 300);
         };
@@ -398,8 +424,8 @@ export function useRealtimeCookingVoice(options: Options) {
       }
       heartbeatRef.current = setInterval(() => {
         if (!sessionRef.current) return;
-        void updateSession({ reconnect: false }).catch(() => {
-          if (activeRef.current) setState("reconnecting");
+        void updateSession({ muted: mutedRef.current, reconnect: false }).catch(() => {
+          if (activeRef.current && !mutedRef.current) setState("reconnecting");
         });
       }, 20_000);
       return true;

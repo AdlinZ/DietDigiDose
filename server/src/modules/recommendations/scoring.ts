@@ -1,6 +1,9 @@
+import { unexpiredInventory } from "./inventoryAvailability.js";
+import { recipeDemands } from "./quantities.js";
+import { buildFefoConsumptionPreviewFromCandidates } from "../../services/inventoryQuantity.js";
 import type { RecommendationDataset, RecommendationInput, Row } from "./types.js";
 
-export const RECIPE_SCORING_VERSION = "rules-2026-08-26.1";
+export const RECIPE_SCORING_VERSION = "rules-2026-09-09.2";
 export const RECIPE_CANDIDATE_VERSION = "sql-public-v1";
 export const RECOMMENDATION_WEIGHTS = Object.freeze({
   inventoryCoverage: 35, expiringUse: 20, missingPenalty: 20, timeFit: 15, nutritionFit: 10,
@@ -80,6 +83,8 @@ function recipeSummary(row: Row, requirements: Array<Row & { role: string }>) {
     difficulty: String(row.difficulty || "简单"), calories: Number(row.calories || 0), protein: Number(row.protein || 0),
     carbs: Number(row.carbs || 0), fat: Number(row.fat || 0), category: String(row.category || "其他"),
     tags: parseArray(row.tags).map(String), steps: parseArray(row.steps_json).map(String), ingredients: ingredientList(row),
+    serving_size: row.serving_size == null ? null : Number(row.serving_size),
+    prep_time: row.prep_time == null ? null : Number(row.prep_time),
     quality_status: String(row.quality_status || "trusted"), nutrition_basis: String(row.nutrition_basis || "source"),
     nutrition_is_estimated: String(row.nutrition_basis || "source") !== "source",
     required_kitchenware: requirements.length ? requirements.filter((item) => item.role === "required")
@@ -98,7 +103,8 @@ function hardConflict(recipe: Row, ingredients: Array<{ name: string }>, dataset
   const restrictionText = profile.restrictions.join("、");
   if (/素食|纯素/.test(restrictionText) && /(猪|牛|羊|鸡|鸭|鱼|虾|蟹|肉|蛋|奶)/.test(recipeText)) return true;
   if (/清真/.test(restrictionText) && /(猪|料酒|酒精)/.test(recipeText)) return true;
-  if (timeBudget && Number(recipe.cook_time || 0) > timeBudget) return true;
+  const knownPreparation = recipe.prep_time == null ? 0 : Number(recipe.prep_time);
+  if (timeBudget && Number(recipe.cook_time || 0) + knownPreparation > timeBudget) return true;
   const governed = dataset.compatibility.get(Number(recipe.id));
   const missingTools = governed?.requirements.length ? governed.blocking.map((required) =>
     String(required.catalogName || required.capabilityCode || "未映射厨具能力"))
@@ -108,6 +114,7 @@ function hardConflict(recipe: Row, ingredients: Array<{ name: string }>, dataset
 
 export function scoreRecipeRecommendations(dataset: RecommendationDataset,
   input: Omit<RecommendationInput, "cursor" | "pageSize">, timeBudget: number | null, today: string) {
+  dataset = { ...dataset, inventory: unexpiredInventory(dataset.inventory, today) };
   const favorites = new Set(dataset.favoriteIds); const recent = new Set(dataset.recentIds); const skipped = new Set(dataset.skippedIds);
   const ownedTools = dataset.kitchenware.map((item) => String(item.name));
   const targetCalories = Number(dataset.profile.nutrition.calories_kcal || dataset.dailyCaloriesTarget || 2000);
@@ -124,15 +131,25 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
   const results = dataset.recipes.flatMap((recipe) => {
     const ingredients = ingredientList(recipe);
     if (hardConflict(recipe, ingredients, dataset, ownedTools, timeBudget)) return [];
-    const matched = ingredients.filter((ingredient) => dataset.inventory.some((item) => nameMatches(ingredient.name, String(item.food_name))));
-    const missing = ingredients.filter((ingredient) => !matched.some((item) => item.name === ingredient.name));
+    const nameMatched = ingredients.filter((ingredient) => dataset.inventory.some((item) => nameMatches(ingredient.name, String(item.food_name))));
+    const servings = Number(dataset.profile.kitchen.servings) || Number(recipe.serving_size) || 1;
+    const demands = ingredients.map(ingredient => recipeDemands([ingredient], Number(recipe.serving_size) || null, servings)?.[0]);
+    const knownDemands = demands.filter((demand): demand is NonNullable<typeof demand> => !!demand);
+    const preview = buildFefoConsumptionPreviewFromCandidates(dataset.inventory.map(item => ({ id: item.id, food_name: item.food_name,
+      quantity_value: item.quantity_value, quantity_unit: item.quantity_unit, expiration_date: item.expiration_date,
+      batch_code: item.batch_code, version: item.version, quantity_evidence_status: item.quantity_evidence_status as "known" | "estimated" | "unknown" | undefined })), knownDemands);
+    let previewIndex = 0;
+    const states = demands.map(demand => demand ? preview[previewIndex++].quantity_status : "unknown");
+    const matched = ingredients.filter((_, index) => states[index] === "sufficient");
+    const missing = ingredients.filter((_, index) => ["insufficient", "unavailable"].includes(states[index]));
+    const uncertain = ingredients.filter((_, index) => states[index] === "unknown");
     const expiring = matched.flatMap((ingredient) => dataset.inventory.filter((item) => nameMatches(ingredient.name, String(item.food_name))
       && daysUntil(String(item.expiration_date), today) >= 0 && daysUntil(String(item.expiration_date), today) <= 3)
       .map((item) => ({ name: String(item.food_name), daysLeft: daysUntil(String(item.expiration_date), today) })));
     const coverage = ingredients.length ? matched.length / ingredients.length : 0;
-    if (input.category === "冰箱可做" && matched.length === 0) return [];
-    if (input.matchStatus === "full" && missing.length > 0) return [];
-    if (input.matchStatus === "missing_few" && (missing.length < 1 || missing.length > 2)) return [];
+    if (input.category === "冰箱可做" && nameMatched.length === 0) return [];
+    if (input.matchStatus === "full" && (!ingredients.length || missing.length > 0 || uncertain.length > 0)) return [];
+    if (input.matchStatus === "missing_few" && (missing.length < 1 || missing.length > 2 || uncertain.length > 0)) return [];
     if (input.matchStatus === "expiring" && expiring.length === 0) return [];
     const cookTime = Number(recipe.cook_time || 0);
     const timeFit = timeBudget ? Math.max(0, 1 - Math.abs(timeBudget - cookTime) / Math.max(timeBudget, 1)) : Math.max(0, 1 - cookTime / 120);
@@ -149,18 +166,24 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
       - (skipped.has(Number(recipe.id)) ? RECOMMENDATION_WEIGHTS.skipPenalty : 0) - dislikedPenalty) * 100) / 100;
     const reasons: string[] = [];
     if (expiring.length) reasons.push(`可优先使用 ${expiring.slice(0, 2).map((item) => item.name).join("、")} 等临期食材`);
-    if (coverage > 0) reasons.push(`库存覆盖 ${Math.round(coverage * 100)}%，已具备 ${matched.length} 项食材`);
-    if (timeBudget) reasons.push(`预计 ${cookTime} 分钟，符合 ${timeBudget} 分钟时间上限`);
+    if (coverage > 0) reasons.push(`已知用量覆盖 ${Math.round(coverage * 100)}%，${matched.length} 项原料数量足够`);
+    if (cookTime > 0) reasons.push(recipe.prep_time == null
+      ? `烹饪约 ${cookTime} 分钟，准备与收尾时间待核实`
+      : `准备与烹饪约 ${cookTime + Number(recipe.prep_time)} 分钟，尚未计入收尾及多菜设备安排`);
     if (!reasons.length) reasons.push("通过公开权限、质量与安全硬约束检查");
+    if (uncertain.length) reasons.unshift(`${uncertain.length} 项原料的用量或库存数量待核对`);
     const degraded: string[] = [];
+    if (uncertain.length) degraded.push("inventory_quantity_unknown");
     if (!ingredients.length) degraded.push("ingredients_unstructured");
+    degraded.push("whole_plan_time_unverified");
+    if (!cookTime || recipe.prep_time == null) degraded.push("preparation_time_unknown");
     if (dataset.profile.kitchen.budget_per_meal) degraded.push("recipe_price_unavailable");
-    if (dataset.profile.kitchen.servings) degraded.push("recipe_yield_unavailable");
+    if (dataset.profile.kitchen.servings && !(Number(recipe.serving_size) > 0)) degraded.push("recipe_yield_unavailable");
     return [{ recipeId: Number(recipe.id), recipe: recipeSummary(recipe, dataset.requirements.get(Number(recipe.id)) || []), score,
       scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION,
       hardConstraints: { satisfied: ["quality", "permission", "allergy", "time", "kitchenware"], unmet: [] as string[] },
       features: { inventoryCoverage: Math.round(coverage * 100), matchedIngredients: matched, expiringIngredients: expiring,
-        missingIngredients: missing, timeBudgetMinutes: timeBudget, estimatedTimeMinutes: cookTime, nutritionFit: Math.round(nutritionFit * 100),
+        missingIngredients: missing, uncertainIngredients: uncertain, nameMatchedIngredients: nameMatched, timeBudgetMinutes: timeBudget, estimatedTimeMinutes: cookTime, nutritionFit: Math.round(nutritionFit * 100),
         favorite: favorites.has(Number(recipe.id)), recentRepeat: recent.has(Number(recipe.id)), skippedRecently: skipped.has(Number(recipe.id)) },
       reasons: reasons.slice(0, 3), dataUpdatedAt, degraded }];
   }).sort((a, b) => b.score - a.score || a.recipeId - b.recipeId);

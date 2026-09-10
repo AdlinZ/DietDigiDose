@@ -1,3 +1,4 @@
+import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type { Pool } from "pg";
 import type { RecommendationRequestWrite, RecipeQuery, RecommendationsRepository } from "./repository.js";
 import type { RecommendationEventInput, Row } from "./types.js";
@@ -5,10 +6,11 @@ import type { RecommendationEventInput, Row } from "./types.js";
 export class PostgresRecommendationsRepository implements RecommendationsRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+  async preparedMeals(userId: number) { return (await this.pool.query("SELECT * FROM prepared_meals WHERE user_id=$1 AND remaining_servings>0 ORDER BY produced_at,id", [userId])).rows as Row[]; }
   async profile(userId: number) { return ((await this.pool.query(`SELECT allergies_json, dietary_restrictions_json, disliked_foods,
     kitchen_constraints_json, nutrition_targets_json, updated_at FROM user_health_profiles WHERE user_id = $1`, [userId])).rows[0] as Row | undefined) || null; }
-  async inventory(userId: number) { return (await this.pool.query(`SELECT id, food_name, expiration_date, updated_at FROM inventory_items
-    WHERE user_id = $1 AND is_available = TRUE AND deleted_at IS NULL ORDER BY expiration_date, id`, [userId])).rows as Row[]; }
+  async inventory(userId: number): Promise<Row[]> { const rows = (await this.pool.query(`SELECT id, food_name, expiration_date, updated_at, quantity_value, quantity_unit, batch_code, version, (SELECT metadata_json FROM inventory_change_logs e WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id AND e.metadata_json->'field_evidence'->>'quantity' IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence FROM inventory_items
+    WHERE user_id = $1 AND is_available = TRUE AND deleted_at IS NULL ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date, id`, [userId])).rows as Row[]; return rows.map(row => ({ ...row, quantity_evidence_status: quantityEvidenceStatus(row.quantity_evidence, row.version) })); }
   async kitchenware(userId: number) { return (await this.pool.query(`SELECT name, updated_at FROM kitchenware_items
     WHERE user_id = $1 AND deleted_at IS NULL AND status <> '维修中' ORDER BY id`, [userId])).rows as Row[]; }
   async recipes(query: RecipeQuery) {

@@ -1,8 +1,11 @@
+import type { UpdateCookingPlanDraftInput, SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
 import { requestJson, type ApiFetch } from "./client";
 
 export type MealPlanItemStatus = "planned" | "queued" | "cooking" | "completed" | "skipped";
 
 export interface MealPlanItem {
+  plannedServings?: number | null;
+  targetMealId?: string | null;
   id: string;
   planId: string;
   plannedDate: string;
@@ -45,6 +48,12 @@ const itemPath = (planId: string, itemId: string) =>
   `/api/v1/meal-plans/${encodeURIComponent(planId)}/items/${encodeURIComponent(itemId)}`;
 
 export const mealPlansApi = {
+  activateDraft: (apiFetch: ApiFetch, id: string, version: number) =>
+    requestJson<{ plan: MealPlan; repeated: boolean }>(apiFetch, `/api/v1/meal-plans/${encodeURIComponent(id)}/activate`, { method: "POST", body: JSON.stringify({ version }) }),
+  updateDraft: async (apiFetch: ApiFetch, id: string, input: UpdateCookingPlanDraftInput) =>
+    requestJson<{ plan: MealPlan; repeated: boolean }>(apiFetch, `/api/v1/meal-plans/${encodeURIComponent(id)}/draft`, { method: "PATCH", body: JSON.stringify((await import("@dietdigidose/contracts")).updateCookingPlanDraftSchema.parse(input)) }),
+  saveDraft: async (apiFetch: ApiFetch, input: SaveCookingPlanDraftInput) =>
+    requestJson<{ plan: MealPlan; repeated: boolean }>(apiFetch, "/api/v1/meal-plans/drafts", { method: "POST", body: JSON.stringify((await import("@dietdigidose/contracts")).saveCookingPlanDraftSchema.parse(input)) }),
   list: (apiFetch: ApiFetch, includeArchived = true) =>
     requestJson<MealPlan[]>(apiFetch, `/api/v1/meal-plans?includeArchived=${includeArchived}`),
   get: (apiFetch: ApiFetch, id: string) =>

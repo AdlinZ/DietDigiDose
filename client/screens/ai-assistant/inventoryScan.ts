@@ -1,24 +1,10 @@
+import { normalizeDetectedFoods } from "@/screens/inventory/scan";
 import type { InventoryScanFood } from "./types";
 
 export const normalizeInventoryScanFoods = (items: unknown, jobId: string): InventoryScanFood[] =>
-  (Array.isArray(items) ? items : [])
-    .filter((item: { foodName?: unknown }) => typeof item.foodName === "string" && item.foodName.trim())
-    .slice(0, 30)
-    .map((item: {
-      foodName: string;
-      quantity?: string;
-      suggestedStorageLocation?: string;
-      estimatedExpireDays?: number;
-    }, index: number) => ({
-      id: `${jobId}-${index}`,
-      foodName: item.foodName.trim(),
-      quantity: item.quantity || "1份",
-      suggestedStorageLocation: (["冷藏", "冷冻", "常温"].includes(item.suggestedStorageLocation || "")
-        ? item.suggestedStorageLocation
-        : "冷藏") as InventoryScanFood["suggestedStorageLocation"],
-      estimatedExpireDays: Math.max(1, Math.min(Number(item.estimatedExpireDays) || 7, 365)),
-      selected: true,
-    }));
+  normalizeDetectedFoods(items, jobId).map(item => ({ ...item,
+    suggestedStorageLocation: item.suggestedStorageLocation as InventoryScanFood["suggestedStorageLocation"],
+  }));
 
 export const inferInventoryCategory = (name: string) => {
   if (/[牛猪鸡羊鱼虾蟹贝肉]|培根|火腿/.test(name)) return "肉食";

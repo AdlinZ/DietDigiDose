@@ -1,3 +1,8 @@
+import { prepareDraftActivation } from "./draftActivation.js";
+import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@dietdigidose/contracts";
+import { isDeepStrictEqual } from "node:util";
+import { SqliteDietRecordsRepository } from "../dietRecords/sqliteRepository.js";
+import { prepareProduction } from "../dietRecords/preparedMeals.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { currentDateKey, currentTimeKey } from "../../utils/date.js";
@@ -5,15 +10,71 @@ import { formatMealPlan, formatMealPlanItem, ingredient, normalizedName, parseJs
 import type { MealPlansRepository } from "./repository.js";
 import type { MealPlanCompleteInput, MealPlanExecutionInput, MealPlanItemUpdateInput, MealPlanUpdateInput } from "./types.js";
 
-const itemSelect = `SELECT i.*, r.title AS recipe_title, r.image_url AS recipe_image_url,
+const itemSelect = `SELECT i.*, p.constraints_json AS plan_constraints_json, r.title AS recipe_title, r.image_url AS recipe_image_url,
   r.cook_time AS recipe_cook_time, r.difficulty AS recipe_difficulty,
   r.status AS recipe_status, r.deleted_at AS recipe_deleted_at
-  FROM meal_plan_items i LEFT JOIN recipes r ON r.id = i.recipe_id`;
+  FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id LEFT JOIN recipes r ON r.id = i.recipe_id`;
 
 export class SqliteMealPlansRepository implements MealPlansRepository {
   private readonly database: Database.Database;
 
   constructor(database: Database.Database) { this.database = database; }
+
+  async activateDraft(userId: number, id: string, version: number) {
+    return this.database.transaction(() => {
+      const current = this.getPlan(id, userId, false);
+      if (!current) return { kind: "not_found" as const };
+      const activation = prepareDraftActivation(current, version);
+      if (!activation) return { kind: "version_conflict" as const };
+      if (activation.repeated) return { kind: "updated" as const, value: { plan: this.formatPlan(current, userId), repeated: true } };
+      if (this.getItems(id, userId).length) return { kind: "version_conflict" as const };
+      const recipes = activation.items.map(item => this.database.prepare("SELECT steps_json FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(item.recipeId) as Row | undefined);
+      if (recipes.some(recipe => !recipe)) return { kind: "recipe_not_available" as const };
+      activation.items.forEach((item, index) => this.database.prepare(`INSERT INTO meal_plan_items
+        (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json)
+        VALUES(?,?,?,?,?,?,?,?,?)`).run(item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),recipes[index]!.steps_json));
+      this.database.prepare("UPDATE meal_plans SET status='active',constraints_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?")
+        .run(JSON.stringify(activation.constraints),id,userId);
+      return { kind: "updated" as const, value: { plan: this.formatPlan(this.getPlan(id,userId,false)!,userId), repeated: false } };
+    })();
+  }
+
+  async updateDraft(userId: number, id: string, input: UpdateCookingPlanDraftInput) {
+    return this.database.transaction(() => {
+      const current = this.getPlan(id, userId, false);
+      if (!current) return { kind: "not_found" as const };
+      const constraints = parseJson<Row>(current.constraints_json, {});
+      const last = constraints.lastDraftUpdate as UpdateCookingPlanDraftInput | undefined;
+      if (last?.idempotencyKey === input.idempotencyKey) {
+        if (!isDeepStrictEqual(last, input)) return { kind: "version_conflict" as const };
+        return { kind: "updated" as const, value: { plan: this.formatPlan(current, userId), repeated: true } };
+      }
+      if (Number(current.version) !== input.version || current.status !== "draft" || !constraints.savedCookingDraft || this.getItems(id, userId).length) {
+        return { kind: "version_conflict" as const };
+      }
+      const dates = input.draft.meals.map(meal => meal.date).sort();
+      this.database.prepare(`UPDATE meal_plans SET constraints_json=?,start_date=?,end_date=?,version=version+1,
+        updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND version=?`).run(
+        JSON.stringify({ ...constraints, currentCookingDraft: input.draft, lastDraftUpdate: input }), dates[0], dates.at(-1), id, userId, input.version);
+      return { kind: "updated" as const, value: { plan: this.formatPlan(this.getPlan(id, userId, false)!, userId), repeated: false } };
+    })();
+  }
+
+  async saveDraft(userId: number, input: SaveCookingPlanDraftInput) {
+    return this.database.transaction(() => {
+      const existing = this.database.prepare("SELECT * FROM meal_plans WHERE id = ?").get(input.id) as Row | undefined;
+      const snapshot = { title: input.title, draft: input.draft };
+      if (existing) {
+        if (Number(existing.user_id) !== userId || !isDeepStrictEqual(parseJson<Row>(existing.constraints_json, {}).savedCookingDraft, snapshot)) return null;
+        return { plan: this.formatPlan(existing, userId), repeated: true };
+      }
+      const dates = input.draft.meals.map(meal => meal.date).sort();
+      this.database.prepare(`INSERT INTO meal_plans (id,user_id,title,start_date,end_date,status,source,constraints_json)
+        VALUES (?,?,?,?,?,'draft','manual',?)`).run(input.id, userId, input.title, dates[0], dates.at(-1),
+        JSON.stringify({ savedCookingDraft: snapshot }));
+      return { plan: this.formatPlan(this.getPlan(input.id, userId, false)!, userId), repeated: false };
+    })();
+  }
 
   async list(userId: number, includeArchived: boolean) {
     const rows = this.database.prepare(`SELECT * FROM meal_plans WHERE user_id = ?${includeArchived ? "" : " AND deleted_at IS NULL"}
@@ -113,8 +174,8 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
         if (!item) return { kind: "not_found" as const };
         if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
         if (!item.recipe_id || item.recipe_status !== "approved" || item.recipe_deleted_at) return { kind: "recipe_unavailable" as const };
-        const existing = this.database.prepare(`SELECT id FROM cooking_queue_items WHERE user_id = ? AND recipe_id = ?
-          AND deleted_at IS NULL AND status IN ('waiting', 'preparing', 'ready', 'cooking')`).get(userId, item.recipe_id) as { id: string } | undefined;
+        const existing = this.database.prepare(`SELECT id FROM cooking_queue_items WHERE user_id = ? AND source_plan_item_id = ?
+          AND deleted_at IS NULL AND status IN ('waiting', 'preparing', 'ready', 'cooking')`).get(userId, itemId) as { id: string } | undefined;
         let queueItemId = existing?.id;
         let added = false;
         if (!queueItemId) {
@@ -125,12 +186,13 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
             AND deleted_at IS NULL AND status IN ('waiting', 'preparing', 'ready', 'cooking')`).get(userId) as { position: number }).position);
           queueItemId = randomUUID();
           this.database.prepare(`INSERT INTO cooking_queue_items
-            (id, user_id, recipe_id, position, meal_type, planned_at, recipe_snapshot_json, idempotency_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(queueItemId, userId, item.recipe_id, position, queueMealType(item.meal_type), null, JSON.stringify({
+            (id, user_id, recipe_id, position, meal_type, planned_at, recipe_snapshot_json, idempotency_key, source_plan_item_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(queueItemId, userId, item.recipe_id, position, queueMealType(item.meal_type), null, JSON.stringify({
             title: item.recipe_title || item.title, imageUrl: item.recipe_image_url || null,
             cookTime: item.recipe_cook_time || 0, difficulty: item.recipe_difficulty || "难度未知",
             ingredients: parseJson(item.ingredients_json, []),
-          }), `meal-plan:${itemId}`);
+            plannedServings: formatMealPlanItem(item).plannedServings, planItemId: itemId, plannedDate: String(item.planned_date),
+          }), `meal-plan:${itemId}:${input.version}`, itemId);
           added = true;
         }
         const changed = this.database.prepare(`UPDATE meal_plan_items SET queue_item_id = ?, status = 'queued', version = version + 1,
@@ -147,12 +209,26 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   }
 
   async complete(userId: number, planId: string, itemId: string, input: MealPlanCompleteInput) {
+    if (input.production) {
+      if (input.dietRecordId) throw new Error("制作分配不能同时关联旧饮食记录");
+      const item = this.getItem(planId, itemId, userId);
+      if (!item) return { kind: "not_found" as const };
+      const value = await new SqliteDietRecordsRepository(this.database).completeCooking(userId, {
+        idempotency_key: input.idempotencyKey, recipe_id: item.recipe_id == null ? null : Number(item.recipe_id),
+        inventory_item_ids: [], inventory_consumptions: input.inventory_consumptions ?? [],
+        production: prepareProduction({ ...input.production, plan_item_id: itemId, plan_version: input.version }),
+      });
+      return { kind: "completed" as const, value };
+    }
     try {
       return this.database.transaction(() => {
         const repeated = this.repeated(userId, input.idempotencyKey);
         if (repeated) return { kind: "completed" as const, value: repeated };
         const item = this.getItem(planId, itemId, userId);
         if (!item) return { kind: "not_found" as const };
+        const produced = this.database.prepare("SELECT result_json FROM prepared_meals WHERE user_id=? AND plan_item_id=?")
+          .get(userId, itemId) as { result_json: string } | undefined;
+        if (produced) return { kind: "completed" as const, value: { ...JSON.parse(produced.result_json), repeated: true } };
         if (item.status === "completed" && item.diet_record_id) {
           return { kind: "completed" as const, value: { dietRecordId: Number(item.diet_record_id), repeated: true } };
         }

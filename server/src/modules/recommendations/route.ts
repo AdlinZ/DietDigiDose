@@ -1,3 +1,4 @@
+import { replaceCookingPlanItemSchema, mealPlanRequirementsSchema } from "@dietdigidose/contracts";
 import { Router, type NextFunction, type Response } from "express";
 import { authMiddleware, type AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
@@ -14,6 +15,15 @@ export function createRecommendationsRouter(service: RecommendationsService) {
   const router = Router();
   router.use(authMiddleware);
   router.get("/versions", (_req, res) => res.json(service.versions()));
+  router.post("/plan-requirements", validateBody(mealPlanRequirementsSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
+    void service.planRequirements(req.userId!, req.body).then(value => res.json(value)).catch((error: unknown) => handle(error, res, next));
+  });
+  router.post("/cooking-plan", validateBody(mealPlanRequirementsSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
+    void service.cookingPlan(req.userId!, req.body).then(value => res.json(value)).catch((error: unknown) => handle(error, res, next));
+  });
+  router.post("/cooking-plan/replace", validateBody(replaceCookingPlanItemSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
+    void service.replaceCookingItem(req.userId!, req.body).then(value => res.json(value)).catch((error: unknown) => handle(error, res, next));
+  });
   router.post("/recipes", validateBody(recipeRecommendationSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
     void service.page(req.userId!, req.body).then((value) => res.json(value)).catch((error: unknown) => handle(error, res, next));
   });

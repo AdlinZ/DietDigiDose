@@ -18,7 +18,8 @@ export function ingredient(value: unknown) {
 function dateTime(value: unknown) { return value instanceof Date ? value.toISOString() : String(value); }
 
 export function formatMealPlanItem(row: Row): MealPlanItemView {
-  return {
+  const allocation = (parseJson<Row>(row.plan_constraints_json, {}).executionItems as Record<string, { servings?: number }> | undefined)?.[String(row.id)];
+  return { plannedServings: allocation?.servings ?? null,
     id: String(row.id),
     planId: String(row.plan_id),
     plannedDate: String(row.planned_date),
@@ -48,13 +49,16 @@ export function formatMealPlanItem(row: Row): MealPlanItemView {
 
 export function formatMealPlan(row: Row, items: MealPlanItemView[]): MealPlanView {
   const archived = Boolean(row.deleted_at);
+  const executionItems = parseJson<Row>(row.constraints_json, {}).executionItems as Record<string, { servings?: number; targetMealId?: string }> | undefined;
+  const plannedItems = items.map(item => ({ ...item, plannedServings: executionItems?.[item.id]?.servings ?? null,
+    targetMealId: executionItems?.[item.id]?.targetMealId ?? null }));
   return {
     id: String(row.id), title: String(row.title), startDate: String(row.start_date), endDate: String(row.end_date),
     status: String(row.status), source: String(row.source || "manual"),
     createdByRunId: row.created_by_run_id ? String(row.created_by_run_id) : null,
     constraints: parseJson<Row>(row.constraints_json, {}), version: Number(row.version || 1),
     undoState: archived && row.source === "agent" ? "undone" : "active", archived,
-    createdAt: dateTime(row.created_at), updatedAt: dateTime(row.updated_at), items,
+    createdAt: dateTime(row.created_at), updatedAt: dateTime(row.updated_at), items: plannedItems,
   };
 }
 

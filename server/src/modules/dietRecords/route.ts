@@ -1,7 +1,8 @@
+import { preparedMealEventSchema } from "@dietdigidose/contracts";
 import { Router, type NextFunction, type Response } from "express";
 import { authMiddleware, type AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
-import { positiveIntegerParam } from "../../middleware/validateParam.js";
+import { positiveIntegerParam, uuidParam } from "../../middleware/validateParam.js";
 import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { sendError } from "../../utils/http.js";
 import { cookingCompletionSchema, dietRecordCreateSchema } from "../../validation/schemas.js";
@@ -16,12 +17,20 @@ function handleInventoryError(error: unknown, res: Response, next: NextFunction)
 export function createDietRecordsRouter(service: DietRecordsService) {
   const router = Router();
   router.param("id", positiveIntegerParam);
+  router.param("mealId", uuidParam);
   router.use(authMiddleware);
 
   router.post("/cooking-completions", validateBody(cookingCompletionSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
     void service.completeCooking(req.userId!, req.body)
       .then((result) => res.status(result.repeated ? 200 : 201).json(result))
       .catch((error: unknown) => handleInventoryError(error, res, next));
+  });
+  router.get("/prepared-meals", (req: AuthRequest, res, next) => {
+    void service.listPreparedMeals(req.userId!).then(value => res.json(value)).catch(next);
+  });
+  router.post("/prepared-meals/:mealId/events", validateBody(preparedMealEventSchema), (req: AuthRequest, res, next) => {
+    void service.applyMealEvent(req.userId!, String(req.params.mealId), req.body)
+      .then(value => res.status(value.repeated ? 200 : 201).json(value)).catch(error => handleInventoryError(error, res, next));
   });
   router.get("/", (req: AuthRequest, res: Response, next: NextFunction) => {
     const date = typeof req.query.date === "string" ? req.query.date : undefined;

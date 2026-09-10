@@ -49,7 +49,7 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
           [input.userId, input.idempotencyKey])).rows[0]?.id;
       }
       if (!foundId) {
-        foundId = (await client.query(`SELECT id FROM cooking_queue_items WHERE user_id = $1 AND recipe_id = $2
+        foundId = (await client.query(`SELECT id FROM cooking_queue_items WHERE user_id = $1 AND recipe_id = $2 AND source_plan_item_id IS NULL
           AND deleted_at IS NULL AND status IN (${active})`, [input.userId, input.recipeId])).rows[0]?.id;
       }
       if (foundId) {

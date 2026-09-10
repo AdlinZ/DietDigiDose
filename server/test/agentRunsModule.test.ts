@@ -118,6 +118,15 @@ describe("Agent runs module", () => {
       assert.equal((await repository.run(created.id, 42))?.status, "completed");
       assert.equal(await repository.deleteUserData(42), 2);
       assert.equal(await repository.run(created.id, 42), undefined);
+      const photoInput = { modality: "inventory_scan" as const, image: "cGhvdG8=", idempotencyKey: "inventory-photo:test" };
+      const photo = await repository.createRun(42, photoInput);
+      database.prepare("UPDATE agent_runs SET status='completed',created_at=datetime('now','-2 days') WHERE id=?").run(photo.id);
+      assert.equal((await repository.createRun(42, photoInput)).id, photo.id);
+      assert.notEqual((await repository.createRun(43, photoInput)).id, photo.id);
+      database.prepare("UPDATE agent_runs SET status='failed' WHERE id=?").run(photo.id);
+      assert.notEqual((await repository.createRun(42, photoInput)).id, photo.id);
+
+
     } finally {
       database.close();
     }

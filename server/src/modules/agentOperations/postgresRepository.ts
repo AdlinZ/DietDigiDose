@@ -1,7 +1,12 @@
+import { permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
+import { PostgresDietRecordsRepository } from "../dietRecords/postgresRepository.js";
+import { agentMealProduction, agentPreparedMealEvent } from "../../services/agent/mealPayload.js";
+import { agentInventoryCreate, agentInventoryUpdate, agentInventoryConsumption } from "../../services/agent/inventoryPayload.js";
+import { PostgresInventoryRepository, consumeInventoryWithPostgresClient } from "../inventory/postgresRepository.js";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { currentDateKey, currentTimeKey, dateKeyAfterDays } from "../../utils/date.js";
-import { arrayValue, nonNegativeInteger, nonNegativeNumber, reversibleAgentActions, stringValue, timestampMs } from "./helpers.js";
+import { currentDateKey, currentTimeKey } from "../../utils/date.js";
+import { inventoryUndoOrder, InventoryUndoVersions, inventoryUndoFields, arrayValue, nonNegativeInteger, nonNegativeNumber, reversibleAgentActions, stringValue, timestampMs } from "./helpers.js";
 import type { AgentOperationsRepository, ExecutableAgentAction } from "./repository.js";
 
 type PgActionRow = {
@@ -50,16 +55,39 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
   async undoActions(userId: number, runId: string) {
     return this.transaction(async (client) => {
       const selected = await client.query<PgActionRow>(`SELECT id,action_type,status,before_json,result_json,executed_at,created_at
-        FROM agent_actions WHERE run_id=$1 AND user_id=$2 AND status='executed'
+        FROM agent_actions WHERE run_id=$1 AND user_id=$2 AND status IN ('executed','undone')
         ORDER BY created_at,id FOR UPDATE`, [runId, userId]);
-      const actions = selected.rows.filter((row) => reversibleAgentActions.has(row.action_type));
-      if (!actions.length) throw new Error("没有可撤销的 Agent 操作");
+      const actions = selected.rows.filter((row) => row.status === "executed" && reversibleAgentActions.has(row.action_type));
+      if (!actions.length) {
+        if (selected.rows.some(row => row.status === "undone" && reversibleAgentActions.has(row.action_type))) return { undone: 0 };
+        throw new Error("没有可撤销的 Agent 操作");
+      }
       const latest = Math.max(...actions.map((action) => timestampMs(action.executed_at || action.created_at)));
       if (!Number.isFinite(latest) || Date.now() - latest > 10 * 60_000) throw new Error("撤销窗口已过期");
-      for (const action of [...actions].reverse()) {
+      const undoVersions = new InventoryUndoVersions();
+      for (const action of inventoryUndoOrder(actions)) {
         const result = objectValue(action.result_json);
         const before = objectValue(action.before_json);
-        if (action.action_type === "create_meal_plan" && result?.planId) {
+        if ((action.action_type === "add_inventory_item" || action.action_type === "update_inventory_item") && result?.inventoryItemId) {
+          const item = objectValue(result.item);
+          if (!item?.version) throw new Error("库存操作缺少版本证据，无法安全撤销");
+          const current = (await client.query("SELECT * FROM inventory_items WHERE id=$1 AND user_id=$2 AND version=$3 AND deleted_at IS NULL FOR UPDATE",
+            [result.inventoryItemId,userId,undoVersions.expected(result.inventoryItemId, item.version)])).rows[0];
+          if (!current) throw new Error("库存已有后续消耗或修改，请在库存页纠正，无法安全撤销");
+          if (action.action_type === "add_inventory_item") {
+            await client.query("UPDATE inventory_items SET deleted_at=CURRENT_TIMESTAMP,is_available=FALSE,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2",
+              [result.inventoryItemId,userId]);
+          } else {
+            if (!before || before.id !== result.inventoryItemId) throw new Error("缺少库存原始状态，无法撤销");
+            await client.query(`UPDATE inventory_items SET ${inventoryUndoFields.map((field,index) => `${field}=$${index+1}`).join(",")},version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$13 AND user_id=$14`,
+              [...inventoryUndoFields.map(field => before[field] ?? null),result.inventoryItemId,userId]);
+          }
+          if (action.action_type === "update_inventory_item") undoVersions.restored(result.inventoryItemId, current.version, before?.version);
+          await client.query(`INSERT INTO inventory_change_logs(user_id,inventory_item_id,action,source,quantity_before,quantity_after,quantity_unit,idempotency_key,metadata_json)
+            VALUES($1,$2,'undo','ai',$3,$4,$5,$6,$7)`, [userId,result.inventoryItemId,current.quantity_value,
+            action.action_type === "add_inventory_item" ? null : before?.quantity_value ?? null,current.quantity_unit,
+            `agent-undo:${action.id}`,JSON.stringify({ actionId: action.id, runId, actionType: action.action_type })]);
+        } else if (action.action_type === "create_meal_plan" && result?.planId) {
           const changed = await client.query(`UPDATE meal_plans SET deleted_at=CURRENT_TIMESTAMP,status='cancelled',version=version+1
             WHERE id=$1 AND user_id=$2 AND created_by_run_id=$3 AND version=1 AND deleted_at IS NULL`, [result.planId, userId, runId]);
           if (changed.rowCount !== 1) throw new Error("餐单已在 Agent 执行后发生变化，无法安全撤销");
@@ -197,6 +225,16 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
         result = { itemId };
         break;
       }
+      case "produce_meal": {
+        const input = agentMealProduction(payload, `agent-production:${action.id}`);
+        result = await new PostgresDietRecordsRepository(this.pool, consumeInventoryWithPostgresClient).completeCookingWithClient(client, userId, input);
+        break;
+      }
+      case "record_prepared_meal_event": {
+        const { mealId, input } = agentPreparedMealEvent(payload, `agent-meal-event:${action.id}`);
+        result = await new PostgresDietRecordsRepository(this.pool, consumeInventoryWithPostgresClient).applyMealEventWithClient(client, userId, mealId, input);
+        break;
+      }
       case "record_diet_meal": {
         const foodName = stringValue(payload.foodName);
         if (!foodName) throw new Error("缺少食物名称");
@@ -213,40 +251,44 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
         break;
       }
       case "add_inventory_item": {
-        const name = stringValue(payload.name);
-        if (!name) throw new Error("缺少库存食材名称");
-        const days = Math.max(1, Math.min(Number(payload.expireDays) || 7, 365));
-        const inserted = await client.query<{ id: number }>(`INSERT INTO inventory_items
-          (user_id,food_name,category,quantity,expiration_date,storage_location,is_available)
-          VALUES ($1,$2,$3,$4,$5,$6,true) RETURNING id`, [userId, name, stringValue(payload.category, "其他"),
-          stringValue(payload.quantity, "1份"), dateKeyAfterDays(days), stringValue(payload.location, "冷藏")]);
-        result = { inventoryItemId: Number(inserted.rows[0].id) };
+        const inventory = new PostgresInventoryRepository(this.pool);
+        const input = agentInventoryCreate(payload);
+        const item = await inventory.createWithClient(client, userId, input, "ai");
+        result = { inventoryItemId: item.id, item };
         break;
       }
       case "update_inventory_item": {
-        const itemId = Number(payload.itemId);
-        if (!Number.isInteger(itemId) || itemId <= 0) throw new Error("库存食材不存在或无权修改");
-        const selectedItem = await client.query("SELECT * FROM inventory_items WHERE id=$1 AND user_id=$2 FOR UPDATE", [itemId, userId]);
-        before = selectedItem.rows[0];
-        if (!before) throw new Error("库存食材不存在或无权修改");
-        await client.query(`UPDATE inventory_items SET food_name=COALESCE($1,food_name),category=COALESCE($2,category),
-          quantity=COALESCE($3,quantity),expiration_date=COALESCE($4,expiration_date),storage_location=COALESCE($5,storage_location),
-          is_available=COALESCE($6,is_available) WHERE id=$7 AND user_id=$8`, [
-          payload.name ? stringValue(payload.name) : null, payload.category ? stringValue(payload.category) : null,
-          payload.quantity ? stringValue(payload.quantity) : null, payload.expirationDate ? stringValue(payload.expirationDate) : null,
-          payload.location ? stringValue(payload.location) : null,
-          typeof payload.isAvailable === "boolean" ? payload.isAvailable : null, itemId, userId,
-        ]);
-        result = { inventoryItemId: itemId };
+        const inventory = new PostgresInventoryRepository(this.pool);
+        const { itemId, version, patch } = agentInventoryUpdate(payload);
+        const current = (await client.query("SELECT * FROM inventory_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [itemId, userId])).rows[0];
+        if (!current) throw new Error("库存食材不存在或无权修改");
+        before = current;
+        const hasQuantity = Object.prototype.hasOwnProperty.call(patch, "quantity_value");
+        const persistence = {
+          patch,
+          nextQuantityValue: hasQuantity ? patch.quantity_value ?? null : current.quantity_value == null ? null : Number(current.quantity_value),
+          nextQuantityUnit: hasQuantity ? patch.quantity_unit ?? null : current.quantity_unit as typeof patch.quantity_unit ?? null,
+        };
+        const updated = await inventory.updateWithClient(client, userId, itemId, version, persistence, "ai");
+        if (updated.kind === "conflict") throw new Error("库存已在其他设备更新，请刷新后重试");
+        result = { inventoryItemId: itemId, item: updated.item };
         break;
       }
       case "consume_inventory_items": {
-        const ids = arrayValue(payload.itemIds).map(Number).filter((id) => Number.isInteger(id) && id > 0).slice(0, 100);
-        if (!ids.length) throw new Error("缺少需要消耗的库存项");
-        const selectedItems = await client.query(`SELECT * FROM inventory_items WHERE user_id=$1 AND id=ANY($2::integer[]) FOR UPDATE`, [userId, ids]);
-        before = selectedItems.rows;
-        await client.query("UPDATE inventory_items SET is_available=false WHERE user_id=$1 AND id=ANY($2::integer[])", [userId, ids]);
-        result = { inventoryItemIds: ids };
+
+        const { input, reason } = agentInventoryConsumption(payload, `agent-inventory:${runId}:${action.id}`);
+        const consumed = await consumeInventoryWithPostgresClient(client, userId, input, { reason, runId });
+        result = { inventoryItemIds: input.items.map(item => item.item_id), ...consumed, reason };
+        break;
+      }
+      case "update_kitchen_preferences": {
+        const { preferences } = permanentPreferencePayloadSchema.parse(payload);
+        await client.query("INSERT INTO user_health_profiles(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING", [userId]);
+        const stored = (await client.query("SELECT kitchen_constraints_json FROM user_health_profiles WHERE user_id=$1 FOR UPDATE", [userId])).rows[0];
+        before = objectValue(stored.kitchen_constraints_json) || {};
+        const effective = { ...(before as Record<string, unknown>), ...preferences };
+        await client.query("UPDATE user_health_profiles SET kitchen_constraints_json=$1::jsonb,updated_at=CURRENT_TIMESTAMP WHERE user_id=$2", [JSON.stringify(effective),userId]);
+        result = { kitchenPreferences: effective, scope: "persistent" };
         break;
       }
       case "add_kitchenware_item": {

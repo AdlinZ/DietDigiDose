@@ -1,3 +1,6 @@
+import { permanentPreferencePayloadSchema } from "./preferencePayload.js";
+import { agentMealProduction, agentPreparedMealEvent } from "./mealPayload.js";
+import { agentInventoryCreate, agentInventoryUpdate, agentInventoryConsumption, InventoryActionClarificationError } from "./inventoryPayload.js";
 import { z } from "zod";
 import type { AgentActionProposal, AgentActionType } from "./types.js";
 import type { UserContext } from "../contextBuilder.js";
@@ -16,17 +19,19 @@ const highRiskActions = new Set<AgentActionType>([
   "add_inventory_item",
   "update_inventory_item",
   "consume_inventory_items",
+  "produce_meal",
+  "record_prepared_meal_event",
   "add_kitchenware_item",
   "submit_recipe",
-  "record_health_log",
+  "update_kitchen_preferences", "record_health_log",
 ]);
 
 export const agentActionProposalSchema = z.object({
   actionType: z.enum([
     "create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item",
     "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item",
-    "update_inventory_item", "consume_inventory_items", "add_kitchenware_item", "submit_recipe",
-    "record_health_log",
+    "update_inventory_item", "consume_inventory_items", "produce_meal", "record_prepared_meal_event", "add_kitchenware_item", "submit_recipe",
+    "update_kitchen_preferences", "record_health_log",
   ]),
   summary: z.string().trim().min(1).max(300),
   payload: z.record(z.string(), z.unknown()),
@@ -44,6 +49,14 @@ function normalizeMealType(value: unknown) {
 }
 
 function normalizePayload(actionType: AgentActionType, raw: Record<string, unknown>) {
+  if (actionType === "update_kitchen_preferences") return permanentPreferencePayloadSchema.parse(raw);
+  if (actionType === "produce_meal" || actionType === "record_prepared_meal_event") {
+    try {
+      if (actionType === "produce_meal") agentMealProduction(raw, "agent-production-validation");
+      else agentPreparedMealEvent(raw, "agent-meal-event-validation");
+      return raw;
+    } catch { throw new InventoryActionClarificationError("请确认制作或待吃餐的对象、份量及实际食用日期；制作完成不会自动算作已吃。"); }
+  }
   if (actionType === "record_diet_meal") {
     const rawDate = raw.recordedAt ?? raw.date;
     const recordedAt = typeof rawDate === "string" && !["today", "今天"].includes(rawDate.trim().toLocaleLowerCase())
@@ -72,14 +85,21 @@ function normalizePayload(actionType: AgentActionType, raw: Record<string, unkno
     });
   }
 
-  if (actionType === "add_inventory_item") {
-    return z.object({
-      name: requiredText.max(120),
-      expireDays: z.coerce.number().int().min(0).max(3650).default(7),
-      category: z.string().trim().max(80).optional(),
-      quantity: z.string().trim().max(80).optional(),
-      location: z.string().trim().max(80).optional(),
-    }).parse({ ...raw, name: raw.name ?? raw.foodName });
+  if (["add_inventory_item", "update_inventory_item", "consume_inventory_items"].includes(actionType)) {
+    try {
+      if (actionType === "add_inventory_item") {
+        const item = agentInventoryCreate(raw);
+        return { ...raw, name: item.food_name, quantity: item.quantity, quantityValue: item.quantity_value,
+          quantityUnit: item.quantity_unit, expirationDate: item.expiration_date };
+      }
+      if (actionType === "update_inventory_item") agentInventoryUpdate(raw);
+      else agentInventoryConsumption(raw, "agent-policy-validation");
+      return raw;
+    } catch {
+      throw new InventoryActionClarificationError(actionType === "consume_inventory_items"
+        ? "请确认要使用或丢弃的库存批次、数量和单位；只有明确用完才会整项扣减。库存变化后需重新确认。"
+        : "请补充要修改的库存批次及数量；库存变化后需重新确认。数量不确定时可以说明未知。");
+    }
   }
 
   validateRequiredPayload(actionType, raw);

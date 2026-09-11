@@ -24,6 +24,7 @@ export type ApplicationRoutes = {
   mealPlans: Router;
   insights: Router;
   recommendations: Router;
+  planMaintenance: Router;
   kitchenware: Router;
   notifications: Router;
   media: Router;

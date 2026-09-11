@@ -303,6 +303,33 @@ describe("API security baseline", () => {
     db.prepare("DELETE FROM worker_task_runs WHERE worker_id = 'worker-test'").run();
   });
 
+  test("daily maintenance settings require a user's time and persist with ownership and version checks", async () => {
+    const owner = await register("maintenance-owner@example.com");
+    const stranger = await register("maintenance-stranger@example.com");
+    const url = "/api/v1/plan-maintenance/settings";
+    assert.equal((await api(url)).response.status, 401);
+    assert.deepEqual((await api(url, { token: owner.token })).body,
+      { enabled: false, timeZone: null, localTime: null, nextCheckAt: null, nextLocalDate: null, lastCompletedLocalDate: null, version: 0 });
+    for (const body of [{ enabled: true, version: 0 }, { enabled: true, version: 0, timeZone: "bad", localTime: "24:00" }]) {
+      assert.equal((await api(url, { token: owner.token, method: "PATCH", body: JSON.stringify(body) })).response.status, 400);
+    }
+    const change = { enabled: true, version: 0, timeZone: "Asia/Shanghai", localTime: "08:15" };
+    const saved = await api(url, { token: owner.token, method: "PATCH", body: JSON.stringify(change) });
+    assert.equal(saved.response.status, 200);
+    assert.equal((saved.body as JsonObject).version, 1);
+    assert.equal((saved.body as JsonObject).nextCheckAt.slice(11), "00:15:00.000Z");
+    assert.deepEqual((await api(url, { token: owner.token })).body, saved.body);
+    assert.equal(((await api(url, { token: stranger.token })).body as JsonObject).enabled, false);
+    assert.equal((await api(url, { token: owner.token, method: "PATCH", body: JSON.stringify(change) })).response.status, 409);
+    const attempts = await Promise.all(["09:00", "10:00"].map(localTime => api(url, { token: owner.token, method: "PATCH",
+      body: JSON.stringify({ ...change, version: 1, localTime }) })));
+    assert.deepEqual(attempts.map(value => value.response.status).sort(), [200,409]);
+    const disabled = await api(url, { token: owner.token, method: "PATCH", body: JSON.stringify({ enabled: false, version: 2 }) });
+    assert.equal(disabled.response.status, 200);
+    assert.equal((disabled.body as JsonObject).nextCheckAt, null);
+    assert.equal((disabled.body as JsonObject).timeZone, "Asia/Shanghai");
+  });
+
   test("worker batch history is visible only to administrators", async () => {
     const regular = await register("worker-observer@example.com");
     const forbidden = await api("/api/v1/admin/worker-runs", { token: regular.token });

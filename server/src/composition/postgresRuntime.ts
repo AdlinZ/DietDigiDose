@@ -1,3 +1,6 @@
+import { PlanMaintenanceService } from "../modules/planMaintenance/service.js";
+import { createPlanMaintenanceRouter } from "../modules/planMaintenance/route.js";
+import { PostgresPlanMaintenanceRepository } from "../modules/planMaintenance/postgresRepository.js";
 import { Pool } from "pg";
 import { configureAccessControlService, AccessControlService } from "../modules/accessControl/index.js";
 import { PostgresAccessControlRepository } from "../modules/accessControl/postgresRepository.js";
@@ -227,6 +230,7 @@ export async function initializePostgresApplication(): Promise<ApplicationRuntim
         mealPlans: createMealPlansRouter(new MealPlansService(new PostgresMealPlansRepository(pool))),
         insights: createInsightsRouter(new InsightsService(new PostgresInsightsRepository(pool))),
         recommendations: createRecommendationsRouter(recommendations),
+        planMaintenance: createPlanMaintenanceRouter(new PlanMaintenanceService(new PostgresPlanMaintenanceRepository(pool))),
         kitchenware: createKitchenwareRouter(kitchenware),
         notifications: notificationsRoutes,
         media: mediaRoutes,

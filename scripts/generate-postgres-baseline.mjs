@@ -19,6 +19,7 @@ const manifestPath = path.join(serverRoot, "src", "storage", "database", "postgr
 
 const BOOLEAN_COLUMNS = new Set([
   "recommendation_learning_settings.enabled",
+  "plan_maintenance_settings.enabled",
   "ai_usage_logs.success",
   "household_inventory_items.is_available",
   "household_shopping_items.checked",

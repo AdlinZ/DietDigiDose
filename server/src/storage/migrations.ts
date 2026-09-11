@@ -2131,6 +2131,19 @@ const migrations: Migration[] = [
 
   { version: 66,name: "reported_cooking_minutes",up(database) { database.exec("ALTER TABLE prepared_meals ADD COLUMN reported_cooking_minutes INTEGER CHECK(reported_cooking_minutes BETWEEN 1 AND 1440)"); } },
 
+  { version: 67, name: "plan_maintenance_settings", up(database) {
+    database.exec(`CREATE TABLE plan_maintenance_settings (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      time_zone TEXT, local_time TEXT,
+      next_check_at DATETIME, next_local_date TEXT, last_completed_local_date TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK(NOT enabled OR (time_zone IS NOT NULL AND local_time IS NOT NULL AND next_check_at IS NOT NULL AND next_local_date IS NOT NULL))
+    );
+    CREATE INDEX idx_plan_maintenance_due ON plan_maintenance_settings(enabled,next_check_at);`);
+  } },
+
 ];
 
 export function runMigrations(database: Database.Database) {

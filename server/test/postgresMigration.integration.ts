@@ -1,3 +1,5 @@
+import { PostgresPlanMaintenanceRepository } from "../src/modules/planMaintenance/postgresRepository.js";
+import { PlanMaintenanceService } from "../src/modules/planMaintenance/service.js";
 import type { SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
 import assert from "node:assert/strict";
 import { currentDateKey } from "../src/utils/date.js";
@@ -2238,6 +2240,21 @@ try {
       [JSON.stringify([{ backend: "local", path: `/tmp/recovered-${id}.png` }]), id]);
     assert.equal(await mediaCleanupService.process(id), true);
   }
+
+  const maintenance = new PlanMaintenanceService(new PostgresPlanMaintenanceRepository(pool), () => new Date("2026-09-12T05:00:00Z"));
+  assert.equal((await maintenance.settings(user.id)).version, 0);
+  const settingsInput = { enabled: true as const, version: 0, timeZone: "Asia/Shanghai", localTime: "08:15" };
+  const maintenanceSaved = await maintenance.updateSettings(user.id, settingsInput);
+  assert.equal(maintenanceSaved.nextCheckAt, "2026-09-12T00:15:00.000Z");
+  assert.deepEqual(await new PlanMaintenanceService(new PostgresPlanMaintenanceRepository(pool)).settings(user.id), maintenanceSaved);
+  await assert.rejects(() => maintenance.updateSettings(user.id, settingsInput), /刷新/);
+  const settingsResults = await Promise.allSettled(["09:00", "10:00"].map(localTime => maintenance.updateSettings(user.id,
+    { ...settingsInput, version: 1, localTime })));
+  assert.equal(settingsResults.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(settingsResults.filter(result => result.status === "rejected").length, 1);
+  const pausedMaintenance = await maintenance.updateSettings(user.id, { enabled: false, version: 2 });
+  assert.equal(pausedMaintenance.nextCheckAt, null);
+  assert.equal(pausedMaintenance.timeZone, "Asia/Shanghai");
 
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);

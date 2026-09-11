@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "256de675c49aabb9f59a63c2c533222e5a65415bb221a0d16f8ee1635e467c76",
-  "tableCount": 97,
-  "indexCount": 144,
-  "foreignKeyCount": 151,
+  "sourceSchemaSha256": "e1e315456678384e7507f0b7a23aa46269960d9855ecf2ced1a760040b1787a5",
+  "tableCount": 98,
+  "indexCount": 145,
+  "foreignKeyCount": 152,
   "tables": [
     {
       "name": "admin_audit_logs",
@@ -5613,6 +5613,87 @@
         },
         {
           "name": "created_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "plan_maintenance_settings",
+      "autoIncrement": false,
+      "primaryKey": [
+        "user_id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "sqliteType": "INTEGER",
+          "postgresType": "boolean",
+          "transform": "0/1 -> false/true",
+          "nullable": false
+        },
+        {
+          "name": "time_zone",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "local_time",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "next_check_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "next_local_date",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "last_completed_local_date",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
           "sqliteType": "DATETIME",
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",

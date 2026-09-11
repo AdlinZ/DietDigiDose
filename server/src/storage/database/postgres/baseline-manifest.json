@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "e1e315456678384e7507f0b7a23aa46269960d9855ecf2ced1a760040b1787a5",
-  "tableCount": 98,
-  "indexCount": 145,
-  "foreignKeyCount": 152,
+  "sourceSchemaSha256": "bcc6b5918dbe729e5e7a8c6adfb9cfc366844aba6f08c18461c927f33b1e7443",
+  "tableCount": 99,
+  "indexCount": 147,
+  "foreignKeyCount": 153,
   "tables": [
     {
       "name": "admin_audit_logs",
@@ -5617,6 +5617,80 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "plan_maintenance_events",
+      "autoIncrement": false,
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "event_type",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "source_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "subject_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "details_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "processed_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": true
         }
       ]
     },

@@ -1,3 +1,4 @@
+import { appendSqliteMaintenanceEvent } from "../planMaintenance/sqliteEventWriter.js";
 import { InventoryDomainError } from "./errors.js";
 import { quantityEvidenceStatus } from "./evidence.js";
 import { savedIntakeItems } from "./intakeIdentity.js";
@@ -57,6 +58,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
       item.quantity_value ?? null, item.quantity_unit ?? null,
       item.package_size_value ?? null, item.package_size_unit ?? null, item.batch_code ?? null,
     );
+    appendSqliteMaintenanceEvent(this.database, { userId, kind: "inventory_created", sourceId: String(row.lastInsertRowid), subjectId: String(row.lastInsertRowid) });
     return this.database.prepare("SELECT * FROM inventory_items WHERE id = ?").get(row.lastInsertRowid) as Record<string, unknown>;
   }
 

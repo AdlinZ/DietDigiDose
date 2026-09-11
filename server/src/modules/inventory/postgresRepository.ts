@@ -1,3 +1,4 @@
+import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
 import { InventoryDomainError } from "./errors.js";
 import { quantityEvidenceStatus } from "./evidence.js";
 import { savedIntakeItems } from "./intakeIdentity.js";
@@ -148,6 +149,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
       item.quantity_unit ?? null, item.package_size_value ?? null, item.package_size_unit ?? null,
       item.batch_code ?? null,
     ]);
+    await appendPostgresMaintenanceEvent(client, { userId, kind: "inventory_created", sourceId: String(result.rows[0].id), subjectId: String(result.rows[0].id) });
     return formatInventoryItem(result.rows[0]!);
   }
 

@@ -3445,6 +3445,21 @@ test("prepared meals separate production, later eating and discard atomically", 
   const saved = await api("/api/v1/diet-records/prepared-meals", { token: first.token });
   assert.equal((saved.body as JsonObject[]).find(item => item.id === meal.id)?.remaining_servings, 0);
 
+  const maintenanceEvents = db.prepare("SELECT event_type,details_json FROM plan_maintenance_events WHERE user_id=? AND subject_id=? ORDER BY event_type").all(first.user.id,meal.id) as JsonObject[];
+  assert.deepEqual(maintenanceEvents.map(item => item.event_type), ["discard","eat","eat","production","reschedule"]);
+  assert.deepEqual(JSON.parse(maintenanceEvents.find(item => item.event_type === "production")!.details_json).inventoryItemIds, [stockId]);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=?").get(second.user.id) as JsonObject).n, 0);
+  db.exec("CREATE TRIGGER fail_maintenance_outbox_test BEFORE INSERT ON plan_maintenance_events WHEN NEW.event_type='production' BEGIN SELECT RAISE(ABORT,'test outbox failure'); END");
+  try {
+    const failed = await api("/api/v1/diet-records/cooking-completions", { token: first.token, method: "POST", body: JSON.stringify({
+      ...payload, idempotency_key: "production-outbox-rollback", inventory_consumptions: [{ item_id: stockId, version: 2, mode: "amount", amount_value: 1, unit: "piece" }],
+    }) });
+    assert.equal(failed.response.status, 500);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM prepared_meals WHERE idempotency_key='production-outbox-rollback'").get() as JsonObject).n, 0);
+    assert.equal((db.prepare("SELECT quantity_value FROM inventory_items WHERE id=?").get(stockId) as JsonObject).quantity_value, 7);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND subject_id=?").get(first.user.id,meal.id) as JsonObject).n, 5);
+  } finally { db.exec("DROP TRIGGER fail_maintenance_outbox_test"); }
+
   db.exec("CREATE TRIGGER fail_prepared_meal_test BEFORE INSERT ON prepared_meals WHEN NEW.food_name='强制回滚制作' BEGIN SELECT RAISE(ABORT,'test production failure'); END");
   try {
     const failed = await api("/api/v1/diet-records/cooking-completions", { token: first.token, method: "POST", body: JSON.stringify({

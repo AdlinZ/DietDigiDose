@@ -1,3 +1,4 @@
+import { appendSqliteMaintenanceEvent } from "../planMaintenance/sqliteEventWriter.js";
 import { randomUUID } from "node:crypto";
 import type { PreparedMealEventInput } from "@dietdigidose/contracts";
 import { formatPreparedMeal, mealConsumptionRecord, transitionMeal, roundServings, undoMealIntake } from "./preparedMeals.js";
@@ -53,6 +54,8 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
         }
         this.database.prepare("INSERT INTO prepared_meal_intake_corrections(id,user_id,event_id,original_diet_record_id,mode,result_json) VALUES(?,?,?,?,?,?)")
           .run(randomUUID(), userId, event.id, id, mode, JSON.stringify({ prepared_meal: next, original_event: event.id, original_diet_record_id: id, mode }));
+        appendSqliteMaintenanceEvent(this.database, { userId, kind: "intake_correction", sourceId: event.id,
+          subjectId: meal.id, details: { mode, version: next.version, planItemId: meal.plan_item_id } });
       } else if (mode === "undo_eating") {
         throw new InventoryQuantityError("PREPARED_MEAL_NOT_FOUND", "此记录没有可撤销的关联食用");
       }
@@ -95,6 +98,8 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
         (user_id, idempotency_key, recipe_id, diet_record_id, consumed_inventory_ids_json, result_json)
         VALUES (?, ?, ?, ?, ?, ?)`).run(userId, input.idempotency_key, input.recipe_id ?? null, dietRecord.id,
         JSON.stringify(consumedIds), JSON.stringify(response));
+      appendSqliteMaintenanceEvent(this.database, { userId, kind: "cooking_completion", sourceId: input.idempotency_key,
+        subjectId: String(dietRecord.id), details: { inventoryItemIds: consumedIds } });
       return response;
     })();
   }
@@ -125,6 +130,8 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
       const result = { prepared_meal: next, diet_record: record, repeated: false };
       this.database.prepare("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES(?,?,?,?,?,?,?,?,?)")
         .run(randomUUID(), userId, mealId, input.idempotency_key, input.type, input.servings ?? null, input.recorded_at!, record?.id ?? null, JSON.stringify(result));
+      appendSqliteMaintenanceEvent(this.database, { userId, kind: input.type, sourceId: input.idempotency_key,
+        subjectId: mealId, details: { version: next.version, planItemId: meal.plan_item_id } });
       return result;
     })();
   }
@@ -175,6 +182,8 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
       .run(randomUUID(), userId, id, `production:${id}`, production.eaten_servings, production.eaten_at!, record.id, JSON.stringify(response));
     if (production.queue_item_id) this.database.prepare("UPDATE cooking_queue_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(production.queue_item_id, userId);
     if (production.plan_item_id) this.database.prepare("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(production.plan_item_id, userId);
+    appendSqliteMaintenanceEvent(this.database, { userId, kind: "production", sourceId: id, subjectId: id,
+      details: { version: meal.version, planItemId: production.plan_item_id ?? null, inventoryItemIds: consumedIds } });
     return response;
   }
 

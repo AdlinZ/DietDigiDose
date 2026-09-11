@@ -51,6 +51,7 @@
     "server/src/modules/mealPlans/sqliteRepository.ts": 55,
     "server/src/modules/mediaCleanup/sqliteRepository.ts": 11,
     "server/src/modules/notifications/sqliteRepository.ts": 57,
+    "server/src/modules/planMaintenance/sqliteEventWriter.ts": 2,
     "server/src/modules/planMaintenance/sqliteRepository.ts": 4,
     "server/src/modules/rateLimits/sqliteRepository.ts": 10,
     "server/src/modules/realtimeVoice/sqliteRepository.ts": 23,
@@ -68,6 +69,6 @@
     "server/src/services/kitchenwareCapabilities.ts": 14,
     "server/src/storage/database/postgres/migration.ts": 8,
     "server/src/storage/db.ts": 110,
-    "server/src/storage/migrations.ts": 97
+    "server/src/storage/migrations.ts": 98
   }
 }

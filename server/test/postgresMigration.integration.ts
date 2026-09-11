@@ -411,6 +411,23 @@ try {
   assert.equal(raceMeals.filter(result => result.status === "fulfilled").length, 1);
   assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === prepared.id)?.remaining_servings, 0);
 
+  const maintenanceEvents = await pool.query("SELECT event_type FROM plan_maintenance_events WHERE user_id=$1 AND subject_id=$2 ORDER BY event_type",[user.id,prepared.id]);
+  assert.deepEqual(maintenanceEvents.rows.map(row => row.event_type), ["discard","eat","eat","production"]);
+  const outboxClient = await pool.connect();
+  try {
+    await outboxClient.query("BEGIN");
+    const uncommitted = await dietRepository.completeCookingWithClient(outboxClient,user.id, {
+      idempotency_key: "outbox-rollback-test", inventory_item_ids: [], inventory_consumptions: [],
+      production: { food_name: "Rollback outbox", produced_servings: 1, eaten_servings: 0, meal_type: "午餐", nutrition_per_serving: {} },
+    });
+    const uncommittedMeal = uncommitted.prepared_meal as { id: string };
+    assert.equal((await outboxClient.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE subject_id=$1",[uncommittedMeal.id])).rows[0].n,1);
+    assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE subject_id=$1",[uncommittedMeal.id])).rows[0].n,0);
+    await outboxClient.query("ROLLBACK");
+    assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE subject_id=$1",[uncommittedMeal.id])).rows[0].n,0);
+    assert.equal((await pool.query("SELECT COUNT(*)::int n FROM prepared_meals WHERE id=$1",[uncommittedMeal.id])).rows[0].n,0);
+  } finally { await outboxClient.query("ROLLBACK"); outboxClient.release(); }
+
   const tinyProduction = await dietService.completeCooking(user.id, {
     idempotency_key: "postgres-precision-produce-205", inventory_item_ids: [], inventory_consumptions: [],
     production: { food_name: "Postgres 小余量", produced_servings: 1, eaten_servings: 0.9995, meal_type: "午餐", nutrition_per_serving: {} },

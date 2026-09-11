@@ -2144,6 +2144,18 @@ const migrations: Migration[] = [
     CREATE INDEX idx_plan_maintenance_due ON plan_maintenance_settings(enabled,next_check_at);`);
   } },
 
+  { version: 68, name: "plan_maintenance_business_events", up(database) {
+    database.exec(`CREATE TABLE plan_maintenance_events (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL, source_id TEXT NOT NULL, subject_id TEXT NOT NULL,
+      details_json TEXT NOT NULL DEFAULT '{}',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, processed_at DATETIME,
+      UNIQUE(user_id,event_type,source_id)
+    );
+    CREATE INDEX idx_plan_maintenance_events_pending ON plan_maintenance_events(processed_at,user_id,created_at,id);`);
+  } },
+
 ];
 
 export function runMigrations(database: Database.Database) {

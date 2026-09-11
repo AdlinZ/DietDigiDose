@@ -4296,3 +4296,21 @@ test("household dining preferences are explicit, self-owned and revoked on leavi
   assert.notEqual(fresh.membershipId,staleMembership.membershipId);
   await assert.rejects(() => service.saveDiningPreferences(member.user.id,Number(family.id),{ ...staleMembership,shared: true }),/已变化/);
 });
+
+test("household inventory rejects stale edits and removal without changing quantity",async () => {
+  const owner = await register("family-cas-owner@example.com"), member = await register("family-cas-member@example.com");
+  const family = (await api("/api/v1/households",{ token: owner.token,method: "POST",body: JSON.stringify({ name: "并发库存" }) })).body as JsonObject;
+  await api("/api/v1/households/join",{ token: member.token,method: "POST",body: JSON.stringify({ invite_code: family.invite_code }) });
+  const base = `/api/v1/households/${family.id}/inventory`;
+  const created = (await api(base,{ token: owner.token,method: "POST",body: JSON.stringify({ food_name: "鸡蛋",quantity: "6个",expiration_date: "2099-01-01" }) })).body as JsonObject;
+  const endpoint = `${base}/${created.id}`;
+  const saved = await api(endpoint,{ token: member.token,method: "PUT",body: JSON.stringify({ version: created.version,quantity: "5个" }) });
+  assert.equal(saved.response.status,200); assert.equal((saved.body as JsonObject).version,Number(created.version)+1);
+  assert.equal((await api(endpoint,{ token: owner.token,method: "PUT",body: JSON.stringify({ version: created.version,quantity: "99个" }) })).response.status,409);
+  assert.equal((await api(`${endpoint}?version=${created.version}`,{ token: owner.token,method: "DELETE" })).response.status,409);
+  assert.equal((await api(endpoint,{ token: owner.token,method: "DELETE" })).response.status,400);
+  assert.equal((await api(endpoint,{ token: owner.token,method: "PUT",body: JSON.stringify({ quantity: "88个" }) })).response.status,400);
+  const rows = (await api(base,{ token: owner.token })).body as JsonObject[];
+  assert.equal(rows.find(row => row.id === created.id)?.quantity,"5个");
+  assert.equal((await api(`${endpoint}?version=${(saved.body as JsonObject).version}`,{ token: owner.token,method: "DELETE" })).response.status,200);
+});

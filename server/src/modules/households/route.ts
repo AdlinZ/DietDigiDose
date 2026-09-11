@@ -79,7 +79,7 @@ export function createHouseholdsRouter(service: HouseholdsService) {
       .then((value) => res.json(value)).catch((error) => handle(error, res, next));
   });
   router.delete("/:id/inventory/:itemId", (req: AuthRequest, res, next) => {
-    void service.removeInventory(req.userId!, householdId(req), Number(req.params.itemId))
+    void service.removeInventory(req.userId!, householdId(req), Number(req.params.itemId), Number(req.query.version))
       .then((value) => res.json(value)).catch((error) => handle(error, res, next));
   });
   router.get("/:id/history", (req: AuthRequest, res, next) => {

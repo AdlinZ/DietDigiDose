@@ -23,6 +23,6 @@ export interface HouseholdsRepository {
   inventory(userId: number, householdId: number): Promise<Row[] | null>;
   createInventory(userId: number, householdId: number, input: InventoryCreateInput): Promise<InventoryMutationResult>;
   updateInventory(userId: number, householdId: number, itemId: number, input: InventoryUpdateInput): Promise<InventoryMutationResult>;
-  removeInventory(userId: number, householdId: number, itemId: number): Promise<"not_member" | "not_found" | "removed">;
+  removeInventory(userId: number, householdId: number, itemId: number, version: number): Promise<"not_member" | "not_found" | "version_conflict" | "removed">;
   history(userId: number, householdId: number): Promise<Row[] | null>;
 }

@@ -228,8 +228,9 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
       const current = this.database.prepare("SELECT * FROM household_inventory_items WHERE id=? AND household_id=?")
         .get(itemId, householdId) as Row | undefined;
       if (!current) return { kind: "not_found" as const };
+      if (Number(current.version) !== input.version) return { kind: "version_conflict" as const };
       this.database.prepare(`UPDATE household_inventory_items SET food_name=?,category=?,quantity=?,expiration_date=?,storage_location=?,
-        image_url=?,is_available=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND household_id=?`).run(
+        image_url=?,is_available=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND household_id=?`).run(
         input.food_name ?? current.food_name, input.category ?? current.category, input.quantity ?? current.quantity,
         input.expiration_date ?? current.expiration_date, input.storage_location ?? current.storage_location,
         input.image_url ?? current.image_url, input.is_available === undefined ? current.is_available : input.is_available ? 1 : 0,
@@ -242,12 +243,13 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
     })();
   }
 
-  async removeInventory(userId: number, householdId: number, itemId: number) {
+  async removeInventory(userId: number, householdId: number, itemId: number, version: number) {
     return this.database.transaction(() => {
       if (!this.member(householdId, userId)) return "not_member" as const;
       const item = this.database.prepare("SELECT * FROM household_inventory_items WHERE id=? AND household_id=?")
         .get(itemId, householdId) as Row | undefined;
       if (!item) return "not_found" as const;
+      if (Number(item.version) !== version) return "version_conflict" as const;
       this.database.prepare("DELETE FROM household_inventory_items WHERE id=?").run(itemId);
       this.activity(householdId, userId, "consume", String(item.food_name), String(item.quantity), String(item.storage_location));
       return "removed" as const;

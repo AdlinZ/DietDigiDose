@@ -1137,7 +1137,7 @@ export default function InventoryScreen() {
           quantity_value: parsedQuantity.amount,
           quantity_unit: parsedQuantity.unit,
         } : {}),
-        ...(!activeHousehold && editingItem?.version ? { version: editingItem.version } : {}),
+        ...(editingItem?.version ? { version: editingItem.version } : {}),
       };
 
       if (activeHousehold && editingItem) {
@@ -1161,7 +1161,7 @@ export default function InventoryScreen() {
       }
       setModalVisible(false);
     } catch (e) {
-      Alert.alert("错误", "网络异常");
+      Alert.alert("保存失败", e instanceof Error ? e.message : "网络异常，请重试");
     } finally {
       setSaving(false);
     }
@@ -1176,7 +1176,7 @@ export default function InventoryScreen() {
         onPress: async () => {
           try {
             if (activeHousehold) {
-              await householdApi.inventoryRemove(authFetch, activeHousehold.id, id);
+              await householdApi.inventoryRemove(authFetch, activeHousehold.id, id, items.find(item => item.id === id)?.version ?? 0);
               await loadFamilyInventory();
             } else {
               await inventoryMutations.removeInventory.mutateAsync(id);
@@ -1184,7 +1184,7 @@ export default function InventoryScreen() {
             setModalVisible(false);
             setEditingItem(null);
           } catch (e) {
-            console.error(e);
+            Alert.alert("移除失败", e instanceof Error ? e.message : "请刷新后重试");
           }
         },
       },
@@ -1226,19 +1226,20 @@ export default function InventoryScreen() {
 
     try {
       if (activeHousehold) {
-        await householdApi.inventoryUpdate(authFetch, activeHousehold.id, item.id, { storage_location: storageLocation });
+        await householdApi.inventoryUpdate(authFetch, activeHousehold.id, item.id, { storage_location: storageLocation,version: item.version });
+        await loadFamilyInventory();
       } else {
         await inventoryMutations.updateInventory.mutateAsync({ id: item.id, input: { storage_location: storageLocation } });
       }
-    } catch {
+    } catch (error) {
       setItems((currentItems) =>
         currentItems.map((currentItem) =>
           currentItem.id === item.id ? { ...currentItem, storage_location: previousLocation } : currentItem,
         ),
       );
-      Alert.alert("移动失败", "未能更新食材的存放位置，请稍后重试。");
+      Alert.alert("移动失败", error instanceof Error ? error.message : "未能更新食材的存放位置，请稍后重试。");
     }
-  }, [activeHousehold, authFetch]);
+  }, [activeHousehold, authFetch, loadFamilyInventory]);
 
   const handleItemDrop = useCallback(async (item: InventoryItem, pageX: number, pageY: number) => {
     const destination = await getStorageLocationAtPoint(pageX, pageY);

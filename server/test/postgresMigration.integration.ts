@@ -733,10 +733,15 @@ try {
   const manualHouseholdInventory = await householdsService.createInventory(user.id, postgresHouseholdId, {
     food_name: "Postgres 家庭鸡蛋", expiration_date: "2026-09-09", quantity: "6个",
   });
-  const updatedHouseholdInventory = await householdsService.updateInventory(householdMember, postgresHouseholdId,
-    Number(manualHouseholdInventory.id), { quantity: "5个", is_available: true });
+  const inventoryRace = await Promise.allSettled([user.id,householdMember].map(actor => householdsService.updateInventory(actor, postgresHouseholdId,
+    Number(manualHouseholdInventory.id), { quantity: "5个", is_available: true,version: Number(manualHouseholdInventory.version) })));
+  assert.equal(inventoryRace.filter(result => result.status === "fulfilled").length,1);
+  assert.equal(inventoryRace.filter(result => result.status === "rejected").length,1);
+  const updatedHouseholdInventory = (inventoryRace.find(result => result.status === "fulfilled") as PromiseFulfilledResult<Record<string,unknown>>).value;
   assert.equal(updatedHouseholdInventory.quantity, "5个");
-  await householdsService.removeInventory(user.id, postgresHouseholdId, Number(manualHouseholdInventory.id));
+  await assert.rejects(() => householdsService.updateInventory(householdMember, postgresHouseholdId,Number(manualHouseholdInventory.id),{ quantity: "99个",version: Number(manualHouseholdInventory.version) }),/其他成员更新/);
+  await assert.rejects(() => householdsService.removeInventory(user.id, postgresHouseholdId, Number(manualHouseholdInventory.id),Number(manualHouseholdInventory.version)),/其他成员更新/);
+  await householdsService.removeInventory(user.id, postgresHouseholdId, Number(manualHouseholdInventory.id),Number(updatedHouseholdInventory.version));
   assert((await householdsService.history(user.id, postgresHouseholdId)).length >= 7);
   await assert.rejects(() => householdsService.transferOwner(user.id, postgresHouseholdId,
     { newOwnerUserId: householdMember, version: 999 }), /家庭空间已更新/);

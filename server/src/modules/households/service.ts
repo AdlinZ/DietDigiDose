@@ -159,14 +159,18 @@ export class HouseholdsService {
   }
 
   async updateInventory(userId: number, householdId: number, itemId: number, input: InventoryUpdateInput) {
+    if (!Number.isSafeInteger(input.version) || input.version < 1) throw new HouseholdsError(400,"请读取食材最新版本后再修改","VERSION_REQUIRED");
     const result = await this.repository.updateInventory(userId, householdId, itemId, input);
+    if (result.kind === "version_conflict") throw new HouseholdsError(409,"家庭食材已被其他成员更新，请刷新后重试","VERSION_CONFLICT");
     if (result.kind === "not_member") throw new HouseholdsError(403, "无权修改该家庭食材", "FORBIDDEN");
     if (result.kind === "not_found") throw new HouseholdsError(404, "食材不存在", "NOT_FOUND");
     return formatInventory(result.item);
   }
 
-  async removeInventory(userId: number, householdId: number, itemId: number) {
-    const result = await this.repository.removeInventory(userId, householdId, itemId);
+  async removeInventory(userId: number, householdId: number, itemId: number, version: number) {
+    if (!Number.isSafeInteger(version) || version < 1) throw new HouseholdsError(400,"请读取食材最新版本后再移除","VERSION_REQUIRED");
+    const result = await this.repository.removeInventory(userId, householdId, itemId, version);
+    if (result === "version_conflict") throw new HouseholdsError(409,"家庭食材已被其他成员更新，请刷新后重试","VERSION_CONFLICT");
     if (result === "not_member") throw new HouseholdsError(403, "无权操作该家庭食材", "FORBIDDEN");
     if (result === "not_found") throw new HouseholdsError(404, "食材不存在", "NOT_FOUND");
     return { message: "家庭食材已用完下架" };

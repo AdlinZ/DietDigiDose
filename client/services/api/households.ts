@@ -143,8 +143,8 @@ export const householdApi = {
       body: JSON.stringify(input),
     }),
 
-  inventoryRemove: (apiFetch: ApiFetch, householdId: number, itemId: number) =>
-    requestJson<{ message: string }>(apiFetch, `/api/v1/households/${householdId}/inventory/${itemId}`, {
+  inventoryRemove: (apiFetch: ApiFetch, householdId: number, itemId: number, version: number) =>
+    requestJson<{ message: string }>(apiFetch, `/api/v1/households/${householdId}/inventory/${itemId}?version=${version}`, {
       method: "DELETE",
     }),
 

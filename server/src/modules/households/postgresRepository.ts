@@ -236,12 +236,13 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
 
   async updateInventory(userId: number, householdId: number, itemId: number, input: InventoryUpdateInput) {
     return this.tx(async (client) => {
-      if (!await this.member(client, householdId, userId)) return { kind: "not_member" as const };
+      if (!await this.member(client, householdId, userId, true)) return { kind: "not_member" as const };
       const current = (await client.query("SELECT * FROM household_inventory_items WHERE id=$1 AND household_id=$2 FOR UPDATE",
       [itemId, householdId])).rows[0] as Row | undefined;
       if (!current) return { kind: "not_found" as const };
+      if (Number(current.version) !== input.version) return { kind: "version_conflict" as const };
       await client.query(`UPDATE household_inventory_items SET food_name=$1,category=$2,quantity=$3,expiration_date=$4,
-        storage_location=$5,image_url=$6,is_available=$7,updated_at=CURRENT_TIMESTAMP WHERE id=$8 AND household_id=$9`, [
+        storage_location=$5,image_url=$6,is_available=$7,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$8 AND household_id=$9`, [
         input.food_name ?? current.food_name, input.category ?? current.category, input.quantity ?? current.quantity,
         input.expiration_date ?? current.expiration_date, input.storage_location ?? current.storage_location,
         input.image_url ?? current.image_url, input.is_available ?? current.is_available, itemId, householdId,
@@ -253,12 +254,13 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
     });
   }
 
-  async removeInventory(userId: number, householdId: number, itemId: number) {
+  async removeInventory(userId: number, householdId: number, itemId: number, version: number) {
     return this.tx(async (client) => {
-      if (!await this.member(client, householdId, userId)) return "not_member" as const;
+      if (!await this.member(client, householdId, userId, true)) return "not_member" as const;
       const item = (await client.query("SELECT * FROM household_inventory_items WHERE id=$1 AND household_id=$2 FOR UPDATE",
       [itemId, householdId])).rows[0] as Row | undefined;
       if (!item) return "not_found" as const;
+      if (Number(item.version) !== version) return "version_conflict" as const;
       await client.query("DELETE FROM household_inventory_items WHERE id=$1", [itemId]);
       await this.activity(client, householdId, userId, "consume", String(item.food_name), String(item.quantity), String(item.storage_location));
       return "removed" as const;
@@ -272,8 +274,10 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
       ORDER BY hl.created_at DESC LIMIT 100`, [householdId])).rows as Row[];
   }
 
-  private async member(client: Pool | PoolClient, householdId: number, userId: number) {
-    return (await client.query("SELECT * FROM household_members WHERE household_id=$1 AND user_id=$2", [householdId, userId]))
+  private async member(client: Pool | PoolClient, householdId: number, userId: number, lock = false) {
+    // Match leave/dissolve lock order before holding the membership through a mutation.
+    if (lock) await client.query("SELECT id FROM households WHERE id=$1 FOR KEY SHARE",[householdId]);
+    return (await client.query(`SELECT * FROM household_members WHERE household_id=$1 AND user_id=$2${lock ? " FOR SHARE" : ""}`, [householdId, userId]))
       .rows[0] as Row | undefined;
   }
   private activity(client: PoolClient, householdId: number, userId: number, action: string, name: string, quantity: string, location = "") {

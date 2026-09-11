@@ -1,6 +1,6 @@
 # Staging 部署与演练
 
-该目录提供独立 HTTPS staging 的可复现部署基线：Caddy 自动签发 TLS 并提供产品官网与管理端静态页面、PostgreSQL 16 持久卷、一次性 Drizzle migration、独立 API/worker，以及不会保留烟测账号的核心闭环验证。
+该目录提供独立 HTTPS staging 的可复现部署基线：Caddy 自动签发 TLS 并提供产品官网与管理端静态页面、PostgreSQL 16 持久卷、一次性 Drizzle migration、独立 API/worker，以及使用临时账号并报告清理结果的核心闭环验证。
 
 ## 部署
 
@@ -20,6 +20,8 @@
    ```bash
    STAGING_BASE_URL=https://staging-api.example.com node deploy/staging-smoke.mjs
    ```
+
+   烟测使用临时账号录入三种合成测试食材，并验证结构化部分扣减、制作与实际食用分离、食用/制作幂等、丢弃余量及旧请求不恢复余量。未知营养必须保持未知，不使用公共菜谱的热量来猜测合成测试餐。最后删除临时账号；失败输出的 `cleanup` 表明清理是否完成，清理失败需运维跟进。`ALLOW_HTTP=1` 只允许本机回环地址演练，不能用于候选 staging。
 
    如果服务器使用 Nginx 而非 Caddy，可从 `deploy/nginx.staging.conf.example` 创建站点配置。必须将 `/api/`、`/media/` 和 `/share/` 都反向代理到 API；其中 `/share/` 是动态分享承接页，不能交给管理端 SPA 的 `try_files`。
 

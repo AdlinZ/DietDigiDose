@@ -2484,6 +2484,8 @@ try {
   const rolledBack = await pool.query("SELECT quantity_value FROM inventory_items WHERE food_name = '番茄'");
   assert.equal(Number(rolledBack.rows[0]?.quantity_value), 200);
 
+  // Repository assertions above leave synthetic runs in flight; they must not start model calls during the HTTP smoke.
+  await pool.query("UPDATE agent_runs SET status='cancelled' WHERE status IN ('queued','running','awaiting_approval','awaiting_input')");
   process.env.DATABASE_DRIVER = "postgresql";
   process.env.DATABASE_URL = connectionString;
   process.env.REQUIRE_HTTPS = "0";
@@ -2496,8 +2498,14 @@ try {
   const health = await fetch(`http://127.0.0.1:${address.port}/api/v1/health`);
   assert.equal(health.status, 200);
   assert.equal((await health.json() as { databaseDriver: string }).databaseDriver, "postgresql");
-  await new Promise<void>((resolve, reject) => runtimeServer.close((error) => error ? reject(error) : resolve()));
-  await app.locals.closeRuntime();
+  const { verifyStagingSmoke } = await import("./stagingSmokeAssertions.js");
+  try {
+    await verifyStagingSmoke(`http://127.0.0.1:${address.port}`);
+    assert.equal(Number((await pool.query("SELECT COUNT(*) AS n FROM users WHERE email LIKE 'staging-smoke-%@example.invalid'")).rows[0].n),0);
+  } finally {
+    await new Promise<void>((resolve, reject) => runtimeServer.close((error) => error ? reject(error) : resolve()));
+    await app.locals.closeRuntime();
+  }
 
   console.log(JSON.stringify({
     ok: true,

@@ -4355,3 +4355,9 @@ test("Agent explicit recipe preferences use guarded shared learning settings and
   await verifyAgentRecipePreference(new SqliteAgentOperationsRepository(db),createRecommendationsRuntime(db).service,
     async (sql,values) => db.prepare(sql).run(...values),account.user.id,Number(recipe.id));
 });
+
+test("staging smoke exercises current production and eating contracts and cleans up its account",async () => {
+  const { verifyStagingSmoke } = await import("./stagingSmokeAssertions.js");
+  await verifyStagingSmoke(baseUrl);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM users WHERE email LIKE 'staging-smoke-%@example.invalid'").get() as JsonObject).n,0);
+});

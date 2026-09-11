@@ -69,3 +69,15 @@ test("duplicate events coalesce and malformed ingredients remain an explicit che
   input.events = [{ id: "unknown",user_id: 1,event_type: "future-kind",subject_id: "x" }];
   assert.match(maintenanceScope(input).checks[0].reason,/未知/);
 });
+
+
+test("daily checks inspect all future active meals only while enabled", () => {
+  const input = fixture();
+  input.events = [{ id: "daily",user_id: 1,event_type: "daily_check",subject_id: "2026-09-12" }];
+  input.items.push({ ...input.items[0],id: "past",planned_date: "2026-09-11" });
+  input.items.push({ ...input.items[0],id: "done",status: "completed" });
+  input.items.push({ ...input.items[0],id: "other",user_id: 2 });
+  assert.deepEqual(maintenanceScope({ ...input,dailyEnabled: true }).items.map(item => item.itemId),["egg","rice"]);
+  assert.deepEqual(maintenanceScope({ ...input,dailyEnabled: false }).items,[]);
+  assert.ok(maintenanceScope({ ...input,dailyEnabled: false }).checks[0].reason.includes("关闭"));
+});

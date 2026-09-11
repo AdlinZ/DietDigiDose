@@ -9,7 +9,7 @@ export async function evaluateMaintenanceJob(repository: MaintenanceQueueReposit
   const snapshot = await repository.inputs(job,await repository.candidateRecipeIds());
   if (!snapshot) return null;
   const date = typeof fromDate === "string" ? fromDate : new Intl.DateTimeFormat("en-CA", { timeZone: String(snapshot.data.plan_maintenance_settings?.[0]?.time_zone || "Asia/Shanghai"),year: "numeric",month: "2-digit",day: "2-digit" }).format(fromDate);
-  const scope = maintenanceScope({ userId: job.userId,fromDate: date,events: snapshot.data.maintenance_events,
+  const scope = maintenanceScope({ dailyEnabled: Boolean(snapshot.data.plan_maintenance_settings?.[0]?.enabled),userId: job.userId,fromDate: date,events: snapshot.data.maintenance_events,
     inventory: snapshot.data.inventory_items,prepared: snapshot.data.prepared_meals,
     plans: snapshot.data.meal_plans,items: snapshot.data.meal_plan_items });
   const kitchenware = snapshotKitchenware(snapshot);

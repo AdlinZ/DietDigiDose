@@ -2264,7 +2264,7 @@ try {
   await pool.query("DELETE FROM plan_maintenance_jobs");
   await pool.query("DELETE FROM plan_maintenance_events");
   const queueOtherUser = Number((await pool.query("SELECT id FROM users WHERE id<>$1 LIMIT 1",[user.id])).rows[0].id);
-  await verifyMaintenanceQueue({ users: [user.id,queueOtherUser], repository: () => new PostgresMaintenanceQueueRepository(pool),
+  await verifyMaintenanceQueue({ settings: new PostgresPlanMaintenanceRepository(pool),users: [user.id,queueOtherUser], repository: () => new PostgresMaintenanceQueueRepository(pool),
     seed: async (id,userId,at) => { await pool.query("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES($1,$2,'eat',$1,$1,$3)",[id,userId,at]); },
     unprocessed: async () => (await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE processed_at IS NULL")).rows[0].n,
     seedMeals: async userId => {

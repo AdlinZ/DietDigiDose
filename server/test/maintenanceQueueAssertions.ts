@@ -1,9 +1,11 @@
+import type { PlanMaintenanceRepository } from "../src/modules/planMaintenance/repository.js";
 import { evaluateMaintenanceJob } from "../src/modules/planMaintenance/evaluate.js";
 import assert from "node:assert/strict";
 import type { MaintenanceQueueRepository } from "../src/modules/planMaintenance/queue.js";
 
 export async function verifyMaintenanceQueue(harness: {
   repository: () => MaintenanceQueueRepository;
+  settings: PlanMaintenanceRepository;
   seed: (id: string,userId: number,at: string) => Promise<void>;
   unprocessed: () => Promise<number>;
   users: [number,number];
@@ -97,4 +99,29 @@ export async function verifyMaintenanceQueue(harness: {
   assert.equal(await harness.changeCount(),4);
   assert.deepEqual(await apply(fresh,[]),{ kind: "lease_lost" });
   assert.equal(await harness.changeCount(),4);
+  // Daily dispatch advances its next occurrence without claiming successful completion.
+  const dailyUser = harness.users[1];
+  const dailyNow = new Date("2030-09-12T05:00:00Z");
+  assert.equal(await harness.settings.saveSettings(dailyUser,0,{ enabled: true,timeZone: "Asia/Shanghai",localTime: "12:00",
+    nextCheckAt: "2030-09-10T04:00:00Z",nextLocalDate: "2030-09-10",lastCompletedLocalDate: null,version: 0 }),true);
+  const dispatched = await Promise.all([harness.repository().enqueueDaily(dailyNow),harness.repository().enqueueDaily(dailyNow)]);
+  assert.equal(dispatched.reduce((a,b) => a+b,0),1);
+  assert.equal((await harness.settings.settings(dailyUser))?.nextLocalDate,"2030-09-13");
+  assert.equal((await harness.settings.settings(dailyUser))?.lastCompletedLocalDate,null);
+  assert.equal(await harness.repository().enqueueDaily(dailyNow),0);
+  await harness.repository().enqueueEvents(new Date(dailyNow.getTime()+31_000));
+  const dailyJob = await harness.repository().claim(new Date(dailyNow.getTime()+32_000));
+  assert.ok(dailyJob); assert.equal(dailyJob.userId,dailyUser);
+  const dailyInput = await harness.repository().inputs(dailyJob); assert.ok(dailyInput);
+  assert.deepEqual(dailyInput.data.maintenance_events.map(event => event.subject_id),["2030-09-12"]);
+  assert.equal((await harness.repository().applyChanges(dailyJob,[],dailyInput)).kind,"completed");
+  const settings = (await harness.settings.settings(dailyUser))!;
+  assert.equal(settings.lastCompletedLocalDate,"2030-09-12");
+  // Time edits can point back to an already dispatched date; the event key still deduplicates.
+  assert.equal(await harness.settings.saveSettings(dailyUser,settings.version,{ ...settings,nextCheckAt: "2030-09-12T04:00:00Z",nextLocalDate: "2030-09-12" }),true);
+  assert.equal(await harness.repository().enqueueDaily(dailyNow),0);
+  const latest = (await harness.settings.settings(dailyUser))!;
+  assert.equal(await harness.settings.saveSettings(dailyUser,latest.version,{ ...latest,enabled: false,nextCheckAt: null,nextLocalDate: null }),true);
+  assert.equal(await harness.repository().enqueueDaily(new Date("2030-09-14T05:00:00Z")),0);
+
 }

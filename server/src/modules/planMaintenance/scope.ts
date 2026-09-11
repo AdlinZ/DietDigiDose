@@ -14,7 +14,7 @@ function object(value: unknown): Row {
 
 /** Dependency discovery only: eligibility to change still belongs to #195's decision policy. */
 export function maintenanceScope(input: {
-  userId: number; fromDate: string; events: Row[]; inventory: Row[]; prepared: Row[]; plans: Row[]; items: Row[];
+  dailyEnabled?: boolean; userId: number; fromDate: string; events: Row[]; inventory: Row[]; prepared: Row[]; plans: Row[]; items: Row[];
 }): MaintenanceScope {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.fromDate)
     || new Date(`${input.fromDate}T00:00:00Z`).toISOString().slice(0,10) !== input.fromDate) throw new Error("Invalid maintenance date");
@@ -34,6 +34,24 @@ export function maintenanceScope(input: {
     const id = String(event.id);
     const kind = String(event.event_type);
     const details = object(event.details_json);
+    if (kind === "daily_check") {
+      if (!input.dailyEnabled) { checks.push({ eventId: id,reason: "每日检查已关闭，跳过该定时事件" }); continue; }
+      for (const item of items) mark(item,id);
+      for (const plan of plans) {
+        const constraints = object(plan.constraints_json);
+        const saved = object(constraints.savedCookingDraft);
+        const draft = object(constraints.currentCookingDraft ?? saved.draft);
+        for (const target of (Array.isArray(draft.meals) ? draft.meals : []) as Row[]) {
+          if (!target || String(target.date) < input.fromDate || !Array.isArray(target.allocations)
+            || !target.allocations.some((allocation: Row) => allocation?.preparedMealId)) continue;
+          const planId = String(plan.id), targetId = String(target.id), key = JSON.stringify([planId,targetId]);
+          const entry = targets.get(key) ?? { planId,targetId,eventIds: new Set<string>() };
+          entry.eventIds.add(id); targets.set(key,entry);
+        }
+      }
+      continue;
+    }
+
     const stockIds = kind === "inventory_created" ? [Number(event.subject_id)]
       : Array.isArray(details.inventoryItemIds) ? details.inventoryItemIds.map(Number) : [];
     const stocks = stockIds.map(stockId => input.inventory.find(row => owned(row) && Number(row.id) === stockId));

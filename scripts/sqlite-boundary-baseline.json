@@ -52,7 +52,7 @@
     "server/src/modules/mediaCleanup/sqliteRepository.ts": 11,
     "server/src/modules/notifications/sqliteRepository.ts": 57,
     "server/src/modules/planMaintenance/sqliteEventWriter.ts": 2,
-    "server/src/modules/planMaintenance/sqliteQueueRepository.ts": 32,
+    "server/src/modules/planMaintenance/sqliteQueueRepository.ts": 39,
     "server/src/modules/planMaintenance/sqliteRepository.ts": 4,
     "server/src/modules/rateLimits/sqliteRepository.ts": 10,
     "server/src/modules/realtimeVoice/sqliteRepository.ts": 23,

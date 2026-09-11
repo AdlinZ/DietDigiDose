@@ -1,3 +1,4 @@
+import { dispatchDaily } from "./daily.js";
 import { inputSnapshot, maintenanceInputTables, maintenanceRuleTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import { maintenanceScope } from "./scope.js";
 import type { Row } from "../mealPlans/formatters.js";
@@ -10,6 +11,24 @@ import { batchLimit, leaseDuration, MAINTENANCE_MAX_ATTEMPTS, MAINTENANCE_RULE_V
 export class SqliteMaintenanceQueueRepository implements MaintenanceQueueRepository {
   private readonly db: Database.Database;
   constructor(db: Database.Database) { this.db = db; }
+
+  async enqueueDaily(now: Date, limit?: number) {
+    return this.db.transaction(() => {
+      const due = this.db.prepare(`SELECT * FROM plan_maintenance_settings WHERE enabled=1
+        AND julianday(next_check_at)<=julianday(?) ORDER BY next_check_at,user_id LIMIT ?`).all(now.toISOString(),batchLimit(limit)) as Row[];
+      let inserted = 0;
+      for (const row of due) {
+        const occurrence = dispatchDaily(now,row);
+        if (occurrence.date) inserted += this.db.prepare(`INSERT INTO plan_maintenance_events
+          (id,user_id,event_type,source_id,subject_id,created_at) VALUES(?,?,'daily_check',?,?,?)
+          ON CONFLICT(user_id,event_type,source_id) DO NOTHING`)
+          .run(randomUUID(),row.user_id,occurrence.date,occurrence.date,now.toISOString()).changes;
+        this.db.prepare(`UPDATE plan_maintenance_settings SET next_check_at=?,next_local_date=?,version=version+1,updated_at=? WHERE user_id=?`)
+          .run(occurrence.next.scheduledAt,occurrence.next.localDate,now.toISOString(),row.user_id);
+      }
+      return inserted;
+    })();
+  }
 
   async enqueueEvents(now: Date, limit?: number) {
     return this.db.transaction(() => {
@@ -58,7 +77,7 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
       if (!valid) return null;
       const events = this.db.prepare(`SELECT e.* FROM plan_maintenance_events e JOIN plan_maintenance_job_events m ON m.event_id=e.id
         WHERE m.job_id=? AND e.user_id=? ORDER BY e.id`).all(job.id,job.userId) as Row[];
-      return maintenanceScope({ userId: job.userId,fromDate,events,
+      return maintenanceScope({ dailyEnabled: Boolean((this.db.prepare("SELECT enabled FROM plan_maintenance_settings WHERE user_id=?").get(job.userId) as Row | undefined)?.enabled),userId: job.userId,fromDate,events,
         inventory: this.db.prepare("SELECT * FROM inventory_items WHERE user_id=? ORDER BY id").all(job.userId) as Row[],
         prepared: this.db.prepare("SELECT * FROM prepared_meals WHERE user_id=? ORDER BY id").all(job.userId) as Row[],
         plans: this.db.prepare("SELECT * FROM meal_plans WHERE user_id=? ORDER BY id").all(job.userId) as Row[],
@@ -110,6 +129,10 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
           results.push(result.value);
         }
         if (!valid()) throw new MaintenanceApplyConflict("lease_lost");
+        const daily = this.db.prepare(`SELECT MAX(e.subject_id) AS date FROM plan_maintenance_events e
+          JOIN plan_maintenance_job_events m ON m.event_id=e.id WHERE m.job_id=? AND e.user_id=? AND e.event_type='daily_check'`).get(job.id,job.userId) as { date: string | null };
+        if (daily.date) this.db.prepare(`UPDATE plan_maintenance_settings SET last_completed_local_date=?,version=version+1,updated_at=CURRENT_TIMESTAMP
+          WHERE user_id=? AND (last_completed_local_date IS NULL OR last_completed_local_date<?)`).run(daily.date,job.userId,daily.date);
         this.db.prepare(`UPDATE plan_maintenance_events SET processed_at=CURRENT_TIMESTAMP WHERE user_id=?
           AND id IN (SELECT event_id FROM plan_maintenance_job_events WHERE job_id=?)`).run(job.userId,job.id);
         this.db.prepare("UPDATE plan_maintenance_jobs SET status='completed',result_json=?,lease_token=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?")

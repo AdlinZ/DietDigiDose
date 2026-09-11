@@ -52,8 +52,9 @@ export async function runWorkerCycle(workerId: string, runtime: WorkerRuntimeBun
         }
       : taskName === "plan-maintenance-dispatch"
       ? async () => {
+          const daily = await runtime.maintenanceQueue.enqueueDaily(new Date(),numberFromEnv("PLAN_MAINTENANCE_EVENT_BATCH_SIZE",200));
           const enqueued = await runtime.maintenanceQueue.enqueueEvents(new Date(),numberFromEnv("PLAN_MAINTENANCE_EVENT_BATCH_SIZE",200));
-          return { processed: enqueued, succeeded: enqueued, failed: 0, details: { phase: "event_dispatch", eventsEnqueued: enqueued } };
+          return { processed: enqueued, succeeded: enqueued, failed: 0, details: { phase: "event_dispatch", eventsEnqueued: enqueued, dailyChecksCreated: daily } };
         }
       : taskName === "plan-maintenance-process"
       ? async (context: WorkerTaskContext) => processMaintenanceJobs(runtime.maintenanceQueue,context,numberFromEnv("PLAN_MAINTENANCE_JOB_BATCH_SIZE",10))

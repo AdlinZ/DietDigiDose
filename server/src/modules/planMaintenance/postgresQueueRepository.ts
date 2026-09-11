@@ -1,3 +1,4 @@
+import { dispatchDaily } from "./daily.js";
 import { inputSnapshot, maintenanceInputTables, maintenanceRuleTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import { maintenanceScope } from "./scope.js";
 import { lockMealPlanning } from "../mealPlans/postgresLock.js";
@@ -15,6 +16,23 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
     try { await client.query("BEGIN"); const result = await action(client); await client.query("COMMIT"); return result; }
     catch(error) { await client.query("ROLLBACK"); throw error; }
     finally { client.release(); }
+  }
+
+  async enqueueDaily(now: Date, limit?: number) {
+    return this.transaction(async client => {
+      const due = (await client.query(`SELECT * FROM plan_maintenance_settings WHERE enabled=TRUE
+        AND next_check_at<=$1 ORDER BY next_check_at,user_id LIMIT $2 FOR UPDATE SKIP LOCKED`,[now.toISOString(),batchLimit(limit)])).rows;
+      let inserted = 0;
+      for (const row of due) {
+        const occurrence = dispatchDaily(now,row);
+        if (occurrence.date) inserted += (await client.query(`INSERT INTO plan_maintenance_events
+          (id,user_id,event_type,source_id,subject_id,created_at) VALUES($1,$2,'daily_check',$3,$3,$4)
+          ON CONFLICT(user_id,event_type,source_id) DO NOTHING`,[randomUUID(),row.user_id,occurrence.date,now.toISOString()])).rowCount ?? 0;
+        await client.query(`UPDATE plan_maintenance_settings SET next_check_at=$1,next_local_date=$2,version=version+1,updated_at=$3 WHERE user_id=$4`,
+          [occurrence.next.scheduledAt,occurrence.next.localDate,now.toISOString(),row.user_id]);
+      }
+      return inserted;
+    });
   }
 
   async enqueueEvents(now: Date, limit?: number) {
@@ -66,7 +84,7 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
       if (!valid) return null;
       const events = (await client.query(`SELECT e.* FROM plan_maintenance_events e JOIN plan_maintenance_job_events m ON m.event_id=e.id
         WHERE m.job_id=$1 AND e.user_id=$2 ORDER BY e.id`,[job.id,job.userId])).rows;
-      return maintenanceScope({ userId: job.userId,fromDate,events,
+      return maintenanceScope({ dailyEnabled: Boolean((await client.query("SELECT enabled FROM plan_maintenance_settings WHERE user_id=$1",[job.userId])).rows[0]?.enabled),userId: job.userId,fromDate,events,
         inventory: (await client.query("SELECT * FROM inventory_items WHERE user_id=$1 ORDER BY id",[job.userId])).rows,
         prepared: (await client.query("SELECT * FROM prepared_meals WHERE user_id=$1 ORDER BY id",[job.userId])).rows,
         plans: (await client.query("SELECT * FROM meal_plans WHERE user_id=$1 ORDER BY id",[job.userId])).rows,
@@ -129,6 +147,10 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
         const completed = await client.query(`UPDATE plan_maintenance_jobs SET status='completed',result_json=$1::jsonb,lease_token=NULL,
           lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND lease_expires_at>clock_timestamp()`,[JSON.stringify({ changes: results, diagnostics: diagnostics ?? null }),job.id]);
         if (completed.rowCount !== 1) throw new MaintenanceApplyConflict("lease_lost");
+        const daily = (await client.query(`SELECT MAX(e.subject_id) AS date FROM plan_maintenance_events e
+          JOIN plan_maintenance_job_events m ON m.event_id=e.id WHERE m.job_id=$1 AND e.user_id=$2 AND e.event_type='daily_check'`,[job.id,job.userId])).rows[0];
+        if (daily.date) await client.query(`UPDATE plan_maintenance_settings SET last_completed_local_date=$1,version=version+1,updated_at=CURRENT_TIMESTAMP
+          WHERE user_id=$2 AND (last_completed_local_date IS NULL OR last_completed_local_date<$1)`,[daily.date,job.userId]);
         await client.query(`UPDATE plan_maintenance_events SET processed_at=CURRENT_TIMESTAMP WHERE user_id=$1
           AND id IN (SELECT event_id FROM plan_maintenance_job_events WHERE job_id=$2)`,[job.userId,job.id]);
         return { kind: "completed",changes: results };

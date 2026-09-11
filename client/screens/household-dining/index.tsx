@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ScrollView, Switch, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput } from "@dietdigidose/contracts";
+import { householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput, type HouseholdDiningMembers } from "@dietdigidose/contracts";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
@@ -73,7 +73,31 @@ function DiningEditor({ householdId }: { householdId: number }) {
       <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={() => void save()} className="rounded-xl bg-brand p-4"><Text className="text-center font-bold text-white">保存共餐设置</Text></TouchableOpacity>
       <Text className="text-copy-muted">已保存授权：{saved.shared ? "允许" : "不允许"}</Text>
     </> : busy ? <Text className="text-copy-muted">正在读取设置…</Text> : null}
+    {saved ? <SharedMembers key={`${saved.version}-${reload}`} householdId={householdId} /> : null}
     {message ? <Text accessibilityLiveRegion="polite" className="text-ink">{message}</Text> : null}
     <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={() => setReload(value => value+1)}><Text className="text-brand">重新读取设置</Text></TouchableOpacity>
+  </View>;
+}
+
+function SharedMembers({ householdId }: { householdId: number }) {
+  const apiFetch = useAuthFetch();
+  const [data,setData] = useState<HouseholdDiningMembers | null>(null);
+  const [error,setError] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void householdApi.diningMembers(apiFetch,householdId).then(value => { if (active) setData(value); })
+      .catch(() => { if (active) setError(true); });
+    return () => { active = false; };
+  },[apiFetch,householdId]);
+  return <View className="gap-3 rounded-xl bg-surface p-4">
+    <Text className="font-bold text-ink">本家庭已授权的共餐信息</Text>
+    <Text className="text-copy-muted">这是读取时的成员设置。配餐前请重新读取并确认参加人员；未授权不代表没有忌口。</Text>
+    {error ? <Text className="text-ink">未能读取成员信息，请重新读取设置。</Text> : !data ? <Text className="text-copy-muted">正在读取成员信息…</Text> : data.members.map(member => <View key={member.membershipId} className="gap-1">
+      <Text className="font-bold text-ink">{member.name}</Text>
+      {member.shared ? <>
+        <Text className="text-copy-muted">过敏原：{member.allergies.join("、") || "未填写，请确认"}</Text>
+        <Text className="text-copy-muted">饮食限制：{member.restrictions.join("、") || "未填写，请确认"}</Text>
+      </> : <Text className="text-copy-muted">未授权共享，忌口待本人确认</Text>}
+    </View>)}
   </View>;
 }

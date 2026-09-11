@@ -5,6 +5,7 @@ import type {
 } from "./types.js";
 
 export interface HouseholdsRepository {
+  diningMembers(userId: number, householdId: number): Promise<Row[]>;
   diningPreferences(userId: number, householdId: number): Promise<Row | null>;
   saveDiningPreferences(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdDiningPreferencesInput): Promise<boolean>;
 

@@ -36,6 +36,9 @@ export function createHouseholdsRouter(service: HouseholdsService) {
     void service.transferOwner(req.userId!, householdId(req), req.body).then((value) => res.json(value))
       .catch((error) => handle(error, res, next));
   });
+  router.get("/:id/dining-members", (req: AuthRequest,res,next) => {
+    void service.diningMembers(req.userId!,householdId(req)).then(value => res.json(value)).catch(error => handle(error,res,next));
+  });
   router.get("/:id/dining-preferences", (req: AuthRequest,res,next) => {
     void service.diningPreferences(req.userId!,householdId(req)).then(value => res.json(value)).catch(error => handle(error,res,next));
   });

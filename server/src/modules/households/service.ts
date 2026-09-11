@@ -1,3 +1,4 @@
+import { householdDiningMembersSchema } from "@dietdigidose/contracts";
 import crypto from "node:crypto";
 import { HouseholdsError } from "./errors.js";
 import { formatInventory, formatShoppingItem, normalizeItemName } from "./formatters.js";
@@ -16,6 +17,17 @@ export class HouseholdsService {
 
   constructor(repository: HouseholdsRepository, codeFactory: () => string = inviteCode) {
     this.repository = repository; this.codeFactory = codeFactory;
+  }
+
+  async diningMembers(userId: number, householdId: number) {
+    const rows = await this.repository.diningMembers(userId,householdId);
+    if (!rows.length) throw new HouseholdsError(403,"你不是该家庭的成员","NOT_MEMBER");
+    return householdDiningMembersSchema.parse({ members: rows.map(row => {
+      const identity = { membershipId: Number(row.id),userId: Number(row.user_id),name: String(row.name),version: Number(row.dining_version) };
+      if (!row.dining_shared) return { ...identity,shared: false };
+      const preferences = typeof row.dining_preferences_json === "string" ? JSON.parse(row.dining_preferences_json) : row.dining_preferences_json as { allergies?: string[]; restrictions?: string[] };
+      return { ...identity,shared: true,allergies: preferences?.allergies ?? [],restrictions: preferences?.restrictions ?? [] };
+    }) });
   }
 
   async diningPreferences(userId: number, householdId: number) {

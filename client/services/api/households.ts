@@ -1,4 +1,4 @@
-import { householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput } from "@dietdigidose/contracts";
+import { householdDiningMembersSchema, householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput } from "@dietdigidose/contracts";
 import { requestJson, type ApiFetch } from "./client";
 
 export interface HouseholdMember {
@@ -71,6 +71,8 @@ export interface HouseholdActivityLog {
 }
 
 export const householdApi = {
+  diningMembers: (apiFetch: ApiFetch, householdId: number) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/dining-members`, {}, householdDiningMembersSchema),
   diningPreferences: (apiFetch: ApiFetch, householdId: number) =>
     requestJson(apiFetch, `/api/v1/households/${householdId}/dining-preferences`, {}, householdDiningPreferencesSchema),
   saveDiningPreferences: (apiFetch: ApiFetch, householdId: number, input: HouseholdDiningPreferencesInput) =>

@@ -22,6 +22,15 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async diningMembers(userId: number, householdId: number) {
+    return (await this.pool.query(`SELECT hm.id,hm.user_id,COALESCE(u.nickname,u.username) AS name,hm.dining_shared,hm.dining_version,
+      CASE WHEN hm.dining_shared=1 THEN hm.dining_preferences_json ELSE NULL END AS dining_preferences_json
+      FROM household_members hm JOIN users u ON u.id=hm.user_id
+      WHERE hm.household_id=$1 AND EXISTS (
+        SELECT 1 FROM household_members viewer WHERE viewer.household_id=hm.household_id AND viewer.user_id=$2)
+      ORDER BY hm.id`,[householdId,userId])).rows as Row[];
+  }
+
   async diningPreferences(userId: number, householdId: number) {
     return (await this.pool.query("SELECT id,dining_shared,dining_preferences_json,dining_version FROM household_members WHERE household_id=$1 AND user_id=$2",[householdId,userId])).rows[0] as Row | undefined ?? null;
   }

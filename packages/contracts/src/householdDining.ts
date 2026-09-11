@@ -59,3 +59,15 @@ export const householdMealProductionSchema = z.object({
   }).strict()).min(1).max(100),
 }).strict().refine(value => new Set(value.inventory.map(item => item.itemId)).size === value.inventory.length,"原料不能重复");
 export type HouseholdMealProductionInput = z.infer<typeof householdMealProductionSchema>;
+
+export const householdMealEatingSchema = z.object({
+  idempotencyKey: z.string().uuid(),membershipId: z.number().int().positive(),version: z.number().int().positive(),
+  servings: diningServings,
+  recordedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
+    const date = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0,10) === value;
+  },"食用日期无效"),
+  recordedTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(),
+  mealType: z.enum(["breakfast","lunch","dinner","snack"]),
+}).strict();
+export type HouseholdMealEatingInput = z.infer<typeof householdMealEatingSchema>;

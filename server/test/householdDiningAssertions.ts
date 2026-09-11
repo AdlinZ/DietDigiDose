@@ -57,5 +57,34 @@ export async function verifyHouseholdProduction(service: HouseholdsService, hous
   assert.equal((await service.inventory(owner,householdId)).find(item => item.id === first.id)?.quantity,"3个");
   await assert.rejects(() => service.produceMeal(owner,householdId,{ ...input,producedServings: 4 }),/制作编号/);
   await assert.rejects(() => service.produceMeal(member,householdId,input),/成员身份/);
-  for (const item of [first,second]) await service.removeInventory(owner,householdId,Number(item.id),Number(item.version)+1);
+  return batch;
+}
+
+export async function verifyHouseholdEating(service: HouseholdsService,householdId: number,mealId: string,users: number[]) {
+  const inventoryBefore = await service.inventory(users[0]!,householdId);
+  const selections = await Promise.all(users.map(async (user,index) => ({ user,input: {
+    idempotencyKey: `78888888-8888-4888-8888-88888888888${index+2}`,
+    membershipId: (await service.diningPreferences(user,householdId)).membershipId,
+    version: index === 0 ? 1 : 2,servings: 1,recordedDate: "2026-09-12",recordedTime: "12:00",mealType: "lunch" as const,
+  } })));
+  const first = await service.eatMeal(users[0]!,householdId,mealId,selections[0]!.input);
+  const replay = await service.eatMeal(users[0]!,householdId,mealId,selections[0]!.input);
+  assert.equal(replay.repeated,true); assert.equal(replay.dietRecordId,first.dietRecordId);
+  const contenders = selections.slice(1);
+  const race = await Promise.allSettled(contenders.map(item => service.eatMeal(item.user,householdId,mealId,item.input)));
+  assert.equal(race.filter(item => item.status === "fulfilled").length,1);
+  const rejectedIndex = race.findIndex(item => item.status === "rejected");
+  assert.ok(rejectedIndex >= 0);
+  const loser = contenders[rejectedIndex]!;
+  const last = await service.eatMeal(loser.user,householdId,mealId,{ ...loser.input,version: 3 });
+  assert.equal((last.meal as { remainingServings: number }).remainingServings,0);
+  await assert.rejects(() => service.eatMeal(users[0]!,householdId,mealId,{ ...selections[0]!.input,idempotencyKey: "78888888-8888-4888-8888-888888888889",version: 4 }),/不足/);
+  const listed = await service.meals(users[0]!,householdId);
+  assert.equal(listed.find(item => item.id === mealId)?.remainingServings,0);
+  assert.equal(JSON.stringify(listed).includes("dietRecord"),false);
+  assert.deepEqual(await service.inventory(users[0]!,householdId),inventoryBefore);
+  for (const item of inventoryBefore) await service.removeInventory(users[0]!,householdId,Number(item.id),Number(item.version));
+  await service.leave(users[2]!,householdId);
+  await assert.rejects(() => service.meals(users[2]!,householdId),/不是/);
+  await assert.rejects(() => service.eatMeal(users[2]!,householdId,mealId,selections[2]!.input),/成员身份/);
 }

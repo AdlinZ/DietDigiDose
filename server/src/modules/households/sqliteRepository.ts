@@ -1,3 +1,4 @@
+import { eatingRequest, prepareEating, repeatEating } from "./eating.js";
 import { randomUUID } from "node:crypto";
 import { HouseholdsError } from "./errors.js";
 import { consumeProductionItem, productionRequest, productionResult, repeatProduction } from "./production.js";
@@ -19,6 +20,31 @@ const inventorySelect = `SELECT hi.*,COALESCE(u.nickname,u.username) AS creator_
 export class SqliteHouseholdsRepository implements HouseholdsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+
+  async meals(userId: number,householdId: number) {
+    return this.database.transaction(() => {
+      if (!this.member(householdId,userId)) throw new HouseholdsError(403,"你不是该家庭的成员","NOT_MEMBER");
+      return (this.database.prepare("SELECT * FROM household_meal_batches WHERE household_id=? ORDER BY created_at DESC,id DESC LIMIT 100").all(householdId) as Row[]).map(row => productionResult(row,false));
+    })();
+  }
+  async eatMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealEatingInput) {
+    return this.database.transaction(() => {
+      const member = this.member(householdId,userId);
+      if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
+      const existing = this.database.prepare("SELECT * FROM household_meal_events WHERE user_id=? AND idempotency_key=?").get(userId,input.idempotencyKey) as Row | undefined;
+      if (existing) return repeatEating(existing,householdId,mealId,input);
+      const meal = this.database.prepare("SELECT * FROM household_meal_batches WHERE id=? AND household_id=?").get(mealId,householdId) as Row | undefined;
+      if (!meal) throw new HouseholdsError(404,"家庭待吃餐不存在","MEAL_NOT_FOUND");
+      const next = prepareEating(meal,input); const record = next.record;
+      const diet = this.database.prepare("INSERT INTO diet_records(user_id,food_name,meal_type,amount,calories,protein,carbs,fat,recorded_at,recorded_time) VALUES(?,?,?,?,?,?,?,?,?,?)")
+        .run(userId,record.food_name,record.meal_type,record.amount,record.calories ?? null,record.protein ?? null,record.carbs ?? null,record.fat ?? null,record.recorded_at,record.recorded_time);
+      this.database.prepare("UPDATE household_meal_batches SET remaining_servings=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(next.remaining,mealId);
+      const result = { meal: productionResult({ ...meal,remaining_servings: next.remaining,version: input.version+1 },false),dietRecordId: Number(diet.lastInsertRowid),repeated: false };
+      this.database.prepare("INSERT INTO household_meal_events(id,household_id,meal_id,user_id,membership_id,idempotency_key,servings,request_json,result_json,diet_record_id) VALUES(?,?,?,?,?,?,?,?,?,?)")
+        .run(randomUUID(),householdId,mealId,userId,input.membershipId,input.idempotencyKey,input.servings,JSON.stringify(eatingRequest(input)),JSON.stringify(result),result.dietRecordId);
+      return result;
+    })();
+  }
 
   async produceMeal(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdMealProductionInput) {
     return this.database.transaction(() => {

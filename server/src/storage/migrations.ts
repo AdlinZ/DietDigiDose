@@ -2200,6 +2200,24 @@ const migrations: Migration[] = [
     );
     CREATE INDEX idx_household_meal_batches_household ON household_meal_batches(household_id,created_at,id);`);
   } },
+  { version: 72, name: "household_meal_eating_events", up(database) {
+    database.exec(`CREATE TABLE household_meal_events (
+      id TEXT PRIMARY KEY,
+      household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+      meal_id TEXT NOT NULL REFERENCES household_meal_batches(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      membership_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      servings REAL NOT NULL CHECK(servings > 0),
+      request_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      diet_record_id INTEGER REFERENCES diet_records(id) ON DELETE SET NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,idempotency_key)
+    );
+    CREATE INDEX idx_household_meal_events_meal ON household_meal_events(meal_id,created_at);
+    CREATE INDEX idx_household_meal_events_diet ON household_meal_events(diet_record_id,user_id);`);
+  } },
 ];
 
 export function runMigrations(database: Database.Database) {

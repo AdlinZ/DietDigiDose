@@ -41,7 +41,7 @@
     "server/src/modules/health/index.ts": 1,
     "server/src/modules/health/sqliteRepository.ts": 17,
     "server/src/modules/households/index.ts": 1,
-    "server/src/modules/households/sqliteRepository.ts": 64,
+    "server/src/modules/households/sqliteRepository.ts": 72,
     "server/src/modules/insights/index.ts": 1,
     "server/src/modules/insights/sqliteRepository.ts": 22,
     "server/src/modules/inventory/index.ts": 1,
@@ -70,6 +70,6 @@
     "server/src/services/kitchenwareCapabilities.ts": 14,
     "server/src/storage/database/postgres/migration.ts": 8,
     "server/src/storage/db.ts": 110,
-    "server/src/storage/migrations.ts": 101
+    "server/src/storage/migrations.ts": 102
   }
 }

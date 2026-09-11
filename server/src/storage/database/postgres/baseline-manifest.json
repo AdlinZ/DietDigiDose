@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "d1572ab17f1b7d6429b3bc3f257c2faf9e48822433226c39fe64d087a02122ca",
-  "tableCount": 102,
-  "indexCount": 151,
-  "foreignKeyCount": 158,
+  "sourceSchemaSha256": "423442537defd295ec076f5f2ab58fb701c9030d378d5b7839076107de8b0c97",
+  "tableCount": 103,
+  "indexCount": 154,
+  "foreignKeyCount": 162,
   "tables": [
     {
       "name": "admin_audit_logs",
@@ -2761,6 +2761,122 @@
         },
         {
           "name": "updated_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "household_meal_events",
+      "autoIncrement": false,
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "diet_record_id",
+          "referencedTable": "diet_records",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "set null"
+        },
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "set null"
+        },
+        {
+          "column": "meal_id",
+          "referencedTable": "household_meal_batches",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        },
+        {
+          "column": "household_id",
+          "referencedTable": "households",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "household_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "meal_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "membership_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "idempotency_key",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "servings",
+          "sqliteType": "REAL",
+          "postgresType": "double precision",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "request_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "result_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "diet_record_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
           "sqliteType": "DATETIME",
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",

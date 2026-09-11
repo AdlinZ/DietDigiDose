@@ -348,6 +348,7 @@ describe("API security baseline", () => {
       },
       mealState: async id => db.prepare("SELECT version,planned_date AS plannedDate FROM meal_plan_items WHERE id=?").get(id) as { version: number; plannedDate: string },
       changeCount: async () => (db.prepare("SELECT COUNT(*) n FROM meal_plan_changes WHERE plan_id='maintenance-plan'").get() as JsonObject).n,
+      mutateInventory: async userId => { db.prepare("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES(?,'新入库','其他','1份','2026-09-20')").run(userId); },
     });
     db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
   });

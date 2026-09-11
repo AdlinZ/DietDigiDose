@@ -2275,9 +2275,52 @@ try {
     },
     mealState: async id => (await pool.query('SELECT version,planned_date AS "plannedDate" FROM meal_plan_items WHERE id=$1',[id])).rows[0],
     changeCount: async () => (await pool.query("SELECT COUNT(*)::int n FROM meal_plan_changes WHERE plan_id='maintenance-plan'")).rows[0].n,
+    mutateInventory: async userId => { await pool.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'新入库','其他','1份','2026-09-20')",[userId]); },
   });
   await pool.query("DELETE FROM plan_maintenance_jobs");
   await pool.query("DELETE FROM plan_maintenance_events");
+
+  // Pause after the input rows are locked and prove both a new row and an update
+  // cannot slip between fingerprint validation and commit.
+  await pool.query("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES('input-lock-event',$1,'eat','input-lock-event','batch',CURRENT_TIMESTAMP - INTERVAL '1 minute')",[user.id]);
+  const inputQueue = new PostgresMaintenanceQueueRepository(pool);
+  await inputQueue.enqueueEvents(new Date());
+  const inputJob = await inputQueue.claim(new Date());
+  assert.ok(inputJob);
+  const capturedInputs = await inputQueue.inputs(inputJob);
+  assert.ok(capturedInputs);
+  const inputsLocked = Promise.withResolvers<void>();
+  const allowCommit = Promise.withResolvers<void>();
+  const guardedPool = new Proxy(pool, { get(target,key) {
+    if (key === "connect") return async () => {
+      const connection = await target.connect();
+      return new Proxy(connection, { get(client,property) {
+        if (property === "query") return async (...args: unknown[]) => {
+          const result = await (client.query.bind(client) as (...args: unknown[]) => Promise<unknown>)(...args);
+          if (typeof args[0] === "string" && args[0].startsWith("SELECT * FROM recipe_recommendation_events") && args[0].endsWith("FOR UPDATE")) {
+            inputsLocked.resolve(); await allowCommit.promise;
+          }
+          return result;
+        };
+        const value = Reflect.get(client,property);
+        return typeof value === "function" ? value.bind(client) : value;
+      } });
+    };
+    const value = Reflect.get(target,key);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+  const applyingInputs = new PostgresMaintenanceQueueRepository(guardedPool).applyChanges(inputJob,[],capturedInputs);
+  await Promise.race([inputsLocked.promise,applyingInputs.then(() => { throw new Error("application ended before input lock check"); })]);
+  const blockedWriter = await pool.connect();
+  try {
+    await blockedWriter.query("SET lock_timeout='100ms'");
+    await assert.rejects(() => blockedWriter.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'锁回归','其他','1份','2026-09-20')",[user.id]),
+      (error: unknown) => (error as { code: string }).code === "55P03");
+    await assert.rejects(() => blockedWriter.query("UPDATE inventory_items SET quantity='2份' WHERE id=(SELECT MIN(id) FROM inventory_items WHERE user_id=$1)",[user.id]),
+      (error: unknown) => (error as { code: string }).code === "55P03");
+  } finally { await blockedWriter.query("SET lock_timeout=0"); blockedWriter.release(); allowCommit.resolve(); }
+  assert.equal((await applyingInputs).kind,"completed");
+  await pool.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'锁释放后','其他','1份','2026-09-20')",[user.id]);
 
   const maintenance = new PlanMaintenanceService(new PostgresPlanMaintenanceRepository(pool), () => new Date("2026-09-12T05:00:00Z"));
   assert.equal((await maintenance.settings(user.id)).version, 0);

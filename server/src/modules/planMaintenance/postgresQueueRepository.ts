@@ -1,3 +1,4 @@
+import { inputSnapshot, maintenanceInputTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import { maintenanceScope } from "./scope.js";
 import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 import { PostgresMealPlansRepository } from "../mealPlans/postgresRepository.js";
@@ -70,7 +71,26 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
     });
   }
 
-  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[]): Promise<MaintenanceApplication> {
+  private async readInputs(client: PoolClient, userId: number, recipeIds: number[], lock = false) {
+    const data: Record<string,Record<string,unknown>[]> = {};
+    const suffix = lock ? " FOR UPDATE" : "";
+    for (const table of maintenanceInputTables) data[table] = (await client.query(`SELECT * FROM ${table} WHERE user_id=$1${suffix}`,[userId])).rows;
+    data.recipe_recommendation_events = (await client.query(`SELECT * FROM recipe_recommendation_events WHERE user_id=$1 AND event_type='skip'${suffix}`,[userId])).rows;
+    recipeIds = [...new Set([...recipeIds,...data.meal_plan_items.map(row => Number(row.recipe_id)).filter(id => id>0)])];
+    data.recipes = recipeIds.length ? (await client.query(`SELECT * FROM recipes WHERE id=ANY($1::integer[])${lock ? " FOR SHARE" : ""}`,[recipeIds])).rows : [];
+    return inputSnapshot(userId,recipeIds,data);
+  }
+
+  async inputs(job: MaintenanceJob, recipeIds: number[] = []) {
+    return this.transaction(async client => {
+      await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      const valid = (await client.query(`SELECT 1 FROM plan_maintenance_jobs WHERE id=$1 AND user_id=$2 AND lease_token=$3
+        AND attempts=$4 AND status='running' AND lease_expires_at>clock_timestamp()`,[job.id,job.userId,job.leaseToken,job.attempt])).rows[0];
+      return valid ? this.readInputs(client,job.userId,recipeIds) : null;
+    });
+  }
+
+  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">): Promise<MaintenanceApplication> {
     try {
       return await this.transaction(async client => {
         await lockMealPlanning(client,job.userId);
@@ -78,9 +98,15 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
           AND status='running' AND attempts=$3 AND lease_token=$4 AND lease_expires_at>clock_timestamp() FOR UPDATE`,
           [job.id,job.userId,job.attempt,job.leaseToken])).rows[0];
         if (!lease) throw new MaintenanceApplyConflict("lease_lost");
+        // The parent FK row blocks new owned inputs; existing input rows are locked
+        // below. These locks last only for validation/application, never computation.
+        await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[job.userId]);
+        const actual = await this.readInputs(client,job.userId,expected.recipeIds,true);
+        if (actual.fingerprint !== expected.fingerprint) throw new MaintenanceApplyConflict("input_conflict");
         const plans = new PostgresMealPlansRepository(this.pool);
         const results: Record<string, unknown>[] = [];
         for (const change of changes) {
+          if (change.input.recipeId && !expected.recipeIds.includes(change.input.recipeId)) throw new MaintenanceApplyConflict("input_conflict");
           const current = (await client.query(`SELECT i.version,p.version AS plan_version,p.start_date,p.end_date FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id
             WHERE i.id=$1 AND i.plan_id=$2 AND i.user_id=$3 AND p.user_id=i.user_id AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active' FOR UPDATE OF i,p`,
             [change.itemId,change.planId,job.userId])).rows[0];

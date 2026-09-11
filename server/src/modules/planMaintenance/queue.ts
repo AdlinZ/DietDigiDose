@@ -1,3 +1,4 @@
+import type { MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import type { MaintenanceScope } from "./scope.js";
 import type { MealPlanItemUpdateInput } from "../mealPlans/types.js";
 export const MAINTENANCE_RULE_VERSION = "maintenance-2026-09-12.1";
@@ -9,7 +10,8 @@ export interface MaintenanceQueueRepository {
   /** Claim one user at a time; a fresh token fences every attempt, including recovery. */
   claim(now: Date, leaseMs?: number): Promise<MaintenanceJob | null>;
   scope(job: MaintenanceJob, fromDate: string): Promise<MaintenanceScope | null>;
-  applyChanges(job: MaintenanceJob, changes: MaintenanceChange[]): Promise<MaintenanceApplication>;
+  inputs(job: MaintenanceJob, recipeIds?: number[]): Promise<MaintenanceInputSnapshot | null>;
+  applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">): Promise<MaintenanceApplication>;
   fail(job: MaintenanceJob, now: Date, error: string): Promise<boolean>;
 }
 export function batchLimit(value = 200) { return Math.max(1, Math.min(1000, Math.trunc(value) || 200)); }

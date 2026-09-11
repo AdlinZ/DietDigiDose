@@ -9,6 +9,7 @@ export async function verifyMaintenanceQueue(harness: {
   seedMeals: (userId: number) => Promise<void>;
   mealState: (id: string) => Promise<{ version: number; plannedDate: string }>;
   changeCount: () => Promise<number>;
+  mutateInventory: (userId: number) => Promise<void>;
 }) {
   const now = new Date(Date.now()+3_600_000);
   const later = (ms: number) => new Date(now.getTime()+ms);
@@ -56,16 +57,28 @@ export async function verifyMaintenanceQueue(harness: {
   assert.deepEqual(await harness.repository().scope({ ...fresh,eventIds: ["queue-c"] },"2026-09-12"),scope);
   assert.equal(await harness.repository().scope({ ...fresh,userId: harness.users[1] },"2026-09-12"),null);
   assert.equal(await harness.repository().scope(first,"2026-09-12"),null);
+  let captured = await harness.repository().inputs(fresh);
+  assert.ok(captured);
+  assert.equal((await harness.repository().inputs(fresh))?.fingerprint,captured.fingerprint);
+  const apply = (job: Parameters<MaintenanceQueueRepository["applyChanges"]>[0],changes: Parameters<MaintenanceQueueRepository["applyChanges"]>[1]) =>
+    harness.repository().applyChanges(job,changes,captured!);
   const change = (itemId: string,version = 1) => ({ planVersion: 1,planId: "maintenance-plan",itemId,
     input: { version,plannedDate: "2026-09-13" },reason: "关联库存变化" });
-  assert.deepEqual(await harness.repository().applyChanges(first,[change("maintenance-mutable")]),{ kind: "lease_lost" });
-  assert.deepEqual(await harness.repository().applyChanges(fresh,[change("maintenance-mutable"),change("maintenance-confirmed",99)]),{ kind: "input_conflict" });
-  assert.deepEqual(await harness.repository().applyChanges(fresh,[{ ...change("maintenance-mutable"),planVersion: 99 }]),{ kind: "input_conflict" });
-  assert.deepEqual(await harness.repository().applyChanges(fresh,[{ ...change("maintenance-mutable"),input: { version: 1,plannedDate: "2026-10-01" } }]),{ kind: "input_conflict" });
+  assert.deepEqual(await apply(first,[change("maintenance-mutable")]),{ kind: "lease_lost" });
+  assert.deepEqual(await apply(fresh,[change("maintenance-mutable"),change("maintenance-confirmed",99)]),{ kind: "input_conflict" });
+  assert.deepEqual(await apply(fresh,[{ ...change("maintenance-mutable"),planVersion: 99 }]),{ kind: "input_conflict" });
+  assert.deepEqual(await apply(fresh,[{ ...change("maintenance-mutable"),input: { version: 1,plannedDate: "2026-10-01" } }]),{ kind: "input_conflict" });
   assert.deepEqual(await harness.mealState("maintenance-mutable"),{ version: 1,plannedDate: "2026-09-12" });
   assert.equal(await harness.changeCount(),0);
   assert.equal(await harness.unprocessed(),4);
-  const applied = await harness.repository().applyChanges(fresh,["mutable","confirmed","cooking","purchased"].map(kind => change(`maintenance-${kind}`)));
+  await harness.mutateInventory(harness.users[0]);
+  assert.deepEqual(await apply(fresh,[change("maintenance-mutable")]),{ kind: "input_conflict" });
+  assert.equal(await harness.changeCount(),0);
+  assert.equal(await harness.unprocessed(),4);
+  const previousFingerprint = captured.fingerprint;
+  captured = await harness.repository().inputs(fresh);
+  assert.ok(captured); assert.notEqual(captured.fingerprint,previousFingerprint);
+  const applied = await apply(fresh,["mutable","confirmed","cooking","purchased"].map(kind => change(`maintenance-${kind}`)));
   assert.equal(applied.kind,"completed");
   if (applied.kind !== "completed") assert.fail("expected completion");
   assert.deepEqual(applied.changes.map(item => (item.change as { status: string }).status),["applied","pending","blocked","pending"]);
@@ -73,6 +86,6 @@ export async function verifyMaintenanceQueue(harness: {
   for (const kind of ["confirmed","cooking","purchased","untouched"]) assert.deepEqual(await harness.mealState(`maintenance-${kind}`),{ version: 1,plannedDate: "2026-09-12" });
   assert.equal(await harness.unprocessed(),3);
   assert.equal(await harness.changeCount(),4);
-  assert.deepEqual(await harness.repository().applyChanges(fresh,[]),{ kind: "lease_lost" });
+  assert.deepEqual(await apply(fresh,[]),{ kind: "lease_lost" });
   assert.equal(await harness.changeCount(),4);
 }

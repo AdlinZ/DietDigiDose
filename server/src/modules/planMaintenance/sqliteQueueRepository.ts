@@ -1,3 +1,4 @@
+import { inputSnapshot, maintenanceInputTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import { maintenanceScope } from "./scope.js";
 import type { Row } from "../mealPlans/formatters.js";
 import { SqliteMealPlansRepository } from "../mealPlans/sqliteRepository.js";
@@ -62,16 +63,35 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
     })();
   }
 
-  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[]): Promise<MaintenanceApplication> {
+  private readInputs(userId: number, recipeIds: number[]) {
+    const data: Record<string,Row[]> = {};
+    for (const table of maintenanceInputTables) data[table] = this.db.prepare(`SELECT * FROM ${table} WHERE user_id=?`).all(userId) as Row[];
+    data.recipe_recommendation_events = this.db.prepare("SELECT * FROM recipe_recommendation_events WHERE user_id=? AND event_type='skip'").all(userId) as Row[];
+    recipeIds = [...new Set([...recipeIds,...data.meal_plan_items.map(row => Number(row.recipe_id)).filter(id => id>0)])];
+    data.recipes = recipeIds.length ? this.db.prepare(`SELECT * FROM recipes WHERE id IN (${recipeIds.map(() => "?").join(",")})`).all(...recipeIds) as Row[] : [];
+    return inputSnapshot(userId,recipeIds,data);
+  }
+
+  async inputs(job: MaintenanceJob, recipeIds: number[] = []) {
+    return this.db.transaction(() => {
+      const valid = this.db.prepare(`SELECT 1 FROM plan_maintenance_jobs WHERE id=? AND user_id=? AND lease_token=?
+        AND attempts=? AND status='running' AND julianday(lease_expires_at)>julianday('now')`).get(job.id,job.userId,job.leaseToken,job.attempt);
+      return valid ? this.readInputs(job.userId,recipeIds) : null;
+    })();
+  }
+
+  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">): Promise<MaintenanceApplication> {
     try {
       return this.db.transaction(() => {
         const valid = () => Boolean(this.db.prepare(`SELECT 1 FROM plan_maintenance_jobs WHERE id=? AND user_id=?
           AND status='running' AND attempts=? AND lease_token=? AND julianday(lease_expires_at)>julianday('now')`)
           .get(job.id,job.userId,job.attempt,job.leaseToken));
         if (!valid()) throw new MaintenanceApplyConflict("lease_lost");
+        if (this.readInputs(job.userId,expected.recipeIds).fingerprint !== expected.fingerprint) throw new MaintenanceApplyConflict("input_conflict");
         const plans = new SqliteMealPlansRepository(this.db);
         const results: Record<string, unknown>[] = [];
         for (const change of changes) {
+          if (change.input.recipeId && !expected.recipeIds.includes(change.input.recipeId)) throw new MaintenanceApplyConflict("input_conflict");
           // Check even when the manual change API could return a prior idempotent proposal.
           const current = this.db.prepare(`SELECT i.version,p.version AS planVersion,p.start_date,p.end_date FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id
             WHERE i.id=? AND i.plan_id=? AND i.user_id=? AND p.user_id=i.user_id AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active' `)

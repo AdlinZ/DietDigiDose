@@ -34,6 +34,7 @@ function DiningAccount({ signedIn,recipeId,planItem }: { signedIn: boolean; reci
         {message ? <Text accessibilityLiveRegion="polite" className="text-ink">{message}</Text> : null}
         <TouchableOpacity accessibilityRole="button" onPress={() => { setSelected(null); setFamilies([]); setMessage(""); setReload(value => value+1); }}><Text className="text-brand">刷新家庭列表</Text></TouchableOpacity>
         {selected !== null ? <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/household-meals",params: { householdId: selected } })}><Text className="font-bold text-brand">查看家庭待吃与记录本人食用</Text></TouchableOpacity> : null}
+        {selected !== null && planItem ? <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/household-production",params: { householdId: selected,planItem } })}><Text className="font-bold text-brand">记录这餐已完成的家庭制作</Text></TouchableOpacity> : null}
         {selected !== null ? <DiningEditor key={selected} householdId={selected} recipeId={recipeId} planItem={planItem} /> : null}
       </>}
     </ScrollView>

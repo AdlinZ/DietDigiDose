@@ -381,7 +381,8 @@ export default function MealPlansScreen() {
                   <MealProductionFields produced={produced} eaten={eaten} onProducedChange={setProduced} onEatenChange={setEaten} />
                   <TouchableOpacity onPress={() => setWithoutStock(value => !value)}><Text className="text-brand">{withoutStock ? "已确认：" : "点击确认："} 本次未使用库存原料</Text></TouchableOpacity>
                 </> : null}
-                {detailItem.status !== "completed" ? <TouchableOpacity onPress={() => void complete(detailItem)} className="mb-4 mt-3 items-center rounded-2xl bg-brand-fill py-3.5"><Text className="font-black text-white">保存制作与食用分配</Text></TouchableOpacity> : <View className="mb-4 mt-3 items-center rounded-2xl bg-brand-soft py-3.5"><Text className="font-black text-brand">{detailItem.dietRecordId ? `已关联饮食记录 #${detailItem.dietRecordId}` : "制作已保存，请到待吃餐确认食用"}</Text></View>}
+                {detailItem.householdMealId && detailItem.householdId ? <TouchableOpacity accessibilityRole="button" onPress={() => { const householdId = detailItem.householdId!; setDetailItem(null); router.push({ pathname: "/household-meals",params: { householdId } }); }}><Text className="font-bold text-brand">查看这餐的家庭待吃</Text></TouchableOpacity> : null}
+                {detailItem.status !== "completed" ? <TouchableOpacity onPress={() => void complete(detailItem)} className="mb-4 mt-3 items-center rounded-2xl bg-brand-fill py-3.5"><Text className="font-black text-white">保存制作与食用分配</Text></TouchableOpacity> : <View className="mb-4 mt-3 items-center rounded-2xl bg-brand-soft py-3.5"><Text className="font-black text-brand">{detailItem.householdMealId ? "家庭制作已保存，请到家庭待吃记录本人食用" : detailItem.dietRecordId ? `已关联饮食记录 #${detailItem.dietRecordId}` : "制作已保存，请到待吃餐确认食用"}</Text></View>}
               </ScrollView>
             </View>
           ) : null}

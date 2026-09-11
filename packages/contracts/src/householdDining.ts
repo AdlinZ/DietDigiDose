@@ -54,6 +54,7 @@ export const householdDiningAllocationPreviewSchema = z.object({
 export type HouseholdDiningAllocationPreview = z.infer<typeof householdDiningAllocationPreviewSchema>;
 
 export const householdMealProductionSchema = z.object({
+  planItem: z.object({ planId: z.string().min(1).max(100),itemId: z.string().min(1).max(100),version: z.number().int().positive() }).strict().optional(),
   idempotencyKey: z.string().uuid(), membershipId: z.number().int().positive(),
   foodName: z.string().trim().min(1).max(120), producedServings: diningServings,
   inventory: z.array(z.object({ itemId: z.number().int().positive(),version: z.number().int().positive(),

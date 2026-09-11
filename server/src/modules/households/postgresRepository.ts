@@ -1,8 +1,10 @@
+import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
+import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 import { reservationTotals, validateReservation } from "./reservations.js";
 import { eatingRequest, prepareEating, repeatEating } from "./eating.js";
 import { randomUUID } from "node:crypto";
 import { HouseholdsError } from "./errors.js";
-import { consumeProductionItem, productionRequest, productionResult, repeatProduction } from "./production.js";
+import { validateProductionPlan, consumeProductionItem, productionRequest, productionResult, repeatProduction } from "./production.js";
 import type { Pool, PoolClient } from "pg";
 import type { HouseholdsRepository } from "./repository.js";
 import type {
@@ -88,11 +90,19 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
 
   async produceMeal(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdMealProductionInput) {
     return this.tx(async client => {
+      if (input.planItem) {
+        await lockMealPlanning(client,userId);
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`prepared-meals:${userId}`]);
+      }
       await client.query("SELECT id FROM households WHERE id=$1 FOR UPDATE",[householdId]);
       const member = await this.member(client,householdId,userId,true);
       if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
       const existing = (await client.query("SELECT * FROM household_meal_batches WHERE household_id=$1 AND idempotency_key=$2",[householdId,input.idempotencyKey])).rows[0] as Row | undefined;
       if (existing) return repeatProduction(existing,userId,input);
+      if (input.planItem) {
+        const item = (await client.query("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=$1 AND i.plan_id=$2 AND i.user_id=$3 AND p.user_id=$3 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active' FOR UPDATE OF i,p",[input.planItem.itemId,input.planItem.planId,userId])).rows[0] as Row | undefined;
+        validateProductionPlan(item,input);
+      }
       const snapshot: Row[] = [];
       for (const consumption of productionRequest(input).inventory) {
         const item = (await client.query("SELECT * FROM household_inventory_items WHERE id=$1 AND household_id=$2 FOR UPDATE",[consumption.itemId,householdId])).rows[0] as Row | undefined;
@@ -106,6 +116,11 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
       const id = randomUUID();
       const row = (await client.query(`INSERT INTO household_meal_batches(id,household_id,created_by_user_id,membership_id,idempotency_key,request_json,food_name,produced_servings,remaining_servings,inventory_json)
         VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb) RETURNING *`,[id,householdId,userId,input.membershipId,input.idempotencyKey,JSON.stringify(productionRequest(input)),input.foodName,input.producedServings,input.producedServings,JSON.stringify(snapshot)])).rows[0] as Row;
+      if (input.planItem) {
+        await client.query("UPDATE household_meal_batches SET plan_item_id=$1 WHERE id=$2",[input.planItem.itemId,id]);
+        await client.query("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2",[input.planItem.itemId,userId]);
+        await appendPostgresMaintenanceEvent(client,{ userId,kind: "cooking_completion",sourceId: `household:${id}`,subjectId: id,details: { planItemId: input.planItem.itemId,version: input.planItem.version+1,mode: "household" } });
+      }
       return productionResult(row,false);
     });
   }

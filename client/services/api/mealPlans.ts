@@ -10,6 +10,8 @@ export interface MealPlanChange {
   beforeVersion: number; afterVersion: number | null; createdAt: string; appliedAt: string | null;
 }
 export interface MealPlanItem {
+  householdMealId?: string | null;
+  householdId?: number | null;
   confirmedAt?: string | null;
   change?: MealPlanChange;
   plannedServings?: number | null;

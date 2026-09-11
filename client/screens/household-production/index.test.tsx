@@ -1,12 +1,13 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
 import { Text, TouchableOpacity } from "react-native";
+let mockPlanItem: { planId: string; itemId: string; version: number } | undefined;
 const mockProduce = jest.fn(); const mockInventory = jest.fn(); const mockFetch = jest.fn();
 const mockStore = new Map<string,string>(); let mockUser = { id: 61 };
 const mockRemove = jest.fn(async (key: string) => { mockStore.delete(key); });
 const mockWrite = jest.fn(async (key: string,value: string) => { mockStore.set(key,value); });
 jest.mock("@/contexts/AuthContext",() => ({ useAuth: () => ({ user: mockUser }),useAuthFetch: () => mockFetch }));
-jest.mock("@/hooks/useSafeRouter",() => ({ useSafeSearchParams: () => ({ householdId: 8 }),useSafeRouter: () => ({ back: jest.fn(),push: jest.fn() }) }));
+jest.mock("@/hooks/useSafeRouter",() => ({ useSafeSearchParams: () => ({ householdId: 8,planItem: mockPlanItem }),useSafeRouter: () => ({ back: jest.fn(),push: jest.fn() }) }));
 jest.mock("@/components/Screen",() => ({ Screen: "View" }));
 jest.mock("expo-router",() => ({ useFocusEffect: (callback: () => void) => require("react").useEffect(callback,[callback]) }));
 jest.mock("expo-crypto",() => ({ randomUUID: () => "78888888-8888-4888-8888-888888888881" }));
@@ -23,7 +24,7 @@ function fill(tree: renderer.ReactTestRenderer) {
   tree.root.findByProps({ accessibilityLabel: "总制作份量" }).props.onChangeText("3");
   tree.root.findByProps({ accessibilityLabel: "使用大米" }).props.onValueChange(true);
 }
-beforeEach(() => { jest.clearAllMocks(); mockUser = { id: 61 }; mockStore.clear(); mockProduce.mockReset(); mockInventory.mockReset().mockResolvedValue([{ id: 9,food_name: "大米",quantity: "1kg",version: 2,is_available: true }]); });
+beforeEach(() => { mockPlanItem = undefined; jest.clearAllMocks(); mockUser = { id: 61 }; mockStore.clear(); mockProduce.mockReset(); mockInventory.mockReset().mockResolvedValue([{ id: 9,food_name: "大米",quantity: "1kg",version: 2,is_available: true }]); });
 test("only exact positive quantities are accepted",() => {
   for (const input of ["-2个","1-2个","大约100g","100g加一点","适量","0g"]) expect(actualQuantity(input)).toBeNull();
   expect(actualQuantity(" 0.3 kg ")).toEqual({ amount: 0.3,unit: "kg" });
@@ -72,5 +73,25 @@ test("failed cleanup of a rejected production retains its retry instead of allow
   act(() => fill(tree)); act(() => tree.root.findByProps({ accessibilityLabel: "大米实际扣量" }).props.onChangeText("300g"));
   await act(async () => { press(tree,"确认完成制作并扣减所选原料"); });
   expect(mockStore.has(key)).toBe(true); expect(JSON.stringify(tree.toJSON())).toContain("本地待确认项未能清除");
+  act(() => tree.unmount());
+});
+
+
+test("persists the source meal version and keeps it when reopening from another meal",async () => {
+  mockPlanItem = { planId: "personal-plan",itemId: "lunch",version: 4 };
+  mockProduce.mockRejectedValueOnce(new Error("timeout")).mockResolvedValueOnce({});
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<HouseholdProductionScreen />); });
+  act(() => fill(tree));
+  act(() => tree.root.findByProps({ accessibilityLabel: "大米实际扣量" }).props.onChangeText("300g"));
+  await act(async () => { press(tree,"确认完成制作并扣减所选原料"); });
+  const original = mockProduce.mock.calls[0][2];
+  expect(original.planItem).toEqual(mockPlanItem);
+  expect(JSON.parse(mockStore.get(key)!).planItem).toEqual(mockPlanItem);
+  act(() => tree.unmount());
+  mockPlanItem = { planId: "another-plan",itemId: "dinner",version: 1 };
+  await act(async () => { tree = renderer.create(<HouseholdProductionScreen />); });
+  await act(async () => { press(tree,"重试原制作"); });
+  expect(mockProduce.mock.calls[1][2]).toEqual(original);
   act(() => tree.unmount());
 });

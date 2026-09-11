@@ -1,4 +1,4 @@
-import { verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
+import { verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
@@ -4298,6 +4298,12 @@ test("household dining preferences are explicit, self-owned and revoked on leavi
   const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
   await verifyHouseholdCorrections(service,new SqliteDietRecordsRepository(db),Number(family.id),owner.user.id,member.user.id,"DINING01");
   await verifyHouseholdReservations(service,new SqliteDietRecordsRepository(db),Number(family.id),owner.user.id,member.user.id,"DINING01");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  await verifyHouseholdPlanProduction(service,new SqliteMealPlansRepository(db),Number(family.id),owner.user.id,member.user.id,async (sql,args = []) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...args) as JsonObject[];
+    statement.run(...args); return [];
+  });
   await verifyHouseholdPlanPreview(service,Number(family.id),owner.user.id,member.user.id,diningRecipeId,async (sql,args = []) => {
     const statement = db.prepare(sql);
     if (statement.reader) return statement.all(...args) as JsonObject[];

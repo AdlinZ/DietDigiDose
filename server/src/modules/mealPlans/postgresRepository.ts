@@ -16,7 +16,9 @@ import type { MealPlansRepository } from "./repository.js";
 import type { MealPlanCompleteInput, MealPlanExecutionInput, MealPlanItemUpdateInput, MealPlanUpdateInput } from "./types.js";
 
 const activeQueueStatuses = "'waiting', 'preparing', 'ready', 'cooking'";
-const itemSelect = `SELECT i.*, p.constraints_json AS plan_constraints_json, r.title AS recipe_title, r.image_url AS recipe_image_url,
+const itemSelect = `SELECT i.*,
+  (SELECT hm.id FROM household_meal_batches hm WHERE hm.plan_item_id=i.id AND hm.created_by_user_id=i.user_id) AS household_meal_id,
+  (SELECT hm.household_id FROM household_meal_batches hm WHERE hm.plan_item_id=i.id AND hm.created_by_user_id=i.user_id) AS household_id, p.constraints_json AS plan_constraints_json, r.title AS recipe_title, r.image_url AS recipe_image_url,
   r.cook_time AS recipe_cook_time, r.difficulty AS recipe_difficulty,
   r.status AS recipe_status, r.deleted_at AS recipe_deleted_at
   FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id LEFT JOIN recipes r ON r.id = i.recipe_id`;
@@ -311,7 +313,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       if (repeated) return { kind: "completed" as const, value: repeated };
       const item = await this.getItem(client, planId, itemId, userId, true);
       if (!item) return { kind: "not_found" as const };
-      if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      if (["completed","skipped"].includes(String(item.status)) || Number(item.version) !== input.version) return { kind: "version_conflict" as const };
       if (!item.recipe_id || item.recipe_status !== "approved" || item.recipe_deleted_at) return { kind: "recipe_unavailable" as const };
       await client.query("SELECT pg_advisory_xact_lock(9471, $1::integer)", [userId]);
       const existing = await client.query(`SELECT id FROM cooking_queue_items WHERE user_id = $1 AND source_plan_item_id = $2
@@ -370,7 +372,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       if (item.status === "completed" && item.diet_record_id) {
         return { kind: "completed" as const, value: { dietRecordId: Number(item.diet_record_id), repeated: true } };
       }
-      if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      if (item.status === "completed" || Number(item.version) !== input.version) return { kind: "version_conflict" as const };
       let dietRecordId = input.dietRecordId;
       if (dietRecordId) {
         const record = await client.query("SELECT id FROM diet_records WHERE id = $1 AND user_id = $2", [dietRecordId, userId]);

@@ -214,6 +214,7 @@ export async function cachedApiGet<T>(apiFetch: ApiFetch, path: string, policy: 
 }
 
 function invalidationPrefixes(path: string) {
+  if (/^\/api\/v1\/households\/\d+\/meals(?:\/|\?|$)/.test(path)) return ["/api/v1/households", "/api/v1/meal-plans", "/api/v1/diet-records", "/api/v1/health-data", "/api/v1/insights"];
   if (path.startsWith("/api/v1/inventory")) return ["/api/v1/inventory", "/api/v1/insights"];
   if (path.startsWith("/api/v1/diet-records")) return ["/api/v1/diet-records", "/api/v1/health-data"];
   if (path.startsWith("/api/v1/health-data")) return ["/api/v1/health-data"];

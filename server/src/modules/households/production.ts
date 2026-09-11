@@ -4,7 +4,7 @@ import { recipeDemands } from "../recommendations/quantities.js";
 import { HouseholdsError } from "./errors.js";
 import type { Row } from "./types.js";
 export function productionRequest(input: HouseholdMealProductionInput) {
-  return { idempotencyKey: input.idempotencyKey,membershipId: input.membershipId,foodName: input.foodName,producedServings: input.producedServings,inventory: [...input.inventory].sort((a,b) => a.itemId-b.itemId).map(item => ({ itemId: item.itemId,version: item.version,amount: item.amount,unit: item.unit })) };
+  return { ...(input.planItem ? { planItem: { planId: input.planItem.planId,itemId: input.planItem.itemId,version: input.planItem.version } } : {}),idempotencyKey: input.idempotencyKey,membershipId: input.membershipId,foodName: input.foodName,producedServings: input.producedServings,inventory: [...input.inventory].sort((a,b) => a.itemId-b.itemId).map(item => ({ itemId: item.itemId,version: item.version,amount: item.amount,unit: item.unit })) };
 }
 export function productionResult(row: Row, repeated: boolean) {
   return { id: String(row.id),householdId: Number(row.household_id),foodName: String(row.food_name),
@@ -30,4 +30,12 @@ export function consumeProductionItem(row: Row, input: HouseholdMealProductionIn
     if (error instanceof InventoryQuantityError) throw new HouseholdsError(409,error.message,error.code);
     throw error;
   }
+}
+
+
+export function validateProductionPlan(item: Row | undefined, input: HouseholdMealProductionInput) {
+  if (!input.planItem) return;
+  if (!item) throw new HouseholdsError(404,"来源餐次不存在或不是本人有效计划","PLAN_ITEM_UNAVAILABLE");
+  if (Number(item.version) !== input.planItem.version || item.status !== "planned" || item.queue_item_id || item.diet_record_id)
+    throw new HouseholdsError(409,"来源餐次已变化或进入执行，请回到个人计划核对","PLAN_ITEM_CHANGED");
 }

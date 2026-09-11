@@ -1,8 +1,9 @@
+import { appendSqliteMaintenanceEvent } from "../planMaintenance/sqliteEventWriter.js";
 import { reservationTotals, validateReservation } from "./reservations.js";
 import { eatingRequest, prepareEating, repeatEating } from "./eating.js";
 import { randomUUID } from "node:crypto";
 import { HouseholdsError } from "./errors.js";
-import { consumeProductionItem, productionRequest, productionResult, repeatProduction } from "./production.js";
+import { validateProductionPlan, consumeProductionItem, productionRequest, productionResult, repeatProduction } from "./production.js";
 import type Database from "better-sqlite3";
 import type { HouseholdsRepository } from "./repository.js";
 import type {
@@ -85,6 +86,10 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
       if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
       const existing = this.database.prepare("SELECT * FROM household_meal_batches WHERE household_id=? AND idempotency_key=?").get(householdId,input.idempotencyKey) as Row | undefined;
       if (existing) return repeatProduction(existing,userId,input);
+      if (input.planItem) {
+        const item = this.database.prepare("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=? AND i.plan_id=? AND i.user_id=? AND p.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active'").get(input.planItem.itemId,input.planItem.planId,userId,userId) as Row | undefined;
+        validateProductionPlan(item,input);
+      }
       const snapshot: Row[] = [];
       for (const consumption of productionRequest(input).inventory) {
         const item = this.database.prepare("SELECT * FROM household_inventory_items WHERE id=? AND household_id=?").get(consumption.itemId,householdId) as Row | undefined;
@@ -98,6 +103,11 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
       const id = randomUUID();
       this.database.prepare(`INSERT INTO household_meal_batches(id,household_id,created_by_user_id,membership_id,idempotency_key,request_json,food_name,produced_servings,remaining_servings,inventory_json)
         VALUES(?,?,?,?,?,?,?,?,?,?)`).run(id,householdId,userId,input.membershipId,input.idempotencyKey,JSON.stringify(productionRequest(input)),input.foodName,input.producedServings,input.producedServings,JSON.stringify(snapshot));
+      if (input.planItem) {
+        this.database.prepare("UPDATE household_meal_batches SET plan_item_id=? WHERE id=?").run(input.planItem.itemId,id);
+        this.database.prepare("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(input.planItem.itemId,userId);
+        appendSqliteMaintenanceEvent(this.database,{ userId,kind: "cooking_completion",sourceId: `household:${id}`,subjectId: id,details: { planItemId: input.planItem.itemId,version: input.planItem.version+1,mode: "household" } });
+      }
       return productionResult(this.database.prepare("SELECT * FROM household_meal_batches WHERE id=?").get(id) as Row,false);
     })();
   }

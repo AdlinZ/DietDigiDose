@@ -120,6 +120,13 @@
       "when": 1789160344280,
       "tag": "0016_living_scarlet_spider",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789161324640,
+      "tag": "0017_spooky_sunset_bain",
+      "breakpoints": true
     }
   ]
 }

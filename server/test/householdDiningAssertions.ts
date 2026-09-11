@@ -179,3 +179,49 @@ export async function verifyHouseholdPlanPreview(service: HouseholdsService, hou
   await query("DELETE FROM meal_plans WHERE id=?",[planId]);
   await service.saveDiningPreferences(owner,householdId,{ ...consent,shared: original.shared });
 }
+
+export async function verifyHouseholdPlanProduction(service: HouseholdsService, plans: import("../src/modules/mealPlans/repository.js").MealPlansRepository,
+  householdId: number, owner: number, other: number, query: (sql: string,args?: unknown[]) => Promise<Record<string,unknown>[]>) {
+  const planId = "household-source-plan", itemId = "98888888-8888-4888-8888-888888888880";
+  await query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES(?,?,'来源计划','2036-09-12','2036-09-18','active')",[planId,owner]);
+  for (const id of [itemId,'household-unrelated-meal']) await query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title) VALUES(?,?,?,'2036-09-12','lunch','原餐')",[id,planId,owner]);
+  const unrelated = await query("SELECT * FROM meal_plan_items WHERE id='household-unrelated-meal'");
+  const stock = await service.createInventory(owner,householdId,{ food_name: "来源制作米",quantity: "600g",expiration_date: "2099-01-01" });
+  const input = { idempotencyKey: "98888888-8888-4888-8888-888888888881",membershipId: (await service.diningPreferences(owner,householdId)).membershipId,
+    planItem: { planId,itemId,version: 1 },foodName: "三人米饭",producedServings: 3,
+    inventory: [{ itemId: Number(stock.id),version: Number(stock.version),amount: 300,unit: 'g' as const }] };
+  const dietBefore = await query("SELECT count(*) AS n FROM diet_records WHERE user_id=?",[owner]);
+  await assert.rejects(() => service.produceMeal(other,householdId,{ ...input,membershipId: 2147000000 }),/成员身份/);
+  const otherInput = { ...input,membershipId: (await service.diningPreferences(other,householdId)).membershipId };
+  await assert.rejects(() => service.produceMeal(other,householdId,otherInput),/不是本人/);
+  await assert.rejects(() => service.produceMeal(owner,householdId,{ ...input,planItem: { ...input.planItem,version: 2 } }),/已变化/);
+  await query("UPDATE meal_plan_items SET status='queued' WHERE id=?",[itemId]);
+  await assert.rejects(() => service.produceMeal(owner,householdId,input),/已变化/);
+  await query("UPDATE meal_plan_items SET status='planned',confirmed_at=CURRENT_TIMESTAMP WHERE id=?",[itemId]);
+  await assert.rejects(() => service.produceMeal(owner,householdId,{ ...input,inventory: [{ ...input.inventory[0]!,amount: 700 }] }));
+  assert.equal((await query("SELECT status FROM meal_plan_items WHERE id=?",[itemId]))[0]?.status,'planned');
+  assert.equal((await service.inventory(owner,householdId)).find(row => row.id === stock.id)?.quantity,'600g');
+  const results = await Promise.allSettled([service.produceMeal(owner,householdId,input),service.produceMeal(owner,householdId,{ ...input,idempotencyKey: "98888888-8888-4888-8888-888888888882" })]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length,1);
+  const successful = results.findIndex(result => result.status === 'fulfilled');
+  const savedInput = successful === 0 ? input : { ...input,idempotencyKey: "98888888-8888-4888-8888-888888888882" };
+  const batch = await service.produceMeal(owner,householdId,savedInput);
+  assert.equal(batch.repeated,true); assert.equal(batch.remainingServings,3);
+  await assert.rejects(() => service.produceMeal(owner,householdId,{ ...savedInput,planItem: undefined }),/制作编号/);
+  assert.deepEqual(await query("SELECT status,version,diet_record_id FROM meal_plan_items WHERE id=?",[itemId]),[{ status: 'completed',version: 2,diet_record_id: null }]);
+  assert.equal((await service.inventory(owner,householdId)).find(row => row.id === stock.id)?.quantity,'300g');
+  assert.deepEqual(await query("SELECT count(*) AS n FROM diet_records WHERE user_id=?",[owner]),dietBefore);
+  assert.deepEqual(await query("SELECT * FROM meal_plan_items WHERE id='household-unrelated-meal'"),unrelated);
+  const plan = await plans.find(owner,planId,false);
+  const displayed = (plan?.items as Record<string,unknown>[]).find(item => item.id === itemId);
+  assert.equal(displayed?.householdMealId,batch.id); assert.equal(displayed?.householdId,householdId);
+  await assert.rejects(() => plans.complete(owner,planId,itemId,{ version: 2,idempotencyKey: "98888888-8888-4888-8888-888888888885",production: { food_name: "重复个人产出",produced_servings: 3,eaten_servings: 0,nutrition_per_serving: {},meal_type: 'lunch' } }),/餐次已变化/);
+  assert.equal((await query("SELECT count(*) AS n FROM prepared_meals WHERE plan_item_id=?",[itemId]))[0]?.n?.toString(),'0');
+  assert.equal((await query("SELECT count(*) AS n FROM plan_maintenance_events WHERE source_id=?",[`household:${batch.id}`]))[0]?.n?.toString(),'1');
+  assert.equal((await plans.enqueue(owner,planId,itemId,{ version: 2,idempotencyKey: "98888888-8888-4888-8888-888888888884" })).kind,'version_conflict');
+  assert.equal((await plans.complete(owner,planId,itemId,{ version: 2,idempotencyKey: "98888888-8888-4888-8888-888888888883" })).kind,'version_conflict');
+  assert.deepEqual(await query("SELECT count(*) AS n FROM diet_records WHERE user_id=?",[owner]),dietBefore);
+  await query("DELETE FROM household_inventory_items WHERE id=?",[stock.id]);
+  await query("DELETE FROM meal_plans WHERE id=?",[planId]);
+  assert.equal((await service.meals(owner,householdId)).find(row => row.id === batch.id)?.remainingServings,3);
+}

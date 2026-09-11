@@ -59,7 +59,9 @@ export class RecommendationsService {
   async replaceCookingItem(userId: number, input: ReplaceCookingPlanItemInput) {
     const request = replaceCookingPlanItemSchema.parse(input);
     const candidates = await this.compute(userId, { surface: "meal_plan" }, request.draft.effectivePreferences);
-    return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId));
+    const dates = request.draft.meals.map(meal => meal.date).sort();
+    const existing = request.draft.planningMode === "weekly" ? (await this.repository.planningState(userId,dates[0],dates[dates.length-1])).items : [];
+    return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId),existing);
   }
 
   versions() { return { scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION }; }

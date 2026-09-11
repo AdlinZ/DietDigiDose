@@ -208,3 +208,19 @@ test("cooking drafts do not allocate expired raw ingredients", async () => {
   assert.equal(draft.ingredientBudget[0].fully_covered, false);
   assert.deepEqual(draft.ingredientBudget[0].deductions, []);
 });
+
+test("weekly replacement reloads current commitments for the owner and week", async () => {
+  const recipes = [1,2].map(id => ({ id,title: `蛋羹${id}`,ingredients_json: [{ name: "鸡蛋",amount: "1个" }],steps_json: ["蒸熟"],status: "approved",cook_time: 5,prep_time: 2,serving_size: 1 }));
+  const stock = { id: 1,food_name: "鸡蛋",quantity_value: 4,quantity_unit: "piece",expiration_date: "2099-09-30",version: 1,batch_code: null };
+  let committed = false;
+  const service = new RecommendationsService(repository({ recipes: async () => recipes,inventory: async () => [stock],planningState: async (userId,start,end) => {
+    assert.equal(userId,7); assert.equal(start,"2099-09-12"); assert.equal(end,"2099-09-18");
+    return { plans: [],shopping: [],items: committed ? [{ id: "other",planned_date: "2099-09-12",meal_type: "晚餐",title: "已确认",status: "planned",ingredients_json: [{ name: "鸡蛋",amount: "2个" }] }] : [] };
+  } }),kitchenware);
+  const preview = await service.weeklyPlan(7,{ startDate: "2099-09-12",mealTypes: ["lunch"] });
+  committed = true;
+  const target = preview.draft!.cooking[0];
+  const updated = await service.replaceCookingItem(7,{ draft: preview.draft!,targetMealId: target.targetMealId,recipeId: target.recipeId === 1 ? 2 : 1 });
+  assert.equal(updated.draft.weeklyShopping![0].required,9);
+  assert.equal(updated.draft.weeklyShopping![0].missing,5);
+});

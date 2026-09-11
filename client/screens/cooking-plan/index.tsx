@@ -145,13 +145,13 @@ export default function CookingPlanScreen() {
     <ScrollView contentContainerClassName="p-5 gap-4 pb-12" keyboardShouldPersistTaps="handled">
       <Text className="text-copy-muted">先用未保留的待吃餐，再计算需要补做的份量。可到待吃餐页标记“这份留着”。</Text>
       <TouchableOpacity onPress={() => router.push("/prepared-meals")}><Text className="font-bold text-brand">查看待吃餐与保留项</Text></TouchableOpacity>
-      <View className="rounded-2xl bg-surface p-4 gap-3">
+      {result?.planningMode === "weekly" ? <TouchableOpacity onPress={() => router.push("/weekly-plan")}><Text className="font-bold text-brand">重新核对七日安排与采购缺口</Text></TouchableOpacity> : <View className="rounded-2xl bg-surface p-4 gap-3">
         <Text className="font-bold text-ink">晚餐日期</Text><TextInput accessibilityLabel="晚餐日期" value={date} onChangeText={value => { setDate(value); invalidateDraft(); }} className="rounded-xl border border-line p-3 text-ink" placeholder="YYYY-MM-DD" />
         <Text className="font-bold text-ink">每餐需要几份</Text><TextInput accessibilityLabel="每餐份量" value={servings} onChangeText={value => { setServings(value); invalidateDraft(); }} keyboardType="decimal-pad" className="rounded-xl border border-line p-3 text-ink" />
         <Text className="font-bold text-ink">本次时间上限（分钟）</Text><TextInput accessibilityLabel="本次时间上限" value={minutes} onChangeText={value => { setMinutes(value); invalidateDraft(); }} keyboardType="number-pad" placeholder="留空沿用长期设置，未设置为30" className="rounded-xl border border-line p-3 text-ink" />
         <TouchableOpacity accessibilityRole="checkbox" accessibilityState={{ checked: includeLunch }} onPress={() => { setIncludeLunch(value => !value); invalidateDraft(); }}><Text className="font-bold text-brand">{includeLunch ? "已包含" : "未包含"} · 次日午餐</Text></TouchableOpacity>
         <TouchableOpacity disabled={!user || loading} onPress={() => void calculate()} className="rounded-xl bg-brand-fill p-3 items-center">{loading ? <ActivityIndicator color="#fff" /> : <Text className="font-bold text-white">{user ? "按当前库存重新计算" : "请先登录"}</Text>}</TouchableOpacity>
-      </View>
+      </View>}
       {error ? <Text className="text-danger">{error}</Text> : null}
       {replacement ? <View className="rounded-2xl bg-warm-soft p-4 gap-3">
         <Text className="font-black text-ink">替换预览 · 其余安排保留</Text>
@@ -166,12 +166,13 @@ export default function CookingPlanScreen() {
         <Text className="text-copy-muted">保存的是计算时的方案；库存变化后请重新核对。</Text>
         {saved ? <TouchableOpacity disabled={saving || loading || activated || !!replacement || !!result.unresolved.length} onPress={() => void activate()} className="rounded-xl bg-brand-soft p-3"><Text className="font-bold text-brand">{activated ? "已转为餐单 · 从餐单开始制作" : "转为餐单，选择要制作的菜"}</Text></TouchableOpacity> : null}
         <View className="rounded-2xl bg-warm-soft p-4 gap-2"><Text className="font-black text-ink">方案草案 · 还需核对</Text><Text className="text-copy-muted">{result.planningMode === "weekly" ? "各餐分次制作，累计已知耗时约" : "已知顺序耗时约"} {result.time.knownSequentialMinutes} 分钟，{result.planningMode === "weekly" ? `单次上限 ${result.time.sessionBudgetMinutes} 分钟` : `上限 ${result.time.budgetMinutes} 分钟`}{result.time.exceedsBudget ? "，已超时" : ""}。尚未计入完整收尾、设备安排；保鲜、携带和加热条件也需核实。</Text></View>
-        {result.meals.map(meal => <View key={meal.id} className="rounded-2xl bg-surface p-4 gap-2"><Text className="font-black text-ink">{meal.date} · {meal.mealType === "dinner" ? "晚餐" : "午餐"}</Text><Text className="text-brand">需要 {meal.servings} 份 · 待吃餐 {meal.preparedServings} 份 · 补做 {meal.cookServings} 份</Text>
+        {result.meals.map(meal => <View key={meal.id} className="rounded-2xl bg-surface p-4 gap-2"><Text className="font-black text-ink">{meal.date} · {({ breakfast: "早餐",lunch: "午餐",dinner: "晚餐",snack: "加餐" })[meal.mealType]}</Text><Text className="text-brand">需要 {meal.servings} 份 · 待吃餐 {meal.preparedServings} 份 · 补做 {meal.cookServings} 份</Text>
           {meal.allocations.map(item => <Text key={item.preparedMealId} className="text-copy-muted">待吃：{item.foodName} {item.servings} 份（存放条件待核对）</Text>)}
           {result.cooking.filter(item => item.targetMealId === meal.id).map(item => <View key={item.recipeId} className="gap-2"><TouchableOpacity onPress={() => router.push({ pathname: "/recipe-detail", params: { id: item.recipeId } })}><Text className="font-bold text-brand">补做：{item.title} {item.servings} 份 · 查看菜谱</Text></TouchableOpacity><TouchableOpacity disabled={loading || saving || activated} onPress={() => void replace(meal.id)}><Text className="font-bold text-brand">这道换一个</Text></TouchableOpacity></View>)}
           {result.unresolved.filter(item => item.targetMealId === meal.id).map(item => <Text key={item.targetMealId} className="text-danger">{item.reason}</Text>)}
         </View>)}
         <View className="rounded-2xl bg-surface p-4 gap-2"><Text className="font-black text-ink">整套原料预算</Text>{result.ingredientBudget.map((item, index) => <Text key={index} className="text-copy-muted">{item.food_name}：{item.quantity_status === "unknown" ? "数量或换算依据未知" : item.fully_covered ? "已知库存足量" : `缺 ${item.missing_value} ${item.unit}`}</Text>)}</View>
+        {result.weeklyShopping ? <View className="rounded-2xl bg-surface p-4 gap-2"><Text className="font-black text-ink">七日合并采购缺口（含原有安排）</Text>{result.weeklyShopping.map(item => <View key={`${item.foodName}:${item.unit}`}><Text className="text-copy-muted">{item.foodName}：需要 {item.required} {item.unit}，库存覆盖 {item.covered}，{item.uncertain ? "缺口待核对" : `还缺 ${item.missing}`}</Text>{item.sources.map((source,index) => <Text key={`${source.mealId}:${index}`} className="text-copy-muted text-xs">{result.meals.find(meal => meal.id === source.mealId)?.date ?? "原有安排"}：{source.required} {item.unit}</Text>)}</View>)}</View> : null}
         <Text className="text-copy-muted text-xs">此页只计算方案。实际制作时请按最新库存核对扣减；实际吃下后再记录饮食。</Text>
       </> : null}
     </ScrollView>

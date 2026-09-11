@@ -1,3 +1,4 @@
+import { createPlanningBudget } from "./planningBudget.js";
 import { currentDateKey } from "../../utils/date.js";
 import { unexpiredInventory } from "./inventoryAvailability.js";
 import { recipeDemands } from "./quantities.js";
@@ -51,7 +52,7 @@ export function buildCookingDraft(requirements: ReturnType<typeof allocatePrepar
 }
 
 /** Reprice the entire draft while changing exactly one cooking entry. */
-export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: string, recipeId: number | undefined, candidates: Candidate[], inventory: Row[]) {
+export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: string, recipeId: number | undefined, candidates: Candidate[], inventory: Row[], existing: Row[] = []) {
   const targets = draft.cooking.filter(item => item.targetMealId === targetMealId);
   if (targets.length !== 1) throw new RecommendationsError(409, "请先指定唯一需要替换的新做菜", "COOKING_PLAN_TARGET_AMBIGUOUS");
   const target = targets[0];
@@ -61,9 +62,11 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
     const replacement = { targetMealId, recipeId: candidate.recipeId, title: candidate.recipe.title,
       servings: target.servings, recipeYield: candidate.recipe.serving_size!, demands: needed };
     const cooking = draft.cooking.map(item => item.targetMealId === targetMealId ? replacement : item);
-    const ingredientBudget = buildFefoConsumptionPreviewFromCandidates(unexpiredInventory(inventory, currentDateKey()).map(item => ({ id: item.id, food_name: item.food_name,
+    const singleBudget = buildFefoConsumptionPreviewFromCandidates(unexpiredInventory(inventory, currentDateKey()).map(item => ({ id: item.id, food_name: item.food_name,
       quantity_evidence_status: item.quantity_evidence_status as "known" | "estimated" | "unknown" | undefined, quantity_value: item.quantity_value, quantity_unit: item.quantity_unit, expiration_date: item.expiration_date,
       batch_code: item.batch_code, version: item.version })), cooking.flatMap(item => item.demands));
+    const weeklyBudget = draft.planningMode === "weekly" ? createPlanningBudget(inventory,existing) : null;
+    const ingredientBudget = weeklyBudget ? [...draft.meals].sort((a,b) => a.date.localeCompare(b.date) || ["breakfast","lunch","dinner","snack"].indexOf(a.mealType)-["breakfast","lunch","dinner","snack"].indexOf(b.mealType)).flatMap(meal => weeklyBudget.consume(cooking.filter(item => item.targetMealId === meal.id).flatMap(item => item.demands),meal.date,meal.id)) : singleBudget;
     const missingTime: string[] = [];
     let knownTime = 0;
     let sessionExceeds = false;
@@ -76,13 +79,14 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
       if (draft.planningMode === "weekly" && sessionTime > (draft.time.sessionBudgetMinutes ?? draft.time.budgetMinutes)) sessionExceeds = true;
       if (!recipe.cook_time || recipe.prep_time == null) missingTime.push(item.title);
     }
-    return [{ cooking, ingredientBudget, knownTime, missingTime, sessionExceeds, score: candidate.score,
+    return [{ cooking, ingredientBudget, knownTime, missingTime, sessionExceeds, weeklyBudget, score: candidate.score,
       exceedsBudget: knownTime > draft.time.budgetMinutes,
       shortageCount: ingredientBudget.filter(item => !item.fully_covered).length }];
   }).sort((a, b) => Number(a.exceedsBudget || a.sessionExceeds) - Number(b.exceedsBudget || b.sessionExceeds) || a.shortageCount - b.shortageCount || b.score - a.score);
   const chosen = choices[0];
   if (!chosen) throw new RecommendationsError(409, "没有符合当前条件且用量明确的替代菜，原方案保持不变", "COOKING_PLAN_NO_REPLACEMENT");
-  const conflicts: string[] = [];
+  const conflicts: string[] = [...(chosen.weeklyBudget?.checks ?? [])];
+  if (chosen.weeklyBudget?.unknownCommitment) conflicts.push("已有安排用量未核实，新增餐次的库存覆盖仅为暂算");
   for (const item of chosen.ingredientBudget) {
     if (item.quantity_status === "unknown") conflicts.push(`${item.food_name} 的库存数量或单位换算未知`);
     else if (!item.fully_covered) conflicts.push(`${item.food_name} 的整套需求超过已知库存`);
@@ -93,5 +97,7 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
   return { draft: cookingPlanDraftSchema.parse({ ...draft, cooking: chosen.cooking, ingredientBudget: chosen.ingredientBudget,
     time: { ...draft.time, knownSequentialMinutes: chosen.knownTime, exceedsBudget: chosen.exceedsBudget,
       incomplete: true, isEstimate: true, missing: [...new Set([...draft.time.missing, ...chosen.missingTime.map(title => `recipe:${title}`)])] },
-    status: "requires_validation" }), conflicts: [...new Set(conflicts)] };
+    weeklyShopping: chosen.weeklyBudget ? [...chosen.weeklyBudget.aggregate.values()] : draft.weeklyShopping,
+    checksPending: [...new Set([...draft.checksPending,...conflicts])].slice(0,50),
+    status: "requires_validation" }), shopping: chosen.weeklyBudget ? [...chosen.weeklyBudget.aggregate.values()] : undefined, conflicts: [...new Set(conflicts)] };
 }

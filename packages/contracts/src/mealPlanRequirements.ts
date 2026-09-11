@@ -19,7 +19,12 @@ export type MealPlanRequirementsInput = z.infer<typeof mealPlanRequirementsSchem
 
 const amount = z.number().finite().nonnegative();
 const positiveAmount = z.number().finite().positive();
+export const weeklyShoppingSchema = z.array(z.object({
+  foodName: z.string().max(200),unit: z.string().max(40),uncertain: z.boolean(),required: amount,covered: amount,missing: amount,
+  sources: z.array(z.object({ mealId: z.string().max(100),required: amount,missing: amount })).max(2800),
+})).max(2800);
 export const cookingPlanDraftSchema = z.object({
+  weeklyShopping: weeklyShoppingSchema.optional(),
   planningMode: z.enum(["single_session", "weekly"]).optional(),
   status: z.literal("requires_validation"),
   meals: z.array(z.object({

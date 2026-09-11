@@ -45,3 +45,29 @@ test("unknown committed quantities and excessive cooking time remain unresolved"
   const tooLong = buildWeeklyPlan(input,{ meal_time_minutes: 5 },[candidate],[],[],[],[]);
   assert.equal(tooLong.draft?.unresolved.length,7);
 });
+
+test("weekly replacement reserves other plans and applies target-day expiry without changing other meals", async () => {
+  const { replaceCookingDraft } = await import("../src/modules/recommendations/plan.js");
+  const inventory = [stock(1,4,"2099-09-13")];
+  const existing = [{ id: "existing",planned_date: startDate,meal_type: "午餐",title: "原有双蛋",status: "planned",ingredients_json: [{ name: "鸡蛋",amount: "2个" }] }];
+  const original = buildWeeklyPlan(input,{},[candidate],inventory,[],existing,[]).draft!;
+  const replacement = { ...candidate,recipeId: 2,recipe: { ...candidate.recipe,title: "双蛋",ingredients: [{ name: "鸡蛋",amount: "2个" }] } };
+  const changed = replaceCookingDraft(original,"week:2099-09-13:lunch",2,[candidate,replacement],inventory,existing);
+  const eggs = changed.draft.weeklyShopping![0];
+  assert.deepEqual([eggs.required,eggs.covered,eggs.missing],[9,4,5]);
+  assert.equal(changed.draft.ingredientBudget[0].covered_value,2);
+  assert(changed.draft.ingredientBudget.slice(1).every(item => item.covered_value === 0));
+  assert.deepEqual(changed.draft.cooking.slice(1),original.cooking.slice(1));
+  assert.equal(inventory[0].quantity_value,4);
+});
+
+test("rechecking after cancellation and purchase updates shortages while retaining manual shopping", () => {
+  const existing = [{ id: "existing",planned_date: startDate,meal_type: "午餐",title: "原有双蛋",status: "planned",ingredients_json: [{ name: "鸡蛋",amount: "2个" }] }];
+  const shopping = [{ id: "manual",name: "手工采购",amount: "一盒",checked: false }];
+  const before = buildWeeklyPlan(input,{},[candidate],[stock(1,4)],[],existing,shopping);
+  const after = buildWeeklyPlan(input,{},[candidate],[stock(1,8)],[],[{ ...existing[0],status: "skipped" }],shopping);
+  assert.equal(before.shopping[0].missing,4);
+  assert.equal(after.shopping[0].required,7);
+  assert.equal(after.shopping[0].missing,0);
+  assert.deepEqual(after.plannedPurchases,before.plannedPurchases);
+});

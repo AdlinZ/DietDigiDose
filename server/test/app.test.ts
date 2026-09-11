@@ -2128,6 +2128,23 @@ describe("user data isolation", () => {
     assert.deepEqual(await new SqliteRecommendationsRepository(db).skippedRecipeIds(account.user.id),[eventPayload.recipeId]);
     assert.ok((refreshed.body as JsonObject).items.some((item: JsonObject) => item.recipeId === newRecipe));
 
+    const sourceQueue = await api("/api/v1/cooking-queue", { method: "POST", token: account.token,
+      body: JSON.stringify({ recipeId: eventPayload.recipeId, recommendationRequestId: firstBody.requestId }) });
+    assert.equal(sourceQueue.response.status, 201);
+    const sourceItem = (sourceQueue.body as JsonObject).item;
+    const queuedEvidence = JSON.parse((db.prepare("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=?").get(sourceItem.id) as JsonObject).recipe_snapshot_json).selectionEvidence;
+    assert.equal(queuedEvidence.requestId, firstBody.requestId);
+    const productionPayload = { idempotency_key: "selection-to-production-186", recipe_id: eventPayload.recipeId,
+      production: { food_name: "选择来源测试", produced_servings: 1, eaten_servings: 0, queue_item_id: sourceItem.id, queue_version: sourceItem.version } };
+    const sourceProduction = await api("/api/v1/diet-records/cooking-completions", { method: "POST", token: account.token, body: JSON.stringify(productionPayload) });
+    assert.equal(sourceProduction.response.status, 201);
+    assert.deepEqual((sourceProduction.body as JsonObject).selection_evidence, queuedEvidence);
+    assert.equal((sourceProduction.body as JsonObject).diet_record, null, "source evidence alone is not actual eating");
+    db.prepare("DELETE FROM cooking_queue_items WHERE id=?").run(sourceItem.id);
+    const sourceRetry = await api("/api/v1/diet-records/cooking-completions", { method: "POST", token: account.token, body: JSON.stringify(productionPayload) });
+    assert.equal(sourceRetry.response.status, 200);
+    assert.deepEqual((sourceRetry.body as JsonObject).selection_evidence, queuedEvidence);
+
     const hiddenRequest = await api("/api/v1/recommendations/events", {
       method: "POST", token: second.token,
       body: JSON.stringify({ ...eventPayload, idempotencyKey: "recommendation-isolation-test-0001" }),

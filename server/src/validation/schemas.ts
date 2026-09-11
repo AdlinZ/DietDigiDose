@@ -148,6 +148,7 @@ const cookingQueueMealType = z.enum(["breakfast", "lunch", "dinner", "snack"]);
 const nullableDateTime = z.string().datetime({ offset: true, message: "计划时间必须是包含时区的 ISO 时间" }).nullable();
 
 export const cookingQueueCreateSchema = z.object({
+  recommendationRequestId: z.string().uuid().optional(),
   recipeId: z.number().int().positive(),
   idempotencyKey: z.string().trim().min(8).max(200).optional(),
   plannedAt: nullableDateTime.optional(),

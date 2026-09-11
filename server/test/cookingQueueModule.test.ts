@@ -12,6 +12,7 @@ const row: QueueRow = {
 
 function fakeRepository(overrides: Partial<CookingQueueRepository> = {}): CookingQueueRepository {
   return {
+    recommendationRequest: async () => null,
     list: async () => [row], findOwned: async () => row,
     findApprovedRecipe: async () => ({ id: 1, title: "番茄炒蛋", image_url: null, cook_time: 10, calories: 200, difficulty: "简单", ingredients_json: ["番茄"] }),
     enqueue: async () => ({ kind: "created", row }), update: async () => ({ ...row, version: 2 }),
@@ -35,4 +36,19 @@ describe("cooking queue module", () => {
     const service = new CookingQueueService(fakeRepository({ enqueue: async () => ({ kind: "full" }) }));
     await assert.rejects(() => service.create(1, { recipeId: 1 }), (error: any) => error.code === "COOKING_QUEUE_FULL");
   });
+});
+
+test("queue selection snapshots belong to the user and recipe and cannot be taken from a client payload", async () => {
+  const inventory = { version: 1, scope: "personal", allocations: [{ itemId: 4, itemVersion: 2, amount: 3, unit: "g" }] };
+  let snapshot: Record<string, unknown> | undefined;
+  const service = new CookingQueueService(fakeRepository({
+    recommendationRequest: async (userId, requestId) => userId === 7 && requestId === "request" ? { scoring_version: "v1", results_json: JSON.stringify([{ recipeId: 1, features: { inventoryEvidence: inventory } }]) } : null,
+    enqueue: async input => { snapshot = input.snapshot; return { kind: "created", row }; },
+  }));
+  await service.create(7, { recipeId: 1, recommendationRequestId: "request" });
+  assert.deepEqual(snapshot?.selectionEvidence, { version: 1, requestId: "request", recipeId: 1, scoringVersion: "v1", inventory });
+  await assert.rejects(service.create(8, { recipeId: 1, recommendationRequestId: "request" }), /推荐来源/);
+  await assert.rejects(service.create(7, { recipeId: 2, recommendationRequestId: "request" }), /推荐来源/);
+  await service.create(7, { recipeId: 1 });
+  assert.equal(snapshot?.selectionEvidence, null);
 });

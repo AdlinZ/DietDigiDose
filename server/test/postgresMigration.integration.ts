@@ -58,6 +58,7 @@ import { PostgresAdminKitchenwareRepository } from "../src/modules/adminKitchenw
 import { AdminKitchenwareService } from "../src/modules/adminKitchenware/service.js";
 import { PostgresAdminRecipesRepository } from "../src/modules/adminRecipes/postgresRepository.js";
 import { AdminRecipesService } from "../src/modules/adminRecipes/service.js";
+import { CookingQueueService } from "../src/modules/cookingQueue/service.js";
 import { PostgresCookingQueueRepository } from "../src/modules/cookingQueue/postgresRepository.js";
 import { PostgresCommunityRepository } from "../src/modules/community/postgresRepository.js";
 import { CommunityService } from "../src/modules/community/service.js";
@@ -1646,7 +1647,7 @@ try {
   const selectionEvent = await recommendationsRepository.findEvent(user.id, recommendationEventInput.idempotencyKey);
   assert.deepEqual((selectionEvent?.metadata_json as Record<string, unknown>).selectionEvidence, {
     version: 1, requestId: recommendationPage.requestId, recipeId: recommendedRecipeId,
-    inventory: recommendationPage.items[0]!.features.inventoryEvidence,
+    inventory: (recommendationPage.items[0]!.features as Record<string, unknown>).inventoryEvidence,
   });
   await assert.rejects(recommendationsService.event(user.id, { ...recommendationEventInput, eventType: "queue" }),
     (error: unknown) => error instanceof Error && "code" in error && error.code === "RECOMMENDATION_EVENT_CONFLICT");
@@ -1654,6 +1655,20 @@ try {
   assert.equal(recommendationEvents[0]!.eventId, recommendationEvents[1]!.eventId);
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_recommendation_events
     WHERE user_id = $1 AND idempotency_key = $2`, [user.id, recommendationEventInput.idempotencyKey])).rows[0]?.count), 1);
+
+  const selectedQueue = await new CookingQueueService(cookingQueueRepository).create(user.id, {
+    recipeId: recommendedRecipeId, recommendationRequestId: recommendationPage.requestId,
+  });
+  assert.equal(selectedQueue.added, true);
+  const queuedSelection = (await pool.query("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=$1",[selectedQueue.item.id])).rows[0].recipe_snapshot_json.selectionEvidence;
+  assert.equal(queuedSelection.requestId, recommendationPage.requestId);
+  const selectedProductionInput = { idempotency_key: "pg-selection-production-186", recipe_id: recommendedRecipeId, inventory_item_ids: [], inventory_consumptions: [],
+    production: { food_name: "PG 选择来源", produced_servings: 1, eaten_servings: 0, meal_type: "午餐", nutrition_per_serving: {}, queue_item_id: selectedQueue.item.id, queue_version: selectedQueue.item.version } };
+  const selectedProduction = await dietService.completeCooking(user.id, selectedProductionInput);
+  assert.deepEqual(selectedProduction.selection_evidence, queuedSelection);
+  assert.equal(selectedProduction.diet_record, null);
+  await pool.query("DELETE FROM cooking_queue_items WHERE id=$1",[selectedQueue.item.id]);
+  assert.deepEqual((await dietService.completeCooking(user.id, selectedProductionInput)).selection_evidence, queuedSelection);
 
   for (const reason of ["no_time","too_much","dislike"]) {
     for (let index=0;index<3;index++) await recommendationsService.event(user.id,{ ...recommendationEventInput,eventType: "skip",metadata: { reason,scope: "long_term" },idempotencyKey: `preference-${reason}-${index}` });

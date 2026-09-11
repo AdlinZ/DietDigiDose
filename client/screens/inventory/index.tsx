@@ -2100,7 +2100,7 @@ export default function InventoryScreen() {
                                 idempotencyKey: `inventory-view-${recommendationRequestId}-${recipe.id}`,
                               }).catch(() => undefined);
                             }
-                            router.push("/recipe-detail", { id: recipe.id });
+                            router.push("/recipe-detail", { id: recipe.id, recommendationRequestId: recommendation ? recommendationRequestId ?? undefined : undefined });
                           }}
                         >
                           <View className="relative">

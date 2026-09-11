@@ -2,6 +2,7 @@ import type { QueueEnqueueData, QueueEnqueueResult, QueuePatch, QueueRecipe, Que
 
 /** Driver-neutral persistence port for durable cooking queue state. */
 export interface CookingQueueRepository {
+  recommendationRequest(userId: number, requestId: string): Promise<QueueRow | null>;
   list(userId: number, includeHistory: boolean): Promise<QueueRow[]>;
   findOwned(id: string, userId: number): Promise<QueueRow | null>;
   findApprovedRecipe(recipeId: number): Promise<QueueRecipe | null>;

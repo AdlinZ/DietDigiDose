@@ -200,7 +200,9 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
         production.meal_type, production.storage_location ?? null, production.queue_item_id ?? null, production.plan_item_id ?? null,production.reported_cooking_minutes ?? null);
     const meal = formatPreparedMeal(this.database.prepare("SELECT * FROM prepared_meals WHERE id=?").get(id) as Record<string, unknown>);
     const record = production.eaten_servings > 0 ? this.createSync(userId, mealConsumptionRecord(meal, production.eaten_servings, production.eaten_at!, production.eaten_time ?? null)) : null;
-    const response = { prepared_meal: meal, diet_record: record, consumed_inventory_item_ids: consumedIds, inventory_consumption_changes: changes, repeated: false };
+    const queueSnapshot = production.queue_item_id ? (this.database.prepare("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=? AND user_id=?").get(production.queue_item_id,userId) as { recipe_snapshot_json: string } | undefined)?.recipe_snapshot_json : undefined;
+    const selectionEvidence = queueSnapshot ? (JSON.parse(queueSnapshot) as Record<string, unknown>).selectionEvidence ?? null : null;
+    const response = { selection_evidence: selectionEvidence, prepared_meal: meal, diet_record: record, consumed_inventory_item_ids: consumedIds, inventory_consumption_changes: changes, repeated: false };
     this.database.prepare("UPDATE prepared_meals SET result_json=? WHERE id=?").run(JSON.stringify(response), id);
     if (record) this.database.prepare("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES(?,?,?,?,'eat',?,?,?,?)")
       .run(randomUUID(), userId, id, `production:${id}`, production.eaten_servings, production.eaten_at!, record.id, JSON.stringify(response));

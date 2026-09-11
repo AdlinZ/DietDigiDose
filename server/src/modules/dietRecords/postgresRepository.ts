@@ -232,7 +232,9 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
         production.meal_type, production.storage_location ?? null, production.queue_item_id ?? null, production.plan_item_id ?? null,production.reported_cooking_minutes ?? null]);
     const meal = formatPreparedMeal(inserted.rows[0]);
     const record = production.eaten_servings > 0 ? await insertRecord(client, userId, mealConsumptionRecord(meal, production.eaten_servings, production.eaten_at!, production.eaten_time ?? null)) : null;
-    const response = { prepared_meal: meal, diet_record: record, consumed_inventory_item_ids: consumedIds, inventory_consumption_changes: changes, repeated: false };
+    const queueSnapshot = production.queue_item_id ? (await client.query("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=$1 AND user_id=$2",[production.queue_item_id,userId])).rows[0]?.recipe_snapshot_json : null;
+    const selectionEvidence = queueSnapshot?.selectionEvidence ?? null;
+    const response = { selection_evidence: selectionEvidence, prepared_meal: meal, diet_record: record, consumed_inventory_item_ids: consumedIds, inventory_consumption_changes: changes, repeated: false };
     await client.query("UPDATE prepared_meals SET result_json=$1::jsonb WHERE id=$2", [JSON.stringify(response), id]);
     if (record) await client.query("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES($1,$2,$3,$4,'eat',$5,$6,$7,$8::jsonb)",
       [randomUUID(), userId, id, `production:${id}`, production.eaten_servings, production.eaten_at!, record.id, JSON.stringify(response)]);

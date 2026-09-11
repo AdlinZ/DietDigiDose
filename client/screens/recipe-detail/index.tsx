@@ -61,7 +61,7 @@ interface Recipe {
 
 export default function RecipeDetailScreen() {
   const router = useSafeRouter();
-  const { id, pendingAction } = useSafeSearchParams<{ id: number; pendingAction?: "favorite" | "shopping-list" | "queue" }>();
+  const { id, pendingAction, recommendationRequestId } = useSafeSearchParams<{ id: number; recommendationRequestId?: string; pendingAction?: "favorite" | "shopping-list" | "queue" }>();
   const { isAuthenticated } = useAuth();
   const authFetch = useAuthFetch();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
@@ -302,7 +302,7 @@ export default function RecipeDetailScreen() {
     }
     if (!isAuthenticated) {
       router.push("/login", {
-        returnTo: { pathname: "/recipe-detail", params: { id: recipe.id, pendingAction: "queue" } },
+        returnTo: { pathname: "/recipe-detail", params: { id: recipe.id, pendingAction: "queue", recommendationRequestId } },
       });
       return;
     }
@@ -314,7 +314,7 @@ export default function RecipeDetailScreen() {
 
     setQueueSaving(true);
     try {
-      const result = await cookingQueueApi.add(authFetch, { recipeId: recipe.id });
+      const result = await cookingQueueApi.add(authFetch, { recipeId: recipe.id, recommendationRequestId });
       setIsQueued(true);
       if (!result.added) {
         router.push("/cooking-queue");

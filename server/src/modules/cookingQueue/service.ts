@@ -67,10 +67,19 @@ export class CookingQueueService {
   async create(userId: number, input: QueueCreateInput) {
     const recipe = await this.repository.findApprovedRecipe(input.recipeId);
     if (!recipe) throw new CookingQueueError(404, "菜谱不存在或尚未通过审核", "RECIPE_NOT_AVAILABLE");
+    let selectionEvidence: Record<string, unknown> | null = null;
+    if (input.recommendationRequestId) {
+      const request = await this.repository.recommendationRequest(userId, input.recommendationRequestId);
+      const candidate = parseJson<Array<Record<string, unknown>>>(request?.results_json, []).find(item => Number(item.recipeId) === input.recipeId);
+      if (!request || !candidate) throw new CookingQueueError(409, "推荐来源已失效或与菜谱不符，请返回推荐页重试", "RECOMMENDATION_SOURCE_MISMATCH");
+      selectionEvidence = { version: 1, requestId: input.recommendationRequestId, recipeId: input.recipeId,
+        scoringVersion: request.scoring_version, inventory: (candidate.features as Record<string, unknown> | undefined)?.inventoryEvidence ?? null };
+    }
     const result = await this.repository.enqueue({
       id: randomUUID(), userId, recipeId: input.recipeId, idempotencyKey: input.idempotencyKey,
       plannedAt: input.plannedAt, mealType: input.mealType,
       snapshot: {
+        selectionEvidence,
         title: recipe.title, imageUrl: recipe.image_url, cookTime: recipe.cook_time,
         calories: recipe.calories, difficulty: recipe.difficulty,
         ingredients: parseJson<unknown[]>(recipe.ingredients_json, []),

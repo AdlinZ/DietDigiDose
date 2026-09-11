@@ -30,3 +30,13 @@ export type WorkerRunsPage = {
   page: number;
   pageSize: number;
 };
+
+/** Cancellation is cooperative. Business writes must also fence the lease in their transaction. */
+export type WorkerTaskContext = {
+  runId: string;
+  taskName: WorkerTaskName;
+  leaseOwnerId: string;
+  signal: AbortSignal;
+  /** Checks current ownership; does not replace an atomic fence on business writes. */
+  assertActive: () => Promise<void>;
+};

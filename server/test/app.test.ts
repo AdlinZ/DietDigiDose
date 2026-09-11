@@ -258,8 +258,11 @@ describe("API security baseline", () => {
     const runtime = await import("../src/modules/worker/index.js");
     assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-a", 60_000), true);
     assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), false);
+    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-a", 60_000), false);
     db.prepare("UPDATE worker_task_leases SET lease_expires_at = datetime('now', '-1 second') WHERE task_name = 'media-cleanup'").run();
     assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), true);
+    assert.equal(await runtime.releaseWorkerTaskLease("media-cleanup", "worker-a"), false);
+    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-c", 60_000), false);
     assert.equal(await runtime.releaseWorkerTaskLease("media-cleanup", "worker-b"), true);
 
     const completed = await runtime.runManagedWorkerTask({
@@ -271,6 +274,22 @@ describe("API security baseline", () => {
     const completedRow = db.prepare(`SELECT status, processed_count AS processed, succeeded_count AS succeeded,
       failed_count AS failed FROM worker_task_runs WHERE id = ?`).get(completed.runId) as JsonObject;
     assert.deepEqual(completedRow, { status: "completed", processed: 2, succeeded: 2, failed: 0 });
+
+    const { SqliteWorkerRepository } = await import("../src/modules/worker/sqliteRepository.js");
+    const workerRepository = new SqliteWorkerRepository(db);
+    assert.equal(await workerRepository.acquireLease("media-cleanup", "stale-owner", 60_000), true);
+    await workerRepository.createRun("stale-worker-result", "media-cleanup", "worker-test");
+    assert.equal(await workerRepository.ownsLease("media-cleanup", "stale-owner"), true);
+    db.prepare("UPDATE worker_task_leases SET lease_expires_at = datetime('now','-1 second') WHERE task_name='media-cleanup'").run();
+    assert.equal(await workerRepository.ownsLease("media-cleanup", "stale-owner"), false);
+    assert.equal(await workerRepository.completeRun("stale-worker-result", "completed", 1,
+      { processed: 1, succeeded: 1, failed: 0 }, null, "stale-owner"), false);
+    assert.equal(await workerRepository.acquireLease("media-cleanup", "new-owner", 60_000), true);
+    assert.equal(await workerRepository.completeRun("stale-worker-result", "completed", 1,
+      { processed: 1, succeeded: 1, failed: 0 }, null, "stale-owner"), false);
+    assert.equal((db.prepare("SELECT status FROM worker_task_runs WHERE id='stale-worker-result'").get() as JsonObject).status, "running");
+    await workerRepository.failRun("stale-worker-result", 1, "lease lost");
+    assert.equal(await workerRepository.releaseLease("media-cleanup", "new-owner"), true);
 
     const partialFailure = await runtime.runManagedWorkerTask({
       taskName: "media-cleanup",

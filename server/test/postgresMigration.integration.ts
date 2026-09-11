@@ -2242,12 +2242,28 @@ try {
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
+  assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), false);
+  assert.equal(await workerRepository.ownsLease("media-cleanup", "postgres-worker-a"), true);
   await pool.query(`
     UPDATE worker_task_leases SET lease_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second'
     WHERE task_name = 'media-cleanup'
   `);
+  assert.equal(await workerRepository.ownsLease("media-cleanup", "postgres-worker-a"), false);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), true);
+  assert.equal(await workerRepository.releaseLease("media-cleanup", "postgres-worker-a"), false);
+  assert.equal(await workerRepository.ownsLease("media-cleanup", "postgres-worker-b"), true);
   assert.equal(await workerRepository.releaseLease("media-cleanup", "postgres-worker-b"), true);
+  assert.equal(await workerRepository.acquireLease("media-cleanup", "stale-owner", 60_000), true);
+  await workerRepository.createRun("stale-worker-result", "media-cleanup", "postgres-worker");
+  await pool.query("UPDATE worker_task_leases SET lease_expires_at=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE task_name='media-cleanup'");
+  assert.equal(await workerRepository.completeRun("stale-worker-result", "completed", 1,
+    { processed: 1, succeeded: 1, failed: 0 }, null, "stale-owner"), false);
+  assert.equal(await workerRepository.acquireLease("media-cleanup", "new-owner", 60_000), true);
+  assert.equal(await workerRepository.completeRun("stale-worker-result", "completed", 1,
+    { processed: 1, succeeded: 1, failed: 0 }, null, "stale-owner"), false);
+  assert.equal((await pool.query("SELECT status FROM worker_task_runs WHERE id='stale-worker-result'")).rows[0].status, "running");
+  await workerRepository.failRun("stale-worker-result", 1, "lease lost");
+  assert.equal(await workerRepository.releaseLease("media-cleanup", "new-owner"), true);
   const workerRuntime = new WorkerRuntime(workerRepository);
   const workerResult = await workerRuntime.run({
     taskName: "media-cleanup",

@@ -24,10 +24,16 @@ export class SqliteWorkerRepository implements WorkerRepository {
         owner_id = excluded.owner_id,
         lease_expires_at = excluded.lease_expires_at,
         updated_at = CURRENT_TIMESTAMP
-      WHERE worker_task_leases.owner_id = excluded.owner_id
-        OR worker_task_leases.lease_expires_at <= CURRENT_TIMESTAMP
+      WHERE worker_task_leases.lease_expires_at <= CURRENT_TIMESTAMP
     `).run(taskName, workerId, `+${leaseSeconds} seconds`);
     return result.changes > 0;
+  }
+
+  async ownsLease(taskName: WorkerTaskName, ownerId: string) {
+    return Boolean(this.database.prepare(`
+      SELECT 1 FROM worker_task_leases
+      WHERE task_name = ? AND owner_id = ? AND lease_expires_at > CURRENT_TIMESTAMP
+    `).get(taskName, ownerId));
   }
 
   async releaseLease(taskName: WorkerTaskName, workerId: string) {
@@ -42,11 +48,13 @@ export class SqliteWorkerRepository implements WorkerRepository {
     `).run(runId, taskName, workerId);
   }
 
-  async completeRun(runId: string, status: "completed" | "failed", durationMs: number, result: WorkerTaskResult, errorMessage: string | null) {
-    this.database.prepare(`
+  async completeRun(runId: string, status: "completed" | "failed", durationMs: number, result: WorkerTaskResult, errorMessage: string | null, leaseOwnerId: string) {
+    const updated = this.database.prepare(`
       UPDATE worker_task_runs SET status = ?, finished_at = CURRENT_TIMESTAMP,
         duration_ms = ?, processed_count = ?, succeeded_count = ?, failed_count = ?, result_json = ?,
-        error_message = ? WHERE id = ?
+        error_message = ? WHERE id = ? AND status = 'running'
+        AND EXISTS (SELECT 1 FROM worker_task_leases
+          WHERE task_name = worker_task_runs.task_name AND owner_id = ? AND lease_expires_at > CURRENT_TIMESTAMP)
     `).run(
       status,
       durationMs,
@@ -56,7 +64,9 @@ export class SqliteWorkerRepository implements WorkerRepository {
       JSON.stringify(result.details ?? {}),
       errorMessage,
       runId,
+      leaseOwnerId,
     );
+    return updated.changes === 1;
   }
 
   async failRun(runId: string, durationMs: number, errorMessage: string) {

@@ -1,6 +1,7 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
 import { Text, TouchableOpacity } from "react-native";
+const mockReserve = jest.fn();
 const mockList = jest.fn(); const mockEat = jest.fn(); const mockFetch = jest.fn();
 const mockStore = new Map<string,string>(); let mockUser = { id: 51 };
 const mockWrite = jest.fn(async (key: string,value: string) => { mockStore.set(key,value); });
@@ -13,7 +14,7 @@ jest.mock("expo-file-system",() => ({ Paths: { cache: { size: 0 } } }));
 jest.mock("@react-native-async-storage/async-storage",() => ({ __esModule: true,default: {
   getItem: async (key: string) => mockStore.get(key) ?? null,setItem: (...args: [string,string]) => mockWrite(...args),removeItem: async (key: string) => { mockStore.delete(key); },
 } }));
-jest.mock("@/services/api/households",() => ({ householdApi: { meals: (...args: unknown[]) => mockList(...args),diningPreferences: async () => ({ membershipId: 5 }),eatMeal: (...args: unknown[]) => mockEat(...args) } }));
+jest.mock("@/services/api/households",() => ({ householdApi: { reserveMeal: (...args: unknown[]) => mockReserve(...args),meals: (...args: unknown[]) => mockList(...args),diningPreferences: async () => ({ membershipId: 5 }),eatMeal: (...args: unknown[]) => mockEat(...args) } }));
 import HouseholdMealsScreen from "./index";
 import { invalidatePrivateStorage,activatePrivateStorage } from "@/utils/userStorage";
 const meal = { id: "78888888-8888-4888-8888-888888888888",householdId: 8,foodName: "家庭饭",producedServings: 3,remainingServings: 3,version: 1,repeated: false };
@@ -75,5 +76,22 @@ test("a new session of the same account cannot remain blocked by the old in-flig
   await act(async () => { resolve({ meal }); });
   expect(mockList).toHaveBeenCalledTimes(2);
   expect(JSON.stringify(tree.toJSON())).not.toContain("家庭饭");
+  act(() => tree.unmount());
+});
+
+test("reserving uses the displayed version and only changes the current members reservation",async () => {
+  mockReserve.mockResolvedValue({ version: 2,myReservedServings: 1 });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<HouseholdMealsScreen />); });
+  act(() => press(tree,"设置我的预留"));
+  act(() => tree.root.findByProps({ accessibilityLabel: "我的预留份量" }).props.onChangeText("1"));
+  mockList.mockResolvedValue([{ ...meal,version: 2,reservedServings: 1,myReservedServings: 1,availableServings: 3 }]);
+  await act(async () => { press(tree,"保存我的预留"); });
+  expect(mockReserve).toHaveBeenCalledWith(mockFetch,8,meal.id,{ membershipId: 5,version: 1,servings: 1 });
+  expect(mockEat).not.toHaveBeenCalled();
+  act(() => press(tree,"设置我的预留"));
+  act(() => tree.root.findByProps({ accessibilityLabel: "我的预留份量" }).props.onChangeText("0"));
+  await act(async () => { press(tree,"保存我的预留"); });
+  expect(mockReserve.mock.calls[1][3]).toEqual({ membershipId: 5,version: 2,servings: 0 });
   act(() => tree.unmount());
 });

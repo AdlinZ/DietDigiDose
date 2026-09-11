@@ -76,7 +76,18 @@ export const householdMealSchema = z.object({
   id: z.string().uuid(),householdId: z.number().int().positive(),foodName: z.string(),
   producedServings: diningServings,remainingServings: z.number().finite().min(0).max(30),
   version: z.number().int().positive(),repeated: z.boolean(),
+  reservedServings: z.number().finite().min(0).max(30).optional(),
+  myReservedServings: z.number().finite().min(0).max(30).optional(),
+  availableServings: z.number().finite().min(0).max(30).optional(),
 }).strict().refine(value => value.remainingServings <= value.producedServings,"剩余份量不能超过产出");
 export const householdMealsSchema = z.array(householdMealSchema);
 export const householdEatingResultSchema = z.object({ meal: householdMealSchema,dietRecordId: z.number().int().positive(),repeated: z.boolean() }).strict();
 export type HouseholdMeal = z.infer<typeof householdMealSchema>;
+
+export const householdMealReservationSchema = z.object({
+  membershipId: z.number().int().positive(),version: z.number().int().positive(),
+  servings: z.union([z.literal(0),diningServings]),
+}).strict();
+export type HouseholdMealReservationInput = z.infer<typeof householdMealReservationSchema>;
+
+export const householdMealReservationResultSchema = z.object({ version: z.number().int().positive(),myReservedServings: z.number().finite().min(0).max(30) }).strict();

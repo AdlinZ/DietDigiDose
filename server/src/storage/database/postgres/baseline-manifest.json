@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "15a5b1392ac69fe7fce2d8b8c012c378bba30d9e3e4e69099a6d4c5c70420f52",
-  "tableCount": 104,
+  "sourceSchemaSha256": "328c31de7dffbb6479c42a7ecb7352dc8325d41e887353d8f7f9648cb906769d",
+  "tableCount": 105,
   "indexCount": 155,
-  "foreignKeyCount": 164,
+  "foreignKeyCount": 166,
   "tables": [
     {
       "name": "admin_audit_logs",
@@ -2881,6 +2881,13 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": false
+        },
+        {
+          "name": "reserved_servings_used",
+          "sqliteType": "REAL",
+          "postgresType": "double precision",
+          "transform": "identity",
+          "nullable": false
         }
       ]
     },
@@ -2954,6 +2961,53 @@
           "sqliteType": "DATETIME",
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "household_meal_reservations",
+      "autoIncrement": false,
+      "primaryKey": [
+        "meal_id",
+        "membership_id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "membership_id",
+          "referencedTable": "household_members",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        },
+        {
+          "column": "meal_id",
+          "referencedTable": "household_meal_batches",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "meal_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "membership_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "servings",
+          "sqliteType": "REAL",
+          "postgresType": "double precision",
+          "transform": "identity",
           "nullable": false
         }
       ]

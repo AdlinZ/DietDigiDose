@@ -67,6 +67,8 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
           const meal = (await client.query("SELECT * FROM household_meal_batches WHERE id=$1 AND household_id=$2 FOR UPDATE",[householdEvent.meal_id,householdEvent.household_id])).rows[0];
           if (!meal) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","家庭批次不存在，无法归还份量");
           restored = undoHouseholdMealIntake(meal,householdEvent);
+          if (Number(householdEvent.reserved_servings_used) > 0) await client.query("INSERT INTO household_meal_reservations(meal_id,membership_id,servings) VALUES($1,$2,$3) ON CONFLICT(meal_id,membership_id) DO UPDATE SET servings=household_meal_reservations.servings+excluded.servings",
+            [householdEvent.meal_id,householdEvent.membership_id,householdEvent.reserved_servings_used]);
           await client.query("UPDATE household_meal_batches SET remaining_servings=$1,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[restored,householdEvent.meal_id]);
         }
         await client.query("INSERT INTO household_meal_intake_corrections(id,user_id,event_id,original_diet_record_id,mode,result_json) VALUES($1,$2,$3,$4,$5,$6::jsonb)",

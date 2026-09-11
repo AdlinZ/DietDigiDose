@@ -3,7 +3,7 @@ import { ScrollView, Text, TextInput, TouchableOpacity, View } from "react-nativ
 import { useFocusEffect } from "expo-router";
 import * as Crypto from "expo-crypto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { householdMealEatingSchema, type HouseholdMeal, type HouseholdMealEatingInput } from "@dietdigidose/contracts";
+import { householdMealReservationSchema, householdMealEatingSchema, type HouseholdMeal, type HouseholdMealEatingInput } from "@dietdigidose/contracts";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
@@ -21,6 +21,7 @@ export default function HouseholdMealsScreen() {
 function MealsAccount({ userId,householdId }: { userId?: number; householdId: number }) {
   const authFetch = useAuthFetch(); const router = useSafeRouter();
   const [meals,setMeals] = useState<HouseholdMeal[]>([]); const [membershipId,setMembershipId] = useState<number | null>(null);
+  const [reservation,setReservation] = useState<HouseholdMeal | null>(null); const [reservationAmount,setReservationAmount] = useState("1");
   const [selection,setSelection] = useState<HouseholdMeal | null>(null); const [servings,setServings] = useState("1");
   const [date,setDate] = useState(toLocalDateKey()); const [time,setTime] = useState("");
   const [mealType,setMealType] = useState<HouseholdMealEatingInput["mealType"]>("lunch");
@@ -33,7 +34,7 @@ function MealsAccount({ userId,householdId }: { userId?: number; householdId: nu
   useEffect(() => { alive.current = true; return () => { alive.current = false; sequence.current++; }; },[]);
   const load = useCallback(async () => {
     if (!userId || !Number.isSafeInteger(householdId) || householdId < 1 || !key || writing.current) return;
-    const ticket = ++sequence.current; setBusy(true); setSelection(null); setMessage("");
+    const ticket = ++sequence.current; setBusy(true); setSelection(null); setReservation(null); setMessage("");
     try {
       const stored = await AsyncStorage.getItem(key);
       if (!alive.current || getPrivateStorageGeneration(userId) !== generation || ticket !== sequence.current) return;
@@ -70,13 +71,25 @@ function MealsAccount({ userId,householdId }: { userId?: number; householdId: nu
       setPending(null); setSelection(null); setMeals([]); setMessage("本人食用已记录，正在刷新余量。"); refresh = true;
     } catch (error) {
       if (!current()) return;
-      const rejected = error instanceof ApiError && ["MEAL_VERSION_CONFLICT","MEAL_INSUFFICIENT"].includes(error.code ?? "");
+      const rejected = error instanceof ApiError && ["MEAL_VERSION_CONFLICT","MEAL_INSUFFICIENT","MEAL_RESERVED"].includes(error.code ?? "");
       if (rejected) {
         try {
           if (await removeUserPrivateStorage(baseKey,userId,generation) && current()) { setPending(null); setSelection(null); setMembershipId(null); setMeals([]); }
         } catch { if (current()) setMessage("本次未记录食用，但本地待确认项未能清除。请重试原提交以确认结果。"); return; }
       }
       setMessage(!sent ? "未能保存待确认项，本次尚未提交。请重试。" : rejected ? "余量已变化，本次未记录。请刷新后重新填写。" : "提交结果尚未确认，请重试原提交。不要重新记录同一次食用。");
+    } finally { if (current()) { writing.current = false; setBusy(false); if (refresh) void load(); } }
+  };
+  const saveReservation = async () => {
+    if (!userId || !reservation || !membershipId || pending || busy || writing.current) return;
+    const input = householdMealReservationSchema.safeParse({ membershipId,version: reservation.version,servings: Number(reservationAmount) });
+    if (!input.success || !reservationAmount.trim()) { setMessage("请输入0到30份，最多六位小数；0表示取消自己的预留。"); return; }
+    writing.current = true; setBusy(true); sequence.current++; let refresh = false;
+    try {
+      await householdApi.reserveMeal(authFetch,householdId,reservation.id,input.data);
+      if (current()) { setReservation(null); refresh = true; }
+    } catch {
+      if (current()) { setReservation(null); setMeals([]); setMembershipId(null); setMessage("预留结果尚未确认，或份量已变化。请刷新核对后再修改。"); }
     } finally { if (current()) { writing.current = false; setBusy(false); if (refresh) void load(); } }
   };
   const clear = async () => {
@@ -104,8 +117,16 @@ function MealsAccount({ userId,householdId }: { userId?: number; householdId: nu
         {!busy && membershipId && meals.length === 0 ? <Text className="text-copy-muted">暂无家庭制作批次。</Text> : null}
         {meals.map(meal => <View key={meal.id} className="gap-2 rounded-xl bg-surface p-4">
           <Text className="font-bold text-ink">{meal.foodName}</Text><Text className="text-copy-muted">剩余 {meal.remainingServings} / 制作 {meal.producedServings} 份</Text>
-          <TouchableOpacity accessibilityRole="button" disabled={busy || Boolean(pending) || !membershipId || meal.remainingServings <= 0} onPress={() => { setSelection(meal); setServings("1"); setDate(toLocalDateKey()); setTime(""); }}><Text className="text-brand">我吃了</Text></TouchableOpacity>
+          {meal.availableServings !== undefined ? <Text className="text-copy-muted">我可取用 {meal.availableServings} 份，其中为我预留 {meal.myReservedServings ?? 0} 份</Text> : null}
+          <TouchableOpacity accessibilityRole="button" disabled={busy || Boolean(pending) || !membershipId || (meal.availableServings ?? meal.remainingServings) <= 0} onPress={() => { setReservation(null); setSelection(meal); setServings("1"); setDate(toLocalDateKey()); setTime(""); }}><Text className="text-brand">我吃了</Text></TouchableOpacity>
+          <TouchableOpacity accessibilityRole="button" disabled={busy || Boolean(pending) || !membershipId} onPress={() => { setSelection(null); setReservation(meal); setReservationAmount(String(meal.myReservedServings || 1)); }}><Text className="text-brand">设置我的预留</Text></TouchableOpacity>
         </View>)}
+        {reservation && !pending ? <View className="gap-3 rounded-xl bg-surface p-4">
+          <Text className="font-bold text-ink">为我预留：{reservation.foodName}</Text>
+          <Text className="text-copy-muted">预留不会记录食用；本人食用时优先使用。填0取消自己的预留，退出家庭也会释放。</Text>
+          <TextInput accessibilityLabel="我的预留份量" keyboardType="decimal-pad" value={reservationAmount} onChangeText={setReservationAmount} editable={!busy} className="border border-border p-3 text-ink" />
+          <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={() => void saveReservation()}><Text className="font-bold text-brand">保存我的预留</Text></TouchableOpacity>
+        </View> : null}
         {selection && !pending ? <View className="gap-3 rounded-xl bg-surface p-4">
           <Text className="font-bold text-ink">记录本人食用：{selection.foodName}</Text>
           <TextInput accessibilityLabel="实际食用份量" value={servings} onChangeText={setServings} keyboardType="decimal-pad" editable={!busy} className="border border-border p-3 text-ink" />

@@ -1,3 +1,4 @@
+import { reservationTotals, validateReservation } from "./reservations.js";
 import { eatingRequest, prepareEating, repeatEating } from "./eating.js";
 import { randomUUID } from "node:crypto";
 import { HouseholdsError } from "./errors.js";
@@ -21,10 +22,28 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async reserveMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealReservationInput) {
+    return this.database.transaction(() => {
+      const member = this.member(householdId,userId);
+      if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
+      const meal = this.database.prepare("SELECT * FROM household_meal_batches WHERE id=? AND household_id=?").get(mealId,householdId) as Row | undefined;
+      if (!meal) throw new HouseholdsError(404,"家庭批次不存在","MEAL_NOT_FOUND");
+      const totals = reservationTotals(this.database.prepare("SELECT membership_id,servings FROM household_meal_reservations WHERE meal_id=?").all(mealId) as Row[],input.membershipId);
+      validateReservation(meal,input,totals);
+      if (input.servings > 0) this.database.prepare("INSERT INTO household_meal_reservations(meal_id,membership_id,servings) VALUES(?,?,?) ON CONFLICT(meal_id,membership_id) DO UPDATE SET servings=excluded.servings").run(mealId,input.membershipId,input.servings);
+      else this.database.prepare("DELETE FROM household_meal_reservations WHERE meal_id=? AND membership_id=?").run(mealId,input.membershipId);
+      this.database.prepare("UPDATE household_meal_batches SET version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(mealId);
+      return { version: input.version+1,myReservedServings: input.servings };
+    })();
+  }
   async meals(userId: number,householdId: number) {
     return this.database.transaction(() => {
-      if (!this.member(householdId,userId)) throw new HouseholdsError(403,"你不是该家庭的成员","NOT_MEMBER");
-      return (this.database.prepare("SELECT * FROM household_meal_batches WHERE household_id=? ORDER BY created_at DESC,id DESC LIMIT 100").all(householdId) as Row[]).map(row => productionResult(row,false));
+      const member = this.member(householdId,userId);
+      if (!member) throw new HouseholdsError(403,"你不是该家庭的成员","NOT_MEMBER");
+      return (this.database.prepare("SELECT * FROM household_meal_batches WHERE household_id=? ORDER BY created_at DESC,id DESC LIMIT 100").all(householdId) as Row[]).map(row => {
+        const totals = reservationTotals(this.database.prepare("SELECT membership_id,servings FROM household_meal_reservations WHERE meal_id=?").all(row.id) as Row[],Number(member.id));
+        return productionResult({ ...row,reserved_total: totals.total,reserved_mine: totals.mine },false);
+      });
     })();
   }
   async eatMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealEatingInput) {
@@ -35,13 +54,18 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
       if (existing) return repeatEating(existing,householdId,mealId,input);
       const meal = this.database.prepare("SELECT * FROM household_meal_batches WHERE id=? AND household_id=?").get(mealId,householdId) as Row | undefined;
       if (!meal) throw new HouseholdsError(404,"家庭待吃餐不存在","MEAL_NOT_FOUND");
-      const next = prepareEating(meal,input); const record = next.record;
+      const totals = reservationTotals(this.database.prepare("SELECT membership_id,servings FROM household_meal_reservations WHERE meal_id=?").all(mealId) as Row[],input.membershipId);
+      const next = prepareEating(meal,input,totals); const record = next.record;
       const diet = this.database.prepare("INSERT INTO diet_records(user_id,food_name,meal_type,amount,calories,protein,carbs,fat,recorded_at,recorded_time) VALUES(?,?,?,?,?,?,?,?,?,?)")
         .run(userId,record.food_name,record.meal_type,record.amount,record.calories ?? null,record.protein ?? null,record.carbs ?? null,record.fat ?? null,record.recorded_at,record.recorded_time);
       this.database.prepare("UPDATE household_meal_batches SET remaining_servings=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(next.remaining,mealId);
+      if (next.reservedUsed > 0) {
+        if (next.reservedUsed >= totals.mine) this.database.prepare("DELETE FROM household_meal_reservations WHERE meal_id=? AND membership_id=?").run(mealId,input.membershipId);
+        else this.database.prepare("UPDATE household_meal_reservations SET servings=? WHERE meal_id=? AND membership_id=?").run(Math.round((totals.mine-next.reservedUsed)*1_000_000)/1_000_000,mealId,input.membershipId);
+      }
       const result = { meal: productionResult({ ...meal,remaining_servings: next.remaining,version: input.version+1 },false),dietRecordId: Number(diet.lastInsertRowid),repeated: false };
-      this.database.prepare("INSERT INTO household_meal_events(id,household_id,meal_id,user_id,membership_id,idempotency_key,servings,request_json,result_json,diet_record_id) VALUES(?,?,?,?,?,?,?,?,?,?)")
-        .run(randomUUID(),householdId,mealId,userId,input.membershipId,input.idempotencyKey,input.servings,JSON.stringify(eatingRequest(input)),JSON.stringify(result),result.dietRecordId);
+      this.database.prepare("INSERT INTO household_meal_events(id,household_id,meal_id,user_id,membership_id,idempotency_key,servings,request_json,result_json,diet_record_id,reserved_servings_used) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+        .run(randomUUID(),householdId,mealId,userId,input.membershipId,input.idempotencyKey,input.servings,JSON.stringify(eatingRequest(input)),JSON.stringify(result),result.dietRecordId,next.reservedUsed);
       return result;
     })();
   }

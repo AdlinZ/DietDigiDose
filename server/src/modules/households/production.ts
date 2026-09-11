@@ -8,6 +8,7 @@ export function productionRequest(input: HouseholdMealProductionInput) {
 }
 export function productionResult(row: Row, repeated: boolean) {
   return { id: String(row.id),householdId: Number(row.household_id),foodName: String(row.food_name),
+    ...(row.reserved_total === undefined ? {} : { reservedServings: Math.round(Number(row.reserved_total)*1_000_000)/1_000_000,myReservedServings: Math.round(Number(row.reserved_mine)*1_000_000)/1_000_000,availableServings: Math.round((Number(row.remaining_servings)-Number(row.reserved_total)+Number(row.reserved_mine))*1_000_000)/1_000_000 }),
     producedServings: Number(row.produced_servings),remainingServings: Number(row.remaining_servings),version: Number(row.version),repeated };
 }
 export function repeatProduction(row: Row,userId: number,input: HouseholdMealProductionInput) {

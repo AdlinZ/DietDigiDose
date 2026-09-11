@@ -5,6 +5,7 @@ import type {
 } from "./types.js";
 
 export interface HouseholdsRepository {
+  reserveMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealReservationInput): Promise<Row>;
   meals(userId: number,householdId: number): Promise<Row[]>;
   eatMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealEatingInput): Promise<Row>;
   produceMeal(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdMealProductionInput): Promise<Row>;

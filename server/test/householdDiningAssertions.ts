@@ -117,3 +117,33 @@ export async function verifyHouseholdCorrections(service: HouseholdsService,diet
   await service.removeInventory(owner,householdId,Number(stock.id),Number(stock.version)+1);
   await service.join(member,inviteCode);
 }
+
+export async function verifyHouseholdReservations(service: HouseholdsService,diet: Pick<import("../src/modules/dietRecords/repository.js").DietRecordsRepository,"remove">,householdId: number,owner: number,member: number,inviteCode: string) {
+  const stock = await service.createInventory(owner,householdId,{ food_name: "预留原料",quantity: "6个",expiration_date: "2099-01-01" });
+  const own = (await service.diningPreferences(owner,householdId)).membershipId;
+  const other = (await service.diningPreferences(member,householdId)).membershipId;
+  const batch = await service.produceMeal(owner,householdId,{ idempotencyKey: "78888888-8888-4888-8888-888888888820",membershipId: own,foodName: "预留餐",producedServings: 3,inventory: [{ itemId: Number(stock.id),version: Number(stock.version),amount: 3,unit: "piece" }] });
+  const mealId = String(batch.id);
+  await service.reserveMeal(owner,householdId,mealId,{ membershipId: own,version: 1,servings: 2 });
+  await assert.rejects(() => service.reserveMeal(member,householdId,mealId,{ membershipId: other,version: 2,servings: 2 }),/不足/);
+  await service.reserveMeal(member,householdId,mealId,{ membershipId: other,version: 2,servings: 1 });
+  const mine = (await service.meals(owner,householdId)).find(item => item.id === mealId)!;
+  assert.equal(mine.availableServings,2); assert.equal(mine.myReservedServings,2); assert.equal(mine.reservedServings,3);
+  const input = { idempotencyKey: "78888888-8888-4888-8888-888888888821",membershipId: own,version: 3,servings: 0.5,recordedDate: "2026-09-12",recordedTime: null,mealType: "lunch" as const };
+  const eaten = await service.eatMeal(owner,householdId,mealId,input);
+  assert.equal((await service.meals(owner,householdId)).find(item => item.id === mealId)?.myReservedServings,1.5);
+  await diet.remove(owner,Number(eaten.dietRecordId),"undo_eating");
+  assert.equal((await service.meals(owner,householdId)).find(item => item.id === mealId)?.myReservedServings,2);
+  const race = await Promise.allSettled([1,2].map(() => service.reserveMeal(owner,householdId,mealId,{ membershipId: own,version: 5,servings: 2 })));
+  assert.equal(race.filter(item => item.status === "fulfilled").length,1);
+  await service.reserveMeal(owner,householdId,mealId,{ membershipId: own,version: 6,servings: 0 });
+  await service.eatMeal(owner,householdId,mealId,{ ...input,idempotencyKey: "78888888-8888-4888-8888-888888888822",version: 7,servings: 2 });
+  await assert.rejects(() => service.eatMeal(owner,householdId,mealId,{ ...input,idempotencyKey: "78888888-8888-4888-8888-888888888823",version: 8 }),/其他成员预留/);
+  await service.leave(member,householdId);
+  assert.equal((await service.meals(owner,householdId)).find(item => item.id === mealId)?.availableServings,1);
+  await assert.rejects(() => service.reserveMeal(member,householdId,mealId,{ membershipId: other,version: 8,servings: 1 }),/成员身份/);
+  await service.join(member,inviteCode);
+  assert.equal((await service.meals(member,householdId)).find(item => item.id === mealId)?.myReservedServings,0);
+  assert.equal((await service.inventory(owner,householdId)).find(item => item.id === stock.id)?.quantity,"3个");
+  await service.removeInventory(owner,householdId,Number(stock.id),Number(stock.version)+1);
+}

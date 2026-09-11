@@ -12,10 +12,11 @@ export function repeatEating(event: Row,householdId: number,mealId: string,input
   const result = typeof event.result_json === "string" ? JSON.parse(event.result_json) : event.result_json;
   return { ...result,repeated: true };
 }
-export function prepareEating(meal: Row,input: HouseholdMealEatingInput) {
+export function prepareEating(meal: Row,input: HouseholdMealEatingInput, reservations: { total: number; mine: number } = { total: 0,mine: 0 }) {
   if (Number(meal.version) !== input.version) throw new HouseholdsError(409,"家庭待吃量已变化，请刷新后重试","MEAL_VERSION_CONFLICT");
   if (input.servings > Number(meal.remaining_servings)) throw new HouseholdsError(409,"家庭待吃量不足","MEAL_INSUFFICIENT");
+  if (input.servings > roundServings(Number(meal.remaining_servings)-reservations.total+reservations.mine)) throw new HouseholdsError(409,"这部分餐食已为其他成员预留","MEAL_RESERVED");
   const nutrition = typeof meal.nutrition_per_serving_json === "string" ? JSON.parse(meal.nutrition_per_serving_json) : meal.nutrition_per_serving_json;
-  return { remaining: roundServings(Number(meal.remaining_servings)-input.servings),
+  return { reservedUsed: Math.min(input.servings,reservations.mine),remaining: roundServings(Number(meal.remaining_servings)-input.servings),
     record: mealConsumptionRecord({ food_name: String(meal.food_name),meal_type: input.mealType,nutrition_per_serving: nutrition ?? {} },input.servings,input.recordedDate,input.recordedTime) };
 }

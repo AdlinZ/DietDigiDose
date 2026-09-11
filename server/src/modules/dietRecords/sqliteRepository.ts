@@ -51,6 +51,8 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
           const meal = this.database.prepare("SELECT * FROM household_meal_batches WHERE id=? AND household_id=?").get(householdEvent.meal_id,householdEvent.household_id) as Record<string,unknown> | undefined;
           if (!meal) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","家庭批次不存在，无法归还份量");
           restored = undoHouseholdMealIntake(meal,householdEvent);
+          if (Number(householdEvent.reserved_servings_used) > 0) this.database.prepare("INSERT INTO household_meal_reservations(meal_id,membership_id,servings) VALUES(?,?,?) ON CONFLICT(meal_id,membership_id) DO UPDATE SET servings=servings+excluded.servings")
+            .run(householdEvent.meal_id,householdEvent.membership_id,householdEvent.reserved_servings_used);
           this.database.prepare("UPDATE household_meal_batches SET remaining_servings=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(restored,householdEvent.meal_id);
         }
         this.database.prepare("INSERT INTO household_meal_intake_corrections(id,user_id,event_id,original_diet_record_id,mode,result_json) VALUES(?,?,?,?,?,?)")

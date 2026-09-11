@@ -2230,6 +2230,15 @@ const migrations: Migration[] = [
       UNIQUE(user_id,original_diet_record_id)
     );`);
   } },
+  { version: 74, name: "household_meal_reservations", up(database) {
+    database.exec(`CREATE TABLE household_meal_reservations (
+      meal_id TEXT NOT NULL REFERENCES household_meal_batches(id) ON DELETE CASCADE,
+      membership_id INTEGER NOT NULL REFERENCES household_members(id) ON DELETE CASCADE,
+      servings REAL NOT NULL CHECK(servings > 0),
+      PRIMARY KEY(meal_id,membership_id)
+    );
+    ALTER TABLE household_meal_events ADD COLUMN reserved_servings_used REAL NOT NULL DEFAULT 0;`);
+  } },
 ];
 
 export function runMigrations(database: Database.Database) {

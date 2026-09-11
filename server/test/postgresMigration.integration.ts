@@ -1598,6 +1598,12 @@ try {
   assert.equal((await pool.query("SELECT metadata_json->>'learningPaused' paused FROM recipe_recommendation_events WHERE user_id=$1 AND idempotency_key='learning-paused-0'",[user.id])).rows[0].paused,"true");
   assert.equal((await recommendationsService.learningState(householdMember)).version,1);
 
+  const outcomeFacts = (await recommendationsService.learningState(user.id)).observations;
+  assert(outcomeFacts.some(fact => fact.kind === "production"));
+  assert(outcomeFacts.some(fact => fact.correctionId && !fact.valid));
+  assert.equal(new Set(outcomeFacts.map(fact => fact.id)).size,outcomeFacts.length);
+  assert.deepEqual(await recommendationsRepository.preferenceOutcomes(-1),{ production: [],events: [] });
+
   const aiToolDataService = new AiToolDataService(new PostgresAiToolDataRepository(pool));
   await pool.query(`INSERT INTO recipes
     (title, cook_time, difficulty, calories, protein, carbs, fat, tags, ingredients_json, source, status, quality_status)

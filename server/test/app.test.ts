@@ -3951,6 +3951,11 @@ test("prepared meal intake correction is explicit, atomic, idempotent and does n
   assert.equal((await remove(secondId, "delete_intake")).response.status, 200);
   assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 1);
   assert.equal((await remove(secondId, "undo_eating")).response.status, 409);
+  const evidence = await api("/api/v1/recommendations/preferences",{ token: account.token });
+  const observations = (evidence.body as JsonObject).observations as JsonObject[];
+  assert.equal(observations.filter(fact => fact.kind === "eat").length,2);
+  assert(observations.filter(fact => fact.kind === "eat").every(fact => fact.valid === false && fact.correctionId));
+  assert.equal(observations.filter(fact => fact.kind === "discard" && fact.valid).length,1);
 });
 
 test("meal plan change reviews protect confirmation, purchases and cooking with replay-safe restoration", async () => {

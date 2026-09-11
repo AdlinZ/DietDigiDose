@@ -1,3 +1,4 @@
+import { formatOutcomeEvidence } from "./outcomeEvidence.js";
 import { effectiveDislikeRecipeIds, learningOverrides, formatLearningState } from "./preferenceEvidence.js";
 import { preferenceLearningUpdateSchema, type PreferenceLearningUpdate } from "@dietdigidose/contracts";
 import { buildWeeklyPlan } from "./weeklyPlan.js";
@@ -25,7 +26,10 @@ export class RecommendationsService {
     this.kitchenware = kitchenware;
   }
 
-  async learningState(userId: number) { return formatLearningState(await this.repository.learningData(userId)); }
+  async learningState(userId: number) {
+    const [data,outcomes] = await Promise.all([this.repository.learningData(userId),this.repository.preferenceOutcomes(userId)]);
+    return { ...formatLearningState(data),observations: formatOutcomeEvidence(outcomes.production,outcomes.events) };
+  }
   async updateLearning(userId: number,input: PreferenceLearningUpdate) {
     const request = preferenceLearningUpdateSchema.parse(input);
     if (request.kind === "recipe" && !await this.repository.recipeAvailable(request.recipeId)) {

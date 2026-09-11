@@ -7,6 +7,7 @@ import { RecommendationsService } from "../src/modules/recommendations/service.j
 
 function repository(overrides: Partial<RecommendationsRepository> = {}) {
   return {
+    preferenceOutcomes: async () => ({ production: [],events: [] }),
     learningData: async () => ({ settings: null,events: [],recipes: [] }),
     planningState: async () => ({ items: [],plans: [],shopping: [] }),
     preparedMeals: async () => [], profile: async () => null, inventory: async () => [], kitchenware: async () => [],

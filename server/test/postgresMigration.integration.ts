@@ -1,3 +1,4 @@
+import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { randomUUID } from "node:crypto";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
@@ -2346,6 +2347,10 @@ try {
     let parameter = 0;
     return (await pool.query(sql.replace(/\?/g,() => `$${++parameter}`),args)).rows;
   });
+
+  await verifyWeeklyRoll(queueOtherUser,async (sql,args = []) => {
+    let parameter = 0; return (await pool.query(sql.replace(/\?/g,() => `$${++parameter}`),args)).rows;
+  },() => recommendationsService.weeklyPlan(queueOtherUser,{ startDate: "2036-09-13",mealTypes: ["lunch"],servings: 1 }));
 
   const originalPortionRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('原菜','[{\"name\":\"大米\",\"amount\":\"100g\"}]','[]','approved',1) RETURNING id")).rows[0].id);
   const replacementPortionRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('新菜','[{\"name\":\"大米\",\"amount\":\"200g\"}]','[]','approved',4) RETURNING id")).rows[0].id);

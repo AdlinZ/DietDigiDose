@@ -1,3 +1,4 @@
+import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
 import { SqlitePlanMaintenanceRepository } from "../src/modules/planMaintenance/sqliteRepository.js";
@@ -4257,5 +4258,19 @@ test("maintenance event evaluates and applies one affected meal without changing
     const statement = db.prepare(sql);
     if (statement.reader) return statement.all(...args) as JsonObject[];
     statement.run(...args); return [];
+  });
+});
+
+
+test("rolling weekly preview preserves overlapping arrangements and fills only day seven",async () => {
+  const owner = await register("weekly-roll@example.com");
+  await verifyWeeklyRoll(owner.user.id,async (sql,args = []) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...args) as JsonObject[];
+    statement.run(...args); return [];
+  },async () => {
+    const result = await api("/api/v1/recommendations/weekly-plan",{ token: owner.token,method: "POST",body: JSON.stringify({ startDate: "2036-09-13",mealTypes: ["lunch"],servings: 1 }) });
+    assert.equal(result.response.status,200);
+    return result.body as unknown as import("@dietdigidose/contracts").WeeklyPlanPreview;
   });
 });

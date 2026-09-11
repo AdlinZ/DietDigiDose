@@ -43,10 +43,20 @@ export function projectCoreLoops(data: CoreLoopDataset): CoreLoopFact[] {
     actorClass: actorClass(row.kind), environment: typeof row.metric_environment === "string" ? row.metric_environment : "unknown", scope: "personal",
     producedAt: utc(row.created_at), recipeId: row.recipe_id == null ? null : Number(row.recipe_id), selection: null, stock: [], deductions: [],
     intake: [{ recordId: String(row.diet_record_id), actorKey: actor(row.user_id), servings: 1, committedAt: utc(row.created_at), survivesCorrection: Boolean(row.record_exists) }] });
-  for (const row of data.shared) facts.push({ productionId: `household:${row.id}`, actorKey: actor(row.created_by_user_id), producerKey: actor(row.created_by_user_id),
-    actorClass: actorClass(row.kind), environment: "unknown", scope: "household", producedAt: utc(row.produced_at), recipeId: null,
-    selection: null, stock: [], deductions: [], intake: [{ recordId: String(row.diet_record_id), actorKey: actor(row.created_by_user_id),
-      servings: Number(row.servings), committedAt: utc(row.intake_at), survivesCorrection: true }] });
+  const sharedFacts = new Map<string, CoreLoopFact>();
+  for (const row of data.shared) {
+    const key = `household:${row.id}`;
+    let fact = sharedFacts.get(key);
+    if (!fact) {
+      fact = { productionId: key, actorKey: actor(row.created_by_user_id), producerKey: actor(row.created_by_user_id),
+        actorClass: actorClass(row.kind), environment: "unknown", scope: "household", producedAt: utc(row.produced_at), recipeId: null,
+        selection: null, stock: [], deductions: [], intake: [] };
+      sharedFacts.set(key,fact);
+    }
+    fact.intake.push({ recordId: String(row.diet_record_id), actorKey: actor(row.created_by_user_id),
+      servings: Number(row.servings), committedAt: utc(row.intake_at), survivesCorrection: true });
+  }
+  facts.push(...sharedFacts.values());
   return facts;
 }
 

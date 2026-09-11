@@ -93,12 +93,13 @@ module.exports = ({ config }) => ({
   },
   plugins: [
     '@siteed/audio-studio',
-    process.env.EXPO_PUBLIC_BACKEND_BASE_URL ? [
+    [
       'expo-router',
       {
-        origin: process.env.EXPO_PUBLIC_BACKEND_BASE_URL,
+        ...(process.env.EXPO_PUBLIC_BACKEND_BASE_URL ? { origin: process.env.EXPO_PUBLIC_BACKEND_BASE_URL } : {}),
+        asyncRoutes: { web: true, default: false },
       },
-    ] : 'expo-router',
+    ],
     [
       'expo-splash-screen',
       {

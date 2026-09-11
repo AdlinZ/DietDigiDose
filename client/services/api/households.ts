@@ -1,3 +1,4 @@
+import { householdMealsSchema, householdEatingResultSchema, type HouseholdMealEatingInput } from "@dietdigidose/contracts";
 import { householdDiningAllocationPreviewSchema, type HouseholdDiningAllocationInput, householdDiningMembersSchema, householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput } from "@dietdigidose/contracts";
 import { requestJson, type ApiFetch } from "./client";
 
@@ -71,6 +72,9 @@ export interface HouseholdActivityLog {
 }
 
 export const householdApi = {
+  meals: (apiFetch: ApiFetch, householdId: number) => requestJson(apiFetch, `/api/v1/households/${householdId}/meals`, {}, householdMealsSchema),
+  eatMeal: (apiFetch: ApiFetch, householdId: number, mealId: string, input: HouseholdMealEatingInput) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/meals/${encodeURIComponent(mealId)}/eat`, { method: "POST",body: JSON.stringify(input) },householdEatingResultSchema),
   previewDiningAllocation: (apiFetch: ApiFetch, householdId: number, input: HouseholdDiningAllocationInput) =>
     requestJson(apiFetch, `/api/v1/households/${householdId}/dining-allocation-preview`, { method: "POST", body: JSON.stringify(input) }, householdDiningAllocationPreviewSchema),
   diningMembers: (apiFetch: ApiFetch, householdId: number) =>

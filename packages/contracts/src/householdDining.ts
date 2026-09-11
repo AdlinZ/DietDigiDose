@@ -71,3 +71,12 @@ export const householdMealEatingSchema = z.object({
   mealType: z.enum(["breakfast","lunch","dinner","snack"]),
 }).strict();
 export type HouseholdMealEatingInput = z.infer<typeof householdMealEatingSchema>;
+
+export const householdMealSchema = z.object({
+  id: z.string().uuid(),householdId: z.number().int().positive(),foodName: z.string(),
+  producedServings: diningServings,remainingServings: z.number().finite().min(0).max(30),
+  version: z.number().int().positive(),repeated: z.boolean(),
+}).strict().refine(value => value.remainingServings <= value.producedServings,"剩余份量不能超过产出");
+export const householdMealsSchema = z.array(householdMealSchema);
+export const householdEatingResultSchema = z.object({ meal: householdMealSchema,dietRecordId: z.number().int().positive(),repeated: z.boolean() }).strict();
+export type HouseholdMeal = z.infer<typeof householdMealSchema>;

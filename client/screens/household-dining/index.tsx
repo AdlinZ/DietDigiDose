@@ -32,6 +32,7 @@ function DiningAccount({ signedIn,recipeId }: { signedIn: boolean; recipeId?: nu
         {families.map(family => <TouchableOpacity accessibilityRole="button" accessibilityState={{ selected: selected === family.id }} key={family.id} onPress={() => setSelected(family.id)} className="rounded-xl bg-surface p-4"><Text className={selected === family.id ? "font-bold text-brand" : "text-ink"}>{family.name}</Text></TouchableOpacity>)}
         {message ? <Text accessibilityLiveRegion="polite" className="text-ink">{message}</Text> : null}
         <TouchableOpacity accessibilityRole="button" onPress={() => { setSelected(null); setFamilies([]); setMessage(""); setReload(value => value+1); }}><Text className="text-brand">刷新家庭列表</Text></TouchableOpacity>
+        {selected !== null ? <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/household-meals",params: { householdId: selected } })}><Text className="font-bold text-brand">查看家庭待吃与记录本人食用</Text></TouchableOpacity> : null}
         {selected !== null ? <DiningEditor key={selected} householdId={selected} recipeId={recipeId} /> : null}
       </>}
     </ScrollView>

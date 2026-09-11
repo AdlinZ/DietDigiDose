@@ -109,7 +109,7 @@ worker 默认启动后立即执行一次，之后每小时执行；可用 `WORKE
 WORKER_TASKS=plan-maintenance-dispatch,plan-maintenance-process WORKER_INTERVAL_MS=30000 node dist/worker.js
 ```
 
-`PLAN_MAINTENANCE_EVENT_BATCH_SIZE` 默认200，`PLAN_MAINTENANCE_JOB_BATCH_SIZE` 默认10；每个业务任务最多尝试3次，输入冲突重新计算，过期租约可恢复。`plan_maintenance_jobs.result_json` 保存变更与诊断（输入指纹、规则版本、数量检查、模型调用数和费用）。每日检查仅在账户明确启用并设置时间/时区后入队，停机漏跑的旧日期合并为当天检查，同一当地日期不重复生成。关闭后未处理的每日事件只记录跳过。用户可在餐次计划页的“每日计划检查”设置时间与时区；可从设置页打开最近20次检查结果；消息中心及推送通知仍待接入。默认综合worker仍每小时轮询，低延迟部署需采用上面的独立配置。
+`PLAN_MAINTENANCE_EVENT_BATCH_SIZE` 默认200，`PLAN_MAINTENANCE_JOB_BATCH_SIZE` 默认10；每个业务任务最多尝试3次，输入冲突重新计算，过期租约可恢复。`plan_maintenance_jobs.result_json` 保存变更与诊断（输入指纹、规则版本、数量检查、模型调用数和费用）。每日检查仅在账户明确启用并设置时间/时区后入队，停机漏跑的旧日期合并为当天检查，同一当地日期不重复生成。关闭后未处理的每日事件只记录跳过。用户可在餐次计划页的“每日计划检查”设置时间与时区；可从设置页打开最近20次检查结果；完成后的调整/核对事项和最终失败会进入消息中心，静默完成不提醒；设备推送仍待接入。默认综合worker仍每小时轮询，低延迟部署需采用上面的独立配置。
 
 手动重跑全部任务或单项任务：
 

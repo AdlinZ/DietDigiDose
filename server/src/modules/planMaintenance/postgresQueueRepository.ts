@@ -1,3 +1,4 @@
+import { maintenanceNotice } from "./notice.js";
 import { dispatchDaily } from "./daily.js";
 import { inputSnapshot, maintenanceInputTables, maintenanceRuleTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import { maintenanceScope } from "./scope.js";
@@ -16,6 +17,24 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
     try { await client.query("BEGIN"); const result = await action(client); await client.query("COMMIT"); return result; }
     catch(error) { await client.query("ROLLBACK"); throw error; }
     finally { client.release(); }
+  }
+
+  async publishResults(limit?: number) {
+    return this.transaction(async client => {
+      const rows = (await client.query(`SELECT * FROM plan_maintenance_jobs WHERE status IN ('completed','failed')
+        AND COALESCE(result_json->>'notificationRecorded','0')='0' ORDER BY updated_at,id LIMIT $1 FOR UPDATE SKIP LOCKED`,[batchLimit(limit)])).rows;
+      for (const row of rows) {
+        const notice = maintenanceNotice(row);
+        if (notice) {
+          const notification = (await client.query(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)
+            VALUES($1,'plan_maintenance',$2,$3,$4,'normal',$5,$6) RETURNING id`,[row.user_id,notice.title,notice.body,notice.action ? "action_required" : "system",notice.action ? "pending" : "info",`maintenance:${row.id}`])).rows[0];
+          await client.query("INSERT INTO notification_events(user_id,notification_id,event_type,metadata_json) VALUES($1,$2,'created',$3::jsonb)",
+            [row.user_id,notification.id,JSON.stringify({ source: "plan_maintenance",jobId: row.id })]);
+        }
+        await client.query("UPDATE plan_maintenance_jobs SET result_json=COALESCE(result_json,'{}'::jsonb)||'{\"notificationRecorded\":1}'::jsonb WHERE id=$1",[row.id]);
+      }
+      return rows.length;
+    });
   }
 
   async enqueueDaily(now: Date, limit?: number) {

@@ -14,7 +14,7 @@ function fixture() {
   let application: MaintenanceApplication = { kind: "completed",changes: [] };
   let diagnostics: unknown;
   const repository: MaintenanceQueueRepository = {
-    enqueueDaily: async () => 0,enqueueEvents: async () => 0,scope: async () => null,candidateRecipeIds: async () => [],
+    publishResults: async () => 0,enqueueDaily: async () => 0,enqueueEvents: async () => 0,scope: async () => null,candidateRecipeIds: async () => [],
     claim: async () => ++claims === 1 ? { id: "job",userId: 1,attempt: 1,leaseToken: "token",eventIds: [] } : null,
     inputs: async () => snapshot,
     applyChanges: async (_job,_changes,_snapshot,result) => { commits++; diagnostics = result; return application; },

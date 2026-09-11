@@ -18,7 +18,7 @@ import { useAppThemeColors } from "@/hooks/useAppThemeColors";
 type NotificationFilter = "all" | "pending" | "system";
 type NotificationItem = {
   id: number;
-  type: "expiring_inventory" | "admin_campaign" | "meal_reminder" | "water_reminder";
+  type: "expiring_inventory" | "admin_campaign" | "meal_reminder" | "water_reminder" | "plan_maintenance";
   title: string;
   body: string;
   isRead: boolean;
@@ -59,6 +59,7 @@ function itemVisual(item: NotificationItem) {
       label: item.priority === "urgent" ? "今天到期" : item.priority === "high" ? "高优先级" : "临期任务",
     };
   }
+  if (item.type === "plan_maintenance") return { icon: "clipboard-check" as const,colorClass: "accent-brand",textClass: "text-brand",background: "bg-brand/10",label: "计划检查" };
   if (item.type === "meal_reminder") return { icon: "utensils" as const, colorClass: "accent-brand", textClass: "text-brand", background: "bg-brand/10", label: "用餐习惯" };
   if (item.type === "water_reminder") return { icon: "droplet" as const, colorClass: "accent-info", textClass: "text-info", background: "bg-info-soft", label: "饮水习惯" };
   return { icon: "bullhorn" as const, colorClass: "accent-brand", textClass: "text-brand", background: "bg-brand/10", label: "系统公告" };
@@ -148,6 +149,8 @@ export default function NotificationsScreen() {
         router.push("/ai-assistant", { prompt: "请优先使用我即将到期的库存食材，安排一份今天能完成的餐单。" });
       } else if (item.type === "expiring_inventory") {
         router.push("/(tabs)/inventory", { highlightItemId: item.inventoryItemId });
+      } else if (item.type === "plan_maintenance") {
+        router.push("/maintenance-results");
       } else if (item.type === "meal_reminder") {
         router.push("/diet-record");
       }
@@ -192,6 +195,12 @@ export default function NotificationsScreen() {
               <Text className={`text-[10px] font-bold ${visual.textClass}`}>{visual.label}</Text>
               <Text className="text-[10px] text-copy-muted">{new Date(item.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</Text>
             </View>
+            {item.type === "plan_maintenance" && item.actionStatus === "pending" && (
+              <View className="mt-3 gap-2 border-t border-background-secondary pt-3">
+                <TouchableOpacity onPress={() => void runAction(item,"complete")} className="rounded-lg bg-brand-fill px-3 py-2"><Text className="text-xs font-bold text-white">标记提醒已处理</Text></TouchableOpacity>
+                <Text className="text-xs text-copy-muted">仅关闭这条提醒；接受或恢复安排请到餐次计划操作。</Text>
+              </View>
+            )}
             {item.type === "expiring_inventory" && item.actionStatus === "pending" && (
               <View className="mt-3 flex-row flex-wrap gap-2 border-t border-background-secondary pt-3">
                 <TouchableOpacity onPress={() => void runAction(item, "plan_recipe")} className="rounded-lg bg-brand-fill px-3 py-2">

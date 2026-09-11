@@ -6,6 +6,7 @@ import type { MaintenanceQueueRepository } from "../src/modules/planMaintenance/
 export async function verifyMaintenanceQueue(harness: {
   repository: () => MaintenanceQueueRepository;
   settings: PlanMaintenanceRepository;
+  noticeCount: (jobId: string) => Promise<number>;
   seed: (id: string,userId: number,at: string) => Promise<void>;
   unprocessed: () => Promise<number>;
   users: [number,number];
@@ -130,5 +131,13 @@ export async function verifyMaintenanceQueue(harness: {
   const latest = (await harness.settings.settings(dailyUser))!;
   assert.equal(await harness.settings.saveSettings(dailyUser,latest.version,{ ...latest,enabled: false,nextCheckAt: null,nextLocalDate: null }),true);
   assert.equal(await harness.repository().enqueueDaily(new Date("2030-09-14T05:00:00Z")),0);
+
+  await Promise.all([harness.repository().publishResults(),harness.repository().publishResults()]);
+  assert.equal(await harness.noticeCount(fresh.id),1);
+  assert.equal(await harness.noticeCount(first.id),1);
+  assert.equal(await harness.noticeCount(other.id),1);
+  assert.equal(await harness.noticeCount(dailyJob.id),0);
+  assert.equal(await harness.repository().publishResults(),0);
+  assert.equal(await harness.noticeCount(fresh.id),1);
 
 }

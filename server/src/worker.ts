@@ -57,7 +57,12 @@ export async function runWorkerCycle(workerId: string, runtime: WorkerRuntimeBun
           return { processed: enqueued, succeeded: enqueued, failed: 0, details: { phase: "event_dispatch", eventsEnqueued: enqueued, dailyChecksCreated: daily } };
         }
       : taskName === "plan-maintenance-process"
-      ? async (context: WorkerTaskContext) => processMaintenanceJobs(runtime.maintenanceQueue,context,numberFromEnv("PLAN_MAINTENANCE_JOB_BATCH_SIZE",10))
+      ? async (context: WorkerTaskContext) => {
+          const result = await processMaintenanceJobs(runtime.maintenanceQueue,context,numberFromEnv("PLAN_MAINTENANCE_JOB_BATCH_SIZE",10));
+          await context.assertActive();
+          const reportsPublished = await runtime.maintenanceQueue.publishResults(numberFromEnv("PLAN_MAINTENANCE_EVENT_BATCH_SIZE",200));
+          return { ...result,details: { ...result.details,reportsPublished } };
+        }
       : async () => {
           const cleanup = await runtime.mediaCleanup.processPending(numberFromEnv("MEDIA_CLEANUP_BATCH_SIZE", 25));
           return {

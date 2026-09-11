@@ -338,7 +338,7 @@ describe("API security baseline", () => {
     const owner = await register("queue-owner@example.com");
     const other = await register("queue-other@example.com");
     db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
-    await verifyMaintenanceQueue({ settings: new SqlitePlanMaintenanceRepository(db),users: [owner.user.id,other.user.id], repository: () => new SqliteMaintenanceQueueRepository(db),
+    await verifyMaintenanceQueue({ noticeCount: async id => (db.prepare("SELECT COUNT(*) n FROM user_notification_inbox WHERE group_key=?").get(`maintenance:${id}`) as JsonObject).n,settings: new SqlitePlanMaintenanceRepository(db),users: [owner.user.id,other.user.id], repository: () => new SqliteMaintenanceQueueRepository(db),
       seed: async (id,userId,at) => { db.prepare("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES(?,?,'eat',?,?,?)").run(id,userId,id,id,at); },
       unprocessed: async () => (db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE processed_at IS NULL").get() as JsonObject).n,
       seedMeals: async userId => {

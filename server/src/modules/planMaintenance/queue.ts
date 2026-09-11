@@ -6,6 +6,7 @@ export const MAINTENANCE_MAX_ATTEMPTS = 3;
 export type MaintenanceJob = { id: string; userId: number; attempt: number; leaseToken: string; eventIds: string[] };
 export interface MaintenanceQueueRepository {
   /** Assign committed events after the debounce window. Assignment is not completion. */
+  publishResults(limit?: number): Promise<number>;
   enqueueDaily(now: Date, limit?: number): Promise<number>;
   enqueueEvents(now: Date, limit?: number): Promise<number>;
   /** Claim one user at a time; a fresh token fences every attempt, including recovery. */

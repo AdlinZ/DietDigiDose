@@ -1,3 +1,4 @@
+import { maintenanceNotice } from "./notice.js";
 import { dispatchDaily } from "./daily.js";
 import { inputSnapshot, maintenanceInputTables, maintenanceRuleTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import { maintenanceScope } from "./scope.js";
@@ -11,6 +12,24 @@ import { batchLimit, leaseDuration, MAINTENANCE_MAX_ATTEMPTS, MAINTENANCE_RULE_V
 export class SqliteMaintenanceQueueRepository implements MaintenanceQueueRepository {
   private readonly db: Database.Database;
   constructor(db: Database.Database) { this.db = db; }
+
+  async publishResults(limit?: number) {
+    return this.db.transaction(() => {
+      const rows = this.db.prepare(`SELECT * FROM plan_maintenance_jobs WHERE status IN ('completed','failed')
+        AND COALESCE(json_extract(result_json,'$.notificationRecorded'),0)=0 ORDER BY updated_at,id LIMIT ?`).all(batchLimit(limit)) as Row[];
+      for (const row of rows) {
+        const notice = maintenanceNotice(row);
+        if (notice) {
+          const notification = this.db.prepare(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)
+            VALUES(?,'plan_maintenance',?,?,?,?,?,?)`).run(row.user_id,notice.title,notice.body,notice.action ? "action_required" : "system","normal",notice.action ? "pending" : "info",`maintenance:${row.id}`);
+          this.db.prepare("INSERT INTO notification_events(user_id,notification_id,event_type,metadata_json) VALUES(?,?,'created',?)")
+            .run(row.user_id,notification.lastInsertRowid,JSON.stringify({ source: "plan_maintenance",jobId: row.id }));
+        }
+        this.db.prepare("UPDATE plan_maintenance_jobs SET result_json=json_set(COALESCE(result_json,'{}'),'$.notificationRecorded',1) WHERE id=?").run(row.id);
+      }
+      return rows.length;
+    })();
+  }
 
   async enqueueDaily(now: Date, limit?: number) {
     return this.db.transaction(() => {

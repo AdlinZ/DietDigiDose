@@ -58,9 +58,10 @@ export async function verifyMaintenanceQueue(harness: {
   assert.deepEqual(await harness.repository().scope({ ...fresh,eventIds: ["queue-c"] },"2026-09-12"),scope);
   assert.equal(await harness.repository().scope({ ...fresh,userId: harness.users[1] },"2026-09-12"),null);
   assert.equal(await harness.repository().scope(first,"2026-09-12"),null);
-  let captured = await harness.repository().inputs(fresh);
+  const candidateIds = await harness.repository().candidateRecipeIds();
+  let captured = await harness.repository().inputs(fresh,candidateIds);
   assert.ok(captured);
-  assert.equal((await harness.repository().inputs(fresh))?.fingerprint,captured.fingerprint);
+  assert.equal((await harness.repository().inputs(fresh,candidateIds))?.fingerprint,captured.fingerprint);
   const evaluated = await evaluateMaintenanceJob(harness.repository(),fresh,"2026-09-12");
   assert.ok(evaluated); assert.equal(evaluated.snapshot.fingerprint,captured.fingerprint);
   assert.deepEqual(evaluated.scope,scope); assert.equal(evaluated.result.modelCalls,0);
@@ -81,7 +82,7 @@ export async function verifyMaintenanceQueue(harness: {
   assert.equal(await harness.changeCount(),0);
   assert.equal(await harness.unprocessed(),4);
   const previousFingerprint = captured.fingerprint;
-  captured = await harness.repository().inputs(fresh);
+  captured = await harness.repository().inputs(fresh,candidateIds);
   assert.ok(captured); assert.notEqual(captured.fingerprint,previousFingerprint);
   const applied = await apply(fresh,["mutable","confirmed","cooking","purchased"].map(kind => change(`maintenance-${kind}`)));
   assert.equal(applied.kind,"completed");

@@ -54,6 +54,10 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
     });
   }
 
+  async candidateRecipeIds() {
+    return (await this.pool.query("SELECT id FROM recipes WHERE status='approved' AND deleted_at IS NULL AND COALESCE(quality_status,'trusted')<>'needs_review' ORDER BY id")).rows.map(row => Number(row.id));
+  }
+
   async scope(job: MaintenanceJob, fromDate: string) {
     return this.transaction(async client => {
       await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");

@@ -9,6 +9,7 @@ export interface MaintenanceQueueRepository {
   enqueueEvents(now: Date, limit?: number): Promise<number>;
   /** Claim one user at a time; a fresh token fences every attempt, including recovery. */
   claim(now: Date, leaseMs?: number): Promise<MaintenanceJob | null>;
+  candidateRecipeIds(): Promise<number[]>;
   scope(job: MaintenanceJob, fromDate: string): Promise<MaintenanceScope | null>;
   inputs(job: MaintenanceJob, recipeIds?: number[]): Promise<MaintenanceInputSnapshot | null>;
   applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">): Promise<MaintenanceApplication>;

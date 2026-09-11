@@ -40,9 +40,13 @@ export function createDietRecordsRouter(service: DietRecordsService) {
     void service.create(req.userId!, req.body).then((record) => res.status(201).json(record)).catch(next);
   });
   router.delete("/:id", (req: AuthRequest, res: Response, next: NextFunction) => {
-    void service.remove(req.userId!, Number(req.params.id))
+    const mode = req.query.mode;
+    if (mode !== undefined && mode !== "undo_eating" && mode !== "delete_intake") {
+      sendError(res, 400, "删除方式无效", "INVALID_DELETE_MODE"); return;
+    }
+    void service.remove(req.userId!, Number(req.params.id), mode)
       .then((removed) => removed ? res.json({ message: "删除成功" }) : sendError(res, 404, "记录不存在", "DIET_RECORD_NOT_FOUND"))
-      .catch(next);
+      .catch(error => handleInventoryError(error, res, next));
   });
   return router;
 }

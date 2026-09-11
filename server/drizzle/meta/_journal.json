@@ -36,6 +36,13 @@
       "when": 1788903495806,
       "tag": "0004_chief_loki",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789144764306,
+      "tag": "0005_outstanding_brood",
+      "breakpoints": true
     }
   ]
 }

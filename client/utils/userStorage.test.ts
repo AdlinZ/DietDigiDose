@@ -1,6 +1,7 @@
 jest.mock("@react-native-async-storage/async-storage", () => ({
   __esModule: true,
   default: {
+    setItem: jest.fn(),
     getAllKeys: jest.fn(),
     multiGet: jest.fn(),
     multiRemove: jest.fn(),
@@ -13,6 +14,9 @@ jest.mock("expo-file-system", () => ({
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
+  activatePrivateStorage,
+  getPrivateStorageGeneration,
+  writeUserPrivateStorage,
   AI_DATA_CONSENT_STORAGE_KEY,
   CHAT_SESSIONS_STORAGE_KEY,
   INVENTORY_SCAN_JOB_STORAGE_KEY,
@@ -112,4 +116,28 @@ describe("user-scoped private storage", () => {
       "@shiyu_shopping_list:user:101",
     ]);
   });
+});
+
+
+test("logout drains in-flight retry writes and removes both key formats only for that account", async () => {
+  activatePrivateStorage(301);
+  const generation = getPrivateStorageGeneration(301);
+  let finish!: () => void;
+  (AsyncStorage.setItem as jest.Mock).mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  (AsyncStorage.getAllKeys as jest.Mock).mockResolvedValue([
+    "prepared-meal-pending:user:301", "prepared-meal-pending:301", "prepared-meal-pending:user:302", "prepared-meal-pending:302",
+  ]);
+  const writing = writeUserPrivateStorage("prepared-meal-pending", 301, generation, "private request");
+  const purging = purgeUserPrivateStorage(301);
+  finish();
+  expect(await writing).toBe(false);
+  await purging;
+  expect(AsyncStorage.multiRemove).toHaveBeenLastCalledWith(["prepared-meal-pending:user:301", "prepared-meal-pending:301"]);
+  expect(await writeUserPrivateStorage("prepared-meal-pending", 301, generation, "late request")).toBe(false);
+  expect(await writeUserPrivateStorage("prepared-meal-pending", 301, getPrivateStorageGeneration(301), "during logout")).toBe(false);
+  activatePrivateStorage(301);
+  (AsyncStorage.setItem as jest.Mock).mockResolvedValue(undefined);
+  expect(await writeUserPrivateStorage("prepared-meal-pending", 301, generation, "old session")).toBe(false);
+  expect(await writeUserPrivateStorage("prepared-meal-pending", 301, getPrivateStorageGeneration(301), "new session")).toBe(true);
+  expect(isClearableCacheKey("prepared-meal-pending:user:301", 301)).toBe(false);
 });

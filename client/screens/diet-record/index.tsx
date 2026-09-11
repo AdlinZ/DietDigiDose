@@ -16,23 +16,9 @@ import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { addLocalDays, parseDateKey, toLocalDateKey } from "@/utils/date";
-import { aiApi, ApiError, dietApi, waitForAgentRun } from "@/services/api";
+import { aiApi, ApiError, dietApi, waitForAgentRun, type DietRecord } from "@/services/api";
 
 import * as ImagePicker from "expo-image-picker";
-
-interface DietRecord {
-  id: number;
-  meal_type: string;
-  food_name: string;
-  amount: string;
-  calories: number | null;
-  protein: number | null;
-  carbs: number | null;
-  fat: number | null;
-  recorded_at: string;
-  recorded_time?: string | null;
-  image_url: string | null;
-}
 
 interface PresetFood {
   name: string;
@@ -343,22 +329,28 @@ export default function DietRecordScreen() {
   };
 
   const handleDelete = (id: number) => {
-    Alert.alert("确认删除", "要删除此打卡记录吗？", [
-      { text: "取消", style: "cancel" },
-      {
-        text: "删除",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            await dietApi.remove(authFetch, id);
-            fetchRecords();
-            void fetchWeeklyRecordCounts();
-          } catch (e) {
-            console.error(e);
-          }
-        },
-      },
-    ]);
+    const record = records.find(item => item.id === id);
+    const remove = async (mode?: "undo_eating" | "delete_intake") => {
+      try {
+        await dietApi.remove(authFetch, id, mode);
+        fetchRecords();
+        void fetchWeeklyRecordCounts();
+      } catch (error) {
+        Alert.alert("未能处理记录", error instanceof Error ? error.message : "请稍后重试");
+      }
+    };
+    if (record?.prepared_meal_id) {
+      Alert.alert("处理关联食用记录", "撤销误记：恢复待吃份量并删除摄入，制作时消耗的原料不返还。仅删除摄入：仍保留食用事实，待吃份量不变。", [
+        { text: "取消", style: "cancel" },
+        { text: "仅删除摄入", style: "destructive", onPress: () => void remove("delete_intake") },
+        { text: "撤销误记食用", onPress: () => void remove("undo_eating") },
+      ]);
+    } else {
+      Alert.alert("确认删除", "要删除此打卡记录吗？", [
+        { text: "取消", style: "cancel" },
+        { text: "删除", style: "destructive", onPress: () => void remove() },
+      ]);
+    }
   };
 
   const dayTotalCal = records.reduce((s, r) => s + (r.calories || 0), 0);

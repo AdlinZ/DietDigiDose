@@ -2077,6 +2077,23 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    version: 63,
+    name: "prepared_meal_intake_corrections",
+    up(database) {
+      database.exec(`CREATE TABLE prepared_meal_intake_corrections (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        event_id TEXT NOT NULL REFERENCES prepared_meal_events(id) ON DELETE CASCADE,
+        original_diet_record_id INTEGER NOT NULL,
+        mode TEXT NOT NULL CHECK(mode IN ('undo_eating','delete_intake')),
+        result_json TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id,original_diet_record_id), UNIQUE(event_id)
+      );`);
+    },
+  },
+
 ];
 
 export function runMigrations(database: Database.Database) {

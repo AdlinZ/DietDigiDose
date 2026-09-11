@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PreparedMealEventInput } from "@dietdigidose/contracts";
-import { formatPreparedMeal, mealConsumptionRecord, transitionMeal, roundServings } from "./preparedMeals.js";
+import { formatPreparedMeal, mealConsumptionRecord, transitionMeal, roundServings, undoMealIntake } from "./preparedMeals.js";
 import type Database from "better-sqlite3";
 import { applyInventoryConsumptions, InventoryQuantityError, type InventoryConsumption } from "../../services/inventoryQuantity.js";
 import type { DietRecordsRepository } from "./repository.js";
@@ -20,7 +20,7 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
   async list(userId: number, date?: string) {
     const where = date ? "WHERE user_id = ? AND recorded_at = ?" : "WHERE user_id = ?";
     const params = date ? [userId, date] : [userId];
-    return this.database.prepare(`SELECT * FROM diet_records ${where}
+    return this.database.prepare(`SELECT *, (SELECT prepared_meal_id FROM prepared_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS prepared_meal_id FROM diet_records ${where}
       ORDER BY CASE WHEN recorded_time IS NULL THEN 1 ELSE 0 END, recorded_time DESC, id DESC`).all(...params) as Array<Record<string, unknown>>;
   }
 
@@ -33,8 +33,31 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
     return this.database.prepare("SELECT * FROM diet_records WHERE id = ?").get(result.lastInsertRowid) as Record<string, unknown>;
   }
 
-  async remove(userId: number, id: number) {
-    return this.database.prepare("DELETE FROM diet_records WHERE id = ? AND user_id = ?").run(id, userId).changes === 1;
+  async remove(userId: number, id: number, mode?: "undo_eating" | "delete_intake") {
+    return this.database.transaction(() => {
+      const correction = this.database.prepare("SELECT mode FROM prepared_meal_intake_corrections WHERE user_id=? AND original_diet_record_id=?").get(userId, id) as { mode: string } | undefined;
+      if (correction) {
+        if (correction.mode !== mode) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "该记录已按另一种方式处理");
+        return true;
+      }
+      const event = this.database.prepare("SELECT * FROM prepared_meal_events WHERE user_id=? AND diet_record_id=? AND event_type='eat'").get(userId, id) as { id: string; prepared_meal_id: string; servings: number; result_json: string } | undefined;
+      if (event) {
+        if (!mode) throw new InventoryQuantityError("PREPARED_MEAL_DELETE_MODE_REQUIRED", "此记录关联待吃餐，请选择撤销误记食用或仅删除摄入记录");
+        const row = this.database.prepare("SELECT * FROM prepared_meals WHERE id=? AND user_id=?").get(event.prepared_meal_id, userId) as Record<string, unknown>;
+        const meal = formatPreparedMeal(row);
+        const next = mode === "undo_eating" ? undoMealIntake(meal, event) : meal;
+        if (mode === "undo_eating") {
+          const changed = this.database.prepare("UPDATE prepared_meals SET remaining_servings=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND version=?")
+            .run(next.remaining_servings, meal.id, userId, meal.version);
+          if (changed.changes !== 1) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "餐食已变化，请刷新后重试");
+        }
+        this.database.prepare("INSERT INTO prepared_meal_intake_corrections(id,user_id,event_id,original_diet_record_id,mode,result_json) VALUES(?,?,?,?,?,?)")
+          .run(randomUUID(), userId, event.id, id, mode, JSON.stringify({ prepared_meal: next, original_event: event.id, original_diet_record_id: id, mode }));
+      } else if (mode === "undo_eating") {
+        throw new InventoryQuantityError("PREPARED_MEAL_NOT_FOUND", "此记录没有可撤销的关联食用");
+      }
+      return this.database.prepare("DELETE FROM diet_records WHERE id = ? AND user_id = ?").run(id, userId).changes === 1;
+    })();
   }
 
   async completeCooking(userId: number, input: PreparedCookingCompletion) {

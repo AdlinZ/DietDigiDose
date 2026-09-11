@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { purgeLegacyUnscopedPrivateStorage, purgeUserPrivateStorage } from '@/utils/userStorage';
+import { activatePrivateStorage, invalidatePrivateStorage, purgeLegacyUnscopedPrivateStorage, purgeUserPrivateStorage } from '@/utils/userStorage';
 import { ApiError, authApi } from '@/services/api';
 import { clearApiCacheScope, registerApiFetchScope } from '@/services/api/cache';
 import { AUTH_USER_KEY, getStoredToken, removeStoredToken, setStoredToken } from '@/utils/authStorage';
@@ -67,11 +67,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       await stopVoiceOutput().catch(() => undefined);
       if (previousUser?.id && previousUser.id !== data.user.id) {
+        invalidatePrivateStorage(previousUser.id);
         await purgeVoiceAudioCacheForUser(previousUser.id).catch(() => undefined);
         await purgeUserPrivateStorage(previousUser.id).catch(() => undefined);
       }
       await setStoredToken(data.token);
       await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+      activatePrivateStorage(data.user.id);
       setToken(data.token);
       setUser(data.user);
       setPendingSmsRegistration(null);
@@ -87,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     message?: string,
   ) => {
     const cleared = await sessionCoordinator.current.clearIfCurrent(expectedGeneration, async () => {
+      invalidatePrivateStorage(userId);
       await stopVoiceOutput().catch(() => undefined);
       await purgeVoiceAudioCacheForUser(userId).catch(() => undefined);
       await cancelAllLocalNotificationsForUser(userId).catch(() => undefined);
@@ -118,6 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return;
           }
           const restoredGeneration = await sessionCoordinator.current.authenticate(async () => {
+            activatePrivateStorage(cachedUser.id);
             setToken(savedToken);
             setUser(cachedUser);
           });

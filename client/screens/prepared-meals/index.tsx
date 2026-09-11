@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import * as Crypto from "expo-crypto";
@@ -8,6 +8,8 @@ import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { ApiError, dietApi } from "@/services/api";
+import { getPrivateStorageGeneration, getUserStorageKey, removeUserPrivateStorage, writeUserPrivateStorage } from "@/utils/userStorage";
+import { mergePreparedMeals } from "@/utils/preparedMealState";
 import { toLocalDateKey } from "@/utils/date";
 
 type Pending = { mealId: string; input: PreparedMealEventInput };
@@ -26,41 +28,61 @@ export default function PreparedMealsScreen() {
   const busy = useRef(false);
   const accountRef = useRef(user?.id);
   accountRef.current = user?.id;
-  const key = `prepared-meal-pending:${user?.id}`;
+  const key = getUserStorageKey("prepared-meal-pending", user?.id);
+  const generation = user?.id ? getPrivateStorageGeneration(user.id) : 0;
+  const requestRevision = useRef(0);
+  useEffect(() => {
+    requestRevision.current += 1;
+    setMeals([]); setPending(null); setSelection(null); setSaving(false);
+  }, [user?.id]);
   const load = useCallback(async () => {
-    if (!user?.id) { setMeals([]); setPending(null); return; }
+    if (!user?.id || !key) { setMeals([]); setPending(null); return; }
     const account = user.id;
-    setLoading(true); setError(""); setMeals([]); setPending(null);
+    const revision = ++requestRevision.current;
+    setLoading(true); setError("");
     try {
-      const [value, stored] = await Promise.all([dietApi.preparedMeals(authFetch), AsyncStorage.getItem(key)]);
-      if (accountRef.current !== account) return;
-      setMeals(value);
-      if (stored) setPending(JSON.parse(stored));
-    } catch (e) { if (accountRef.current === account) setError(e instanceof Error ? e.message : "待吃餐加载失败"); }
-    finally { if (accountRef.current === account) setLoading(false); }
-  }, [authFetch, user?.id, key]);
+      const [value, currentStored, legacyStored] = await Promise.all([
+        dietApi.preparedMeals(authFetch), AsyncStorage.getItem(key), AsyncStorage.getItem(`prepared-meal-pending:${account}`),
+      ]);
+      if (accountRef.current !== account || generation !== getPrivateStorageGeneration(account) || revision !== requestRevision.current) return;
+      const stored = currentStored ?? legacyStored;
+      if (legacyStored && !currentStored) {
+        if (!await writeUserPrivateStorage("prepared-meal-pending", account, generation, legacyStored)) return;
+        await AsyncStorage.removeItem(`prepared-meal-pending:${account}`);
+      }
+      if (accountRef.current !== account || revision !== requestRevision.current) return;
+      setMeals(items => mergePreparedMeals(items, value));
+      setPending(stored ? JSON.parse(stored) : null);
+    } catch (e) { if (accountRef.current === account && revision === requestRevision.current) setError(e instanceof Error ? e.message : "待吃餐加载失败"); }
+    finally { if (accountRef.current === account && revision === requestRevision.current) setLoading(false); }
+  }, [authFetch, user?.id, key, generation]);
   useFocusEffect(useCallback(() => { setSelection(null); void load(); }, [load]));
   const submit = async (retry?: Pending) => {
-    if (busy.current || !user?.id || (!retry && !selection)) return;
+    if (busy.current || !user?.id || !key || (!retry && !selection)) return;
     busy.current = true; setSaving(true);
     const account = user.id;
+    requestRevision.current += 1;
+    setLoading(false);
     try {
       const request = retry ?? { mealId: selection!.meal.id, input: (await import("@dietdigidose/contracts")).preparedMealEventSchema.parse({
         idempotency_key: `prepared-meal:${Crypto.randomUUID()}`, version: selection!.meal.version, type: selection!.type,
         ...(selection!.type === "reschedule" ? { planned_date: date } : { servings: Number(servings), recorded_at: date }),
       }) };
-      await AsyncStorage.setItem(key, JSON.stringify(request));
-      if (accountRef.current !== account) return;
+      if (!await writeUserPrivateStorage("prepared-meal-pending", account, generation, JSON.stringify(request))) return;
+      if (accountRef.current !== account || generation !== getPrivateStorageGeneration(account)) return;
       setPending(request);
       const result = await dietApi.mealEvent(authFetch, request.mealId, request.input);
-      await AsyncStorage.removeItem(key);
-      if (accountRef.current !== account) return;
+      if (accountRef.current !== account || generation !== getPrivateStorageGeneration(account)) return;
+      requestRevision.current += 1;
+      if (!await removeUserPrivateStorage("prepared-meal-pending", account, generation)) return;
+      if (accountRef.current !== account || generation !== getPrivateStorageGeneration(account)) return;
       setPending(null); setSelection(null);
-      setMeals(items => items.map(item => item.id === result.prepared_meal.id ? result.prepared_meal : item));
+      setMeals(items => mergePreparedMeals(items, [result.prepared_meal]));
+      void load();
       Alert.alert("已保存", request.input.type === "eat" ? "实际食用已记入对应日期的饮食记录。" : request.input.type === "discard" ? "已减少待吃份量，未新增摄入。" : request.input.is_reserved === undefined ? "已调整计划日期，尚未记录食用。" : request.input.is_reserved ? "已标记保留，剩余份量不变。" : "已解除保留，可参与后续规划。");
     } catch (e) {
-      if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
-        await AsyncStorage.removeItem(key);
+      if (accountRef.current === account && generation === getPrivateStorageGeneration(account) && e instanceof ApiError && [400, 404, 409, 422].includes(e.status)) {
+        if (!await removeUserPrivateStorage("prepared-meal-pending", account, generation)) return;
         if (accountRef.current === account) { setPending(null); setSelection(null); void load(); }
       }
       if (accountRef.current === account) Alert.alert("未能确认保存", e instanceof Error ? e.message : "请重试，重复提交不会重复记账");

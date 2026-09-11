@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PreparedMealEventInput } from "@dietdigidose/contracts";
-import { formatPreparedMeal, mealConsumptionRecord, transitionMeal, roundServings } from "./preparedMeals.js";
+import { formatPreparedMeal, mealConsumptionRecord, transitionMeal, roundServings, undoMealIntake } from "./preparedMeals.js";
 import type { Pool, PoolClient } from "pg";
 import type { InventoryConsumptionData, InventoryConsumptionResponse } from "@dietdigidose/contracts";
 import { InventoryQuantityError, type InventoryConsumption } from "../../services/inventoryQuantity.js";
@@ -37,17 +37,41 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
 
   async list(userId: number, date?: string) {
     const result = date
-      ? await this.pool.query(`SELECT * FROM diet_records WHERE user_id = $1 AND recorded_at = $2
+      ? await this.pool.query(`SELECT *, (SELECT prepared_meal_id FROM prepared_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS prepared_meal_id FROM diet_records WHERE user_id = $1 AND recorded_at = $2
           ORDER BY CASE WHEN recorded_time IS NULL THEN 1 ELSE 0 END, recorded_time DESC, id DESC`, [userId, date])
-      : await this.pool.query(`SELECT * FROM diet_records WHERE user_id = $1
+      : await this.pool.query(`SELECT *, (SELECT prepared_meal_id FROM prepared_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS prepared_meal_id FROM diet_records WHERE user_id = $1
           ORDER BY CASE WHEN recorded_time IS NULL THEN 1 ELSE 0 END, recorded_time DESC, id DESC`, [userId]);
     return result.rows as Array<Record<string, unknown>>;
   }
 
   create(userId: number, record: PreparedDietRecord) { return insertRecord(this.pool, userId, record); }
 
-  async remove(userId: number, id: number) {
-    return (await this.pool.query("DELETE FROM diet_records WHERE id = $1 AND user_id = $2", [id, userId])).rowCount === 1;
+  async remove(userId: number, id: number, mode?: "undo_eating" | "delete_intake") {
+    return this.transaction(async client => {
+      // Same account lock as production and consumption, before reading event state.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`prepared-meals:${userId}`]);
+      const correction = (await client.query("SELECT mode FROM prepared_meal_intake_corrections WHERE user_id=$1 AND original_diet_record_id=$2", [userId, id])).rows[0];
+      if (correction) {
+        if (correction.mode !== mode) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "该记录已按另一种方式处理");
+        return true;
+      }
+      const event = (await client.query("SELECT * FROM prepared_meal_events WHERE user_id=$1 AND diet_record_id=$2 AND event_type='eat'", [userId, id])).rows[0];
+      if (event) {
+        if (!mode) throw new InventoryQuantityError("PREPARED_MEAL_DELETE_MODE_REQUIRED", "此记录关联待吃餐，请选择撤销误记食用或仅删除摄入记录");
+        const row = (await client.query("SELECT * FROM prepared_meals WHERE id=$1 AND user_id=$2 FOR UPDATE", [event.prepared_meal_id, userId])).rows[0];
+        const meal = formatPreparedMeal(row);
+        const next = mode === "undo_eating" ? undoMealIntake(meal, event) : meal;
+        if (mode === "undo_eating") {
+          const changed = await client.query("UPDATE prepared_meals SET remaining_servings=$1,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND user_id=$3 AND version=$4", [next.remaining_servings, meal.id, userId, meal.version]);
+          if (changed.rowCount !== 1) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "餐食已变化，请刷新后重试");
+        }
+        await client.query("INSERT INTO prepared_meal_intake_corrections(id,user_id,event_id,original_diet_record_id,mode,result_json) VALUES($1,$2,$3,$4,$5,$6::jsonb)",
+          [randomUUID(), userId, event.id, id, mode, JSON.stringify({ prepared_meal: next, original_event: event.id, original_diet_record_id: id, mode })]);
+      } else if (mode === "undo_eating") {
+        throw new InventoryQuantityError("PREPARED_MEAL_NOT_FOUND", "此记录没有可撤销的关联食用");
+      }
+      return (await client.query("DELETE FROM diet_records WHERE id = $1 AND user_id = $2", [id, userId])).rowCount === 1;
+    });
   }
 
   private async transaction<T>(operation: (client: PoolClient) => Promise<T>) {

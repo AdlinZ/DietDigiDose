@@ -212,7 +212,7 @@ try {
     validationClient.release();
   }
   assert.equal(report.ok, true, report.failures.join("\n"));
-  assert.equal(report.tableCount, 94);
+  assert.equal(report.tableCount, baseline.tables.length);
   assert.equal(report.criticalMetrics["inventory.quantity_value"], 250);
   assert.equal(report.criticalMetrics["diet.calories"], 45);
   assert.equal(report.criticalMetrics["health.weight"], 62.5);
@@ -407,6 +407,38 @@ try {
   })));
   assert.equal(raceMeals.filter(result => result.status === "fulfilled").length, 1);
   assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === prepared.id)?.remaining_servings, 0);
+
+  const tinyProduction = await dietService.completeCooking(user.id, {
+    idempotency_key: "postgres-precision-produce-205", inventory_item_ids: [], inventory_consumptions: [],
+    production: { food_name: "Postgres 小余量", produced_servings: 1, eaten_servings: 0.9995, meal_type: "午餐", nutrition_per_serving: {} },
+  });
+  const tinyMeal = tinyProduction.prepared_meal as { id: string; remaining_servings: number };
+  assert.equal(tinyMeal.remaining_servings, 0.0005);
+  const tinyEvent = { idempotency_key: "postgres-precision-discard-205", version: 1, type: "discard" as const, servings: 0.0005 };
+  const tinyResults = await Promise.all([dietService.applyMealEvent(user.id, tinyMeal.id, tinyEvent), dietService.applyMealEvent(user.id, tinyMeal.id, tinyEvent)]);
+  assert.deepEqual(tinyResults.map(result => result.repeated).sort(), [false, true]);
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === tinyMeal.id)?.remaining_servings, 0);
+
+  const correctProduction = await dietService.completeCooking(user.id, {
+    idempotency_key: "postgres-correction-produce-203", inventory_item_ids: [], inventory_consumptions: [],
+    production: { food_name: "Postgres 纠错饭", produced_servings: 3, eaten_servings: 1, meal_type: "午餐", nutrition_per_serving: {} },
+  });
+  const correctMeal = correctProduction.prepared_meal as { id: string };
+  const correctRecord = correctProduction.diet_record as { id: number };
+  await assert.rejects(dietService.remove(user.id, correctRecord.id), /选择/);
+  await pool.query(`CREATE FUNCTION fail_intake_correction() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected correction failure'; END $$;
+    CREATE TRIGGER fail_intake_correction BEFORE INSERT ON prepared_meal_intake_corrections FOR EACH ROW EXECUTE FUNCTION fail_intake_correction();`);
+  try { await assert.rejects(dietService.remove(user.id, correctRecord.id, "undo_eating"), /injected/); }
+  finally { await pool.query("DROP TRIGGER fail_intake_correction ON prepared_meal_intake_corrections; DROP FUNCTION fail_intake_correction()"); }
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === correctMeal.id)?.remaining_servings, 2);
+  assert.deepEqual(await Promise.all([dietService.remove(user.id, correctRecord.id, "undo_eating"), dietService.remove(user.id, correctRecord.id, "undo_eating")]), [true, true]);
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === correctMeal.id)?.remaining_servings, 3);
+  const correctionEat = await dietService.applyMealEvent(user.id, correctMeal.id, { idempotency_key: "postgres-correction-eat-203", version: 2, type: "eat", servings: 1 });
+  await dietService.applyMealEvent(user.id, correctMeal.id, { idempotency_key: "postgres-correction-later-203", version: 3, type: "discard", servings: 1 });
+  const laterRecordId = Number((correctionEat.diet_record as { id: number }).id);
+  await assert.rejects(dietService.remove(user.id, laterRecordId, "undo_eating"), /其他变更/);
+  assert.equal(await dietService.remove(user.id, laterRecordId, "delete_intake"), true);
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === correctMeal.id)?.remaining_servings, 1);
 
   const intakeItem = { field_evidence: { quantity: { status: "estimated" as const, source: "recognition" as const } }, source_item_id: "postgres-scan:0", food_name: "PG 恢复入库米", category: "粮油干货",
     quantity: "1袋", expiration_date: "2026-10-01", storage_location: "常温" as const, source: "image" as const, confirmed: true };

@@ -3894,3 +3894,55 @@ test("scan undo conflicts roll back the entire batch when a later item was chang
   assert.deepEqual(current, [{ version: 1, deleted_at: null, quantity_value: 2 }, { version: 2, deleted_at: null, quantity_value: 1 }]);
   assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE user_id=? AND idempotency_key LIKE 'intake-undo:%'").get(account.user.id) as JsonObject).n, 0);
 });
+
+test("prepared meals clear sub-millith remainders with idempotent concurrent events", async () => {
+  const account = await register("prepared-precision-205@example.com");
+  const made = await api("/api/v1/diet-records/cooking-completions", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "production-precision-205", production: { food_name: "小余量", produced_servings: 1, eaten_servings: 0.9995 },
+  }) });
+  assert.equal(made.response.status, 201);
+  const meal = (made.body as JsonObject).prepared_meal;
+  assert.equal(meal.remaining_servings, 0.0005);
+  const input = { idempotency_key: "discard-precision-205", version: 1, type: "discard", servings: 0.0005 };
+  const event = (body: JsonObject) => api(`/api/v1/diet-records/prepared-meals/${meal.id}/events`, { token: account.token, method: "POST", body: JSON.stringify(body) });
+  const results = await Promise.all([event(input), event(input)]);
+  assert.deepEqual(results.map(result => result.response.status).sort(), [200, 201]);
+  assert.equal((results[0].body as JsonObject).prepared_meal.remaining_servings, 0);
+  assert.equal((await event({ ...input, idempotency_key: "precision-too-small-205", servings: 0.0000001 })).response.status, 400);
+  const list = await api("/api/v1/diet-records/prepared-meals", { token: account.token });
+  assert.equal((list.body as JsonObject[]).find(row => row.id === meal.id)?.remaining_servings, 0);
+});
+
+test("prepared meal intake correction is explicit, atomic, idempotent and does not restore ingredients", async () => {
+  const account = await register("prepared-correction-203@example.com");
+  const stock = await api("/api/v1/inventory", { token: account.token, method: "POST", body: JSON.stringify({ food_name: "纠错米", category: "粮油干货", quantity: "5g", quantity_value: 5, quantity_unit: "g", expiration_date: "2026-10-01", storage_location: "常温" }) });
+  const stockId = (stock.body as JsonObject).id;
+  const made = await api("/api/v1/diet-records/cooking-completions", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "production-correction-203", inventory_consumptions: [{ item_id: stockId, version: 1, mode: "amount", amount_value: 1, unit: "g" }],
+    production: { food_name: "纠错饭", produced_servings: 3, eaten_servings: 1 },
+  }) });
+  const meal = (made.body as JsonObject).prepared_meal;
+  const record = (made.body as JsonObject).diet_record;
+  const remove = (id: number, mode = "") => api(`/api/v1/diet-records/${id}${mode ? `?mode=${mode}` : ""}`, { token: account.token, method: "DELETE" });
+  assert.equal((await remove(record.id)).response.status, 409);
+  const list = await api("/api/v1/diet-records", { token: account.token });
+  assert.equal((list.body as JsonObject[]).find(row => row.id === record.id)?.prepared_meal_id, meal.id);
+  // Inject a late transaction failure; no quantity change or correction may survive.
+  db.exec(`CREATE TRIGGER fail_intake_correction BEFORE INSERT ON prepared_meal_intake_corrections BEGIN SELECT RAISE(ABORT, 'injected correction failure'); END`);
+  try { assert.equal((await remove(record.id, "undo_eating")).response.status, 500); }
+  finally { db.exec("DROP TRIGGER fail_intake_correction"); }
+  assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 2);
+  assert.ok(db.prepare("SELECT id FROM diet_records WHERE id=?").get(record.id));
+  const results = await Promise.all([remove(record.id, "undo_eating"), remove(record.id, "undo_eating")]);
+  assert.deepEqual(results.map(result => result.response.status), [200, 200]);
+  assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 3);
+  assert.equal((db.prepare("SELECT quantity_value FROM inventory_items WHERE id=?").get(stockId) as JsonObject).quantity_value, 4);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM prepared_meal_intake_corrections WHERE user_id=?").get(account.user.id) as JsonObject).n, 1);
+  const eat = await api(`/api/v1/diet-records/prepared-meals/${meal.id}/events`, { token: account.token, method: "POST", body: JSON.stringify({ idempotency_key: "correction-eat-again-203", version: 2, type: "eat", servings: 1 }) });
+  await api(`/api/v1/diet-records/prepared-meals/${meal.id}/events`, { token: account.token, method: "POST", body: JSON.stringify({ idempotency_key: "correction-later-discard-203", version: 3, type: "discard", servings: 1 }) });
+  const secondId = (eat.body as JsonObject).diet_record.id;
+  assert.equal((await remove(secondId, "undo_eating")).response.status, 409);
+  assert.equal((await remove(secondId, "delete_intake")).response.status, 200);
+  assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 1);
+  assert.equal((await remove(secondId, "undo_eating")).response.status, 409);
+});

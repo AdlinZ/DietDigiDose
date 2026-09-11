@@ -4,6 +4,20 @@ import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import type { PreparedDietRecord } from "./types.js";
 
 export const roundServings = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
+
+export function undoMealIntake(meal: PreparedMeal, event: { servings: number; result_json: unknown }) {
+  const result = typeof event.result_json === "string" ? JSON.parse(event.result_json) : event.result_json;
+  const previous = result as { prepared_meal?: PreparedMeal };
+  // Conservatively reject corrections after any subsequent meal mutation.
+  if (previous.prepared_meal?.version !== meal.version) {
+    throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "这份餐食在食用后已有其他变更，无法直接撤销；可仅删除摄入记录");
+  }
+  const remaining = roundServings(meal.remaining_servings + Number(event.servings));
+  if (remaining > meal.produced_servings || !(Number(event.servings) > 0)) {
+    throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "食用份量与制作记录不一致，无法撤销");
+  }
+  return { ...meal, remaining_servings: remaining, version: meal.version + 1 };
+}
 export function prepareProduction(input: MealProduction): MealProduction {
   const value = mealProductionSchema.parse(input);
   return { ...value, eaten_at: value.eaten_at ?? currentDateKey(), eaten_time: value.eaten_time ?? (value.eaten_at && value.eaten_at !== currentDateKey() ? null : currentTimeKey()) };

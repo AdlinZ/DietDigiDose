@@ -1,5 +1,7 @@
 import type { CookingQueueItem } from "@/services/api/cookingQueue";
 
+import * as Crypto from "expo-crypto";
+import { useCookingCompletion } from "@/hooks/useCookingCompletion";
 import { MealProductionFields } from "@/components/MealProductionFields";
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
@@ -20,7 +22,7 @@ import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import * as Haptics from "expo-haptics";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { toLocalDateKey, toLocalTimeKey } from "@/utils/date";
-import { aiApi, cookingQueueApi, dietApi, inventoryApi, recipesApi, waitForAgentRun, type Recipe } from "@/services/api";
+import { aiApi, cookingQueueApi, inventoryApi, recipesApi, waitForAgentRun, type Recipe } from "@/services/api";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useRealtimeCookingVoice } from "@/hooks/useRealtimeCookingVoice";
 import { parseStructuredQuantity, structuredUnitLabel, type StructuredUnit } from "@/utils/structuredQuantity";
@@ -65,6 +67,7 @@ export default function CookingModeScreen() {
   const router = useSafeRouter();
   const authFetch = useAuthFetch();
   const { user } = useAuth();
+  const completion = useCookingCompletion(user?.id, authFetch);
   const [cookingChatSessionId] = useState(() => `cooking-${Date.now()}`);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [queueContext, setQueueContext] = useState<CookingQueueItem | null>(null);
@@ -120,7 +123,6 @@ export default function CookingModeScreen() {
   const [voiceConversation, setVoiceConversation] = useState<VoiceConversationTurn[]>([]);
 
   const voiceHudTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const completionKeyRef = useRef(`cook-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => () => { void stopVoiceOutput(); }, []);
 
@@ -709,6 +711,7 @@ export default function CookingModeScreen() {
     if (isCompleting) return;
     try {
       setIsCompleting(true);
+      const result = await completion.submit(async () => {
       let inventoryConsumptions: Awaited<ReturnType<typeof buildInventoryConsumptions>> = [];
       if (consumeInventory) {
         inventoryConsumptions = await buildInventoryConsumptions();
@@ -718,7 +721,7 @@ export default function CookingModeScreen() {
             "没有找到已勾选且名称匹配的库存食材。可确认本次未使用库存原料后保存制作。",
             [{ text: "不扣库存，保存制作", onPress: () => void finishCooking(false) }]
           );
-          return;
+          return null;
         }
       }
       const nutritionNumber = (value: unknown) => {
@@ -727,8 +730,8 @@ export default function CookingModeScreen() {
         return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
       };
 
-      const result = await dietApi.completeCooking(authFetch, {
-        idempotency_key: completionKeyRef.current,
+      return {
+        idempotency_key: `cook-${Crypto.randomUUID()}`,
         recipe_id:
           Number.isInteger(Number(recipeId)) && Number(recipeId) > 0
             ? Number(recipeId)
@@ -746,7 +749,9 @@ export default function CookingModeScreen() {
           } : {},
           ...(queueItemId && (queueContext?.version || queueVersion) ? { queue_item_id: queueItemId, queue_version: queueContext?.version ?? Number(queueVersion) } : {}),
         }),
+      };
       });
+      if (!result) return;
 
       setShowFinishModal(false);
       Alert.alert(
@@ -841,6 +846,11 @@ export default function CookingModeScreen() {
 
   return (
     <Screen safeAreaEdges={['left', 'right', 'bottom']} className="flex-1 bg-background-secondary relative">
+      {completion.pending ? <View className="bg-warm-soft p-4 gap-2">
+        <Text className="text-ink">上次「{completion.pending.production?.food_name}」制作尚未确认：制作 {completion.pending.production?.produced_servings} 份，食用 {completion.pending.production?.eaten_servings} 份。将恢复原日期和库存操作。</Text>
+        <TouchableOpacity disabled={isCompleting} onPress={() => void finishCooking(false)}><Text className="font-bold text-brand">重试原制作记录</Text></TouchableOpacity>
+      </View> : null}
+      {completion.error ? <Text className="text-danger p-4">{completion.error}</Text> : null}
       {/* 🌿 Minimalist Ultra-Clean Top Header (极致清爽顶栏) */}
       <View
         style={{ paddingTop: Math.max(insets.top, 12) + 4 }}

@@ -4,12 +4,18 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
   const parsed = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }, "日期无效");
-const servings = z.number().finite().min(0.001).max(1000);
+// Use the same millionth-of-a-serving quantum as both repository drivers.
+// Small existing remainders can be explicitly eaten or discarded without loss.
+const preciseServings = z.number().finite().max(1000).refine(
+  value => Math.abs(value * 1_000_000 - Math.round(value * 1_000_000)) < 0.000001,
+  "份量最多保留六位小数",
+);
+const servings = preciseServings.pipe(z.number().min(0.000001));
 const nutrition = z.number().finite().nonnegative().max(1_000_000).nullable().optional();
 export const mealProductionSchema = z.object({
   food_name: z.string().trim().min(1).max(120),
   produced_servings: servings,
-  eaten_servings: z.number().finite().min(0).max(1000).default(0),
+  eaten_servings: preciseServings.pipe(z.number().min(0)).refine(value => value === 0 || value >= 0.000001, "食用份量最少 0.000001 份").default(0),
   nutrition_per_serving: z.object({ calories: nutrition, protein: nutrition, carbs: nutrition, fat: nutrition }).strict().default({}),
   planned_date: date.nullable().optional(),
   meal_type: z.string().trim().max(30).default(""),
@@ -22,7 +28,6 @@ export const mealProductionSchema = z.object({
   plan_version: z.number().int().positive().optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.eaten_servings > value.produced_servings) ctx.addIssue({ code: "custom", path: ["eaten_servings"], message: "食用份量不能超过制作份量" });
-  if (value.eaten_servings > 0 && value.eaten_servings < 0.001) ctx.addIssue({ code: "custom", path: ["eaten_servings"], message: "食用份量最少 0.001 份" });
   for (const [id, version] of [["queue_item_id", "queue_version"], ["plan_item_id", "plan_version"]] as const) {
     if ((value[id] === undefined) !== (value[version] === undefined)) ctx.addIssue({ code: "custom", path: [version], message: "制作来源和版本必须同时提供" });
   }

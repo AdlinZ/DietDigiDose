@@ -271,6 +271,9 @@ try {
   })));
   assert.deepEqual(imported.map((result) => result.repeated).sort(), [false, true]);
   assert.equal(imported[0]!.items[0]!.id, imported[1]!.items[0]!.id);
+  const importedHistory = await inventoryService.history(user.id,imported[0]!.items[0]!.id);
+  assert.equal(importedHistory.filter(event => event.action === "created").length,1);
+  assert.equal(importedHistory.find(event => event.action === "created")?.source,"manual");
   const consumed = await inventoryRepository.consume(user.id, {
     idempotency_key: "postgres-consume-0001",
     source: "cooking",
@@ -1680,7 +1683,7 @@ try {
       adminConsoleService.classifyCoreLoopActor(user.id,{ kind: "real",version: 0 },adminFoodContext),
     ]);
     assert.equal(classifications.filter(item => item.status === "fulfilled").length,1);
-    const metricStock = await inventoryService.create(user.id,{ food_name: "PG闭环鸡蛋",category: "蛋类",quantity: "2个",quantity_value: 2,quantity_unit: "piece",expiration_date: "2036-09-20",storage_location: "冷藏" });
+    const metricStock = (await inventoryService.bulkIntake(user.id,{ idempotency_key: "pg-confirmed-scan-metric-186",source: "image",items: [{ food_name: "PG闭环鸡蛋",category: "蛋类",quantity: "2个",quantity_value: 2,quantity_unit: "piece",expiration_date: "2036-09-20",storage_location: "冷藏",source: "image",confirmed: true }] })).items[0];
     const metricRecipe = (await pool.query("INSERT INTO recipes(title,description,cook_time,difficulty,category,ingredients_json,steps_json,status,quality_status,serving_size) VALUES('PG闭环蒸蛋','验收',10,'简单','PG闭环验收',$1::jsonb,$2::jsonb,'approved','trusted',1) RETURNING id",[JSON.stringify([{ name: "PG闭环鸡蛋",amount: "1枚" }]),JSON.stringify(["蒸熟"])])).rows[0].id;
     const metricPage = await recommendationsService.page(user.id,{ surface: "inventory",category: "PG闭环验收",pageSize: 10 });
     assert.equal(metricPage.items[0].recipeId,metricRecipe);

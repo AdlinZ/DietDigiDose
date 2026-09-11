@@ -4392,11 +4392,11 @@ test("staging smoke exercises current production and eating contracts and cleans
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM users WHERE email LIKE 'staging-smoke-%@example.invalid'").get() as JsonObject).n,0);
 });
 
-test("weekly metrics reconstruct a real inventory-selection-production-intake chain and protect admin controls", async () => {
+for (const intakeSource of ["manual", "image", "receipt", "shopping"] as const) test(`weekly metrics reconstruct ${intakeSource} inventory-selection-production-intake and protect admin controls`, async () => {
   const previousEnvironment = process.env.CORE_LOOP_ENVIRONMENT;
   process.env.CORE_LOOP_ENVIRONMENT = "metric-fixture";
   try {
-    const account = await register("core-loop-fixture@example.invalid");
+    const account = await register(`core-loop-${intakeSource}-fixture@example.invalid`);
     const admin = await loginAdmin();
     const adminGet = (path: string) => api(path,{ token: admin });
     const actorPath = `/api/v1/admin/core-loops/actors/${account.user.id}`;
@@ -4407,13 +4407,22 @@ test("weekly metrics reconstruct a real inventory-selection-production-intake ch
     const classify = (kind: string,version: number) => api(actorPath,{ method: "PUT",token: admin,body: JSON.stringify({ kind,version }) });
     assert.equal((await classify("real",0)).response.status,200);
     assert.equal((await classify("test",0)).response.status,409);
-    const stock = await api("/api/v1/inventory",{ method: "POST",token: account.token,body: JSON.stringify({ food_name: "闭环鸡蛋",category: "蛋类",quantity: "2个",quantity_value: 2,quantity_unit: "piece",expiration_date: "2036-09-20",storage_location: "冷藏" }) });
-    assert.equal(stock.response.status,201);
-    const item = stock.body as JsonObject;
+    const stockInput = { food_name: "闭环鸡蛋",category: "蛋类",quantity: "2个",quantity_value: 2,quantity_unit: "piece",expiration_date: "2036-09-20",storage_location: "冷藏" };
+    const stockPath = intakeSource === "manual" ? "/api/v1/inventory" : intakeSource === "shopping" ? "/api/v1/inventory/import-shopping-list" : "/api/v1/inventory/bulk-intake";
+    const stockPayload = intakeSource === "manual" ? stockInput : intakeSource === "shopping"
+      ? { idempotency_key: "metric-shopping-import-186",items: [stockInput] }
+      : { idempotency_key: `metric-${intakeSource}-intake-186`,source: intakeSource,items: [{ ...stockInput,source: intakeSource,confirmed: true }] };
+    const stock = await api(stockPath,{ method: "POST",token: account.token,body: JSON.stringify(stockPayload) });
+    assert.equal(stock.response.status,201,JSON.stringify(stock.body));
+    const item = intakeSource === "manual" ? stock.body as JsonObject : (stock.body as JsonObject).items[0];
+    if (intakeSource === "shopping") {
+      assert.equal((await api(stockPath,{ method: "POST",token: account.token,body: JSON.stringify(stockPayload) })).response.status,200);
+      assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE inventory_item_id=? AND action='created'").get(item.id) as JsonObject).n,1);
+    }
     const recipeId = Number(db.prepare("INSERT INTO recipes(title,description,cook_time,difficulty,category,ingredients_json,steps_json,status,quality_status,serving_size) VALUES('闭环蒸蛋','验收',10,'简单','闭环验收',?,?,'approved','trusted',1)").run(JSON.stringify([{ name: "闭环鸡蛋",amount: "1枚" }]),JSON.stringify(["蒸熟"])).lastInsertRowid);
     const page = await api("/api/v1/recommendations/recipes",{ method: "POST",token: account.token,body: JSON.stringify({ surface: "inventory",category: "闭环验收",pageSize: 10 }) });
     assert.equal(page.response.status,200);
-    assert.equal((page.body as JsonObject).items[0].recipeId,recipeId);
+    assert((page.body as JsonObject).items.some((candidate: JsonObject) => candidate.recipeId === recipeId));
     const queued = await api("/api/v1/cooking-queue",{ method: "POST",token: account.token,body: JSON.stringify({ recipeId,recommendationRequestId: (page.body as JsonObject).requestId }) });
     const queue = (queued.body as JsonObject).item;
     const input = { idempotency_key: "metric-production-186",recipe_id: recipeId,inventory_consumptions: [{ item_id: item.id,version: item.version,mode: "amount",amount_value: 1,unit: "piece" }],

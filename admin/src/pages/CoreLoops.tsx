@@ -43,7 +43,7 @@ export default function CoreLoops() {
     finally { setSaving(false); }
   }
   return <main className="space-y-6 p-6">
-    <div className="flex flex-wrap items-center justify-between gap-4"><div><h1 className="text-2xl font-semibold text-slate-900">每周核心闭环</h1><p className="mt-2 text-sm text-slate-600">核对库存选菜、制作扣减和本人实际摄入。每人每周去重。当前可核实个人手动入库路径，其他来源证据不足时保留待核对。</p></div><button className={buttonStyle} onClick={() => setRefresh(value => value+1)}>刷新核对</button></div>
+    <div className="flex flex-wrap items-center justify-between gap-4"><div><h1 className="text-2xl font-semibold text-slate-900">每周核心闭环</h1><p className="mt-2 text-sm text-slate-600">核对库存选菜、制作扣减和本人实际摄入。每人每周去重。当前可核实个人确认入库路径，其他来源证据不足时保留待核对。</p></div><button className={buttonStyle} onClick={() => setRefresh(value => value+1)}>刷新核对</button></div>
     {message && <p role="alert" className="rounded-xl bg-amber-50 p-4 text-amber-900">{message}</p>}
     <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold">统计周</h2><label className="flex items-center gap-3 text-sm">选择周内日期<input aria-label="统计日期" className={inputStyle} type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
       {!report ? <p className="text-sm text-slate-500">{message ? '尚未取得统计结果。' : '正在核对业务记录…'}</p> : <>

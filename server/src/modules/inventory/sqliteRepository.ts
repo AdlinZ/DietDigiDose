@@ -108,7 +108,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
         return inventoryImportResponseSchema.parse({ items: JSON.parse(existing.result_json), repeated: true });
       }
 
-      const items = input.items.map((item) => formatInventoryItem(this.insertInventoryItem(userId, item)));
+      const items = input.items.map((item) => this.createInTransaction(userId, item));
       this.database.prepare(`
         INSERT INTO shopping_inventory_imports (user_id, idempotency_key, result_json) VALUES (?, ?, ?)
       `).run(userId, input.idempotency_key, JSON.stringify(items));

@@ -26,7 +26,7 @@ export function projectCoreLoops(data: CoreLoopDataset): CoreLoopFact[] {
       selection: selection.version === 1 ? { requestId: String(selection.requestId || ""), recipeId: Number(selection.recipeId),
         selectedAt: utc(selection.selectedAt ?? row.selection_created_at), matchedItemIds: inventory.version === 1 ? allocations.map(item => Number(item.itemId)) : null } : null,
       stock: logs.filter(log => log.action === "created").map(log => ({ itemId: Number(log.inventory_item_id), confirmedAt: utc(log.created_at),
-        confirmed: log.source === "manual", scope: "personal" as const, ownerKey: actor(log.user_id) })),
+        confirmed: log.acceptance === "manual" || (log.source === "manual" && log.acceptance == null), scope: "personal" as const, ownerKey: actor(log.user_id) })),
       deductions: changes.map((change,index) => {
         const log = logs.find(log => log.idempotency_key === `cooking:${row.idempotency_key}:${change.item_id}:${index}` && Number(log.inventory_item_id) === Number(change.item_id)
           && log.source === "cooking" && ["consume_all","consume_partial"].includes(String(log.action)));

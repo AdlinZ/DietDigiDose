@@ -38,7 +38,7 @@ export class PostgresAdminConsoleRepository implements AdminConsoleRepository {
         EXISTS(SELECT 1 FROM prepared_meal_intake_corrections c WHERE c.event_id=e.id) AS corrected
         FROM prepared_meal_events e LEFT JOIN diet_records d ON d.id=e.diet_record_id AND d.user_id=e.user_id
         WHERE e.event_type='eat' AND e.prepared_meal_id=ANY($1::text[])`,[ids])).rows as Row[];
-      const logs = (await client.query("SELECT user_id,inventory_item_id,action,source,quantity_before,quantity_after,delta_value,idempotency_key,created_at FROM inventory_change_logs WHERE inventory_item_id=ANY($1::integer[]) AND (action='created' OR source='cooking')",[coreLoopInventoryIds(productions)])).rows as Row[];
+      const logs = (await client.query("SELECT user_id,inventory_item_id,action,source,quantity_before,quantity_after,delta_value,idempotency_key,created_at,metadata_json->>'acceptance' AS acceptance FROM inventory_change_logs WHERE inventory_item_id=ANY($1::integer[]) AND (action='created' OR source='cooking')",[coreLoopInventoryIds(productions)])).rows as Row[];
       const legacy = (await client.query(`SELECT m.id,m.user_id,m.recipe_id,m.diet_record_id,m.created_at,c.kind,d.id IS NOT NULL AS record_exists
         FROM cooking_completions m JOIN users u ON u.id=m.user_id LEFT JOIN core_loop_actor_classifications c ON c.user_id=m.user_id
         LEFT JOIN diet_records d ON d.id=m.diet_record_id AND d.user_id=m.user_id WHERE m.created_at>=$1::timestamptz AND m.created_at<$2::timestamptz`,[start,end])).rows as Row[];

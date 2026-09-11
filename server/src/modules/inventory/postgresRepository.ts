@@ -195,7 +195,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
       `, [userId, input.idempotency_key]);
       if (existing.rows[0]) return inventoryImportResponseSchema.parse({ items: existing.rows[0].result_json, repeated: true });
       const items = [];
-      for (const item of input.items) items.push(await this.insertInventoryItem(client, userId, item));
+      for (const item of input.items) items.push(await this.createWithClient(client, userId, item));
       await client.query(`
         INSERT INTO shopping_inventory_imports (user_id, idempotency_key, result_json) VALUES ($1, $2, $3::jsonb)
       `, [userId, input.idempotency_key, JSON.stringify(items)]);

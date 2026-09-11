@@ -24,3 +24,13 @@ test("unrelated logs, account mismatches and corrected intake never complete the
   const corrected = dataset(); corrected.intakes[0].corrected = true;
   assert.equal(evaluateCoreLoop(projectCoreLoops(corrected)[0],"staging").reason,"no_surviving_intake");
 });
+test("only persisted manual acceptance confirms assisted intake; automatic and legacy AI remain unknown", () => {
+  for (const [source,acceptance,expected] of [
+    ["ai","manual","included"], ["manual","manual","included"],
+    ["ai","automatic","stock_evidence_missing"], ["manual","automatic","stock_evidence_missing"],
+    ["ai",null,"stock_evidence_missing"], ["ai","unrecognized","stock_evidence_missing"],
+  ] as const) {
+    const input = dataset(); Object.assign(input.logs[0],{ source,acceptance });
+    assert.equal(evaluateCoreLoop(projectCoreLoops(input)[0],"staging").reason,expected,`${source}/${acceptance}`);
+  }
+});

@@ -71,3 +71,10 @@ test("rechecking after cancellation and purchase updates shortages while retaini
   assert.equal(after.shopping[0].missing,0);
   assert.deepEqual(after.plannedPurchases,before.plannedPurchases);
 });
+
+test("no-spicy weekly planning does not assume a prepared batch has verified spice content",() => {
+  const batch = { id: "19600000-0000-4000-8000-000000000001",food_name: "昨天的饭",remaining_servings: 2,produced_at: "2099-09-12T08:00:00Z",version: 1,is_reserved: false,planned_date: null,meal_type: "午餐" } as PreparedMeal;
+  const preview = buildWeeklyPlan(input,{ avoid_spicy: true },[candidate],[],[batch],[],[]);
+  assert(preview.draft!.meals.every(meal => meal.preparedServings === 0));
+  assert(preview.checksPending.some(message => message.includes("辣度未核实")));
+});

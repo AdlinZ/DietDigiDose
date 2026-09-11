@@ -3,7 +3,7 @@ import { recipeDemands } from "./quantities.js";
 import { buildFefoConsumptionPreviewFromCandidates } from "../../services/inventoryQuantity.js";
 import type { RecommendationDataset, RecommendationInput, Row } from "./types.js";
 
-export const RECIPE_SCORING_VERSION = "rules-2026-09-12.1";
+export const RECIPE_SCORING_VERSION = "rules-2026-09-12.2";
 export const RECIPE_CANDIDATE_VERSION = "sql-public-v1";
 export const RECOMMENDATION_WEIGHTS = Object.freeze({
   inventoryCoverage: 35, expiringUse: 20, missingPenalty: 20, timeFit: 15, nutritionFit: 10,
@@ -100,6 +100,11 @@ function hardConflict(recipe: Row, ingredients: Array<{ name: string }>, dataset
     const name = String(allergy.name || "").trim();
     if (name && allergyTerms(name).some((term) => recipeText.includes(term))) return true;
   }
+  if (profile.kitchen.avoid_spicy === true) {
+    const knownSpicy = /辣椒|辣酱|辣油|辣粉|剁椒|朝天椒|小米椒|花椒|藤椒|芥末/.test(ingredients.map(item => item.name).join("、"));
+    const spicyTags = parseArray(recipe.tags).some(tag => /辣/.test(String(tag)) && !/不辣|无辣/.test(String(tag)));
+    if (!ingredients.length || knownSpicy || spicyTags) return true;
+  }
   const restrictionText = profile.restrictions.join("、");
   if (/素食|纯素/.test(restrictionText) && /(猪|牛|羊|鸡|鸭|鱼|虾|蟹|肉|蛋|奶)/.test(recipeText)) return true;
   if (/清真/.test(restrictionText) && /(猪|料酒|酒精)/.test(recipeText)) return true;
@@ -176,6 +181,7 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
     const degraded: string[] = [];
     if (uncertain.length) degraded.push("inventory_quantity_unknown");
     if (!ingredients.length) degraded.push("ingredients_unstructured");
+    if (dataset.profile.kitchen.avoid_spicy === true) degraded.push("spiciness_requires_ingredient_confirmation");
     degraded.push("whole_plan_time_unverified");
     if (!cookTime || recipe.prep_time == null) degraded.push("preparation_time_unknown");
     if (dataset.profile.kitchen.budget_per_meal) degraded.push("recipe_price_unavailable");

@@ -17,6 +17,7 @@ export function buildWeeklyPlan(input: WeeklyPlanRequest, preferences: KitchenPr
   const servings = input.servings ?? preferences.servings ?? 1;
   const timeBudget = preferences.meal_time_minutes ?? 30;
   const { stock,checks,aggregate,consume,unknownCommitment } = createPlanningBudget(inventory,existing);
+  if (preferences.avoid_spicy === true && prepared.length) checks.add("待吃餐辣度未核实，本次不自动分配");
   const budgets: ReturnType<typeof buildFefoConsumptionPreviewFromCandidates> = [];
   const batches = prepared.map(meal => ({ ...meal }));
   for (const reservation of reservedPrepared) { const batch = batches.find(meal => meal.id === reservation.preparedMealId); if (batch) batch.remaining_servings = round(Math.max(0,batch.remaining_servings-reservation.servings)); }
@@ -30,7 +31,7 @@ export function buildWeeklyPlan(input: WeeklyPlanRequest, preferences: KitchenPr
       continue;
     }
     const eligiblePrepared = batches.filter(meal => meal.produced_at.slice(0,10) <= date && (!meal.planned_date || meal.planned_date === date));
-    const requirements = allocatePreparedMeals({ meals: [{ id,date,mealType,servings }],excludedPreparedMealIds: [] },eligiblePrepared);
+    const requirements = allocatePreparedMeals({ preferences,meals: [{ id,date,mealType,servings }],excludedPreparedMealIds: [] },eligiblePrepared);
     const target = requirements.meals[0];
     const part = buildCookingDraft(requirements,unknownCommitment ? [] : candidates,unexpiredInventory(stock,date),timeBudget);
     if (part.time.exceedsBudget) {

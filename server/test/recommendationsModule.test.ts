@@ -226,3 +226,22 @@ test("weekly replacement reloads current commitments for the owner and week", as
   assert.equal(updated.draft.weeklyShopping![0].required,9);
   assert.equal(updated.draft.weeklyShopping![0].missing,5);
 });
+
+test("today's no-spicy condition filters known spicy recipes without saving long-term preferences",async () => {
+  const stored = { kitchen_constraints_json: { avoid_spicy: false,meal_time_minutes: 30 } };
+  const recipes = [
+    { id: 1,title: "辣椒炒蛋",ingredients_json: [{ name: "辣椒",amount: "1个" }],tags: [] as string[],steps_json: ["炒熟"],status: "approved",cook_time: 5,prep_time: 2,serving_size: 1 },
+    { id: 2,title: "蒸蛋",ingredients_json: [{ name: "鸡蛋",amount: "1个" }],tags: [] as string[],steps_json: ["蒸熟"],status: "approved",cook_time: 5,prep_time: 2,serving_size: 1 },
+  ];
+  recipes.push({ ...recipes[1],id: 3,title: "辣味标记",tags: ["香辣"] } as typeof recipes[number]);
+  recipes.push({ ...recipes[1],id: 4,title: "原料不明",ingredients_json: [] });
+  const service = new RecommendationsService(repository({ profile: async () => stored,recipes: async () => recipes }),kitchenware);
+  const transient = await service.compute(7,{ surface: "meal_plan" },{ avoid_spicy: true });
+  assert.deepEqual(transient.results.map(item => item.recipeId),[2]);
+  assert.equal(stored.kitchen_constraints_json.avoid_spicy,false);
+  assert.equal((await service.compute(7,{ surface: "meal_plan" })).results.length,4);
+  stored.kitchen_constraints_json.avoid_spicy = true;
+  assert.deepEqual((await service.compute(7,{ surface: "meal_plan" })).results.map(item => item.recipeId),[2]);
+  assert.equal((await service.compute(7,{ surface: "meal_plan" },{ avoid_spicy: false })).results.length,4);
+  assert.equal(stored.kitchen_constraints_json.avoid_spicy,true);
+});

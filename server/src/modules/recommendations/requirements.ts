@@ -6,7 +6,7 @@ const mealLabels = { breakfast: "早餐", lunch: "午餐", dinner: "晚餐", sna
 export function allocatePreparedMeals(input: MealPlanRequirementsInput, prepared: PreparedMeal[]) {
   const excluded = new Set(input.excludedPreparedMealIds);
   const remaining = new Map(prepared.map(meal => [meal.id, meal.remaining_servings]));
-  const candidates = prepared.filter(meal => !meal.is_reserved && !excluded.has(meal.id) && meal.remaining_servings > 0)
+  const candidates = prepared.filter(meal => input.preferences?.avoid_spicy !== true && !meal.is_reserved && !excluded.has(meal.id) && meal.remaining_servings > 0)
     .sort((a, b) => a.produced_at.localeCompare(b.produced_at) || a.id.localeCompare(b.id));
   const meals = [...input.meals].sort((a, b) => a.date.localeCompare(b.date) || ["breakfast", "lunch", "dinner", "snack"].indexOf(a.mealType) - ["breakfast", "lunch", "dinner", "snack"].indexOf(b.mealType) || a.id.localeCompare(b.id)).map(target => {
     let required = target.servings;
@@ -26,6 +26,6 @@ export function allocatePreparedMeals(input: MealPlanRequirementsInput, prepared
   });
   return { meals, totalCookServings: round(meals.reduce((total, meal) => total + meal.cookServings, 0)),
     status: "requires_validation" as const,
-    checksPending: ["prepared_meal_storage_and_food_safety", "allergies_and_reheating", "recipe_quantities", "whole_plan_time"],
+    checksPending: [...(input.preferences?.avoid_spicy === true && prepared.length ? ["待吃餐辣度未核实，本次不自动分配"] : []),"prepared_meal_storage_and_food_safety", "allergies_and_reheating", "recipe_quantities", "whole_plan_time"],
     excludedPreparedMealIds: prepared.filter(meal => meal.is_reserved || excluded.has(meal.id)).map(meal => meal.id) };
 }

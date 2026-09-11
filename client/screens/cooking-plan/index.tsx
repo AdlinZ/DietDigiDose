@@ -24,6 +24,7 @@ export default function CookingPlanScreen() {
   const [date, setDate] = useState(toLocalDateKey());
   const [servings, setServings] = useState("1");
   const [minutes, setMinutes] = useState("");
+  const [temporaryAvoidSpicy,setTemporaryAvoidSpicy] = useState<boolean | undefined>();
   const [includeLunch, setIncludeLunch] = useState(true);
   const [result, setResult] = useState<CookingPlanDraft | null>(null);
   const [error, setError] = useState("");
@@ -38,6 +39,7 @@ export default function CookingPlanScreen() {
       setLoading(false); setSaving(false);
       return () => { requestSequence.current += 1; };
     }
+    setTemporaryAvoidSpicy(undefined);
     setResult(null); setError(""); setLoading(false); setSaved(false); setSaving(false); setReplacement(null); setActivated(false);
     persistedPlan.current = null;
     const owner = user?.id;
@@ -52,6 +54,7 @@ export default function CookingPlanScreen() {
         if (plan.archived) throw new Error("此方案已归档");
         loadedContext.current = context;
         persistedPlan.current = { id: plan.id, version: plan.version };
+        setTemporaryAvoidSpicy(draft.effectivePreferences.avoid_spicy ?? undefined);
         setResult(draft); setSaved(true); setActivated(plan.status !== "draft");
         setDate(draft.meals[0].date); setServings(String(draft.meals[0].servings));
         setMinutes(String(draft.time.budgetMinutes));
@@ -84,7 +87,7 @@ export default function CookingPlanScreen() {
         meals: [{ id: "dinner", date, mealType: "dinner", servings: Number(servings) },
           ...(includeLunch ? [{ id: "lunch", date: nextDate, mealType: "lunch" as const, servings: Number(servings) }] : [])],
         excludedPreparedMealIds: [],
-        ...(minutes.trim() ? { preferences: { meal_time_minutes: Number(minutes) } } : {}),
+        preferences: { ...(minutes.trim() ? { meal_time_minutes: Number(minutes) } : {}),...(temporaryAvoidSpicy === undefined ? {} : { avoid_spicy: temporaryAvoidSpicy }) },
       });
       if (account.current === owner && requestSequence.current === sequence) setResult(draft);
     } catch (e) { if (account.current === owner && requestSequence.current === sequence) setError(e instanceof Error ? e.message : "方案计算失败"); }
@@ -149,6 +152,7 @@ export default function CookingPlanScreen() {
         <Text className="font-bold text-ink">晚餐日期</Text><TextInput accessibilityLabel="晚餐日期" value={date} onChangeText={value => { setDate(value); invalidateDraft(); }} className="rounded-xl border border-line p-3 text-ink" placeholder="YYYY-MM-DD" />
         <Text className="font-bold text-ink">每餐需要几份</Text><TextInput accessibilityLabel="每餐份量" value={servings} onChangeText={value => { setServings(value); invalidateDraft(); }} keyboardType="decimal-pad" className="rounded-xl border border-line p-3 text-ink" />
         <Text className="font-bold text-ink">本次时间上限（分钟）</Text><TextInput accessibilityLabel="本次时间上限" value={minutes} onChangeText={value => { setMinutes(value); invalidateDraft(); }} keyboardType="number-pad" placeholder="留空沿用长期设置，未设置为30" className="rounded-xl border border-line p-3 text-ink" />
+        <View className="flex-row flex-wrap gap-3">{([[undefined,"辣度沿用档案"],[true,"本次不吃辣"],[false,"本次不限辣度"]] as Array<[boolean | undefined,string]>).map(([value,label]) => <TouchableOpacity key={label} onPress={() => { setTemporaryAvoidSpicy(value); invalidateDraft(); }}><Text className={temporaryAvoidSpicy === value ? "font-bold text-brand" : "text-copy-muted"}>{label}</Text></TouchableOpacity>)}</View>
         <TouchableOpacity accessibilityRole="checkbox" accessibilityState={{ checked: includeLunch }} onPress={() => { setIncludeLunch(value => !value); invalidateDraft(); }}><Text className="font-bold text-brand">{includeLunch ? "已包含" : "未包含"} · 次日午餐</Text></TouchableOpacity>
         <TouchableOpacity disabled={!user || loading} onPress={() => void calculate()} className="rounded-xl bg-brand-fill p-3 items-center">{loading ? <ActivityIndicator color="#fff" /> : <Text className="font-bold text-white">{user ? "按当前库存重新计算" : "请先登录"}</Text>}</TouchableOpacity>
       </View>}

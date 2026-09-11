@@ -301,7 +301,7 @@ async function supervisorNode(state: SupervisorGraphState) {
     model: await modelFor("SUPERVISOR"),
     tools: [],
     systemPrompt: structuredSystemPrompt(`你是食光烙记的 Supervisor。只负责识别用户目标并选择专业 Agent，不直接回答。
-kitchenOverride 只提取当前用户明确说出的本次人数、时长、常用餐次、地点、携带及冷藏/加热条件；未提及字段省略，不猜测。它仅影响当前请求，不代表长期设置已保存。
+kitchenOverride 只提取当前用户明确说出的本次人数、时长、常用餐次、地点、是否不吃辣、携带及冷藏/加热条件；未提及字段省略，不猜测。它仅影响当前请求，不代表长期设置已保存。
 可选 Agent：NutritionPlanningAgent（营养与餐单）、RecipeCookingAgent（菜谱与烹饪）、VisionAgent（图片）、VoiceAgent（音频）、OperationsAgent（业务动作）。
 涉及记录、保存、修改、删除、计划落库或采购清单时必须包含 OperationsAgent。图片/音频 Agent 已由系统强制加入。
 只有缺少的信息会实质改变安全性或无法继续完成任务时才填写 needsInput，并提出一个简短问题；普通偏好缺失应采用保守默认值。`, supervisorSchema),
@@ -496,7 +496,7 @@ async function dispatchNode(state: SupervisorGraphState) {
       model: await modelFor("SUPERVISOR"), tools: [],
       systemPrompt: structuredSystemPrompt(`你是 Supervisor。根据视觉或语音识别结果选择后续专业 Agent：NutritionPlanningAgent、RecipeCookingAgent、OperationsAgent。
 只有用户明确要求保存、记录、更新或删除数据时才选择 OperationsAgent。不要再次选择 VisionAgent 或 VoiceAgent。
-kitchenOverride 只提取用户语音明确指定的本次备餐条件，缺少字段省略，未知条件用 null，不猜测；本次覆盖不会保存到长期档案。`, supervisorSchema),
+kitchenOverride 只提取用户语音明确指定的本次备餐条件，缺少字段省略，未知条件用 null，不猜测；本次覆盖不会保存到长期档案；“今天不吃辣”使用 avoid_spicy=true，仅作用于本次。`, supervisorSchema),
     });
     const recognized = Object.fromEntries(mediaEntries);
     const routed = await invokeStructured(

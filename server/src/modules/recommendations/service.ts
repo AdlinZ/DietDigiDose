@@ -62,7 +62,8 @@ export class RecommendationsService {
 
   async planRequirements(userId: number, input: MealPlanRequirementsInput) {
     const request = mealPlanRequirementsSchema.parse(input);
-    return allocatePreparedMeals(request, (await this.repository.preparedMeals(userId)).map(formatPreparedMeal));
+    const preferences = resolveKitchenPreferences(formatRecommendationProfile(await this.repository.profile(userId)).kitchen,request.preferences);
+    return allocatePreparedMeals({ ...request,preferences }, (await this.repository.preparedMeals(userId)).map(formatPreparedMeal));
   }
 
   async cookingPlan(userId: number, input: MealPlanRequirementsInput) {

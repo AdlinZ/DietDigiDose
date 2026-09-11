@@ -3583,12 +3583,14 @@ test("request kitchen overrides reach AI context without changing saved preferen
   const { buildAIPromptMessages, buildUserContext } = await import("../src/services/contextBuilder.js");
   const account = await register("meal-override-192@example.com");
   await api("/api/v1/health-data/profile", { token: account.token, method: "PUT", body: JSON.stringify({ kitchen_constraints: {
-    servings: 1, meal_time_minutes: 45, refrigeration_available: true, reheating_available: false,
+    servings: 1, meal_time_minutes: 45, refrigeration_available: true, reheating_available: false, avoid_spicy: false,
   } }) });
   const storedContext = await buildUserContext(account.user.id);
   const context = (override = {}) => JSON.parse(buildAIPromptMessages(storedContext, override).at(-1)!.content.split("\n")[1]) as JsonObject;
-  const current = context({ servings: 2, meal_time_minutes: 20, refrigeration_available: false });
+  const current = context({ servings: 2, meal_time_minutes: 20, refrigeration_available: false,avoid_spicy: true });
   assert.equal(current.servings, 2);
+  assert.equal(current.meal_preparation_preferences.avoid_spicy,true);
+  assert.equal(current.stored_meal_preferences.avoid_spicy,false);
   assert.equal(current.available_time_minutes, 20);
   assert.equal(current.meal_preparation_preferences.refrigeration_available, false);
   assert.equal(current.meal_preparation_preferences.reheating_available, false);

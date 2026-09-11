@@ -36,7 +36,7 @@ export function formatOutcomeEvidence(production: Row[], events: Row[], inventor
     facts.set(id,{ id,recipeId: Number(after.recipeId) || null,title: String(after.title ?? "餐次调整"),kind: "plan_change",at: iso(row.applied_at ?? row.created_at),valid: row.status === "applied",
       explanation: row.status === "reverted" ? "餐次变更已恢复，不再作为换菜证据" : "餐次调整已应用；原因未明确分类，不据此推断喜欢或厌恶" });
   }
-  const labels: Record<string,string> = { servings: "常用份量",meal_time_minutes: "制作时间上限",budget_per_meal: "每餐预算",cooking_level: "烹饪熟练度",eating_out_frequency: "外食频率",usual_meals: "常用餐次",eating_location: "用餐地点",carry_meals: "携带餐食",refrigeration_available: "冷藏条件",reheating_available: "复热条件" };
+  const labels: Record<string,string> = { avoid_spicy: "不吃辣",servings: "常用份量",meal_time_minutes: "制作时间上限",budget_per_meal: "每餐预算",cooking_level: "烹饪熟练度",eating_out_frequency: "外食频率",usual_meals: "常用餐次",eating_location: "用餐地点",carry_meals: "携带餐食",refrigeration_available: "冷藏条件",reheating_available: "复热条件" };
   for (const row of statements) {
     const result = json(row.result_json);
     if (result.scope !== "persistent" || !["executed","undone"].includes(String(row.status))) continue;

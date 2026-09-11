@@ -45,7 +45,11 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
       LEFT JOIN inventory_change_logs u ON u.inventory_item_id=l.inventory_item_id AND u.user_id=l.user_id AND json_extract(u.metadata_json,'$.intake_undo_job') IS NOT NULL
       WHERE l.user_id=? AND l.action='created' AND json_extract(l.metadata_json,'$.acceptance') IN ('manual','automatic') AND l.created_at>=datetime('now','-30 day')`).all(userId) as Row[];
     const changes = this.database.prepare("SELECT id,status,after_json,created_at,applied_at FROM meal_plan_changes WHERE user_id=? AND status IN ('applied','reverted') AND created_at>=datetime('now','-30 day')").all(userId) as Row[];
-    return { production,events,inventory,changes };
+    const statements = this.database.prepare(`SELECT a.id,a.status,a.before_json,a.result_json,a.created_at,a.executed_at,h.kitchen_constraints_json AS current_preferences
+      FROM agent_actions a JOIN agent_runs r ON r.id=a.run_id AND r.user_id=a.user_id
+      LEFT JOIN user_health_profiles h ON h.user_id=a.user_id
+      WHERE a.user_id=? AND r.source='assistant' AND a.action_type='update_kitchen_preferences' AND a.status IN ('executed','undone') AND a.created_at>=datetime('now','-30 day')`).all(userId) as Row[];
+    return { production,events,inventory,changes,statements };
   }
   async learningData(userId: number) {
     const settings = this.database.prepare("SELECT * FROM recommendation_learning_settings WHERE user_id=?").get(userId) as Row | undefined;

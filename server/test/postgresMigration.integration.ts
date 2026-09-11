@@ -1607,6 +1607,14 @@ try {
   const timeCleared = await dietService.applyMealEvent(user.id,prepared.id,{ ...timeCorrection,idempotency_key: "pg-time-clear-197",version: Number(timeMeal.version)+1,reported_cooking_minutes: null });
   assert.equal((timeCleared.prepared_meal as { reported_cooking_minutes: number | null }).reported_cooking_minutes,null);
   assert.equal(Number((await pool.query("SELECT remaining_servings FROM prepared_meals WHERE id=$1",[prepared.id])).rows[0].remaining_servings),Number(timeMeal.remaining_servings));
+  await pool.query("INSERT INTO user_health_profiles(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING",[user.id]);
+  const previousKitchen = (await pool.query("SELECT kitchen_constraints_json FROM user_health_profiles WHERE user_id=$1",[user.id])).rows[0].kitchen_constraints_json;
+  await pool.query("UPDATE user_health_profiles SET kitchen_constraints_json=kitchen_constraints_json || '{\"servings\":2}'::jsonb WHERE user_id=$1",[user.id]);
+  await pool.query("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,before_json,result_json,idempotency_key,executed_at) VALUES('dialogue-evidence-action',$1,$2,'update_kitchen_preferences','high','executed','{}','{\"servings\":1}','{\"scope\":\"persistent\",\"kitchenPreferences\":{\"servings\":2}}','dialogue-evidence-action',CURRENT_TIMESTAMP)",[protectedRunId,user.id]);
+  assert((await recommendationsService.learningState(user.id)).observations.some(fact => fact.id === "preference-statement:dialogue-evidence-action" && fact.valid));
+  await pool.query("UPDATE user_health_profiles SET kitchen_constraints_json=kitchen_constraints_json || '{\"servings\":3}'::jsonb WHERE user_id=$1",[user.id]);
+  assert((await recommendationsService.learningState(user.id)).observations.some(fact => fact.id === "preference-statement:dialogue-evidence-action" && !fact.valid));
+  await pool.query("UPDATE user_health_profiles SET kitchen_constraints_json=$1::jsonb WHERE user_id=$2",[JSON.stringify(previousKitchen),user.id]);
   const outcomeFacts = (await recommendationsService.learningState(user.id)).observations;
   assert(outcomeFacts.some(fact => fact.kind === "production"));
   assert(outcomeFacts.some(fact => fact.kind === "inventory" && fact.valid));
@@ -1614,7 +1622,7 @@ try {
   assert(outcomeFacts.some(fact => fact.kind === "plan_change" && !fact.valid));
   assert(outcomeFacts.some(fact => fact.correctionId && !fact.valid));
   assert.equal(new Set(outcomeFacts.map(fact => fact.id)).size,outcomeFacts.length);
-  assert.deepEqual(await recommendationsRepository.preferenceOutcomes(-1),{ production: [],events: [],inventory: [],changes: [] });
+  assert.deepEqual(await recommendationsRepository.preferenceOutcomes(-1),{ production: [],events: [],inventory: [],changes: [],statements: [] });
 
   const aiToolDataService = new AiToolDataService(new PostgresAiToolDataRepository(pool));
   await pool.query(`INSERT INTO recipes

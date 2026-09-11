@@ -38,3 +38,13 @@ test("actual time remains an explicit report and missing history stays unknown",
   assert.match(formatOutcomeEvidence([production],[])[0].explanation,/未采集/);
   assert.match(formatOutcomeEvidence([{ ...production,reported_cooking_minutes: 27 }],[])[0].explanation,/用户报告实际用时 27 分钟/);
 });
+
+test("dialogue preference provenance includes only executed persistent changes and detects later corrections",() => {
+  const statement = { id: "action",status: "executed",before_json: { servings: 1 },result_json: { scope: "persistent",kitchenPreferences: { servings: 2 } },current_preferences: { servings: 2 },created_at: "2026-09-12 10:00:00" };
+  const facts = formatOutcomeEvidence([],[],[],[],[statement,statement]);
+  assert.equal(facts.length,1); assert.equal(facts[0].valid,true); assert.match(facts[0].explanation,/常用份量/);
+  assert.equal(formatOutcomeEvidence([],[],[],[],[{ ...statement,current_preferences: { servings: 3 } }])[0].valid,false);
+  assert.equal(formatOutcomeEvidence([],[],[],[],[{ ...statement,status: "undone" }])[0].valid,false);
+  assert.equal(formatOutcomeEvidence([],[],[],[],[{ ...statement,status: "awaiting_approval" }]).length,0);
+  assert.equal(formatOutcomeEvidence([],[],[],[],[{ ...statement,result_json: { scope: "request",kitchenPreferences: { servings: 2 } } }]).length,0);
+});

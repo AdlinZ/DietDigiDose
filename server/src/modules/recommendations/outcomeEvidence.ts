@@ -3,7 +3,7 @@ import type { PreferenceOutcome } from "@dietdigidose/contracts";
 const iso = (value: unknown) => value instanceof Date ? value.toISOString() : String(value).includes("T") ? String(value) : `${String(value).replace(" ","T")}Z`;
 
 /** These are observations, not guesses about taste or why a meal was left over. */
-export function formatOutcomeEvidence(production: Row[], events: Row[], inventory: Row[] = [], changes: Row[] = []): PreferenceOutcome[] {
+export function formatOutcomeEvidence(production: Row[], events: Row[], inventory: Row[] = [], changes: Row[] = [], statements: Row[] = []): PreferenceOutcome[] {
   const facts = new Map<string,PreferenceOutcome>();
   for (const row of production) {
     const id = `production:${row.id}`;
@@ -35,6 +35,18 @@ export function formatOutcomeEvidence(production: Row[], events: Row[], inventor
     const id = `meal-plan-change:${row.id}`;
     facts.set(id,{ id,recipeId: Number(after.recipeId) || null,title: String(after.title ?? "餐次调整"),kind: "plan_change",at: iso(row.applied_at ?? row.created_at),valid: row.status === "applied",
       explanation: row.status === "reverted" ? "餐次变更已恢复，不再作为换菜证据" : "餐次调整已应用；原因未明确分类，不据此推断喜欢或厌恶" });
+  }
+  const labels: Record<string,string> = { servings: "常用份量",meal_time_minutes: "制作时间上限",budget_per_meal: "每餐预算",cooking_level: "烹饪熟练度",eating_out_frequency: "外食频率",usual_meals: "常用餐次",eating_location: "用餐地点",carry_meals: "携带餐食",refrigeration_available: "冷藏条件",reheating_available: "复热条件" };
+  for (const row of statements) {
+    const result = json(row.result_json);
+    if (result.scope !== "persistent" || !["executed","undone"].includes(String(row.status))) continue;
+    const after = json(result.kitchenPreferences); const before = json(row.before_json); const current = json(row.current_preferences);
+    const keys = Object.keys(after).filter(key => labels[key] && JSON.stringify(after[key]) !== JSON.stringify(before[key]));
+    if (!keys.length) continue;
+    const valid = row.status === "executed" && keys.every(key => JSON.stringify(after[key]) === JSON.stringify(current[key]));
+    const id = `preference-statement:${row.id}`;
+    facts.set(id,{ id,recipeId: null,title: "对话中的长期备餐设置",kind: "preference_statement",at: iso(row.executed_at ?? row.created_at),valid,
+      explanation: `${keys.map(key => labels[key]).join("、")}：${valid ? "已执行并与当前档案一致" : "已撤销或被后续设置更改，不再当作当前偏好"}` });
   }
   return [...facts.values()].sort((a,b) => b.at.localeCompare(a.at) || a.id.localeCompare(b.id));
 }

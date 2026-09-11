@@ -3621,6 +3621,12 @@ test("Agent permanent kitchen preferences preserve profile fields and replay ide
   assert.deepEqual((profile.body as JsonObject).allergies, [allergy]);
   assert.deepEqual((profile.body as JsonObject).kitchen_constraints, { meal_time_minutes: 45, servings: 2,
     refrigeration_available: false, reheating_available: false });
+  const evidence = await api("/api/v1/recommendations/preferences",{ token: account.token });
+  assert((evidence.body as JsonObject).observations.some((fact: JsonObject) => fact.id === `preference-statement:${runId}` && fact.valid));
+  await api("/api/v1/health-data/profile",{ token: account.token,method: "PUT",body: JSON.stringify({ allergies: [allergy],kitchen_constraints: { servings: 3 } }) });
+  const correctedEvidence = await api("/api/v1/recommendations/preferences",{ token: account.token });
+  assert((correctedEvidence.body as JsonObject).observations.some((fact: JsonObject) => fact.id === `preference-statement:${runId}` && !fact.valid));
+
 });
 
 test("prepared meal reservations persist without consumption and leave automatic allocation context", async () => {

@@ -50,7 +50,11 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
         WHERE l.user_id=$1 AND l.action='created' AND l.metadata_json->>'acceptance' IN ('manual','automatic') AND l.created_at>=CURRENT_TIMESTAMP-INTERVAL '30 days'`,[userId]),
       this.pool.query("SELECT id,status,after_json,created_at,applied_at FROM meal_plan_changes WHERE user_id=$1 AND status IN ('applied','reverted') AND created_at>=CURRENT_TIMESTAMP-INTERVAL '30 days'",[userId]),
     ]);
-    return { production: production.rows as Row[],events: events.rows as Row[],inventory: inventory.rows as Row[],changes: changes.rows as Row[] };
+    const statements = (await this.pool.query(`SELECT a.id,a.status,a.before_json,a.result_json,a.created_at,a.executed_at,h.kitchen_constraints_json AS current_preferences
+      FROM agent_actions a JOIN agent_runs r ON r.id=a.run_id AND r.user_id=a.user_id
+      LEFT JOIN user_health_profiles h ON h.user_id=a.user_id
+      WHERE a.user_id=$1 AND r.source='assistant' AND a.action_type='update_kitchen_preferences' AND a.status IN ('executed','undone') AND a.created_at>=CURRENT_TIMESTAMP-INTERVAL '30 days'`,[userId])).rows as Row[];
+    return { production: production.rows as Row[],events: events.rows as Row[],inventory: inventory.rows as Row[],changes: changes.rows as Row[],statements };
   }
   async learningData(userId: number) {
     const settings = (await this.pool.query("SELECT * FROM recommendation_learning_settings WHERE user_id=$1",[userId])).rows[0] as Row | undefined;

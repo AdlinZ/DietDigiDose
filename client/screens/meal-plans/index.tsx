@@ -250,6 +250,7 @@ export default function MealPlansScreen() {
           </View>
         ) : null}
 
+        <TouchableOpacity onPress={() => router.push("/plan-maintenance")} className="mx-5 mt-4"><Text className="font-bold text-brand">每日计划检查 · 设置时间</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => router.push("/preference-learning")} className="mx-5 mt-4"><Text className="font-bold text-brand">系统记住了什么 · 管理偏好</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => router.push("/weekly-plan")} className="mx-5 mt-4 rounded-2xl bg-brand-soft p-4"><Text className="font-black text-brand">计算未来七日安排与合并采购</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => router.push("/cooking-plan")} className="mx-5 mt-4 rounded-2xl bg-brand-soft p-4"><Text className="font-black text-brand">按待吃餐和库存计算这次备餐</Text></TouchableOpacity>

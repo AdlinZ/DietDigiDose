@@ -9,3 +9,10 @@ export const planMaintenanceSettingsSchema = z.discriminatedUnion("enabled", [
   z.object({ version: z.number().int().nonnegative(), enabled: z.literal(false) }).strict(),
 ]);
 export type PlanMaintenanceSettingsInput = z.infer<typeof planMaintenanceSettingsSchema>;
+
+export const planMaintenanceStateSchema = z.object({
+  enabled: z.boolean(),timeZone: timeZone.nullable(),localTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable(),
+  nextCheckAt: z.string().refine(value => Number.isFinite(Date.parse(value)), "检查时间无效").nullable(),nextLocalDate: z.string().nullable(),lastCompletedLocalDate: z.string().nullable(),
+  version: z.number().int().nonnegative(),
+});
+export type PlanMaintenanceState = z.infer<typeof planMaintenanceStateSchema>;

@@ -1,3 +1,4 @@
+import { verifyHouseholdDining } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
@@ -4273,4 +4274,24 @@ test("rolling weekly preview preserves overlapping arrangements and fills only d
     assert.equal(result.response.status,200);
     return result.body as unknown as import("@dietdigidose/contracts").WeeklyPlanPreview;
   });
+});
+
+
+test("household dining preferences are explicit, self-owned and revoked on leaving",async () => {
+  const owner = await register("dining-owner@example.com"), member = await register("dining-member@example.com");
+  const { HouseholdsService } = await import("../src/modules/households/service.js");
+  const { SqliteHouseholdsRepository } = await import("../src/modules/households/sqliteRepository.js");
+  const service = new HouseholdsService(new SqliteHouseholdsRepository(db),() => "DINING01");
+  const family = await service.create(owner.user.id,"共餐设置");
+  await service.join(member.user.id,"DINING01");
+  const staleMembership = await verifyHouseholdDining(service,Number(family.id),owner.user.id,member.user.id);
+  const endpoint = `/api/v1/households/${family.id}/dining-preferences`;
+  assert.equal((await api(endpoint,{ token: member.token })).response.status,403);
+  const own = (await api(endpoint,{ token: owner.token })).body as JsonObject;
+  assert.equal((await api(endpoint,{ token: owner.token,method: "PUT",body: JSON.stringify({ ...own,userId: member.user.id }) })).response.status,400);
+  await service.join(member.user.id,"DINING01");
+  const fresh = await service.diningPreferences(member.user.id,Number(family.id));
+  assert.equal(fresh.shared,false); assert.deepEqual(fresh.allergies,[]);
+  assert.notEqual(fresh.membershipId,staleMembership.membershipId);
+  await assert.rejects(() => service.saveDiningPreferences(member.user.id,Number(family.id),{ ...staleMembership,shared: true }),/已变化/);
 });

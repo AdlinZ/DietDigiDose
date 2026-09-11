@@ -18,6 +18,18 @@ export class HouseholdsService {
     this.repository = repository; this.codeFactory = codeFactory;
   }
 
+  async diningPreferences(userId: number, householdId: number) {
+    const row = await this.repository.diningPreferences(userId,householdId);
+    if (!row) throw new HouseholdsError(403,"你不是该家庭的成员","NOT_MEMBER");
+    const preferences = typeof row.dining_preferences_json === "string" ? JSON.parse(row.dining_preferences_json) : row.dining_preferences_json as { allergies?: string[]; restrictions?: string[] };
+    return { membershipId: Number(row.id),version: Number(row.dining_version),shared: Boolean(row.dining_shared),allergies: preferences?.allergies ?? [],restrictions: preferences?.restrictions ?? [] };
+  }
+  async saveDiningPreferences(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdDiningPreferencesInput) {
+    await this.diningPreferences(userId,householdId);
+    if (!await this.repository.saveDiningPreferences(userId,householdId,input)) throw new HouseholdsError(409,"共餐设置或家庭成员状态已变化，请刷新后重试","VERSION_CONFLICT");
+    return { ...input,version: input.version+1 };
+  }
+
   async create(userId: number, rawName: unknown) {
     const name = typeof rawName === "string" ? rawName.trim() : "";
     if (!name) throw new HouseholdsError(400, "请输入家庭空间名称", "INVALID_NAME");

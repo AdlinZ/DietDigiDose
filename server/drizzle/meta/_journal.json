@@ -85,6 +85,13 @@
       "when": 1789151084173,
       "tag": "0011_rainy_living_tribunal",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789156799254,
+      "tag": "0012_quiet_sabretooth",
+      "breakpoints": true
     }
   ]
 }

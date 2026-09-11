@@ -2174,6 +2174,12 @@ const migrations: Migration[] = [
     CREATE INDEX idx_plan_maintenance_job_events_job ON plan_maintenance_job_events(job_id,event_id);`);
   } },
 
+  { version: 70, name: "household_dining_preferences", up(database) {
+    database.exec(`ALTER TABLE household_members ADD COLUMN dining_shared INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE household_members ADD COLUMN dining_preferences_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE household_members ADD COLUMN dining_version INTEGER NOT NULL DEFAULT 1;`);
+  } },
+
 ];
 
 export function runMigrations(database: Database.Database) {

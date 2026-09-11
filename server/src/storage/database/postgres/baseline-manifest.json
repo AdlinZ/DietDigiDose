@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "8dc3227e534d6c3ad89719519996dd92010372b2a5864eb7cbc9aa1a15ab9da4",
+  "sourceSchemaSha256": "7d23338c41f45cec666a90e4f8ecead1d4588961703b167881a618943d68c867",
   "tableCount": 101,
   "indexCount": 149,
   "foreignKeyCount": 156,
@@ -2702,6 +2702,27 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": true
+        },
+        {
+          "name": "dining_shared",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "dining_preferences_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "dining_version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
         }
       ]
     },

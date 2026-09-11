@@ -22,6 +22,14 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async diningPreferences(userId: number, householdId: number) {
+    return (await this.pool.query("SELECT id,dining_shared,dining_preferences_json,dining_version FROM household_members WHERE household_id=$1 AND user_id=$2",[householdId,userId])).rows[0] as Row | undefined ?? null;
+  }
+  async saveDiningPreferences(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdDiningPreferencesInput) {
+    return (await this.pool.query("UPDATE household_members SET dining_shared=$1,dining_preferences_json=$2::jsonb,dining_version=dining_version+1 WHERE household_id=$3 AND user_id=$4 AND dining_version=$5 AND id=$6",
+      [Number(input.shared),JSON.stringify({ allergies: input.allergies,restrictions: input.restrictions }),householdId,userId,input.version,input.membershipId])).rowCount === 1;
+  }
+
   async create(userId: number, name: string, inviteCode: string) {
     try {
       return await this.tx(async (client) => {

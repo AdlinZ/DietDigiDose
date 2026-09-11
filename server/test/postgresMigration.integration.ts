@@ -1,3 +1,4 @@
+import { verifyHouseholdDining } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { randomUUID } from "node:crypto";
@@ -695,6 +696,10 @@ try {
   const postgresHousehold = await householdsService.create(user.id, "Postgres 协作家庭");
   const postgresHouseholdId = Number(postgresHousehold.id);
   assert.equal((await householdsService.join(householdMember, "pghouse1")).status, 201);
+  const staleDiningMembership = await verifyHouseholdDining(householdsService,postgresHouseholdId,user.id,householdMember);
+  await householdsService.join(householdMember,"PGHOUSE1");
+  assert.equal((await householdsService.diningPreferences(householdMember,postgresHouseholdId)).shared,false);
+  await assert.rejects(() => householdsService.saveDiningPreferences(householdMember,postgresHouseholdId,{ ...staleDiningMembership,shared: true }),/已变化/);
   const firstHouseholdShopping = await householdsService.createShopping(user.id, postgresHouseholdId,
     "77777777-7777-4777-8777-777777777771", { name: "Postgres 家庭牛奶", amount: "2盒", category: "乳制品" });
   const secondHouseholdShopping = await householdsService.createShopping(householdMember, postgresHouseholdId,

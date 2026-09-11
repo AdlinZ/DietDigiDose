@@ -17,6 +17,14 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async diningPreferences(userId: number, householdId: number) {
+    return this.database.prepare("SELECT id,dining_shared,dining_preferences_json,dining_version FROM household_members WHERE household_id=? AND user_id=?").get(householdId,userId) as Row | undefined ?? null;
+  }
+  async saveDiningPreferences(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdDiningPreferencesInput) {
+    return this.database.prepare("UPDATE household_members SET dining_shared=?,dining_preferences_json=?,dining_version=dining_version+1 WHERE household_id=? AND user_id=? AND dining_version=? AND id=?")
+      .run(Number(input.shared),JSON.stringify({ allergies: input.allergies,restrictions: input.restrictions }),householdId,userId,input.version,input.membershipId).changes === 1;
+  }
+
   async create(userId: number, name: string, inviteCode: string) {
     try {
       return this.database.transaction(() => {

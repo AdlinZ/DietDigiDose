@@ -97,6 +97,13 @@ export async function verifyMaintenanceQueue(harness: {
   for (const kind of ["confirmed","cooking","purchased","untouched"]) assert.deepEqual(await harness.mealState(`maintenance-${kind}`),{ version: 1,plannedDate: "2026-09-12" });
   assert.equal(await harness.unprocessed(),3);
   assert.equal(await harness.changeCount(),4);
+  const history = await harness.settings.runs(harness.users[0]);
+  const summary = history.find(row => row.id === fresh.id)!;
+  assert.deepEqual([summary.applied,summary.suggested,summary.kept],[1,2,1]);
+  assert.deepEqual(summary.checks,["核对复热"]);
+  assert.equal(summary.status,"completed");
+  assert.equal((await harness.settings.runs(harness.users[1])).some(row => row.id === fresh.id),false);
+  assert.equal(JSON.stringify(history).includes("leaseToken"),false);
   assert.deepEqual(await apply(fresh,[]),{ kind: "lease_lost" });
   assert.equal(await harness.changeCount(),4);
   // Daily dispatch advances its next occurrence without claiming successful completion.

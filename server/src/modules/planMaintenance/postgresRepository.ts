@@ -1,9 +1,15 @@
+import { maintenanceRunSummary } from "./runSummary.js";
 import type { Pool } from "pg";
 import type { MaintenanceSettings, PlanMaintenanceRepository } from "./repository.js";
 
 export class PostgresPlanMaintenanceRepository implements PlanMaintenanceRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+
+  async runs(userId: number) {
+    const result = await this.pool.query("SELECT id,status,attempts,created_at,updated_at,available_at,result_json FROM plan_maintenance_jobs WHERE user_id=$1 ORDER BY created_at DESC,id DESC LIMIT 20",[userId]);
+    return result.rows.map(maintenanceRunSummary);
+  }
 
   async settings(userId: number) {
     const result = await this.pool.query(`SELECT enabled,time_zone AS "timeZone",local_time AS "localTime",

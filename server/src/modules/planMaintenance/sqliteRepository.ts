@@ -1,9 +1,15 @@
+import { maintenanceRunSummary } from "./runSummary.js";
 import type Database from "better-sqlite3";
 import type { MaintenanceSettings, PlanMaintenanceRepository } from "./repository.js";
 
 export class SqlitePlanMaintenanceRepository implements PlanMaintenanceRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+
+  async runs(userId: number) {
+    const rows = this.database.prepare("SELECT id,status,attempts,created_at,updated_at,available_at,result_json FROM plan_maintenance_jobs WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 20").all(userId) as Record<string,unknown>[];
+    return rows.map(maintenanceRunSummary);
+  }
 
   async settings(userId: number) {
     const row = this.database.prepare(`SELECT enabled,time_zone AS timeZone,local_time AS localTime,

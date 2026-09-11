@@ -11,6 +11,8 @@ export class PlanMaintenanceService {
     this.now = now;
   }
 
+  async runs(userId: number) { return { items: await this.repository.runs(userId) }; }
+
   async settings(userId: number): Promise<MaintenanceSettings> {
     return await this.repository.settings(userId) ?? { enabled: false, timeZone: null, localTime: null,
       nextCheckAt: null, nextLocalDate: null, lastCompletedLocalDate: null, version: 0 };

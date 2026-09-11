@@ -380,6 +380,10 @@ describe("API security baseline", () => {
     assert.ok(stored.diagnostics.inputFingerprint);
     assert.ok(stored.diagnostics.checks.length);
     assert.ok((db.prepare("SELECT processed_at FROM plan_maintenance_events WHERE id='dispatch-event'").get() as JsonObject).processed_at);
+    const history = await api("/api/v1/plan-maintenance/runs", { token: owner.token });
+    assert.equal(history.response.status,200);
+    assert.equal((history.body as JsonObject).items[0].status,"completed");
+    assert.equal((await api("/api/v1/plan-maintenance/runs")).response.status,401);
     const replay = await runWorkerCycle("processor-test",worker,["plan-maintenance-process"]);
     assert.equal(replay[0].result?.processed,0);
     db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");

@@ -45,6 +45,7 @@ export default function PlanMaintenanceScreen() {
   return <Screen className="flex-1 bg-background">
     <View className="flex-row items-center gap-6 p-5"><TouchableOpacity accessibilityRole="button" onPress={() => router.back()}><Text className="text-brand">返回</Text></TouchableOpacity><Text className="text-xl font-bold text-ink">每日计划检查</Text></View>
     <ScrollView contentContainerClassName="p-5 gap-4">
+      <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/maintenance-results")}><Text className="font-bold text-brand">查看计划检查结果</Text></TouchableOpacity>
       <Text className="text-copy-muted">每天核对未来餐次的库存和安排。未确认餐次可以调整；已确认或采购的餐次先给出建议，制作中的餐次保持不动。</Text>
       {!user ? <Text className="text-ink">请登录后设置每日检查。</Text> : <>
         {state ? <>

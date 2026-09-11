@@ -16,3 +16,12 @@ export const planMaintenanceStateSchema = z.object({
   version: z.number().int().nonnegative(),
 });
 export type PlanMaintenanceState = z.infer<typeof planMaintenanceStateSchema>;
+
+export const planMaintenanceRunSchema = z.object({
+  id: z.string(),status: z.enum(["queued","running","completed","failed"]),attempts: z.number().int().nonnegative(),
+  createdAt: z.string(),updatedAt: z.string(),retryAt: z.string().nullable(),
+  applied: z.number().int().nonnegative(),suggested: z.number().int().nonnegative(),kept: z.number().int().nonnegative(),
+  checks: z.array(z.string()),message: z.string(),
+});
+export const planMaintenanceRunsSchema = z.object({ items: z.array(planMaintenanceRunSchema) });
+export type PlanMaintenanceRun = z.infer<typeof planMaintenanceRunSchema>;

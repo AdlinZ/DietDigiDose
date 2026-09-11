@@ -8,6 +8,7 @@ export type MaintenanceSettings = {
   version: number;
 };
 export interface PlanMaintenanceRepository {
+  runs(userId: number): Promise<import("@dietdigidose/contracts").PlanMaintenanceRun[]>;
   settings(userId: number): Promise<MaintenanceSettings | null>;
   saveSettings(userId: number, expectedVersion: number, settings: MaintenanceSettings): Promise<boolean>;
 }

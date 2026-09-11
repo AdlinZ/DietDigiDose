@@ -9,6 +9,9 @@ import type { PlanMaintenanceService } from "./service.js";
 export function createPlanMaintenanceRouter(service: PlanMaintenanceService) {
   const router = Router();
   router.use(authMiddleware);
+  router.get("/runs", (req: AuthRequest,res,next) => {
+    void service.runs(req.userId!).then(value => res.json(value)).catch(next);
+  });
   router.get("/settings", (req: AuthRequest,res,next) => {
     void service.settings(req.userId!).then(value => res.json(value)).catch(next);
   });

@@ -197,6 +197,13 @@ function normalizeFoodName(value: string) {
   return value.toLocaleLowerCase().replace(/[\s·、，,。()（）/\\_-]/g, "");
 }
 
+/** Shared by allocation and maintenance dependency tracking. */
+export function inventoryFoodNamesMatch(left: string, right: string) {
+  const a = normalizeFoodName(left);
+  const b = normalizeFoodName(right);
+  return Boolean(a && b && (a.includes(b) || b.includes(a)));
+}
+
 export function buildFefoConsumptionPreview(
   database: Database.Database,
   userId: number,
@@ -240,12 +247,10 @@ export function buildFefoConsumptionPreviewFromCandidates(
     let nameAvailable = false;
     let uncertainQuantity = false;
     const deductions: Array<Record<string, unknown>> = [];
-    const requestName = normalizeFoodName(request.food_name);
     for (const item of inventory) {
       if (remaining <= 0.0001) break;
       if (asOfDate && typeof item.expiration_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.expiration_date) && item.expiration_date < asOfDate) continue;
-      const candidateName = normalizeFoodName(String(item.food_name));
-      if (!(candidateName.includes(requestName) || requestName.includes(candidateName))) continue;
+      if (!inventoryFoodNamesMatch(String(item.food_name),request.food_name)) continue;
       nameAvailable = true;
       if (item.quantity_evidence_status && item.quantity_evidence_status !== "known") { uncertainQuantity = true; continue; }
       const unit = item.quantity_unit as InventoryUnit | null;

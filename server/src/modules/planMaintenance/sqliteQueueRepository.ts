@@ -1,3 +1,5 @@
+import { maintenanceScope } from "./scope.js";
+import type { Row } from "../mealPlans/formatters.js";
 import { SqliteMealPlansRepository } from "../mealPlans/sqliteRepository.js";
 import { MaintenanceApplyConflict, type MaintenanceApplication, type MaintenanceChange } from "./queue.js";
 import { randomUUID } from "node:crypto";
@@ -41,6 +43,22 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
         .run(token,new Date(now.getTime()+leaseDuration(leaseMs)).toISOString(),now.toISOString(),row.id);
       const members = this.db.prepare("SELECT event_id FROM plan_maintenance_job_events WHERE job_id=? ORDER BY event_id").all(row.id) as { event_id: string }[];
       return { id: row.id,userId: row.user_id,attempt: row.attempts+1,leaseToken: token,eventIds: members.map(row => row.event_id) };
+    })();
+  }
+
+  async scope(job: MaintenanceJob, fromDate: string) {
+    return this.db.transaction(() => {
+      const valid = this.db.prepare(`SELECT 1 FROM plan_maintenance_jobs WHERE id=? AND user_id=? AND lease_token=?
+        AND attempts=? AND status='running' AND julianday(lease_expires_at)>julianday('now')`).get(job.id,job.userId,job.leaseToken,job.attempt);
+      if (!valid) return null;
+      const events = this.db.prepare(`SELECT e.* FROM plan_maintenance_events e JOIN plan_maintenance_job_events m ON m.event_id=e.id
+        WHERE m.job_id=? AND e.user_id=? ORDER BY e.id`).all(job.id,job.userId) as Row[];
+      return maintenanceScope({ userId: job.userId,fromDate,events,
+        inventory: this.db.prepare("SELECT * FROM inventory_items WHERE user_id=? ORDER BY id").all(job.userId) as Row[],
+        prepared: this.db.prepare("SELECT * FROM prepared_meals WHERE user_id=? ORDER BY id").all(job.userId) as Row[],
+        plans: this.db.prepare("SELECT * FROM meal_plans WHERE user_id=? ORDER BY id").all(job.userId) as Row[],
+        items: this.db.prepare("SELECT * FROM meal_plan_items WHERE user_id=? ORDER BY id").all(job.userId) as Row[],
+      });
     })();
   }
 

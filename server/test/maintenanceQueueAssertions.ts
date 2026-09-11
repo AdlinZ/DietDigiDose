@@ -50,6 +50,12 @@ export async function verifyMaintenanceQueue(harness: {
   assert.equal(await harness.unprocessed(),4);
   assert.equal(await harness.repository().enqueueEvents(later(304_000)),0);
   await harness.seedMeals(harness.users[0]);
+  const scope = await harness.repository().scope(fresh,"2026-09-12");
+  assert.ok(scope); assert.deepEqual(scope.items,[]); assert.equal(scope.checks.length,1);
+  assert.equal(scope.checks[0].eventId,"queue-fresh");
+  assert.deepEqual(await harness.repository().scope({ ...fresh,eventIds: ["queue-c"] },"2026-09-12"),scope);
+  assert.equal(await harness.repository().scope({ ...fresh,userId: harness.users[1] },"2026-09-12"),null);
+  assert.equal(await harness.repository().scope(first,"2026-09-12"),null);
   const change = (itemId: string,version = 1) => ({ planVersion: 1,planId: "maintenance-plan",itemId,
     input: { version,plannedDate: "2026-09-13" },reason: "关联库存变化" });
   assert.deepEqual(await harness.repository().applyChanges(first,[change("maintenance-mutable")]),{ kind: "lease_lost" });

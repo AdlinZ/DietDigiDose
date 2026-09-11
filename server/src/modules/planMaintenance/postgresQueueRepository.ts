@@ -1,3 +1,4 @@
+import { maintenanceScope } from "./scope.js";
 import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 import { PostgresMealPlansRepository } from "../mealPlans/postgresRepository.js";
 import { MaintenanceApplyConflict, type MaintenanceApplication, type MaintenanceChange } from "./queue.js";
@@ -49,6 +50,23 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
         [token,new Date(now.getTime()+leaseDuration(leaseMs)).toISOString(),now.toISOString(),row.id]);
       const members = (await client.query("SELECT event_id FROM plan_maintenance_job_events WHERE job_id=$1 ORDER BY event_id",[row.id])).rows;
       return { id: row.id,userId: row.user_id,attempt: row.attempts+1,leaseToken: token,eventIds: members.map(row => row.event_id) };
+    });
+  }
+
+  async scope(job: MaintenanceJob, fromDate: string) {
+    return this.transaction(async client => {
+      await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      const valid = (await client.query(`SELECT 1 FROM plan_maintenance_jobs WHERE id=$1 AND user_id=$2 AND lease_token=$3
+        AND attempts=$4 AND status='running' AND lease_expires_at>clock_timestamp()`,[job.id,job.userId,job.leaseToken,job.attempt])).rows[0];
+      if (!valid) return null;
+      const events = (await client.query(`SELECT e.* FROM plan_maintenance_events e JOIN plan_maintenance_job_events m ON m.event_id=e.id
+        WHERE m.job_id=$1 AND e.user_id=$2 ORDER BY e.id`,[job.id,job.userId])).rows;
+      return maintenanceScope({ userId: job.userId,fromDate,events,
+        inventory: (await client.query("SELECT * FROM inventory_items WHERE user_id=$1 ORDER BY id",[job.userId])).rows,
+        prepared: (await client.query("SELECT * FROM prepared_meals WHERE user_id=$1 ORDER BY id",[job.userId])).rows,
+        plans: (await client.query("SELECT * FROM meal_plans WHERE user_id=$1 ORDER BY id",[job.userId])).rows,
+        items: (await client.query("SELECT * FROM meal_plan_items WHERE user_id=$1 ORDER BY id",[job.userId])).rows,
+      });
     });
   }
 

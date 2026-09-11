@@ -1,3 +1,4 @@
+import type { MaintenanceScope } from "./scope.js";
 import type { MealPlanItemUpdateInput } from "../mealPlans/types.js";
 export const MAINTENANCE_RULE_VERSION = "maintenance-2026-09-12.1";
 export const MAINTENANCE_MAX_ATTEMPTS = 3;
@@ -7,6 +8,7 @@ export interface MaintenanceQueueRepository {
   enqueueEvents(now: Date, limit?: number): Promise<number>;
   /** Claim one user at a time; a fresh token fences every attempt, including recovery. */
   claim(now: Date, leaseMs?: number): Promise<MaintenanceJob | null>;
+  scope(job: MaintenanceJob, fromDate: string): Promise<MaintenanceScope | null>;
   applyChanges(job: MaintenanceJob, changes: MaintenanceChange[]): Promise<MaintenanceApplication>;
   fail(job: MaintenanceJob, now: Date, error: string): Promise<boolean>;
 }

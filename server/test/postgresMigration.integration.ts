@@ -2509,6 +2509,8 @@ try {
 
   const { verifyPostgresBackup } = await import("./postgresBackupAssertions.js");
   await verifyPostgresBackup(connectionString);
+  const { verifyPostgresRecoveryApi } = await import("./postgresRecoveryApiAssertions.js");
+  await verifyPostgresRecoveryApi(connectionString);
 
   console.log(JSON.stringify({
     ok: true,
@@ -2554,6 +2556,7 @@ try {
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,
     postgresBackupRestoreVerified: true,
+    postgresRecoveryHttpVerified: true,
     postgresApplicationRuntimeVerified: true,
   }, null, 2));
 } finally {

@@ -1,3 +1,4 @@
+import { inventoryUnitSchema } from "./inventory.ts";
 import { z } from "zod";
 const names = z.array(z.string().trim().min(1).max(100)).max(50);
 export const householdDiningPreferencesSchema = z.object({
@@ -38,6 +39,10 @@ export const householdDiningAllocationPreviewSchema = z.object({
   householdId: z.number().int().positive(), totalServings: diningServings,
   recipeCheck: z.object({
     recipeId: z.number().int().positive(), title: z.string(),status: z.enum(["blocked","needs_review"]),
+    materials: z.object({
+      status: z.enum(["known","unknown"]),recipeYield: z.number().finite().positive().nullable(),
+      demands: z.array(z.object({ food_name: z.string(),amount_value: z.number().finite().positive().max(1_000_000_000),unit: inventoryUnitSchema }).strict()),
+    }).strict(),
     conflicts: z.array(z.object({ membershipId: z.number().int().positive(),constraint: z.string(),kind: z.enum(["allergy","restriction"]) }).strict()),
     checks: z.array(z.string()),
   }).strict().optional(),

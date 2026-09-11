@@ -15,6 +15,8 @@ export async function verifyHouseholdDining(service: HouseholdsService,household
   if (recipeId) {
     const checked = await service.previewDiningAllocation(owner,householdId,{ recipeId,participants: [{ membershipId: initial.membershipId,version: saved.version,servings: 1 }] });
     assert.equal(checked.recipeCheck?.status,"blocked");
+    assert.equal(checked.recipeCheck?.materials.status,"known");
+    assert.deepEqual(checked.recipeCheck?.materials.demands,[{ food_name: "花生油",amount_value: 5,unit: "ml" }]);
     assert.ok(checked.recipeCheck?.conflicts.some(item => item.constraint === "花生"));
     await assert.rejects(() => service.previewDiningAllocation(owner,householdId,{ recipeId: 2147000000,participants: [{ membershipId: initial.membershipId,version: saved.version,servings: 1 }] }),/不可用于/);
   }

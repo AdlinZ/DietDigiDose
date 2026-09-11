@@ -93,3 +93,14 @@ test("shared recipe checks include every diner and never certify unknown restric
   assert.equal(uncertain.status,"needs_review");
   assert.ok(uncertain.checks.length);
 });
+
+test("shared raw ingredient demand scales once for all diners and rejects incomplete quantities", () => {
+  const recipe = { id: 5,title: "蔬菜饭",serving_size: 2,ingredients_json: [{ name: "大米",amount: "200g" },{ name: "水",amount: "300ml" }] };
+  const result = checkDiningRecipe(recipe,[],3);
+  assert.equal(result.materials.status,"known");
+  assert.deepEqual(result.materials.demands,[{ food_name: "大米",amount_value: 300,unit: "g" },{ food_name: "水",amount_value: 450,unit: "ml" }]);
+  assert.equal(checkDiningRecipe({ ...recipe,serving_size: null },[],3).materials.status,"unknown");
+  assert.equal(checkDiningRecipe({ ...recipe,ingredients_json: [...recipe.ingredients_json,{ name: "盐",amount: "适量" }] },[],3).materials.status,"unknown");
+  assert.equal(checkDiningRecipe({ ...recipe,serving_size: Infinity },[],3).materials.status,"unknown");
+  assert.equal(checkDiningRecipe({ ...recipe,ingredients_json: [{ name: "大米",amount: "0.000001g" }] },[],0.000001).materials.status,"unknown");
+});

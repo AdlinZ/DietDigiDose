@@ -38,6 +38,8 @@ export function DiningAllocation({ householdId,members,recipeId }: { recipeId?: 
       {preview.recipeCheck ? <View className="gap-2">
         <Text className="font-bold text-ink">{preview.recipeCheck.title}：{preview.recipeCheck.status === "blocked" ? "有已知忌口冲突，不适合当前共餐" : "尚需核对，未确认符合全部忌口"}</Text>
         {preview.recipeCheck.conflicts.map((conflict,index) => <Text key={index} className="text-ink">{preview.participants.find(person => person.membershipId === conflict.membershipId)?.name}：{conflict.constraint}</Text>)}
+        <Text className="font-bold text-ink">共餐原料总需求</Text>
+        {preview.recipeCheck.materials.status === "known" ? preview.recipeCheck.materials.demands.map((item,index) => <Text key={index} className="text-copy-muted">{item.food_name}：{item.amount_value} {({ piece: "个",serving: "份",bag: "袋",box: "盒",bottle: "瓶",can: "罐" } as Record<string,string>)[item.unit] ?? item.unit}</Text>) : <Text className="text-copy-muted">用量不完整，请核对菜谱份数与配料后再安排采购。</Text>}
         {preview.recipeCheck.checks.map((check,index) => <Text key={index} className="text-copy-muted">{check}</Text>)}
       </View> : null}
       <Text className="font-bold text-ink">共需 {preview.totalServings} 份</Text>

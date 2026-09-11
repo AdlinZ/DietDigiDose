@@ -72,7 +72,7 @@ test("late shared member data does not appear after changing account",async () =
 test("selects participants explicitly and checks the chosen recipe without recording intake",async () => {
   mockParams = { recipeId: 7 };
   mockMembers.mockResolvedValue({ members: [1,2,3].map(id => ({ membershipId: id,userId: id,name: `成员${id}`,version: 2,shared: true,allergies: [],restrictions: [] })) });
-  mockPreview.mockResolvedValue({ recipeCheck: { title: "花生菜",status: "blocked",conflicts: [{ membershipId: 2,constraint: "花生" }],checks: [] },totalServings: 3,participants: [1,2,3].map(id => ({ membershipId: id,name: `成员${id}`,servings: 1 })),allergies: ["花生"],restrictions: ["素食"] });
+  mockPreview.mockResolvedValue({ recipeCheck: { materials: { status: "known",demands: [{ food_name: "花生",amount_value: 300,unit: "g" }] },title: "花生菜",status: "blocked",conflicts: [{ membershipId: 2,constraint: "花生" }],checks: [] },totalServings: 3,participants: [1,2,3].map(id => ({ membershipId: id,name: `成员${id}`,servings: 1 })),allergies: ["花生"],restrictions: ["素食"] });
   let tree!: renderer.ReactTestRenderer;
   await act(async () => { tree = renderer.create(<HouseholdDiningScreen />); });
   act(() => { for (const id of [1,2,3]) tree.root.findByProps({ accessibilityLabel: `成员${id}参与共餐` }).props.onValueChange(true); });

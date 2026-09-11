@@ -696,7 +696,7 @@ try {
   const postgresHousehold = await householdsService.create(user.id, "Postgres 协作家庭");
   const postgresHouseholdId = Number(postgresHousehold.id);
   assert.equal((await householdsService.join(householdMember, "pghouse1")).status, 201);
-  const diningRecipeId = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,status) VALUES('共餐花生菜','[{\"name\":\"花生油\"}]','approved') RETURNING id")).rows[0]?.id);
+  const diningRecipeId = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,status,serving_size) VALUES('共餐花生菜','[{\"name\":\"花生油\",\"amount\":\"10ml\"}]','approved',2) RETURNING id")).rows[0]?.id);
   const staleDiningMembership = await verifyHouseholdDining(householdsService,postgresHouseholdId,user.id,householdMember,diningRecipeId);
   await householdsService.join(householdMember,"PGHOUSE1");
   assert.equal((await householdsService.diningPreferences(householdMember,postgresHouseholdId)).shared,false);

@@ -4284,7 +4284,7 @@ test("household dining preferences are explicit, self-owned and revoked on leavi
   const service = new HouseholdsService(new SqliteHouseholdsRepository(db),() => "DINING01");
   const family = await service.create(owner.user.id,"共餐设置");
   await service.join(member.user.id,"DINING01");
-  const diningRecipeId = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,status) VALUES('共餐花生菜','[{\"name\":\"花生油\"}]','approved')").run().lastInsertRowid);
+  const diningRecipeId = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,status,serving_size) VALUES('共餐花生菜','[{\"name\":\"花生油\",\"amount\":\"10ml\"}]','approved',2)").run().lastInsertRowid);
   const staleMembership = await verifyHouseholdDining(service,Number(family.id),owner.user.id,member.user.id,diningRecipeId);
   const endpoint = `/api/v1/households/${family.id}/dining-preferences`;
   assert.equal((await api(endpoint,{ token: member.token })).response.status,403);

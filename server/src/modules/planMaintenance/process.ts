@@ -1,3 +1,4 @@
+import { maintenanceExplanations } from "./explanations.js";
 import { evaluateMaintenanceJob } from "./evaluate.js";
 import { batchLimit, type MaintenanceQueueRepository } from "./queue.js";
 import type { WorkerTaskContext, WorkerTaskResult } from "../worker/types.js";
@@ -18,7 +19,7 @@ export async function processMaintenanceJobs(repository: MaintenanceQueueReposit
       if (!evaluation) { failed++; continue; }
       const result = await repository.applyChanges(job,evaluation.replacements.changes,evaluation.snapshot,{
         ...evaluation.result,fromDate: evaluation.fromDate,evaluationDurationMs: Math.max(0,Math.round(performance.now()-started)),
-        checks: [...new Set([...evaluation.result.checks,...evaluation.replacements.checks])],
+        checks: maintenanceExplanations(job.userId,evaluation.snapshot,evaluation.result.assessments,evaluation.replacements.changes,[...evaluation.result.checks,...evaluation.replacements.checks]),
       });
       if (result.kind === "completed") succeeded++;
       else {

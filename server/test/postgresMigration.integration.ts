@@ -2275,6 +2275,7 @@ try {
       await pool.query("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('maintenance-purchase',$1,'meal-plan:maintenance-purchased:0','已采购',true)",[userId]);
     },
     mealState: async id => (await pool.query('SELECT version,planned_date AS "plannedDate" FROM meal_plan_items WHERE id=$1',[id])).rows[0],
+    jobResult: async id => (await pool.query("SELECT result_json FROM plan_maintenance_jobs WHERE id=$1",[id])).rows[0].result_json,
     changeCount: async () => (await pool.query("SELECT COUNT(*)::int n FROM meal_plan_changes WHERE plan_id='maintenance-plan'")).rows[0].n,
     mutateInventory: async userId => { await pool.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'新入库','其他','1份','2026-09-20')",[userId]); },
   });

@@ -348,6 +348,7 @@ describe("API security baseline", () => {
         db.prepare("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('maintenance-purchase',?,'meal-plan:maintenance-purchased:0','已采购',1)").run(userId);
       },
       mealState: async id => db.prepare("SELECT version,planned_date AS plannedDate FROM meal_plan_items WHERE id=?").get(id) as { version: number; plannedDate: string },
+      jobResult: async id => { const value = (db.prepare("SELECT result_json FROM plan_maintenance_jobs WHERE id=?").get(id) as JsonObject).result_json; return value ? JSON.parse(value) : null; },
       changeCount: async () => (db.prepare("SELECT COUNT(*) n FROM meal_plan_changes WHERE plan_id='maintenance-plan'").get() as JsonObject).n,
       mutateInventory: async userId => { db.prepare("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES(?,'新入库','其他','1份','2026-09-20')").run(userId); },
     });
@@ -367,6 +368,19 @@ describe("API security baseline", () => {
     assert.equal(repeated[0].result?.processed,0);
     assert.equal((db.prepare("SELECT processed_at FROM plan_maintenance_events WHERE id='dispatch-event'").get() as JsonObject).processed_at,null);
     assert.equal((db.prepare("SELECT status FROM plan_maintenance_jobs WHERE user_id=?").get(owner.user.id) as JsonObject).status,"queued");
+    const processed = await runWorkerCycle("processor-test",worker,["plan-maintenance-process"]);
+    assert.equal(processed[0].status,"completed");
+    assert.equal(processed[0].result?.succeeded,1);
+    const completed = db.prepare("SELECT status,result_json FROM plan_maintenance_jobs WHERE user_id=?").get(owner.user.id) as JsonObject;
+    assert.equal(completed.status,"completed");
+    const stored = JSON.parse(completed.result_json);
+    assert.equal(stored.diagnostics.modelCalls,0);
+    assert.equal(stored.diagnostics.cost,0);
+    assert.ok(stored.diagnostics.inputFingerprint);
+    assert.ok(stored.diagnostics.checks.length);
+    assert.ok((db.prepare("SELECT processed_at FROM plan_maintenance_events WHERE id='dispatch-event'").get() as JsonObject).processed_at);
+    const replay = await runWorkerCycle("processor-test",worker,["plan-maintenance-process"]);
+    assert.equal(replay[0].result?.processed,0);
     db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
   });
 

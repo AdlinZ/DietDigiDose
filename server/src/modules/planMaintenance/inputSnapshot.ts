@@ -5,7 +5,7 @@ import type { Row } from "../mealPlans/formatters.js";
 export const maintenanceInputTables = [
   "inventory_items", "inventory_change_logs", "prepared_meals", "meal_plans", "meal_plan_items",
   "shopping_list_items", "cooking_queue_items", "user_health_profiles", "kitchenware_items",
-  "recommendation_learning_settings", "recipe_favorites", "diet_records",
+  "plan_maintenance_settings", "recommendation_learning_settings", "recipe_favorites", "diet_records",
 ] as const;
 /** Shared governance inputs are read-only during planning, but part of validation. */
 export const maintenanceRuleTables = ["kitchenware_catalog","kitchenware_capabilities","kitchenware_catalog_capabilities",

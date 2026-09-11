@@ -2,7 +2,7 @@ import { inputSnapshot, maintenanceInputTables, maintenanceRuleTables, type Main
 import { maintenanceScope } from "./scope.js";
 import type { Row } from "../mealPlans/formatters.js";
 import { SqliteMealPlansRepository } from "../mealPlans/sqliteRepository.js";
-import { MaintenanceApplyConflict, type MaintenanceApplication, type MaintenanceChange } from "./queue.js";
+import { MaintenanceApplyConflict, type MaintenanceDiagnostics, type MaintenanceApplication, type MaintenanceChange } from "./queue.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { batchLimit, leaseDuration, MAINTENANCE_MAX_ATTEMPTS, MAINTENANCE_RULE_VERSION, retryAt, type MaintenanceJob, type MaintenanceQueueRepository } from "./queue.js";
@@ -87,7 +87,7 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
     })();
   }
 
-  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">): Promise<MaintenanceApplication> {
+  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">, diagnostics?: MaintenanceDiagnostics): Promise<MaintenanceApplication> {
     try {
       return this.db.transaction(() => {
         const valid = () => Boolean(this.db.prepare(`SELECT 1 FROM plan_maintenance_jobs WHERE id=? AND user_id=?
@@ -113,7 +113,7 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
         this.db.prepare(`UPDATE plan_maintenance_events SET processed_at=CURRENT_TIMESTAMP WHERE user_id=?
           AND id IN (SELECT event_id FROM plan_maintenance_job_events WHERE job_id=?)`).run(job.userId,job.id);
         this.db.prepare("UPDATE plan_maintenance_jobs SET status='completed',result_json=?,lease_token=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?")
-          .run(JSON.stringify({ changes: results }),job.id);
+          .run(JSON.stringify({ changes: results, diagnostics: diagnostics ?? null }),job.id);
         return { kind: "completed" as const,changes: results };
       })();
     } catch(error) {

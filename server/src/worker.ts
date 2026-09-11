@@ -1,3 +1,5 @@
+import { processMaintenanceJobs } from "./modules/planMaintenance/process.js";
+import type { WorkerTaskContext } from "./modules/worker/types.js";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -7,7 +9,7 @@ import { checkExpoPushReceipts, sendExpiringInventoryNotifications } from "./ser
 import type { WorkerTaskName, WorkerTaskRunResult } from "./modules/worker/types.js";
 import { logger } from "./utils/logger.js";
 
-const supportedTasks: WorkerTaskName[] = ["notifications", "media-cleanup", "plan-maintenance-dispatch"];
+const supportedTasks: WorkerTaskName[] = ["notifications", "media-cleanup", "plan-maintenance-dispatch", "plan-maintenance-process"];
 
 function numberFromEnv(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -53,6 +55,8 @@ export async function runWorkerCycle(workerId: string, runtime: WorkerRuntimeBun
           const enqueued = await runtime.maintenanceQueue.enqueueEvents(new Date(),numberFromEnv("PLAN_MAINTENANCE_EVENT_BATCH_SIZE",200));
           return { processed: enqueued, succeeded: enqueued, failed: 0, details: { phase: "event_dispatch", eventsEnqueued: enqueued } };
         }
+      : taskName === "plan-maintenance-process"
+      ? async (context: WorkerTaskContext) => processMaintenanceJobs(runtime.maintenanceQueue,context,numberFromEnv("PLAN_MAINTENANCE_JOB_BATCH_SIZE",10))
       : async () => {
           const cleanup = await runtime.mediaCleanup.processPending(numberFromEnv("MEDIA_CLEANUP_BATCH_SIZE", 25));
           return {

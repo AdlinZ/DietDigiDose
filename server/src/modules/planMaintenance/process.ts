@@ -1,0 +1,36 @@
+import { evaluateMaintenanceJob } from "./evaluate.js";
+import { batchLimit, type MaintenanceQueueRepository } from "./queue.js";
+import type { WorkerTaskContext, WorkerTaskResult } from "../worker/types.js";
+
+/** Bounded processing, with durable per-attempt fencing and conflict retries. */
+export async function processMaintenanceJobs(repository: MaintenanceQueueRepository, context: WorkerTaskContext, limit = 10, now = () => new Date()): Promise<WorkerTaskResult> {
+  let processed = 0; let succeeded = 0; let failed = 0;
+  for (let index = 0; index < batchLimit(limit); index++) {
+    await context.assertActive();
+    const job = await repository.claim(now());
+    if (!job) break;
+    processed++;
+    try {
+      await context.assertActive();
+      const evaluation = await evaluateMaintenanceJob(repository,job,now());
+      await context.assertActive();
+      if (!evaluation) { failed++; continue; }
+      const result = await repository.applyChanges(job,evaluation.replacements.changes,evaluation.snapshot,{
+        ...evaluation.result,fromDate: evaluation.fromDate,
+        checks: [...new Set([...evaluation.result.checks,...evaluation.replacements.checks])],
+      });
+      if (result.kind === "completed") succeeded++;
+      else {
+        failed++;
+        if (result.kind === "input_conflict") await repository.fail(job,now(),"maintenance inputs changed; recompute required");
+      }
+    } catch (error) {
+      // An aborted worker leaves the lease for recovery; it must not make late writes.
+      if (context.signal.aborted) throw error;
+      await context.assertActive();
+      failed++;
+      await repository.fail(job,now(),"maintenance evaluation or application failed");
+    }
+  }
+  return { processed,succeeded,failed,details: { phase: "event_processing" } };
+}

@@ -10,6 +10,7 @@ export async function verifyMaintenanceQueue(harness: {
   seedMeals: (userId: number) => Promise<void>;
   mealState: (id: string) => Promise<{ version: number; plannedDate: string }>;
   changeCount: () => Promise<number>;
+  jobResult: (id: string) => Promise<{ diagnostics?: { inputFingerprint: string; checks: string[] } } | null>;
   mutateInventory: (userId: number) => Promise<void>;
 }) {
   const now = new Date(Date.now()+3_600_000);
@@ -67,7 +68,7 @@ export async function verifyMaintenanceQueue(harness: {
   assert.deepEqual(evaluated.scope,scope); assert.equal(evaluated.result.modelCalls,0);
   assert.equal(await evaluateMaintenanceJob(harness.repository(),first,"2026-09-12"),null);
   const apply = (job: Parameters<MaintenanceQueueRepository["applyChanges"]>[0],changes: Parameters<MaintenanceQueueRepository["applyChanges"]>[1]) =>
-    harness.repository().applyChanges(job,changes,captured!);
+    harness.repository().applyChanges(job,changes,captured!,{ ruleVersion: "test-rule",inputFingerprint: captured!.fingerprint,fromDate: "2026-09-12",modelCalls: 0,cost: 0,assessments: [],checks: ["核对复热"] });
   const change = (itemId: string,version = 1) => ({ planVersion: 1,planId: "maintenance-plan",itemId,
     input: { version,plannedDate: "2026-09-13" },reason: "关联库存变化" });
   assert.deepEqual(await apply(first,[change("maintenance-mutable")]),{ kind: "lease_lost" });
@@ -81,11 +82,13 @@ export async function verifyMaintenanceQueue(harness: {
   assert.deepEqual(await apply(fresh,[change("maintenance-mutable")]),{ kind: "input_conflict" });
   assert.equal(await harness.changeCount(),0);
   assert.equal(await harness.unprocessed(),4);
+  assert.equal(await harness.jobResult(fresh.id),null);
   const previousFingerprint = captured.fingerprint;
   captured = await harness.repository().inputs(fresh,candidateIds);
   assert.ok(captured); assert.notEqual(captured.fingerprint,previousFingerprint);
   const applied = await apply(fresh,["mutable","confirmed","cooking","purchased"].map(kind => change(`maintenance-${kind}`)));
   assert.equal(applied.kind,"completed");
+  assert.deepEqual((await harness.jobResult(fresh.id))?.diagnostics,{ ruleVersion: "test-rule",inputFingerprint: captured.fingerprint,fromDate: "2026-09-12",modelCalls: 0,cost: 0,assessments: [],checks: ["核对复热"] });
   if (applied.kind !== "completed") assert.fail("expected completion");
   assert.deepEqual(applied.changes.map(item => (item.change as { status: string }).status),["applied","pending","blocked","pending"]);
   assert.deepEqual(await harness.mealState("maintenance-mutable"),{ version: 2,plannedDate: "2026-09-13" });

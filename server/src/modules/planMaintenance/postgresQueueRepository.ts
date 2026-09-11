@@ -2,7 +2,7 @@ import { inputSnapshot, maintenanceInputTables, maintenanceRuleTables, type Main
 import { maintenanceScope } from "./scope.js";
 import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 import { PostgresMealPlansRepository } from "../mealPlans/postgresRepository.js";
-import { MaintenanceApplyConflict, type MaintenanceApplication, type MaintenanceChange } from "./queue.js";
+import { MaintenanceApplyConflict, type MaintenanceDiagnostics, type MaintenanceApplication, type MaintenanceChange } from "./queue.js";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { batchLimit, leaseDuration, MAINTENANCE_MAX_ATTEMPTS, MAINTENANCE_RULE_VERSION, retryAt, type MaintenanceJob, type MaintenanceQueueRepository } from "./queue.js";
@@ -100,7 +100,7 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
     });
   }
 
-  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">): Promise<MaintenanceApplication> {
+  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">, diagnostics?: MaintenanceDiagnostics): Promise<MaintenanceApplication> {
     try {
       return await this.transaction(async client => {
         await lockMealPlanning(client,job.userId);
@@ -127,7 +127,7 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
           results.push(result.value);
         }
         const completed = await client.query(`UPDATE plan_maintenance_jobs SET status='completed',result_json=$1::jsonb,lease_token=NULL,
-          lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND lease_expires_at>clock_timestamp()`,[JSON.stringify({ changes: results }),job.id]);
+          lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND lease_expires_at>clock_timestamp()`,[JSON.stringify({ changes: results, diagnostics: diagnostics ?? null }),job.id]);
         if (completed.rowCount !== 1) throw new MaintenanceApplyConflict("lease_lost");
         await client.query(`UPDATE plan_maintenance_events SET processed_at=CURRENT_TIMESTAMP WHERE user_id=$1
           AND id IN (SELECT event_id FROM plan_maintenance_job_events WHERE job_id=$2)`,[job.userId,job.id]);

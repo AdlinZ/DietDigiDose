@@ -103,6 +103,14 @@ pnpm --dir server db:rehearse -- \
 
 worker 默认启动后立即执行一次，之后每小时执行；可用 `WORKER_INTERVAL_MS`、`WORKER_TASK_TIMEOUT_MS`、`WORKER_LEASE_MS` 和 `MEDIA_CLEANUP_BATCH_SIZE` 调整。PostgreSQL 原子 lease 防止多 worker 同时领取同一类任务，通知的投递预留和媒体清理 job claim 继续提供业务幂等保护。
 
+计划维护分为 `plan-maintenance-dispatch`（合并已提交事件，30秒去抖）和 `plan-maintenance-process`（领取任务、局部重算、事务应用与保存诊断），均包含在默认任务集合。可单独运行低延迟维护进程：
+
+```bash
+WORKER_TASKS=plan-maintenance-dispatch,plan-maintenance-process WORKER_INTERVAL_MS=30000 node dist/worker.js
+```
+
+`PLAN_MAINTENANCE_EVENT_BATCH_SIZE` 默认200，`PLAN_MAINTENANCE_JOB_BATCH_SIZE` 默认10；每个业务任务最多尝试3次，输入冲突重新计算，过期租约可恢复。`plan_maintenance_jobs.result_json` 保存变更与诊断（输入指纹、规则版本、数量检查、模型调用数和费用）。通知界面与每日定时检查仍待接入；当前仅处理业务事件。默认综合worker仍每小时轮询，低延迟部署需采用上面的独立配置。
+
 手动重跑全部任务或单项任务：
 
 ```bash

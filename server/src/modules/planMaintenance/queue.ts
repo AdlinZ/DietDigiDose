@@ -12,7 +12,7 @@ export interface MaintenanceQueueRepository {
   candidateRecipeIds(): Promise<number[]>;
   scope(job: MaintenanceJob, fromDate: string): Promise<MaintenanceScope | null>;
   inputs(job: MaintenanceJob, recipeIds?: number[]): Promise<MaintenanceInputSnapshot | null>;
-  applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">): Promise<MaintenanceApplication>;
+  applyChanges(job: MaintenanceJob, changes: MaintenanceChange[], expected: Pick<MaintenanceInputSnapshot,"fingerprint" | "recipeIds">, diagnostics?: MaintenanceDiagnostics): Promise<MaintenanceApplication>;
   fail(job: MaintenanceJob, now: Date, error: string): Promise<boolean>;
 }
 export function batchLimit(value = 200) { return Math.max(1, Math.min(1000, Math.trunc(value) || 200)); }
@@ -25,3 +25,5 @@ export class MaintenanceApplyConflict extends Error {
   readonly kind: "lease_lost" | "input_conflict";
   constructor(kind: "lease_lost" | "input_conflict") { super(kind); this.kind = kind; }
 }
+
+export type MaintenanceDiagnostics = { ruleVersion: string; inputFingerprint: string; fromDate: string; modelCalls: number; cost: number; assessments: unknown[]; checks: string[] };

@@ -36,7 +36,15 @@ export const householdDiningAllocationSchema = z.object({
     ctx.addIssue({ code: "custom",path: ["participants"],message: "单次共餐总份量不能超过30份" });
 });
 export type HouseholdDiningAllocationInput = z.infer<typeof householdDiningAllocationSchema>;
+export const householdDiningSupplySchema = z.object({
+  status: z.enum(["known","needs_review"]),otherMealCount: z.number().int().nonnegative(),checks: z.array(z.string()),
+  demands: z.array(z.object({ food_name: z.string(),amount_value: z.number().finite().positive(),unit: inventoryUnitSchema,
+    covered: z.number().finite().nonnegative().nullable(),missing: z.number().finite().nonnegative().nullable(),
+  }).strict()),
+}).strict();
+export type HouseholdDiningSupply = z.infer<typeof householdDiningSupplySchema>;
 export const householdDiningAllocationPreviewSchema = z.object({
+  supply: householdDiningSupplySchema.optional(),
   householdId: z.number().int().positive(), totalServings: diningServings,
   planItem: z.object({ planId: z.string(),itemId: z.string(),version: z.number().int().positive(),plannedDate: z.string(),mealType: z.string(),title: z.string(),decision: z.enum(["apply","suggest","keep"]),applied: z.literal(false) }).strict().optional(),
   recipeCheck: z.object({

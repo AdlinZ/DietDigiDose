@@ -75,6 +75,13 @@ export function DiningAllocation({ householdId,members,recipeId,planItem }: { pl
         {preview.recipeCheck?.materials.status === "known" ? <><Text className="text-copy-muted">采购同步仅用于与已保存安排完全一致的预览，按下列原料总需求加入家庭清单，不抵扣现有库存或其他采购项。请核对后选择。</Text><TouchableOpacity accessibilityRole="button" disabled={busy || !reviewed || saved} onPress={() => void syncShopping()}><Text className="font-bold text-brand">按此总需求同步家庭采购</Text></TouchableOpacity></> : null}
         <TouchableOpacity accessibilityRole="button" disabled={busy || !reviewed || saved} onPress={() => void save()}><Text className="font-bold text-brand">保存这餐的共餐安排</Text></TouchableOpacity>
       </View> : null}
+      {preview.supply ? <View className="gap-2">
+        <Text className="font-bold text-ink">同名家庭库存核算{preview.supply.status === "needs_review" ? "：待核对" : ""}</Text>
+        <Text className="text-copy-muted">已考虑另外 {preview.supply.otherMealCount} 个共餐餐次，先保留受保护餐次的需求，再按日期分配；本次不预留或扣减库存。</Text>
+        {preview.supply.demands.map((demand,index) => <Text key={index} className="text-copy-muted">{demand.food_name}：{demand.covered === null || demand.missing === null ? "暂不能确定可用量与缺口" : `可覆盖 ${demand.covered} ${demand.unit}，尚缺 ${demand.missing} ${demand.unit}`}</Text>)}
+        {preview.supply.checks.map((check,index) => <Text key={index} className="text-copy-muted">{check}</Text>)}
+        <Text className="text-copy-muted">尚未抵扣采购清单或待吃餐，不是最终补买量。上方采购按钮仍按原料总需求同步。</Text>
+      </View> : null}
       <Text className="font-bold text-ink">共需 {preview.totalServings} 份</Text>
       {preview.participants.map(person => <Text key={person.membershipId} className="text-copy-muted">{person.name}：{person.servings} 份</Text>)}
       <Text className="text-copy-muted">需避开的过敏原：{preview.allergies.join("、") || "未填写，请逐人确认"}</Text>

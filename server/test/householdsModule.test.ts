@@ -7,7 +7,7 @@ import { HouseholdsService } from "../src/modules/households/service.js";
 
 function repository(overrides: Partial<HouseholdsRepository> = {}): HouseholdsRepository {
   return {
-    diningPlanContext: async () => null,reserveMeal: async () => ({}),meals: async () => [],eatMeal: async () => ({}),produceMeal: async () => ({}), diningRecipe: async () => null, diningMembers: async () => [], diningPreferences: async () => null,saveDiningPreferences: async () => false,
+    diningSupply: async () => ({ status: "needs_review",otherMealCount: 0,demands: [],checks: [] }),diningPlanContext: async () => null,reserveMeal: async () => ({}),meals: async () => [],eatMeal: async () => ({}),produceMeal: async () => ({}), diningRecipe: async () => null, diningMembers: async () => [], diningPreferences: async () => null,saveDiningPreferences: async () => false,
     create: async () => ({}), mine: async () => [], join: async () => ({ kind: "not_found" }),
     leave: async () => ({ kind: "not_member" }), transferOwner: async () => ({ kind: "not_owner" }),
     shoppingList: async () => null, createShopping: async () => ({ kind: "not_member" }),

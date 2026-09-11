@@ -5,6 +5,7 @@ import type {
 } from "./types.js";
 
 export interface HouseholdsRepository {
+  diningSupply(userId: number,householdId: number,target: { planId: string; itemId: string; version: number },totalServings: number,recipeFingerprint: string): Promise<import("@dietdigidose/contracts").HouseholdDiningSupply>;
   diningPlanContext(userId: number,planId: string,itemId: string): Promise<{ item: Row; queue?: Row; purchases: Row[] } | null>;
   reserveMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealReservationInput): Promise<Row>;
   meals(userId: number,householdId: number): Promise<Row[]>;

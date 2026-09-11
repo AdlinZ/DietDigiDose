@@ -15,7 +15,7 @@
     "build:admin": "pnpm --dir ./admin build",
     "validate:toolchain": "node scripts/validate-toolchain.mjs",
     "release:prepare": "node scripts/prepare-build-release.mjs",
-    "test:release": "node --test scripts/prepare-build-release.test.mjs",
+    "test:release": "node --test scripts/prepare-build-release.test.mjs client/scripts/verify-preview-certificate.test.mjs",
     "validate:release": "node scripts/validate-release-metadata.mjs",
     "preinstall": "npx only-allow pnpm",
     "lint:client": "pnpm --dir ./client lint",

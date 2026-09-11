@@ -672,3 +672,11 @@ PostgreSQL集成演练进一步覆盖完整应用模式：在源API注册两个�
 失败恢复回归设置一个目标原有函数，与归档函数冲突，让pg_restore在创建新schema后失败；验证单事务回滚新schema/表，原函数仍保持旧结果。消除冲突后同一备份正常恢复，函数和数据均恢复到源快照。此测试直接覆盖命令失败，不只检查损坏文件被预检拒绝。
 
 验证：独立PostgreSQL全套通过，报告增加postgresRecoveryHttpVerified；补充源/恢复快照区别后定向真实HTTP演练通过。服务端静态检查通过。首次尝试同进程重建runtime被既有保护拒绝，已改为独立进程；未放宽运行时检查。无产品代码、客户端或模式变更，不重复无关构建。真实staging、上一发布候选升级及实际RPO/RTO仍缺外部证据，全部issue目标继续进行。
+
+## #171 preview证书寿命检查与已有签名证据
+
+新增公开证书检查脚本，在CI恢复持久preview keystore后、构建前核对固定摘要、与release摘要隔离、当前有效且剩余不少于365天。keytool通过环境变量读取密码，只导出公开证书；不自动更换签名。原APK实际签名/包名/版本检查继续保留。三项证书规则测试加入test:release，包含未来、过期、临期、错误pin及误用release证书；公开测试证书无私钥，不代表实际preview证书。
+
+读取两次成功GitHub构建34490933958和34143161394，日志均为HTTPS preview、包名com.dietdigidose.app.preview、签名摘要0c7b482180d86c3022a5295bdcfc02065b599ff4d5d96186149c52f07596590c，证明确有跨构建持久签名证据。完整引用与边界见docs/preview-signing-verification.md。不能把它当成当前开发提交的构建或真机覆盖升级证据。
+
+验证：test:release共7项通过，客户端静态通过；未改应用代码，不重复Web导出。当前机器adb不在PATH，devicectl不可用，设备条件仍不足。未读取签名私钥、修改Secret、触发新构建或分配快照。实际证书的新增CI检查结果及真机覆盖安装仍待完成，全部issue目标保持进行中。

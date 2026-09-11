@@ -142,6 +142,13 @@ jobs:
           echo "ANDROID_KEY_PASSWORD=$PREVIEW_KEY_PASSWORD" >> "$GITHUB_ENV"
           echo "EXPECTED_PREVIEW_CERT_SHA256=$PREVIEW_CERT_SHA256" >> "$GITHUB_ENV"
 
+      - name: Verify preview certificate lifetime
+        if: env.EAS_BUILD_PROFILE == 'preview'
+        working-directory: client
+        run: |
+          keytool -exportcert -rfc -keystore "$ANDROID_KEYSTORE_PATH" -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" -file "$RUNNER_TEMP/preview-signing.pem"
+          node scripts/verify-preview-certificate.mjs "$RUNNER_TEMP/preview-signing.pem"
+
       - name: Generate Android project
         working-directory: client
         run: pnpm exec expo prebuild --platform android --clean --no-install

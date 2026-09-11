@@ -32,7 +32,8 @@ test("saves explicit consent and own membership version, then requires reread af
   await act(async () => { button(tree,"重新读取设置").props.onPress(); });
   expect(tree.root.findByProps({ accessibilityLabel: "允许共餐共享" }).props.value).toBe(false);
   act(() => tree.unmount());
-});
+// The first render also loads React Native host components on cold Windows CI.
+}, 15000);
 test("switching families drops a late private response",async () => {
   let resolve!: (value: unknown) => void;
   mockRead.mockReturnValueOnce(new Promise(done => { resolve = done; }));

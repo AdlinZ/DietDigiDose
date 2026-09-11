@@ -680,3 +680,10 @@ PostgreSQL集成演练进一步覆盖完整应用模式：在源API注册两个�
 读取两次成功GitHub构建34490933958和34143161394，日志均为HTTPS preview、包名com.dietdigidose.app.preview、签名摘要0c7b482180d86c3022a5295bdcfc02065b599ff4d5d96186149c52f07596590c，证明确有跨构建持久签名证据。完整引用与边界见docs/preview-signing-verification.md。不能把它当成当前开发提交的构建或真机覆盖升级证据。
 
 验证：test:release共7项通过，客户端静态通过；未改应用代码，不重复Web导出。当前机器adb不在PATH，devicectl不可用，设备条件仍不足。未读取签名私钥、修改Secret、触发新构建或分配快照。实际证书的新增CI检查结果及真机覆盖安装仍待完成，全部issue目标保持进行中。
+
+### PR #206 首轮 CI 与修复（2026-09-12）
+
+- 已推送 `codex/all-open-issues` 并创建草稿 PR https://github.com/AdlinZ/DietDigiDose/pull/206；未关闭 issue，未合并或发布。
+- 首轮 CI `34655862044` 的 PostgreSQL 16 集成、全套 Linux 测试、覆盖率和稳定性检查通过。主验证在 SQLite 演练失败：旧夹具只支持逆转迁移 59–62；Windows 首个共餐设置页面测试超过默认 5 秒。
+- 补齐仅用于临时空白演练库的迁移 63–77 逆转夹具，保持未知迁移拒绝运行。不是生产数据库降级功能。重新本地执行演练，58→77 升级、备份恢复、回退与恢复后业务检查通过。
+- 共餐设置测试首次加载 React Native 组件允许 15 秒，保留所有业务断言和后续测试默认时限；本地 9 项通过。Windows 结果等待新一轮 CI，不以本地结果替代。

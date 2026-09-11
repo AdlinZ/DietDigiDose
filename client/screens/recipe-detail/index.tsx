@@ -1,3 +1,4 @@
+import { RecipePreferenceFeedback } from "@/components/RecipePreferenceFeedback";
 import { useState, useCallback, useEffect, useRef, type ComponentProps } from "react";
 import {
   View,
@@ -596,6 +597,7 @@ export default function RecipeDetailScreen() {
 
           <View className="h-6" />
         </View>
+        <RecipePreferenceFeedback recipeId={recipe.id} />
       </ScrollView>
 
       <View className="border-t border-line bg-surface px-4 py-3">

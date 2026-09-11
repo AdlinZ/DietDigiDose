@@ -16,6 +16,10 @@ export type LocalMealAssessment = {
 
 /** Recalculate captured commitments only. This function never writes stock or marks meals eaten. */
 export function recalculateMaintenanceQuantities(snapshot: MaintenanceInputSnapshot, scope: MaintenanceScope, fromDate: string) {
+  const notes = scope.checks.filter(check => check.level === "info").map(check => check.reason);
+  const scopeChecks = scope.checks.filter(check => check.level !== "info").map(check => check.reason);
+  if (!scope.items.length && !scope.preparedTargets.length) return { ruleVersion: MAINTENANCE_RULE_VERSION,inputFingerprint: snapshot.fingerprint,modelCalls: 0,cost: 0,
+    assessments: [] as LocalMealAssessment[],checks: scopeChecks,notes };
   const rows = snapshot.data;
   const plans = new Map((rows.meal_plans ?? []).filter(plan => plan.status === "active" && !plan.deleted_at).map(plan => [String(plan.id),plan]));
   const active = (rows.meal_plan_items ?? []).filter(item => !item.deleted_at && plans.has(String(item.plan_id))
@@ -35,7 +39,7 @@ export function recalculateMaintenanceQuantities(snapshot: MaintenanceInputSnaps
   const fixed = active.filter(item => !affected.has(String(item.id)) || decision(item) !== "apply");
   const budget = createPlanningBudget(inventory,fixed);
   const assessments: LocalMealAssessment[] = [];
-  const checks = [...scope.checks.map(check => check.reason),...budget.checks];
+  const checks = [...scopeChecks,...budget.checks];
   for (const item of active.filter(item => affected.has(String(item.id)))) {
     const policy = decision(item);
     const raw = parseJson<unknown>(item.ingredients_json,[]);
@@ -59,5 +63,5 @@ export function recalculateMaintenanceQuantities(snapshot: MaintenanceInputSnaps
   }
   for (const target of scope.preparedTargets) checks.push(`餐次 ${target.targetId} 的待吃分配已变化，需要重新核对份量、期限与复热条件`);
   return { ruleVersion: MAINTENANCE_RULE_VERSION,inputFingerprint: snapshot.fingerprint,modelCalls: 0,cost: 0,
-    assessments,checks: [...new Set(checks)] };
+    assessments,checks: [...new Set(checks)],notes };
 }

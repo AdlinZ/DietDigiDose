@@ -16,3 +16,8 @@ test("each final failure is actionable without exposing internal errors", () => 
   assert.equal(notice?.action,true); assert.equal(notice?.key,"maintenance:failed");
   assert.equal(JSON.stringify(notice).includes("private"),false);
 });
+
+
+test("informational skipped results do not produce action reminders", () => {
+  assert.equal(maintenanceNotice({ ...job([]),result_json: { diagnostics: { checks: [],notes: ["每日检查已关闭，跳过该定时事件"] } } }),null);
+});

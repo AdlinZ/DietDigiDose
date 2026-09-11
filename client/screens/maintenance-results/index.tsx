@@ -36,6 +36,7 @@ function AccountResults({ userId }: { userId?: number }) {
           <Text className="text-ink">{item.message}</Text>
           {item.status === "completed" ? <Text className="text-copy-muted">已调整 {item.applied} 项 · 提出建议 {item.suggested} 项 · 受保护保留 {item.kept} 项</Text> : null}
           {item.retryAt ? <Text className="text-copy-muted">下次重试不早于 {item.retryAt}</Text> : null}
+          {item.notes?.map((note,index) => <Text key={`note-${index}`} className="text-copy-muted">说明：{note}</Text>)}
           {item.checks.map((check,index) => <Text key={index} className="text-copy-muted">待核对：{check}</Text>)}
         </View>)}
         <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/meal-plans")}><Text className="font-bold text-brand">查看餐次计划与调整建议</Text></TouchableOpacity>

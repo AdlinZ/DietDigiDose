@@ -4,7 +4,7 @@ import { ingredient, parseJson, type Row } from "../mealPlans/formatters.js";
 export type MaintenanceScope = {
   items: { planId: string; itemId: string; version: number; planVersion: number; eventIds: string[] }[];
   preparedTargets: { planId: string; targetId: string; eventIds: string[] }[];
-  checks: { eventId: string; reason: string }[];
+  checks: { eventId: string; reason: string; level?: "info" }[];
 };
 
 function object(value: unknown): Row {
@@ -35,7 +35,7 @@ export function maintenanceScope(input: {
     const kind = String(event.event_type);
     const details = object(event.details_json);
     if (kind === "daily_check") {
-      if (!input.dailyEnabled) { checks.push({ eventId: id,reason: "每日检查已关闭，跳过该定时事件" }); continue; }
+      if (!input.dailyEnabled) { checks.push({ eventId: id,reason: "每日检查已关闭，跳过该定时事件",level: "info" }); continue; }
       for (const item of items) mark(item,id);
       for (const plan of plans) {
         const constraints = object(plan.constraints_json);

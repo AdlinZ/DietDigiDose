@@ -25,3 +25,13 @@ test("previous account history cannot appear after switching",async () => {
   await act(async () => { resolve({ items: [run] }); });
   expect(JSON.stringify(tree.toJSON())).not.toContain("核对复热"); act(() => tree.unmount());
 });
+
+
+test("informational notes are displayed separately from required checks",async () => {
+  mockRequest.mockResolvedValueOnce({ items: [{ ...run,status: "completed",checks: [],notes: ["每日检查已关闭，跳过该定时事件"],message: "检查已完成。" }] });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<MaintenanceResultsScreen />); });
+  const output = JSON.stringify(tree.toJSON());
+  expect(output).toContain("每日检查已关闭"); expect(output).not.toContain("待核对：");
+  act(() => tree.unmount());
+});

@@ -54,3 +54,14 @@ test("completed meals release future commitments while changed prepared targets 
   assert.deepEqual(result.assessments.map(item => item.status),["covered","covered"]);
   assert.match(result.checks[0],/期限与复热/);
 });
+
+
+test("skipped daily checks keep information without scanning unrelated incomplete plans", () => {
+  const { snapshot,scope } = fixture();
+  snapshot.data.meal_plan_items[0].ingredients_json = [];
+  scope.items = [];
+  scope.checks = [{ eventId: "daily",reason: "每日检查已关闭，跳过该定时事件",level: "info" }];
+  const result = recalculateMaintenanceQuantities(snapshot,scope,"2026-09-12");
+  assert.deepEqual(result.assessments,[]); assert.deepEqual(result.checks,[]);
+  assert.deepEqual(result.notes,["每日检查已关闭，跳过该定时事件"]);
+});

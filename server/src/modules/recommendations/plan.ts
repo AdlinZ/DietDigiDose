@@ -1,3 +1,4 @@
+import { weeklyShoppingWindow } from "./shoppingWindow.js";
 import { createPlanningBudget } from "./planningBudget.js";
 import { currentDateKey } from "../../utils/date.js";
 import { unexpiredInventory } from "./inventoryAvailability.js";
@@ -53,6 +54,7 @@ export function buildCookingDraft(requirements: ReturnType<typeof allocatePrepar
 
 /** Reprice the entire draft while changing exactly one cooking entry. */
 export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: string, recipeId: number | undefined, candidates: Candidate[], inventory: Row[], existing: Row[] = []) {
+  const shoppingWindow = draft.planningMode === "weekly" ? weeklyShoppingWindow(draft,existing) : undefined;
   const targets = draft.cooking.filter(item => item.targetMealId === targetMealId);
   if (targets.length !== 1) throw new RecommendationsError(409, "请先指定唯一需要替换的新做菜", "COOKING_PLAN_TARGET_AMBIGUOUS");
   const target = targets[0];
@@ -65,8 +67,7 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
     const singleBudget = buildFefoConsumptionPreviewFromCandidates(unexpiredInventory(inventory, currentDateKey()).map(item => ({ id: item.id, food_name: item.food_name,
       quantity_evidence_status: item.quantity_evidence_status as "known" | "estimated" | "unknown" | undefined, quantity_value: item.quantity_value, quantity_unit: item.quantity_unit, expiration_date: item.expiration_date,
       batch_code: item.batch_code, version: item.version })), cooking.flatMap(item => item.demands));
-    const dates = draft.meals.map(meal => meal.date).sort();
-    const weeklyBudget = draft.planningMode === "weekly" ? createPlanningBudget(inventory,existing,draft.shoppingWindow ?? { startDate: dates[0],endDate: dates[dates.length-1] }) : null;
+    const weeklyBudget = draft.planningMode === "weekly" ? createPlanningBudget(inventory,existing.filter(item => !shoppingWindow || String(item.planned_date)>=shoppingWindow.startDate),shoppingWindow) : null;
     const ingredientBudget = weeklyBudget ? [...draft.meals].sort((a,b) => a.date.localeCompare(b.date) || ["breakfast","lunch","dinner","snack"].indexOf(a.mealType)-["breakfast","lunch","dinner","snack"].indexOf(b.mealType)).flatMap(meal => weeklyBudget.consume(cooking.filter(item => item.targetMealId === meal.id).flatMap(item => item.demands),meal.date,meal.id)) : singleBudget;
     const missingTime: string[] = [];
     let knownTime = 0;
@@ -95,7 +96,7 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
   if (chosen.sessionExceeds) conflicts.push(`替换后的单次制作超过 ${draft.time.sessionBudgetMinutes} 分钟上限`);
   if (chosen.exceedsBudget) conflicts.push(`整套已知顺序耗时 ${chosen.knownTime} 分钟，超过 ${draft.time.budgetMinutes} 分钟上限`);
   if (chosen.missingTime.length) conflicts.push(`无法核实这些保留菜谱的完整时间或当前可用条件：${chosen.missingTime.join("、")}`);
-  return { draft: cookingPlanDraftSchema.parse({ ...draft, cooking: chosen.cooking, ingredientBudget: chosen.ingredientBudget,
+  return { draft: cookingPlanDraftSchema.parse({ ...draft, ...(shoppingWindow ? { shoppingWindow } : {}), cooking: chosen.cooking, ingredientBudget: chosen.ingredientBudget,
     time: { ...draft.time, knownSequentialMinutes: chosen.knownTime, exceedsBudget: chosen.exceedsBudget,
       incomplete: true, isEstimate: true, missing: [...new Set([...draft.time.missing, ...chosen.missingTime.map(title => `recipe:${title}`)])] },
     weeklyShopping: chosen.weeklyBudget ? [...chosen.weeklyBudget.aggregate.values()] : draft.weeklyShopping,

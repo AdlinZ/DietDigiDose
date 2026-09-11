@@ -1,3 +1,4 @@
+import { weeklyHistoryStart } from "./shoppingWindow.js";
 import { formatOutcomeEvidence } from "./outcomeEvidence.js";
 import { effectiveDislikeRecipeIds, learningOverrides, formatLearningState } from "./preferenceEvidence.js";
 import { preferenceLearningUpdateSchema, type PreferenceLearningUpdate } from "@dietdigidose/contracts";
@@ -77,7 +78,7 @@ export class RecommendationsService {
     const request = replaceCookingPlanItemSchema.parse(input);
     const candidates = await this.compute(userId, { surface: "meal_plan" }, request.draft.effectivePreferences);
     const dates = request.draft.meals.map(meal => meal.date).sort();
-    const existing = request.draft.planningMode === "weekly" ? (await this.repository.planningState(userId,request.draft.shoppingWindow?.startDate ?? dates[0],request.draft.shoppingWindow?.endDate ?? dates[dates.length-1])).items : [];
+    const existing = request.draft.planningMode === "weekly" ? (await this.repository.planningState(userId,weeklyHistoryStart(request.draft),request.draft.shoppingWindow?.endDate ?? dates[dates.length-1])).items : [];
     return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId),existing);
   }
 

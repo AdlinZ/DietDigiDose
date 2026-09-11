@@ -1,3 +1,4 @@
+import { weeklyShoppingWindow, weeklyHistoryStart } from "../src/modules/recommendations/shoppingWindow.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildWeeklyPlan } from "../src/modules/recommendations/weeklyPlan.js";
@@ -92,4 +93,21 @@ test("future commitments reserve stock without adding outside-week shopping dema
 test("weekly shopping window cannot exclude its cooking dates", () => {
   const draft = buildWeeklyPlan(input,{},[candidate],[stock(1,7)],[],[],[]).draft!;
   assert.equal(cookingPlanDraftSchema.safeParse({ ...draft,shoppingWindow: { startDate: "2099-09-13",endDate: "2099-09-19" } }).success,false);
+});
+
+
+test("legacy weekly windows recover preserved dates rather than shrinking to cooking dates", async () => {
+  const existing = [{ id: "kept",planned_date: startDate,meal_type: "午餐",title: "已有安排",status: "planned",ingredients_json: [{ name: "鸡蛋",amount: "1个" }] }];
+  const generated = buildWeeklyPlan(input,{},[candidate],[stock(1,7)],[],existing,[]).draft!;
+  const legacy = { ...generated,shoppingWindow: undefined };
+  assert.equal(legacy.meals[0].date,"2099-09-13");
+  assert.equal(weeklyHistoryStart(legacy),"2099-09-07");
+  assert.deepEqual(weeklyShoppingWindow(legacy,existing),{ startDate,endDate: "2099-09-18" });
+  assert.throws(() => weeklyShoppingWindow(legacy,[]),/重新生成七日预览/);
+  const { replaceCookingDraft } = await import("../src/modules/recommendations/plan.js");
+  const replacement = { ...candidate,recipeId: 2,recipe: { ...candidate.recipe,ingredients: [{ name: "鸡蛋",amount: "2个" }] } };
+  const prior = { ...existing[0],id: "prior-week",planned_date: "2099-09-10",ingredients_json: [{ name: "鸡蛋",amount: "100个" }] };
+  const updated = replaceCookingDraft(legacy,legacy.cooking[0].targetMealId,2,[candidate,replacement],[stock(1,7)],[prior,...existing]);
+  assert.deepEqual(updated.draft.shoppingWindow,{ startDate,endDate: "2099-09-18" });
+  assert.deepEqual(updated.shopping?.map(item => [item.required,item.covered,item.missing]),[[8,7,1]]);
 });

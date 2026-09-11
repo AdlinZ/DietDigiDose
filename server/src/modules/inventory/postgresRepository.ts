@@ -83,6 +83,8 @@ export async function consumeInventoryWithPostgresClient(
       transition.storedUnit, transition.amountUsed === null ? null : -Math.round((transition.amountUsed + Number.EPSILON) * 1000) / 1000,
       `${input.idempotency_key}:${consumption.item_id}:${index}`, JSON.stringify(metadata),
     ]);
+    await appendPostgresMaintenanceEvent(client,{ userId,kind: "inventory_changed",sourceId: `consume:${input.idempotency_key}:${consumption.item_id}:${index}`,
+      subjectId: String(consumption.item_id),details: { version: consumption.version+1,mode: "consume" } });
     changes.push({
       item_id: consumption.item_id,
       quantity_before: transition.storedValue,

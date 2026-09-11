@@ -1,3 +1,4 @@
+import { appendSqliteMaintenanceEvent } from "../modules/planMaintenance/sqliteEventWriter.js";
 import { currentDateKey } from "../utils/date.js";
 import type Database from "better-sqlite3";
 
@@ -181,6 +182,8 @@ export function applyInventoryConsumptions(
       `${options.idempotencyKey}:${consumption.item_id}:${index}`,
       JSON.stringify(options.metadata || {}),
     );
+    appendSqliteMaintenanceEvent(database,{ userId,kind: "inventory_changed",sourceId: `consume:${options.idempotencyKey}:${consumption.item_id}:${index}`,
+      subjectId: String(consumption.item_id),details: { version: consumption.version+1,mode: "consume" } });
     return {
       item_id: consumption.item_id,
       quantity_before: storedValue,

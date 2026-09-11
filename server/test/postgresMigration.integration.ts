@@ -279,6 +279,11 @@ try {
   });
   assert.equal(repeatedConsumption.repeated, true);
   assert.equal(repeatedConsumption.items[0]!.quantity_value, 200);
+  assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE user_id=$1 AND source_id LIKE 'consume:postgres-consume-0001:%'",[user.id])).rows[0].n,1);
+  await assert.rejects(() => inventoryRepository.consume(user.id,{ idempotency_key: "postgres-consume-rollback",source: "manual",
+    items: [0,1].map(() => ({ item_id: migratedTomato.id,version: consumed.items[0]!.version,mode: "amount" as const,amount_value: 1,unit: "g" as const })) }));
+  assert.equal((await inventoryRepository.findOwned(user.id,migratedTomato.id))?.quantity_value,200);
+  assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE user_id=$1 AND source_id LIKE 'consume:postgres-consume-rollback:%'",[user.id])).rows[0].n,0);
   const updated = await inventoryRepository.update(user.id, created.id, created.version, {
     nextQuantityValue: 500,
     nextQuantityUnit: "ml",

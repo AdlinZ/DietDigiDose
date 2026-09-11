@@ -1572,6 +1572,18 @@ describe("user data isolation", () => {
     });
     assert.equal(retried.response.status, 200);
     assert.equal((retried.body as JsonObject).repeated, true);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND source_id LIKE 'consume:structured-consume-test-0001:%'").get(first.user.id) as JsonObject).n,2);
+    const available = consumedItems.find(item => item.quantity_value === 400)!;
+    const exhausted = consumedItems.find(item => !item.is_available)!;
+    const partialFailure = await api("/api/v1/inventory/consume", { method: "POST",token: first.token,body: JSON.stringify({
+      idempotency_key: "structured-consume-rollback",source: "manual",items: [
+        { item_id: available.id,version: available.version,mode: "amount",amount_value: 1,unit: "g" },
+        { item_id: exhausted.id,version: exhausted.version,mode: "all" },
+      ],
+    }) });
+    assert.equal(partialFailure.response.status,409);
+    assert.equal((db.prepare("SELECT quantity_value FROM inventory_items WHERE id=?").get(available.id) as JsonObject).quantity_value,400);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND source_id LIKE 'consume:structured-consume-rollback:%'").get(first.user.id) as JsonObject).n,0);
     const crossUser = await api("/api/v1/inventory/consume", {
       method: "POST", token: second.token,
       body: JSON.stringify({ ...consumePayload, idempotency_key: "structured-consume-cross-user", items: [consumePayload.items[1]] }),

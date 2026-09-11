@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
 import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
 import { PostgresMaintenanceQueueRepository } from "../src/modules/planMaintenance/postgresQueueRepository.js";
@@ -2274,7 +2275,11 @@ try {
   await pool.query("DELETE FROM plan_maintenance_jobs");
   await pool.query("DELETE FROM plan_maintenance_events");
   const queueOtherUser = Number((await pool.query("SELECT id FROM users WHERE id<>$1 LIMIT 1",[user.id])).rows[0].id);
-  await verifyMaintenanceQueue({ noticeCount: async id => (await pool.query("SELECT COUNT(*)::int n FROM user_notification_inbox WHERE group_key=$1",[`maintenance:${id}`])).rows[0].n,settings: new PostgresPlanMaintenanceRepository(pool),users: [user.id,queueOtherUser], repository: () => new PostgresMaintenanceQueueRepository(pool),
+  await verifyMaintenanceQueue({ repeatReport: async id => {
+    const duplicate = randomUUID();
+    await pool.query("INSERT INTO plan_maintenance_jobs(id,user_id,status,attempts,rule_version,result_json) SELECT $1,user_id,status,attempts,rule_version,result_json-'notificationRecorded' FROM plan_maintenance_jobs WHERE id=$2",[duplicate,id]);
+    return duplicate;
+  },noticeCount: async id => (await pool.query("SELECT COUNT(*)::int n FROM notification_events WHERE metadata_json->>'jobId'=$1",[id])).rows[0].n,settings: new PostgresPlanMaintenanceRepository(pool),users: [user.id,queueOtherUser], repository: () => new PostgresMaintenanceQueueRepository(pool),
     seed: async (id,userId,at) => { await pool.query("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES($1,$2,'eat',$1,$1,$3)",[id,userId,at]); },
     unprocessed: async () => (await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE processed_at IS NULL")).rows[0].n,
     seedMeals: async userId => {

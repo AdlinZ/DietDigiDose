@@ -21,13 +21,14 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
 
   async publishResults(limit?: number) {
     return this.transaction(async client => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('plan-maintenance-notices'))");
       const rows = (await client.query(`SELECT * FROM plan_maintenance_jobs WHERE status IN ('completed','failed')
         AND COALESCE(result_json->>'notificationRecorded','0')='0' ORDER BY updated_at,id LIMIT $1 FOR UPDATE SKIP LOCKED`,[batchLimit(limit)])).rows;
       for (const row of rows) {
         const notice = maintenanceNotice(row);
-        if (notice) {
+        if (notice && !(await client.query("SELECT id FROM user_notification_inbox WHERE user_id=$1 AND group_key=$2",[row.user_id,notice.key])).rows[0]) {
           const notification = (await client.query(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)
-            VALUES($1,'plan_maintenance',$2,$3,$4,'normal',$5,$6) RETURNING id`,[row.user_id,notice.title,notice.body,notice.action ? "action_required" : "system",notice.action ? "pending" : "info",`maintenance:${row.id}`])).rows[0];
+            VALUES($1,'plan_maintenance',$2,$3,$4,'normal',$5,$6) RETURNING id`,[row.user_id,notice.title,notice.body,notice.action ? "action_required" : "system",notice.action ? "pending" : "info",notice.key])).rows[0];
           await client.query("INSERT INTO notification_events(user_id,notification_id,event_type,metadata_json) VALUES($1,$2,'created',$3::jsonb)",
             [row.user_id,notification.id,JSON.stringify({ source: "plan_maintenance",jobId: row.id })]);
         }

@@ -28,4 +28,4 @@ export class MaintenanceApplyConflict extends Error {
   constructor(kind: "lease_lost" | "input_conflict") { super(kind); this.kind = kind; }
 }
 
-export type MaintenanceDiagnostics = { ruleVersion: string; inputFingerprint: string; fromDate: string; modelCalls: number; cost: number; assessments: unknown[]; checks: string[] };
+export type MaintenanceDiagnostics = { evaluationDurationMs?: number; ruleVersion: string; inputFingerprint: string; fromDate: string; modelCalls: number; cost: number; assessments: unknown[]; checks: string[] };

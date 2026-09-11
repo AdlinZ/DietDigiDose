@@ -19,9 +19,9 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
         AND COALESCE(json_extract(result_json,'$.notificationRecorded'),0)=0 ORDER BY updated_at,id LIMIT ?`).all(batchLimit(limit)) as Row[];
       for (const row of rows) {
         const notice = maintenanceNotice(row);
-        if (notice) {
+        if (notice && !this.db.prepare("SELECT id FROM user_notification_inbox WHERE user_id=? AND group_key=?").get(row.user_id,notice.key)) {
           const notification = this.db.prepare(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)
-            VALUES(?,'plan_maintenance',?,?,?,?,?,?)`).run(row.user_id,notice.title,notice.body,notice.action ? "action_required" : "system","normal",notice.action ? "pending" : "info",`maintenance:${row.id}`);
+            VALUES(?,'plan_maintenance',?,?,?,?,?,?)`).run(row.user_id,notice.title,notice.body,notice.action ? "action_required" : "system","normal",notice.action ? "pending" : "info",notice.key);
           this.db.prepare("INSERT INTO notification_events(user_id,notification_id,event_type,metadata_json) VALUES(?,?,'created',?)")
             .run(row.user_id,notification.lastInsertRowid,JSON.stringify({ source: "plan_maintenance",jobId: row.id }));
         }

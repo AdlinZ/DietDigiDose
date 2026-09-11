@@ -28,6 +28,7 @@ test("processor persists zero-cost diagnostics using the account local date", as
   f.snapshot.data.plan_maintenance_settings = [{ time_zone: "America/Los_Angeles" }];
   const result = await processMaintenanceJobs(f.repository,f.context,10,() => new Date("2026-09-12T01:00:00Z"));
   assert.equal(result.succeeded,1);
+  assert.ok((f.diagnostics() as { evaluationDurationMs: number }).evaluationDurationMs >= 0);
   assert.equal((f.diagnostics() as { fromDate: string }).fromDate,"2026-09-11");
   assert.equal((f.diagnostics() as { cost: number }).cost,0);
 });

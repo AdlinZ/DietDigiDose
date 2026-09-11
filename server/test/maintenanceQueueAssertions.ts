@@ -6,6 +6,7 @@ import type { MaintenanceQueueRepository } from "../src/modules/planMaintenance/
 export async function verifyMaintenanceQueue(harness: {
   repository: () => MaintenanceQueueRepository;
   settings: PlanMaintenanceRepository;
+  repeatReport: (jobId: string) => Promise<string>;
   noticeCount: (jobId: string) => Promise<number>;
   seed: (id: string,userId: number,at: string) => Promise<void>;
   unprocessed: () => Promise<number>;
@@ -138,6 +139,11 @@ export async function verifyMaintenanceQueue(harness: {
   assert.equal(await harness.noticeCount(other.id),1);
   assert.equal(await harness.noticeCount(dailyJob.id),0);
   assert.equal(await harness.repository().publishResults(),0);
+  assert.equal(await harness.noticeCount(fresh.id),1);
+
+  const duplicateReport = await harness.repeatReport(fresh.id);
+  await harness.repository().publishResults();
+  assert.equal(await harness.noticeCount(duplicateReport),0);
   assert.equal(await harness.noticeCount(fresh.id),1);
 
 }

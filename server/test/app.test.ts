@@ -338,7 +338,11 @@ describe("API security baseline", () => {
     const owner = await register("queue-owner@example.com");
     const other = await register("queue-other@example.com");
     db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
-    await verifyMaintenanceQueue({ noticeCount: async id => (db.prepare("SELECT COUNT(*) n FROM user_notification_inbox WHERE group_key=?").get(`maintenance:${id}`) as JsonObject).n,settings: new SqlitePlanMaintenanceRepository(db),users: [owner.user.id,other.user.id], repository: () => new SqliteMaintenanceQueueRepository(db),
+    await verifyMaintenanceQueue({ repeatReport: async id => {
+      const duplicate = `${id}-repeat`;
+      db.prepare("INSERT INTO plan_maintenance_jobs(id,user_id,status,attempts,rule_version,result_json) SELECT ?,user_id,status,attempts,rule_version,json_remove(result_json,'$.notificationRecorded') FROM plan_maintenance_jobs WHERE id=?").run(duplicate,id);
+      return duplicate;
+    },noticeCount: async id => (db.prepare("SELECT COUNT(*) n FROM notification_events WHERE json_extract(metadata_json,'$.jobId')=?").get(id) as JsonObject).n,settings: new SqlitePlanMaintenanceRepository(db),users: [owner.user.id,other.user.id], repository: () => new SqliteMaintenanceQueueRepository(db),
       seed: async (id,userId,at) => { db.prepare("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES(?,?,'eat',?,?,?)").run(id,userId,id,id,at); },
       unprocessed: async () => (db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE processed_at IS NULL").get() as JsonObject).n,
       seedMeals: async userId => {

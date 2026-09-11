@@ -10,13 +10,14 @@ export async function processMaintenanceJobs(repository: MaintenanceQueueReposit
     const job = await repository.claim(now());
     if (!job) break;
     processed++;
+    const started = performance.now();
     try {
       await context.assertActive();
       const evaluation = await evaluateMaintenanceJob(repository,job,now());
       await context.assertActive();
       if (!evaluation) { failed++; continue; }
       const result = await repository.applyChanges(job,evaluation.replacements.changes,evaluation.snapshot,{
-        ...evaluation.result,fromDate: evaluation.fromDate,
+        ...evaluation.result,fromDate: evaluation.fromDate,evaluationDurationMs: Math.max(0,Math.round(performance.now()-started)),
         checks: [...new Set([...evaluation.result.checks,...evaluation.replacements.checks])],
       });
       if (result.kind === "completed") succeeded++;

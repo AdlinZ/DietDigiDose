@@ -36,6 +36,7 @@ export type RecommendationDataset = {
   favoriteIds: number[];
   recentIds: number[];
   skippedIds: number[];
+  explicitDislikedIds?: number[];
   diet: { calories: number; protein: number };
   dailyCaloriesTarget: number;
   requirements: Map<number, Array<Row & { role: string }>>;

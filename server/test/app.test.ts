@@ -4033,3 +4033,28 @@ test("weekly planning reads beyond fifteen inventory rows and rejects stale acti
   assert.equal(activation.response.status,409);
   assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=?").get(draftId) as JsonObject).n,0);
 });
+
+test("preference controls suppress old evidence, pause accumulation and reject stale or cross-account updates", async () => {
+  const account = await register("preference-controls@example.com");
+  const other = await register("preference-controls-other@example.com");
+  const recipeId = Number((db.prepare("SELECT id FROM recipes WHERE status='approved' LIMIT 1").get() as JsonObject).id);
+  const send = (key: string) => api("/api/v1/recommendations/events",{ method: "POST",token: account.token,body: JSON.stringify({ recipeId,eventType: "skip",scoringVersion: "controls-test",surface: "meal_plan",idempotencyKey: key,metadata: { reason: "dislike",scope: "long_term" } }) });
+  const read = async () => { const result = await api("/api/v1/recommendations/preferences",{ token: account.token }); return { ...result,body: result.body as JsonObject }; };
+  const change = async (body: JsonObject) => { const result = await api("/api/v1/recommendations/preferences",{ token: account.token,method: "PATCH",body: JSON.stringify(body) }); return { ...result,body: result.body as JsonObject }; };
+  for (let index=0;index<3;index++) assert.equal((await send(`control-before-${index}`)).response.status,201);
+  assert.equal((await read()).body.items.length,1);
+  const removed = await change({ kind: "recipe",version: 1,recipeId,value: "neutral" });
+  assert.equal(removed.body.items.length,0);
+  await send("control-before-0");
+  assert.equal((await read()).body.items.length,0);
+  assert.equal((await change({ kind: "learning",version: 1,enabled: false })).response.status,409);
+  assert.equal((await change({ kind: "learning",version: 2,enabled: false })).body.enabled,false);
+  for (let index=0;index<3;index++) await send(`control-paused-${index}`);
+  assert.equal(JSON.parse((db.prepare("SELECT metadata_json FROM recipe_recommendation_events WHERE user_id=? AND idempotency_key='control-paused-0'").get(account.user.id) as JsonObject).metadata_json).learningPaused,true);
+  assert.equal((await change({ kind: "learning",version: 3,enabled: true })).body.items.length,0);
+  const confirmed = await change({ kind: "recipe",version: 4,recipeId,value: "dislike" });
+  assert.equal(confirmed.body.items[0].origin,"explicit");
+  const isolated = await api("/api/v1/recommendations/preferences",{ token: other.token });
+  assert.equal((isolated.body as JsonObject).version,1); assert.equal((isolated.body as JsonObject).items.length,0);
+  assert.equal((await api("/api/v1/recommendations/preferences")).response.status,401);
+});

@@ -50,6 +50,13 @@
       "when": 1789145394308,
       "tag": "0006_flimsy_firebrand",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789147702013,
+      "tag": "0007_good_punisher",
+      "breakpoints": true
     }
   ]
 }

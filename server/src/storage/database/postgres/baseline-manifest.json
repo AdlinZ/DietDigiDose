@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "65578e3354d99095a6aaebbbec915b8c3e922521e4280835c0defe256d9965ed",
-  "tableCount": 96,
+  "sourceSchemaSha256": "d27d22fa0035946660ae3a0182d438e677cc357d6ae85d9e8ad9289e450fc9d1",
+  "tableCount": 97,
   "indexCount": 144,
-  "foreignKeyCount": 150,
+  "foreignKeyCount": 151,
   "tables": [
     {
       "name": "admin_audit_logs",
@@ -7506,6 +7506,59 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "recommendation_learning_settings",
+      "autoIncrement": false,
+      "primaryKey": [
+        "user_id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "enabled",
+          "sqliteType": "INTEGER",
+          "postgresType": "boolean",
+          "transform": "0/1 -> false/true",
+          "nullable": false
+        },
+        {
+          "name": "overrides_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
         }
       ]
     },

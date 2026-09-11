@@ -1,4 +1,4 @@
-import { repeatedDislikeRecipeIds } from "./preferenceEvidence.js";
+import { effectiveDislikeRecipeIds, learningOverrides } from "./preferenceEvidence.js";
 import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type Database from "better-sqlite3";
 import type { RecommendationRequestWrite, RecipeQuery, RecommendationsRepository } from "./repository.js";
@@ -34,8 +34,25 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
     .all(userId) as Array<{ recipe_id: number }>).map((row) => row.recipe_id); }
   async recentRecipeIds(userId: number) { return (this.database.prepare(`SELECT DISTINCT recipe_id FROM cooking_queue_items
     WHERE user_id = ? AND status = 'completed' AND updated_at >= datetime('now', '-30 day')`).all(userId) as Array<{ recipe_id: number }>).map((row) => row.recipe_id); }
-  async skippedRecipeIds(userId: number) { return repeatedDislikeRecipeIds(this.database.prepare(`SELECT id,recipe_id,event_type,metadata_json,idempotency_key,created_at FROM recipe_recommendation_events
-    WHERE user_id = ? AND event_type = 'skip' AND created_at >= datetime('now', '-30 day')`).all(userId) as Row[]); }
+  async learningData(userId: number) {
+    const settings = this.database.prepare("SELECT * FROM recommendation_learning_settings WHERE user_id=?").get(userId) as Row | undefined;
+    const events = this.database.prepare("SELECT id,recipe_id,event_type,metadata_json,idempotency_key,created_at FROM recipe_recommendation_events WHERE user_id=? AND event_type='skip' AND created_at>=datetime('now','-30 day')").all(userId) as Row[];
+    const ids = [...new Set([...events.map(event => Number(event.recipe_id)),...Object.keys(learningOverrides(settings ?? null)).map(Number)])];
+    const recipes = ids.length ? this.database.prepare(`SELECT id,title FROM recipes WHERE status='approved' AND deleted_at IS NULL AND id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Row[] : [];
+    return { settings: settings ?? null,events,recipes };
+  }
+  async updateLearning(userId: number,input: import("@dietdigidose/contracts").PreferenceLearningUpdate) {
+    return this.database.transaction(() => {
+      this.database.prepare("INSERT INTO recommendation_learning_settings(user_id) VALUES(?) ON CONFLICT(user_id) DO NOTHING").run(userId);
+      const current = this.database.prepare("SELECT * FROM recommendation_learning_settings WHERE user_id=?").get(userId) as Row;
+      if (Number(current.version) !== input.version) return false;
+      const overrides = learningOverrides(current);
+      if (input.kind === "recipe") overrides[String(input.recipeId)] = { value: input.value,updatedAt: new Date().toISOString() };
+      this.database.prepare("UPDATE recommendation_learning_settings SET enabled=?,overrides_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").run(input.kind === "learning" ? Number(input.enabled) : current.enabled,JSON.stringify(overrides),userId);
+      return true;
+    })();
+  }
+  async skippedRecipeIds(userId: number) { return effectiveDislikeRecipeIds(await this.learningData(userId)); }
   async dietTotals(userId: number, date: string) { const row = this.database.prepare(`SELECT COALESCE(SUM(calories), 0) AS calories,
     COALESCE(SUM(protein), 0) AS protein FROM diet_records WHERE user_id = ? AND recorded_at = ?`).get(userId, date) as { calories: number; protein: number };
     return { calories: Number(row.calories), protein: Number(row.protein) }; }
@@ -57,8 +74,8 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
     try {
       this.database.prepare(`INSERT INTO recipe_recommendation_events
         (id, user_id, request_id, recipe_id, event_type, scoring_version, surface, metadata_json, idempotency_key)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, userId, input.requestId ?? null, input.recipeId, input.eventType,
-        input.scoringVersion, input.surface, JSON.stringify(input.metadata ?? {}), input.idempotencyKey);
+        VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ?='skip' THEN json_set(?,'$.learningPaused',json(CASE WHEN EXISTS(SELECT 1 FROM recommendation_learning_settings WHERE user_id=? AND enabled=0) THEN 'true' ELSE 'false' END)) ELSE ? END, ?)`).run(id, userId, input.requestId ?? null, input.recipeId, input.eventType,
+        input.scoringVersion, input.surface,input.eventType, JSON.stringify(input.metadata ?? {}),userId,JSON.stringify(input.metadata ?? {}), input.idempotencyKey);
       return { id, repeated: false };
     } catch (error) {
       if (!(typeof error === "object" && error && "code" in error && String(error.code).startsWith("SQLITE_CONSTRAINT"))) throw error;

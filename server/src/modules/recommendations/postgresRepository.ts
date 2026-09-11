@@ -1,4 +1,4 @@
-import { repeatedDislikeRecipeIds } from "./preferenceEvidence.js";
+import { effectiveDislikeRecipeIds, learningOverrides } from "./preferenceEvidence.js";
 import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type { Pool } from "pg";
 import type { RecommendationRequestWrite, RecipeQuery, RecommendationsRepository } from "./repository.js";
@@ -35,8 +35,27 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
   async favoriteRecipeIds(userId: number) { return (await this.pool.query("SELECT recipe_id FROM recipe_favorites WHERE user_id = $1", [userId])).rows.map((row) => Number(row.recipe_id)); }
   async recentRecipeIds(userId: number) { return (await this.pool.query(`SELECT DISTINCT recipe_id FROM cooking_queue_items
     WHERE user_id = $1 AND status = 'completed' AND updated_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'`, [userId])).rows.map((row) => Number(row.recipe_id)); }
-  async skippedRecipeIds(userId: number) { return repeatedDislikeRecipeIds((await this.pool.query(`SELECT id,recipe_id,event_type,metadata_json,idempotency_key,created_at FROM recipe_recommendation_events
-    WHERE user_id = $1 AND event_type = 'skip' AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'`, [userId])).rows); }
+  async learningData(userId: number) {
+    const settings = (await this.pool.query("SELECT * FROM recommendation_learning_settings WHERE user_id=$1",[userId])).rows[0] as Row | undefined;
+    const events = (await this.pool.query("SELECT id,recipe_id,event_type,metadata_json,idempotency_key,created_at FROM recipe_recommendation_events WHERE user_id=$1 AND event_type='skip' AND created_at>=CURRENT_TIMESTAMP-INTERVAL '30 days'",[userId])).rows as Row[];
+    const ids = [...new Set([...events.map(event => Number(event.recipe_id)),...Object.keys(learningOverrides(settings ?? null)).map(Number)])];
+    const recipes = ids.length ? (await this.pool.query("SELECT id,title FROM recipes WHERE status='approved' AND deleted_at IS NULL AND id=ANY($1::integer[])",[ids])).rows as Row[] : [];
+    return { settings: settings ?? null,events,recipes };
+  }
+  async updateLearning(userId: number,input: import("@dietdigidose/contracts").PreferenceLearningUpdate) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("INSERT INTO recommendation_learning_settings(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING",[userId]);
+      const current = (await client.query("SELECT * FROM recommendation_learning_settings WHERE user_id=$1 FOR UPDATE",[userId])).rows[0] as Row;
+      if (Number(current.version) !== input.version) { await client.query("ROLLBACK"); return false; }
+      const overrides = learningOverrides(current);
+      if (input.kind === "recipe") overrides[String(input.recipeId)] = { value: input.value,updatedAt: new Date().toISOString() };
+      await client.query("UPDATE recommendation_learning_settings SET enabled=$1,overrides_json=$2::jsonb,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=$3",[input.kind === "learning" ? input.enabled : current.enabled,JSON.stringify(overrides),userId]);
+      await client.query("COMMIT"); return true;
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+  async skippedRecipeIds(userId: number) { return effectiveDislikeRecipeIds(await this.learningData(userId)); }
   async dietTotals(userId: number, date: string) { const row = (await this.pool.query(`SELECT COALESCE(SUM(calories), 0) AS calories,
     COALESCE(SUM(protein), 0) AS protein FROM diet_records WHERE user_id = $1 AND recorded_at = $2`, [userId, date])).rows[0];
     return { calories: Number(row.calories), protein: Number(row.protein) }; }
@@ -57,7 +76,7 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
   async createEvent(id: string, userId: number, input: RecommendationEventInput) {
     const result = await this.pool.query(`INSERT INTO recipe_recommendation_events
       (id, user_id, request_id, recipe_id, event_type, scoring_version, surface, metadata_json, idempotency_key)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9) ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
+      VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $5='skip' THEN jsonb_set($8::jsonb,'{learningPaused}',to_jsonb(EXISTS(SELECT 1 FROM recommendation_learning_settings WHERE user_id=$2 AND enabled=FALSE))) ELSE $8::jsonb END, $9) ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING id`,
     [id, userId, input.requestId ?? null, input.recipeId, input.eventType, input.scoringVersion, input.surface,
       JSON.stringify(input.metadata ?? {}), input.idempotencyKey]);
     if (result.rows[0]) return { id, repeated: false };

@@ -18,6 +18,7 @@ const generatedSchemaPath = path.join(serverRoot, "src", "storage", "database", 
 const manifestPath = path.join(serverRoot, "src", "storage", "database", "postgres", "baseline-manifest.json");
 
 const BOOLEAN_COLUMNS = new Set([
+  "recommendation_learning_settings.enabled",
   "ai_usage_logs.success",
   "household_inventory_items.is_available",
   "household_shopping_items.checked",

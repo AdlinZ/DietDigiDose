@@ -6,3 +6,4 @@ export * from "./mealPlanRequirements.ts";
 
 export * from "./inventoryScan.ts";
 export * from "./weeklyPlan.ts";
+export * from "./preferenceLearning.ts";

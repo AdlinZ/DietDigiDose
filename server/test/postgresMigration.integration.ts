@@ -1588,6 +1588,16 @@ try {
   await pool.query("UPDATE recipe_recommendation_events SET metadata_json=metadata_json || '{\"withdrawn\":true}'::jsonb WHERE user_id=$1 AND idempotency_key='preference-dislike-0'",[user.id]);
   assert.deepEqual(await recommendationsRepository.skippedRecipeIds(user.id),[]);
 
+  const learningUpdates = await Promise.all([recommendationsRepository.updateLearning(user.id,{ kind: "learning",version: 1,enabled: false }),recommendationsRepository.updateLearning(user.id,{ kind: "learning",version: 1,enabled: false })]);
+  assert.deepEqual(learningUpdates.sort(),[false,true]);
+  for (let index=0;index<3;index++) await recommendationsService.event(user.id,{ ...recommendationEventInput,eventType: "skip",metadata: { reason: "dislike",scope: "long_term" },idempotencyKey: `learning-paused-${index}` });
+  assert.equal((await recommendationsService.learningState(user.id)).enabled,false);
+  assert.equal(await recommendationsRepository.updateLearning(user.id,{ kind: "recipe",version: 2,recipeId: recommendedRecipeId,value: "neutral" }),true);
+  await recommendationsRepository.updateLearning(user.id,{ kind: "learning",version: 3,enabled: true });
+  assert.equal((await recommendationsService.learningState(user.id)).items.length,0);
+  assert.equal((await pool.query("SELECT metadata_json->>'learningPaused' paused FROM recipe_recommendation_events WHERE user_id=$1 AND idempotency_key='learning-paused-0'",[user.id])).rows[0].paused,"true");
+  assert.equal((await recommendationsService.learningState(householdMember)).version,1);
+
   const aiToolDataService = new AiToolDataService(new PostgresAiToolDataRepository(pool));
   await pool.query(`INSERT INTO recipes
     (title, cook_time, difficulty, calories, protein, carbs, fat, tags, ingredients_json, source, status, quality_status)

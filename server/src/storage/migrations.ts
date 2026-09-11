@@ -2115,6 +2115,20 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    version: 65,
+    name: "recommendation_learning_controls",
+    up(database) {
+      database.exec(`CREATE TABLE recommendation_learning_settings (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        overrides_json TEXT NOT NULL DEFAULT '{}',
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`);
+    },
+  },
+
 ];
 
 export function runMigrations(database: Database.Database) {

@@ -1,3 +1,5 @@
+import { effectiveDislikeRecipeIds, learningOverrides, formatLearningState } from "./preferenceEvidence.js";
+import { preferenceLearningUpdateSchema, type PreferenceLearningUpdate } from "@dietdigidose/contracts";
 import { buildWeeklyPlan } from "./weeklyPlan.js";
 import { weeklyPlanRequestSchema, type WeeklyPlanRequest } from "@dietdigidose/contracts";
 import { parseJson } from "../mealPlans/formatters.js";
@@ -23,6 +25,16 @@ export class RecommendationsService {
     this.kitchenware = kitchenware;
   }
 
+  async learningState(userId: number) { return formatLearningState(await this.repository.learningData(userId)); }
+  async updateLearning(userId: number,input: PreferenceLearningUpdate) {
+    const request = preferenceLearningUpdateSchema.parse(input);
+    if (request.kind === "recipe" && !await this.repository.recipeAvailable(request.recipeId)) {
+      const own = await this.repository.learningData(userId);
+      if (request.value !== "neutral" || (!learningOverrides(own.settings)[String(request.recipeId)] && !own.events.some(event => Number(event.recipe_id) === request.recipeId))) throw new RecommendationsError(404,"菜谱不存在或当前不可设置偏好","RECIPE_NOT_AVAILABLE");
+    }
+    if (!await this.repository.updateLearning(userId,request)) throw new RecommendationsError(409,"偏好已更新，请刷新后重试","PREFERENCE_VERSION_CONFLICT");
+    return this.learningState(userId);
+  }
   async weeklyPlan(userId: number, input: WeeklyPlanRequest) {
     const request = weeklyPlanRequestSchema.parse(input);
     const end = new Date(`${request.startDate}T00:00:00Z`); end.setUTCDate(end.getUTCDate()+6);
@@ -70,17 +82,17 @@ export class RecommendationsService {
     const profile = formatRecommendationProfile(await this.repository.profile(userId));
     profile.kitchen = resolveKitchenPreferences(profile.kitchen, override);
     const timeBudget = input.maxCookTime ?? resolveKitchenPreferences(profile.kitchen).meal_time_minutes;
-    const [inventory, kitchenware, recipes, favoriteIds, recentIds, skippedIds, diet, dailyCaloriesTarget] = await Promise.all([
+    const [inventory, kitchenware, recipes, favoriteIds, recentIds, learning, diet, dailyCaloriesTarget] = await Promise.all([
       this.repository.inventory(userId), this.repository.kitchenware(userId), this.repository.recipes({
         category: input.category, search: input.search, timeBudget,
       }), this.repository.favoriteRecipeIds(userId), this.repository.recentRecipeIds(userId),
-      this.repository.skippedRecipeIds(userId), this.repository.dietTotals(userId, currentDateKey()),
+      this.repository.learningData(userId), this.repository.dietTotals(userId, currentDateKey()),
       this.repository.dailyCaloriesTarget(userId),
     ]);
     const requirementEntries = await Promise.all(recipes.map(async (recipe) => [Number(recipe.id), await this.kitchenware.requirements(Number(recipe.id))] as const));
     const compatibilityEntries = await Promise.all(recipes.map(async (recipe) => [Number(recipe.id), await this.kitchenware.evaluateRequirements(userId, Number(recipe.id))] as const));
     const dataset: RecommendationDataset = {
-      profile, inventory, kitchenware, recipes, favoriteIds, recentIds, skippedIds, diet, dailyCaloriesTarget,
+      profile, inventory, kitchenware, recipes, favoriteIds, recentIds, skippedIds: effectiveDislikeRecipeIds(learning), explicitDislikedIds: Object.entries(learningOverrides(learning.settings)).filter(([,value]) => value.value === "dislike").map(([id]) => Number(id)), diet, dailyCaloriesTarget,
       requirements: new Map(requirementEntries) as RecommendationDataset["requirements"],
       compatibility: new Map(compatibilityEntries) as RecommendationDataset["compatibility"],
     };

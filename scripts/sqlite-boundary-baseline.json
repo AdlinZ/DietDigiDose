@@ -17,7 +17,7 @@
     "server/src/modules/adminRecipes/index.ts": 1,
     "server/src/modules/adminRecipes/sqliteRepository.ts": 30,
     "server/src/modules/adminUsers/sqliteRepository.ts": 25,
-    "server/src/modules/agentOperations/sqliteRepository.ts": 35,
+    "server/src/modules/agentOperations/sqliteRepository.ts": 39,
     "server/src/modules/agentRuns/sqliteRepository.ts": 30,
     "server/src/modules/agentScheduling/sqliteRepository.ts": 7,
     "server/src/modules/aiContext/sqliteRepository.ts": 9,

@@ -585,7 +585,7 @@ async function specialistResultPolicyNode(state: SupervisorGraphState) {
 
 const operationSchema = z.object({
   actions: z.array(z.object({
-    actionType: z.enum(["create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item", "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item", "update_inventory_item", "consume_inventory_items", "produce_meal", "record_prepared_meal_event", "add_kitchenware_item", "submit_recipe", "update_kitchen_preferences", "record_health_log"]),
+    actionType: z.enum(["create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item", "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item", "update_inventory_item", "consume_inventory_items", "produce_meal", "record_prepared_meal_event", "add_kitchenware_item", "submit_recipe", "update_kitchen_preferences", "update_recipe_preference", "record_health_log"]),
     summary: z.string().min(1).max(300),
     payload: z.record(z.string(), z.unknown()),
   })).max(150).default([]),
@@ -601,25 +601,29 @@ async function operationsNode(state: SupervisorGraphState) {
   await appendAgentEvent(state.runId, state.userId, "OperationsAgent", "agent_started", "业务操作 Agent 正在生成类型化动作");
   const mealContext = await buildUserContext(state.userId);
   const inventoryContext = mealContext.inventory;
+  const persistentIntent = hasPermanentPreferenceIntent(requestText(state) + "\n" + (state.transcript || ""));
+  const preferenceVersion = persistentIntent ? (await recommendationsService().learningState(state.userId)).version : null;
   const agent = createAgent({
     model: await modelFor("OPERATIONS"), tools: [],
     systemPrompt: structuredSystemPrompt(`你是 OperationsAgent。只根据用户明确表达的意图生成业务动作，不补充用户未要求的写入。
 餐单和采购新增/更新可直接执行；删除、饮食打卡、库存、厨具、菜谱和健康记录必须形成高风险提案。
 制作完成用 produce_meal，payload 是 {recipe_id?,inventory_consumptions?:[{item_id,version,mode,amount_value?,unit?}],production:{food_name,produced_servings,eaten_servings,nutrition_per_serving?,planned_date?,meal_type?,queue_item_id?,queue_version?,plan_item_id?,plan_version?}}。只有本人明确实际吃的份量才填 eaten_servings，否则为 0；未知每份营养留空，不能根据多人产出猜测个人摄入。已有待吃餐食用、丢弃或延期使用 record_prepared_meal_event，payload 为 {mealId,version,type:"eat"|"discard"|"reschedule",servings?,recorded_at?,planned_date?,meal_type?}；延期不改变份量。不得把制作或已有关联待吃餐再次用 record_diet_meal 记账；对象不明只追问，不任选同名餐。
 库存新增/修正使用 {name?,itemId?,version?,quantity?,quantityValue?,quantityUnit?,expirationDate?,location?}，修正必须带读取到的批次 ID 和版本；数量修正为剩余量。消耗使用 {reason:"used"|"discarded",items:[{itemId,version,mode:"amount"|"all",amountValue?,unit?}]}，部分使用必须提供数量和单位；仅明确全部用完才用 all。单位为 g/kg/ml/l/piece/serving/bag/box/bottle/can，不将袋自动换算为克。批次重名、数量或单位不明时不提写入动作，由最终回答只追问缺失条件。不得猜测 ID、版本或把丢弃记为饮食。
+长期菜谱口味使用 update_recipe_preference，payload 为 {scope:"persistent",recipeId,version,value:"dislike"或"neutral"}。仅在用户明确要求长期记住某个已识别菜谱的不喜欢或纠正旧偏好时提案；需确认，不推断食材喜好，不改变过敏和忌口。version必须使用提供的偏好版本；菜谱ID不明时先询问。
 长期厨房偏好使用 update_kitchen_preferences，payload 为 {scope:"persistent",preferences:{...}}，preferences 字段使用 kitchen_constraints 的原有命名。仅用户明确说以后、长期或设为默认时提案，必须确认后保存；今天、本次人数或条件仅使用本次覆盖，禁止形成长期修改提案。只包含明确改动字段，不补齐未知字段，不触碰过敏、忌口。
 用户说待吃餐“这份留着”时使用 record_prepared_meal_event 的 type:"reschedule",is_reserved:true；解除保留为 false。保留不改变份量，不算食用。
 字段使用 camelCase。餐单 create_meal_plan payload 为 {title,startDate,endDate,constraints,items:[{date,mealType,title,ingredients,steps,calories,protein,carbs,fat}]}；采购 add_shopping_items payload 为 {items:[{name,amount,category}]}；饮食打卡 record_diet_meal payload 必须为 {foodName,mealType,amount,recordedAt?,recordedTime?,calories?,protein?,carbs?,fat?}，禁止使用 dishName、portion 或 date 代替这些字段。`, operationSchema),
   });
   const result = await invokeStructured(
-    () => agent.invoke({ messages: [{ role: "user", content: `用户完整请求：${requestText(state)}\n目标：${state.goal}\n专业 Agent 结果：${JSON.stringify(state.outputs)}\n本次有效备餐条件：${JSON.stringify(resolveKitchenPreferences(mealContext.healthProfile?.kitchen_constraints, state.kitchenOverride))}\n当前库存批次：${JSON.stringify(inventoryContext)}\n待吃餐：${JSON.stringify(mealContext.preparedMeals || [])}` }] }, { recursionLimit: 6 }),
+    () => agent.invoke({ messages: [{ role: "user", content: `用户完整请求：${requestText(state)}\n目标：${state.goal}\n专业 Agent 结果：${JSON.stringify(state.outputs)}\n本次有效备餐条件：${JSON.stringify(resolveKitchenPreferences(mealContext.healthProfile?.kitchen_constraints, state.kitchenOverride))}\n偏好设置版本：${preferenceVersion}\n当前库存批次：${JSON.stringify(inventoryContext)}\n待吃餐：${JSON.stringify(mealContext.preparedMeals || [])}` }] }, { recursionLimit: 6 }),
     operationSchema,
     { runId: state.runId, userId: state.userId, agentName: "OperationsAgent", phase: "operations", model: await modelNameFor("OPERATIONS") },
   );
   let actions: AgentActionProposal[];
   try {
-    actions = validateAgentActions((result.actions || []).filter(action => action.actionType !== "update_kitchen_preferences"
-      || hasPermanentPreferenceIntent(requestText(state) + "\n" + (state.transcript || ""))), await buildUserContext(state.userId));
+    actions = validateAgentActions((result.actions || []).filter(action => !["update_kitchen_preferences","update_recipe_preference"].includes(action.actionType)
+      || persistentIntent).map(action => action.actionType === "update_recipe_preference"
+        ? { ...action,payload: { ...action.payload,version: preferenceVersion } } : action), await buildUserContext(state.userId));
   } catch (error) {
     if (error instanceof InventoryActionClarificationError) {
       return { actions: [], outputs: { ...state.outputs, PolicyGate: { warning: error.message } } };

@@ -4344,3 +4344,14 @@ test("household inventory rejects stale edits and removal without changing quant
   assert.equal(rows.find(row => row.id === created.id)?.quantity,"5个");
   assert.equal((await api(`${endpoint}?version=${(saved.body as JsonObject).version}`,{ token: owner.token,method: "DELETE" })).response.status,200);
 });
+
+
+test("Agent explicit recipe preferences use guarded shared learning settings and retain provenance",async () => {
+  const { verifyAgentRecipePreference } = await import("./agentRecipePreferenceAssertions.js");
+  const { SqliteAgentOperationsRepository } = await import("../src/modules/agentOperations/sqliteRepository.js");
+  const { createRecommendationsRuntime } = await import("../src/modules/recommendations/index.js");
+  const account = await register("agent-taste-197@example.com");
+  const recipe = db.prepare("SELECT id FROM recipes WHERE status='approved' AND deleted_at IS NULL LIMIT 1").get() as JsonObject;
+  await verifyAgentRecipePreference(new SqliteAgentOperationsRepository(db),createRecommendationsRuntime(db).service,
+    async (sql,values) => db.prepare(sql).run(...values),account.user.id,Number(recipe.id));
+});

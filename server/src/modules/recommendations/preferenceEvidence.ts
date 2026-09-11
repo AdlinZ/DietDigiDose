@@ -35,8 +35,8 @@ export function repeatedDislikeRecipeIds(events: Row[], now = Date.now()): numbe
 }
 
 export type LearningData = { settings: Row | null; events: Row[]; recipes: Row[] };
-export function learningOverrides(settings: Row | null): Record<string,{ value: "neutral" | "dislike"; updatedAt: string }> {
-  return metadata(settings?.overrides_json) as Record<string,{ value: "neutral" | "dislike"; updatedAt: string }>;
+export function learningOverrides(settings: Row | null): Record<string,{ value: "neutral" | "dislike"; updatedAt: string; sourceActionId?: string }> {
+  return metadata(settings?.overrides_json) as Record<string,{ value: "neutral" | "dislike"; updatedAt: string; sourceActionId?: string }>;
 }
 export function effectiveDislikeRecipeIds(data: LearningData, now = Date.now()): number[] {
   const ids = new Set(data.settings?.enabled === false || data.settings?.enabled === 0 ? [] : repeatedDislikeRecipeIds(data.events,now));
@@ -53,6 +53,6 @@ export function formatLearningState(data: LearningData, now = Date.now()): impor
       const override = overrides[String(recipeId)];
       const evidence = accepted.get(recipeId) ?? [];
       return { recipeId,title: String(data.recipes.find(recipe => Number(recipe.id) === recipeId)?.title ?? "已不可用菜谱"),origin: override ? "explicit" as const : "inferred" as const,
-        explanation: override ? "你明确设置为不喜欢" : "近30天至少三次明确长期不喜欢，仅降低排序，不排除菜谱",updatedAt: override?.updatedAt ?? evidence.map(item => item.at).sort().at(-1) ?? "",evidence: override ? [] : evidence };
+        explanation: override ? "你明确设置为不喜欢" : "近30天至少三次明确长期不喜欢，仅降低排序，不排除菜谱",updatedAt: override?.updatedAt ?? evidence.map(item => item.at).sort().at(-1) ?? "",evidence: override ? override.sourceActionId ? [{ id: `preference-statement:${override.sourceActionId}`,at: override.updatedAt,reason: "已确认的长期菜谱口味设置" }] : [] : evidence };
     }) };
 }

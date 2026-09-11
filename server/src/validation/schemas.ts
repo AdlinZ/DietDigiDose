@@ -426,7 +426,7 @@ const agentActionEditSchema = z.object({
     "create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item",
     "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item",
     "update_inventory_item", "consume_inventory_items", "produce_meal", "record_prepared_meal_event", "add_kitchenware_item", "submit_recipe",
-    "update_kitchen_preferences", "record_health_log",
+    "update_kitchen_preferences", "update_recipe_preference", "record_health_log",
   ]),
   summary: z.string().trim().min(1).max(300),
   payload: z.record(z.string(), z.unknown()),

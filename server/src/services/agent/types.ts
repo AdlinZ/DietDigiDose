@@ -56,6 +56,7 @@ export type AgentActionType =
   | "add_kitchenware_item"
   | "submit_recipe"
   | "update_kitchen_preferences"
+  | "update_recipe_preference"
   | "record_health_log";
 
 export type AgentActionProposal = {

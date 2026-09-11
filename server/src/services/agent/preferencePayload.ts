@@ -17,3 +17,10 @@ export function hasPermanentPreferenceIntent(text: string) {
     return /(?:以后|今后|从今).{0,20}(?:都|按|固定)|(?:长期|默认|平时|通常|习惯|记住)/.test(clause);
   });
 }
+
+export const permanentRecipePreferencePayloadSchema = z.object({
+  scope: z.literal("persistent"),
+  recipeId: z.number().int().positive(),
+  version: z.number().int().positive(),
+  value: z.enum(["dislike","neutral"]),
+}).strict();

@@ -1694,6 +1694,10 @@ try {
   assert(outcomeFacts.some(fact => fact.correctionId && !fact.valid));
   assert.equal(new Set(outcomeFacts.map(fact => fact.id)).size,outcomeFacts.length);
   assert.deepEqual(await recommendationsRepository.preferenceOutcomes(-1),{ production: [],events: [],inventory: [],changes: [],statements: [] });
+  const { verifyAgentRecipePreference } = await import("./agentRecipePreferenceAssertions.js");
+  await verifyAgentRecipePreference(new PostgresAgentOperationsRepository(pool),recommendationsService,
+    async (sql,values) => { let position = 0; return pool.query(sql.replace(/\?/g,() => `$${++position}`),values); },user.id,recommendedRecipeId);
+
 
   const aiToolDataService = new AiToolDataService(new PostgresAiToolDataRepository(pool));
   await pool.query(`INSERT INTO recipes

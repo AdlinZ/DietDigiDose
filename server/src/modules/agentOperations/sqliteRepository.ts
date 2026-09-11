@@ -1,5 +1,6 @@
+import { learningOverrides } from "../recommendations/preferenceEvidence.js";
 import { SqliteMealPlansRepository } from "../mealPlans/sqliteRepository.js";
-import { permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
+import { permanentRecipePreferencePayloadSchema, permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
 import { SqliteDietRecordsRepository } from "../dietRecords/sqliteRepository.js";
 import { agentMealProduction, agentPreparedMealEvent } from "../../services/agent/mealPayload.js";
 import { agentInventoryCreate, agentInventoryUpdate, agentInventoryConsumption } from "../../services/agent/inventoryPayload.js";
@@ -279,6 +280,20 @@ export class SqliteAgentOperationsRepository implements AgentOperationsRepositor
         const { input, reason } = agentInventoryConsumption(payload, `agent-inventory:${runId}:${action.id}`);
         const consumed = inventory.consumeInTransaction(userId, input, { reason, runId });
         result = { inventoryItemIds: input.items.map(item => item.item_id), ...consumed, reason };
+        break;
+      }
+      case "update_recipe_preference": {
+        const input = permanentRecipePreferencePayloadSchema.parse(payload);
+        const recipe = this.database.prepare("SELECT id FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(input.recipeId);
+        if (!recipe) throw new Error("菜谱不存在或不可设置偏好");
+        this.database.prepare("INSERT INTO recommendation_learning_settings(user_id) VALUES(?) ON CONFLICT(user_id) DO NOTHING").run(userId);
+        const stored = this.database.prepare("SELECT * FROM recommendation_learning_settings WHERE user_id=?").get(userId) as Record<string,unknown>;
+        if (Number(stored.version)!==input.version) throw new Error("偏好已更新，请重新核对提案");
+        const overrides = learningOverrides(stored);
+        before = { version: Number(stored.version),preference: overrides[String(input.recipeId)] ?? null };
+        overrides[String(input.recipeId)] = { value: input.value,updatedAt: new Date().toISOString(),sourceActionId: action.id! };
+        this.database.prepare("UPDATE recommendation_learning_settings SET overrides_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").run(JSON.stringify(overrides),userId);
+        result = { recipeId: input.recipeId,value: input.value,version: input.version+1,scope: "persistent" };
         break;
       }
       case "update_kitchen_preferences": {

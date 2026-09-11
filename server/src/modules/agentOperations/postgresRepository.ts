@@ -1,6 +1,7 @@
+import { learningOverrides } from "../recommendations/preferenceEvidence.js";
 import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 import { PostgresMealPlansRepository } from "../mealPlans/postgresRepository.js";
-import { permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
+import { permanentRecipePreferencePayloadSchema, permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
 import { PostgresDietRecordsRepository } from "../dietRecords/postgresRepository.js";
 import { agentMealProduction, agentPreparedMealEvent } from "../../services/agent/mealPayload.js";
 import { agentInventoryCreate, agentInventoryUpdate, agentInventoryConsumption } from "../../services/agent/inventoryPayload.js";
@@ -286,6 +287,20 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
         const { input, reason } = agentInventoryConsumption(payload, `agent-inventory:${runId}:${action.id}`);
         const consumed = await consumeInventoryWithPostgresClient(client, userId, input, { reason, runId });
         result = { inventoryItemIds: input.items.map(item => item.item_id), ...consumed, reason };
+        break;
+      }
+      case "update_recipe_preference": {
+        const input = permanentRecipePreferencePayloadSchema.parse(payload);
+        const recipe = await client.query("SELECT id FROM recipes WHERE id=$1 AND status='approved' AND deleted_at IS NULL FOR SHARE",[input.recipeId]);
+        if (!recipe.rows[0]) throw new Error("菜谱不存在或不可设置偏好");
+        await client.query("INSERT INTO recommendation_learning_settings(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING",[userId]);
+        const stored = (await client.query("SELECT * FROM recommendation_learning_settings WHERE user_id=$1 FOR UPDATE",[userId])).rows[0];
+        if (Number(stored.version)!==input.version) throw new Error("偏好已更新，请重新核对提案");
+        const overrides = learningOverrides(stored);
+        before = { version: Number(stored.version),preference: overrides[String(input.recipeId)] ?? null };
+        overrides[String(input.recipeId)] = { value: input.value,updatedAt: new Date().toISOString(),sourceActionId: action.id! };
+        await client.query("UPDATE recommendation_learning_settings SET overrides_json=$1::jsonb,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=$2",[JSON.stringify(overrides),userId]);
+        result = { recipeId: input.recipeId,value: input.value,version: input.version+1,scope: "persistent" };
         break;
       }
       case "update_kitchen_preferences": {

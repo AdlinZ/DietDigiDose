@@ -1,3 +1,5 @@
+import { readPostgresDiningSupply } from "../households/postgresDiningSupply.js";
+import { prepareNetDiningShopping } from "../households/diningNetShopping.js";
 import { prepareDiningShopping } from "../households/diningShopping.js";
 import { validatePostgresDiningPlan } from "../households/postgresDiningPlan.js";
 import { replacementAllocation } from "./replacementAllocation.js";
@@ -285,9 +287,10 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     return this.transaction(async (client) => {
       await lockMealPlanning(client,userId);
       await this.lockExecution(client, userId, input.idempotencyKey);
+      if (input.householdNetFingerprint && !input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","净采购需关联已保存的共餐安排");
       const repeated = await this.repeated(client, userId, input.idempotencyKey);
       if (repeated) {
-        if (Boolean(input.householdTotalDemand)!==(repeated.mode === "total_demand") || (input.householdTotalDemand && (!isDeepStrictEqual(input.householdTotalDemand,repeated.sourceDining) || input.householdRecipeFingerprint!==repeated.sourceRecipeFingerprint)))
+        if ((input.householdTotalDemand ? (input.householdNetFingerprint ? "net_demand" : "total_demand") : undefined)!==repeated.mode || input.householdNetFingerprint!==repeated.sourceNetFingerprint || (input.householdTotalDemand && (!isDeepStrictEqual(input.householdTotalDemand,repeated.sourceDining) || input.householdRecipeFingerprint!==repeated.sourceRecipeFingerprint)))
           throw new InventoryQuantityError("DINING_PLAN_CHANGED","此采购编号已用于另一份需求，请重新核对原提交");
         return { kind: "completed" as const, value: repeated };
       }
@@ -300,7 +303,8 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
         await validatePostgresDiningPlan(client,userId,item.recipe_id,dining);
         const recipe = (await client.query("SELECT * FROM recipes WHERE id=$1",[item.recipe_id])).rows[0] as Row;
         const existing = (await client.query("SELECT * FROM household_shopping_items WHERE source_plan_item_id=$1 ORDER BY id FOR UPDATE",[itemId])).rows as Row[];
-        const demands = prepareDiningShopping(dining,input.householdTotalDemand,recipe,existing,input.householdRecipeFingerprint);
+        let demands = prepareDiningShopping(dining,input.householdTotalDemand,recipe,existing,input.householdRecipeFingerprint);
+        if (input.householdNetFingerprint) demands = prepareNetDiningShopping(await readPostgresDiningSupply(client,userId,dining.householdId,{ planId,itemId,version: input.version },dining.participants.reduce((sum,person) => sum+Math.round(person.servings*1_000_000),0)/1_000_000,input.householdRecipeFingerprint!),input.householdNetFingerprint);
         const itemIds: string[] = [];
         for (const demand of demands) {
           const previous = existing.find(row => row.source_demand_key===demand.key);
@@ -313,7 +317,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
           }
         }
         for (const row of existing) if (!demands.some(demand => demand.key===row.source_demand_key)) await client.query("DELETE FROM household_shopping_items WHERE id=$1",[row.id]);
-        const value = { added: itemIds.length,itemIds,householdId: dining.householdId,mode: "total_demand",sourceDining: dining,sourceRecipeFingerprint: input.householdRecipeFingerprint,repeated: false };
+        const value = { added: itemIds.length,itemIds,householdId: dining.householdId,mode: input.householdNetFingerprint ? "net_demand" : "total_demand",...(input.householdNetFingerprint ? { sourceNetFingerprint: input.householdNetFingerprint } : {}),sourceDining: dining,sourceRecipeFingerprint: input.householdRecipeFingerprint,repeated: false };
         await this.saveExecution(client,userId,input.idempotencyKey,"shopping",itemId,value);
         return { kind: "completed" as const,value };
       }
@@ -343,7 +347,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       const value = { added: itemIds.length, itemIds, repeated: false };
       await this.saveExecution(client, userId, input.idempotencyKey, "shopping", itemId, value);
       return { kind: "completed" as const, value };
-    });
+    },Boolean(input.householdNetFingerprint));
   }
 
   enqueue(userId: number, planId: string, itemId: string, input: MealPlanExecutionInput) {
@@ -439,15 +443,17 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     });
   }
 
-  private async transaction<T>(operation: (client: PoolClient) => Promise<T>) {
+  private async transaction<T>(operation: (client: PoolClient) => Promise<T>,serializable = false) {
     const client = await this.pool.connect();
     try {
-      await client.query("BEGIN");
+      await client.query(serializable ? "BEGIN ISOLATION LEVEL SERIALIZABLE" : "BEGIN");
       const result = await operation(client);
       await client.query("COMMIT");
       return result;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (serializable && error && typeof error === "object" && "code" in error && error.code === "40001")
+        throw new InventoryQuantityError("DINING_SUPPLY_CHANGED","家庭数据正在变化，请重试原提交；若仍冲突请重新预览净采购调整");
       throw error;
     } finally { client.release(); }
   }

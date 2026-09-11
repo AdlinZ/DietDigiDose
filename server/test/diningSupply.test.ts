@@ -59,3 +59,24 @@ test('pooled shopping uses the earliest suitable expiry before longer-lived purc
  ]);
  assert.equal(result.status,'known'); assert.equal(result.demands[0]?.shoppingCovered,200); assert.equal(result.demands[0]?.unplanned,100);
 });
+
+test('net proposal excludes its own generated demand and binds source versions without exposing other plans',async () => {
+ const { diningNetShopping,prepareNetDiningShopping } = await import('../src/modules/households/diningNetShopping.js');
+ const snapshot = { plans: [plan('target','2036-09-13',3)],inventory: [{ id: 1,version: 1,food_name: '大米',quantity: '100g',expiration_date: '2036-09-30',is_available: true }],shopping: [
+   { id: 'own',name: '大米',amount: '300g',source_plan_item_id: 'target',source_demand_key: '["大米","g"]',version: 1,source_generated_version: 1 },
+   { id: 'pool',name: '大米',amount: '50g' },
+ ],targetId: 'target',totalServings: 3,recipeFingerprint: checkDiningRecipe(recipe,[],3).fingerprint,today: '2036-09-12' };
+ const proposal = diningNetShopping(snapshot);
+ assert.equal(proposal.status,'ready');
+ assert.deepEqual(proposal.lines,[{ key: '["大米","g"]',name: '大米',beforeAmount: '300g',afterAmount: '150g' }]);
+ assert.deepEqual(prepareNetDiningShopping(snapshot,proposal.fingerprint!),[{ key: '["大米","g"]',name: '大米',amount: '150g' }]);
+ const reordered = { ...snapshot,shopping: [...snapshot.shopping].reverse() };
+ assert.equal(diningNetShopping(reordered).fingerprint,proposal.fingerprint);
+ snapshot.inventory[0]!.version++;
+ assert.throws(() => prepareNetDiningShopping(snapshot,proposal.fingerprint!),/已变化/);
+ for (const state of [{ checked: true },{ deleted_at: 'today' },{ transferred_at: 'today' },{ version: 2 }]) {
+   assert.equal(diningNetShopping({ ...snapshot,shopping: snapshot.shopping.map(row => row.id==='own' ? { ...row,...state } : row) }).status,'needs_review');
+ }
+ snapshot.inventory[0]!.quantity='500g';
+ assert.equal(diningNetShopping(snapshot).lines[0]?.afterAmount,null);
+});

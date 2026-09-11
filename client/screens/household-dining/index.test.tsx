@@ -145,6 +145,29 @@ test("explicitly syncs reviewed total demand for the displayed saved meal versio
   expect(JSON.stringify(tree.toJSON())).toContain("未扣除库存或其他采购");
   expect(JSON.stringify(tree.toJSON())).toContain("库存缺口 100 g");
   expect(JSON.stringify(tree.toJSON())).toContain("清单已列入 50 g，尚未安排 50 g");
-  expect(JSON.stringify(tree.toJSON())).toContain("不是最终补买量");
+  expect(JSON.stringify(tree.toJSON())).toContain("待吃成品不折算成原料");
+  act(() => tree.unmount());
+});
+
+test("reviews net before and after quantities and retries the same snapshot after an uncertain write",async () => {
+  mockParams = { planItem: { planId: "plan",itemId: "meal",version: 4 } };
+  const person = { membershipId: 1,userId: 1,name: "成员1",version: 2,shared: true,allergies: [],restrictions: [],servings: 3 };
+  mockMembers.mockResolvedValue({ members: [person] });
+  mockPreview.mockResolvedValue({ planItem: { ...mockParams.planItem,plannedDate: "2036-09-12",mealType: "lunch",title: "米饭",decision: "apply",applied: false },supply: { status: "known",otherMealCount: 0,demands: [],checks: [],netShopping: { status: "ready",fingerprint: "b".repeat(64),checks: [],lines: [{ key: "rice",name: "大米",beforeAmount: "300g",afterAmount: "150g" }] } },recipeCheck: { fingerprint: "a".repeat(64),title: "米饭",status: "needs_review",materials: { status: "known",demands: [] },conflicts: [],checks: [] },totalServings: 3,participants: [person],allergies: [],restrictions: [] });
+  mockShopping.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ added: 0 });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<HouseholdDiningScreen />); });
+  act(() => tree.root.findByProps({ accessibilityLabel: "成员1参与共餐" }).props.onValueChange(true));
+  await act(async () => { button(tree,"核算共餐需求").props.onPress(); });
+  expect(button(tree,"应用上述净采购调整").props.disabled).toBe(true);
+  expect(JSON.stringify(tree.toJSON())).toContain("300g");
+  expect(JSON.stringify(tree.toJSON())).toContain("150g");
+  act(() => tree.root.findByProps({ accessibilityLabel: "已核对共餐限制" }).props.onValueChange(true));
+  await act(async () => { button(tree,"应用上述净采购调整").props.onPress(); });
+  await act(async () => { button(tree,"应用上述净采购调整").props.onPress(); });
+  expect(mockShopping.mock.calls[0]).toEqual(mockShopping.mock.calls[1]);
+  expect(mockShopping.mock.calls[0][3]).toMatchObject({ householdNetFingerprint: "b".repeat(64),idempotencyKey: `dining-net:${"b".repeat(64)}` });
+  expect(JSON.stringify(tree.toJSON())).toContain("净采购调整已应用");
+  expect(mockPlanSave).not.toHaveBeenCalled();
   act(() => tree.unmount());
 });

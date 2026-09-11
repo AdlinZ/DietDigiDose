@@ -1,3 +1,5 @@
+import { readSqliteDiningSupply } from "../households/sqliteDiningSupply.js";
+import { prepareNetDiningShopping } from "../households/diningNetShopping.js";
 import { prepareDiningShopping } from "../households/diningShopping.js";
 import { validateSqliteDiningPlan } from "../households/sqliteDiningPlan.js";
 import { replacementAllocation } from "./replacementAllocation.js";
@@ -260,9 +262,10 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
 
   async addShopping(userId: number, planId: string, itemId: string, input: MealPlanExecutionInput) {
     return this.database.transaction(() => {
+      if (input.householdNetFingerprint && !input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","净采购需关联已保存的共餐安排");
       const repeated = this.repeated(userId, input.idempotencyKey);
       if (repeated) {
-        if (Boolean(input.householdTotalDemand)!==(repeated.mode === "total_demand") || (input.householdTotalDemand && (!isDeepStrictEqual(input.householdTotalDemand,repeated.sourceDining) || input.householdRecipeFingerprint!==repeated.sourceRecipeFingerprint)))
+        if ((input.householdTotalDemand ? (input.householdNetFingerprint ? "net_demand" : "total_demand") : undefined)!==repeated.mode || input.householdNetFingerprint!==repeated.sourceNetFingerprint || (input.householdTotalDemand && (!isDeepStrictEqual(input.householdTotalDemand,repeated.sourceDining) || input.householdRecipeFingerprint!==repeated.sourceRecipeFingerprint)))
           throw new InventoryQuantityError("DINING_PLAN_CHANGED","此采购编号已用于另一份需求，请重新核对原提交");
         return { kind: "completed" as const, value: repeated };
       }
@@ -275,7 +278,8 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
         validateSqliteDiningPlan(this.database,userId,item.recipe_id,dining);
         const recipe = this.database.prepare("SELECT * FROM recipes WHERE id=?").get(item.recipe_id) as Row;
         const existing = this.database.prepare("SELECT * FROM household_shopping_items WHERE source_plan_item_id=? ORDER BY id").all(itemId) as Row[];
-        const demands = prepareDiningShopping(dining,input.householdTotalDemand,recipe,existing,input.householdRecipeFingerprint);
+        let demands = prepareDiningShopping(dining,input.householdTotalDemand,recipe,existing,input.householdRecipeFingerprint);
+        if (input.householdNetFingerprint) demands = prepareNetDiningShopping(readSqliteDiningSupply(this.database,userId,dining.householdId,{ planId,itemId,version: input.version },dining.participants.reduce((sum,person) => sum+Math.round(person.servings*1_000_000),0)/1_000_000,input.householdRecipeFingerprint!),input.householdNetFingerprint);
         const itemIds: string[] = [];
         for (const demand of demands) {
           const previous = existing.find(row => row.source_demand_key===demand.key);
@@ -288,7 +292,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
           }
         }
         for (const row of existing) if (!demands.some(demand => demand.key===row.source_demand_key)) this.database.prepare("DELETE FROM household_shopping_items WHERE id=?").run(row.id);
-        const value = { added: itemIds.length,itemIds,householdId: dining.householdId,mode: "total_demand",sourceDining: dining,sourceRecipeFingerprint: input.householdRecipeFingerprint,repeated: false };
+        const value = { added: itemIds.length,itemIds,householdId: dining.householdId,mode: input.householdNetFingerprint ? "net_demand" : "total_demand",...(input.householdNetFingerprint ? { sourceNetFingerprint: input.householdNetFingerprint } : {}),sourceDining: dining,sourceRecipeFingerprint: input.householdRecipeFingerprint,repeated: false };
         this.saveExecution(userId,input.idempotencyKey,"shopping",itemId,value);
         return { kind: "completed" as const,value };
       }

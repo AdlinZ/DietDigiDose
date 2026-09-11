@@ -26,12 +26,14 @@ export function DiningAllocation({ householdId,members,recipeId,planItem }: { pl
     } catch (error) { if (ticket === generation.current) setMessage(error instanceof ApiError ? error.message : "未能核算，请检查网络后重试。"); }
     finally { if (ticket === generation.current) { writing.current = false; setBusy(false); } }
   };
-  const syncShopping = async () => {
+  const syncShopping = async (net = false) => {
     if (!preview?.planItem || !reviewed || writing.current || saved) return;
+    const fingerprint = net ? preview.supply?.netShopping?.fingerprint : null;
+    if (net && !fingerprint) return;
     const ticket = generation.current; writing.current = true; setBusy(true); setMessage("");
     try {
-      await mealPlansApi.addShopping(apiFetch,preview.planItem.planId,preview.planItem.itemId,{ version: preview.planItem.version,idempotencyKey: `dining-shopping:${preview.planItem.itemId}:${preview.planItem.version}:${preview.recipeCheck?.fingerprint}`,householdRecipeFingerprint: preview.recipeCheck?.fingerprint,householdTotalDemand: { householdId,constraintsReviewed: true,participants: preview.participants.map(person => ({ membershipId: person.membershipId,version: person.version,servings: person.servings })) } });
-      if (ticket===generation.current) { setSaved(true); setMessage("共餐原料总需求已同步到家庭采购。未扣除库存或其他采购，请在家庭清单中核对实际补买量。"); }
+      await mealPlansApi.addShopping(apiFetch,preview.planItem.planId,preview.planItem.itemId,{ version: preview.planItem.version,idempotencyKey: fingerprint ? `dining-net:${fingerprint}` : `dining-shopping:${preview.planItem.itemId}:${preview.planItem.version}:${preview.recipeCheck?.fingerprint}`,...(fingerprint ? { householdNetFingerprint: fingerprint } : {}),householdRecipeFingerprint: preview.recipeCheck?.fingerprint,householdTotalDemand: { householdId,constraintsReviewed: true,participants: preview.participants.map(person => ({ membershipId: person.membershipId,version: person.version,servings: person.servings })) } });
+      if (ticket===generation.current) { setSaved(true); setMessage(net ? "净采购调整已应用，只更新了这餐未修改的来源采购项。未扣减库存或记录食用。" : "共餐原料总需求已同步到家庭采购。未扣除库存或其他采购，请在家庭清单中核对实际补买量。"); }
     } catch (error) { if (ticket===generation.current) setMessage(error instanceof ApiError ? error.message : "同步结果尚未确认，请核对家庭清单后重试原操作。"); }
     finally { if (ticket===generation.current) { writing.current=false; setBusy(false); } }
   };
@@ -80,8 +82,15 @@ export function DiningAllocation({ householdId,members,recipeId,planItem }: { pl
         <Text className="text-copy-muted">已考虑另外 {preview.supply.otherMealCount} 个共餐餐次，先保留受保护餐次的需求，再按日期分配；本次不预留或扣减库存。</Text>
         {preview.supply.demands.map((demand,index) => <Text key={index} className="text-copy-muted">{demand.food_name}：{demand.covered === null || demand.missing === null ? "暂不能确定可用量与缺口" : `库存可覆盖 ${demand.covered} ${demand.unit}，库存缺口 ${demand.missing} ${demand.unit}`}</Text>)}
         {preview.supply.demands.map((demand,index) => <Text key={`shopping-${index}`} className="text-copy-muted">{demand.food_name}：{demand.shoppingCovered == null || demand.unplanned == null ? "清单覆盖与尚未安排量待核对" : `清单已列入 ${demand.shoppingCovered} ${demand.unit}，尚未安排 ${demand.unplanned} ${demand.unit}`}</Text>)}
+        {preview.supply.netShopping ? <View className="gap-2">
+          <Text className="font-bold text-ink">这餐的净采购调整</Text>
+          <Text className="text-copy-muted">以下数量替换这餐未改动的自动采购项，已抵扣分配到这餐的库存和其他清单数量。提交时重新核对全部来源。</Text>
+          {preview.supply.netShopping.lines.map(line => <Text key={line.key} className="text-copy-muted">{line.name}：{line.beforeAmount ?? "未列入"} → {line.afterAmount ?? "移除，无需补买"}</Text>)}
+          {preview.supply.netShopping.checks.map((check,index) => <Text key={index} className="text-copy-muted">{check}</Text>)}
+          {preview.supply.netShopping.status === "ready" ? <TouchableOpacity accessibilityRole="button" disabled={busy || !reviewed || saved || preview.planItem?.decision === "keep"} onPress={() => void syncShopping(true)}><Text className="font-bold text-brand">应用上述净采购调整</Text></TouchableOpacity> : null}
+        </View> : null}
         {preview.supply.checks.map((check,index) => <Text key={index} className="text-copy-muted">{check}</Text>)}
-        <Text className="text-copy-muted">清单数量是采购安排，不代表已入库或可食用。尚未考虑待吃餐和持久预留，不是最终补买量；上方按钮仍同步原料总需求。</Text>
+        <Text className="text-copy-muted">清单数量是采购安排，不代表已入库或可食用。净采购根据当前原料库存与清单计算；待吃成品不折算成原料，提交后仍需随实际消耗核对。</Text>
       </View> : null}
       <Text className="font-bold text-ink">共需 {preview.totalServings} 份</Text>
       {preview.participants.map(person => <Text key={person.membershipId} className="text-copy-muted">{person.name}：{person.servings} 份</Text>)}

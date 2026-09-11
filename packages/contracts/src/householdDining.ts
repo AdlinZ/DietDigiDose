@@ -37,6 +37,7 @@ export const householdDiningAllocationSchema = z.object({
 });
 export type HouseholdDiningAllocationInput = z.infer<typeof householdDiningAllocationSchema>;
 export const householdDiningSupplySchema = z.object({
+  netShopping: z.object({ status: z.enum(["ready","needs_review"]),fingerprint: z.string().regex(/^[a-f0-9]{64}$/).nullable(),checks: z.array(z.string()),lines: z.array(z.object({ key: z.string(),name: z.string(),beforeAmount: z.string().nullable(),afterAmount: z.string().nullable() }).strict()) }).strict().optional(),
   status: z.enum(["known","needs_review"]),otherMealCount: z.number().int().nonnegative(),checks: z.array(z.string()),
   demands: z.array(z.object({ food_name: z.string(),amount_value: z.number().finite().positive(),unit: inventoryUnitSchema,
     covered: z.number().finite().nonnegative().nullable(),missing: z.number().finite().nonnegative().nullable(),

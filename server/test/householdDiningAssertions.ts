@@ -322,6 +322,30 @@ export async function verifyDiningPlanChanges(service: HouseholdsService,plans: 
   await plans.addShopping(owner,planId,itemId,{ ...shoppingInput,idempotencyKey: 'dining-total-shopping-restored' });
   generated = (await service.shoppingList(owner,householdId)).find(row => row.id===generated.id)!;
   assert.equal(generated.amount,'15ml'); assert.equal(generated.version,3);
+  const netStock = await service.createInventory(owner,householdId,{ food_name: '花生油',quantity: '5ml',expiration_date: '2036-09-30' });
+  const netPreview = (await service.previewDiningAllocation(owner,householdId,supplyInput)).supply!.netShopping!;
+  assert.equal(netPreview.status,'ready');
+  assert.equal(netPreview.lines[0]?.beforeAmount,'15ml'); assert.equal(netPreview.lines[0]?.afterAmount,'10ml');
+  const netInput = { ...shoppingInput,idempotencyKey: 'dining-net-first',householdNetFingerprint: netPreview.fingerprint! };
+  await query("UPDATE household_inventory_items SET version=version+1 WHERE id=?",[netStock.id]);
+  await assert.rejects(() => plans.addShopping(owner,planId,itemId,netInput),/库存、餐次或清单已变化/);
+  assert.equal((await service.shoppingList(owner,householdId)).find(row => row.id===generated.id)?.amount,'15ml');
+  const freshNet = (await service.previewDiningAllocation(owner,householdId,supplyInput)).supply!.netShopping!;
+  const appliedNetInput = { ...netInput,householdNetFingerprint: freshNet.fingerprint! };
+  const netResults = await Promise.allSettled([plans.addShopping(owner,planId,itemId,appliedNetInput),plans.addShopping(owner,planId,itemId,appliedNetInput)]);
+  assert.ok(netResults.some(result => result.status==='fulfilled' && result.value.kind==='completed'));
+  for (const result of netResults) {
+    if (result.status==='fulfilled') {
+      assert.equal(result.value.kind,'completed');
+      if (result.value.kind==='completed') assert.equal(result.value.value.mode,'net_demand');
+    } else assert.match(String(result.reason),/家庭数据正在变化/);
+  }
+  generated = (await service.shoppingList(owner,householdId)).find(row => row.id===generated.id)!;
+  assert.equal(generated.amount,'10ml'); assert.equal(generated.version,4);
+  assert.equal((await plans.addShopping(owner,planId,itemId,appliedNetInput)).kind,'completed');
+  await assert.rejects(() => plans.addShopping(owner,planId,itemId,{ ...appliedNetInput,householdNetFingerprint: undefined }),/采购编号已用于/);
+  assert.equal((await service.inventory(owner,householdId)).find(row => row.id===netStock.id)?.quantity,'5ml');
+  await query("DELETE FROM household_inventory_items WHERE id=?",[netStock.id]);
   await service.updateShopping(member,householdId,String(generated.id),{ version: Number(generated.version),checked: true });
   await query("UPDATE meal_plan_items SET confirmed_at=NULL WHERE id=?",[itemId]);
   const purchasedChange = await plans.updateItem(owner,planId,itemId,{ version: 5,dining: null });

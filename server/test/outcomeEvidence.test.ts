@@ -48,3 +48,14 @@ test("dialogue preference provenance includes only executed persistent changes a
   assert.equal(formatOutcomeEvidence([],[],[],[],[{ ...statement,status: "awaiting_approval" }]).length,0);
   assert.equal(formatOutcomeEvidence([],[],[],[],[{ ...statement,result_json: { scope: "request",kitchenPreferences: { servings: 2 } } }]).length,0);
 });
+
+test("remaining food is a current observation, not inferred consumption or dislike",() => {
+  const current = { ...production,remaining_servings: 2,updated_at: "2026-09-12 12:00:00" };
+  const facts = formatOutcomeEvidence([current],[]);
+  assert.equal(facts.length,1); assert.equal(facts[0].kind,"production");
+  assert.equal(facts[0].servings,3); assert.equal(facts[0].remainingServings,2);
+  assert.equal(facts[0].observedAt,"2026-09-12T12:00:00Z");
+  assert.equal(formatOutcomeEvidence([{ ...current,remaining_servings: 0 }],[])[0].remainingServings,0);
+  assert.equal(formatOutcomeEvidence([{ ...current,remaining_servings: 3 }],[])[0].remainingServings,3);
+  assert.equal(formatOutcomeEvidence([production],[])[0].remainingServings,undefined);
+});

@@ -21,3 +21,20 @@ test("expired, withdrawn, future and malformed evidence cannot strengthen a pref
   }
   assert.deepEqual(repeatedDislikeRecipeIds([...base,{ ...event("c"),created_at: new Date("2026-09-12T10:00:00Z"),metadata_json: JSON.stringify(event("c").metadata_json) }],now),[1]);
 });
+
+test("explanations contain exactly the distinct evidence accepted by ranking",async () => {
+  const { formatLearningState } = await import("../src/modules/recommendations/preferenceEvidence.js");
+  const events = [event("a"),event("b"),event("c"),event("a"),
+    { ...event("view"),event_type: "view" },event("session","dislike","session"),event("busy","no_time"),event("large","too_much"),
+    { ...event("paused"),metadata_json: { ...event("paused").metadata_json,learningPaused: true } },
+    { ...event("withdrawn"),metadata_json: { ...event("withdrawn").metadata_json,withdrawn: true } }];
+  const data = { settings: null,events,recipes: [{ id: 1,title: "菜谱" }] };
+  const state = formatLearningState(data,now);
+  assert.deepEqual(state.items.map(item => item.recipeId),repeatedDislikeRecipeIds(events,now));
+  assert.deepEqual(state.items[0]?.evidence.map(item => item.id),["a","b","c"]);
+  assert.deepEqual(formatLearningState({ ...data,events: [...events].reverse() },now),state);
+  assert.deepEqual(formatLearningState({ ...data,events: events.filter(item => item.id!=="c") },now).items,[]);
+  assert.deepEqual(formatLearningState(data,now+31*24*60*60*1000).items,[]);
+  assert.deepEqual(formatLearningState({ ...data,settings: { enabled: false } },now).items,[]);
+  assert.deepEqual(formatLearningState({ ...data,settings: { overrides_json: { 1: { value: "neutral",updatedAt: "today" } } } },now).items,[]);
+});

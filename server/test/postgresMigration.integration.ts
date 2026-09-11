@@ -1683,6 +1683,11 @@ try {
   await pool.query("UPDATE user_health_profiles SET kitchen_constraints_json=$1::jsonb WHERE user_id=$2",[JSON.stringify(previousKitchen),user.id]);
   const outcomeFacts = (await recommendationsService.learningState(user.id)).observations;
   assert(outcomeFacts.some(fact => fact.kind === "production"));
+  const remainingFacts = (await pool.query("SELECT id,remaining_servings FROM prepared_meals WHERE user_id=$1",[user.id])).rows;
+  for (const fact of outcomeFacts.filter(fact => fact.kind === "production")) {
+    assert.equal(fact.remainingServings,Number(remainingFacts.find(row => `production:${row.id}`===fact.id)?.remaining_servings));
+    assert.ok(fact.observedAt);
+  }
   assert(outcomeFacts.some(fact => fact.kind === "inventory" && fact.valid));
   assert(outcomeFacts.some(fact => fact.kind === "inventory" && !fact.valid));
   assert(outcomeFacts.some(fact => fact.kind === "plan_change" && !fact.valid));

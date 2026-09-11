@@ -4103,6 +4103,8 @@ test("prepared meal intake correction is explicit, atomic, idempotent and does n
   assert.equal((await remove(secondId, "undo_eating")).response.status, 409);
   const evidence = await api("/api/v1/recommendations/preferences",{ token: account.token });
   const observations = (evidence.body as JsonObject).observations as JsonObject[];
+  assert.equal(observations.find(fact => fact.id === `production:${meal.id}`)?.remainingServings,1);
+  assert.ok(observations.find(fact => fact.id === `production:${meal.id}`)?.observedAt);
   assert.equal(observations.filter(fact => fact.kind === "eat").length,2);
   assert(observations.filter(fact => fact.kind === "eat").every(fact => fact.valid === false && fact.correctionId));
   assert.equal(observations.filter(fact => fact.kind === "discard" && fact.valid).length,1);

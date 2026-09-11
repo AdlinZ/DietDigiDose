@@ -29,3 +29,14 @@ test("an old account response cannot reveal its preferences after switching",asy
   expect(JSON.stringify(tree.toJSON())).not.toContain("蛋羹");
   act(() => tree.unmount());
 });
+
+test("shows zero remaining portions as an observation without calling it a taste preference",async () => {
+  mockRequest.mockResolvedValueOnce({ ...initial,items: [],observations: [{ id: "production:batch",kind: "production",title: "蛋羹",at: "2026-09-12T10:00:00Z",servings: 3,remainingServings: 0,observedAt: "2026-09-13T10:00:00Z",valid: true,explanation: "已制作，不等于已食用" }] });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<PreferenceLearningScreen />); });
+  const remaining = tree.root.findAllByType(Text).find(node => Array.isArray(node.props.children) && node.props.children[0] === "当前待吃余量 ");
+  expect(remaining?.props.children).toContain(0);
+  expect(remaining?.props.children).toContain("2026-09-13");
+  expect(JSON.stringify(tree.toJSON())).toContain("余量本身不说明是否喜欢或份量过大");
+  act(() => tree.unmount());
+});

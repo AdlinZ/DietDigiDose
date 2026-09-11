@@ -30,7 +30,10 @@
     "test:postgres-migration": "tsx test/postgresMigration.integration.ts",
     "test:e2e": "tsx --test --test-concurrency=1 test/milestone35.test.ts",
     "test:coverage": "tsx --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-lines=70 --test-coverage-branches=60 --test-coverage-functions=70 test/**/*.test.ts",
-    "test": "tsx --test --test-concurrency=1 test/**/*.test.ts"
+    "test": "tsx --test --test-concurrency=1 test/**/*.test.ts",
+    "db:postgres:backup": "tsx scripts/postgres-backup.ts backup",
+    "db:postgres:inspect": "tsx scripts/postgres-backup.ts inspect",
+    "db:postgres:restore": "tsx scripts/postgres-backup.ts restore"
   },
   "dependencies": {
     "@alicloud/dypnsapi20170525": "2.0.0",

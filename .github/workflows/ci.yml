@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -45,6 +45,11 @@ jobs:
       - run: pnpm -w provider:smoke
       - run: pnpm -w database:schema:check
       - run: pnpm -w database:boundary:check
+      - name: Install PostgreSQL backup client tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
       - run: pnpm --dir server test:postgres-migration
         env:
           POSTGRES_MIGRATION_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration
@@ -60,7 +65,7 @@ jobs:
       - run: pnpm -w audit:prod
 
   stability:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

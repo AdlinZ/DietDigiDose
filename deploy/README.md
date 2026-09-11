@@ -41,19 +41,26 @@
 
 ## 备份与隔离恢复
 
-使用 PostgreSQL custom archive 在线备份到宿主机的权限受限目录；不要把备份写入 Git 工作区或公开对象存储。
+使用版本化工具将 PostgreSQL custom archive 在线备份到宿主机权限受限目录。执行机器需要与源服务器主版本兼容的 `pg_dump`、`pg_restore`（staging 为 PostgreSQL 16）；API runtime 镜像没有内置这些客户端工具。不要把备份写入 Git 工作区或公开对象存储。
+
+通过部署机的安全环境变量设置 `DATABASE_BACKUP_URL`，不要将含密码的 URL 写在命令行参数或验收记录中。`BACKUP_OWNER` 填实际负责人，`CANDIDATE_GIT_SHA` 填被备份部署的完整提交 SHA：
 
 ```bash
 mkdir -p /secure-backups/dietdigidose
-docker compose -f deploy/docker-compose.staging.yml --project-directory deploy exec -T postgres \
-  pg_dump --username=dietdigidose --dbname=dietdigidose --format=custom --no-owner --no-acl \
-  > /secure-backups/dietdigidose/staging.dump
-sha256sum /secure-backups/dietdigidose/staging.dump
-docker compose -f deploy/docker-compose.staging.yml --project-directory deploy exec -T postgres \
-  psql --username=dietdigidose --dbname=dietdigidose --tuples-only --command \
-  "SELECT COUNT(*) FROM users; SELECT COUNT(*) FROM inventory_items; SELECT COUNT(*) FROM schema_migrations;"
+pnpm --dir server db:postgres:backup /secure-backups/dietdigidose/candidate-001
+pnpm --dir server db:postgres:inspect /secure-backups/dietdigidose/candidate-001
 ```
 
-恢复演练必须使用独立 PostgreSQL 实例或独立 compose project/volume。先对空目标应用同一提交的 Drizzle migrations，再以 `pg_restore --clean --if-exists --no-owner --no-acl` 恢复；随后启动隔离 API，验证 health 中 `databaseDriver=postgresql`、登录、库存读取、管理统计、媒体引用、关键表行数和用户隔离。记录 archive SHA-256、源/目标 PostgreSQL 版本、候选 SHA、负责人、RPO/RTO 和回滚结果。生产恢复前停止 API 与 worker，并保留目标恢复前快照。
+目录必须不存在。工具将 archive 与 manifest 保存为受限权限文件；manifest 记录 SHA-256、字节数、负责人、候选 SHA、PostgreSQL 版本、迁移版本、快照时间、完成时间、耗时和各业务/迁移表行数。`pg_dump` 和计数使用同一导出快照，避免在线写入使校验计数漂移。中断后没有完整 manifest 的目录不能作为已完成备份；保留原数据库重新备份。
+
+恢复演练必须预先建立空的独立 PostgreSQL 数据库，并用安全环境变量 `DATABASE_RESTORE_URL` 指向它。不要预先应用 migrations：archive 已包含模式和数据；不要把目标指向正在使用的 staging 或 production。
+
+```bash
+pnpm --dir server db:postgres:restore /secure-backups/dietdigidose/candidate-001
+```
+
+工具先校验 archive，再拒绝含已有关系对象的目标，使用 `pg_restore --single-transaction --exit-on-error --no-owner --no-acl` 恢复；不提供 `--clean` 或覆盖现有数据的开关。完成后比对快照表数；校验不一致时保留隔离目标供调查，不将其接为服务。原数据库和备份不被改动。
+
+随后启动指向恢复库的隔离 API，验证 health 中 `databaseDriver=postgresql`、登录、库存读取、管理统计、媒体引用、核心汇总和用户隔离。`durationMs` 是归档恢复与表数校验耗时，不包含应用启动和业务验收；实际 RTO 需记录从故障到服务恢复的完整时长。RPO 依据故障时间与 manifest 的 `snapshotAt` 计算，并记录期间可接受的数据损失。恢复失败继续使用原库；成功后才单独安排服务切换，切换前保留原配置和数据库安全副本。媒体对象需独立备份，数据库 archive 只保存引用。
 
 旧版 SQLite 文件的最终迁移与回滚步骤仍见 [`docs/postgresql-migration.md`](../docs/postgresql-migration.md)；`database-backup.js` 只用于该旧版迁移窗口，不是 PostgreSQL 日常备份工具。

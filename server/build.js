@@ -14,6 +14,7 @@ try {
       index: 'src/index.ts',
       worker: 'src/worker.ts',
       'database-backup': 'scripts/database-backup.ts',
+      'postgres-backup': 'scripts/postgres-backup.ts',
       'database-rehearsal': 'scripts/database-rehearsal.ts',
       'migrate-community-media': 'scripts/migrate-community-media.ts',
       'apply-postgres-schema': 'scripts/apply-postgres-schema.ts',

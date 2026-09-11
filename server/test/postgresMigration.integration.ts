@@ -2507,6 +2507,9 @@ try {
     await app.locals.closeRuntime();
   }
 
+  const { verifyPostgresBackup } = await import("./postgresBackupAssertions.js");
+  await verifyPostgresBackup(connectionString);
+
   console.log(JSON.stringify({
     ok: true,
     tables: report.tableCount,
@@ -2550,6 +2553,7 @@ try {
     postgresNotificationsRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,
+    postgresBackupRestoreVerified: true,
     postgresApplicationRuntimeVerified: true,
   }, null, 2));
 } finally {

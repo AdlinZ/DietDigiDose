@@ -652,3 +652,13 @@ SQLite/PG在原Agent执行事务内锁定/核对偏好版本，保存明确结�
 验证：服务端421项、最终应用API回归107项、脚本失败清理/清理失败/拒绝非回环HTTP共3项通过；同一CLI在SQLite和独立空PostgreSQL真实HTTP API下通过，测试账号最终不存在。PostgreSQL全套也通过；其前序仓储夹具留下的模拟在途Agent任务在启动HTTP runtime前置为cancelled，避免恢复器误启动模型，生产恢复逻辑不变。服务端静态与脚本语法检查通过，无数据库模式或客户端变动。
 
 外部证据（2026-09-12本机核对）：仓库STAGING_BACKEND_BASE_URL已设置为https://dietdigidose.top；本机curl的HTTPS握手失败、HTTP返回空响应，不能据此证明外部服务完全不可用，也不能证明staging验收通过。android-preview Environment存在四项preview签名Secret及摘要变量，不再按仓库级列表误判其缺失；未读取密钥值。已向用户询问现有运维入口和真机资源，期间继续本地实现。尚未运行外网写入烟测、部署、生成双端候选或真机验收，#105/#107等外部门槛和全部issue目标仍未完成。
+
+## #106 PostgreSQL在线备份与隔离恢复工具
+
+新增db:postgres:backup/inspect/restore及编译后postgres-backup入口。源/目标连接分别通过DATABASE_BACKUP_URL、DATABASE_RESTORE_URL传入；密码不放进进程参数，子进程诊断脱敏。备份要求负责人和完整候选SHA，使用pg_export_snapshot让custom archive和表计数共享同一在线快照。manifest保存字节数、SHA-256、源版本、迁移版本、快照时间和耗时；目录0700、文件0600，拒绝覆盖已有备份，缺失manifest或校验不符不视为有效备份。
+
+恢复只接受没有已有关系对象的隔离目标，不提供clean/覆盖开关。先核对归档，再以pg_restore单事务/失败即退出恢复并核对所有表计数；不会删除源数据库或原备份。文档明确先恢复完整archive、不预先重复建表，媒体需单独备份，应用验证后才安排连接切换；归档恢复耗时不冒充完整RTO，RPO需要真实故障时间。CI固定Ubuntu24.04与PostgreSQL16客户端，避免漂移到不匹配的dump/restore主版本。
+
+验证：独立PostgreSQL全套通过，新增两个临时库演练覆盖小数份量、用户归属、外键、源库后续修改、已有备份拒绝、非空目标拒绝、损坏归档拒绝及权限检查。服务端静态、构建和架构检查通过。另用编译后的CLI实际备份/inspect/恢复当前完整测试库（110表，migration77，Drizzle序号20），全部表计数一致；归档396259字节，SHA256为059fb1f9c1c79bc51240bba4e55932bd476a648122dfaef4d19ad94f8c733e7f。本地备份134ms、恢复及计数265ms，运行于PostgreSQL17.11，仅为本机测试数据结果。备份位于/tmp受限目录，未放入Git。
+
+这补齐可执行的PostgreSQL工具，不等同于已完成真实staging空库/上一候选升级、线上备份、恢复后登录与媒体访问或实际RPO/RTO验收。外部资源信息仍待用户补充，其他本地可实现工作继续，全部issue目标保持进行中。

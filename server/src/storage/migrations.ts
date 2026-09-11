@@ -2129,6 +2129,8 @@ const migrations: Migration[] = [
     },
   },
 
+  { version: 66,name: "reported_cooking_minutes",up(database) { database.exec("ALTER TABLE prepared_meals ADD COLUMN reported_cooking_minutes INTEGER CHECK(reported_cooking_minutes BETWEEN 1 AND 1440)"); } },
+
 ];
 
 export function runMigrations(database: Database.Database) {

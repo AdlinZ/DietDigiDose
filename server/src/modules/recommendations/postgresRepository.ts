@@ -37,7 +37,7 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
     WHERE user_id = $1 AND status = 'completed' AND updated_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'`, [userId])).rows.map((row) => Number(row.recipe_id)); }
   async preferenceOutcomes(userId: number) {
     const [production,events] = await Promise.all([
-      this.pool.query("SELECT id,recipe_id,food_name,produced_servings,produced_at FROM prepared_meals WHERE user_id=$1 AND produced_at>=CURRENT_TIMESTAMP-INTERVAL '30 days'",[userId]),
+      this.pool.query("SELECT id,recipe_id,food_name,produced_servings,produced_at,reported_cooking_minutes FROM prepared_meals WHERE user_id=$1 AND produced_at>=CURRENT_TIMESTAMP-INTERVAL '30 days'",[userId]),
       this.pool.query(`SELECT e.id,e.event_type,e.servings,e.created_at,e.diet_record_id,m.recipe_id,m.food_name,c.id AS correction_id,c.mode AS correction_mode,c.created_at AS corrected_at
         FROM prepared_meal_events e JOIN prepared_meals m ON m.id=e.prepared_meal_id AND m.user_id=e.user_id
         LEFT JOIN prepared_meal_intake_corrections c ON c.event_id=e.id AND c.user_id=e.user_id

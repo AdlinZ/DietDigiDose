@@ -4063,3 +4063,17 @@ test("preference controls suppress old evidence, pause accumulation and reject s
   assert.equal((isolated.body as JsonObject).version,1); assert.equal((isolated.body as JsonObject).items.length,0);
   assert.equal((await api("/api/v1/recommendations/preferences")).response.status,401);
 });
+
+test("reported cooking time is optional, validated and unchanged by completion replay",async () => {
+  const account = await register("actual-cooking-time@example.com");
+  const input = { idempotency_key: "actual-time-production-197",production: { food_name: "实测饭",produced_servings: 1,eaten_servings: 0,reported_cooking_minutes: 27 } };
+  const complete = (body: JsonObject) => api("/api/v1/diet-records/cooking-completions",{ token: account.token,method: "POST",body: JSON.stringify(body) });
+  assert.equal((await complete({ ...input,production: { ...input.production,reported_cooking_minutes: -1 } })).response.status,400);
+  const first = await complete(input);
+  assert.equal(first.response.status,201);
+  assert.equal((first.body as JsonObject).prepared_meal.reported_cooking_minutes,27);
+  const retry = await complete({ ...input,production: { ...input.production,reported_cooking_minutes: 99 } });
+  assert.equal((retry.body as JsonObject).prepared_meal.reported_cooking_minutes,27);
+  const empty = await complete({ ...input,idempotency_key: "actual-time-unknown-197",production: { food_name: "未知用时",produced_servings: 1,eaten_servings: 0 } });
+  assert.equal((empty.body as JsonObject).prepared_meal.reported_cooking_minutes,null);
+});

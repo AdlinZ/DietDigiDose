@@ -57,6 +57,13 @@
       "when": 1789147702013,
       "tag": "0007_good_punisher",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789148697442,
+      "tag": "0008_tearful_whistler",
+      "breakpoints": true
     }
   ]
 }

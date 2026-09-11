@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "d27d22fa0035946660ae3a0182d438e677cc357d6ae85d9e8ad9289e450fc9d1",
+  "sourceSchemaSha256": "256de675c49aabb9f59a63c2c533222e5a65415bb221a0d16f8ee1635e467c76",
   "tableCount": 97,
   "indexCount": 144,
   "foreignKeyCount": 151,
@@ -5958,6 +5958,13 @@
           "postgresType": "boolean",
           "transform": "0/1 -> false/true",
           "nullable": false
+        },
+        {
+          "name": "reported_cooking_minutes",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": true
         }
       ]
     },

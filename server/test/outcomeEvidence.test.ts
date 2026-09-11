@@ -33,3 +33,8 @@ test("restoring an applied meal change invalidates change evidence without infer
   const restored = formatOutcomeEvidence([],[],[],[{ ...change,status: "reverted" }])[0];
   assert.equal(restored.valid,false); assert.equal(restored.recipeId,1);
 });
+
+test("actual time remains an explicit report and missing history stays unknown",() => {
+  assert.match(formatOutcomeEvidence([production],[])[0].explanation,/未采集/);
+  assert.match(formatOutcomeEvidence([{ ...production,reported_cooking_minutes: 27 }],[])[0].explanation,/用户报告实际用时 27 分钟/);
+});

@@ -386,11 +386,12 @@ try {
 
   const production = await dietService.completeCooking(user.id, {
     idempotency_key: "postgres-prepared-production-190", inventory_item_ids: [], inventory_consumptions: [],
-    production: { food_name: "Postgres 三份待吃餐", produced_servings: 3, eaten_servings: 1,
+    production: { food_name: "Postgres 三份待吃餐", reported_cooking_minutes: 27, produced_servings: 3, eaten_servings: 1,
       meal_type: "晚餐", eaten_at: "2026-09-08", nutrition_per_serving: { calories: 100, protein: null } },
   });
   const prepared = production.prepared_meal as { id: string; remaining_servings: number };
   assert.equal(prepared.remaining_servings, 2);
+  assert.equal((production.prepared_meal as { reported_cooking_minutes: number }).reported_cooking_minutes,27);
   const halfMeal = { idempotency_key: "postgres-prepared-half-190", version: 1, type: "eat" as const,
     servings: 0.5, recorded_at: "2026-09-09" };
   const halves = await Promise.all([dietService.applyMealEvent(user.id, prepared.id, halfMeal), dietService.applyMealEvent(user.id, prepared.id, halfMeal)]);

@@ -29,6 +29,7 @@ export function prepareMealEvent(input: PreparedMealEventInput): PreparedMealEve
 export function formatPreparedMeal(row: Record<string, unknown>): PreparedMeal {
   const nutrition = typeof row.nutrition_per_serving_json === "string" ? JSON.parse(row.nutrition_per_serving_json) : row.nutrition_per_serving_json;
   return {
+    reported_cooking_minutes: row.reported_cooking_minutes == null ? null : Number(row.reported_cooking_minutes),
     is_reserved: Boolean(row.is_reserved),
     id: String(row.id), food_name: String(row.food_name), recipe_id: row.recipe_id == null ? null : Number(row.recipe_id),
     produced_servings: Number(row.produced_servings), remaining_servings: Number(row.remaining_servings),

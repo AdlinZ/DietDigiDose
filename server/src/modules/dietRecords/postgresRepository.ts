@@ -194,10 +194,10 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
   private async saveProduction(client: PoolClient, userId: number, input: PreparedCookingCompletion, consumedIds: number[], changes: unknown[]) {
     const production = input.production!;
     const id = randomUUID();
-    const inserted = await client.query(`INSERT INTO prepared_meals(id,user_id,idempotency_key,recipe_id,food_name,produced_servings,remaining_servings,nutrition_per_serving_json,planned_date,meal_type,storage_location,queue_item_id,plan_item_id)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13) RETURNING *`, [id, userId, input.idempotency_key, input.recipe_id ?? null, production.food_name, production.produced_servings,
+    const inserted = await client.query(`INSERT INTO prepared_meals(id,user_id,idempotency_key,recipe_id,food_name,produced_servings,remaining_servings,nutrition_per_serving_json,planned_date,meal_type,storage_location,queue_item_id,plan_item_id,reported_cooking_minutes)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14) RETURNING *`, [id, userId, input.idempotency_key, input.recipe_id ?? null, production.food_name, production.produced_servings,
         roundServings(production.produced_servings - production.eaten_servings), JSON.stringify(production.nutrition_per_serving), production.planned_date ?? null,
-        production.meal_type, production.storage_location ?? null, production.queue_item_id ?? null, production.plan_item_id ?? null]);
+        production.meal_type, production.storage_location ?? null, production.queue_item_id ?? null, production.plan_item_id ?? null,production.reported_cooking_minutes ?? null]);
     const meal = formatPreparedMeal(inserted.rows[0]);
     const record = production.eaten_servings > 0 ? await insertRecord(client, userId, mealConsumptionRecord(meal, production.eaten_servings, production.eaten_at!, production.eaten_time ?? null)) : null;
     const response = { prepared_meal: meal, diet_record: record, consumed_inventory_item_ids: consumedIds, inventory_consumption_changes: changes, repeated: false };

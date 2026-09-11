@@ -96,6 +96,8 @@ export default function CookingModeScreen() {
   // View Controls
   const [viewMode, setViewMode] = useState<"hero" | "timeline">("hero");
   const [showIngredientsDrawer, setShowIngredientsDrawer] = useState(false);
+  const [reportedMinutes,setReportedMinutes] = useState("");
+  useEffect(() => setReportedMinutes(""),[recipeId,queueItemId,user?.id]);
   const [producedServings, setProducedServings] = useState("1");
   const [eatenServings, setEatenServings] = useState("0");
   const [showFinishModal, setShowFinishModal] = useState(false);
@@ -741,6 +743,7 @@ export default function CookingModeScreen() {
         production: (await import("@dietdigidose/contracts")).mealProductionSchema.parse({
           food_name: title || "自制餐食",
           ...(queueContext?.plannedDate ? { planned_date: queueContext.plannedDate } : {}),
+          reported_cooking_minutes: reportedMinutes.trim() ? Number(reportedMinutes) : null,
           produced_servings: Number(producedServings), eaten_servings: Number(eatenServings),
           meal_type: getMealType(), eaten_at: toLocalDateKey(), eaten_time: toLocalTimeKey(),
           // Existing recipe nutrition has no verified serving basis for a multi-serving batch.
@@ -1505,6 +1508,8 @@ export default function CookingModeScreen() {
             </Text>
 
             <MealProductionFields produced={producedServings} eaten={eatenServings} onProducedChange={setProducedServings} onEatenChange={setEatenServings} />
+            <Text className="mt-3 text-copy-muted">实际制作花了几分钟（可留空，不使用菜谱估时）</Text>
+            <TextInput accessibilityLabel="用户报告的实际制作分钟" editable={!isCompleting && !completion.pending} value={reportedMinutes} onChangeText={setReportedMinutes} keyboardType="number-pad" placeholder="例如 25" className="mt-2 w-full rounded-xl border border-line p-3 text-ink" />
             {/* Nutrition Cards Preview */}
             {(calories || protein || carbs || fat) ? (
               <View className="w-full bg-background-secondary rounded-2xl p-4 border border-line mb-5">

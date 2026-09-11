@@ -7,7 +7,7 @@ export function formatOutcomeEvidence(production: Row[], events: Row[], inventor
   const facts = new Map<string,PreferenceOutcome>();
   for (const row of production) {
     const id = `production:${row.id}`;
-    facts.set(id,{ id,recipeId: row.recipe_id == null ? null : Number(row.recipe_id),title: String(row.food_name),kind: "production",at: iso(row.produced_at),servings: Number(row.produced_servings),valid: true,explanation: "已制作，不等于已食用；实际用时未采集" });
+    facts.set(id,{ id,recipeId: row.recipe_id == null ? null : Number(row.recipe_id),title: String(row.food_name),kind: "production",at: iso(row.produced_at),servings: Number(row.produced_servings),valid: true,explanation: row.reported_cooking_minutes == null ? "已制作，不等于已食用；实际用时未采集" : `已制作；用户报告实际用时 ${Number(row.reported_cooking_minutes)} 分钟，不是菜谱估时` });
   }
   for (const row of events) {
     if (row.event_type !== "eat" && row.event_type !== "discard") continue;

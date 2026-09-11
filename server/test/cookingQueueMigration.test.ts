@@ -7,6 +7,8 @@ test("queue migration separates legacy shared meal links without discarding cook
   const db = new Database(":memory:");
   try {
     db.exec(`CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, name TEXT);
+      CREATE TABLE prepared_meals(id TEXT PRIMARY KEY);
+      INSERT INTO prepared_meals VALUES('legacy-meal');
       CREATE TABLE cooking_queue_items(id TEXT PRIMARY KEY,user_id INTEGER,recipe_id INTEGER,status TEXT,
         deleted_at TEXT,recipe_snapshot_json TEXT,version INTEGER,updated_at TEXT);
       CREATE UNIQUE INDEX idx_cooking_queue_active_recipe ON cooking_queue_items(user_id,recipe_id)
@@ -21,6 +23,7 @@ test("queue migration separates legacy shared meal links without discarding cook
     const record = db.prepare("INSERT INTO schema_migrations VALUES(?, 'existing')");
     for (let version = 1; version <= 61; version++) record.run(version);
     runMigrations(db);
+    assert.equal((db.prepare("SELECT reported_cooking_minutes FROM prepared_meals").get() as { reported_cooking_minutes: number | null }).reported_cooking_minutes,null);
     const q = db.prepare("SELECT * FROM cooking_queue_items").get() as Record<string, unknown>;
     assert.equal(q.source_plan_item_id, "a");
     assert.equal((db.prepare("SELECT confirmed_at FROM meal_plan_items WHERE id='a'").get() as { confirmed_at: string }).confirmed_at,"2026-09-01");

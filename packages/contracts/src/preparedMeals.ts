@@ -13,6 +13,7 @@ const preciseServings = z.number().finite().max(1000).refine(
 const servings = preciseServings.pipe(z.number().min(0.000001));
 const nutrition = z.number().finite().nonnegative().max(1_000_000).nullable().optional();
 export const mealProductionSchema = z.object({
+  reported_cooking_minutes: z.number().int().min(1).max(1440).nullable().optional().describe("仅填写用户明确报告的实际制作分钟；不得由菜谱预计时间、步骤倒计时或请求耗时推测"),
   food_name: z.string().trim().min(1).max(120),
   produced_servings: servings,
   eaten_servings: preciseServings.pipe(z.number().min(0)).refine(value => value === 0 || value >= 0.000001, "食用份量最少 0.000001 份").default(0),
@@ -52,6 +53,7 @@ export const preparedMealEventSchema = z.object({
 export type MealProduction = z.infer<typeof mealProductionSchema>;
 export type PreparedMealEventInput = z.infer<typeof preparedMealEventSchema>;
 export type PreparedMeal = {
+  reported_cooking_minutes?: number | null;
   is_reserved: boolean;
   id: string; food_name: string; recipe_id: number | null; produced_servings: number; remaining_servings: number;
   nutrition_per_serving: { calories?: number | null; protein?: number | null; carbs?: number | null; fat?: number | null };

@@ -3,6 +3,11 @@ import type {
 } from "./types.js";
 
 export interface AdminConsoleRepository {
+  coreLoopSettings(): Promise<Row>;
+  updateCoreLoopSettings(enabled: boolean, version: number, environment: string | null, audit: AdminAudit): Promise<boolean>;
+  coreLoopActor(userId: number): Promise<Row | null>;
+  updateCoreLoopActor(userId: number, kind: string, version: number, audit: AdminAudit): Promise<boolean>;
+  coreLoopData(start: string, end: string): Promise<import("./coreLoopProjection.js").CoreLoopDataset>;
   stats(): Promise<Row>;
   funnel(days: number): Promise<Row[]>;
   auditLogs(input: AuditQuery): Promise<{ items: Row[]; total: number }>;

@@ -72,7 +72,7 @@ export class CookingQueueService {
       const request = await this.repository.recommendationRequest(userId, input.recommendationRequestId);
       const candidate = parseJson<Array<Record<string, unknown>>>(request?.results_json, []).find(item => Number(item.recipeId) === input.recipeId);
       if (!request || !candidate) throw new CookingQueueError(409, "推荐来源已失效或与菜谱不符，请返回推荐页重试", "RECOMMENDATION_SOURCE_MISMATCH");
-      selectionEvidence = { version: 1, requestId: input.recommendationRequestId, recipeId: input.recipeId,
+      selectionEvidence = { version: 1, selectedAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), requestId: input.recommendationRequestId, recipeId: input.recipeId,
         scoringVersion: request.scoring_version, inventory: (candidate.features as Record<string, unknown> | undefined)?.inventoryEvidence ?? null };
     }
     const result = await this.repository.enqueue({

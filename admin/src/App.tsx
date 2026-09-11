@@ -7,6 +7,7 @@ const AdminLayout = lazy(() => import('./layout/AdminLayout'));
 const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
+const CoreLoops = lazy(() => import('./pages/CoreLoops'));
 const Users = lazy(() => import('./pages/Users'));
 const Recipes = lazy(() => import('./pages/Recipes'));
 const Community = lazy(() => import('./pages/Community'));
@@ -100,6 +101,7 @@ function App() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="core-loops" element={<CoreLoops />} />
         <Route path="users" element={<Users />} />
         <Route path="user-level-rule" element={<UserLevelRule />} />
         <Route path="ingredients" element={<Ingredients />} />

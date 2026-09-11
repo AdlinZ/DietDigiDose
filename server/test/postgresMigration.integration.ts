@@ -1670,6 +1670,47 @@ try {
   await pool.query("DELETE FROM cooking_queue_items WHERE id=$1",[selectedQueue.item.id]);
   assert.deepEqual((await dietService.completeCooking(user.id, selectedProductionInput)).selection_evidence, queuedSelection);
 
+  const oldMetricEnvironment = process.env.CORE_LOOP_ENVIRONMENT;
+  process.env.CORE_LOOP_ENVIRONMENT = "pg-metric-fixture";
+  try {
+    const settings = await adminConsoleService.coreLoopSettings();
+    await adminConsoleService.configureCoreLoops({ enabled: true,version: settings.version },adminFoodContext);
+    const classifications = await Promise.allSettled([
+      adminConsoleService.classifyCoreLoopActor(user.id,{ kind: "real",version: 0 },adminFoodContext),
+      adminConsoleService.classifyCoreLoopActor(user.id,{ kind: "real",version: 0 },adminFoodContext),
+    ]);
+    assert.equal(classifications.filter(item => item.status === "fulfilled").length,1);
+    const metricStock = await inventoryService.create(user.id,{ food_name: "PG闭环鸡蛋",category: "蛋类",quantity: "2个",quantity_value: 2,quantity_unit: "piece",expiration_date: "2036-09-20",storage_location: "冷藏" });
+    const metricRecipe = (await pool.query("INSERT INTO recipes(title,description,cook_time,difficulty,category,ingredients_json,steps_json,status,quality_status,serving_size) VALUES('PG闭环蒸蛋','验收',10,'简单','PG闭环验收',$1::jsonb,$2::jsonb,'approved','trusted',1) RETURNING id",[JSON.stringify([{ name: "PG闭环鸡蛋",amount: "1枚" }]),JSON.stringify(["蒸熟"])])).rows[0].id;
+    const metricPage = await recommendationsService.page(user.id,{ surface: "inventory",category: "PG闭环验收",pageSize: 10 });
+    assert.equal(metricPage.items[0].recipeId,metricRecipe);
+    const metricQueue = await new CookingQueueService(cookingQueueRepository).create(user.id,{ recipeId: metricRecipe,recommendationRequestId: metricPage.requestId });
+    const metricInput = { idempotency_key: "pg-core-loop-metric",recipe_id: metricRecipe,inventory_item_ids: [],inventory_consumptions: [{ item_id: metricStock.id,version: metricStock.version,mode: "amount" as const,amount_value: 1,unit: "piece" as const }],
+      production: { food_name: "PG闭环制作",produced_servings: 1,eaten_servings: 1,meal_type: "午餐",nutrition_per_serving: {},queue_item_id: metricQueue.item.id,queue_version: metricQueue.item.version } };
+    const oldFunnelWriter = dietRepository.recordFunnelEvent;
+    dietRepository.recordFunnelEvent = async () => { throw new Error("injected analytics outage"); };
+    let metricMade;
+    try { metricMade = await dietService.completeCooking(user.id,metricInput); } finally { dietRepository.recordFunnelEvent = oldFunnelWriter; }
+    const metricReport = await adminConsoleService.coreLoops({ details: "1" });
+    assert.equal(metricReport.verifiedUsers,1,JSON.stringify(metricReport));
+    assert.equal(metricReport.verifiedLoops,1);
+    process.env.CORE_LOOP_ENVIRONMENT = "pg-other-fixture";
+    assert.equal((await adminConsoleService.coreLoops({})).status,"not_collected");
+    assert.equal((await adminConsoleService.coreLoopSettings()).enabled,false);
+    process.env.CORE_LOOP_ENVIRONMENT = "pg-metric-fixture";
+
+    await dietService.completeCooking(user.id,metricInput);
+    assert.equal((await adminConsoleService.coreLoops({})).verifiedLoops,1);
+    await adminConsoleService.classifyCoreLoopActor(user.id,{ kind: "automation",version: 1 },adminFoodContext);
+    assert.equal((await adminConsoleService.coreLoops({})).verifiedLoops,0);
+    await adminConsoleService.classifyCoreLoopActor(user.id,{ kind: "real",version: 2 },adminFoodContext);
+    await dietService.remove(user.id,Number((metricMade.diet_record as Record<string,unknown>).id),"undo_eating");
+    assert.equal((await adminConsoleService.coreLoops({})).verifiedLoops,0);
+    assert(Number((await pool.query("SELECT COUNT(*) n FROM admin_audit_logs WHERE action='core_loop.classify' AND resource_id=$1",[String(user.id)])).rows[0].n)>=3);
+  } finally {
+    if (oldMetricEnvironment === undefined) delete process.env.CORE_LOOP_ENVIRONMENT; else process.env.CORE_LOOP_ENVIRONMENT = oldMetricEnvironment;
+  }
+
   for (const reason of ["no_time","too_much","dislike"]) {
     for (let index=0;index<3;index++) await recommendationsService.event(user.id,{ ...recommendationEventInput,eventType: "skip",metadata: { reason,scope: "long_term" },idempotencyKey: `preference-${reason}-${index}` });
     assert.deepEqual(await recommendationsRepository.skippedRecipeIds(user.id),reason === "dislike" ? [recommendedRecipeId] : []);

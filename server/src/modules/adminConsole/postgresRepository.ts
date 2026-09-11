@@ -1,3 +1,4 @@
+import { coreLoopInventoryIds } from "./coreLoopProjection.js";
 import type { Pool, PoolClient } from "pg";
 import type { AdminConsoleRepository } from "./repository.js";
 import type { AdminAudit, AuditQuery, Row, ScanQuery, TrashResource, UsageQuery } from "./types.js";
@@ -9,6 +10,46 @@ const TABLES: Record<TrashResource, string> = {
 export class PostgresAdminConsoleRepository implements AdminConsoleRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+
+  async coreLoopSettings() { return (await this.pool.query("SELECT * FROM core_loop_metric_settings WHERE id=1")).rows[0] ?? { enabled: 0,coverage_start: null,version: 1 }; }
+  async updateCoreLoopSettings(enabled: boolean, version: number, environment: string | null, audit: AdminAudit) { return this.tx(async client => {
+    await client.query("INSERT INTO core_loop_metric_settings(id) VALUES(1) ON CONFLICT(id) DO NOTHING");
+    const result = await client.query("UPDATE core_loop_metric_settings SET enabled=$1,coverage_start=CASE WHEN $1=1 THEN CASE WHEN environment=$3 THEN COALESCE(coverage_start,CURRENT_TIMESTAMP) ELSE CURRENT_TIMESTAMP END ELSE coverage_start END,environment=CASE WHEN $1=1 THEN $3 ELSE environment END,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=1 AND version=$2 RETURNING id",[Number(enabled),version,environment]);
+    if (!result.rowCount) return false; await this.insertAudit(client,audit); return true;
+  }); }
+  async coreLoopActor(userId: number) { return (await this.pool.query("SELECT u.id AS user_id,COALESCE(c.kind,'unknown') AS kind,COALESCE(c.version,0) AS version FROM users u LEFT JOIN core_loop_actor_classifications c ON c.user_id=u.id WHERE u.id=$1",[userId])).rows[0] ?? null; }
+  async updateCoreLoopActor(userId: number, kind: string, version: number, audit: AdminAudit) { return this.tx(async client => {
+    if (!(await client.query("SELECT id FROM users WHERE id=$1 FOR KEY SHARE",[userId])).rowCount) return false;
+    const result = version === 0 ? await client.query("INSERT INTO core_loop_actor_classifications(user_id,kind,classified_by) VALUES($1,$2,$3) ON CONFLICT(user_id) DO NOTHING RETURNING user_id",[userId,kind,audit.adminUserId])
+      : await client.query("UPDATE core_loop_actor_classifications SET kind=$1,classified_by=$2,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=$3 AND version=$4 RETURNING user_id",[kind,audit.adminUserId,userId,version]);
+    if (!result.rowCount) return false; await this.insertAudit(client,audit); return true;
+  }); }
+  async coreLoopData(start: string, end: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      const productions = (await client.query(`SELECT m.id,m.user_id,m.idempotency_key,m.recipe_id,m.produced_at,c.kind,
+        jsonb_build_object('selection_evidence',m.result_json->'selection_evidence','inventory_consumption_changes',m.result_json->'inventory_consumption_changes','metric_environment',m.result_json->'metric_environment') AS result_json,
+        r.created_at AS selection_created_at FROM prepared_meals m JOIN users u ON u.id=m.user_id LEFT JOIN core_loop_actor_classifications c ON c.user_id=m.user_id
+        LEFT JOIN recipe_recommendation_requests r ON r.id=m.result_json->'selection_evidence'->>'requestId' AND r.user_id=m.user_id
+        WHERE EXISTS(SELECT 1 FROM prepared_meal_events e WHERE e.prepared_meal_id=m.id AND e.event_type='eat' AND e.created_at>=$1::timestamptz AND e.created_at<$2::timestamptz)`,[start,end])).rows as Row[];
+      const ids = productions.map(row => row.id);
+      const intakes = (await client.query(`SELECT e.prepared_meal_id,e.user_id,e.servings,e.created_at,e.diet_record_id,d.id IS NOT NULL AS record_exists,
+        EXISTS(SELECT 1 FROM prepared_meal_intake_corrections c WHERE c.event_id=e.id) AS corrected
+        FROM prepared_meal_events e LEFT JOIN diet_records d ON d.id=e.diet_record_id AND d.user_id=e.user_id
+        WHERE e.event_type='eat' AND e.prepared_meal_id=ANY($1::text[])`,[ids])).rows as Row[];
+      const logs = (await client.query("SELECT user_id,inventory_item_id,action,source,quantity_before,quantity_after,delta_value,idempotency_key,created_at FROM inventory_change_logs WHERE inventory_item_id=ANY($1::integer[]) AND (action='created' OR source='cooking')",[coreLoopInventoryIds(productions)])).rows as Row[];
+      const legacy = (await client.query(`SELECT m.id,m.user_id,m.recipe_id,m.diet_record_id,m.created_at,c.kind,d.id IS NOT NULL AS record_exists
+        FROM cooking_completions m JOIN users u ON u.id=m.user_id LEFT JOIN core_loop_actor_classifications c ON c.user_id=m.user_id
+        LEFT JOIN diet_records d ON d.id=m.diet_record_id AND d.user_id=m.user_id WHERE m.created_at>=$1::timestamptz AND m.created_at<$2::timestamptz`,[start,end])).rows as Row[];
+      const shared = (await client.query(`SELECT m.id,m.created_by_user_id,m.created_at AS produced_at,c.kind,e.diet_record_id,e.servings,e.created_at AS intake_at
+        FROM household_meal_batches m JOIN household_meal_events e ON e.meal_id=m.id AND e.user_id=m.created_by_user_id
+        JOIN diet_records d ON d.id=e.diet_record_id AND d.user_id=e.user_id LEFT JOIN core_loop_actor_classifications c ON c.user_id=e.user_id
+        WHERE e.created_at>=$1::timestamptz AND e.created_at<$2::timestamptz AND NOT EXISTS(SELECT 1 FROM household_meal_intake_corrections x WHERE x.event_id=e.id)`,[start,end])).rows as Row[];
+      const settings = (await client.query("SELECT * FROM core_loop_metric_settings WHERE id=1")).rows[0] ?? { enabled: 0,version: 1,coverage_start: null };
+      await client.query("COMMIT"); return { productions,intakes,logs,legacy,shared,settings };
+    } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
 
   async stats() { return (await this.pool.query(`SELECT
     (SELECT COUNT(*)::integer FROM users) AS users,

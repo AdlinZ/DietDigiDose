@@ -19,14 +19,15 @@ export type CoreLoopFact = {
   deductions: Array<{ itemId: number; before: number | null; after: number | null; amount: number | null; verified: boolean }>;
   intake: Array<{ recordId: string; actorKey: string; servings: number; committedAt: string; survivesCorrection: boolean }>;
 };
-export type CoreLoopReason = "included" | "non_target_environment" | "excluded_actor" | "actor_unclassified"
+export type CoreLoopReason = "included" | "environment_unknown" | "non_target_environment" | "excluded_actor" | "actor_unclassified"
   | "not_producer" | "selection_missing" | "selection_mismatch" | "stock_evidence_missing"
   | "no_inventory_match" | "deduction_evidence_missing" | "no_verified_deduction" | "no_surviving_intake" | "invalid_time";
 export type CoreLoopEvaluation = { productionId: string; actorKey: string; reason: CoreLoopReason; completedAt: string | null };
 
 function timestamp(value: string): number {
   // DB adapters normalize SQLite UTC timestamps before calling this function.
-  return /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? Date.parse(value) : NaN;
+  // SQLite stores commit times to seconds; compare both adapters at that precision.
+  return /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? Math.floor(Date.parse(value) / 1000) * 1000 : NaN;
 }
 
 export function coreLoopWeek(date: string) {
@@ -43,6 +44,8 @@ export function coreLoopWeek(date: string) {
 
 export function evaluateCoreLoop(fact: CoreLoopFact, targetEnvironment: string): CoreLoopEvaluation {
   const result = (reason: CoreLoopReason, completedAt: string | null = null) => ({ productionId: fact.productionId, actorKey: fact.actorKey, reason, completedAt });
+  if (["demo","test","automation"].includes(fact.actorClass)) return result("excluded_actor");
+  if (!fact.environment || fact.environment === "unknown") return result("environment_unknown");
   if (!targetEnvironment || fact.environment !== targetEnvironment) return result("non_target_environment");
   if (!fact.actorKey || !fact.productionId || fact.actorClass === "unknown") return result("actor_unclassified");
   if (fact.actorClass !== "real") return result("excluded_actor");
@@ -86,7 +89,7 @@ export function summarizeCoreLoopWeek(facts: CoreLoopFact[], input: { date: stri
   let status = !input.targetEnvironment || !Number.isFinite(coverage) || coverage >= end || now < start ? "not_collected"
     : coverage > start ? "partial" : now < end ? "in_progress" : "complete";
   const evaluations = facts.map(fact => evaluateCoreLoop(fact, input.targetEnvironment));
-  const unknownReasons = new Set<CoreLoopReason>(["actor_unclassified", "selection_missing", "stock_evidence_missing", "deduction_evidence_missing", "invalid_time"]);
+  const unknownReasons = new Set<CoreLoopReason>(["environment_unknown", "actor_unclassified", "selection_missing", "stock_evidence_missing", "deduction_evidence_missing", "invalid_time"]);
   const unknown = evaluations.filter((evaluation,index) => unknownReasons.has(evaluation.reason) && facts[index].intake.some(item =>
     item.survivesCorrection && item.actorKey === facts[index].actorKey && item.servings > 0
     && (!Number.isFinite(timestamp(item.committedAt)) || (timestamp(item.committedAt) >= start && timestamp(item.committedAt) < end && timestamp(item.committedAt) <= now)))).length;

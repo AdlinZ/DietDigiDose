@@ -2253,6 +2253,25 @@ const migrations: Migration[] = [
     ALTER TABLE household_shopping_items ADD COLUMN source_generated_version INTEGER;
     CREATE UNIQUE INDEX idx_household_shopping_plan_demand ON household_shopping_items(source_plan_item_id,source_demand_key) WHERE source_plan_item_id IS NOT NULL;`);
   } },
+  { version: 78, name: "core_loop_metric_configuration", up(database) {
+    database.exec(`CREATE TABLE core_loop_metric_settings (
+      id INTEGER PRIMARY KEY CHECK(id=1),
+      environment TEXT,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      coverage_start DATETIME,
+      version INTEGER NOT NULL DEFAULT 1,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO core_loop_metric_settings(id) VALUES(1);
+    CREATE TABLE core_loop_actor_classifications (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('real','demo','test','automation','unknown')),
+      version INTEGER NOT NULL DEFAULT 1,
+      classified_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`);
+  } },
+
 ];
 
 export function runMigrations(database: Database.Database) {

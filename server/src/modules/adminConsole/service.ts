@@ -1,3 +1,7 @@
+import { z } from "zod";
+import { coreLoopEnvironment } from "../../services/coreLoopEnvironment.js";
+import { coreLoopWeek, summarizeCoreLoopWeek, CORE_LOOP_TIME_ZONE } from "./coreLoopMetric.js";
+import { projectCoreLoops, utc } from "./coreLoopProjection.js";
 import { aiErrorTypeForCode, sanitizeAIErrorMessage } from "../../services/aiErrors.js";
 import { AdminConsoleError } from "./errors.js";
 import type { AdminConsoleRepository } from "./repository.js";
@@ -15,6 +19,42 @@ function numeric(row: Row, keys: string[]) { const copy = { ...row }; for (const
 export class AdminConsoleService {
   private readonly repository: AdminConsoleRepository;
   constructor(repository: AdminConsoleRepository) { this.repository = repository; }
+
+  async coreLoopSettings() {
+    const row = await this.repository.coreLoopSettings();
+    return { enabled: Boolean(row.enabled) && row.environment === coreLoopEnvironment(), version: Number(row.version), coverageStart: row.environment === coreLoopEnvironment() && row.coverage_start ? utc(row.coverage_start) : null,
+      environment: coreLoopEnvironment(), timeZone: CORE_LOOP_TIME_ZONE };
+  }
+  async configureCoreLoops(input: unknown, context: AuditContext) {
+    const parsed = z.object({ enabled: z.boolean(),version: z.number().int().positive() }).strict().safeParse(input);
+    if (!parsed.success) throw new AdminConsoleError(400,"采集配置无效");
+    if (parsed.data.enabled && !coreLoopEnvironment()) throw new AdminConsoleError(409,"请先在服务端配置 CORE_LOOP_ENVIRONMENT");
+    if (!await this.repository.updateCoreLoopSettings(parsed.data.enabled,parsed.data.version,coreLoopEnvironment(),{ ...context,action: "core_loop.configure",resourceType: "core_loop",resourceId: 1,summary: `周闭环统计 ${parsed.data.enabled ? "启用" : "停用"}` }))
+      throw new AdminConsoleError(409,"采集配置已变化，请刷新后重试");
+    return this.coreLoopSettings();
+  }
+  async coreLoopActor(userId: number) {
+    if (!Number.isSafeInteger(userId) || userId <= 0) throw new AdminConsoleError(400,"用户 ID 无效");
+    const row = await this.repository.coreLoopActor(userId);
+    if (!row) throw new AdminConsoleError(404,"用户不存在");
+    return { userId,actorKey: `user:${userId}`,kind: String(row.kind),version: Number(row.version) };
+  }
+  async classifyCoreLoopActor(userId: number, input: unknown, context: AuditContext) {
+    await this.coreLoopActor(userId);
+    const parsed = z.object({ kind: z.enum(["real","test","demo","automation","unknown"]),version: z.number().int().min(0) }).strict().safeParse(input);
+    if (!parsed.success) throw new AdminConsoleError(400,"账号分类无效");
+    if (!await this.repository.updateCoreLoopActor(userId,parsed.data.kind,parsed.data.version,{ ...context,action: "core_loop.classify",resourceType: "user",resourceId: userId,summary: `周闭环账号分类：${parsed.data.kind}` }))
+      throw new AdminConsoleError(409,"账号分类已变化，请刷新后重试");
+    return this.coreLoopActor(userId);
+  }
+  async coreLoops(query: Row) {
+    const date = typeof query.date === "string" ? query.date : new Intl.DateTimeFormat("en-CA",{ timeZone: CORE_LOOP_TIME_ZONE,year: "numeric",month: "2-digit",day: "2-digit" }).format(new Date());
+    let week; try { week = coreLoopWeek(date); } catch { throw new AdminConsoleError(400,"统计日期无效"); }
+    const data = await this.repository.coreLoopData(week.start,week.end);
+    const report = summarizeCoreLoopWeek(projectCoreLoops(data),{ date,targetEnvironment: coreLoopEnvironment() || "",coverageStart: data.settings.enabled && data.settings.environment === coreLoopEnvironment() && data.settings.coverage_start ? utc(data.settings.coverage_start) : null,now: new Date().toISOString() });
+    const { evaluations,...summary } = report;
+    return { ...summary,environment: coreLoopEnvironment(), ...(query.details === "1" ? { evaluations: evaluations.slice(0,200),detailsTruncated: evaluations.length > 200 } : {}) };
+  }
 
   stats() { return this.repository.stats(); }
   async funnel(query: Row) { const days = Math.max(1, Math.min(90, Number(query.days) || 30));

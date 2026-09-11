@@ -10,6 +10,11 @@ function handle(error: unknown, res: Response, next: NextFunction) {
 
 export function createAdminConsoleRouter(service: AdminConsoleService) {
   const router = Router();
+  router.get("/core-loops", (req,res,next) => { void service.coreLoops(req.query).then(value => res.json(value)).catch(error => handle(error,res,next)); });
+  router.get("/core-loops/settings", (_req,res,next) => { void service.coreLoopSettings().then(value => res.json(value)).catch(error => handle(error,res,next)); });
+  router.put("/core-loops/settings", (req: AuthRequest,res,next) => { void service.configureCoreLoops(req.body,context(req)).then(value => res.json(value)).catch(error => handle(error,res,next)); });
+  router.get("/core-loops/actors/:userId", (req,res,next) => { void service.coreLoopActor(Number(req.params.userId)).then(value => res.json(value)).catch(error => handle(error,res,next)); });
+  router.put("/core-loops/actors/:userId", (req: AuthRequest,res,next) => { void service.classifyCoreLoopActor(Number(req.params.userId),req.body,context(req)).then(value => res.json(value)).catch(error => handle(error,res,next)); });
   router.get("/stats", (_req, res, next) => { void service.stats().then((value) => res.json(value)).catch(next); });
   router.get("/funnel", (req, res, next) => { void service.funnel(req.query).then((value) => res.json(value)).catch(next); });
   router.get("/audit-logs", (req, res, next) => { void service.auditLogs(req.query).then((value) => res.json(value)).catch(next); });

@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "cbaaf9f0eac661f204e1c172718b3ae4edca602d4e23e218d36910a4dd6cbeff",
-  "tableCount": 105,
+  "sourceSchemaSha256": "cd65b83c15e9546809a4e33981a06e3f72b1c160675d609a3d1563a18fe08da0",
+  "tableCount": 107,
   "indexCount": 157,
-  "foreignKeyCount": 168,
+  "foreignKeyCount": 170,
   "tables": [
     {
       "name": "admin_audit_logs",
@@ -2168,6 +2168,118 @@
           "postgresType": "text",
           "transform": "identity",
           "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "core_loop_actor_classifications",
+      "autoIncrement": false,
+      "primaryKey": [
+        "user_id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "classified_by",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "set null"
+        },
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "classified_by",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "updated_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "core_loop_metric_settings",
+      "autoIncrement": false,
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [],
+      "columns": [
+        {
+          "name": "id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "environment",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "enabled",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "coverage_start",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
         }
       ]
     },

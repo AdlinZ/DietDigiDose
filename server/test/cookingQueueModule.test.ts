@@ -46,7 +46,8 @@ test("queue selection snapshots belong to the user and recipe and cannot be take
     enqueue: async input => { snapshot = input.snapshot; return { kind: "created", row }; },
   }));
   await service.create(7, { recipeId: 1, recommendationRequestId: "request" });
-  assert.deepEqual(snapshot?.selectionEvidence, { version: 1, requestId: "request", recipeId: 1, scoringVersion: "v1", inventory });
+  assert.equal(typeof (snapshot?.selectionEvidence as Record<string, unknown>).selectedAt, "string");
+  assert.deepEqual({ ...(snapshot?.selectionEvidence as Record<string, unknown>), selectedAt: undefined }, { selectedAt: undefined, version: 1, requestId: "request", recipeId: 1, scoringVersion: "v1", inventory });
   await assert.rejects(service.create(8, { recipeId: 1, recommendationRequestId: "request" }), /推荐来源/);
   await assert.rejects(service.create(7, { recipeId: 2, recommendationRequestId: "request" }), /推荐来源/);
   await service.create(7, { recipeId: 1 });

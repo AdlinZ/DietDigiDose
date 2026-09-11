@@ -5,6 +5,9 @@ import { AdminConsoleService } from "../src/modules/adminConsole/service.js";
 
 function repository(overrides: Partial<AdminConsoleRepository> = {}): AdminConsoleRepository {
   return {
+    coreLoopSettings: async () => ({ enabled: 0,version: 1,coverage_start: null }), updateCoreLoopSettings: async () => false,
+    coreLoopActor: async () => null, updateCoreLoopActor: async () => false,
+    coreLoopData: async () => ({ productions: [],intakes: [],logs: [],legacy: [],shared: [],settings: { enabled: 0,version: 1,coverage_start: null } }),
     stats: async () => ({}), funnel: async () => [], auditLogs: async () => ({ items: [], total: 0 }),
     scanJobs: async () => [], scanJob: async () => null, conversations: async () => [],
     conversation: async () => ({ user: null, messages: [] }), runDiagnostic: async () => null,

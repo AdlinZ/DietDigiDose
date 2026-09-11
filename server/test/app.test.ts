@@ -1,3 +1,4 @@
+import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
 import { SqlitePlanMaintenanceRepository } from "../src/modules/planMaintenance/sqliteRepository.js";
 import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
@@ -4247,4 +4248,14 @@ test("portion-aware recipe substitution and restoration preserve execution quant
   db.prepare("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json) VALUES('portion-meal','portion-plan',?,'2026-09-12','午餐','原菜',?,'[{\"name\":\"大米\",\"amount\":\"150g\"}]')").run(owner.user.id,original);
   await verifyPortionReplacement(new SqliteMealPlansRepository(db),owner.user.id,original,replacement,async () =>
     JSON.parse((db.prepare("SELECT constraints_json FROM meal_plans WHERE id='portion-plan'").get() as JsonObject).constraints_json).executionItems["portion-meal"]);
+});
+
+
+test("maintenance event evaluates and applies one affected meal without changing a confirmed meal",async () => {
+  const owner = await register("maintenance-flow@example.com");
+  await verifyMaintenanceFlow(new SqliteMaintenanceQueueRepository(db),owner.user.id,async (sql,args = []) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...args) as JsonObject[];
+    statement.run(...args); return [];
+  });
 });

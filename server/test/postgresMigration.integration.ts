@@ -1,3 +1,4 @@
+import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { randomUUID } from "node:crypto";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
 import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
@@ -2340,6 +2341,11 @@ try {
   } finally { await blockedWriter.query("SET lock_timeout=0"); blockedWriter.release(); allowCommit.resolve(); }
   assert.equal((await applyingInputs).kind,"completed");
   await pool.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'锁释放后','其他','1份','2026-09-20')",[user.id]);
+
+  await verifyMaintenanceFlow(new PostgresMaintenanceQueueRepository(pool),queueOtherUser,async (sql,args = []) => {
+    let parameter = 0;
+    return (await pool.query(sql.replace(/\?/g,() => `$${++parameter}`),args)).rows;
+  });
 
   const originalPortionRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('原菜','[{\"name\":\"大米\",\"amount\":\"100g\"}]','[]','approved',1) RETURNING id")).rows[0].id);
   const replacementPortionRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('新菜','[{\"name\":\"大米\",\"amount\":\"200g\"}]','[]','approved',4) RETURNING id")).rows[0].id);

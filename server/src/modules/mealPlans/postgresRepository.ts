@@ -1,3 +1,4 @@
+import { lockMealPlanning } from "./postgresLock.js";
 import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop, planMetadataPreservesItem, type PlanMetadataEdit } from "./changePolicy.js";
 import { prepareDraftActivation } from "./draftActivation.js";
@@ -26,7 +27,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   async activateDraft(userId: number, id: string, version: number) {
     return this.transaction(async client => {
-      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`meal-plan-activation:${userId}`]);
+      await lockMealPlanning(client,userId);
       const selected = await client.query("SELECT * FROM meal_plans WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [id,userId]);
       const current = selected.rows[0] as Row | undefined;
       if (!current) return { kind: "not_found" as const };
@@ -60,6 +61,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   async updateDraft(userId: number, id: string, input: UpdateCookingPlanDraftInput) {
     return this.transaction(async client => {
+      await lockMealPlanning(client,userId);
       const selected = await client.query("SELECT * FROM meal_plans WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [id, userId]);
       const current = selected.rows[0] as Row | undefined;
       if (!current) return { kind: "not_found" as const };
@@ -119,6 +121,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   async updatePlan(userId: number, id: string, input: MealPlanUpdateInput) {
     return this.transaction(async client => {
+      await lockMealPlanning(client,userId);
     const current = await this.getPlan(client, id, userId, false);
     if (!current) return { kind: "not_found" as const };
     const startDate = input.startDate ?? String(current.start_date);
@@ -135,6 +138,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   async removePlan(userId: number, id: string, version: number) {
     return this.transaction(async client => {
+      await lockMealPlanning(client,userId);
     await this.assertPlanEditWithClient(client,userId,id,{ archive: true });
     const changed = await client.query(`UPDATE meal_plans SET deleted_at = CURRENT_TIMESTAMP, status = 'cancelled',
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND version = $3 AND deleted_at IS NULL`,
@@ -160,6 +164,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   async confirmItem(userId: number, planId: string, itemId: string, version: number) {
     return this.transaction(async client => {
+      await lockMealPlanning(client,userId);
       const item = await this.getItem(client,planId,itemId,userId,true);
       if (!item) return { kind: "not_found" as const };
       if (Number(item.version) !== version) return { kind: "version_conflict" as const };
@@ -174,6 +179,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
     return this.transaction(async client => {
+      await lockMealPlanning(client,userId);
       const item = await this.getItem(client,planId,itemId,userId,true);
       if (!item) return { kind: "not_found" as const };
       const facts = await this.changeFacts(client,item,userId);
@@ -202,6 +208,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {
     return this.transaction(async client => {
+      await lockMealPlanning(client,userId);
       const change = (await client.query("SELECT * FROM meal_plan_changes WHERE id=$1 AND user_id=$2 AND plan_id=$3 FOR UPDATE", [changeId,userId,planId])).rows[0] as Row | undefined;
       if (!change) return { kind: "not_found" as const };
       const item = await this.getItem(client,planId,String(change.item_id),userId,true);
@@ -254,6 +261,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   addShopping(userId: number, planId: string, itemId: string, input: MealPlanExecutionInput) {
     return this.transaction(async (client) => {
+      await lockMealPlanning(client,userId);
       await this.lockExecution(client, userId, input.idempotencyKey);
       const repeated = await this.repeated(client, userId, input.idempotencyKey);
       if (repeated) return { kind: "completed" as const, value: repeated };
@@ -289,6 +297,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   enqueue(userId: number, planId: string, itemId: string, input: MealPlanExecutionInput) {
     return this.transaction(async (client) => {
+      await lockMealPlanning(client,userId);
       await this.lockExecution(client, userId, input.idempotencyKey);
       const repeated = await this.repeated(client, userId, input.idempotencyKey);
       if (repeated) return { kind: "completed" as const, value: repeated };
@@ -341,6 +350,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       return { kind: "completed" as const, value };
     }
     return this.transaction(async (client) => {
+      await lockMealPlanning(client,userId);
       await this.lockExecution(client, userId, input.idempotencyKey);
       const repeated = await this.repeated(client, userId, input.idempotencyKey);
       if (repeated) return { kind: "completed" as const, value: repeated };

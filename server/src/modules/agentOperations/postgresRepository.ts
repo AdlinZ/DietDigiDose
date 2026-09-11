@@ -1,3 +1,4 @@
+import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 import { PostgresMealPlansRepository } from "../mealPlans/postgresRepository.js";
 import { permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
 import { PostgresDietRecordsRepository } from "../dietRecords/postgresRepository.js";
@@ -34,6 +35,7 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
   async executeActions(userId: number, runId: string, proposals: ExecutableAgentAction[]) {
     try {
       return await this.transaction(async (client) => {
+      await lockMealPlanning(client,userId);
         const run = await client.query("SELECT status FROM agent_runs WHERE id=$1 AND user_id=$2 FOR UPDATE", [runId, userId]);
         if (!run.rows[0] || run.rows[0].status !== "running") throw new Error("Agent Run 已取消或不再允许执行操作");
         const executions = [];
@@ -55,6 +57,7 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
 
   async undoActions(userId: number, runId: string) {
     return this.transaction(async (client) => {
+      await lockMealPlanning(client,userId);
       const selected = await client.query<PgActionRow>(`SELECT id,action_type,status,before_json,result_json,executed_at,created_at
         FROM agent_actions WHERE run_id=$1 AND user_id=$2 AND status IN ('executed','undone')
         ORDER BY created_at,id FOR UPDATE`, [runId, userId]);

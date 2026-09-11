@@ -1316,6 +1316,29 @@ try {
   const activationInput: SaveCookingPlanDraftInput = { ...savedDraftInput, id: "1b5e226a-8e80-413b-bf8e-bfe60cf43194",
     draft: { ...savedDraftInput.draft, unresolved: [], cooking: [{ targetMealId: "dinner", recipeId: Number(secondRecipe.id),
       title: String(secondRecipe.title), servings: 1, recipeYield: 1, demands: [{ food_name: "番茄", amount_value: 200, unit: "g" }] }] } };
+  const lockDraft = { ...activationInput,id: "19600000-0000-4000-8000-000000000099",draft: { ...activationInput.draft,planningMode: "weekly" as const,meals: activationInput.draft.meals.map(meal => ({ ...meal,date: "2099-09-12" })) } };
+  await mealPlanRepository.saveDraft(user.id,lockDraft);
+  const blocker = await pool.connect();
+  const { lockMealPlanning } = await import("../src/modules/mealPlans/postgresLock.js");
+  await blocker.query("BEGIN");
+  await lockMealPlanning(blocker,user.id);
+  const blockedActivation = mealPlanRepository.activateDraft(user.id,lockDraft.id,1);
+  const blockedAgent = new PostgresAgentOperationsRepository(pool).executeActions(user.id,"missing-lock-probe",[]).catch(error => error as Error);
+  let observedWait = false;
+  try {
+    for (let attempt=0;attempt<100;attempt++) {
+      const waiting = await pool.query("SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())");
+      if (Number(waiting.rowCount) >= 2) { observedWait = true; break; }
+      await new Promise(resolve => setTimeout(resolve,10));
+    }
+    await blocker.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES('weekly-concurrent-plan',$1,'并发安排','2099-09-12','2099-09-12','active')",[user.id]);
+    await blocker.query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title) VALUES('weekly-concurrent-item','weekly-concurrent-plan',$1,'2099-09-12','晚餐','已安排')",[user.id]);
+    await blocker.query("COMMIT");
+  } catch (error) { await blocker.query("ROLLBACK"); throw error; }
+  finally { blocker.release(); }
+  assert.equal((await blockedActivation).kind,"version_conflict");
+  assert.match(String(await blockedAgent),/Agent Run 已取消/);
+  assert.equal(observedWait,true,"activation must wait for the competing meal writer before reading occupancy");
   await mealPlanRepository.saveDraft(user.id, activationInput);
   const activatedDrafts = await Promise.all([
     mealPlanRepository.activateDraft(user.id, activationInput.id, 1), mealPlanRepository.activateDraft(user.id, activationInput.id, 1),

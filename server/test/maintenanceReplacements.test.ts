@@ -66,3 +66,17 @@ test("already covered meals produce no replacement", () => {
   snapshot.data.inventory_items.push({ id: 11,food_name: "鸡蛋",quantity_value: 4,quantity_unit: "piece",is_available: 1,version: 1,expiration_date: "2026-09-20" });
   assert.deepEqual(selectMaintenanceReplacements(snapshot,scope,compatibility,"2026-09-12"),{ changes: [],checks: [] });
 });
+
+
+test("replacement respects the number of batches required by planned portions", () => {
+  const { snapshot,scope,compatibility } = fixture();
+  snapshot.data.meal_plan_items.pop(); scope.items.pop();
+  snapshot.data.meal_plans[0].constraints_json = { executionItems: { a: { servings: 3 } } };
+  snapshot.data.inventory_items[0].quantity_value = 500;
+  snapshot.data.user_health_profiles = [{ kitchen_constraints_json: { meal_time_minutes: 12 } }];
+  assert.equal(selectMaintenanceReplacements(snapshot,scope,compatibility,"2026-09-12").changes.length,0);
+  snapshot.data.user_health_profiles = [{ kitchen_constraints_json: { meal_time_minutes: 20 } }];
+  const result = selectMaintenanceReplacements(snapshot,scope,compatibility,"2026-09-12");
+  assert.equal(result.changes.length,1);
+  assert.ok(result.checks.some(check => check.includes("18 分钟") && check.includes("设备容量")));
+});

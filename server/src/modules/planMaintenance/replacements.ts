@@ -1,3 +1,4 @@
+import { maintenanceSessionTime } from "./sessionTime.js";
 import { resolveKitchenPreferences } from "@dietdigidose/contracts";
 import { replacementAllocation } from "../mealPlans/replacementAllocation.js";
 import { type Row } from "../mealPlans/formatters.js";
@@ -70,21 +71,14 @@ export function selectMaintenanceReplacements(snapshot: MaintenanceInputSnapshot
       const result = recalculateMaintenanceQuantities(trial,scope,fromDate);
       if (result.assessments.find(value => value.itemId === target.itemId)?.status !== "covered") continue;
       if (before.assessments.some(previous => previous.status === "covered" && result.assessments.find(value => value.itemId === previous.itemId)?.status !== "covered")) continue;
-      const sameSession = trial.data.meal_plan_items.filter(row => row.plan_id === item.plan_id && row.planned_date === item.planned_date && row.meal_type === item.meal_type
-        && !row.deleted_at && !["completed","skipped"].includes(String(row.status)) && !String(row.id).startsWith("reserved-original:"));
-      let minutes = 0; let known = true;
-      for (const row of sameSession) {
-        const source = trial.data.recipes.find(value => Number(value.id) === Number(row.recipe_id));
-        if (!source || !(Number(source.cook_time)>0) || source.prep_time == null) { known = false; break; }
-        minutes += Number(source.cook_time)+Number(source.prep_time);
-      }
-      if (!known || minutes>budget) continue;
+      const time = maintenanceSessionTime(trial,trialItem,budget);
+      if (time.preparationOrCookingUnknown || time.exceedsBudget) continue;
       changes.push({ ...target,input: { version: target.version,recipeId: candidate.recipeId },reason: "业务变化后原安排有原料缺口或约束冲突，替换为当前库存可覆盖的菜谱" });
+      checks.push(`${String(item.planned_date)} ${String(item.meal_type)}：按计划份量分批顺序制作约 ${time.knownSequentialMinutes} 分钟，预算 ${time.budgetMinutes} 分钟；收尾与设备容量尚待核对`);
       Object.assign(working,trial);
       found = true; break;
     }
     if (!found) checks.push(`餐次 ${target.itemId} 暂无满足已知份量、原料、时间与厨具条件的替换，保留原安排`);
   }
-  if (changes.length) checks.push("替换时间按菜谱估计，尚未计入收尾；执行前仍需核对实际条件");
   return { changes,checks };
 }

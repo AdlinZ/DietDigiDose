@@ -1,4 +1,4 @@
-import { mealProductionSchema, kitchenPreferencesSchema } from "@dietdigidose/contracts";
+import { householdDiningPlanSchema, mealProductionSchema, kitchenPreferencesSchema } from "@dietdigidose/contracts";
 import { z } from "zod";
 import { inventoryConsumptionItemSchema } from "@dietdigidose/contracts";
 
@@ -485,6 +485,7 @@ export const mealPlanVersionSchema = z.object({
 }).strict();
 
 export const mealPlanItemUpdateSchema = z.object({
+  dining: householdDiningPlanSchema.nullable().optional(),
   version: z.number().int().positive(),
   plannedDate: isoDate.optional(),
   mealType: trimmedString(1, 30, "餐次").optional(),

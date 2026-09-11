@@ -1,3 +1,4 @@
+import { DiningChangeDetails } from "@/components/DiningChangeDetails";
 import { useEffect, useState } from "react";
 import { Alert, Text, TouchableOpacity, View } from "react-native";
 import { useAuthFetch } from "@/contexts/AuthContext";
@@ -43,6 +44,7 @@ export function MealPlanChanges({ planId, revision, items, onChanged }: { planId
       <Text className="font-bold text-ink">{items.find(item => item.id === change.itemId)?.title || "餐次"} · {labels[change.status] || change.status}</Text>
       <Text className="text-copy-muted text-xs">{change.reason} · {change.source === "manual" ? "手动调整" : "系统建议"}</Text>
       <Text className="text-ink text-sm">{describe(change)}</Text>
+      {change.after.dining !== undefined ? <><DiningChangeDetails label="变更前" dining={change.before.input?.dining ?? null} /><DiningChangeDetails label="变更后" dining={change.after.dining} /></> : null}
       <View className="flex-row gap-5">
         {change.status === "pending" ? <><TouchableOpacity disabled={busy} onPress={() => void review(change,"accept")}><Text className="font-bold text-brand">接受变更</Text></TouchableOpacity><TouchableOpacity disabled={busy} onPress={() => void review(change,"reject")}><Text className="text-copy-muted">保留原安排</Text></TouchableOpacity></> : null}
         {change.status === "applied" ? <TouchableOpacity disabled={busy} onPress={() => void review(change,"restore")}><Text className="text-brand">恢复变更前安排</Text></TouchableOpacity> : null}

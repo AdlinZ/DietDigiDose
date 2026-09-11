@@ -5,11 +5,12 @@ export type MealPlanItemStatus = "planned" | "queued" | "cooking" | "completed" 
 
 export interface MealPlanChange {
   id: string; itemId: string; source: string; reason: string; status: string;
-  before: { title?: string; input?: { plannedDate?: string; mealType?: string; recipeId?: number | null; status?: string } };
-  after: { title?: string; plannedDate?: string; mealType?: string; recipeId?: number | null; status?: string };
+  before: { title?: string; input?: { dining?: import("@dietdigidose/contracts").HouseholdDiningPlan | null; plannedDate?: string; mealType?: string; recipeId?: number | null; status?: string } };
+  after: { dining?: import("@dietdigidose/contracts").HouseholdDiningPlan | null; title?: string; plannedDate?: string; mealType?: string; recipeId?: number | null; status?: string };
   beforeVersion: number; afterVersion: number | null; createdAt: string; appliedAt: string | null;
 }
 export interface MealPlanItem {
+  dining?: import("@dietdigidose/contracts").HouseholdDiningPlan | null;
   householdMealId?: string | null;
   householdId?: number | null;
   confirmedAt?: string | null;

@@ -2243,6 +2243,10 @@ const migrations: Migration[] = [
     database.exec(`ALTER TABLE household_meal_batches ADD COLUMN plan_item_id TEXT REFERENCES meal_plan_items(id) ON DELETE SET NULL;
     CREATE UNIQUE INDEX idx_household_meal_batches_plan ON household_meal_batches(plan_item_id) WHERE plan_item_id IS NOT NULL;`);
   } },
+  { version: 76, name: "meal_plan_dining_allocation", up(database) {
+    database.exec(`ALTER TABLE meal_plan_items ADD COLUMN dining_json TEXT;
+    ALTER TABLE household_meal_batches ADD COLUMN dining_json TEXT;`);
+  } },
 ];
 
 export function runMigrations(database: Database.Database) {

@@ -65,7 +65,7 @@ function ProductionAccount({ userId,householdId,generation,planItem }: { userId?
       setPending(null); setDone(true); setSelected({}); setMessage("制作已记录，原料已扣减。尚未记录任何人的食用。");
     } catch (error) {
       if (!current()) return;
-      const rejected = error instanceof ApiError && ["INVENTORY_VERSION_CONFLICT","INVENTORY_INSUFFICIENT","INVENTORY_UNIT_MISMATCH","STRUCTURED_QUANTITY_REQUIRED","QUANTITY_PRECISION_REQUIRED","INVENTORY_CONFLICT","PLAN_ITEM_UNAVAILABLE","PLAN_ITEM_CHANGED"].includes(error.code ?? "");
+      const rejected = error instanceof ApiError && ["INVENTORY_VERSION_CONFLICT","INVENTORY_INSUFFICIENT","INVENTORY_UNIT_MISMATCH","STRUCTURED_QUANTITY_REQUIRED","QUANTITY_PRECISION_REQUIRED","INVENTORY_CONFLICT","PLAN_ITEM_UNAVAILABLE","PLAN_ITEM_CHANGED","DINING_HOUSEHOLD_CHANGED","DINING_NOT_MEMBER","DINING_MEMBERS_CHANGED","DINING_RECIPE_UNAVAILABLE","DINING_CONSTRAINT_CONFLICT"].includes(error.code ?? "");
       if (rejected) {
         try {
           if (await removeUserPrivateStorage(baseKey,userId,generation) && current()) { setPending(null); setMembershipId(null); setSelected({}); setInventory([]); }

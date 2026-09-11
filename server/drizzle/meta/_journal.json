@@ -127,6 +127,13 @@
       "when": 1789161324640,
       "tag": "0017_spooky_sunset_bain",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789161806598,
+      "tag": "0018_powerful_sunfire",
+      "breakpoints": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+import { validateSqliteDiningPlan } from "./sqliteDiningPlan.js";
 import { appendSqliteMaintenanceEvent } from "../planMaintenance/sqliteEventWriter.js";
 import { reservationTotals, validateReservation } from "./reservations.js";
 import { eatingRequest, prepareEating, repeatEating } from "./eating.js";
@@ -86,9 +87,15 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
       if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
       const existing = this.database.prepare("SELECT * FROM household_meal_batches WHERE household_id=? AND idempotency_key=?").get(householdId,input.idempotencyKey) as Row | undefined;
       if (existing) return repeatProduction(existing,userId,input);
+      let dining: import("@dietdigidose/contracts").HouseholdDiningPlan | null = null;
       if (input.planItem) {
         const item = this.database.prepare("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=? AND i.plan_id=? AND i.user_id=? AND p.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active'").get(input.planItem.itemId,input.planItem.planId,userId,userId) as Row | undefined;
         validateProductionPlan(item,input);
+        dining = item?.dining_json ? (typeof item.dining_json === "string" ? JSON.parse(item.dining_json) : item.dining_json) as import("@dietdigidose/contracts").HouseholdDiningPlan : null;
+        if (dining) {
+          if (dining.householdId !== householdId) throw new HouseholdsError(409,"共餐安排属于另一家庭，请回到原安排","DINING_HOUSEHOLD_CHANGED");
+          validateSqliteDiningPlan(this.database,userId,item?.recipe_id,dining);
+        }
       }
       const snapshot: Row[] = [];
       for (const consumption of productionRequest(input).inventory) {
@@ -104,7 +111,7 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
       this.database.prepare(`INSERT INTO household_meal_batches(id,household_id,created_by_user_id,membership_id,idempotency_key,request_json,food_name,produced_servings,remaining_servings,inventory_json)
         VALUES(?,?,?,?,?,?,?,?,?,?)`).run(id,householdId,userId,input.membershipId,input.idempotencyKey,JSON.stringify(productionRequest(input)),input.foodName,input.producedServings,input.producedServings,JSON.stringify(snapshot));
       if (input.planItem) {
-        this.database.prepare("UPDATE household_meal_batches SET plan_item_id=? WHERE id=?").run(input.planItem.itemId,id);
+        this.database.prepare("UPDATE household_meal_batches SET plan_item_id=?,dining_json=? WHERE id=?").run(input.planItem.itemId,dining ? JSON.stringify(dining) : null,id);
         this.database.prepare("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(input.planItem.itemId,userId);
         appendSqliteMaintenanceEvent(this.database,{ userId,kind: "cooking_completion",sourceId: `household:${id}`,subjectId: id,details: { planItemId: input.planItem.itemId,version: input.planItem.version+1,mode: "household" } });
       }

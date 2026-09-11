@@ -94,3 +94,16 @@ export const householdMealReservationSchema = z.object({
 export type HouseholdMealReservationInput = z.infer<typeof householdMealReservationSchema>;
 
 export const householdMealReservationResultSchema = z.object({ version: z.number().int().positive(),myReservedServings: z.number().finite().min(0).max(30) }).strict();
+
+
+export const householdDiningPlanSchema = z.object({
+  householdId: z.number().int().positive(),
+  participants: z.array(z.object({ membershipId: z.number().int().positive(),version: z.number().int().positive(),servings: diningServings }).strict()).min(1).max(30),
+  constraintsReviewed: z.literal(true),
+}).strict().superRefine((value,ctx) => {
+  if (new Set(value.participants.map(item => item.membershipId)).size !== value.participants.length)
+    ctx.addIssue({ code: "custom",message: "参与成员不能重复" });
+  if (value.participants.reduce((sum,item) => sum+Math.round(item.servings*1_000_000),0)>30_000_000)
+    ctx.addIssue({ code: "custom",message: "单次共餐总份量不能超过30份" });
+});
+export type HouseholdDiningPlan = z.infer<typeof householdDiningPlanSchema>;

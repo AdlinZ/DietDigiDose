@@ -1,3 +1,4 @@
+import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { householdMealReservationSchema, householdMealEatingSchema, householdMealProductionSchema, householdDiningAllocationSchema, householdDiningPreferencesSchema } from "@dietdigidose/contracts";
 import crypto from "node:crypto";
 import { Router, type NextFunction, type Response } from "express";
@@ -12,6 +13,7 @@ import { HouseholdsError } from "./errors.js";
 import type { HouseholdsService } from "./service.js";
 
 function handle(error: unknown, res: Response, next: NextFunction) {
+  if (error instanceof InventoryQuantityError) return sendError(res,409,error.message,error.code);
   return error instanceof HouseholdsError ? sendError(res, error.status, error.message, error.code) : next(error);
 }
 function householdId(req: AuthRequest) { return Number(req.params.id); }

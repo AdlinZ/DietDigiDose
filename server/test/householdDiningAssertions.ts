@@ -225,3 +225,66 @@ export async function verifyHouseholdPlanProduction(service: HouseholdsService, 
   await query("DELETE FROM meal_plans WHERE id=?",[planId]);
   assert.equal((await service.meals(owner,householdId)).find(row => row.id === batch.id)?.remainingServings,3);
 }
+
+export async function verifyDiningPlanChanges(service: HouseholdsService,plans: import("../src/modules/mealPlans/repository.js").MealPlansRepository,diet: Pick<import("../src/modules/dietRecords/repository.js").DietRecordsRepository,"completeCooking">,
+  householdId: number,owner: number,member: number,recipeId: number,invite: string,query: (sql: string,args?: unknown[]) => Promise<Record<string,unknown>[]>) {
+  const third = Number((await query("INSERT INTO users(username,email,password_hash) VALUES('dining-plan-third','dining-plan-third@example.com','hash') RETURNING id"))[0]?.id);
+  await service.join(third,invite);
+  const people = await Promise.all([owner,member,third].map(async userId => {
+    const old = await service.diningPreferences(userId,householdId);
+    return { userId,old,saved: await service.saveDiningPreferences(userId,householdId,{ ...old,shared: true,allergies: [],restrictions: [] }) };
+  }));
+  const planId = 'dining-change-plan',itemId = '98888888-8888-4888-8888-888888888890';
+  await query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES(?,?,'共餐计划','2036-09-12','2036-09-18','active')",[planId,owner]);
+  await query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id) VALUES(?,?,?,'2036-09-12','lunch','原餐',?)",[itemId,planId,owner,recipeId]);
+  let dining = { householdId,constraintsReviewed: true as const,participants: people.map(person => ({ membershipId: person.saved.membershipId,version: person.saved.version,servings: 1 })) };
+  const originalDiet = await query("SELECT count(*) AS n FROM diet_records WHERE user_id=?",[owner]);
+  const read = async () => ((await plans.find(owner,planId,false))?.items as Record<string,unknown>[])[0]!;
+  const applied = await plans.updateItem(owner,planId,itemId,{ version: 1,dining });
+  assert.equal(applied.kind,'updated'); if (applied.kind !== 'updated') throw new Error('missing applied change');
+  assert.deepEqual((await read()).dining,dining);
+  await assert.rejects(() => plans.enqueue(owner,planId,itemId,{ version: 2,idempotencyKey: 'dining-plan-queue' }),/家庭制作/);
+  await assert.rejects(() => plans.complete(owner,planId,itemId,{ version: 2,idempotencyKey: 'dining-plan-complete' }),/家庭制作/);
+  await assert.rejects(() => plans.addShopping(owner,planId,itemId,{ version: 2,idempotencyKey: 'dining-plan-shopping' }),/家庭采购/);
+  await assert.rejects(() => diet.completeCooking(owner,{ idempotency_key: "dining-direct-private-production",recipe_id: recipeId,inventory_item_ids: [],inventory_consumptions: [],production: {
+    food_name: "错误个人产出",produced_servings: 3,eaten_servings: 3,eaten_at: "2036-09-12",meal_type: "lunch",nutrition_per_serving: {},plan_item_id: itemId,plan_version: 2,
+  } }),/家庭制作/);
+  await assert.rejects(() => plans.updateItem(owner,planId,itemId,{ version: 2,recipeId: null }),/更换共餐菜谱/);
+  const change = applied.value.change as { id: string; status: string };
+  assert.equal(change.status,'applied');
+  assert.equal((await plans.reviewChange(owner,planId,change.id,'restore')).kind,'updated');
+  assert.equal((await read()).dining,null);
+  await plans.confirmItem(owner,planId,itemId,3);
+  const pending = await plans.updateItem(owner,planId,itemId,{ version: 4,dining });
+  assert.equal(pending.kind,'updated'); if (pending.kind !== 'updated') throw new Error('missing suggestion');
+  const pendingId = (pending.value.change as { id: string }).id;
+  assert.equal((pending.value.change as { status: string }).status,'pending'); assert.equal((await read()).dining,null);
+  const changedMember = await service.saveDiningPreferences(member,householdId,{ ...people[1]!.saved,shared: true,allergies: ['花生'] });
+  await assert.rejects(() => plans.reviewChange(owner,planId,pendingId,'accept'),/已变化/);
+  dining = { ...dining,participants: dining.participants.map(person => person.membershipId === changedMember.membershipId ? { ...person,version: changedMember.version } : person) };
+  await assert.rejects(() => plans.updateItem(owner,planId,itemId,{ version: 4,dining }),/明确忌口冲突/);
+  const clear = await service.saveDiningPreferences(member,householdId,{ ...changedMember,allergies: [] });
+  dining = { ...dining,participants: dining.participants.map(person => person.membershipId === clear.membershipId ? { ...person,version: clear.version } : person) };
+  await plans.reviewChange(owner,planId,pendingId,'reject');
+  const next = await plans.updateItem(owner,planId,itemId,{ version: 4,dining });
+  if (next.kind !== 'updated') throw new Error('missing fresh suggestion');
+  assert.equal((await plans.reviewChange(owner,planId,(next.value.change as { id: string }).id,'accept')).kind,'updated');
+  assert.deepEqual((await read()).dining,dining);
+  const stock = await service.createInventory(owner,householdId,{ food_name: '共餐制作米',quantity: '600g',expiration_date: '2099-01-01' });
+  const batch = await service.produceMeal(owner,householdId,{ idempotencyKey: '98888888-8888-4888-8888-888888888891',membershipId: people[0]!.saved.membershipId,
+    planItem: { planId,itemId,version: 5 },foodName: '共餐已制作',producedServings: 3,inventory: [{ itemId: Number(stock.id),version: Number(stock.version),amount: 300,unit: 'g' }] });
+  const captured = (await query("SELECT dining_json FROM household_meal_batches WHERE id=?",[batch.id]))[0]?.dining_json;
+  assert.deepEqual(typeof captured === 'string' ? JSON.parse(captured) : captured,dining);
+  assert.deepEqual(await query("SELECT count(*) AS n FROM diet_records WHERE user_id=?",[owner]),originalDiet);
+  const blocked = await plans.updateItem(owner,planId,itemId,{ version: 6,dining: null });
+  if (blocked.kind !== 'updated') throw new Error('missing blocked change');
+  assert.equal((blocked.value.change as { status: string }).status,'blocked');
+  assert.deepEqual((await read()).dining,dining);
+  await query("DELETE FROM household_inventory_items WHERE id=?",[stock.id]);
+  await query("DELETE FROM meal_plans WHERE id=?",[planId]);
+  for (const person of people) {
+    const latest = await service.diningPreferences(person.userId,householdId);
+    await service.saveDiningPreferences(person.userId,householdId,{ ...latest,shared: person.old.shared,allergies: person.old.allergies,restrictions: person.old.restrictions });
+  }
+  await service.leave(third,householdId);
+}

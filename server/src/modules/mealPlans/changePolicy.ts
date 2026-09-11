@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { parseJson, type Row } from "./formatters.js";
 import type { MealPlanItemUpdateInput } from "./types.js";
@@ -13,12 +14,12 @@ export function mealChangeSnapshot(item: Row, queue: Row | undefined, purchases:
     title: String(item.recipe_title || item.title), version: Number(item.version), confirmedAt: item.confirmed_at instanceof Date ? item.confirmed_at.toISOString() : item.confirmed_at ?? null,
     queue: queue ? { id: queue.id, version: Number(queue.version), status: queue.status } : null,
     purchases: purchases.map(row => ({ id: row.id, version: Number(row.version), checked: Boolean(row.checked), inventoryItemId: row.inventory_item_id ?? null })),
-    input: { plannedDate: String(item.planned_date), mealType: String(item.meal_type), recipeId: item.recipe_id == null ? null : Number(item.recipe_id), status: item.status === "skipped" ? "skipped" as const : "planned" as const },
+    input: { dining: parseJson(item.dining_json,null),plannedDate: String(item.planned_date), mealType: String(item.meal_type), recipeId: item.recipe_id == null ? null : Number(item.recipe_id), status: item.status === "skipped" ? "skipped" as const : "planned" as const },
   };
 }
 export function mealChangeFingerprint(itemId: string, snapshot: unknown, input: MealPlanItemUpdateInput) {
   return createHash("sha256").update(JSON.stringify({ itemId, snapshot, input: {
-    plannedDate: input.plannedDate ?? null, mealType: input.mealType ?? null, recipeId: input.recipeId === undefined ? "unchanged" : input.recipeId, status: input.status ?? null,
+    dining: input.dining === undefined ? "unchanged" : input.dining,plannedDate: input.plannedDate ?? null, mealType: input.mealType ?? null, recipeId: input.recipeId === undefined ? "unchanged" : input.recipeId, status: input.status ?? null,
   } })).digest("hex");
 }
 export function formatMealChange(row: Row) {
@@ -29,7 +30,8 @@ export function formatMealChange(row: Row) {
 }
 
 export function isMealChangeNoop(item: Row, input: MealPlanItemUpdateInput) {
-  return (input.plannedDate === undefined || input.plannedDate === item.planned_date)
+  return (input.dining === undefined || isDeepStrictEqual(input.dining,parseJson(item.dining_json,null)))
+    && (input.plannedDate === undefined || input.plannedDate === item.planned_date)
     && (input.mealType === undefined || input.mealType === item.meal_type)
     && (input.recipeId === undefined || input.recipeId === (item.recipe_id == null ? null : Number(item.recipe_id)))
     && (input.status === undefined || input.status === item.status);

@@ -9,6 +9,7 @@ export type MealPlanUpdateInput = {
 };
 
 export type MealPlanItemUpdateInput = {
+  dining?: import("@dietdigidose/contracts").HouseholdDiningPlan | null;
   version: number;
   plannedDate?: string;
   mealType?: string;

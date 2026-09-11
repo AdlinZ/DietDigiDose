@@ -1,3 +1,4 @@
+import { validatePostgresDiningPlan } from "./postgresDiningPlan.js";
 import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
 import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 import { reservationTotals, validateReservation } from "./reservations.js";
@@ -99,9 +100,15 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
       if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
       const existing = (await client.query("SELECT * FROM household_meal_batches WHERE household_id=$1 AND idempotency_key=$2",[householdId,input.idempotencyKey])).rows[0] as Row | undefined;
       if (existing) return repeatProduction(existing,userId,input);
+      let dining: import("@dietdigidose/contracts").HouseholdDiningPlan | null = null;
       if (input.planItem) {
         const item = (await client.query("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=$1 AND i.plan_id=$2 AND i.user_id=$3 AND p.user_id=$3 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active' FOR UPDATE OF i,p",[input.planItem.itemId,input.planItem.planId,userId])).rows[0] as Row | undefined;
         validateProductionPlan(item,input);
+        dining = item?.dining_json ? (typeof item.dining_json === "string" ? JSON.parse(item.dining_json) : item.dining_json) as import("@dietdigidose/contracts").HouseholdDiningPlan : null;
+        if (dining) {
+          if (dining.householdId !== householdId) throw new HouseholdsError(409,"共餐安排属于另一家庭，请回到原安排","DINING_HOUSEHOLD_CHANGED");
+          await validatePostgresDiningPlan(client,userId,item?.recipe_id,dining);
+        }
       }
       const snapshot: Row[] = [];
       for (const consumption of productionRequest(input).inventory) {
@@ -117,7 +124,7 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
       const row = (await client.query(`INSERT INTO household_meal_batches(id,household_id,created_by_user_id,membership_id,idempotency_key,request_json,food_name,produced_servings,remaining_servings,inventory_json)
         VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb) RETURNING *`,[id,householdId,userId,input.membershipId,input.idempotencyKey,JSON.stringify(productionRequest(input)),input.foodName,input.producedServings,input.producedServings,JSON.stringify(snapshot)])).rows[0] as Row;
       if (input.planItem) {
-        await client.query("UPDATE household_meal_batches SET plan_item_id=$1 WHERE id=$2",[input.planItem.itemId,id]);
+        await client.query("UPDATE household_meal_batches SET plan_item_id=$1,dining_json=$3::jsonb WHERE id=$2",[input.planItem.itemId,id,dining ? JSON.stringify(dining) : null]);
         await client.query("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2",[input.planItem.itemId,userId]);
         await appendPostgresMaintenanceEvent(client,{ userId,kind: "cooking_completion",sourceId: `household:${id}`,subjectId: id,details: { planItemId: input.planItem.itemId,version: input.planItem.version+1,mode: "household" } });
       }

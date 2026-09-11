@@ -1,3 +1,4 @@
+jest.mock("@/services/api/households",() => ({ householdApi: { diningMembers: async () => ({ members: [] }) } }));
 import React from "react";
 import renderer, { act } from "react-test-renderer";
 import { Alert, Text, TouchableOpacity } from "react-native";

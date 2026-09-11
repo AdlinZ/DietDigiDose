@@ -20,6 +20,7 @@ function dateTime(value: unknown) { return value instanceof Date ? value.toISOSt
 export function formatMealPlanItem(row: Row): MealPlanItemView {
   const allocation = (parseJson<Row>(row.plan_constraints_json, {}).executionItems as Record<string, { servings?: number }> | undefined)?.[String(row.id)];
   return { plannedServings: allocation?.servings ?? null,
+    dining: parseJson(row.dining_json,null),
     householdMealId: row.household_meal_id == null ? null : String(row.household_meal_id),
     householdId: row.household_id == null ? null : Number(row.household_id),
     id: String(row.id),

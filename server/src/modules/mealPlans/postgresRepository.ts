@@ -1,3 +1,4 @@
+import { validatePostgresDiningPlan } from "../households/postgresDiningPlan.js";
 import { replacementAllocation } from "./replacementAllocation.js";
 import { lockMealPlanning } from "./postgresLock.js";
 import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
@@ -197,6 +198,10 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
       const replacement = input.recipeId ? (await client.query("SELECT title FROM recipes WHERE id=$1 AND status='approved' AND deleted_at IS NULL FOR SHARE",[input.recipeId])).rows[0] as Row | undefined : undefined;
       if (input.recipeId && !replacement) return { kind: "recipe_not_available" as const };
+      if (item.dining_json && input.dining === undefined && input.recipeId !== undefined && input.recipeId !== item.recipe_id)
+        throw new InventoryQuantityError("DINING_REVIEW_REQUIRED","更换共餐菜谱前，请重新核对所有参与成员的限制并提交共餐安排");
+      const dining = input.dining === undefined ? parseJson<import("@dietdigidose/contracts").HouseholdDiningPlan | null>(item.dining_json,null) : input.dining;
+      if (dining) await validatePostgresDiningPlan(client,userId,input.recipeId === undefined ? item.recipe_id : input.recipeId,dining);
       const proposal = { ...input, title: String(replacement?.title || item.recipe_title || item.title) };
       const id = randomUUID();
       let next = formatMealPlanItem(item);
@@ -242,6 +247,10 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
   private async applyItemChange(client: PoolClient, userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
     const current = await this.getItem(client, planId, itemId, userId);
     if (!current) return { kind: "not_found" as const };
+    if (current.dining_json && input.dining === undefined && input.recipeId !== undefined && input.recipeId !== current.recipe_id)
+      throw new InventoryQuantityError("DINING_REVIEW_REQUIRED","更换共餐菜谱前，请重新核对所有参与成员的限制并提交共餐安排");
+    const dining = input.dining === undefined ? parseJson<import("@dietdigidose/contracts").HouseholdDiningPlan | null>(current.dining_json,null) : input.dining;
+    if (dining) await validatePostgresDiningPlan(client,userId,input.recipeId === undefined ? current.recipe_id : input.recipeId,dining);
     let replacement: Row | undefined;
     if (input.recipeId !== undefined && input.recipeId !== null) {
       const selected = await client.query(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat, serving_size
@@ -253,7 +262,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     if (allocation === null) return { kind: "protected" as const };
     const changed = await client.query(`UPDATE meal_plan_items SET planned_date = $1, meal_type = $2, recipe_id = $3, title = $4,
       ingredients_json = $5::jsonb, steps_json = $6::jsonb, calories = $7, protein = $8, carbs = $9, fat = $10, status = $11,
-      queue_item_id = CASE WHEN $12::boolean THEN NULL ELSE queue_item_id END,
+      queue_item_id = CASE WHEN $12::boolean THEN NULL ELSE queue_item_id END, dining_json = $17::jsonb,
       version = version + 1, updated_at = CURRENT_TIMESTAMP
       WHERE id = $13 AND plan_id = $14 AND user_id = $15 AND version = $16 AND deleted_at IS NULL`, [
       input.plannedDate ?? current.planned_date, input.mealType ?? current.meal_type,
@@ -261,7 +270,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       replacement?.title ?? current.title, JSON.stringify(allocation?.ingredients ?? current.ingredients_json),
       JSON.stringify(replacement?.steps_json ?? current.steps_json), replacement?.calories ?? current.calories,
       replacement?.protein ?? current.protein, replacement?.carbs ?? current.carbs, replacement?.fat ?? current.fat,
-      input.status ?? current.status, input.recipeId !== undefined, itemId, planId, userId, input.version,
+      input.status ?? current.status, input.recipeId !== undefined, itemId, planId, userId, input.version,dining ? JSON.stringify(dining) : null,
     ]);
     if (changed.rowCount !== 1) return { kind: "version_conflict" as const };
     if (allocation?.constraints) await client.query("UPDATE meal_plans SET constraints_json=$1::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND user_id=$3",
@@ -277,6 +286,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       if (repeated) return { kind: "completed" as const, value: repeated };
       const item = await this.getItem(client, planId, itemId, userId, true);
       if (!item) return { kind: "not_found" as const };
+      if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_SHOPPING_REQUIRED","这是共餐安排，请按共餐总需求核对家庭采购");
       if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
       const ingredients = parseJson<unknown[]>(item.ingredients_json, []).map(ingredient)
         .filter((entry): entry is { name: string; amount: string } => Boolean(entry?.name));
@@ -313,6 +323,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       if (repeated) return { kind: "completed" as const, value: repeated };
       const item = await this.getItem(client, planId, itemId, userId, true);
       if (!item) return { kind: "not_found" as const };
+      if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED","这是共餐安排，请从家庭制作入口记录产出");
       if (["completed","skipped"].includes(String(item.status)) || Number(item.version) !== input.version) return { kind: "version_conflict" as const };
       if (!item.recipe_id || item.recipe_status !== "approved" || item.recipe_deleted_at) return { kind: "recipe_unavailable" as const };
       await client.query("SELECT pg_advisory_xact_lock(9471, $1::integer)", [userId]);
@@ -352,6 +363,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       if (input.dietRecordId) throw new Error("制作分配不能同时关联旧饮食记录");
       const item = (await this.pool.query(`${itemSelect} WHERE i.plan_id=$1 AND i.id=$2 AND i.user_id=$3`, [planId, itemId, userId])).rows[0];
       if (!item) return { kind: "not_found" as const };
+      if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED","这是共餐安排，请从家庭制作入口记录产出");
       const value = await new PostgresDietRecordsRepository(this.pool, consumeInventoryWithPostgresClient).completeCooking(userId, {
         idempotency_key: input.idempotencyKey, recipe_id: item.recipe_id == null ? null : Number(item.recipe_id),
         inventory_item_ids: [], inventory_consumptions: input.inventory_consumptions ?? [],
@@ -367,6 +379,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`prepared-meals:${userId}`]);
       const item = await this.getItem(client, planId, itemId, userId, true);
       if (!item) return { kind: "not_found" as const };
+      if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED","这是共餐安排，请从家庭制作入口记录产出");
       const produced = (await client.query("SELECT result_json FROM prepared_meals WHERE user_id=$1 AND plan_item_id=$2", [userId, itemId])).rows[0];
       if (produced) return { kind: "completed" as const, value: { ...produced.result_json, repeated: true } };
       if (item.status === "completed" && item.diet_record_id) {

@@ -3,6 +3,7 @@ import renderer, { act } from "react-test-renderer";
 import { Text, TextInput, TouchableOpacity } from "react-native";
 let mockParams: { recipeId?: number; planItem?: { planId: string; itemId: string; version: number } } = {};
 let mockUser: { id: number } | null = { id: 1 };
+const mockPlanSave = jest.fn();
 const mockPreview = jest.fn();
 const mockMembers = jest.fn();
 const mockFetch = jest.fn(); const mockMine = jest.fn(); const mockRead = jest.fn(); const mockSave = jest.fn();
@@ -10,6 +11,7 @@ jest.mock("@react-native-async-storage/async-storage",() => require("@react-nati
 jest.mock("@/contexts/AuthContext",() => ({ useAuth: () => ({ user: mockUser }),useAuthFetch: () => mockFetch }));
 jest.mock("@/components/Screen",() => ({ Screen: "View" }));
 jest.mock("@/hooks/useSafeRouter",() => ({ useSafeSearchParams: () => mockParams,useSafeRouter: () => ({ back: jest.fn() }) }));
+jest.mock("@/services/api/mealPlans",() => ({ mealPlansApi: { updateItem: (...args: unknown[]) => mockPlanSave(...args) } }));
 jest.mock("@/services/api/households",() => ({ householdApi: { previewDiningAllocation: (...args: unknown[]) => mockPreview(...args), diningMembers: (...args: unknown[]) => mockMembers(...args), mine: (...args: unknown[]) => mockMine(...args),diningPreferences: (...args: unknown[]) => mockRead(...args),saveDiningPreferences: (...args: unknown[]) => mockSave(...args) } }));
 import HouseholdDiningScreen from "./index";
 const initial = { membershipId: 3,version: 1,shared: false,allergies: [],restrictions: [] };
@@ -100,5 +102,25 @@ test("passes the selected personal meal version and labels the result as unappli
   expect(mockPreview).toHaveBeenCalledWith(mockFetch,8,{ planItem,participants: [{ membershipId: 1,version: 2,servings: 1 }] });
   expect(JSON.stringify(tree.toJSON())).toContain("需要先审阅变更建议");
   expect(mockSave).not.toHaveBeenCalled();
+  act(() => tree.unmount());
+});
+
+
+test("saves only after explicit review and presents a protected meal suggestion",async () => {
+  const planItem = { planId: "plan",itemId: "meal",version: 4 };
+  mockParams = { planItem };
+  const person = { membershipId: 1,userId: 1,name: "成员1",version: 2,shared: true,allergies: [],restrictions: [],servings: 1 };
+  mockMembers.mockResolvedValue({ members: [person] });
+  mockPreview.mockResolvedValue({ planItem: { ...planItem,plannedDate: "2036-09-12",mealType: "lunch",title: "原午餐",decision: "suggest",applied: false },recipeCheck: { title: "原午餐",status: "needs_review",materials: { status: "unknown",demands: [] },conflicts: [],checks: [] },totalServings: 1,participants: [person],allergies: [],restrictions: [] });
+  mockPlanSave.mockResolvedValue({ change: { status: "pending" } });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<HouseholdDiningScreen />); });
+  act(() => tree.root.findByProps({ accessibilityLabel: "成员1参与共餐" }).props.onValueChange(true));
+  await act(async () => { button(tree,"核算共餐需求").props.onPress(); });
+  expect(button(tree,"保存这餐的共餐安排").props.disabled).toBe(true);
+  act(() => tree.root.findByProps({ accessibilityLabel: "已核对共餐限制" }).props.onValueChange(true));
+  await act(async () => { button(tree,"保存这餐的共餐安排").props.onPress(); });
+  expect(mockPlanSave).toHaveBeenCalledWith(mockFetch,"plan","meal",{ version: 4,dining: { householdId: 8,constraintsReviewed: true,participants: [{ membershipId: 1,version: 2,servings: 1 }] } });
+  expect(JSON.stringify(tree.toJSON())).toContain("变更建议已保存");
   act(() => tree.unmount());
 });

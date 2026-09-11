@@ -56,7 +56,7 @@ function requiredTools(row: Row) {
     [/(?:破壁机|料理机|搅拌机)/, "破壁机"], [/(?:烤箱|烘焙)/, "烤箱"], [/(?:电饭煲|电饭锅)/, "电饭煲"], [/(?:蒸锅|蒸笼)/, "蒸锅"]];
   return rules.filter(([pattern]) => pattern.test(text)).map(([, tool]) => tool);
 }
-function allergyTerms(name: string) {
+export function allergyTerms(name: string) {
   const normalized = normalizeRecommendationName(name);
   const alias = Object.entries(ALLERGEN_ALIASES).find(([key]) => normalized.includes(normalizeRecommendationName(key)));
   return [...new Set([name, ...(alias?.[1] || [])])].map(normalizeRecommendationName).filter(Boolean);

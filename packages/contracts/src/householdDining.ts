@@ -23,6 +23,7 @@ const diningServings = z.number().finite().min(0.000001).max(30).refine(
   "份量最多保留六位小数",
 );
 export const householdDiningAllocationSchema = z.object({
+  recipeId: z.number().int().positive().optional(),
   participants: z.array(z.object({
     membershipId: z.number().int().positive(), version: z.number().int().positive(), servings: diningServings,
   }).strict()).min(1).max(30),
@@ -35,6 +36,11 @@ export const householdDiningAllocationSchema = z.object({
 export type HouseholdDiningAllocationInput = z.infer<typeof householdDiningAllocationSchema>;
 export const householdDiningAllocationPreviewSchema = z.object({
   householdId: z.number().int().positive(), totalServings: diningServings,
+  recipeCheck: z.object({
+    recipeId: z.number().int().positive(), title: z.string(),status: z.enum(["blocked","needs_review"]),
+    conflicts: z.array(z.object({ membershipId: z.number().int().positive(),constraint: z.string(),kind: z.enum(["allergy","restriction"]) }).strict()),
+    checks: z.array(z.string()),
+  }).strict().optional(),
   participants: z.array(diningMemberIdentity.extend({ shared: z.literal(true),allergies: names,restrictions: names,servings: diningServings }).strict()).min(1).max(30),
   allergies: z.array(z.string()).max(1500),restrictions: z.array(z.string()).max(1500),recipeValidationRequired: z.literal(true),
 }).strict();

@@ -22,6 +22,10 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async diningRecipe(recipeId: number) {
+    return (await this.pool.query("SELECT id,title,description,ingredients_json FROM recipes WHERE id=$1 AND deleted_at IS NULL AND status='approved' AND COALESCE(quality_status,'trusted') <> 'needs_review'",[recipeId])).rows[0] as Row | undefined ?? null;
+  }
+
   async diningMembers(userId: number, householdId: number) {
     return (await this.pool.query(`SELECT hm.id,hm.user_id,COALESCE(u.nickname,u.username) AS name,hm.dining_shared,hm.dining_version,
       CASE WHEN hm.dining_shared=1 THEN hm.dining_preferences_json ELSE NULL END AS dining_preferences_json

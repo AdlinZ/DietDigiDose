@@ -1,18 +1,19 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
 import { Text, TextInput, TouchableOpacity } from "react-native";
+let mockParams: { recipeId?: number } = {};
 let mockUser: { id: number } | null = { id: 1 };
 const mockPreview = jest.fn();
 const mockMembers = jest.fn();
 const mockFetch = jest.fn(); const mockMine = jest.fn(); const mockRead = jest.fn(); const mockSave = jest.fn();
 jest.mock("@/contexts/AuthContext",() => ({ useAuth: () => ({ user: mockUser }),useAuthFetch: () => mockFetch }));
 jest.mock("@/components/Screen",() => ({ Screen: "View" }));
-jest.mock("@/hooks/useSafeRouter",() => ({ useSafeRouter: () => ({ back: jest.fn() }) }));
+jest.mock("@/hooks/useSafeRouter",() => ({ useSafeSearchParams: () => mockParams,useSafeRouter: () => ({ back: jest.fn() }) }));
 jest.mock("@/services/api/households",() => ({ householdApi: { previewDiningAllocation: (...args: unknown[]) => mockPreview(...args), diningMembers: (...args: unknown[]) => mockMembers(...args), mine: (...args: unknown[]) => mockMine(...args),diningPreferences: (...args: unknown[]) => mockRead(...args),saveDiningPreferences: (...args: unknown[]) => mockSave(...args) } }));
 import HouseholdDiningScreen from "./index";
 const initial = { membershipId: 3,version: 1,shared: false,allergies: [],restrictions: [] };
 const button = (tree: renderer.ReactTestRenderer,label: string) => tree.root.findAllByType(TouchableOpacity).find(node => node.findAllByType(Text).some(text => text.props.children === label))!;
-beforeEach(() => { jest.resetAllMocks(); mockMembers.mockResolvedValue({ members: [{ membershipId: 9,userId: 4,name: "未授权成员",version: 1,shared: false }] }); mockUser = { id: 1 }; mockMine.mockResolvedValue([{ id: 8,name: "家庭甲" },{ id: 9,name: "家庭乙" }]); mockRead.mockResolvedValue(initial); });
+beforeEach(() => { jest.resetAllMocks(); mockParams = {}; mockMembers.mockResolvedValue({ members: [{ membershipId: 9,userId: 4,name: "未授权成员",version: 1,shared: false }] }); mockUser = { id: 1 }; mockMine.mockResolvedValue([{ id: 8,name: "家庭甲" },{ id: 9,name: "家庭乙" }]); mockRead.mockResolvedValue(initial); });
 test("saves explicit consent and own membership version, then requires reread after uncertain write",async () => {
   mockSave.mockRejectedValue(new Error("offline"));
   let tree!: renderer.ReactTestRenderer;
@@ -68,15 +69,17 @@ test("late shared member data does not appear after changing account",async () =
   act(() => tree.unmount());
 });
 
-test("selects participants explicitly and previews total demand without recording intake",async () => {
+test("selects participants explicitly and checks the chosen recipe without recording intake",async () => {
+  mockParams = { recipeId: 7 };
   mockMembers.mockResolvedValue({ members: [1,2,3].map(id => ({ membershipId: id,userId: id,name: `成员${id}`,version: 2,shared: true,allergies: [],restrictions: [] })) });
-  mockPreview.mockResolvedValue({ totalServings: 3,participants: [1,2,3].map(id => ({ membershipId: id,name: `成员${id}`,servings: 1 })),allergies: ["花生"],restrictions: ["素食"] });
+  mockPreview.mockResolvedValue({ recipeCheck: { title: "花生菜",status: "blocked",conflicts: [{ membershipId: 2,constraint: "花生" }],checks: [] },totalServings: 3,participants: [1,2,3].map(id => ({ membershipId: id,name: `成员${id}`,servings: 1 })),allergies: ["花生"],restrictions: ["素食"] });
   let tree!: renderer.ReactTestRenderer;
   await act(async () => { tree = renderer.create(<HouseholdDiningScreen />); });
   act(() => { for (const id of [1,2,3]) tree.root.findByProps({ accessibilityLabel: `成员${id}参与共餐` }).props.onValueChange(true); });
   await act(async () => { button(tree,"核算共餐需求").props.onPress(); });
-  expect(mockPreview).toHaveBeenCalledWith(mockFetch,8,{ participants: [1,2,3].map(id => ({ membershipId: id,version: 2,servings: 1 })) });
+  expect(mockPreview).toHaveBeenCalledWith(mockFetch,8,{ recipeId: 7,participants: [1,2,3].map(id => ({ membershipId: id,version: 2,servings: 1 })) });
   expect(mockSave).not.toHaveBeenCalled();
+  expect(JSON.stringify(tree.toJSON())).toContain("有已知忌口冲突");
   expect(JSON.stringify(tree.toJSON())).toContain("花生");
   act(() => { tree.root.findByProps({ accessibilityLabel: "成员3参与共餐" }).props.onValueChange(false); });
   expect(JSON.stringify(tree.toJSON())).not.toContain("需避开的过敏原");

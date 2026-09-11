@@ -1,3 +1,4 @@
+import { checkDiningRecipe } from "../src/modules/households/recipeConstraints.js";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { HouseholdsRepository } from "../src/modules/households/repository.js";
@@ -5,7 +6,7 @@ import { HouseholdsService } from "../src/modules/households/service.js";
 
 function repository(overrides: Partial<HouseholdsRepository> = {}): HouseholdsRepository {
   return {
-    diningMembers: async () => [], diningPreferences: async () => null,saveDiningPreferences: async () => false,
+    diningRecipe: async () => null, diningMembers: async () => [], diningPreferences: async () => null,saveDiningPreferences: async () => false,
     create: async () => ({}), mine: async () => [], join: async () => ({ kind: "not_found" }),
     leave: async () => ({ kind: "not_member" }), transferOwner: async () => ({ kind: "not_owner" }),
     shoppingList: async () => null, createShopping: async () => ({ kind: "not_member" }),
@@ -79,3 +80,16 @@ describe("households module", () => {
   rows[1]!.dining_shared = 0;
   await assert.rejects(() => service.previewDiningAllocation(1,9,{ participants }),/尚未授权/);
  });
+
+test("shared recipe checks include every diner and never certify unknown restrictions", () => {
+  const result = checkDiningRecipe({ id: 4,title: "家常菜",ingredients_json: [{ name: "植物油（花生油）" },{ name: "猪肉" }] },[
+    { membershipId: 1,allergies: [],restrictions: [] },
+    { membershipId: 2,allergies: ["花生"],restrictions: [] },
+    { membershipId: 3,allergies: [],restrictions: ["不吃猪肉、虾"] },
+  ]);
+  assert.equal(result.status,"blocked");
+  assert.deepEqual(result.conflicts.map(item => item.membershipId),[2,3]);
+  const uncertain = checkDiningRecipe({ id: 5,title: "青菜",ingredients_json: [{ name: "青菜" }] },[{ membershipId: 1,allergies: [],restrictions: ["低嘌呤"] }]);
+  assert.equal(uncertain.status,"needs_review");
+  assert.ok(uncertain.checks.length);
+});

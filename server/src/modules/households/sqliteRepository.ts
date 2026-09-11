@@ -17,6 +17,10 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async diningRecipe(recipeId: number) {
+    return this.database.prepare("SELECT id,title,description,ingredients_json FROM recipes WHERE id=? AND deleted_at IS NULL AND status='approved' AND COALESCE(quality_status,'trusted') <> 'needs_review'").get(recipeId) as Row | undefined ?? null;
+  }
+
   async diningMembers(userId: number, householdId: number) {
     return this.database.prepare(`SELECT hm.id,hm.user_id,COALESCE(u.nickname,u.username) AS name,hm.dining_shared,hm.dining_version,
       CASE WHEN hm.dining_shared=1 THEN hm.dining_preferences_json ELSE NULL END AS dining_preferences_json

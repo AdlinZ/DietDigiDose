@@ -1,3 +1,4 @@
+import { checkDiningRecipe } from "./recipeConstraints.js";
 import { householdDiningAllocationSchema, householdDiningMembersSchema, type HouseholdDiningAllocationInput } from "@dietdigidose/contracts";
 import crypto from "node:crypto";
 import { HouseholdsError } from "./errors.js";
@@ -30,9 +31,15 @@ export class HouseholdsService {
         throw new HouseholdsError(409,"参与成员尚未授权共餐忌口，请先由本人确认并授权","DINING_CONSENT_REQUIRED");
       return { ...member,servings: selection.servings };
     });
+    let recipeCheck;
+    if (input.recipeId !== undefined) {
+      const recipe = await this.repository.diningRecipe(input.recipeId);
+      if (!recipe) throw new HouseholdsError(404,"菜谱不可用于共餐检查","RECIPE_UNAVAILABLE");
+      recipeCheck = checkDiningRecipe(recipe,participants);
+    }
     const totalServings = participants.reduce((sum,item) => sum + Math.round(item.servings * 1_000_000),0) / 1_000_000;
     return {
-      householdId,totalServings,participants,
+      householdId,totalServings,participants,...(recipeCheck ? { recipeCheck } : {}),
       // These are requirements for subsequent recipe checking, never proof a dish is safe.
       allergies: [...new Set(participants.flatMap(member => member.allergies))],
       restrictions: [...new Set(participants.flatMap(member => member.restrictions))],

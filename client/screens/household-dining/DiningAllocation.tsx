@@ -4,7 +4,7 @@ import { householdDiningAllocationSchema, type HouseholdDiningMembers, type Hous
 import { useAuthFetch } from "@/contexts/AuthContext";
 import { householdApi } from "@/services/api/households";
 
-export function DiningAllocation({ householdId,members }: { householdId: number; members: HouseholdDiningMembers["members"] }) {
+export function DiningAllocation({ householdId,members,recipeId }: { recipeId?: number; householdId: number; members: HouseholdDiningMembers["members"] }) {
   const apiFetch = useAuthFetch();
   const [selected,setSelected] = useState<Record<number,string>>({});
   const [preview,setPreview] = useState<HouseholdDiningAllocationPreview | null>(null);
@@ -13,7 +13,7 @@ export function DiningAllocation({ householdId,members }: { householdId: number;
   useEffect(() => () => { generation.current++; },[]);
   const calculate = async () => {
     if (writing.current) return;
-    const parsed = householdDiningAllocationSchema.safeParse({ participants: members.filter(member => selected[member.membershipId] !== undefined).map(member => ({ membershipId: member.membershipId,version: member.version,servings: Number(selected[member.membershipId]) })) });
+    const parsed = householdDiningAllocationSchema.safeParse({ ...(recipeId ? { recipeId } : {}),participants: members.filter(member => selected[member.membershipId] !== undefined).map(member => ({ membershipId: member.membershipId,version: member.version,servings: Number(selected[member.membershipId]) })) });
     if (!parsed.success) { setMessage("请选择参与成员并填写正数份量，最多六位小数，总量不超过30份。"); return; }
     const ticket = generation.current; writing.current = true; setBusy(true); setMessage(""); setPreview(null);
     try {
@@ -25,6 +25,7 @@ export function DiningAllocation({ householdId,members }: { householdId: number;
   return <View className="gap-3 border-t border-border pt-4">
     <Text className="font-bold text-ink">核算一次共餐的份量</Text>
     <Text className="text-copy-muted">只选择这次参加的人。这里预览总制作需求和忌口，不保存餐次或记录食用。</Text>
+    {recipeId ? <Text className="text-copy-muted">将同时检查从详情页选中的菜谱。</Text> : null}
     {members.map(member => <View key={member.membershipId} className="gap-2">
       <View className="flex-row items-center justify-between"><Text className="text-ink">{member.name}</Text><Switch accessibilityLabel={`${member.name}参与共餐`} value={selected[member.membershipId] !== undefined} disabled={busy} onValueChange={enabled => {
         setPreview(null); setSelected(value => { const next = { ...value }; if (enabled) next[member.membershipId] = "1"; else delete next[member.membershipId]; return next; });
@@ -34,6 +35,11 @@ export function DiningAllocation({ householdId,members }: { householdId: number;
     <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={() => void calculate()}><Text className="font-bold text-brand">{busy ? "正在核算…" : "核算共餐需求"}</Text></TouchableOpacity>
     {message ? <Text accessibilityLiveRegion="polite" className="text-ink">{message}</Text> : null}
     {preview ? <View className="gap-2">
+      {preview.recipeCheck ? <View className="gap-2">
+        <Text className="font-bold text-ink">{preview.recipeCheck.title}：{preview.recipeCheck.status === "blocked" ? "有已知忌口冲突，不适合当前共餐" : "尚需核对，未确认符合全部忌口"}</Text>
+        {preview.recipeCheck.conflicts.map((conflict,index) => <Text key={index} className="text-ink">{preview.participants.find(person => person.membershipId === conflict.membershipId)?.name}：{conflict.constraint}</Text>)}
+        {preview.recipeCheck.checks.map((check,index) => <Text key={index} className="text-copy-muted">{check}</Text>)}
+      </View> : null}
       <Text className="font-bold text-ink">共需 {preview.totalServings} 份</Text>
       {preview.participants.map(person => <Text key={person.membershipId} className="text-copy-muted">{person.name}：{person.servings} 份</Text>)}
       <Text className="text-copy-muted">需避开的过敏原：{preview.allergies.join("、") || "未填写，请逐人确认"}</Text>

@@ -470,6 +470,7 @@ export default function RecipeDetailScreen() {
           ) : null}
 
           <View className="mx-4 mt-4 rounded-[24px] border border-line bg-surface p-5 md:mx-8 md:p-6">
+            <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/household-dining",params: { recipeId: recipe.id } })} className="mb-4 rounded-xl bg-brand-soft p-3"><Text className="font-bold text-brand">检查这道菜的共餐忌口</Text></TouchableOpacity>
             <SectionTitle icon="chart-pie" eyebrow="每份参考" title={nutritionPresentation.title} />
             {nutritionPresentation.disclosure ? (
               <Text testID="nutrition-estimate-label" className="mt-3 rounded-xl bg-warm-soft px-3 py-2 text-xs font-bold leading-5 text-warm">

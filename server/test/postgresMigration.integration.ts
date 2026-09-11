@@ -1,4 +1,4 @@
-import { verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
+import { verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { randomUUID } from "node:crypto";
@@ -706,6 +706,10 @@ try {
   for (const dinerId of [user.id,householdMember,thirdDiner]) assert.deepEqual((await pool.query("SELECT amount,calories FROM diet_records WHERE user_id=$1 AND food_name='家庭蛋饭'",[dinerId])).rows,[{ amount: "1份",calories: null }]);
   await verifyHouseholdCorrections(householdsService,dietRepository,postgresHouseholdId,user.id,householdMember,"PGHOUSE1");
   await verifyHouseholdReservations(householdsService,dietRepository,postgresHouseholdId,user.id,householdMember,"PGHOUSE1");
+  await verifyHouseholdPlanPreview(householdsService,postgresHouseholdId,user.id,householdMember,diningRecipeId,async (sql,args = []) => {
+    let index = 0;
+    return (await pool.query(sql.replace(/\?/g,() => `$${++index}`),args)).rows;
+  });
   const staleDiningMembership = await verifyHouseholdDining(householdsService,postgresHouseholdId,user.id,householdMember,diningRecipeId);
   await householdsService.join(householdMember,"PGHOUSE1");
   assert.equal((await householdsService.diningPreferences(householdMember,postgresHouseholdId)).shared,false);

@@ -1,11 +1,12 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
 import { Text, TextInput, TouchableOpacity } from "react-native";
-let mockParams: { recipeId?: number } = {};
+let mockParams: { recipeId?: number; planItem?: { planId: string; itemId: string; version: number } } = {};
 let mockUser: { id: number } | null = { id: 1 };
 const mockPreview = jest.fn();
 const mockMembers = jest.fn();
 const mockFetch = jest.fn(); const mockMine = jest.fn(); const mockRead = jest.fn(); const mockSave = jest.fn();
+jest.mock("@react-native-async-storage/async-storage",() => require("@react-native-async-storage/async-storage/jest/async-storage-mock"));
 jest.mock("@/contexts/AuthContext",() => ({ useAuth: () => ({ user: mockUser }),useAuthFetch: () => mockFetch }));
 jest.mock("@/components/Screen",() => ({ Screen: "View" }));
 jest.mock("@/hooks/useSafeRouter",() => ({ useSafeSearchParams: () => mockParams,useSafeRouter: () => ({ back: jest.fn() }) }));
@@ -83,5 +84,21 @@ test("selects participants explicitly and checks the chosen recipe without recor
   expect(JSON.stringify(tree.toJSON())).toContain("花生");
   act(() => { tree.root.findByProps({ accessibilityLabel: "成员3参与共餐" }).props.onValueChange(false); });
   expect(JSON.stringify(tree.toJSON())).not.toContain("需避开的过敏原");
+  act(() => tree.unmount());
+});
+
+
+test("passes the selected personal meal version and labels the result as unapplied",async () => {
+  const planItem = { planId: "plan",itemId: "meal",version: 4 };
+  mockParams = { planItem };
+  mockMembers.mockResolvedValue({ members: [{ membershipId: 1,userId: 1,name: "成员1",version: 2,shared: true,allergies: [],restrictions: [] }] });
+  mockPreview.mockResolvedValue({ planItem: { ...planItem,plannedDate: "2036-09-12",mealType: "lunch",title: "原午餐",decision: "suggest",applied: false },totalServings: 1,participants: [{ membershipId: 1,name: "成员1",servings: 1 }],allergies: [],restrictions: [] });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<HouseholdDiningScreen />); });
+  act(() => tree.root.findByProps({ accessibilityLabel: "成员1参与共餐" }).props.onValueChange(true));
+  await act(async () => { button(tree,"核算共餐需求").props.onPress(); });
+  expect(mockPreview).toHaveBeenCalledWith(mockFetch,8,{ planItem,participants: [{ membershipId: 1,version: 2,servings: 1 }] });
+  expect(JSON.stringify(tree.toJSON())).toContain("需要先审阅变更建议");
+  expect(mockSave).not.toHaveBeenCalled();
   act(() => tree.unmount());
 });

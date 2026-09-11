@@ -1,3 +1,4 @@
+import { mealChangeDecision } from "../mealPlans/changePolicy.js";
 import { checkDiningRecipe } from "./recipeConstraints.js";
 import { householdMealReservationSchema, type HouseholdMealReservationInput, householdMealEatingSchema, type HouseholdMealEatingInput, householdMealProductionSchema, type HouseholdMealProductionInput, householdDiningAllocationSchema, householdDiningMembersSchema, type HouseholdDiningAllocationInput } from "@dietdigidose/contracts";
 import crypto from "node:crypto";
@@ -43,14 +44,23 @@ export class HouseholdsService {
       return { ...member,servings: selection.servings };
     });
     const totalServings = participants.reduce((sum,item) => sum + Math.round(item.servings * 1_000_000),0) / 1_000_000;
-    let recipeCheck;
-    if (input.recipeId !== undefined) {
-      const recipe = await this.repository.diningRecipe(input.recipeId);
+    let recipeCheck; let planItem; let recipeId = input.recipeId;
+    if (input.planItem) {
+      const context = await this.repository.diningPlanContext(userId,input.planItem.planId,input.planItem.itemId);
+      if (!context) throw new HouseholdsError(404,"个人餐次不存在或不可用于共餐预览","PLAN_ITEM_UNAVAILABLE");
+      if (Number(context.item.version) !== input.planItem.version) throw new HouseholdsError(409,"个人餐次已变化，请刷新后重新预览","PLAN_ITEM_CHANGED");
+      const currentRecipe = context.item.recipe_id == null ? undefined : Number(context.item.recipe_id);
+      if (recipeId !== undefined && recipeId !== currentRecipe) throw new HouseholdsError(409,"所选菜谱与当前餐次不一致，请刷新后重试","PLAN_RECIPE_CHANGED");
+      recipeId = currentRecipe;
+      planItem = { ...input.planItem,plannedDate: String(context.item.planned_date),mealType: String(context.item.meal_type),title: String(context.item.title),decision: mealChangeDecision(context.item,context.queue,context.purchases),applied: false as const };
+    }
+    if (recipeId !== undefined) {
+      const recipe = await this.repository.diningRecipe(recipeId);
       if (!recipe) throw new HouseholdsError(404,"菜谱不可用于共餐检查","RECIPE_UNAVAILABLE");
       recipeCheck = checkDiningRecipe(recipe,participants,totalServings);
     }
     return {
-      householdId,totalServings,participants,...(recipeCheck ? { recipeCheck } : {}),
+      householdId,totalServings,participants,...(recipeCheck ? { recipeCheck } : {}),...(planItem ? { planItem } : {}),
       // These are requirements for subsequent recipe checking, never proof a dish is safe.
       allergies: [...new Set(participants.flatMap(member => member.allergies))],
       restrictions: [...new Set(participants.flatMap(member => member.restrictions))],

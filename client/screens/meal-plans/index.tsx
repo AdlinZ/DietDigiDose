@@ -346,6 +346,11 @@ export default function MealPlansScreen() {
                 <TouchableOpacity onPress={() => setDetailItem(null)} className="h-9 w-9 items-center justify-center rounded-full bg-background-secondary"><FontAwesome6 name="xmark" size={14} colorClassName="accent-copy-muted" /></TouchableOpacity>
               </View>
               <ScrollView className="mt-4" showsVerticalScrollIndicator={false}>
+                <TouchableOpacity disabled={!selectedPlan || Boolean(savingAction)} className="rounded-2xl bg-brand-soft p-3 mb-3" onPress={() => {
+                  if (!selectedPlan) return;
+                  const planItem = { planId: selectedPlan.id,itemId: detailItem.id,version: detailItem.version };
+                  setDetailItem(null); router.push({ pathname: "/household-dining",params: { planItem } });
+                }}><Text className="font-bold text-brand">预览这餐的家庭共餐需求</Text></TouchableOpacity>
                 <TouchableOpacity disabled={Boolean(detailItem.confirmedAt) || Boolean(savingAction)} className="rounded-2xl bg-brand-soft p-3 mb-3" onPress={async () => {
                   if (!selectedPlan || savingAction) return;
                   setSavingAction("confirm");

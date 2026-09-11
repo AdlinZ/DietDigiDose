@@ -27,6 +27,16 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async diningPlanContext(userId: number,planId: string,itemId: string) {
+    return this.tx(async client => {
+      await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+      const item = (await client.query("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=$1 AND i.plan_id=$2 AND i.user_id=$3 AND p.user_id=$3 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active'",[itemId,planId,userId])).rows[0] as Row | undefined;
+      if (!item) return null;
+      const queue = item.queue_item_id ? (await client.query("SELECT id,version,status FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",[item.queue_item_id,userId])).rows[0] as Row | undefined : undefined;
+      const purchases = (await client.query("SELECT id,version,checked FROM shopping_list_items WHERE user_id=$1 AND client_id LIKE $2 ORDER BY id",[userId,`meal-plan:${item.id}:%`])).rows as Row[];
+      return { item,queue,purchases };
+    });
+  }
   async reserveMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealReservationInput) {
     return this.tx(async client => {
       const member = await this.member(client,householdId,userId,true);

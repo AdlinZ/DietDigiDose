@@ -147,3 +147,35 @@ export async function verifyHouseholdReservations(service: HouseholdsService,die
   assert.equal((await service.inventory(owner,householdId)).find(item => item.id === stock.id)?.quantity,"3个");
   await service.removeInventory(owner,householdId,Number(stock.id),Number(stock.version)+1);
 }
+
+
+export async function verifyHouseholdPlanPreview(service: HouseholdsService, householdId: number, owner: number, other: number, recipeId: number,
+  query: (sql: string,args?: unknown[]) => Promise<Record<string,unknown>[]>) {
+  const original = await service.diningPreferences(owner,householdId);
+  const consent = await service.saveDiningPreferences(owner,householdId,{ ...original,shared: true });
+  const planId = "dining-context-plan", itemId = "dining-context-item";
+  await query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES(?,?,'共餐预览','2036-09-12','2036-09-18','active')",[planId,owner]);
+  await query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id) VALUES(?,?,?,'2036-09-12','lunch','共餐原餐',?)",[itemId,planId,owner,recipeId]);
+  const input = { planItem: { planId,itemId,version: 1 },participants: [{ membershipId: consent.membershipId,version: consent.version,servings: 2 }] };
+  const before = await query("SELECT * FROM meal_plan_items WHERE id=?",[itemId]);
+  const dietBefore = await query("SELECT count(*) AS n FROM diet_records WHERE user_id=?",[owner]);
+  const preview = await service.previewDiningAllocation(owner,householdId,input);
+  assert.deepEqual(preview.planItem,{ ...input.planItem,plannedDate: '2036-09-12',mealType: 'lunch',title: '共餐原餐',decision: 'apply',applied: false });
+  assert.equal(preview.recipeCheck?.materials.status,'known');
+  assert.deepEqual(await query("SELECT * FROM meal_plan_items WHERE id=?",[itemId]),before);
+  assert.deepEqual(await query("SELECT count(*) AS n FROM diet_records WHERE user_id=?",[owner]),dietBefore);
+  await assert.rejects(() => service.previewDiningAllocation(other,householdId,input),/不存在或不可用于/);
+  await assert.rejects(() => service.previewDiningAllocation(owner,householdId,{ ...input,planItem: { ...input.planItem,version: 2 } }),/已变化/);
+  await assert.rejects(() => service.previewDiningAllocation(owner,householdId,{ ...input,recipeId: recipeId+1 }),/不一致/);
+  await query("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('dining-context-shopping',?,?,'已采购花生油',true)",[owner,`meal-plan:${itemId}:oil`]);
+  assert.equal((await service.previewDiningAllocation(owner,householdId,input)).planItem?.decision,'suggest');
+  await query("DELETE FROM shopping_list_items WHERE id='dining-context-shopping'");
+  await query("UPDATE meal_plan_items SET confirmed_at=CURRENT_TIMESTAMP WHERE id=?",[itemId]);
+  assert.equal((await service.previewDiningAllocation(owner,householdId,input)).planItem?.decision,'suggest');
+  await query("UPDATE meal_plan_items SET status='queued' WHERE id=?",[itemId]);
+  assert.equal((await service.previewDiningAllocation(owner,householdId,input)).planItem?.decision,'keep');
+  await query("UPDATE meal_plans SET status='draft' WHERE id=?",[planId]);
+  await assert.rejects(() => service.previewDiningAllocation(owner,householdId,input),/不存在或不可用于/);
+  await query("DELETE FROM meal_plans WHERE id=?",[planId]);
+  await service.saveDiningPreferences(owner,householdId,{ ...consent,shared: original.shared });
+}

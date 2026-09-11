@@ -22,6 +22,15 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async diningPlanContext(userId: number,planId: string,itemId: string) {
+    return this.database.transaction(() => {
+      const item = this.database.prepare("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=? AND i.plan_id=? AND i.user_id=? AND p.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active'").get(itemId,planId,userId,userId) as Row | undefined;
+      if (!item) return null;
+      const queue = item.queue_item_id ? this.database.prepare("SELECT id,version,status FROM cooking_queue_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(item.queue_item_id,userId) as Row | undefined : undefined;
+      const purchases = this.database.prepare("SELECT id,version,checked FROM shopping_list_items WHERE user_id=? AND client_id LIKE ? ORDER BY id").all(userId,`meal-plan:${item.id}:%`) as Row[];
+      return { item,queue,purchases };
+    })();
+  }
   async reserveMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealReservationInput) {
     return this.database.transaction(() => {
       const member = this.member(householdId,userId);

@@ -1,19 +1,20 @@
 import { DiningAllocation } from "@/screens/household-dining/DiningAllocation";
 import { useEffect, useRef, useState } from "react";
 import { ScrollView, Switch, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput, type HouseholdDiningMembers } from "@dietdigidose/contracts";
+import { householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput, type HouseholdDiningMembers, type HouseholdDiningAllocationInput } from "@dietdigidose/contracts";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import { householdApi, type Household } from "@/services/api/households";
 
+type PlanItem = HouseholdDiningAllocationInput["planItem"];
 export default function HouseholdDiningScreen() {
   const { user } = useAuth();
-  const params = useSafeSearchParams<{ recipeId?: number }>();
+  const params = useSafeSearchParams<{ recipeId?: number; planItem?: PlanItem }>();
   const recipeId = Number(params.recipeId) > 0 ? Number(params.recipeId) : undefined;
-  return <DiningAccount key={`${user?.id ?? "signed-out"}-${recipeId ?? "none"}`} signedIn={Boolean(user)} recipeId={recipeId} />;
+  return <DiningAccount key={`${user?.id ?? "signed-out"}-${recipeId ?? "none"}-${JSON.stringify(params.planItem)}`} signedIn={Boolean(user)} recipeId={recipeId} planItem={params.planItem} />;
 }
-function DiningAccount({ signedIn,recipeId }: { signedIn: boolean; recipeId?: number }) {
+function DiningAccount({ signedIn,recipeId,planItem }: { signedIn: boolean; recipeId?: number; planItem?: PlanItem }) {
   const apiFetch = useAuthFetch(); const router = useSafeRouter();
   const [families,setFamilies] = useState<Household[]>([]); const [selected,setSelected] = useState<number | null>(null);
   const [message,setMessage] = useState(""); const [reload,setReload] = useState(0);
@@ -33,12 +34,12 @@ function DiningAccount({ signedIn,recipeId }: { signedIn: boolean; recipeId?: nu
         {message ? <Text accessibilityLiveRegion="polite" className="text-ink">{message}</Text> : null}
         <TouchableOpacity accessibilityRole="button" onPress={() => { setSelected(null); setFamilies([]); setMessage(""); setReload(value => value+1); }}><Text className="text-brand">刷新家庭列表</Text></TouchableOpacity>
         {selected !== null ? <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/household-meals",params: { householdId: selected } })}><Text className="font-bold text-brand">查看家庭待吃与记录本人食用</Text></TouchableOpacity> : null}
-        {selected !== null ? <DiningEditor key={selected} householdId={selected} recipeId={recipeId} /> : null}
+        {selected !== null ? <DiningEditor key={selected} householdId={selected} recipeId={recipeId} planItem={planItem} /> : null}
       </>}
     </ScrollView>
   </Screen>;
 }
-function DiningEditor({ householdId,recipeId }: { householdId: number; recipeId?: number }) {
+function DiningEditor({ householdId,recipeId,planItem }: { householdId: number; recipeId?: number; planItem?: PlanItem }) {
   const apiFetch = useAuthFetch();
   const [saved,setSaved] = useState<HouseholdDiningPreferencesInput | null>(null);
   const [shared,setShared] = useState(false); const [allergies,setAllergies] = useState(""); const [restrictions,setRestrictions] = useState("");
@@ -77,13 +78,13 @@ function DiningEditor({ householdId,recipeId }: { householdId: number; recipeId?
       <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={() => void save()} className="rounded-xl bg-brand p-4"><Text className="text-center font-bold text-white">保存共餐设置</Text></TouchableOpacity>
       <Text className="text-copy-muted">已保存授权：{saved.shared ? "允许" : "不允许"}</Text>
     </> : busy ? <Text className="text-copy-muted">正在读取设置…</Text> : null}
-    {saved ? <SharedMembers key={`${saved.version}-${reload}`} householdId={householdId} recipeId={recipeId} /> : null}
+    {saved ? <SharedMembers key={`${saved.version}-${reload}`} householdId={householdId} recipeId={recipeId} planItem={planItem} /> : null}
     {message ? <Text accessibilityLiveRegion="polite" className="text-ink">{message}</Text> : null}
     <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={() => setReload(value => value+1)}><Text className="text-brand">重新读取设置</Text></TouchableOpacity>
   </View>;
 }
 
-function SharedMembers({ householdId,recipeId }: { householdId: number; recipeId?: number }) {
+function SharedMembers({ householdId,recipeId,planItem }: { householdId: number; recipeId?: number; planItem?: PlanItem }) {
   const apiFetch = useAuthFetch();
   const [data,setData] = useState<HouseholdDiningMembers | null>(null);
   const [error,setError] = useState(false);
@@ -103,6 +104,6 @@ function SharedMembers({ householdId,recipeId }: { householdId: number; recipeId
         <Text className="text-copy-muted">饮食限制：{member.restrictions.join("、") || "未填写，请确认"}</Text>
       </> : <Text className="text-copy-muted">未授权共享，忌口待本人确认</Text>}
     </View>)}
-    {data ? <DiningAllocation householdId={householdId} members={data.members} recipeId={recipeId} /> : null}
+    {data ? <DiningAllocation householdId={householdId} members={data.members} recipeId={recipeId} planItem={planItem} /> : null}
   </View>;
 }

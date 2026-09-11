@@ -30,6 +30,8 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
       if (!item) return null;
       const queue = item.queue_item_id ? this.database.prepare("SELECT id,version,status FROM cooking_queue_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(item.queue_item_id,userId) as Row | undefined : undefined;
       const purchases = this.database.prepare("SELECT id,version,checked FROM shopping_list_items WHERE user_id=? AND client_id LIKE ? ORDER BY id").all(userId,`meal-plan:${item.id}:%`) as Row[];
+    const sharedPurchases = this.database.prepare("SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=? ORDER BY id").all(item.id) as Row[];
+    purchases.push(...sharedPurchases.map(row => ({ ...row,id: `household:${row.id}` })));
       return { item,queue,purchases };
     })();
   }

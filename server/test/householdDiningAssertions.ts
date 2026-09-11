@@ -270,6 +270,38 @@ export async function verifyDiningPlanChanges(service: HouseholdsService,plans: 
   if (next.kind !== 'updated') throw new Error('missing fresh suggestion');
   assert.equal((await plans.reviewChange(owner,planId,(next.value.change as { id: string }).id,'accept')).kind,'updated');
   assert.deepEqual((await read()).dining,dining);
+  const demandPreview = await service.previewDiningAllocation(owner,householdId,{ recipeId,participants: dining.participants });
+  const shoppingInput = { version: 5,idempotencyKey: 'dining-total-shopping-first',householdTotalDemand: dining,householdRecipeFingerprint: demandPreview.recipeCheck!.fingerprint };
+  await assert.rejects(() => plans.addShopping(owner,planId,itemId,{ ...shoppingInput,householdTotalDemand: { ...dining,participants: dining.participants.slice(0,2) } }),/预览与已保存/);
+  await assert.rejects(() => plans.addShopping(owner,planId,itemId,{ ...shoppingInput,householdRecipeFingerprint: '0'.repeat(64) }),/菜谱内容已变化/);
+  const shopping = await plans.addShopping(owner,planId,itemId,shoppingInput);
+  if (shopping.kind !== 'completed') throw new Error('missing household shopping');
+  assert.equal(shopping.value.added,1); assert.equal(shopping.value.householdId,householdId);
+  let generated = (await service.shoppingList(owner,householdId)).find(row => (shopping.value.itemIds as string[]).includes(String(row.id)))!;
+  assert.equal(generated.amount,'15ml'); assert.equal(generated.category,'共餐总需求');
+  assert.equal((await plans.addShopping(owner,planId,itemId,shoppingInput)).kind,'completed');
+  await assert.rejects(() => plans.addShopping(owner,planId,itemId,{ ...shoppingInput,householdRecipeFingerprint: '0'.repeat(64) }),/采购编号已用于/);
+  const freshSync = await plans.addShopping(owner,planId,itemId,{ ...shoppingInput,idempotencyKey: 'dining-total-shopping-second' });
+  if (freshSync.kind !== 'completed') throw new Error('missing repeated synchronization');
+  assert.equal(freshSync.value.added,0);
+  await query("UPDATE recipes SET ingredients_json=? WHERE id=?",['[{"name":"花生油","amount":"20ml"}]',recipeId]);
+  const revisedPreview = await service.previewDiningAllocation(owner,householdId,{ recipeId,participants: dining.participants });
+  const revised = await plans.addShopping(owner,planId,itemId,{ ...shoppingInput,idempotencyKey: 'dining-total-shopping-revised',householdRecipeFingerprint: revisedPreview.recipeCheck!.fingerprint });
+  assert.equal(revised.kind,'completed');
+  generated = (await service.shoppingList(owner,householdId)).find(row => row.id===generated.id)!;
+  assert.equal(generated.amount,'30ml'); assert.equal(generated.version,2);
+  await query("UPDATE recipes SET ingredients_json=? WHERE id=?",['[{"name":"花生油","amount":"10ml"}]',recipeId]);
+  await plans.addShopping(owner,planId,itemId,{ ...shoppingInput,idempotencyKey: 'dining-total-shopping-restored' });
+  generated = (await service.shoppingList(owner,householdId)).find(row => row.id===generated.id)!;
+  assert.equal(generated.amount,'15ml'); assert.equal(generated.version,3);
+  await service.updateShopping(member,householdId,String(generated.id),{ version: Number(generated.version),checked: true });
+  await query("UPDATE meal_plan_items SET confirmed_at=NULL WHERE id=?",[itemId]);
+  const purchasedChange = await plans.updateItem(owner,planId,itemId,{ version: 5,dining: null });
+  if (purchasedChange.kind !== 'updated') throw new Error('missing purchase protection');
+  assert.equal((purchasedChange.value.change as { status: string }).status,'pending');
+  const purchasePreview = await service.previewDiningAllocation(owner,householdId,{ planItem: { planId,itemId,version: 5 },participants: dining.participants });
+  assert.equal(purchasePreview.planItem?.decision,'suggest');
+  await assert.rejects(() => plans.addShopping(owner,planId,itemId,{ ...shoppingInput,idempotencyKey: 'dining-total-shopping-third' }),/已购买、入库或手动修改/);
   const stock = await service.createInventory(owner,householdId,{ food_name: '共餐制作米',quantity: '600g',expiration_date: '2099-01-01' });
   const batch = await service.produceMeal(owner,householdId,{ idempotencyKey: '98888888-8888-4888-8888-888888888891',membershipId: people[0]!.saved.membershipId,
     planItem: { planId,itemId,version: 5 },foodName: '共餐已制作',producedServings: 3,inventory: [{ itemId: Number(stock.id),version: Number(stock.version),amount: 300,unit: 'g' }] });
@@ -282,6 +314,7 @@ export async function verifyDiningPlanChanges(service: HouseholdsService,plans: 
   assert.deepEqual((await read()).dining,dining);
   await query("DELETE FROM household_inventory_items WHERE id=?",[stock.id]);
   await query("DELETE FROM meal_plans WHERE id=?",[planId]);
+  await query("DELETE FROM household_shopping_items WHERE id=?",[generated.id]);
   for (const person of people) {
     const latest = await service.diningPreferences(person.userId,householdId);
     await service.saveDiningPreferences(person.userId,householdId,{ ...latest,shared: person.old.shared,allergies: person.old.allergies,restrictions: person.old.restrictions });

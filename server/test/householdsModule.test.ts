@@ -1,3 +1,4 @@
+import { prepareDiningShopping } from "../src/modules/households/diningShopping.js";
 import { checkDiningRecipe } from "../src/modules/households/recipeConstraints.js";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
@@ -103,4 +104,15 @@ test("shared raw ingredient demand scales once for all diners and rejects incomp
   assert.equal(checkDiningRecipe({ ...recipe,ingredients_json: [...recipe.ingredients_json,{ name: "盐",amount: "适量" }] },[],3).materials.status,"unknown");
   assert.equal(checkDiningRecipe({ ...recipe,serving_size: Infinity },[],3).materials.status,"unknown");
   assert.equal(checkDiningRecipe({ ...recipe,ingredients_json: [{ name: "大米",amount: "0.000001g" }] },[],0.000001).materials.status,"unknown");
+});
+
+
+test("shared shopping derives total raw demand and refuses manually changed sources",() => {
+  const dining = { householdId: 1,constraintsReviewed: true as const,participants: [1,2,3].map(id => ({ membershipId: id,version: 1,servings: 1 })) };
+  const recipe = { id: 1,title: "米饭",serving_size: 1,ingredients_json: [{ name: "米",amount: "100g" }] };
+  assert.deepEqual(prepareDiningShopping(dining,dining,recipe,[],checkDiningRecipe(recipe,[],3).fingerprint),[{ key: '["米","g"]',name: '米',amount: '300g' }]);
+  assert.throws(() => prepareDiningShopping(dining,dining,{ ...recipe,ingredients_json: [{ name: "米",amount: "200g" }] },[],checkDiningRecipe(recipe,[],3).fingerprint),/菜谱内容已变化/);
+  for (const row of [{ checked: true },{ transferred_at: '2036-09-12' },{ deleted_at: '2036-09-12' },{ version: 2 }]) {
+    assert.throws(() => prepareDiningShopping(dining,dining,recipe,[{ household_id: 1,version: 1,source_generated_version: 1,...row }]),/不自动覆盖/);
+  }
 });

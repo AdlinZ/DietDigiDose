@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { recipeDemands } from "../recommendations/quantities.js";
 import { allergyTerms, parseArray } from "../recommendations/scoring.js";
 import type { Row } from "./types.js";
@@ -40,6 +41,7 @@ export function checkDiningRecipe(recipe: Row, participants: Array<{ membershipI
     : { status: "unknown" as const,recipeYield: Number.isFinite(yieldSize) && yieldSize > 0 ? yieldSize : null,demands: [] };
   return {
     materials,
+    fingerprint: createHash("sha256").update(JSON.stringify({ id: Number(recipe.id),title: recipe.title,description: recipe.description ?? null,ingredients: rawIngredients,servings: Number(recipe.serving_size) })).digest("hex"),
     recipeId: Number(recipe.id),title: String(recipe.title),status: conflicts.length ? "blocked" as const : "needs_review" as const,conflicts,
     checks: [
       ...(!known ? ["原料总用量未能完整换算，请核对菜谱份数与每项配料数量"] : ["原料为共餐总需求，尚未扣除可用库存或已有预留"]),

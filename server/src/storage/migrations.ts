@@ -2247,6 +2247,12 @@ const migrations: Migration[] = [
     database.exec(`ALTER TABLE meal_plan_items ADD COLUMN dining_json TEXT;
     ALTER TABLE household_meal_batches ADD COLUMN dining_json TEXT;`);
   } },
+  { version: 77, name: "household_shopping_plan_source", up(database) {
+    database.exec(`ALTER TABLE household_shopping_items ADD COLUMN source_plan_item_id TEXT REFERENCES meal_plan_items(id) ON DELETE SET NULL;
+    ALTER TABLE household_shopping_items ADD COLUMN source_demand_key TEXT;
+    ALTER TABLE household_shopping_items ADD COLUMN source_generated_version INTEGER;
+    CREATE UNIQUE INDEX idx_household_shopping_plan_demand ON household_shopping_items(source_plan_item_id,source_demand_key) WHERE source_plan_item_id IS NOT NULL;`);
+  } },
 ];
 
 export function runMigrations(database: Database.Database) {

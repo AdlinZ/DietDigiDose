@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "821f7213985ee97531763083ab5a7c6efef79dcc395a6a28b2842dfa11265271",
+  "sourceSchemaSha256": "cbaaf9f0eac661f204e1c172718b3ae4edca602d4e23e218d36910a4dd6cbeff",
   "tableCount": 105,
-  "indexCount": 156,
-  "foreignKeyCount": 167,
+  "indexCount": 157,
+  "foreignKeyCount": 168,
   "tables": [
     {
       "name": "admin_audit_logs",
@@ -3215,6 +3215,13 @@
           "referencedColumn": "id",
           "onUpdate": "no action",
           "onDelete": "cascade"
+        },
+        {
+          "column": "source_plan_item_id",
+          "referencedTable": "meal_plan_items",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "set null"
         }
       ],
       "columns": [
@@ -3335,6 +3342,27 @@
           "sqliteType": "DATETIME",
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "source_plan_item_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "source_demand_key",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "source_generated_version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
           "nullable": true
         }
       ]

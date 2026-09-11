@@ -17,7 +17,7 @@ export type MealPlanItemUpdateInput = {
   status?: "planned" | "skipped";
 };
 
-export type MealPlanExecutionInput = { version: number; idempotencyKey: string };
+export type MealPlanExecutionInput = { householdRecipeFingerprint?: string; householdTotalDemand?: import("@dietdigidose/contracts").HouseholdDiningPlan; version: number; idempotencyKey: string };
 export type MealPlanCompleteInput = MealPlanExecutionInput & { dietRecordId?: number; production?: MealProduction; inventory_consumptions?: InventoryConsumption[] };
 export type MealPlanView = Record<string, unknown> & { id: string; version: number };
 export type MealPlanItemView = Record<string, unknown> & { id: string; version: number };

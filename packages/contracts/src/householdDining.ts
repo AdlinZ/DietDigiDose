@@ -40,7 +40,7 @@ export const householdDiningAllocationPreviewSchema = z.object({
   householdId: z.number().int().positive(), totalServings: diningServings,
   planItem: z.object({ planId: z.string(),itemId: z.string(),version: z.number().int().positive(),plannedDate: z.string(),mealType: z.string(),title: z.string(),decision: z.enum(["apply","suggest","keep"]),applied: z.literal(false) }).strict().optional(),
   recipeCheck: z.object({
-    recipeId: z.number().int().positive(), title: z.string(),status: z.enum(["blocked","needs_review"]),
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/),recipeId: z.number().int().positive(), title: z.string(),status: z.enum(["blocked","needs_review"]),
     materials: z.object({
       status: z.enum(["known","unknown"]),recipeYield: z.number().finite().positive().nullable(),
       demands: z.array(z.object({ food_name: z.string(),amount_value: z.number().finite().positive().max(1_000_000_000),unit: inventoryUnitSchema }).strict()),

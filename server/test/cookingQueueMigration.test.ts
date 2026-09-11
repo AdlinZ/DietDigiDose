@@ -8,6 +8,7 @@ test("queue migration separates legacy shared meal links without discarding cook
   try {
     db.exec(`CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, name TEXT);
       CREATE TABLE household_members(id INTEGER PRIMARY KEY AUTOINCREMENT);
+      CREATE TABLE household_shopping_items(id TEXT PRIMARY KEY);
       CREATE TABLE prepared_meals(id TEXT PRIMARY KEY);
       INSERT INTO prepared_meals VALUES('legacy-meal');
       CREATE TABLE cooking_queue_items(id TEXT PRIMARY KEY,user_id INTEGER,recipe_id INTEGER,status TEXT,

@@ -1,3 +1,4 @@
+import { prepareDiningShopping } from "../households/diningShopping.js";
 import { validateSqliteDiningPlan } from "../households/sqliteDiningPlan.js";
 import { replacementAllocation } from "./replacementAllocation.js";
 import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
@@ -141,6 +142,8 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   private changeFacts(item: Row, userId: number) {
     const queue = item.queue_item_id ? this.database.prepare("SELECT id,version,status FROM cooking_queue_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(item.queue_item_id, userId) as Row | undefined : undefined;
     const purchases = this.database.prepare("SELECT id,version,checked FROM shopping_list_items WHERE user_id=? AND client_id LIKE ? ORDER BY id").all(userId, `meal-plan:${item.id}:%`) as Row[];
+    const sharedPurchases = this.database.prepare("SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=? ORDER BY id").all(item.id) as Row[];
+    purchases.push(...sharedPurchases.map(row => ({ ...row,id: `household:${row.id}` })));
     return { decision: mealChangeDecision(item, queue, purchases), snapshot: mealChangeSnapshot(item, queue, purchases) };
   }
 
@@ -258,11 +261,39 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   async addShopping(userId: number, planId: string, itemId: string, input: MealPlanExecutionInput) {
     return this.database.transaction(() => {
       const repeated = this.repeated(userId, input.idempotencyKey);
-      if (repeated) return { kind: "completed" as const, value: repeated };
+      if (repeated) {
+        if (Boolean(input.householdTotalDemand)!==(repeated.mode === "total_demand") || (input.householdTotalDemand && (!isDeepStrictEqual(input.householdTotalDemand,repeated.sourceDining) || input.householdRecipeFingerprint!==repeated.sourceRecipeFingerprint)))
+          throw new InventoryQuantityError("DINING_PLAN_CHANGED","此采购编号已用于另一份需求，请重新核对原提交");
+        return { kind: "completed" as const, value: repeated };
+      }
       const item = this.getItem(planId, itemId, userId);
       if (!item) return { kind: "not_found" as const };
-      if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_SHOPPING_REQUIRED","这是共餐安排，请按共餐总需求核对家庭采购");
+      if (item.dining_json) {
+        if (Number(item.version)!==input.version || item.status!=="planned") return { kind: "version_conflict" as const };
+        if (!input.householdTotalDemand) throw new InventoryQuantityError("HOUSEHOLD_SHOPPING_REQUIRED","这是共餐安排，请按共餐总需求核对家庭采购");
+        const dining = parseJson<import("@dietdigidose/contracts").HouseholdDiningPlan>(item.dining_json,null!);
+        validateSqliteDiningPlan(this.database,userId,item.recipe_id,dining);
+        const recipe = this.database.prepare("SELECT * FROM recipes WHERE id=?").get(item.recipe_id) as Row;
+        const existing = this.database.prepare("SELECT * FROM household_shopping_items WHERE source_plan_item_id=? ORDER BY id").all(itemId) as Row[];
+        const demands = prepareDiningShopping(dining,input.householdTotalDemand,recipe,existing,input.householdRecipeFingerprint);
+        const itemIds: string[] = [];
+        for (const demand of demands) {
+          const previous = existing.find(row => row.source_demand_key===demand.key);
+          if (previous) {
+            if (previous.name!==demand.name || previous.amount!==demand.amount) this.database.prepare("UPDATE household_shopping_items SET name=?,amount=?,version=version+1,source_generated_version=version+1,updated_by_user_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(demand.name,demand.amount,userId,previous.id);
+          } else {
+            const id = randomUUID();
+            this.database.prepare("INSERT INTO household_shopping_items(id,household_id,name,amount,category,created_by_user_id,updated_by_user_id,source_plan_item_id,source_demand_key,source_generated_version) VALUES(?,?,?,?,'共餐总需求',?,?,?,?,1)").run(id,dining.householdId,demand.name,demand.amount,userId,userId,itemId,demand.key);
+            itemIds.push(id);
+          }
+        }
+        for (const row of existing) if (!demands.some(demand => demand.key===row.source_demand_key)) this.database.prepare("DELETE FROM household_shopping_items WHERE id=?").run(row.id);
+        const value = { added: itemIds.length,itemIds,householdId: dining.householdId,mode: "total_demand",sourceDining: dining,sourceRecipeFingerprint: input.householdRecipeFingerprint,repeated: false };
+        this.saveExecution(userId,input.idempotencyKey,"shopping",itemId,value);
+        return { kind: "completed" as const,value };
+      }
       if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      if (input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","这餐已不是共餐安排，请重新核对");
       const ingredients = parseJson<unknown[]>(item.ingredients_json, []).map(ingredient)
         .filter((entry): entry is { name: string; amount: string } => Boolean(entry?.name));
       const stock = (this.database.prepare(`SELECT food_name FROM inventory_items

@@ -26,6 +26,15 @@ export function DiningAllocation({ householdId,members,recipeId,planItem }: { pl
     } catch (error) { if (ticket === generation.current) setMessage(error instanceof ApiError ? error.message : "未能核算，请检查网络后重试。"); }
     finally { if (ticket === generation.current) { writing.current = false; setBusy(false); } }
   };
+  const syncShopping = async () => {
+    if (!preview?.planItem || !reviewed || writing.current || saved) return;
+    const ticket = generation.current; writing.current = true; setBusy(true); setMessage("");
+    try {
+      await mealPlansApi.addShopping(apiFetch,preview.planItem.planId,preview.planItem.itemId,{ version: preview.planItem.version,idempotencyKey: `dining-shopping:${preview.planItem.itemId}:${preview.planItem.version}:${preview.recipeCheck?.fingerprint}`,householdRecipeFingerprint: preview.recipeCheck?.fingerprint,householdTotalDemand: { householdId,constraintsReviewed: true,participants: preview.participants.map(person => ({ membershipId: person.membershipId,version: person.version,servings: person.servings })) } });
+      if (ticket===generation.current) { setSaved(true); setMessage("共餐原料总需求已同步到家庭采购。未扣除库存或其他采购，请在家庭清单中核对实际补买量。"); }
+    } catch (error) { if (ticket===generation.current) setMessage(error instanceof ApiError ? error.message : "同步结果尚未确认，请核对家庭清单后重试原操作。"); }
+    finally { if (ticket===generation.current) { writing.current=false; setBusy(false); } }
+  };
   const save = async () => {
     if (!preview?.planItem || !reviewed || writing.current || saved) return;
     const ticket = generation.current; writing.current = true; setBusy(true); setMessage("");
@@ -63,6 +72,7 @@ export function DiningAllocation({ householdId,members,recipeId,planItem }: { pl
       </View> : null}
       {preview.planItem && preview.planItem.decision !== "keep" && preview.recipeCheck?.status === "needs_review" ? <View className="gap-2">
         <View className="flex-row items-center justify-between"><Text className="flex-1 text-copy-muted">已逐人核对共享忌口、配料与实际制作条件</Text><Switch accessibilityLabel="已核对共餐限制" value={reviewed} disabled={busy} onValueChange={setReviewed} /></View>
+        {preview.recipeCheck?.materials.status === "known" ? <><Text className="text-copy-muted">采购同步仅用于与已保存安排完全一致的预览，按下列原料总需求加入家庭清单，不抵扣现有库存或其他采购项。请核对后选择。</Text><TouchableOpacity accessibilityRole="button" disabled={busy || !reviewed || saved} onPress={() => void syncShopping()}><Text className="font-bold text-brand">按此总需求同步家庭采购</Text></TouchableOpacity></> : null}
         <TouchableOpacity accessibilityRole="button" disabled={busy || !reviewed || saved} onPress={() => void save()}><Text className="font-bold text-brand">保存这餐的共餐安排</Text></TouchableOpacity>
       </View> : null}
       <Text className="font-bold text-ink">共需 {preview.totalServings} 份</Text>

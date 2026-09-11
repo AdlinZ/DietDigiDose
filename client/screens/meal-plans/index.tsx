@@ -121,6 +121,7 @@ export default function MealPlansScreen() {
 
   const addShopping = async (item: MealPlanItem) => {
     if (!selectedPlan || savingAction) return;
+    if (item.dining) { router.push({ pathname: "/household-dining",params: { planItem: { planId: selectedPlan.id,itemId: item.id,version: item.version } } }); return; }
     setSavingAction(`shopping:${item.id}`);
     try {
       const result = await mealPlansApi.addShopping(authFetch, selectedPlan.id, item.id, {

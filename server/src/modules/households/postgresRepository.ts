@@ -37,6 +37,8 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
       if (!item) return null;
       const queue = item.queue_item_id ? (await client.query("SELECT id,version,status FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",[item.queue_item_id,userId])).rows[0] as Row | undefined : undefined;
       const purchases = (await client.query("SELECT id,version,checked FROM shopping_list_items WHERE user_id=$1 AND client_id LIKE $2 ORDER BY id",[userId,`meal-plan:${item.id}:%`])).rows as Row[];
+    const sharedPurchases = (await client.query("SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=$1 ORDER BY id",[item.id])).rows as Row[];
+    purchases.push(...sharedPurchases.map(row => ({ ...row,id: `household:${row.id}` })));
       return { item,queue,purchases };
     });
   }

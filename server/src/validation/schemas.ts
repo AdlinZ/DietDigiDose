@@ -498,7 +498,7 @@ const mealPlanExecutionBaseSchema = z.object({
   idempotencyKey: z.string().trim().min(16).max(200),
 }).strict();
 
-export const mealPlanShoppingSchema = mealPlanExecutionBaseSchema;
+export const mealPlanShoppingSchema = mealPlanExecutionBaseSchema.extend({ householdRecipeFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),householdTotalDemand: householdDiningPlanSchema.optional() }).strict();
 export const mealPlanQueueSchema = mealPlanExecutionBaseSchema;
 export const mealPlanCompleteSchema = mealPlanExecutionBaseSchema.extend({
   dietRecordId: z.number().int().positive().optional(),

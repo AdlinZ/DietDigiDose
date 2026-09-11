@@ -1,3 +1,4 @@
+import { prepareDiningShopping } from "../households/diningShopping.js";
 import { validatePostgresDiningPlan } from "../households/postgresDiningPlan.js";
 import { replacementAllocation } from "./replacementAllocation.js";
 import { lockMealPlanning } from "./postgresLock.js";
@@ -163,6 +164,8 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
   private async changeFacts(client: PoolClient, item: Row, userId: number) {
     const queue = item.queue_item_id ? (await client.query("SELECT id,version,status FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [item.queue_item_id,userId])).rows[0] as Row | undefined : undefined;
     const purchases = (await client.query("SELECT id,version,checked FROM shopping_list_items WHERE user_id=$1 AND client_id LIKE $2 ORDER BY id FOR UPDATE", [userId,`meal-plan:${item.id}:%`])).rows as Row[];
+    const sharedPurchases = (await client.query("SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=$1 ORDER BY id FOR UPDATE",[item.id])).rows as Row[];
+    purchases.push(...sharedPurchases.map(row => ({ ...row,id: `household:${row.id}` })));
     return { decision: mealChangeDecision(item,queue,purchases), snapshot: mealChangeSnapshot(item,queue,purchases) };
   }
 
@@ -283,11 +286,39 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       await lockMealPlanning(client,userId);
       await this.lockExecution(client, userId, input.idempotencyKey);
       const repeated = await this.repeated(client, userId, input.idempotencyKey);
-      if (repeated) return { kind: "completed" as const, value: repeated };
+      if (repeated) {
+        if (Boolean(input.householdTotalDemand)!==(repeated.mode === "total_demand") || (input.householdTotalDemand && (!isDeepStrictEqual(input.householdTotalDemand,repeated.sourceDining) || input.householdRecipeFingerprint!==repeated.sourceRecipeFingerprint)))
+          throw new InventoryQuantityError("DINING_PLAN_CHANGED","此采购编号已用于另一份需求，请重新核对原提交");
+        return { kind: "completed" as const, value: repeated };
+      }
       const item = await this.getItem(client, planId, itemId, userId, true);
       if (!item) return { kind: "not_found" as const };
-      if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_SHOPPING_REQUIRED","这是共餐安排，请按共餐总需求核对家庭采购");
+      if (item.dining_json) {
+        if (Number(item.version)!==input.version || item.status!=="planned") return { kind: "version_conflict" as const };
+        if (!input.householdTotalDemand) throw new InventoryQuantityError("HOUSEHOLD_SHOPPING_REQUIRED","这是共餐安排，请按共餐总需求核对家庭采购");
+        const dining = parseJson<import("@dietdigidose/contracts").HouseholdDiningPlan>(item.dining_json,null!);
+        await validatePostgresDiningPlan(client,userId,item.recipe_id,dining);
+        const recipe = (await client.query("SELECT * FROM recipes WHERE id=$1",[item.recipe_id])).rows[0] as Row;
+        const existing = (await client.query("SELECT * FROM household_shopping_items WHERE source_plan_item_id=$1 ORDER BY id FOR UPDATE",[itemId])).rows as Row[];
+        const demands = prepareDiningShopping(dining,input.householdTotalDemand,recipe,existing,input.householdRecipeFingerprint);
+        const itemIds: string[] = [];
+        for (const demand of demands) {
+          const previous = existing.find(row => row.source_demand_key===demand.key);
+          if (previous) {
+            if (previous.name!==demand.name || previous.amount!==demand.amount) await client.query("UPDATE household_shopping_items SET name=$1,amount=$2,version=version+1,source_generated_version=version+1,updated_by_user_id=$3,updated_at=CURRENT_TIMESTAMP WHERE id=$4",[demand.name,demand.amount,userId,previous.id]);
+          } else {
+            const id = randomUUID();
+            await client.query("INSERT INTO household_shopping_items(id,household_id,name,amount,category,created_by_user_id,updated_by_user_id,source_plan_item_id,source_demand_key,source_generated_version) VALUES($1,$2,$3,$4,'共餐总需求',$5,$5,$6,$7,1)",[id,dining.householdId,demand.name,demand.amount,userId,itemId,demand.key]);
+            itemIds.push(id);
+          }
+        }
+        for (const row of existing) if (!demands.some(demand => demand.key===row.source_demand_key)) await client.query("DELETE FROM household_shopping_items WHERE id=$1",[row.id]);
+        const value = { added: itemIds.length,itemIds,householdId: dining.householdId,mode: "total_demand",sourceDining: dining,sourceRecipeFingerprint: input.householdRecipeFingerprint,repeated: false };
+        await this.saveExecution(client,userId,input.idempotencyKey,"shopping",itemId,value);
+        return { kind: "completed" as const,value };
+      }
       if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      if (input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","这餐已不是共餐安排，请重新核对");
       const ingredients = parseJson<unknown[]>(item.ingredients_json, []).map(ingredient)
         .filter((entry): entry is { name: string; amount: string } => Boolean(entry?.name));
       const stock = (await client.query(`SELECT food_name FROM inventory_items
@@ -448,7 +479,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     return client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`meal-plan:${userId}:${key}`]);
   }
 
-  private async repeated(client: PoolClient, userId: number, key: string) {
+  private async repeated(client: PoolClient, userId: number, key: string): Promise<import("./types.js").ExecutionResult | null> {
     const result = await client.query("SELECT result_json FROM meal_plan_execution_requests WHERE user_id = $1 AND idempotency_key = $2", [userId, key]);
     return result.rows[0] ? { ...(result.rows[0].result_json as Record<string, unknown>), repeated: true } : null;
   }

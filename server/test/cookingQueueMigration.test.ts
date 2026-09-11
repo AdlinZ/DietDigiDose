@@ -11,16 +11,19 @@ test("queue migration separates legacy shared meal links without discarding cook
         deleted_at TEXT,recipe_snapshot_json TEXT,version INTEGER,updated_at TEXT);
       CREATE UNIQUE INDEX idx_cooking_queue_active_recipe ON cooking_queue_items(user_id,recipe_id)
         WHERE deleted_at IS NULL AND status IN ('waiting','preparing','ready','cooking');
+      CREATE TABLE meal_plans(id TEXT PRIMARY KEY,status TEXT);
+      INSERT INTO meal_plans VALUES('plan','active');
       CREATE TABLE meal_plan_items(id TEXT PRIMARY KEY,user_id INTEGER,queue_item_id TEXT,status TEXT,
-        deleted_at TEXT,version INTEGER,updated_at TEXT,ingredients_json TEXT,planned_date TEXT);
+        deleted_at TEXT,version INTEGER,updated_at TEXT,ingredients_json TEXT,planned_date TEXT,plan_id TEXT,created_at TEXT);
       INSERT INTO cooking_queue_items VALUES('q',1,10,'cooking',NULL,'{"ingredients":[]}',4,NULL);
-      INSERT INTO meal_plan_items VALUES('a',1,'q','queued',NULL,2,NULL,'[{"name":"蛋","amount":"6个"}]','2026-09-10');
-      INSERT INTO meal_plan_items VALUES('b',1,'q','queued',NULL,3,NULL,'[]','2026-09-11');`);
+      INSERT INTO meal_plan_items VALUES('a',1,'q','queued',NULL,2,NULL,'[{"name":"蛋","amount":"6个"}]','2026-09-10','plan','2026-09-01');
+      INSERT INTO meal_plan_items VALUES('b',1,'q','queued',NULL,3,NULL,'[]','2026-09-11','plan','2026-09-01');`);
     const record = db.prepare("INSERT INTO schema_migrations VALUES(?, 'existing')");
     for (let version = 1; version <= 61; version++) record.run(version);
     runMigrations(db);
     const q = db.prepare("SELECT * FROM cooking_queue_items").get() as Record<string, unknown>;
     assert.equal(q.source_plan_item_id, "a");
+    assert.equal((db.prepare("SELECT confirmed_at FROM meal_plan_items WHERE id='a'").get() as { confirmed_at: string }).confirmed_at,"2026-09-01");
     assert.equal(q.status, "cooking");
     assert.equal(q.version, 5);
     assert.deepEqual(JSON.parse(String(q.recipe_snapshot_json)).ingredients, [{ name: "蛋", amount: "6个" }]);

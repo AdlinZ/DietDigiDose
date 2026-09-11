@@ -44,6 +44,19 @@ export class MealPlansService {
     if (result === "version_conflict") throw new MealPlansError(409, "餐单已在其他设备更新，请刷新后重试", "MEAL_PLAN_VERSION_CONFLICT");
     return { deleted: true };
   }
+  listChanges(userId: number, planId: string) { return this.repository.listChanges(userId, planId); }
+  async confirmItem(userId: number, planId: string, itemId: string, version: number) {
+    const result = await this.repository.confirmItem(userId, planId, itemId, version);
+    if (result.kind === "not_found") throw new MealPlansError(404, "餐次不存在", "MEAL_PLAN_ITEM_NOT_FOUND");
+    if (result.kind !== "updated") throw new MealPlansError(409, "餐次已变化，请刷新后确认", "MEAL_PLAN_VERSION_CONFLICT");
+    return result.value;
+  }
+  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {
+    const result = await this.repository.reviewChange(userId,planId,changeId,action);
+    if (result.kind === "not_found") throw new MealPlansError(404, "变更或餐次不存在", "MEAL_PLAN_CHANGE_NOT_FOUND");
+    if (result.kind !== "updated") throw new MealPlansError(409, "餐次、采购或制作状态已变化，无法应用旧建议；原安排已保留", "MEAL_PLAN_CHANGE_CONFLICT");
+    return result.value;
+  }
   async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
     const result = await this.repository.updateItem(userId, planId, itemId, input);
     if (result.kind === "not_found") throw new MealPlansError(404, "餐次不存在", "MEAL_PLAN_ITEM_NOT_FOUND");

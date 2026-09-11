@@ -43,6 +43,13 @@
       "when": 1789144764306,
       "tag": "0005_outstanding_brood",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789145394308,
+      "tag": "0006_flimsy_firebrand",
+      "breakpoints": true
     }
   ]
 }

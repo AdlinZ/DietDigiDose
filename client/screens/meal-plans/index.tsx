@@ -1,4 +1,5 @@
 
+import { MealPlanChanges } from "@/components/MealPlanChanges";
 import { MealProductionFields } from "@/components/MealProductionFields";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
@@ -35,6 +36,7 @@ export default function MealPlansScreen() {
   const router = useSafeRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const authFetch = useAuthFetch();
+  const [changeRevision, setChangeRevision] = useState(0);
   const [plans, setPlans] = useState<MealPlan[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState(toLocalDateKey());
@@ -102,7 +104,13 @@ export default function MealPlansScreen() {
     try {
       const next = await mealPlansApi.updateItem(authFetch, selectedPlan.id, detailItem.id, { version: detailItem.version, ...input });
       replaceItem(next);
-      if (typeof input.plannedDate === "string") setSelectedDate(input.plannedDate);
+      setChangeRevision(value => value + 1);
+      if (next.change?.status === "pending") {
+        setDetailItem(null);
+        Alert.alert("变更建议已保存", "这餐已确认或已购买，请在安排变更中审阅后接受。");
+      } else if (next.change?.status === "blocked") {
+        Alert.alert("原安排已保留", "这餐已进入烹饪队列、开始制作或完成，不能直接调整。");
+      } else if (next.change?.status === "applied" && typeof input.plannedDate === "string") setSelectedDate(input.plannedDate);
     } catch (error) {
       Alert.alert("修改失败", error instanceof Error ? error.message : "请刷新后重试");
       await load();
@@ -243,6 +251,7 @@ export default function MealPlansScreen() {
         ) : null}
 
         <TouchableOpacity onPress={() => router.push("/cooking-plan")} className="mx-5 mt-4 rounded-2xl bg-brand-soft p-4"><Text className="font-black text-brand">按待吃餐和库存计算这次备餐</Text></TouchableOpacity>
+        {selectedPlan ? <MealPlanChanges key={selectedPlan.id} planId={selectedPlan.id} revision={changeRevision} items={selectedPlan.items} onChanged={next => { replaceItem(next); setDetailItem(null); }} /> : null}
         {selectedPlan?.constraints.savedCookingDraft && !selectedPlan.archived ? <TouchableOpacity onPress={() => router.push({ pathname: "/cooking-plan", params: { planId: selectedPlan.id } })} className="mx-5 rounded-2xl bg-brand-soft p-4"><Text className="font-bold text-brand">恢复备餐方案草案 · 查看份量、原料与时间</Text></TouchableOpacity> : null}
         {!selectedPlan ? (
           <View className="mx-5 mt-10 items-center rounded-3xl border border-dashed border-line bg-surface p-8">
@@ -334,6 +343,13 @@ export default function MealPlansScreen() {
                 <TouchableOpacity onPress={() => setDetailItem(null)} className="h-9 w-9 items-center justify-center rounded-full bg-background-secondary"><FontAwesome6 name="xmark" size={14} colorClassName="accent-copy-muted" /></TouchableOpacity>
               </View>
               <ScrollView className="mt-4" showsVerticalScrollIndicator={false}>
+                <TouchableOpacity disabled={Boolean(detailItem.confirmedAt) || Boolean(savingAction)} className="rounded-2xl bg-brand-soft p-3 mb-3" onPress={async () => {
+                  if (!selectedPlan || savingAction) return;
+                  setSavingAction("confirm");
+                  try { replaceItem(await mealPlansApi.confirmItem(authFetch,selectedPlan.id,detailItem.id,detailItem.version)); setChangeRevision(value => value + 1); }
+                  catch (reason) { Alert.alert("确认失败",reason instanceof Error ? reason.message : "请刷新后重试"); }
+                  finally { setSavingAction(null); }
+                }}><Text className="font-bold text-brand">{detailItem.confirmedAt ? "已确认 · 自动调整需先审阅" : "确认这餐安排"}</Text></TouchableOpacity>
                 <View className="flex-row gap-2">
                   {MEAL_TYPES.map((mealType) => <TouchableOpacity key={mealType} onPress={() => void updateItem({ mealType })} className={`rounded-xl px-3 py-2 ${detailItem.mealType === mealType ? "bg-brand-fill" : "bg-background-secondary"}`}><Text className={`text-[10px] font-black ${detailItem.mealType === mealType ? "text-white" : "text-copy-muted"}`}>{mealType}</Text></TouchableOpacity>)}
                 </View>

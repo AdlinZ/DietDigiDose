@@ -27,7 +27,8 @@ export type MutationResult<T> =
   | { kind: "not_found" }
   | { kind: "version_conflict" }
   | { kind: "invalid_date_range" }
-  | { kind: "recipe_not_available" };
+  | { kind: "recipe_not_available" }
+  | { kind: "protected" };
 
 export type ExecutionRepositoryResult =
   | { kind: "completed"; value: ExecutionResult }
@@ -36,3 +37,5 @@ export type ExecutionRepositoryResult =
   | { kind: "recipe_unavailable" }
   | { kind: "queue_full" }
   | { kind: "diet_record_not_found" };
+
+export type MealPlanChangeReview = "accept" | "reject" | "restore";

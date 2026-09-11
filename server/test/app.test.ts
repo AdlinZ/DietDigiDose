@@ -3946,3 +3946,42 @@ test("prepared meal intake correction is explicit, atomic, idempotent and does n
   assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 1);
   assert.equal((await remove(secondId, "undo_eating")).response.status, 409);
 });
+
+test("meal plan change reviews protect confirmation, purchases and cooking with replay-safe restoration", async () => {
+  const account = await register("plan-protection-195@example.com");
+  const planId = "19500000-0000-4000-8000-000000000001";
+  const itemId = "19500000-0000-4000-8000-000000000002";
+  db.prepare("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES(?,?,?,'2026-09-12','2026-09-18','active')").run(planId,account.user.id,"保护计划");
+  db.prepare("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title) VALUES(?,?,?,'2026-09-12','午餐','计划饭')").run(itemId,planId,account.user.id);
+  const path = `/api/v1/meal-plans/${planId}/items/${itemId}`;
+  const patch = (input: JsonObject) => api(path,{ token: account.token,method: "PATCH",body: JSON.stringify(input) });
+  const review = (id: string, action: string) => api(`/api/v1/meal-plans/${planId}/changes/${id}/review`,{ token: account.token,method: "POST",body: JSON.stringify({ action }) });
+  const first = await patch({ version: 1, mealType: "晚餐" });
+  assert.equal(first.response.status,200);
+  assert.equal((first.body as JsonObject).change.status,"applied");
+  assert.equal((first.body as JsonObject).version,2);
+  assert.equal((await review((first.body as JsonObject).change.id,"restore")).response.status,200);
+  assert.equal((db.prepare("SELECT meal_type FROM meal_plan_items WHERE id=?").get(itemId) as JsonObject).meal_type,"午餐");
+  assert.equal((await review((first.body as JsonObject).change.id,"restore")).response.status,200);
+  await api(`${path}/confirm`,{ token: account.token,method: "POST",body: JSON.stringify({ version: 3 }) });
+  const suggested = await patch({ version: 4,mealType: "早餐" });
+  assert.equal((suggested.body as JsonObject).change.status,"pending");
+  assert.equal((suggested.body as JsonObject).mealType,"午餐");
+  const suggestionId = (suggested.body as JsonObject).change.id;
+  const accepted = await Promise.all([review(suggestionId,"accept"),review(suggestionId,"accept")]);
+  assert.deepEqual(accepted.map(value => value.response.status),[200,200]);
+  assert.equal((db.prepare("SELECT version FROM meal_plan_items WHERE id=?").get(itemId) as JsonObject).version,5);
+  const rejectInput = { version: 5,mealType: "晚餐" };
+  const rejected = await patch(rejectInput);
+  await review((rejected.body as JsonObject).change.id,"reject");
+  assert.equal(((await patch(rejectInput)).body as JsonObject).change.status,"rejected");
+  const pending = await patch({ version: 5,plannedDate: "2026-09-13" });
+  // A purchase arrives after suggestion creation without changing the meal version.
+  db.prepare("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES(?,?,?,'米',1)").run("195-shopping",account.user.id,`meal-plan:${itemId}:米`);
+  assert.equal((await review((pending.body as JsonObject).change.id,"accept")).response.status,409);
+  assert.equal((await review(suggestionId,"restore")).response.status,409);
+  db.prepare("UPDATE meal_plan_items SET status='cooking' WHERE id=?").run(itemId);
+  const blocked = await patch({ version: 5,plannedDate: "2026-09-14" });
+  assert.equal((blocked.body as JsonObject).change.status,"blocked");
+  assert.equal((blocked.body as JsonObject).plannedDate,"2026-09-12");
+});

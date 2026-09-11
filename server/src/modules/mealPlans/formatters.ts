@@ -22,6 +22,7 @@ export function formatMealPlanItem(row: Row): MealPlanItemView {
   return { plannedServings: allocation?.servings ?? null,
     id: String(row.id),
     planId: String(row.plan_id),
+    confirmedAt: row.confirmed_at ? dateTime(row.confirmed_at) : null,
     plannedDate: String(row.planned_date),
     mealType: String(row.meal_type),
     title: String(row.recipe_title || row.title),

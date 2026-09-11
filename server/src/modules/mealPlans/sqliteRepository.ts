@@ -1,3 +1,4 @@
+import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop } from "./changePolicy.js";
 import { prepareDraftActivation } from "./draftActivation.js";
 import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@dietdigidose/contracts";
 import { isDeepStrictEqual } from "node:util";
@@ -31,8 +32,8 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       const recipes = activation.items.map(item => this.database.prepare("SELECT steps_json FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(item.recipeId) as Row | undefined);
       if (recipes.some(recipe => !recipe)) return { kind: "recipe_not_available" as const };
       activation.items.forEach((item, index) => this.database.prepare(`INSERT INTO meal_plan_items
-        (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),recipes[index]!.steps_json));
+        (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json,confirmed_at)
+        VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).run(item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),recipes[index]!.steps_json));
       this.database.prepare("UPDATE meal_plans SET status='active',constraints_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?")
         .run(JSON.stringify(activation.constraints),id,userId);
       return { kind: "updated" as const, value: { plan: this.formatPlan(this.getPlan(id,userId,false)!,userId), repeated: false } };
@@ -108,7 +109,81 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
     return this.getPlan(id, userId, false) ? "version_conflict" as const : "not_found" as const;
   }
 
-  async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
+  private changeFacts(item: Row, userId: number) {
+    const queue = item.queue_item_id ? this.database.prepare("SELECT id,version,status FROM cooking_queue_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(item.queue_item_id, userId) as Row | undefined : undefined;
+    const purchases = this.database.prepare("SELECT id,version,checked FROM shopping_list_items WHERE user_id=? AND client_id LIKE ? ORDER BY id").all(userId, `meal-plan:${item.id}:%`) as Row[];
+    return { decision: mealChangeDecision(item, queue, purchases), snapshot: mealChangeSnapshot(item, queue, purchases) };
+  }
+
+  async confirmItem(userId: number, planId: string, itemId: string, version: number) {
+    return this.database.transaction(() => {
+      const item = this.getItem(planId, itemId, userId);
+      if (!item) return { kind: "not_found" as const };
+      if (Number(item.version) !== version) return { kind: "version_conflict" as const };
+      if (!item.confirmed_at) this.database.prepare("UPDATE meal_plan_items SET confirmed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(itemId, userId);
+      return { kind: "updated" as const, value: formatMealPlanItem(this.getItem(planId, itemId, userId)!) };
+    })();
+  }
+
+  async listChanges(userId: number, planId: string) {
+    return (this.database.prepare("SELECT * FROM meal_plan_changes WHERE user_id=? AND plan_id=? ORDER BY created_at DESC,id DESC").all(userId, planId) as Row[]).map(formatMealChange);
+  }
+
+  async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
+    return this.database.transaction(() => {
+      const item = this.getItem(planId, itemId, userId);
+      if (!item) return { kind: "not_found" as const };
+      const facts = this.changeFacts(item, userId);
+      if (Number(item.version) === input.version && isMealChangeNoop(item,input)) return { kind: "updated" as const, value: formatMealPlanItem(item) };
+      const fingerprint = mealChangeFingerprint(itemId, facts.snapshot, input);
+      const existing = this.database.prepare("SELECT * FROM meal_plan_changes WHERE user_id=? AND fingerprint=?").get(userId, fingerprint) as Row | undefined;
+      if (existing) return { kind: "updated" as const, value: { ...formatMealPlanItem(item), change: formatMealChange(existing) } };
+      if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      const replacement = input.recipeId ? this.database.prepare("SELECT title FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(input.recipeId) as Row | undefined : undefined;
+      if (input.recipeId && !replacement) return { kind: "recipe_not_available" as const };
+      const proposal = { ...input, title: String(replacement?.title || item.recipe_title || item.title) };
+      const id = randomUUID();
+      let next = formatMealPlanItem(item);
+      if (facts.decision === "apply") {
+        const applied = this.applyItemChange(userId, planId, itemId, input);
+        if (applied.kind !== "updated") return applied;
+        next = applied.value;
+      }
+      this.database.prepare(`INSERT INTO meal_plan_changes(id,user_id,plan_id,item_id,fingerprint,source,reason,status,before_version,after_version,before_json,after_json,applied_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END)`).run(id,userId,planId,itemId,fingerprint,source,reason,
+        facts.decision === "apply" ? "applied" : facts.decision === "suggest" ? "pending" : "blocked", input.version,
+        facts.decision === "apply" ? next.version : null,JSON.stringify(facts.snapshot),JSON.stringify(proposal),facts.decision === "apply" ? 1 : 0);
+      return { kind: "updated" as const, value: { ...next, change: formatMealChange(this.database.prepare("SELECT * FROM meal_plan_changes WHERE id=?").get(id) as Row) } };
+    })();
+  }
+
+  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {
+    return this.database.transaction(() => {
+      const change = this.database.prepare("SELECT * FROM meal_plan_changes WHERE id=? AND user_id=? AND plan_id=?").get(changeId,userId,planId) as Row | undefined;
+      if (!change) return { kind: "not_found" as const };
+      const item = this.getItem(planId,String(change.item_id),userId);
+      if (!item) return { kind: "not_found" as const };
+      if ((action === "accept" && change.status === "applied") || (action === "reject" && change.status === "rejected") || (action === "restore" && change.status === "reverted")) return { kind: "updated" as const, value: formatMealPlanItem(item) };
+      if (action === "reject" && change.status === "pending") {
+        this.database.prepare("UPDATE meal_plan_changes SET status='rejected' WHERE id=?").run(changeId);
+        return { kind: "updated" as const, value: formatMealPlanItem(item) };
+      }
+      if ((action === "accept" && change.status !== "pending") || (action === "restore" && change.status !== "applied") || action === "reject") return { kind: "version_conflict" as const };
+      const facts = this.changeFacts(item,userId);
+      const before = parseJson<ReturnType<typeof mealChangeSnapshot>>(change.before_json, {} as ReturnType<typeof mealChangeSnapshot>);
+      const expectedVersion = action === "restore" ? Number(change.after_version) : Number(change.before_version);
+      const unchangedFacts = { ...facts.snapshot, version: before.version, input: before.input,title: before.title };
+      if (facts.decision === "keep" || Number(item.version) !== expectedVersion || !isDeepStrictEqual(unchangedFacts,before)) return { kind: "protected" as const };
+      const patch = action === "restore" ? before.input : parseJson<MealPlanItemUpdateInput>(change.after_json, { version: expectedVersion });
+      const result = this.applyItemChange(userId,planId,String(item.id),{ ...patch, version: expectedVersion });
+      if (result.kind !== "updated") return result;
+      if (action === "restore") this.database.prepare("UPDATE meal_plan_changes SET status='reverted',after_json=json_set(after_json,'$.restoredVersion',?,'$.restoredAt',CURRENT_TIMESTAMP) WHERE id=?").run(result.value.version,changeId);
+      else this.database.prepare("UPDATE meal_plan_changes SET status='applied',after_version=?,applied_at=CURRENT_TIMESTAMP WHERE id=?").run(result.value.version,changeId);
+      return result;
+    })();
+  }
+
+  private applyItemChange(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
     const current = this.getItem(planId, itemId, userId);
     if (!current) return { kind: "not_found" as const };
     let replacement: Row | undefined;
@@ -265,7 +340,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       .get(id, userId) as Row | undefined;
   }
   private getItem(planId: string, itemId: string, userId: number) {
-    return this.database.prepare(`${itemSelect} WHERE i.id = ? AND i.plan_id = ? AND i.user_id = ? AND i.deleted_at IS NULL`)
+    return this.database.prepare(`${itemSelect} WHERE i.id = ? AND i.plan_id = ? AND i.user_id = ? AND i.deleted_at IS NULL AND p.deleted_at IS NULL`)
       .get(itemId, planId, userId) as Row | undefined;
   }
   private getItems(planId: string, userId: number) {

@@ -1,3 +1,4 @@
+import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop } from "./changePolicy.js";
 import { prepareDraftActivation } from "./draftActivation.js";
 import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@dietdigidose/contracts";
 import { isDeepStrictEqual } from "node:util";
@@ -38,8 +39,8 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
         recipes.push(found.rows[0]);
       }
       for (const [index,item] of activation.items.entries()) await client.query(`INSERT INTO meal_plan_items
-        (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb)`, [item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),JSON.stringify(recipes[index].steps_json)]);
+        (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json,confirmed_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,CURRENT_TIMESTAMP)`, [item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),JSON.stringify(recipes[index].steps_json)]);
       const updated = await client.query("UPDATE meal_plans SET status='active',constraints_json=$1::jsonb,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND user_id=$3 RETURNING *", [JSON.stringify(activation.constraints),id,userId]);
       return { kind: "updated" as const, value: { plan: await this.formatPlan(client,updated.rows[0],userId), repeated: false } };
     });
@@ -125,17 +126,91 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     return await this.getPlan(this.pool, id, userId, false) ? "version_conflict" as const : "not_found" as const;
   }
 
-  async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
-    const current = await this.getItem(this.pool, planId, itemId, userId);
+  private async changeFacts(client: PoolClient, item: Row, userId: number) {
+    const queue = item.queue_item_id ? (await client.query("SELECT id,version,status FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [item.queue_item_id,userId])).rows[0] as Row | undefined : undefined;
+    const purchases = (await client.query("SELECT id,version,checked FROM shopping_list_items WHERE user_id=$1 AND client_id LIKE $2 ORDER BY id FOR UPDATE", [userId,`meal-plan:${item.id}:%`])).rows as Row[];
+    return { decision: mealChangeDecision(item,queue,purchases), snapshot: mealChangeSnapshot(item,queue,purchases) };
+  }
+
+  async confirmItem(userId: number, planId: string, itemId: string, version: number) {
+    return this.transaction(async client => {
+      const item = await this.getItem(client,planId,itemId,userId,true);
+      if (!item) return { kind: "not_found" as const };
+      if (Number(item.version) !== version) return { kind: "version_conflict" as const };
+      if (!item.confirmed_at) await client.query("UPDATE meal_plan_items SET confirmed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2", [itemId,userId]);
+      return { kind: "updated" as const, value: formatMealPlanItem((await this.getItem(client,planId,itemId,userId))!) };
+    });
+  }
+
+  async listChanges(userId: number, planId: string) {
+    return (await this.pool.query("SELECT * FROM meal_plan_changes WHERE user_id=$1 AND plan_id=$2 ORDER BY created_at DESC,id DESC", [userId,planId])).rows.map(formatMealChange);
+  }
+
+  async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
+    return this.transaction(async client => {
+      const item = await this.getItem(client,planId,itemId,userId,true);
+      if (!item) return { kind: "not_found" as const };
+      const facts = await this.changeFacts(client,item,userId);
+      if (Number(item.version) === input.version && isMealChangeNoop(item,input)) return { kind: "updated" as const, value: formatMealPlanItem(item) };
+      const fingerprint = mealChangeFingerprint(itemId,facts.snapshot,input);
+      const existing = (await client.query("SELECT * FROM meal_plan_changes WHERE user_id=$1 AND fingerprint=$2", [userId,fingerprint])).rows[0] as Row | undefined;
+      if (existing) return { kind: "updated" as const, value: { ...formatMealPlanItem(item), change: formatMealChange(existing) } };
+      if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      const replacement = input.recipeId ? (await client.query("SELECT title FROM recipes WHERE id=$1 AND status='approved' AND deleted_at IS NULL FOR SHARE",[input.recipeId])).rows[0] as Row | undefined : undefined;
+      if (input.recipeId && !replacement) return { kind: "recipe_not_available" as const };
+      const proposal = { ...input, title: String(replacement?.title || item.recipe_title || item.title) };
+      const id = randomUUID();
+      let next = formatMealPlanItem(item);
+      if (facts.decision === "apply") {
+        const applied = await this.applyItemChange(client,userId,planId,itemId,input);
+        if (applied.kind !== "updated") return applied;
+        next = applied.value;
+      }
+      const changed = await client.query(`INSERT INTO meal_plan_changes(id,user_id,plan_id,item_id,fingerprint,source,reason,status,before_version,after_version,before_json,after_json,applied_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,CASE WHEN $13::boolean THEN CURRENT_TIMESTAMP ELSE NULL END) RETURNING *`,
+        [id,userId,planId,itemId,fingerprint,source,reason,facts.decision === "apply" ? "applied" : facts.decision === "suggest" ? "pending" : "blocked",input.version,
+          facts.decision === "apply" ? next.version : null,JSON.stringify(facts.snapshot),JSON.stringify(proposal),facts.decision === "apply"]);
+      return { kind: "updated" as const, value: { ...next, change: formatMealChange(changed.rows[0]) } };
+    });
+  }
+
+  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {
+    return this.transaction(async client => {
+      const change = (await client.query("SELECT * FROM meal_plan_changes WHERE id=$1 AND user_id=$2 AND plan_id=$3 FOR UPDATE", [changeId,userId,planId])).rows[0] as Row | undefined;
+      if (!change) return { kind: "not_found" as const };
+      const item = await this.getItem(client,planId,String(change.item_id),userId,true);
+      if (!item) return { kind: "not_found" as const };
+      if ((action === "accept" && change.status === "applied") || (action === "reject" && change.status === "rejected") || (action === "restore" && change.status === "reverted")) return { kind: "updated" as const, value: formatMealPlanItem(item) };
+      if (action === "reject" && change.status === "pending") {
+        await client.query("UPDATE meal_plan_changes SET status='rejected' WHERE id=$1", [changeId]);
+        return { kind: "updated" as const, value: formatMealPlanItem(item) };
+      }
+      if ((action === "accept" && change.status !== "pending") || (action === "restore" && change.status !== "applied") || action === "reject") return { kind: "version_conflict" as const };
+      const facts = await this.changeFacts(client,item,userId);
+      const before = parseJson<ReturnType<typeof mealChangeSnapshot>>(change.before_json, {} as ReturnType<typeof mealChangeSnapshot>);
+      const expectedVersion = action === "restore" ? Number(change.after_version) : Number(change.before_version);
+      const unchangedFacts = { ...facts.snapshot,version:before.version,input:before.input,title:before.title };
+      if (facts.decision === "keep" || Number(item.version) !== expectedVersion || !isDeepStrictEqual(unchangedFacts,before)) return { kind: "protected" as const };
+      const patch = action === "restore" ? before.input : parseJson<MealPlanItemUpdateInput>(change.after_json, { version: expectedVersion });
+      const result = await this.applyItemChange(client,userId,planId,String(item.id),{ ...patch,version:expectedVersion });
+      if (result.kind !== "updated") return result;
+      if (action === "restore") await client.query("UPDATE meal_plan_changes SET status='reverted',after_json=after_json || jsonb_build_object('restoredVersion',$1::integer,'restoredAt',CURRENT_TIMESTAMP) WHERE id=$2",[result.value.version,changeId]);
+      else await client.query("UPDATE meal_plan_changes SET status='applied',after_version=$1,applied_at=CURRENT_TIMESTAMP WHERE id=$2",[result.value.version,changeId]);
+      return result;
+    });
+  }
+
+  private async applyItemChange(client: PoolClient, userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
+    const current = await this.getItem(client, planId, itemId, userId);
     if (!current) return { kind: "not_found" as const };
     let replacement: Row | undefined;
     if (input.recipeId !== undefined && input.recipeId !== null) {
-      const selected = await this.pool.query(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat
+      const selected = await client.query(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat
         FROM recipes WHERE id = $1 AND status = 'approved' AND deleted_at IS NULL`, [input.recipeId]);
       replacement = selected.rows[0] as Row | undefined;
       if (!replacement) return { kind: "recipe_not_available" as const };
     }
-    const changed = await this.pool.query(`UPDATE meal_plan_items SET planned_date = $1, meal_type = $2, recipe_id = $3, title = $4,
+    const changed = await client.query(`UPDATE meal_plan_items SET planned_date = $1, meal_type = $2, recipe_id = $3, title = $4,
       ingredients_json = $5::jsonb, steps_json = $6::jsonb, calories = $7, protein = $8, carbs = $9, fat = $10, status = $11,
       queue_item_id = CASE WHEN $12::boolean THEN NULL ELSE queue_item_id END,
       version = version + 1, updated_at = CURRENT_TIMESTAMP
@@ -148,7 +223,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       input.status ?? current.status, input.recipeId !== undefined, itemId, planId, userId, input.version,
     ]);
     if (changed.rowCount !== 1) return { kind: "version_conflict" as const };
-    return { kind: "updated" as const, value: formatMealPlanItem((await this.getItem(this.pool, planId, itemId, userId))!) };
+    return { kind: "updated" as const, value: formatMealPlanItem((await this.getItem(client, planId, itemId, userId))!) };
   }
 
   addShopping(userId: number, planId: string, itemId: string, input: MealPlanExecutionInput) {
@@ -294,7 +369,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
   }
 
   private async getItem(client: Pool | PoolClient, planId: string, itemId: string, userId: number, lock = false) {
-    const result = await client.query(`${itemSelect} WHERE i.id = $1 AND i.plan_id = $2 AND i.user_id = $3 AND i.deleted_at IS NULL${lock ? " FOR UPDATE OF i" : ""}`,
+    const result = await client.query(`${itemSelect} WHERE i.id = $1 AND i.plan_id = $2 AND i.user_id = $3 AND i.deleted_at IS NULL AND p.deleted_at IS NULL${lock ? " FOR UPDATE OF i" : ""}`,
       [itemId, planId, userId]);
     return result.rows[0] as Row | undefined;
   }

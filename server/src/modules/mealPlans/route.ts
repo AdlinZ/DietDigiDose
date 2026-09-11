@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { updateCookingPlanDraftSchema, saveCookingPlanDraftSchema } from "@dietdigidose/contracts";
 import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { Router, type NextFunction, type Response } from "express";
@@ -22,6 +23,16 @@ export function createMealPlansRouter(service: MealPlansService) {
   router.use(authMiddleware);
   router.param("id", uuidParam);
   router.param("itemId", uuidParam);
+  router.param("changeId", uuidParam);
+  router.get("/:id/changes", (req: AuthRequest,res,next) => {
+    void service.listChanges(req.userId!,String(req.params.id)).then(value => res.json(value)).catch(next);
+  });
+  router.post("/:id/changes/:changeId/review", validateBody(z.object({ action: z.enum(["accept","reject","restore"]) }).strict()), (req: AuthRequest,res,next) => {
+    void service.reviewChange(req.userId!,String(req.params.id),String(req.params.changeId),req.body.action).then(value => res.json(value)).catch(error => handleError(error,res,next));
+  });
+  router.post("/:id/items/:itemId/confirm", validateBody(mealPlanVersionSchema), (req: AuthRequest,res,next) => {
+    void service.confirmItem(req.userId!,String(req.params.id),String(req.params.itemId),req.body.version).then(value => res.json(value)).catch(error => handleError(error,res,next));
+  });
   router.post("/:id/activate", validateBody(mealPlanVersionSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
     void service.activateDraft(req.userId!, String(req.params.id), req.body.version).then(value => res.json(value))
       .catch((error: unknown) => handleError(error, res, next));

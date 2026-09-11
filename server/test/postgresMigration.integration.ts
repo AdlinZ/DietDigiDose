@@ -1241,6 +1241,38 @@ try {
   assert.equal(await cookingQueueRepository.cancel("66666666-6666-4666-8666-666666666666", user.id), true);
 
   const mealPlanRepository = new PostgresMealPlansRepository(pool);
+  const protectedPlanId = "19500000-0000-4000-8000-000000000001";
+  const protectedItemId = "19500000-0000-4000-8000-000000000002";
+  await pool.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES($1,$2,'PG保护计划','2026-09-12','2026-09-18','active')", [protectedPlanId,user.id]);
+  await pool.query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title) VALUES($1,$2,$3,'2026-09-12','午餐','PG饭')", [protectedItemId,protectedPlanId,user.id]);
+  const autoChange = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 1,mealType: "晚餐" },"worker","规则调整");
+  assert.equal(autoChange.kind,"updated");
+  if (autoChange.kind !== "updated") throw new Error("auto change failed");
+  assert.equal((autoChange.value.change as Record<string,unknown>).status,"applied");
+  const autoId = String((autoChange.value.change as Record<string,unknown>).id);
+  assert.equal((await mealPlanRepository.reviewChange(user.id,protectedPlanId,autoId,"restore")).kind,"updated");
+  await mealPlanRepository.confirmItem(user.id,protectedPlanId,protectedItemId,3);
+  const suggestion = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 4,mealType: "早餐" },"worker","条件变化");
+  if (suggestion.kind !== "updated") throw new Error("suggestion failed");
+  assert.equal((suggestion.value.change as Record<string,unknown>).status,"pending");
+  const changeId = String((suggestion.value.change as Record<string,unknown>).id);
+  const reviews = await Promise.all([mealPlanRepository.reviewChange(user.id,protectedPlanId,changeId,"accept"),mealPlanRepository.reviewChange(user.id,protectedPlanId,changeId,"accept")]);
+  assert.deepEqual(reviews.map(result => result.kind),["updated","updated"]);
+  assert.equal((await pool.query("SELECT version FROM meal_plan_items WHERE id=$1",[protectedItemId])).rows[0].version,5);
+  await pool.query("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('pg-protection-purchase',$1,$2,'米',TRUE)",[user.id,`meal-plan:${protectedItemId}:米`]);
+  assert.equal((await mealPlanRepository.reviewChange(user.id,protectedPlanId,changeId,"restore")).kind,"protected");
+  const rejectedSuggestion = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,mealType: "晚餐" });
+  if (rejectedSuggestion.kind !== "updated") throw new Error("suggestion failed");
+  const rejectedId = String((rejectedSuggestion.value.change as Record<string,unknown>).id);
+  await mealPlanRepository.reviewChange(user.id,protectedPlanId,rejectedId,"reject");
+  const replayRejected = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,mealType: "晚餐" });
+  if (replayRejected.kind !== "updated") throw new Error("replay failed");
+  assert.equal((replayRejected.value.change as Record<string,unknown>).status,"rejected");
+  await pool.query("UPDATE meal_plan_items SET status='cooking' WHERE id=$1",[protectedItemId]);
+  const blockedChange = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,plannedDate: "2026-09-13" });
+  if (blockedChange.kind !== "updated") throw new Error("blocked result missing");
+  assert.equal((blockedChange.value.change as Record<string,unknown>).status,"blocked");
+
   const savedDraftInput: SaveCookingPlanDraftInput = {
     id: "7cd0c614-438c-45ab-a3cc-50507798a194", title: "可恢复草案",
     draft: { status: "requires_validation", meals: [{ id: "dinner", date: "2026-09-09", mealType: "dinner",

@@ -2094,6 +2094,27 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    version: 64,
+    name: "meal_plan_change_review",
+    up(database) {
+      database.exec(`ALTER TABLE meal_plan_items ADD COLUMN confirmed_at DATETIME;
+        UPDATE meal_plan_items SET confirmed_at=created_at WHERE plan_id IN (SELECT id FROM meal_plans WHERE status='active');
+        CREATE TABLE meal_plan_changes (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          plan_id TEXT NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
+          item_id TEXT NOT NULL REFERENCES meal_plan_items(id) ON DELETE CASCADE,
+          fingerprint TEXT NOT NULL, source TEXT NOT NULL, reason TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('pending','applied','rejected','blocked','reverted','conflict')),
+          before_version INTEGER NOT NULL, after_version INTEGER,
+          before_json TEXT NOT NULL, after_json TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, applied_at DATETIME,
+          UNIQUE(user_id,fingerprint)
+        );
+        CREATE INDEX idx_meal_plan_changes_plan ON meal_plan_changes(user_id,plan_id,created_at);`);
+    },
+  },
+
 ];
 
 export function runMigrations(database: Database.Database) {

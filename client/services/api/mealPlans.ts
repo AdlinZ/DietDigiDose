@@ -3,7 +3,15 @@ import { requestJson, type ApiFetch } from "./client";
 
 export type MealPlanItemStatus = "planned" | "queued" | "cooking" | "completed" | "skipped";
 
+export interface MealPlanChange {
+  id: string; itemId: string; source: string; reason: string; status: string;
+  before: { title?: string; input?: { plannedDate?: string; mealType?: string; recipeId?: number | null; status?: string } };
+  after: { title?: string; plannedDate?: string; mealType?: string; recipeId?: number | null; status?: string };
+  beforeVersion: number; afterVersion: number | null; createdAt: string; appliedAt: string | null;
+}
 export interface MealPlanItem {
+  confirmedAt?: string | null;
+  change?: MealPlanChange;
   plannedServings?: number | null;
   targetMealId?: string | null;
   id: string;
@@ -48,6 +56,9 @@ const itemPath = (planId: string, itemId: string) =>
   `/api/v1/meal-plans/${encodeURIComponent(planId)}/items/${encodeURIComponent(itemId)}`;
 
 export const mealPlansApi = {
+  changes: (apiFetch: ApiFetch, planId: string) => requestJson<MealPlanChange[]>(apiFetch, `/api/v1/meal-plans/${encodeURIComponent(planId)}/changes`),
+  reviewChange: (apiFetch: ApiFetch, planId: string, changeId: string, action: "accept" | "reject" | "restore") => requestJson<MealPlanItem>(apiFetch, `/api/v1/meal-plans/${encodeURIComponent(planId)}/changes/${encodeURIComponent(changeId)}/review`, { method: "POST", body: JSON.stringify({ action }) }),
+  confirmItem: (apiFetch: ApiFetch, planId: string, itemId: string, version: number) => requestJson<MealPlanItem>(apiFetch, `${itemPath(planId,itemId)}/confirm`, { method: "POST", body: JSON.stringify({ version }) }),
   activateDraft: (apiFetch: ApiFetch, id: string, version: number) =>
     requestJson<{ plan: MealPlan; repeated: boolean }>(apiFetch, `/api/v1/meal-plans/${encodeURIComponent(id)}/activate`, { method: "POST", body: JSON.stringify({ version }) }),
   updateDraft: async (apiFetch: ApiFetch, id: string, input: UpdateCookingPlanDraftInput) =>

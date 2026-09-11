@@ -1600,9 +1600,12 @@ try {
 
   const outcomeFacts = (await recommendationsService.learningState(user.id)).observations;
   assert(outcomeFacts.some(fact => fact.kind === "production"));
+  assert(outcomeFacts.some(fact => fact.kind === "inventory" && fact.valid));
+  assert(outcomeFacts.some(fact => fact.kind === "inventory" && !fact.valid));
+  assert(outcomeFacts.some(fact => fact.kind === "plan_change" && !fact.valid));
   assert(outcomeFacts.some(fact => fact.correctionId && !fact.valid));
   assert.equal(new Set(outcomeFacts.map(fact => fact.id)).size,outcomeFacts.length);
-  assert.deepEqual(await recommendationsRepository.preferenceOutcomes(-1),{ production: [],events: [] });
+  assert.deepEqual(await recommendationsRepository.preferenceOutcomes(-1),{ production: [],events: [],inventory: [],changes: [] });
 
   const aiToolDataService = new AiToolDataService(new PostgresAiToolDataRepository(pool));
   await pool.query(`INSERT INTO recipes

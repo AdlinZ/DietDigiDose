@@ -14,7 +14,7 @@ export type RecommendationRequestWrite = {
 };
 
 export interface RecommendationsRepository {
-  preferenceOutcomes(userId: number): Promise<{ production: Row[]; events: Row[] }>;
+  preferenceOutcomes(userId: number): Promise<{ production: Row[]; events: Row[]; inventory?: Row[]; changes?: Row[] }>;
   learningData(userId: number): Promise<import("./preferenceEvidence.js").LearningData>;
   updateLearning(userId: number,input: import("@dietdigidose/contracts").PreferenceLearningUpdate): Promise<boolean>;
   planningState(userId: number, startDate: string, endDate: string): Promise<{ items: Row[]; plans: Row[]; shopping: Row[] }>;

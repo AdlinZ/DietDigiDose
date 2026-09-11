@@ -18,3 +18,18 @@ test("undo and intake deletion revoke consumption evidence; discard does not inf
   const discard = formatOutcomeEvidence([],[{ ...eating,event_type: "discard",diet_record_id: null }])[0];
   assert.equal(discard.valid,true); assert.match(discard.explanation,/原因未知/);
 });
+
+test("confirmed and automatic inventory remain distinct and undo invalidates the original evidence",() => {
+  const row = { id: 1,food_name: "番茄",quantity_after: 2,quantity_unit: "piece",created_at: "2026-09-12 10:00:00",metadata_json: { acceptance: "manual" } };
+  const manual = formatOutcomeEvidence([],[],[row])[0];
+  assert.equal(manual.kind,"inventory"); assert.equal(manual.quantity,2); assert.equal(manual.servings,undefined);
+  assert.match(manual.explanation,/用户确认/);
+  assert.match(formatOutcomeEvidence([],[],[{ ...row,metadata_json: JSON.stringify({ acceptance: "automatic" }) }])[0].explanation,/自动入库/);
+  assert.equal(formatOutcomeEvidence([],[],[{ ...row,undo_id: 2 }])[0].valid,false);
+});
+test("restoring an applied meal change invalidates change evidence without inferring a taste",() => {
+  const change = { id: "change",status: "applied",after_json: { recipeId: 1,title: "新菜" },created_at: "2026-09-12 10:00:00",applied_at: "2026-09-12 11:00:00" };
+  assert.equal(formatOutcomeEvidence([],[],[],[change])[0].valid,true);
+  const restored = formatOutcomeEvidence([],[],[],[{ ...change,status: "reverted" }])[0];
+  assert.equal(restored.valid,false); assert.equal(restored.recipeId,1);
+});

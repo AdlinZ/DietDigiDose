@@ -28,7 +28,7 @@ export class RecommendationsService {
 
   async learningState(userId: number) {
     const [data,outcomes] = await Promise.all([this.repository.learningData(userId),this.repository.preferenceOutcomes(userId)]);
-    return { ...formatLearningState(data),observations: formatOutcomeEvidence(outcomes.production,outcomes.events) };
+    return { ...formatLearningState(data),observations: formatOutcomeEvidence(outcomes.production,outcomes.events,outcomes.inventory,outcomes.changes) };
   }
   async updateLearning(userId: number,input: PreferenceLearningUpdate) {
     const request = preferenceLearningUpdateSchema.parse(input);

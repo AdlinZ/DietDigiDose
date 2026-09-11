@@ -43,7 +43,14 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
         LEFT JOIN prepared_meal_intake_corrections c ON c.event_id=e.id AND c.user_id=e.user_id
         WHERE e.user_id=$1 AND (e.created_at>=CURRENT_TIMESTAMP-INTERVAL '30 days' OR c.created_at>=CURRENT_TIMESTAMP-INTERVAL '30 days')`,[userId]),
     ]);
-    return { production: production.rows as Row[],events: events.rows as Row[] };
+    const [inventory,changes] = await Promise.all([
+      this.pool.query(`SELECT l.id,l.created_at,l.quantity_after,l.quantity_unit,l.metadata_json,i.food_name,i.deleted_at,u.id AS undo_id
+        FROM inventory_change_logs l JOIN inventory_items i ON i.id=l.inventory_item_id AND i.user_id=l.user_id
+        LEFT JOIN inventory_change_logs u ON u.inventory_item_id=l.inventory_item_id AND u.user_id=l.user_id AND u.metadata_json->>'intake_undo_job' IS NOT NULL
+        WHERE l.user_id=$1 AND l.action='created' AND l.metadata_json->>'acceptance' IN ('manual','automatic') AND l.created_at>=CURRENT_TIMESTAMP-INTERVAL '30 days'`,[userId]),
+      this.pool.query("SELECT id,status,after_json,created_at,applied_at FROM meal_plan_changes WHERE user_id=$1 AND status IN ('applied','reverted') AND created_at>=CURRENT_TIMESTAMP-INTERVAL '30 days'",[userId]),
+    ]);
+    return { production: production.rows as Row[],events: events.rows as Row[],inventory: inventory.rows as Row[],changes: changes.rows as Row[] };
   }
   async learningData(userId: number) {
     const settings = (await this.pool.query("SELECT * FROM recommendation_learning_settings WHERE user_id=$1",[userId])).rows[0] as Row | undefined;

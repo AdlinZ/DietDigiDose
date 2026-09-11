@@ -34,7 +34,7 @@ export default function PreferenceLearningScreen() {
           {item.origin === "inferred" ? <TouchableOpacity disabled={busy} onPress={() => void update({ kind: "recipe",version: state.version,recipeId: item.recipeId,value: "dislike" })}><Text className="text-brand">确认：我确实不喜欢</Text></TouchableOpacity> : null}
           <TouchableOpacity disabled={busy} onPress={() => void update({ kind: "recipe",version: state.version,recipeId: item.recipeId,value: "neutral" })}><Text className="text-brand">纠正或删除：不再据此降低排序</Text></TouchableOpacity>
         </View>)}
-        {state.observations?.length ? <View className="gap-3"><Text className="font-bold text-ink">近30天的相关事实</Text><Text className="text-copy-muted">这些事实用于核对结果，目前不会单独改变口味结论。</Text>{state.observations.map(fact => <View key={fact.id} className="rounded-xl bg-surface p-3"><Text className="text-ink">{fact.at.slice(0,10)} · {fact.title} · {fact.servings} 份</Text><Text className="text-copy-muted">{fact.explanation}</Text></View>)}</View> : null}
+        {state.observations?.length ? <View className="gap-3"><Text className="font-bold text-ink">近30天的相关事实</Text><Text className="text-copy-muted">这些事实用于核对结果，目前不会单独改变口味结论。</Text>{state.observations.map(fact => <View key={fact.id} className="rounded-xl bg-surface p-3"><Text className="text-ink">{fact.at.slice(0,10)} · {fact.title}{fact.servings !== undefined ? ` · ${fact.servings} 份` : fact.quantity !== undefined ? ` · ${fact.quantity} ${fact.unit}` : ""}</Text><Text className="text-copy-muted">{fact.explanation}</Text></View>)}</View> : null}
         <Text className="text-copy-muted text-xs">删除后保留最小屏蔽记录，避免旧反馈再次生成同一结论。删除账号时一并清除。</Text>
       </>}
     </ScrollView></Screen>;

@@ -54,7 +54,7 @@
     "server/src/modules/rateLimits/sqliteRepository.ts": 10,
     "server/src/modules/realtimeVoice/sqliteRepository.ts": 23,
     "server/src/modules/recipes/sqliteRepository.ts": 26,
-    "server/src/modules/recommendations/sqliteRepository.ts": 26,
+    "server/src/modules/recommendations/sqliteRepository.ts": 30,
     "server/src/modules/shopping/index.ts": 1,
     "server/src/modules/shopping/sqliteRepository.ts": 9,
     "server/src/modules/voicePacks/index.ts": 1,

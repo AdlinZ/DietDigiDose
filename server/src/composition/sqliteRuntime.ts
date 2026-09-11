@@ -1,3 +1,4 @@
+import { SqliteMaintenanceQueueRepository } from "../modules/planMaintenance/sqliteQueueRepository.js";
 import { PlanMaintenanceService } from "../modules/planMaintenance/service.js";
 import { createPlanMaintenanceRouter } from "../modules/planMaintenance/route.js";
 import { SqlitePlanMaintenanceRepository } from "../modules/planMaintenance/sqliteRepository.js";
@@ -134,6 +135,7 @@ export function initializeSqliteWorker(): WorkerRuntimeBundle {
   return {
     driver: "sqlite",
     worker: new WorkerRuntime(new SqliteWorkerRepository(db)),
+    maintenanceQueue: new SqliteMaintenanceQueueRepository(db),
     mediaCleanup: new MediaCleanupService(new SqliteMediaCleanupRepository(db), deleteStoredMediaReferences),
     async close() {},
   };

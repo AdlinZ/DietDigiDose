@@ -1,4 +1,4 @@
-export type WorkerTaskName = "notifications" | "media-cleanup";
+export type WorkerTaskName = "notifications" | "media-cleanup" | "plan-maintenance-dispatch";
 export type WorkerRunStatus = "running" | "completed" | "failed";
 
 export type WorkerTaskResult = {

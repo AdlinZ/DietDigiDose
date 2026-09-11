@@ -1,3 +1,4 @@
+import { PostgresMaintenanceQueueRepository } from "../modules/planMaintenance/postgresQueueRepository.js";
 import { PlanMaintenanceService } from "../modules/planMaintenance/service.js";
 import { createPlanMaintenanceRouter } from "../modules/planMaintenance/route.js";
 import { PostgresPlanMaintenanceRepository } from "../modules/planMaintenance/postgresRepository.js";
@@ -253,6 +254,7 @@ export async function initializePostgresWorker(): Promise<WorkerRuntimeBundle> {
     return {
       driver: "postgresql",
       worker: new WorkerRuntime(new PostgresWorkerRepository(pool)),
+      maintenanceQueue: new PostgresMaintenanceQueueRepository(pool),
       mediaCleanup: new MediaCleanupService(new PostgresMediaCleanupRepository(pool), deleteStoredMediaReferences),
       close: () => pool.end(),
     };

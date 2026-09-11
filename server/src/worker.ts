@@ -7,7 +7,7 @@ import { checkExpoPushReceipts, sendExpiringInventoryNotifications } from "./ser
 import type { WorkerTaskName, WorkerTaskRunResult } from "./modules/worker/types.js";
 import { logger } from "./utils/logger.js";
 
-const supportedTasks: WorkerTaskName[] = ["notifications", "media-cleanup"];
+const supportedTasks: WorkerTaskName[] = ["notifications", "media-cleanup", "plan-maintenance-dispatch"];
 
 function numberFromEnv(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -47,6 +47,11 @@ export async function runWorkerCycle(workerId: string, runtime: WorkerRuntimeBun
               failedRecipients: notifications.failedRecipients,
             },
           };
+        }
+      : taskName === "plan-maintenance-dispatch"
+      ? async () => {
+          const enqueued = await runtime.maintenanceQueue.enqueueEvents(new Date(),numberFromEnv("PLAN_MAINTENANCE_EVENT_BATCH_SIZE",200));
+          return { processed: enqueued, succeeded: enqueued, failed: 0, details: { phase: "event_dispatch", eventsEnqueued: enqueued } };
         }
       : async () => {
           const cleanup = await runtime.mediaCleanup.processPending(numberFromEnv("MEDIA_CLEANUP_BATCH_SIZE", 25));

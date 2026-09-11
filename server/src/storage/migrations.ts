@@ -2156,6 +2156,24 @@ const migrations: Migration[] = [
     CREATE INDEX idx_plan_maintenance_events_pending ON plan_maintenance_events(processed_at,user_id,created_at,id);`);
   } },
 
+  { version: 69, name: "plan_maintenance_event_jobs", up(database) {
+    database.exec(`CREATE TABLE plan_maintenance_jobs (
+      id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed')),
+      attempts INTEGER NOT NULL DEFAULT 0, rule_version TEXT NOT NULL,
+      available_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      lease_token TEXT, lease_expires_at DATETIME,
+      last_error TEXT, result_json TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX idx_plan_maintenance_jobs_due ON plan_maintenance_jobs(status,available_at,lease_expires_at);
+    CREATE TABLE plan_maintenance_job_events (
+      event_id TEXT PRIMARY KEY REFERENCES plan_maintenance_events(id) ON DELETE CASCADE,
+      job_id TEXT NOT NULL REFERENCES plan_maintenance_jobs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX idx_plan_maintenance_job_events_job ON plan_maintenance_job_events(job_id,event_id);`);
+  } },
+
 ];
 
 export function runMigrations(database: Database.Database) {

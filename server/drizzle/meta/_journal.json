@@ -78,6 +78,13 @@
       "when": 1789150792808,
       "tag": "0010_modern_the_twelve",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789151084173,
+      "tag": "0011_rainy_living_tribunal",
+      "breakpoints": true
     }
   ]
 }

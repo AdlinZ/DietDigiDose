@@ -1,3 +1,5 @@
+import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
+import { PostgresMaintenanceQueueRepository } from "../src/modules/planMaintenance/postgresQueueRepository.js";
 import { PostgresPlanMaintenanceRepository } from "../src/modules/planMaintenance/postgresRepository.js";
 import { PlanMaintenanceService } from "../src/modules/planMaintenance/service.js";
 import type { SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
@@ -2257,6 +2259,16 @@ try {
       [JSON.stringify([{ backend: "local", path: `/tmp/recovered-${id}.png` }]), id]);
     assert.equal(await mediaCleanupService.process(id), true);
   }
+
+  await pool.query("DELETE FROM plan_maintenance_jobs");
+  await pool.query("DELETE FROM plan_maintenance_events");
+  const queueOtherUser = Number((await pool.query("SELECT id FROM users WHERE id<>$1 LIMIT 1",[user.id])).rows[0].id);
+  await verifyMaintenanceQueue({ users: [user.id,queueOtherUser], repository: () => new PostgresMaintenanceQueueRepository(pool),
+    seed: async (id,userId,at) => { await pool.query("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES($1,$2,'eat',$1,$1,$3)",[id,userId,at]); },
+    unprocessed: async () => (await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE processed_at IS NULL")).rows[0].n,
+  });
+  await pool.query("DELETE FROM plan_maintenance_jobs");
+  await pool.query("DELETE FROM plan_maintenance_events");
 
   const maintenance = new PlanMaintenanceService(new PostgresPlanMaintenanceRepository(pool), () => new Date("2026-09-12T05:00:00Z"));
   assert.equal((await maintenance.settings(user.id)).version, 0);

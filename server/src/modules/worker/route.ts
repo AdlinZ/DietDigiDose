@@ -3,7 +3,7 @@ import { sendError } from "../../utils/http.js";
 import type { WorkerRepository } from "./repository.js";
 import type { WorkerRunStatus, WorkerTaskName } from "./types.js";
 
-const taskNames = new Set<WorkerTaskName>(["notifications", "media-cleanup"]);
+const taskNames = new Set<WorkerTaskName>(["notifications", "media-cleanup", "plan-maintenance-dispatch"]);
 const statuses = new Set<WorkerRunStatus>(["running", "completed", "failed"]);
 
 export function buildAdminWorkerRunsRouter(repository: WorkerRepository) {

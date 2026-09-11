@@ -43,5 +43,6 @@ export type WorkerRuntimeBundle = {
   driver: DatabaseDriver;
   worker: WorkerRuntime;
   mediaCleanup: MediaCleanupService;
+  maintenanceQueue: import("../modules/planMaintenance/queue.js").MaintenanceQueueRepository;
   close(): Promise<void>;
 };

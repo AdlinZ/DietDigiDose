@@ -1,3 +1,5 @@
+import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
+import { SqliteMaintenanceQueueRepository } from "../src/modules/planMaintenance/sqliteQueueRepository.js";
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -328,6 +330,33 @@ describe("API security baseline", () => {
     assert.equal(disabled.response.status, 200);
     assert.equal((disabled.body as JsonObject).nextCheckAt, null);
     assert.equal((disabled.body as JsonObject).timeZone, "Asia/Shanghai");
+  });
+
+  test("maintenance queue coalesces events, fences recovery and bounds retries", async () => {
+    const owner = await register("queue-owner@example.com");
+    const other = await register("queue-other@example.com");
+    db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
+    await verifyMaintenanceQueue({ users: [owner.user.id,other.user.id], repository: () => new SqliteMaintenanceQueueRepository(db),
+      seed: async (id,userId,at) => { db.prepare("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES(?,?,'eat',?,?,?)").run(id,userId,id,id,at); },
+      unprocessed: async () => (db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE processed_at IS NULL").get() as JsonObject).n,
+    });
+    db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
+  });
+
+  test("worker dispatch persists event assignments without claiming plan completion", async () => {
+    const owner = await register("dispatch-owner@example.com");
+    db.prepare("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES('dispatch-event',?,'eat','dispatch-event','meal',datetime('now','-1 minute'))").run(owner.user.id);
+    const { initializeSqliteWorker } = await import("../src/composition/sqliteRuntime.js");
+    const { runWorkerCycle } = await import("../src/worker.js");
+    const worker = initializeSqliteWorker();
+    const first = await runWorkerCycle("dispatch-test",worker,["plan-maintenance-dispatch"]);
+    assert.equal(first[0].status,"completed");
+    assert.deepEqual(first[0].result?.details,{ phase: "event_dispatch",eventsEnqueued: 1 });
+    const repeated = await runWorkerCycle("dispatch-test",worker,["plan-maintenance-dispatch"]);
+    assert.equal(repeated[0].result?.processed,0);
+    assert.equal((db.prepare("SELECT processed_at FROM plan_maintenance_events WHERE id='dispatch-event'").get() as JsonObject).processed_at,null);
+    assert.equal((db.prepare("SELECT status FROM plan_maintenance_jobs WHERE user_id=?").get(owner.user.id) as JsonObject).status,"queued");
+    db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
   });
 
   test("worker batch history is visible only to administrators", async () => {

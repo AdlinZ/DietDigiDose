@@ -48,7 +48,7 @@
     "server/src/modules/inventory/sqliteRepository.ts": 40,
     "server/src/modules/kitchenware/sqliteRepository.ts": 18,
     "server/src/modules/mealPlans/index.ts": 1,
-    "server/src/modules/mealPlans/sqliteRepository.ts": 55,
+    "server/src/modules/mealPlans/sqliteRepository.ts": 56,
     "server/src/modules/mediaCleanup/sqliteRepository.ts": 11,
     "server/src/modules/notifications/sqliteRepository.ts": 57,
     "server/src/modules/planMaintenance/sqliteEventWriter.ts": 2,

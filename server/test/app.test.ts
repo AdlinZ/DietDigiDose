@@ -1,3 +1,4 @@
+import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
 import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
 import { SqliteMaintenanceQueueRepository } from "../src/modules/planMaintenance/sqliteQueueRepository.js";
 import assert from "node:assert/strict";
@@ -4195,4 +4196,17 @@ test("reported cooking time is optional, validated and unchanged by completion r
 
   const empty = await complete({ ...input,idempotency_key: "actual-time-unknown-197",production: { food_name: "未知用时",produced_servings: 1,eaten_servings: 0 } });
   assert.equal((empty.body as JsonObject).prepared_meal.reported_cooking_minutes,null);
+});
+
+
+test("portion-aware recipe substitution and restoration preserve execution quantities", async () => {
+  const owner = await register("portion-swap@example.com");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  const original = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('原菜','[{\"name\":\"大米\",\"amount\":\"100g\"}]','[]','approved',1)").run().lastInsertRowid);
+  const replacement = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('新菜','[{\"name\":\"大米\",\"amount\":\"200g\"}]','[]','approved',4)").run().lastInsertRowid);
+  db.prepare("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,constraints_json) VALUES('portion-plan',?,'份量回归','2026-09-12','2026-09-20',?)")
+    .run(owner.user.id,JSON.stringify({ executionItems: { "portion-meal": { servings: 1.5,recipeId: original,targetMealId: "target" } } }));
+  db.prepare("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json) VALUES('portion-meal','portion-plan',?,'2026-09-12','午餐','原菜',?,'[{\"name\":\"大米\",\"amount\":\"150g\"}]')").run(owner.user.id,original);
+  await verifyPortionReplacement(new SqliteMealPlansRepository(db),owner.user.id,original,replacement,async () =>
+    JSON.parse((db.prepare("SELECT constraints_json FROM meal_plans WHERE id='portion-plan'").get() as JsonObject).constraints_json).executionItems["portion-meal"]);
 });

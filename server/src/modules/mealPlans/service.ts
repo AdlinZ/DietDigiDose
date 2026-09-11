@@ -53,12 +53,14 @@ export class MealPlansService {
   }
   async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {
     const result = await this.repository.reviewChange(userId,planId,changeId,action);
+    if (result.kind === "protected") throw new MealPlansError(409,"新菜谱缺少可换算的份量或原料用量，请先核对","MEAL_PLAN_QUANTITY_UNKNOWN");
     if (result.kind === "not_found") throw new MealPlansError(404, "变更或餐次不存在", "MEAL_PLAN_CHANGE_NOT_FOUND");
     if (result.kind !== "updated") throw new MealPlansError(409, "餐次、采购或制作状态已变化，无法应用旧建议；原安排已保留", "MEAL_PLAN_CHANGE_CONFLICT");
     return result.value;
   }
   async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
     const result = await this.repository.updateItem(userId, planId, itemId, input);
+    if (result.kind === "protected") throw new MealPlansError(409,"新菜谱缺少可换算的份量或原料用量，请先核对","MEAL_PLAN_QUANTITY_UNKNOWN");
     if (result.kind === "not_found") throw new MealPlansError(404, "餐次不存在", "MEAL_PLAN_ITEM_NOT_FOUND");
     if (result.kind === "recipe_not_available") throw new MealPlansError(404, "替换菜谱不存在或不可用", "RECIPE_NOT_AVAILABLE");
     if (result.kind !== "updated") throw new MealPlansError(409, "餐单已在其他设备更新，请刷新后重试", "MEAL_PLAN_VERSION_CONFLICT");

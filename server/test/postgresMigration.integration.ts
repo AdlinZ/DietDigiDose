@@ -1,3 +1,4 @@
+import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
 import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
 import { PostgresMaintenanceQueueRepository } from "../src/modules/planMaintenance/postgresQueueRepository.js";
 import { PostgresPlanMaintenanceRepository } from "../src/modules/planMaintenance/postgresRepository.js";
@@ -2321,6 +2322,14 @@ try {
   } finally { await blockedWriter.query("SET lock_timeout=0"); blockedWriter.release(); allowCommit.resolve(); }
   assert.equal((await applyingInputs).kind,"completed");
   await pool.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'锁释放后','其他','1份','2026-09-20')",[user.id]);
+
+  const originalPortionRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('原菜','[{\"name\":\"大米\",\"amount\":\"100g\"}]','[]','approved',1) RETURNING id")).rows[0].id);
+  const replacementPortionRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('新菜','[{\"name\":\"大米\",\"amount\":\"200g\"}]','[]','approved',4) RETURNING id")).rows[0].id);
+  await pool.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,constraints_json) VALUES('portion-plan',$1,'份量回归','2026-09-12','2026-09-20',$2::jsonb)",
+    [user.id,JSON.stringify({ executionItems: { "portion-meal": { servings: 1.5,recipeId: originalPortionRecipe,targetMealId: "target" } } })]);
+  await pool.query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json) VALUES('portion-meal','portion-plan',$1,'2026-09-12','午餐','原菜',$2,'[{\"name\":\"大米\",\"amount\":\"150g\"}]')",[user.id,originalPortionRecipe]);
+  await verifyPortionReplacement(new PostgresMealPlansRepository(pool),user.id,originalPortionRecipe,replacementPortionRecipe,async () =>
+    (await pool.query("SELECT constraints_json FROM meal_plans WHERE id='portion-plan'")).rows[0].constraints_json.executionItems["portion-meal"]);
 
   const maintenance = new PlanMaintenanceService(new PostgresPlanMaintenanceRepository(pool), () => new Date("2026-09-12T05:00:00Z"));
   assert.equal((await maintenance.settings(user.id)).version, 0);

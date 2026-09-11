@@ -1,3 +1,4 @@
+import { replacementAllocation } from "./replacementAllocation.js";
 import { lockMealPlanning } from "./postgresLock.js";
 import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop, planMetadataPreservesItem, type PlanMetadataEdit } from "./changePolicy.js";
@@ -241,11 +242,13 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     if (!current) return { kind: "not_found" as const };
     let replacement: Row | undefined;
     if (input.recipeId !== undefined && input.recipeId !== null) {
-      const selected = await client.query(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat
+      const selected = await client.query(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat, serving_size
         FROM recipes WHERE id = $1 AND status = 'approved' AND deleted_at IS NULL`, [input.recipeId]);
       replacement = selected.rows[0] as Row | undefined;
       if (!replacement) return { kind: "recipe_not_available" as const };
     }
+    const allocation = replacement ? replacementAllocation(current,replacement) : undefined;
+    if (allocation === null) return { kind: "protected" as const };
     const changed = await client.query(`UPDATE meal_plan_items SET planned_date = $1, meal_type = $2, recipe_id = $3, title = $4,
       ingredients_json = $5::jsonb, steps_json = $6::jsonb, calories = $7, protein = $8, carbs = $9, fat = $10, status = $11,
       queue_item_id = CASE WHEN $12::boolean THEN NULL ELSE queue_item_id END,
@@ -253,12 +256,14 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       WHERE id = $13 AND plan_id = $14 AND user_id = $15 AND version = $16 AND deleted_at IS NULL`, [
       input.plannedDate ?? current.planned_date, input.mealType ?? current.meal_type,
       input.recipeId === undefined ? current.recipe_id : input.recipeId,
-      replacement?.title ?? current.title, JSON.stringify(replacement?.ingredients_json ?? current.ingredients_json),
+      replacement?.title ?? current.title, JSON.stringify(allocation?.ingredients ?? current.ingredients_json),
       JSON.stringify(replacement?.steps_json ?? current.steps_json), replacement?.calories ?? current.calories,
       replacement?.protein ?? current.protein, replacement?.carbs ?? current.carbs, replacement?.fat ?? current.fat,
       input.status ?? current.status, input.recipeId !== undefined, itemId, planId, userId, input.version,
     ]);
     if (changed.rowCount !== 1) return { kind: "version_conflict" as const };
+    if (allocation?.constraints) await client.query("UPDATE meal_plans SET constraints_json=$1::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND user_id=$3",
+      [JSON.stringify(allocation.constraints),planId,userId]);
     return { kind: "updated" as const, value: formatMealPlanItem((await this.getItem(client, planId, itemId, userId))!) };
   }
 

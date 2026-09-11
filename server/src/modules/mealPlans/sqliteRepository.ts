@@ -1,3 +1,4 @@
+import { replacementAllocation } from "./replacementAllocation.js";
 import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop, planMetadataPreservesItem, type PlanMetadataEdit } from "./changePolicy.js";
 import { prepareDraftActivation } from "./draftActivation.js";
@@ -218,10 +219,12 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
     if (!current) return { kind: "not_found" as const };
     let replacement: Row | undefined;
     if (input.recipeId !== undefined && input.recipeId !== null) {
-      replacement = this.database.prepare(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat
+      replacement = this.database.prepare(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat, serving_size
         FROM recipes WHERE id = ? AND status = 'approved' AND deleted_at IS NULL`).get(input.recipeId) as Row | undefined;
       if (!replacement) return { kind: "recipe_not_available" as const };
     }
+    const allocation = replacement ? replacementAllocation(current,replacement) : undefined;
+    if (allocation === null) return { kind: "protected" as const };
     const changed = this.database.prepare(`UPDATE meal_plan_items SET planned_date = ?, meal_type = ?, recipe_id = ?, title = ?,
       ingredients_json = ?, steps_json = ?, calories = ?, protein = ?, carbs = ?, fat = ?, status = ?,
       queue_item_id = CASE WHEN ? THEN NULL ELSE queue_item_id END,
@@ -229,13 +232,15 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       WHERE id = ? AND plan_id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL`).run(
       input.plannedDate ?? current.planned_date, input.mealType ?? current.meal_type,
       input.recipeId === undefined ? current.recipe_id : input.recipeId,
-      replacement?.title ?? current.title, replacement?.ingredients_json ?? current.ingredients_json,
+      replacement?.title ?? current.title, allocation ? JSON.stringify(allocation.ingredients) : current.ingredients_json,
       replacement?.steps_json ?? current.steps_json, replacement?.calories ?? current.calories,
       replacement?.protein ?? current.protein, replacement?.carbs ?? current.carbs, replacement?.fat ?? current.fat,
       input.status ?? current.status, input.recipeId !== undefined ? 1 : 0,
       itemId, planId, userId, input.version,
     );
     if (changed.changes !== 1) return { kind: "version_conflict" as const };
+    if (allocation?.constraints) this.database.prepare("UPDATE meal_plans SET constraints_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?")
+      .run(JSON.stringify(allocation.constraints),planId,userId);
     return { kind: "updated" as const, value: formatMealPlanItem(this.getItem(planId, itemId, userId)!) };
   }
 

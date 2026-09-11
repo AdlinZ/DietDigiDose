@@ -34,3 +34,12 @@ export function isMealChangeNoop(item: Row, input: MealPlanItemUpdateInput) {
     && (input.recipeId === undefined || input.recipeId === (item.recipe_id == null ? null : Number(item.recipe_id)))
     && (input.status === undefined || input.status === item.status);
 }
+
+export type PlanMetadataEdit = { startDate?: string; endDate?: string; status?: string; constraints?: unknown; archive?: boolean };
+export function planMetadataPreservesItem(item: Row, decision: MealChangeDecision, edit: PlanMetadataEdit) {
+  if (item.status === "skipped") return true;
+  if ((edit.startDate && String(item.planned_date) < edit.startDate) || (edit.endDate && String(item.planned_date) > edit.endDate)) return false;
+  if (item.status === "completed") return true;
+  const endsExecution = edit.archive || ["cancelled", "completed", "draft"].includes(edit.status ?? "");
+  return !(decision !== "apply" && (endsExecution || edit.constraints !== undefined));
+}

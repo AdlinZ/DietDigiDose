@@ -14,6 +14,7 @@ export type RecommendationRequestWrite = {
 };
 
 export interface RecommendationsRepository {
+  planningState(userId: number, startDate: string, endDate: string): Promise<{ items: Row[]; plans: Row[]; shopping: Row[] }>;
   preparedMeals(userId: number): Promise<Row[]>;
   profile(userId: number): Promise<Row | null>;
   inventory(userId: number): Promise<Row[]>;

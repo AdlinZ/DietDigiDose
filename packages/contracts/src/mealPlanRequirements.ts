@@ -20,6 +20,7 @@ export type MealPlanRequirementsInput = z.infer<typeof mealPlanRequirementsSchem
 const amount = z.number().finite().nonnegative();
 const positiveAmount = z.number().finite().positive();
 export const cookingPlanDraftSchema = z.object({
+  planningMode: z.enum(["single_session", "weekly"]).optional(),
   status: z.literal("requires_validation"),
   meals: z.array(z.object({
     id: z.string().min(1).max(80), date, mealType: z.enum(["breakfast", "lunch", "dinner", "snack"]),
@@ -41,7 +42,7 @@ export const cookingPlanDraftSchema = z.object({
     })).max(1000).optional(),
     quantity_status: z.enum(["sufficient", "insufficient", "unknown", "unavailable"]).optional(),
   })).max(2800),
-  time: z.object({ budgetMinutes: positiveAmount, knownSequentialMinutes: amount, exceedsBudget: z.boolean(),
+  time: z.object({ sessionBudgetMinutes: positiveAmount.optional(), budgetMinutes: positiveAmount, knownSequentialMinutes: amount, exceedsBudget: z.boolean(),
     isEstimate: z.boolean(), incomplete: z.boolean(), missing: z.array(z.string().max(200)).max(50) }),
   checksPending: z.array(z.string().max(200)).max(50),
   excludedPreparedMealIds: z.array(z.string().uuid()).max(100),

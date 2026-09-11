@@ -1,4 +1,5 @@
-import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop } from "./changePolicy.js";
+import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
+import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop, planMetadataPreservesItem, type PlanMetadataEdit } from "./changePolicy.js";
 import { prepareDraftActivation } from "./draftActivation.js";
 import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@dietdigidose/contracts";
 import { isDeepStrictEqual } from "node:util";
@@ -28,6 +29,16 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       const activation = prepareDraftActivation(current, version);
       if (!activation) return { kind: "version_conflict" as const };
       if (activation.repeated) return { kind: "updated" as const, value: { plan: this.formatPlan(current, userId), repeated: true } };
+      if (activation.weekly) {
+        const occupied = this.database.prepare("SELECT i.planned_date,i.meal_type FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.status<>'skipped'").all(userId) as Row[];
+        const activePlans = this.database.prepare("SELECT constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active'").all(userId) as Row[];
+        for (const plan of activePlans) {
+          const saved = parseJson<Row>(plan.constraints_json,{});
+          const draft = (saved.currentCookingDraft ?? (saved.savedCookingDraft as { draft?: unknown } | undefined)?.draft) as { meals?: Array<{ date: string; mealType: string; cookServings: number }> } | undefined;
+          for (const meal of draft?.meals ?? []) if (meal.cookServings === 0) occupied.push({ planned_date: meal.date,meal_type: meal.mealType });
+        }
+        if (activation.targets.some(target => occupied.some(item => String(item.planned_date) === target.date && queueMealType(item.meal_type) === target.mealType))) return { kind: "version_conflict" as const };
+      }
       if (this.getItems(id, userId).length) return { kind: "version_conflict" as const };
       const recipes = activation.items.map(item => this.database.prepare("SELECT steps_json FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(item.recipeId) as Row | undefined);
       if (recipes.some(recipe => !recipe)) return { kind: "recipe_not_available" as const };
@@ -89,24 +100,38 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   }
 
   async updatePlan(userId: number, id: string, input: MealPlanUpdateInput) {
+    return this.database.transaction(() => {
     const current = this.getPlan(id, userId, false);
     if (!current) return { kind: "not_found" as const };
     const startDate = input.startDate ?? String(current.start_date);
     const endDate = input.endDate ?? String(current.end_date);
     if (startDate > endDate) return { kind: "invalid_date_range" as const };
+    this.assertPlanEditInTransaction(userId,id,input);
     const changed = this.database.prepare(`UPDATE meal_plans SET title = ?, start_date = ?, end_date = ?, status = ?,
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL`)
       .run(input.title ?? current.title, startDate, endDate, input.status ?? current.status, id, userId, input.version);
     if (changed.changes !== 1) return { kind: "version_conflict" as const };
     return { kind: "updated" as const, value: this.formatPlan(this.getPlan(id, userId, false)!, userId) };
+  })();
   }
 
   async removePlan(userId: number, id: string, version: number) {
+    return this.database.transaction(() => {
+    this.assertPlanEditInTransaction(userId,id,{ archive: true });
     const changed = this.database.prepare(`UPDATE meal_plans SET deleted_at = CURRENT_TIMESTAMP, status = 'cancelled',
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL`)
       .run(id, userId, version);
     if (changed.changes === 1) return "removed" as const;
     return this.getPlan(id, userId, false) ? "version_conflict" as const : "not_found" as const;
+  })();
+  }
+
+  assertPlanEditInTransaction(userId: number, planId: string, edit: PlanMetadataEdit) {
+    const items = this.database.prepare("SELECT * FROM meal_plan_items WHERE plan_id=? AND user_id=? AND deleted_at IS NULL ORDER BY id").all(planId,userId) as Row[];
+    for (const item of items) {
+      const facts = this.changeFacts(item,userId);
+      if (!planMetadataPreservesItem(item,facts.decision,edit)) throw new InventoryQuantityError("MEAL_PLAN_PROTECTED", "餐单包含已确认、已采购或已进入制作的安排，或日期将排除已有餐次；请先逐餐审阅调整，原安排已保留");
+    }
   }
 
   private changeFacts(item: Row, userId: number) {

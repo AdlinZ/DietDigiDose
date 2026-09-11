@@ -3984,4 +3984,46 @@ test("meal plan change reviews protect confirmation, purchases and cooking with 
   const blocked = await patch({ version: 5,plannedDate: "2026-09-14" });
   assert.equal((blocked.body as JsonObject).change.status,"blocked");
   assert.equal((blocked.body as JsonObject).plannedDate,"2026-09-12");
+  const planPath = `/api/v1/meal-plans/${planId}`;
+  const metadata = (input: JsonObject) => api(planPath,{ token: account.token,method: "PATCH",body: JSON.stringify(input) });
+  assert.equal((await metadata({ version: 1,title: "仅改标题" })).response.status,200);
+  assert.equal((await metadata({ version: 2,startDate: "2026-09-13" })).response.status,409);
+  assert.equal((await metadata({ version: 2,status: "cancelled" })).response.status,409);
+  assert.equal((await api(planPath,{ token: account.token,method: "DELETE",body: JSON.stringify({ version: 2 }) })).response.status,409);
+  assert.equal((db.prepare("SELECT deleted_at FROM meal_plans WHERE id=?").get(planId) as JsonObject).deleted_at,null);
+  const runId = "19500000-0000-4000-8000-000000000003";
+  db.prepare("INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id) VALUES(?,?,'guard','text','assistant','running','{}',?)").run(runId,account.user.id,runId);
+  db.prepare("UPDATE meal_plans SET version=1,created_by_run_id=? WHERE id=?").run(runId,planId);
+  db.prepare("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,result_json,idempotency_key,executed_at) VALUES(?,?,?,'create_meal_plan','high','executed','{}',?,'195-undo-key',CURRENT_TIMESTAMP)").run("195-action",runId,account.user.id,JSON.stringify({ planId }));
+  const { SqliteAgentOperationsRepository } = await import("../src/modules/agentOperations/sqliteRepository.js");
+  await assert.rejects(new SqliteAgentOperationsRepository(db).undoActions(account.user.id,runId), /原安排已保留/);
+  assert.equal((db.prepare("SELECT deleted_at FROM meal_plans WHERE id=?").get(planId) as JsonObject).deleted_at,null);
+
+});
+
+test("weekly planning reads beyond fifteen inventory rows and rejects stale activation without touching existing plans", async () => {
+  const account = await register("weekly-plan-196@example.com");
+  for (let index=0;index<16;index++) db.prepare("INSERT INTO inventory_items(user_id,food_name,category,quantity,quantity_value,quantity_unit,expiration_date,is_available) VALUES(?,?,'其他','1个',1,'piece','2099-09-30',1)").run(account.user.id,`无关库存${index}`);
+  db.prepare("INSERT INTO inventory_items(user_id,food_name,category,quantity,quantity_value,quantity_unit,expiration_date,is_available) VALUES(?,'周规划鸡蛋','蛋类','4个',4,'piece','2099-09-30',1)").run(account.user.id);
+  const recipeId = Number(db.prepare("INSERT INTO recipes(title,cook_time,prep_time,ingredients_json,steps_json,status,serving_size,required_kitchenware_json) VALUES('周规划蛋羹',1,1,'[{\"name\":\"周规划鸡蛋\",\"amount\":\"1个\"}]','[\"制作\"]','approved',1,'[]')").run().lastInsertRowid);
+  db.prepare("INSERT INTO shopping_list_items(id,user_id,name,amount,checked) VALUES('weekly-user-shopping',?,'周规划鸡蛋','20个',0)").run(account.user.id);
+  const result = await api("/api/v1/recommendations/weekly-plan",{ token: account.token,method: "POST",body: JSON.stringify({ startDate: "2099-09-12",mealTypes: ["lunch"],servings: 1 }) });
+  assert.equal(result.response.status,200);
+  const value = result.body as JsonObject;
+  assert.equal(value.slots.length,7);
+  const eggs = value.shopping.find((item: JsonObject) => item.foodName === "周规划鸡蛋");
+  assert.equal(eggs.covered,4);
+  assert.equal(eggs.missing,3);
+  assert.equal(value.plannedPurchases[0].amount,"20个");
+  assert.equal((db.prepare("SELECT quantity_value FROM inventory_items WHERE user_id=? AND food_name='周规划鸡蛋'").get(account.user.id) as JsonObject).quantity_value,4);
+  assert.equal(value.draft.planningMode,"weekly");
+  const draftId = "19600000-0000-4000-8000-000000000001";
+  const saved = await api("/api/v1/meal-plans/drafts",{ token: account.token,method: "POST",body: JSON.stringify({ id: draftId,title: "七日草案",draft: value.draft }) });
+  assert.equal(saved.response.status,201);
+  const otherPlanId = "19600000-0000-4000-8000-000000000002";
+  db.prepare("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES(?,?,'后来确认','2099-09-12','2099-09-12','active')").run(otherPlanId,account.user.id);
+  db.prepare("INSERT INTO meal_plan_items(id,user_id,plan_id,planned_date,meal_type,title,recipe_id,confirmed_at) VALUES('weekly-existing',?,?,'2099-09-12','午餐','后来确认',?,CURRENT_TIMESTAMP)").run(account.user.id,otherPlanId,recipeId);
+  const activation = await api(`/api/v1/meal-plans/${draftId}/activate`,{ token: account.token,method: "POST",body: JSON.stringify({ version: 1 }) });
+  assert.equal(activation.response.status,409);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=?").get(draftId) as JsonObject).n,0);
 });

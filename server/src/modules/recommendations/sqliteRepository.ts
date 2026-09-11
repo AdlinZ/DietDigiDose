@@ -6,6 +6,13 @@ import type { RecommendationEventInput, Row } from "./types.js";
 export class SqliteRecommendationsRepository implements RecommendationsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+  async planningState(userId: number, startDate: string, endDate: string) {
+    return {
+      items: this.database.prepare("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.planned_date BETWEEN ? AND ? ORDER BY i.planned_date,i.id").all(userId,startDate,endDate) as Row[],
+      plans: this.database.prepare("SELECT id,constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active' AND start_date<=? AND end_date>=?").all(userId,endDate,startDate) as Row[],
+      shopping: this.database.prepare("SELECT id,name,amount,checked FROM shopping_list_items WHERE user_id=? AND deleted_at IS NULL ORDER BY id").all(userId) as Row[],
+    };
+  }
   async preparedMeals(userId: number) { return this.database.prepare("SELECT * FROM prepared_meals WHERE user_id=? AND remaining_servings>0 ORDER BY produced_at,id").all(userId) as Row[]; }
   async profile(userId: number) { return (this.database.prepare(`SELECT allergies_json, dietary_restrictions_json, disliked_foods,
     kitchen_constraints_json, nutrition_targets_json, updated_at FROM user_health_profiles WHERE user_id = ?`).get(userId) as Row | undefined) || null; }

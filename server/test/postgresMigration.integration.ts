@@ -1272,6 +1272,15 @@ try {
   const blockedChange = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,plannedDate: "2026-09-13" });
   if (blockedChange.kind !== "updated") throw new Error("blocked result missing");
   assert.equal((blockedChange.value.change as Record<string,unknown>).status,"blocked");
+  assert.equal((await mealPlanRepository.updatePlan(user.id,protectedPlanId,{ version: 1,title: "安全改标题" })).kind,"updated");
+  await assert.rejects(mealPlanRepository.updatePlan(user.id,protectedPlanId,{ version: 2,startDate: "2026-09-13" }),/原安排已保留/);
+  await assert.rejects(mealPlanRepository.removePlan(user.id,protectedPlanId,2),/原安排已保留/);
+  const protectedRunId = "19500000-0000-4000-8000-000000000003";
+  await pool.query("INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id) VALUES($1,$2,'guard','text','assistant','running','{}',$1)",[protectedRunId,user.id]);
+  await pool.query("UPDATE meal_plans SET version=1,created_by_run_id=$1 WHERE id=$2",[protectedRunId,protectedPlanId]);
+  await pool.query("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,result_json,idempotency_key,executed_at) VALUES('195-action',$1,$2,'create_meal_plan','high','executed','{}',$3::jsonb,'195-undo-key',CURRENT_TIMESTAMP)",[protectedRunId,user.id,JSON.stringify({ planId: protectedPlanId })]);
+  await assert.rejects(new PostgresAgentOperationsRepository(pool).undoActions(user.id,protectedRunId),/原安排已保留/);
+
 
   const savedDraftInput: SaveCookingPlanDraftInput = {
     id: "7cd0c614-438c-45ab-a3cc-50507798a194", title: "可恢复草案",
@@ -1510,6 +1519,14 @@ try {
 
   const recommendationsRepository = new PostgresRecommendationsRepository(pool);
   const recommendationsService = new RecommendationsService(recommendationsRepository, kitchenwareService);
+  const weeklyState = await recommendationsRepository.planningState(user.id,"2026-09-12","2026-09-18");
+  assert(weeklyState.items.some(item => item.id === protectedItemId));
+  assert.equal((await recommendationsRepository.planningState(-1,"2026-09-12","2026-09-18")).items.length,0);
+  const stockBeforeWeekly = await recommendationsRepository.inventory(user.id);
+  const weeklyPreview = await recommendationsService.weeklyPlan(user.id,{ startDate: "2026-09-12",mealTypes: ["breakfast","lunch","dinner"] });
+  assert.equal(weeklyPreview.slots.length,21);
+  assert(weeklyPreview.slots.some(slot => slot.preservedItemIds.includes(protectedItemId)));
+  assert.deepEqual(await recommendationsRepository.inventory(user.id),stockBeforeWeekly);
   const recommendationPage = await recommendationsService.page(user.id, {
     surface: "home", matchStatus: "all", pageSize: 1,
   });

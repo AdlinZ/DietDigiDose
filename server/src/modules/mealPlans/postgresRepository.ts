@@ -1,4 +1,5 @@
-import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop } from "./changePolicy.js";
+import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
+import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop, planMetadataPreservesItem, type PlanMetadataEdit } from "./changePolicy.js";
 import { prepareDraftActivation } from "./draftActivation.js";
 import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@dietdigidose/contracts";
 import { isDeepStrictEqual } from "node:util";
@@ -25,12 +26,23 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
 
   async activateDraft(userId: number, id: string, version: number) {
     return this.transaction(async client => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`meal-plan-activation:${userId}`]);
       const selected = await client.query("SELECT * FROM meal_plans WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [id,userId]);
       const current = selected.rows[0] as Row | undefined;
       if (!current) return { kind: "not_found" as const };
       const activation = prepareDraftActivation(current, version);
       if (!activation) return { kind: "version_conflict" as const };
       if (activation.repeated) return { kind: "updated" as const, value: { plan: await this.formatPlan(client,current,userId), repeated: true } };
+      if (activation.weekly) {
+        const occupied = (await client.query("SELECT i.planned_date,i.meal_type FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=$1 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.status<>'skipped'",[userId])).rows as Row[];
+        const activePlans = (await client.query("SELECT constraints_json FROM meal_plans WHERE user_id=$1 AND deleted_at IS NULL AND status='active'",[userId])).rows as Row[];
+        for (const plan of activePlans) {
+          const saved = parseJson<Row>(plan.constraints_json,{});
+          const draft = (saved.currentCookingDraft ?? (saved.savedCookingDraft as { draft?: unknown } | undefined)?.draft) as { meals?: Array<{ date: string; mealType: string; cookServings: number }> } | undefined;
+          for (const meal of draft?.meals ?? []) if (meal.cookServings === 0) occupied.push({ planned_date: meal.date,meal_type: meal.mealType });
+        }
+        if (activation.targets.some(target => occupied.some(item => String(item.planned_date) === target.date && queueMealType(item.meal_type) === target.mealType))) return { kind: "version_conflict" as const };
+      }
       if ((await client.query("SELECT id FROM meal_plan_items WHERE plan_id=$1 AND user_id=$2 AND deleted_at IS NULL LIMIT 1", [id,userId])).rowCount) return { kind: "version_conflict" as const };
       const recipes: Row[] = [];
       for (const item of activation.items) {
@@ -106,24 +118,38 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
   }
 
   async updatePlan(userId: number, id: string, input: MealPlanUpdateInput) {
-    const current = await this.getPlan(this.pool, id, userId, false);
+    return this.transaction(async client => {
+    const current = await this.getPlan(client, id, userId, false);
     if (!current) return { kind: "not_found" as const };
     const startDate = input.startDate ?? String(current.start_date);
     const endDate = input.endDate ?? String(current.end_date);
     if (startDate > endDate) return { kind: "invalid_date_range" as const };
-    const changed = await this.pool.query(`UPDATE meal_plans SET title = $1, start_date = $2, end_date = $3, status = $4,
+    await this.assertPlanEditWithClient(client,userId,id,input);
+    const changed = await client.query(`UPDATE meal_plans SET title = $1, start_date = $2, end_date = $3, status = $4,
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6 AND version = $7 AND deleted_at IS NULL`,
     [input.title ?? current.title, startDate, endDate, input.status ?? current.status, id, userId, input.version]);
     if (changed.rowCount !== 1) return { kind: "version_conflict" as const };
-    return { kind: "updated" as const, value: await this.formatPlan(this.pool, (await this.getPlan(this.pool, id, userId, false))!, userId) };
+    return { kind: "updated" as const, value: await this.formatPlan(client, (await this.getPlan(client, id, userId, false))!, userId) };
+  });
   }
 
   async removePlan(userId: number, id: string, version: number) {
-    const changed = await this.pool.query(`UPDATE meal_plans SET deleted_at = CURRENT_TIMESTAMP, status = 'cancelled',
+    return this.transaction(async client => {
+    await this.assertPlanEditWithClient(client,userId,id,{ archive: true });
+    const changed = await client.query(`UPDATE meal_plans SET deleted_at = CURRENT_TIMESTAMP, status = 'cancelled',
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND version = $3 AND deleted_at IS NULL`,
     [id, userId, version]);
     if (changed.rowCount === 1) return "removed" as const;
-    return await this.getPlan(this.pool, id, userId, false) ? "version_conflict" as const : "not_found" as const;
+    return await this.getPlan(client, id, userId, false) ? "version_conflict" as const : "not_found" as const;
+  });
+  }
+
+  async assertPlanEditWithClient(client: PoolClient, userId: number, planId: string, edit: PlanMetadataEdit) {
+    const items = (await client.query("SELECT * FROM meal_plan_items WHERE plan_id=$1 AND user_id=$2 AND deleted_at IS NULL ORDER BY id FOR UPDATE",[planId,userId])).rows as Row[];
+    for (const item of items) {
+      const facts = await this.changeFacts(client,item,userId);
+      if (!planMetadataPreservesItem(item,facts.decision,edit)) throw new InventoryQuantityError("MEAL_PLAN_PROTECTED", "餐单包含已确认、已采购或已进入制作的安排，或日期将排除已有餐次；请先逐餐审阅调整，原安排已保留");
+    }
   }
 
   private async changeFacts(client: PoolClient, item: Row, userId: number) {

@@ -6,6 +6,14 @@ import type { RecommendationEventInput, Row } from "./types.js";
 export class PostgresRecommendationsRepository implements RecommendationsRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+  async planningState(userId: number, startDate: string, endDate: string) {
+    const [items,plans,shopping] = await Promise.all([
+      this.pool.query("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=$1 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.planned_date BETWEEN $2 AND $3 ORDER BY i.planned_date,i.id",[userId,startDate,endDate]),
+      this.pool.query("SELECT id,constraints_json FROM meal_plans WHERE user_id=$1 AND deleted_at IS NULL AND status='active' AND start_date<=$3 AND end_date>=$2",[userId,startDate,endDate]),
+      this.pool.query("SELECT id,name,amount,checked FROM shopping_list_items WHERE user_id=$1 AND deleted_at IS NULL ORDER BY id",[userId]),
+    ]);
+    return { items: items.rows,plans: plans.rows,shopping: shopping.rows };
+  }
   async preparedMeals(userId: number) { return (await this.pool.query("SELECT * FROM prepared_meals WHERE user_id=$1 AND remaining_servings>0 ORDER BY produced_at,id", [userId])).rows as Row[]; }
   async profile(userId: number) { return ((await this.pool.query(`SELECT allergies_json, dietary_restrictions_json, disliked_foods,
     kitchen_constraints_json, nutrition_targets_json, updated_at FROM user_health_profiles WHERE user_id = $1`, [userId])).rows[0] as Row | undefined) || null; }

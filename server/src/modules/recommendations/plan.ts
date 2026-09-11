@@ -66,17 +66,20 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
       batch_code: item.batch_code, version: item.version })), cooking.flatMap(item => item.demands));
     const missingTime: string[] = [];
     let knownTime = 0;
+    let sessionExceeds = false;
     for (const item of cooking) {
       const current = candidates.find(entry => entry.recipeId === item.recipeId);
       if (!current) { missingTime.push(item.title); continue; }
       const recipe = current.recipe;
-      knownTime += (recipe.cook_time + (recipe.prep_time ?? 0)) * Math.ceil(item.servings / item.recipeYield);
+      const sessionTime = (recipe.cook_time + (recipe.prep_time ?? 0)) * Math.ceil(item.servings / item.recipeYield);
+      knownTime += sessionTime;
+      if (draft.planningMode === "weekly" && sessionTime > (draft.time.sessionBudgetMinutes ?? draft.time.budgetMinutes)) sessionExceeds = true;
       if (!recipe.cook_time || recipe.prep_time == null) missingTime.push(item.title);
     }
-    return [{ cooking, ingredientBudget, knownTime, missingTime, score: candidate.score,
+    return [{ cooking, ingredientBudget, knownTime, missingTime, sessionExceeds, score: candidate.score,
       exceedsBudget: knownTime > draft.time.budgetMinutes,
       shortageCount: ingredientBudget.filter(item => !item.fully_covered).length }];
-  }).sort((a, b) => Number(a.exceedsBudget) - Number(b.exceedsBudget) || a.shortageCount - b.shortageCount || b.score - a.score);
+  }).sort((a, b) => Number(a.exceedsBudget || a.sessionExceeds) - Number(b.exceedsBudget || b.sessionExceeds) || a.shortageCount - b.shortageCount || b.score - a.score);
   const chosen = choices[0];
   if (!chosen) throw new RecommendationsError(409, "没有符合当前条件且用量明确的替代菜，原方案保持不变", "COOKING_PLAN_NO_REPLACEMENT");
   const conflicts: string[] = [];
@@ -84,6 +87,7 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
     if (item.quantity_status === "unknown") conflicts.push(`${item.food_name} 的库存数量或单位换算未知`);
     else if (!item.fully_covered) conflicts.push(`${item.food_name} 的整套需求超过已知库存`);
   }
+  if (chosen.sessionExceeds) conflicts.push(`替换后的单次制作超过 ${draft.time.sessionBudgetMinutes} 分钟上限`);
   if (chosen.exceedsBudget) conflicts.push(`整套已知顺序耗时 ${chosen.knownTime} 分钟，超过 ${draft.time.budgetMinutes} 分钟上限`);
   if (chosen.missingTime.length) conflicts.push(`无法核实这些保留菜谱的完整时间或当前可用条件：${chosen.missingTime.join("、")}`);
   return { draft: cookingPlanDraftSchema.parse({ ...draft, cooking: chosen.cooking, ingredientBudget: chosen.ingredientBudget,

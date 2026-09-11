@@ -5,3 +5,4 @@ export * from "./mealPreferences.ts";
 export * from "./mealPlanRequirements.ts";
 
 export * from "./inventoryScan.ts";
+export * from "./weeklyPlan.ts";

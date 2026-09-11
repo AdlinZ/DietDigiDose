@@ -1,4 +1,4 @@
-import type { ReplaceCookingPlanItemInput, MealPlanRequirementsInput, CookingPlanDraft } from "@dietdigidose/contracts";
+import type { WeeklyPlanRequest, WeeklyPlanPreview, ReplaceCookingPlanItemInput, MealPlanRequirementsInput, CookingPlanDraft } from "@dietdigidose/contracts";
 import { requestJson, type ApiFetch } from "./client";
 
 export type RecommendationSurface = "home" | "inventory" | "ai" | "meal_plan";
@@ -40,6 +40,7 @@ export interface RecipeRecommendationPage<TRecipe> {
 }
 
 export const recommendationsApi = {
+  weeklyPlan: async (apiFetch: ApiFetch, input: WeeklyPlanRequest) => requestJson<WeeklyPlanPreview>(apiFetch,"/api/v1/recommendations/weekly-plan",{ method: "POST",body: JSON.stringify((await import("@dietdigidose/contracts")).weeklyPlanRequestSchema.parse(input)) }),
   cookingPlan: async (apiFetch: ApiFetch, input: MealPlanRequirementsInput) => requestJson<CookingPlanDraft>(apiFetch, "/api/v1/recommendations/cooking-plan", {
     method: "POST", body: JSON.stringify((await import("@dietdigidose/contracts")).mealPlanRequirementsSchema.parse(input)),
   }).then(async value => (await import("@dietdigidose/contracts")).cookingPlanDraftSchema.parse(value)),

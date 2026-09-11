@@ -1,3 +1,6 @@
+import { buildWeeklyPlan } from "./weeklyPlan.js";
+import { weeklyPlanRequestSchema, type WeeklyPlanRequest } from "@dietdigidose/contracts";
+import { parseJson } from "../mealPlans/formatters.js";
 import { buildCookingDraft, replaceCookingDraft } from "./plan.js";
 import { cookingPlanDraftSchema, replaceCookingPlanItemSchema, mealPlanRequirementsSchema, type ReplaceCookingPlanItemInput, type MealPlanRequirementsInput } from "@dietdigidose/contracts";
 import { formatPreparedMeal } from "../dietRecords/preparedMeals.js";
@@ -18,6 +21,27 @@ export class RecommendationsService {
   constructor(repository: RecommendationsRepository, kitchenware: Pick<KitchenwareService, "requirements" | "evaluateRequirements">) {
     this.repository = repository;
     this.kitchenware = kitchenware;
+  }
+
+  async weeklyPlan(userId: number, input: WeeklyPlanRequest) {
+    const request = weeklyPlanRequestSchema.parse(input);
+    const end = new Date(`${request.startDate}T00:00:00Z`); end.setUTCDate(end.getUTCDate()+6);
+    const endDate = end.toISOString().slice(0,10);
+    const [computed,stock,batches,state] = await Promise.all([this.compute(userId,{ surface: "meal_plan" }),this.repository.inventory(userId),this.repository.preparedMeals(userId),this.repository.planningState(userId,request.startDate,endDate)]);
+    const reservations: Array<{ preparedMealId: string; servings: number }> = [];
+    const items = [...state.items];
+    for (const plan of state.plans) {
+      const constraints = parseJson<Row>(plan.constraints_json,{});
+      const saved = constraints.savedCookingDraft as { draft?: unknown } | undefined;
+      const draft = cookingPlanDraftSchema.safeParse(constraints.currentCookingDraft ?? saved?.draft);
+      if (!draft.success) continue;
+      for (const meal of draft.data.meals) {
+        if (meal.date < request.startDate || meal.date > endDate) continue;
+        reservations.push(...meal.allocations);
+        if (meal.cookServings === 0) items.push({ id: `prepared-plan:${plan.id}:${meal.id}`,planned_date: meal.date,meal_type: meal.mealType,title: meal.allocations.map(item => item.foodName).join("、"),prepared_only: true,status: "planned" });
+      }
+    }
+    return buildWeeklyPlan(request,computed.profile.kitchen,computed.results,stock,batches.map(formatPreparedMeal),items,state.shopping,reservations);
   }
 
   async planRequirements(userId: number, input: MealPlanRequirementsInput) {

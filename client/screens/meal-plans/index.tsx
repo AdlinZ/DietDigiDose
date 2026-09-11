@@ -250,6 +250,7 @@ export default function MealPlansScreen() {
           </View>
         ) : null}
 
+        <TouchableOpacity onPress={() => router.push("/weekly-plan")} className="mx-5 mt-4 rounded-2xl bg-brand-soft p-4"><Text className="font-black text-brand">计算未来七日安排与合并采购</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => router.push("/cooking-plan")} className="mx-5 mt-4 rounded-2xl bg-brand-soft p-4"><Text className="font-black text-brand">按待吃餐和库存计算这次备餐</Text></TouchableOpacity>
         {selectedPlan ? <MealPlanChanges key={selectedPlan.id} planId={selectedPlan.id} revision={changeRevision} items={selectedPlan.items} onChanged={next => { replaceItem(next); setDetailItem(null); }} /> : null}
         {selectedPlan?.constraints.savedCookingDraft && !selectedPlan.archived ? <TouchableOpacity onPress={() => router.push({ pathname: "/cooking-plan", params: { planId: selectedPlan.id } })} className="mx-5 rounded-2xl bg-brand-soft p-4"><Text className="font-bold text-brand">恢复备餐方案草案 · 查看份量、原料与时间</Text></TouchableOpacity> : null}

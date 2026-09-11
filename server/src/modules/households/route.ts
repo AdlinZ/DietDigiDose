@@ -1,4 +1,4 @@
-import { householdDiningPreferencesSchema } from "@dietdigidose/contracts";
+import { householdDiningAllocationSchema, householdDiningPreferencesSchema } from "@dietdigidose/contracts";
 import crypto from "node:crypto";
 import { Router, type NextFunction, type Response } from "express";
 import { authMiddleware, type AuthRequest } from "../../middleware/auth.js";
@@ -35,6 +35,9 @@ export function createHouseholdsRouter(service: HouseholdsService) {
   router.post("/:id/transfer-owner", validateBody(householdTransferOwnerSchema), (req: AuthRequest, res, next) => {
     void service.transferOwner(req.userId!, householdId(req), req.body).then((value) => res.json(value))
       .catch((error) => handle(error, res, next));
+  });
+  router.post("/:id/dining-allocation-preview", validateBody(householdDiningAllocationSchema), (req: AuthRequest,res,next) => {
+    void service.previewDiningAllocation(req.userId!,householdId(req),req.body).then(value => res.json(value)).catch(error => handle(error,res,next));
   });
   router.get("/:id/dining-members", (req: AuthRequest,res,next) => {
     void service.diningMembers(req.userId!,householdId(req)).then(value => res.json(value)).catch(error => handle(error,res,next));

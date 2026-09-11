@@ -17,3 +17,25 @@ export const householdDiningMembersSchema = z.object({
   ])),
 }).strict();
 export type HouseholdDiningMembers = z.infer<typeof householdDiningMembersSchema>;
+
+const diningServings = z.number().finite().min(0.000001).max(30).refine(
+  value => Math.abs(value * 1_000_000 - Math.round(value * 1_000_000)) < 0.000001,
+  "份量最多保留六位小数",
+);
+export const householdDiningAllocationSchema = z.object({
+  participants: z.array(z.object({
+    membershipId: z.number().int().positive(), version: z.number().int().positive(), servings: diningServings,
+  }).strict()).min(1).max(30),
+}).strict().superRefine((value,ctx) => {
+  if (new Set(value.participants.map(item => item.membershipId)).size !== value.participants.length)
+    ctx.addIssue({ code: "custom",path: ["participants"],message: "共餐成员不能重复" });
+  if (value.participants.reduce((sum,item) => sum + Math.round(item.servings * 1_000_000),0) > 30_000_000)
+    ctx.addIssue({ code: "custom",path: ["participants"],message: "单次共餐总份量不能超过30份" });
+});
+export type HouseholdDiningAllocationInput = z.infer<typeof householdDiningAllocationSchema>;
+export const householdDiningAllocationPreviewSchema = z.object({
+  householdId: z.number().int().positive(), totalServings: diningServings,
+  participants: z.array(diningMemberIdentity.extend({ shared: z.literal(true),allergies: names,restrictions: names,servings: diningServings }).strict()).min(1).max(30),
+  allergies: z.array(z.string()).max(1500),restrictions: z.array(z.string()).max(1500),recipeValidationRequired: z.literal(true),
+}).strict();
+export type HouseholdDiningAllocationPreview = z.infer<typeof householdDiningAllocationPreviewSchema>;

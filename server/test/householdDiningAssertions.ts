@@ -12,8 +12,13 @@ export async function verifyHouseholdDining(service: HouseholdsService,household
   assert.deepEqual(shared.find(value => value.userId === member),{ membershipId: initial.membershipId,userId: member,name: shared.find(value => value.userId === member)?.name,version: saved.version,shared: true,allergies: ["花生"],restrictions: ["不吃猪肉"] });
   assert.equal(shared.find(value => value.userId === owner)?.shared,false);
   assert.equal("allergies" in shared.find(value => value.userId === owner)!,false);
+  const selection = { participants: [{ membershipId: initial.membershipId,version: saved.version,servings: 1.5 }] };
+  assert.equal((await service.previewDiningAllocation(owner,householdId,selection)).totalServings,1.5);
+  await assert.rejects(() => service.previewDiningAllocation(owner,householdId,{ participants: [{ ...selection.participants[0]!,version: initial.version }] }),/已变化/);
   const hidden = await service.saveDiningPreferences(member,householdId,{ ...saved,shared: false });
   assert.equal(hidden.shared,false);
+  await assert.rejects(() => service.previewDiningAllocation(owner,householdId,selection),/已变化/);
+  await assert.rejects(() => service.previewDiningAllocation(owner,householdId,{ participants: [{ ...selection.participants[0]!,version: hidden.version }] }),/尚未授权/);
   const withdrawn = (await service.diningMembers(owner,householdId)).members.find(value => value.userId === member)!;
   assert.equal(withdrawn.shared,false);
   assert.equal("allergies" in withdrawn,false);

@@ -56,3 +56,26 @@ describe("households module", () => {
     await assert.rejects(() => service.history(2, 3), /无权查看/);
   });
 });
+
+ test("three diners retain individual portions and every selected hard constraint", async () => {
+  const rows = [
+    { id: 11,user_id: 1,name: "甲",dining_version: 2,dining_shared: 1,dining_preferences_json: { allergies: ["花生"],restrictions: [] } },
+    { id: 12,user_id: 2,name: "乙",dining_version: 3,dining_shared: 1,dining_preferences_json: { allergies: ["虾"],restrictions: ["素食"] } },
+    { id: 13,user_id: 3,name: "丙",dining_version: 1,dining_shared: 1,dining_preferences_json: { allergies: [],restrictions: ["不吃猪肉"] } },
+  ];
+  const service = new HouseholdsService(repository({ diningMembers: async () => rows }));
+  const participants = rows.map(row => ({ membershipId: row.id,version: row.dining_version,servings: 1 }));
+  const preview = await service.previewDiningAllocation(1,9,{ participants });
+  assert.equal(preview.totalServings,3);
+  assert.deepEqual(preview.participants.map(person => person.servings),[1,1,1]);
+  assert.deepEqual(preview.allergies,["花生","虾"]);
+  assert.deepEqual(preview.restrictions,["素食","不吃猪肉"]);
+  assert.equal(preview.recipeValidationRequired,true);
+  const absent = await service.previewDiningAllocation(1,9,{ participants: participants.slice(0,2) });
+  assert.equal(absent.totalServings,2); assert.deepEqual(absent.restrictions,["素食"]);
+  const fractions = await service.previewDiningAllocation(1,9,{ participants: participants.map((item,index) => ({ ...item,servings: [0.1,0.2,0.000001][index]! })) });
+  assert.equal(fractions.totalServings,0.300001);
+  await assert.rejects(() => service.previewDiningAllocation(1,9,{ participants: [participants[0]!,participants[0]!] }));
+  rows[1]!.dining_shared = 0;
+  await assert.rejects(() => service.previewDiningAllocation(1,9,{ participants }),/尚未授权/);
+ });

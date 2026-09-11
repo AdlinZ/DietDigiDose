@@ -1,13 +1,14 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
-import { Switch, Text, TextInput, TouchableOpacity } from "react-native";
+import { Text, TextInput, TouchableOpacity } from "react-native";
 let mockUser: { id: number } | null = { id: 1 };
+const mockPreview = jest.fn();
 const mockMembers = jest.fn();
 const mockFetch = jest.fn(); const mockMine = jest.fn(); const mockRead = jest.fn(); const mockSave = jest.fn();
 jest.mock("@/contexts/AuthContext",() => ({ useAuth: () => ({ user: mockUser }),useAuthFetch: () => mockFetch }));
 jest.mock("@/components/Screen",() => ({ Screen: "View" }));
 jest.mock("@/hooks/useSafeRouter",() => ({ useSafeRouter: () => ({ back: jest.fn() }) }));
-jest.mock("@/services/api/households",() => ({ householdApi: { diningMembers: (...args: unknown[]) => mockMembers(...args), mine: (...args: unknown[]) => mockMine(...args),diningPreferences: (...args: unknown[]) => mockRead(...args),saveDiningPreferences: (...args: unknown[]) => mockSave(...args) } }));
+jest.mock("@/services/api/households",() => ({ householdApi: { previewDiningAllocation: (...args: unknown[]) => mockPreview(...args), diningMembers: (...args: unknown[]) => mockMembers(...args), mine: (...args: unknown[]) => mockMine(...args),diningPreferences: (...args: unknown[]) => mockRead(...args),saveDiningPreferences: (...args: unknown[]) => mockSave(...args) } }));
 import HouseholdDiningScreen from "./index";
 const initial = { membershipId: 3,version: 1,shared: false,allergies: [],restrictions: [] };
 const button = (tree: renderer.ReactTestRenderer,label: string) => tree.root.findAllByType(TouchableOpacity).find(node => node.findAllByType(Text).some(text => text.props.children === label))!;
@@ -17,14 +18,14 @@ test("saves explicit consent and own membership version, then requires reread af
   let tree!: renderer.ReactTestRenderer;
   await act(async () => { tree = renderer.create(<HouseholdDiningScreen />); });
   expect(JSON.stringify(tree.toJSON())).toContain("未授权共享，忌口待本人确认");
-  expect(tree.root.findByType(Switch).props.value).toBe(false);
-  act(() => { tree.root.findAllByType(TextInput)[0].props.onChangeText("花生\n 花生 \n虾"); tree.root.findByType(Switch).props.onValueChange(true); });
+  expect(tree.root.findByProps({ accessibilityLabel: "允许共餐共享" }).props.value).toBe(false);
+  act(() => { tree.root.findAllByType(TextInput)[0].props.onChangeText("花生\n 花生 \n虾"); tree.root.findByProps({ accessibilityLabel: "允许共餐共享" }).props.onValueChange(true); });
   await act(async () => { button(tree,"保存共餐设置").props.onPress(); });
   expect(mockSave).toHaveBeenCalledWith(mockFetch,8,{ ...initial,shared: true,allergies: ["花生","虾"] });
   expect(tree.root.findAllByType(TextInput)).toHaveLength(0);
   expect(JSON.stringify(tree.toJSON())).toContain("保存结果尚未确认");
   await act(async () => { button(tree,"重新读取设置").props.onPress(); });
-  expect(tree.root.findByType(Switch).props.value).toBe(false);
+  expect(tree.root.findByProps({ accessibilityLabel: "允许共餐共享" }).props.value).toBe(false);
   act(() => tree.unmount());
 });
 test("switching families drops a late private response",async () => {
@@ -48,7 +49,7 @@ test("account changes discard drafts and late saves, including when the family i
   await act(async () => { tree.update(<HouseholdDiningScreen />); });
   await act(async () => { resolve({ ...initial,allergies: ["账号甲的过敏原"],shared: true }); });
   expect(tree.root.findAllByType(TextInput)[0].props.value).toBe("");
-  expect(tree.root.findByType(Switch).props.value).toBe(false);
+  expect(tree.root.findByProps({ accessibilityLabel: "允许共餐共享" }).props.value).toBe(false);
   mockUser = null;
   await act(async () => { tree.update(<HouseholdDiningScreen />); });
   expect(tree.root.findAllByType(TextInput)).toHaveLength(0);
@@ -64,5 +65,20 @@ test("late shared member data does not appear after changing account",async () =
   await act(async () => { resolve({ members: [{ membershipId: 99,userId: 99,name: "旧家庭成员",version: 1,shared: true,allergies: ["旧家庭过敏原"],restrictions: [] }] }); });
   expect(JSON.stringify(tree.toJSON())).not.toContain("旧家庭");
   expect(JSON.stringify(tree.toJSON())).toContain("未授权成员");
+  act(() => tree.unmount());
+});
+
+test("selects participants explicitly and previews total demand without recording intake",async () => {
+  mockMembers.mockResolvedValue({ members: [1,2,3].map(id => ({ membershipId: id,userId: id,name: `成员${id}`,version: 2,shared: true,allergies: [],restrictions: [] })) });
+  mockPreview.mockResolvedValue({ totalServings: 3,participants: [1,2,3].map(id => ({ membershipId: id,name: `成员${id}`,servings: 1 })),allergies: ["花生"],restrictions: ["素食"] });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<HouseholdDiningScreen />); });
+  act(() => { for (const id of [1,2,3]) tree.root.findByProps({ accessibilityLabel: `成员${id}参与共餐` }).props.onValueChange(true); });
+  await act(async () => { button(tree,"核算共餐需求").props.onPress(); });
+  expect(mockPreview).toHaveBeenCalledWith(mockFetch,8,{ participants: [1,2,3].map(id => ({ membershipId: id,version: 2,servings: 1 })) });
+  expect(mockSave).not.toHaveBeenCalled();
+  expect(JSON.stringify(tree.toJSON())).toContain("花生");
+  act(() => { tree.root.findByProps({ accessibilityLabel: "成员3参与共餐" }).props.onValueChange(false); });
+  expect(JSON.stringify(tree.toJSON())).not.toContain("需避开的过敏原");
   act(() => tree.unmount());
 });

@@ -1,4 +1,4 @@
-import { householdDiningMembersSchema } from "@dietdigidose/contracts";
+import { householdDiningAllocationSchema, householdDiningMembersSchema, type HouseholdDiningAllocationInput } from "@dietdigidose/contracts";
 import crypto from "node:crypto";
 import { HouseholdsError } from "./errors.js";
 import { formatInventory, formatShoppingItem, normalizeItemName } from "./formatters.js";
@@ -17,6 +17,27 @@ export class HouseholdsService {
 
   constructor(repository: HouseholdsRepository, codeFactory: () => string = inviteCode) {
     this.repository = repository; this.codeFactory = codeFactory;
+  }
+
+  async previewDiningAllocation(userId: number, householdId: number, raw: HouseholdDiningAllocationInput) {
+    const input = householdDiningAllocationSchema.parse(raw);
+    const current = await this.diningMembers(userId,householdId);
+    const participants = input.participants.map(selection => {
+      const member = current.members.find(value => value.membershipId === selection.membershipId);
+      if (!member || member.version !== selection.version)
+        throw new HouseholdsError(409,"共餐成员或忌口已变化，请重新读取后选择","DINING_MEMBERS_CHANGED");
+      if (!member.shared)
+        throw new HouseholdsError(409,"参与成员尚未授权共餐忌口，请先由本人确认并授权","DINING_CONSENT_REQUIRED");
+      return { ...member,servings: selection.servings };
+    });
+    const totalServings = participants.reduce((sum,item) => sum + Math.round(item.servings * 1_000_000),0) / 1_000_000;
+    return {
+      householdId,totalServings,participants,
+      // These are requirements for subsequent recipe checking, never proof a dish is safe.
+      allergies: [...new Set(participants.flatMap(member => member.allergies))],
+      restrictions: [...new Set(participants.flatMap(member => member.restrictions))],
+      recipeValidationRequired: true as const,
+    };
   }
 
   async diningMembers(userId: number, householdId: number) {

@@ -1,3 +1,4 @@
+import { DiningAllocation } from "@/screens/household-dining/DiningAllocation";
 import { useEffect, useRef, useState } from "react";
 import { ScrollView, Switch, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput, type HouseholdDiningMembers } from "@dietdigidose/contracts";
@@ -99,5 +100,6 @@ function SharedMembers({ householdId }: { householdId: number }) {
         <Text className="text-copy-muted">饮食限制：{member.restrictions.join("、") || "未填写，请确认"}</Text>
       </> : <Text className="text-copy-muted">未授权共享，忌口待本人确认</Text>}
     </View>)}
+    {data ? <DiningAllocation householdId={householdId} members={data.members} /> : null}
   </View>;
 }

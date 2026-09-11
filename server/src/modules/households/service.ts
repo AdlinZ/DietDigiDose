@@ -1,5 +1,5 @@
 import { checkDiningRecipe } from "./recipeConstraints.js";
-import { householdDiningAllocationSchema, householdDiningMembersSchema, type HouseholdDiningAllocationInput } from "@dietdigidose/contracts";
+import { householdMealProductionSchema, type HouseholdMealProductionInput, householdDiningAllocationSchema, householdDiningMembersSchema, type HouseholdDiningAllocationInput } from "@dietdigidose/contracts";
 import crypto from "node:crypto";
 import { HouseholdsError } from "./errors.js";
 import { formatInventory, formatShoppingItem, normalizeItemName } from "./formatters.js";
@@ -18,6 +18,10 @@ export class HouseholdsService {
 
   constructor(repository: HouseholdsRepository, codeFactory: () => string = inviteCode) {
     this.repository = repository; this.codeFactory = codeFactory;
+  }
+
+  async produceMeal(userId: number, householdId: number, input: HouseholdMealProductionInput) {
+    return this.repository.produceMeal(userId,householdId,householdMealProductionSchema.parse(input));
   }
 
   async previewDiningAllocation(userId: number, householdId: number, raw: HouseholdDiningAllocationInput) {

@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { HouseholdsError } from "./errors.js";
+import { consumeProductionItem, productionRequest, productionResult, repeatProduction } from "./production.js";
 import type Database from "better-sqlite3";
 import type { HouseholdsRepository } from "./repository.js";
 import type {
@@ -16,6 +19,29 @@ const inventorySelect = `SELECT hi.*,COALESCE(u.nickname,u.username) AS creator_
 export class SqliteHouseholdsRepository implements HouseholdsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+
+  async produceMeal(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdMealProductionInput) {
+    return this.database.transaction(() => {
+      const member = this.member(householdId,userId);
+      if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
+      const existing = this.database.prepare("SELECT * FROM household_meal_batches WHERE household_id=? AND idempotency_key=?").get(householdId,input.idempotencyKey) as Row | undefined;
+      if (existing) return repeatProduction(existing,userId,input);
+      const snapshot: Row[] = [];
+      for (const consumption of productionRequest(input).inventory) {
+        const item = this.database.prepare("SELECT * FROM household_inventory_items WHERE id=? AND household_id=?").get(consumption.itemId,householdId) as Row | undefined;
+        if (!item) throw new HouseholdsError(409,"家庭原料不存在或不属于该家庭","INVENTORY_CONFLICT");
+        const next = consumeProductionItem(item,consumption);
+        this.database.prepare("UPDATE household_inventory_items SET quantity=?,is_available=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND household_id=?")
+          .run(next.nextQuantity,Number(next.available),consumption.itemId,householdId);
+        snapshot.push({ ...consumption,foodName: item.food_name,before: item.quantity,after: next.nextQuantity });
+        this.activity(householdId,userId,"consume",String(item.food_name),`${consumption.amount}${consumption.unit}`,String(item.storage_location));
+      }
+      const id = randomUUID();
+      this.database.prepare(`INSERT INTO household_meal_batches(id,household_id,created_by_user_id,membership_id,idempotency_key,request_json,food_name,produced_servings,remaining_servings,inventory_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(id,householdId,userId,input.membershipId,input.idempotencyKey,JSON.stringify(productionRequest(input)),input.foodName,input.producedServings,input.producedServings,JSON.stringify(snapshot));
+      return productionResult(this.database.prepare("SELECT * FROM household_meal_batches WHERE id=?").get(id) as Row,false);
+    })();
+  }
 
   async diningRecipe(recipeId: number) {
     return this.database.prepare("SELECT id,title,description,ingredients_json,serving_size FROM recipes WHERE id=? AND deleted_at IS NULL AND status='approved' AND COALESCE(quality_status,'trusted') <> 'needs_review'").get(recipeId) as Row | undefined ?? null;

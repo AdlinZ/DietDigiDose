@@ -2180,6 +2180,26 @@ const migrations: Migration[] = [
       ALTER TABLE household_members ADD COLUMN dining_version INTEGER NOT NULL DEFAULT 1;`);
   } },
 
+  { version: 71, name: "household_meal_batches", up(database) {
+    database.exec(`CREATE TABLE household_meal_batches (
+      id TEXT PRIMARY KEY,
+      household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+      created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      membership_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      request_json TEXT NOT NULL,
+      food_name TEXT NOT NULL,
+      produced_servings REAL NOT NULL CHECK(produced_servings > 0),
+      remaining_servings REAL NOT NULL CHECK(remaining_servings >= 0 AND remaining_servings <= produced_servings),
+      inventory_json TEXT NOT NULL,
+      nutrition_per_serving_json TEXT NOT NULL DEFAULT '{}',
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(household_id,idempotency_key)
+    );
+    CREATE INDEX idx_household_meal_batches_household ON household_meal_batches(household_id,created_at,id);`);
+  } },
 ];
 
 export function runMigrations(database: Database.Database) {

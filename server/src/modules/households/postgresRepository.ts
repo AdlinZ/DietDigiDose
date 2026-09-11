@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { HouseholdsError } from "./errors.js";
+import { consumeProductionItem, productionRequest, productionResult, repeatProduction } from "./production.js";
 import type { Pool, PoolClient } from "pg";
 import type { HouseholdsRepository } from "./repository.js";
 import type {
@@ -21,6 +24,30 @@ function json<T>(value: unknown): T {
 export class PostgresHouseholdsRepository implements HouseholdsRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+
+  async produceMeal(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdMealProductionInput) {
+    return this.tx(async client => {
+      await client.query("SELECT id FROM households WHERE id=$1 FOR UPDATE",[householdId]);
+      const member = await this.member(client,householdId,userId,true);
+      if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
+      const existing = (await client.query("SELECT * FROM household_meal_batches WHERE household_id=$1 AND idempotency_key=$2",[householdId,input.idempotencyKey])).rows[0] as Row | undefined;
+      if (existing) return repeatProduction(existing,userId,input);
+      const snapshot: Row[] = [];
+      for (const consumption of productionRequest(input).inventory) {
+        const item = (await client.query("SELECT * FROM household_inventory_items WHERE id=$1 AND household_id=$2 FOR UPDATE",[consumption.itemId,householdId])).rows[0] as Row | undefined;
+        if (!item) throw new HouseholdsError(409,"家庭原料不存在或不属于该家庭","INVENTORY_CONFLICT");
+        const next = consumeProductionItem(item,consumption);
+        await client.query("UPDATE household_inventory_items SET quantity=$1,is_available=$2,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$3 AND household_id=$4",
+          [next.nextQuantity,next.available,consumption.itemId,householdId]);
+        snapshot.push({ ...consumption,foodName: item.food_name,before: item.quantity,after: next.nextQuantity });
+        await this.activity(client,householdId,userId,"consume",String(item.food_name),`${consumption.amount}${consumption.unit}`,String(item.storage_location));
+      }
+      const id = randomUUID();
+      const row = (await client.query(`INSERT INTO household_meal_batches(id,household_id,created_by_user_id,membership_id,idempotency_key,request_json,food_name,produced_servings,remaining_servings,inventory_json)
+        VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb) RETURNING *`,[id,householdId,userId,input.membershipId,input.idempotencyKey,JSON.stringify(productionRequest(input)),input.foodName,input.producedServings,input.producedServings,JSON.stringify(snapshot)])).rows[0] as Row;
+      return productionResult(row,false);
+    });
+  }
 
   async diningRecipe(recipeId: number) {
     return (await this.pool.query("SELECT id,title,description,ingredients_json,serving_size FROM recipes WHERE id=$1 AND deleted_at IS NULL AND status='approved' AND COALESCE(quality_status,'trusted') <> 'needs_review'",[recipeId])).rows[0] as Row | undefined ?? null;

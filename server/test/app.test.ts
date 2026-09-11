@@ -1,4 +1,4 @@
-import { verifyHouseholdDining } from "./householdDiningAssertions.js";
+import { verifyHouseholdDining, verifyHouseholdProduction } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
@@ -4285,6 +4285,9 @@ test("household dining preferences are explicit, self-owned and revoked on leavi
   const family = await service.create(owner.user.id,"共餐设置");
   await service.join(member.user.id,"DINING01");
   const diningRecipeId = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,status,serving_size) VALUES('共餐花生菜','[{\"name\":\"花生油\",\"amount\":\"10ml\"}]','approved',2)").run().lastInsertRowid);
+  const dietBefore = db.prepare("SELECT count(*) AS n FROM diet_records").get() as JsonObject;
+  await verifyHouseholdProduction(service,Number(family.id),owner.user.id,member.user.id);
+  assert.deepEqual(db.prepare("SELECT count(*) AS n FROM diet_records").get(),dietBefore);
   const staleMembership = await verifyHouseholdDining(service,Number(family.id),owner.user.id,member.user.id,diningRecipeId);
   const endpoint = `/api/v1/households/${family.id}/dining-preferences`;
   assert.equal((await api(endpoint,{ token: member.token })).response.status,403);

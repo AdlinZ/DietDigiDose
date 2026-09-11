@@ -38,3 +38,24 @@ export async function verifyHouseholdDining(service: HouseholdsService,household
   await assert.rejects(() => service.saveDiningPreferences(member,householdId,hidden),/不是/);
   return initial;
 }
+
+export async function verifyHouseholdProduction(service: HouseholdsService, householdId: number,owner: number,member: number) {
+  const membership = await service.diningPreferences(owner,householdId);
+  const first = await service.createInventory(owner,householdId,{ food_name: "制作鸡蛋",quantity: "6个",expiration_date: "2099-01-01" });
+  const second = await service.createInventory(owner,householdId,{ food_name: "制作米",quantity: "100g",expiration_date: "2099-01-01" });
+  const input = { idempotencyKey: "78888888-8888-4888-8888-888888888881",membershipId: membership.membershipId,foodName: "家庭蛋饭",producedServings: 3,
+    inventory: [{ itemId: Number(first.id),version: Number(first.version),amount: 3,unit: "piece" as const },{ itemId: Number(second.id),version: Number(second.version),amount: 50,unit: "g" as const }] };
+  await assert.rejects(() => service.produceMeal(owner,householdId,{ ...input,inventory: [input.inventory[0]!,{ ...input.inventory[1]!,version: 999 }] }),/库存已/);
+  assert.equal((await service.inventory(owner,householdId)).find(item => item.id === first.id)?.quantity,"6个");
+  const concurrent = await Promise.all([service.produceMeal(owner,householdId,input),service.produceMeal(owner,householdId,input)]);
+  assert.deepEqual(concurrent.map(value => value.repeated).sort(),[false,true]);
+  assert.equal(concurrent[0]!.id,concurrent[1]!.id);
+  const batch = concurrent[0]!;
+  assert.equal(batch.producedServings,3); assert.equal(batch.remainingServings,3);
+  const replay = await service.produceMeal(owner,householdId,input);
+  assert.equal(replay.id,batch.id); assert.equal(replay.repeated,true);
+  assert.equal((await service.inventory(owner,householdId)).find(item => item.id === first.id)?.quantity,"3个");
+  await assert.rejects(() => service.produceMeal(owner,householdId,{ ...input,producedServings: 4 }),/制作编号/);
+  await assert.rejects(() => service.produceMeal(member,householdId,input),/成员身份/);
+  for (const item of [first,second]) await service.removeInventory(owner,householdId,Number(item.id),Number(item.version)+1);
+}

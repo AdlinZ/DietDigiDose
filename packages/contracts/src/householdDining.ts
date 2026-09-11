@@ -50,3 +50,12 @@ export const householdDiningAllocationPreviewSchema = z.object({
   allergies: z.array(z.string()).max(1500),restrictions: z.array(z.string()).max(1500),recipeValidationRequired: z.literal(true),
 }).strict();
 export type HouseholdDiningAllocationPreview = z.infer<typeof householdDiningAllocationPreviewSchema>;
+
+export const householdMealProductionSchema = z.object({
+  idempotencyKey: z.string().uuid(), membershipId: z.number().int().positive(),
+  foodName: z.string().trim().min(1).max(120), producedServings: diningServings,
+  inventory: z.array(z.object({ itemId: z.number().int().positive(),version: z.number().int().positive(),
+    amount: z.number().finite().positive().max(1_000_000_000),unit: inventoryUnitSchema,
+  }).strict()).min(1).max(100),
+}).strict().refine(value => new Set(value.inventory.map(item => item.itemId)).size === value.inventory.length,"原料不能重复");
+export type HouseholdMealProductionInput = z.infer<typeof householdMealProductionSchema>;

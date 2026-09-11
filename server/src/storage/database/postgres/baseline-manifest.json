@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "7d23338c41f45cec666a90e4f8ecead1d4588961703b167881a618943d68c867",
-  "tableCount": 101,
-  "indexCount": 149,
-  "foreignKeyCount": 156,
+  "sourceSchemaSha256": "d1572ab17f1b7d6429b3bc3f257c2faf9e48822433226c39fe64d087a02122ca",
+  "tableCount": 102,
+  "indexCount": 151,
+  "foreignKeyCount": 158,
   "tables": [
     {
       "name": "admin_audit_logs",
@@ -2634,6 +2634,129 @@
           "sqliteType": "INTEGER",
           "postgresType": "integer",
           "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "household_meal_batches",
+      "autoIncrement": false,
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "created_by_user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "set null"
+        },
+        {
+          "column": "household_id",
+          "referencedTable": "households",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "household_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "created_by_user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "membership_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "idempotency_key",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "request_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "food_name",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "produced_servings",
+          "sqliteType": "REAL",
+          "postgresType": "double precision",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "remaining_servings",
+          "sqliteType": "REAL",
+          "postgresType": "double precision",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "inventory_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "nutrition_per_serving_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": false
         },
         {

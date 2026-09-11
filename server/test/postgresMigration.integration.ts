@@ -290,6 +290,9 @@ try {
   assert(history?.some((entry) => entry.action === "consume_partial"));
   assert.deepEqual(await inventoryRepository.remove(user.id, created), { kind: "removed" });
 
+  const inventoryChanges = (await pool.query("SELECT details_json FROM plan_maintenance_events WHERE user_id=$1 AND subject_id=$2 AND event_type='inventory_changed'",[user.id,String(created.id)])).rows;
+  assert.deepEqual(inventoryChanges.map(row => row.details_json.mode).sort(),["remove","update"]);
+  assert.equal(inventoryChanges.find(row => row.details_json.mode === "update").details_json.previousFoodName,created.food_name);
   const unknownExpiry = await inventoryRepository.create(user.id, {
     food_name: "未知日期大米", category: "粮油干货", quantity: "一袋", expiration_date: "", storage_location: "常温",
   });
@@ -317,11 +320,13 @@ try {
   const undoResults = await Promise.all([inventoryRepository.undoScan(user.id, winningJob), inventoryRepository.undoScan(user.id, winningJob)]);
   assert.deepEqual(undoResults.map(result => result.undone).sort(), [0, 1]);
   assert.deepEqual(await inventoryRepository.undoneScanItemIds(user.id, winningJob), [autoItem.id]);
+  assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE user_id=$1 AND subject_id=$2 AND event_type='inventory_changed'",[user.id,String(autoItem.id)])).rows[0].n,1);
   const conflictBatch = await inventoryRepository.bulkIntake(user.id, { idempotency_key: "pg-undo-conflict-batch", source: "image", source_reference: "pg-undo-conflict",
     items: [0,1].map(index => ({ source_item_id: `pg-undo-conflict:${index}`, food_name: `PG撤销冲突${index}`, category: "其他", quantity: "2个", quantity_value: 2,
       quantity_unit: "piece" as const, expiration_date: "", storage_location: "常温" as const, source: "image" as const, confirmed: true })) });
   await inventoryRepository.update(user.id, conflictBatch.items[1]!.id, 1, { patch: { quantity: "1个" }, nextQuantityValue: 1, nextQuantityUnit: "piece" });
   await assert.rejects(() => inventoryRepository.undoScan(user.id, "pg-undo-conflict"), /整批未撤销/);
+  assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE user_id=$1 AND source_id LIKE 'intake-undo:pg-undo-conflict:%'",[user.id])).rows[0].n,0);
   const conflictRows = (await pool.query("SELECT version,deleted_at,quantity_value FROM inventory_items WHERE id=ANY($1::integer[]) ORDER BY id", [conflictBatch.items.map(item => item.id)])).rows;
   assert.equal(conflictRows[0].version, 1);
   assert(conflictRows.every(row => row.deleted_at === null));

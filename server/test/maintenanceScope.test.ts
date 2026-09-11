@@ -81,3 +81,13 @@ test("daily checks inspect all future active meals only while enabled", () => {
   assert.deepEqual(maintenanceScope({ ...input,dailyEnabled: false }).items,[]);
   assert.ok(maintenanceScope({ ...input,dailyEnabled: false }).checks[0].reason.includes("关闭"));
 });
+
+
+test("renaming stock checks both old and current ingredient dependencies, including deleted stock", () => {
+  const input = fixture();
+  input.inventory[0].food_name = "大米";
+  input.events = [{ id: "renamed",user_id: 1,event_type: "inventory_changed",subject_id: "10",details_json: { previousFoodName: "鸡蛋" } }];
+  assert.deepEqual(maintenanceScope(input).items.map(item => item.itemId),["egg","rice"]);
+  Object.assign(input.inventory[0],{ deleted_at: "now",is_available: false });
+  assert.deepEqual(maintenanceScope(input).items.map(item => item.itemId),["egg","rice"]);
+});

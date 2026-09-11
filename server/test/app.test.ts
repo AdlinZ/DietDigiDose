@@ -3999,6 +3999,7 @@ test("scan review uses owned completed server artifacts and performs no implicit
   const undo = () => api(`/api/v1/inventory/scan-jobs/${jobId}/undo`, { token: account.token, method: "POST" });
   assert.deepEqual((await undo()).body, { undone: 2, repeated: false });
   assert.deepEqual((await undo()).body, { undone: 0, repeated: true });
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND event_type='inventory_changed'").get(account.user.id) as JsonObject).n,2);
   assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_items WHERE user_id=? AND deleted_at IS NULL").get(account.user.id) as JsonObject).n, 0);
   const afterUndo = await accept();
   assert.equal((afterUndo.body as JsonObject).items.length, 0);
@@ -4024,6 +4025,8 @@ test("scan undo conflicts roll back the entire batch when a later item was chang
     body: JSON.stringify({ version: 1, quantity: "1个", quantity_value: 1, quantity_unit: "piece" }) });
   const undone = await api(`/api/v1/inventory/scan-jobs/${jobId}/undo`, { token: account.token, method: "POST" });
   assert.equal(undone.response.status, 409);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND source_id LIKE 'intake-undo:%'").get(account.user.id) as JsonObject).n,0);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND event_type='inventory_changed'").get(account.user.id) as JsonObject).n,1);
   const current = db.prepare("SELECT version,deleted_at,quantity_value FROM inventory_items WHERE user_id=? ORDER BY id").all(account.user.id);
   assert.deepEqual(current, [{ version: 1, deleted_at: null, quantity_value: 2 }, { version: 2, deleted_at: null, quantity_value: 1 }]);
   assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE user_id=? AND idempotency_key LIKE 'intake-undo:%'").get(account.user.id) as JsonObject).n, 0);

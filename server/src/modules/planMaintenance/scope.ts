@@ -52,7 +52,7 @@ export function maintenanceScope(input: {
       continue;
     }
 
-    const stockIds = kind === "inventory_created" ? [Number(event.subject_id)]
+    const stockIds = ["inventory_created","inventory_changed"].includes(kind) ? [Number(event.subject_id)]
       : Array.isArray(details.inventoryItemIds) ? details.inventoryItemIds.map(Number) : [];
     const stocks = stockIds.map(stockId => input.inventory.find(row => owned(row) && Number(row.id) === stockId));
     if (stocks.some(row => !row)) checks.push({ eventId: id,reason: "关联库存已不存在，无法确定原料影响范围" });
@@ -61,7 +61,8 @@ export function maintenanceScope(input: {
       const raw = parseJson<unknown>(item.ingredients_json,null);
       const ingredients = Array.isArray(raw) ? raw.map(ingredient).filter(value => value !== null) : [];
       if (stocks.length && !ingredients.length) checks.push({ eventId: id,reason: `餐次 ${item.id} 缺少原料信息，需核对影响` });
-      if (stocks.some(stock => stock && ingredients.some(part => inventoryFoodNamesMatch(String(stock.food_name),part.name)))) mark(item,id);
+      if (stocks.some(stock => stock && ingredients.some(part => inventoryFoodNamesMatch(String(stock.food_name),part.name)))
+        || (kind === "inventory_changed" && typeof details.previousFoodName === "string" && ingredients.some(part => inventoryFoodNamesMatch(details.previousFoodName as string,part.name)))) mark(item,id);
     }
     if (["production","eat","discard","reschedule","intake_correction"].includes(kind)) {
       const meal = input.prepared.find(row => owned(row) && String(row.id) === String(event.subject_id));
@@ -89,7 +90,7 @@ export function maintenanceScope(input: {
       if (!linked && kind === "production" && Number(meal.remaining_servings)>0 && plans.length) {
         checks.push({ eventId: id,reason: "新增待吃餐尚无未来餐次分配，需核对可覆盖的需求" });
       }
-    } else if (!["inventory_created","cooking_completion"].includes(kind)) {
+    } else if (!["inventory_created","inventory_changed","cooking_completion"].includes(kind)) {
       checks.push({ eventId: id,reason: "未知业务事件类型，未自动扩大影响范围" });
     }
   }

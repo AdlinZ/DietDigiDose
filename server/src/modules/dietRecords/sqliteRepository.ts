@@ -1,7 +1,7 @@
 import { appendSqliteMaintenanceEvent } from "../planMaintenance/sqliteEventWriter.js";
 import { randomUUID } from "node:crypto";
 import type { PreparedMealEventInput } from "@dietdigidose/contracts";
-import { formatPreparedMeal, mealConsumptionRecord, transitionMeal, roundServings, undoMealIntake } from "./preparedMeals.js";
+import { formatPreparedMeal, mealConsumptionRecord, transitionMeal, roundServings, undoMealIntake, undoHouseholdMealIntake } from "./preparedMeals.js";
 import type Database from "better-sqlite3";
 import { applyInventoryConsumptions, InventoryQuantityError, type InventoryConsumption } from "../../services/inventoryQuantity.js";
 import type { DietRecordsRepository } from "./repository.js";
@@ -21,7 +21,7 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
   async list(userId: number, date?: string) {
     const where = date ? "WHERE user_id = ? AND recorded_at = ?" : "WHERE user_id = ?";
     const params = date ? [userId, date] : [userId];
-    return this.database.prepare(`SELECT *, (SELECT prepared_meal_id FROM prepared_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS prepared_meal_id FROM diet_records ${where}
+    return this.database.prepare(`SELECT *, (SELECT prepared_meal_id FROM prepared_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS prepared_meal_id, (SELECT meal_id FROM household_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS household_meal_id FROM diet_records ${where}
       ORDER BY CASE WHEN recorded_time IS NULL THEN 1 ELSE 0 END, recorded_time DESC, id DESC`).all(...params) as Array<Record<string, unknown>>;
   }
 
@@ -36,6 +36,27 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
 
   async remove(userId: number, id: number, mode?: "undo_eating" | "delete_intake") {
     return this.database.transaction(() => {
+      const householdCorrection = this.database.prepare("SELECT mode FROM household_meal_intake_corrections WHERE user_id=? AND original_diet_record_id=?").get(userId,id) as { mode: string } | undefined;
+      if (householdCorrection) {
+        if (householdCorrection.mode !== mode) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","该记录已按另一种方式处理");
+        return true;
+      }
+      const householdEvent = this.database.prepare("SELECT * FROM household_meal_events WHERE user_id=? AND diet_record_id=?").get(userId,id) as Record<string,unknown> | undefined;
+      if (householdEvent) {
+        if (!mode) throw new InventoryQuantityError("PREPARED_MEAL_DELETE_MODE_REQUIRED","此记录关联家庭食用，请选择撤销误记或仅删除个人摄入");
+        let restored: number | null = null;
+        if (mode === "undo_eating") {
+          const member = this.database.prepare("SELECT id FROM household_members WHERE household_id=? AND user_id=?").get(householdEvent.household_id,userId) as { id: number } | undefined;
+          if (!member || Number(member.id) !== Number(householdEvent.membership_id)) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","家庭成员身份已变化，不能归还份量；可仅删除个人摄入");
+          const meal = this.database.prepare("SELECT * FROM household_meal_batches WHERE id=? AND household_id=?").get(householdEvent.meal_id,householdEvent.household_id) as Record<string,unknown> | undefined;
+          if (!meal) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","家庭批次不存在，无法归还份量");
+          restored = undoHouseholdMealIntake(meal,householdEvent);
+          this.database.prepare("UPDATE household_meal_batches SET remaining_servings=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(restored,householdEvent.meal_id);
+        }
+        this.database.prepare("INSERT INTO household_meal_intake_corrections(id,user_id,event_id,original_diet_record_id,mode,result_json) VALUES(?,?,?,?,?,?)")
+          .run(randomUUID(),userId,householdEvent.id,id,mode,JSON.stringify({ mealId: householdEvent.meal_id,restoredRemaining: restored }));
+        return this.database.prepare("DELETE FROM diet_records WHERE id=? AND user_id=?").run(id,userId).changes === 1;
+      }
       const correction = this.database.prepare("SELECT mode FROM prepared_meal_intake_corrections WHERE user_id=? AND original_diet_record_id=?").get(userId, id) as { mode: string } | undefined;
       if (correction) {
         if (correction.mode !== mode) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "该记录已按另一种方式处理");

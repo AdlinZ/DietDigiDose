@@ -339,7 +339,7 @@ export default function DietRecordScreen() {
         Alert.alert("未能处理记录", error instanceof Error ? error.message : "请稍后重试");
       }
     };
-    if (record?.prepared_meal_id) {
+    if (record?.prepared_meal_id || record?.household_meal_id) {
       Alert.alert("处理关联食用记录", "撤销误记：恢复待吃份量并删除摄入，制作时消耗的原料不返还。仅删除摄入：仍保留食用事实，待吃份量不变。", [
         { text: "取消", style: "cancel" },
         { text: "仅删除摄入", style: "destructive", onPress: () => void remove("delete_intake") },

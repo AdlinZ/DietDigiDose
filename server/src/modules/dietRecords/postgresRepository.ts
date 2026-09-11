@@ -1,7 +1,7 @@
 import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
 import { randomUUID } from "node:crypto";
 import type { PreparedMealEventInput } from "@dietdigidose/contracts";
-import { formatPreparedMeal, mealConsumptionRecord, transitionMeal, roundServings, undoMealIntake } from "./preparedMeals.js";
+import { formatPreparedMeal, mealConsumptionRecord, transitionMeal, roundServings, undoMealIntake, undoHouseholdMealIntake } from "./preparedMeals.js";
 import type { Pool, PoolClient } from "pg";
 import type { InventoryConsumptionData, InventoryConsumptionResponse } from "@dietdigidose/contracts";
 import { InventoryQuantityError, type InventoryConsumption } from "../../services/inventoryQuantity.js";
@@ -38,9 +38,9 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
 
   async list(userId: number, date?: string) {
     const result = date
-      ? await this.pool.query(`SELECT *, (SELECT prepared_meal_id FROM prepared_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS prepared_meal_id FROM diet_records WHERE user_id = $1 AND recorded_at = $2
+      ? await this.pool.query(`SELECT *, (SELECT prepared_meal_id FROM prepared_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS prepared_meal_id, (SELECT meal_id FROM household_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS household_meal_id FROM diet_records WHERE user_id = $1 AND recorded_at = $2
           ORDER BY CASE WHEN recorded_time IS NULL THEN 1 ELSE 0 END, recorded_time DESC, id DESC`, [userId, date])
-      : await this.pool.query(`SELECT *, (SELECT prepared_meal_id FROM prepared_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS prepared_meal_id FROM diet_records WHERE user_id = $1
+      : await this.pool.query(`SELECT *, (SELECT prepared_meal_id FROM prepared_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS prepared_meal_id, (SELECT meal_id FROM household_meal_events WHERE diet_record_id=diet_records.id AND user_id=diet_records.user_id LIMIT 1) AS household_meal_id FROM diet_records WHERE user_id = $1
           ORDER BY CASE WHEN recorded_time IS NULL THEN 1 ELSE 0 END, recorded_time DESC, id DESC`, [userId]);
     return result.rows as Array<Record<string, unknown>>;
   }
@@ -51,6 +51,28 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
     return this.transaction(async client => {
       // Same account lock as production and consumption, before reading event state.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`prepared-meals:${userId}`]);
+      const householdCorrection = (await client.query("SELECT mode FROM household_meal_intake_corrections WHERE user_id=$1 AND original_diet_record_id=$2",[userId,id])).rows[0];
+      if (householdCorrection) {
+        if (householdCorrection.mode !== mode) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","该记录已按另一种方式处理");
+        return true;
+      }
+      const householdEvent = (await client.query("SELECT * FROM household_meal_events WHERE user_id=$1 AND diet_record_id=$2",[userId,id])).rows[0];
+      if (householdEvent) {
+        if (!mode) throw new InventoryQuantityError("PREPARED_MEAL_DELETE_MODE_REQUIRED","此记录关联家庭食用，请选择撤销误记或仅删除个人摄入");
+        await client.query("SELECT id FROM households WHERE id=$1 FOR KEY SHARE",[householdEvent.household_id]);
+        let restored: number | null = null;
+        if (mode === "undo_eating") {
+          const member = (await client.query("SELECT id FROM household_members WHERE household_id=$1 AND user_id=$2 FOR SHARE",[householdEvent.household_id,userId])).rows[0];
+          if (!member || Number(member.id) !== Number(householdEvent.membership_id)) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","家庭成员身份已变化，不能归还份量；可仅删除个人摄入");
+          const meal = (await client.query("SELECT * FROM household_meal_batches WHERE id=$1 AND household_id=$2 FOR UPDATE",[householdEvent.meal_id,householdEvent.household_id])).rows[0];
+          if (!meal) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","家庭批次不存在，无法归还份量");
+          restored = undoHouseholdMealIntake(meal,householdEvent);
+          await client.query("UPDATE household_meal_batches SET remaining_servings=$1,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[restored,householdEvent.meal_id]);
+        }
+        await client.query("INSERT INTO household_meal_intake_corrections(id,user_id,event_id,original_diet_record_id,mode,result_json) VALUES($1,$2,$3,$4,$5,$6::jsonb)",
+          [randomUUID(),userId,householdEvent.id,id,mode,JSON.stringify({ mealId: householdEvent.meal_id,restoredRemaining: restored })]);
+        return (await client.query("DELETE FROM diet_records WHERE id=$1 AND user_id=$2",[id,userId])).rowCount === 1;
+      }
       const correction = (await client.query("SELECT mode FROM prepared_meal_intake_corrections WHERE user_id=$1 AND original_diet_record_id=$2", [userId, id])).rows[0];
       if (correction) {
         if (correction.mode !== mode) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "该记录已按另一种方式处理");

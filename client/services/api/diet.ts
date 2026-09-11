@@ -2,7 +2,7 @@ import type { MealProduction, PreparedMeal, PreparedMealEventInput } from "@diet
 import { requestJson, type ApiFetch } from "./client";
 import type { DietRecord } from "./types";
 
-export type DietRecordInput = Omit<DietRecord, "id" | "prepared_meal_id">;
+export type DietRecordInput = Omit<DietRecord, "id" | "prepared_meal_id" | "household_meal_id">;
 
 export const dietApi = {
   list: (apiFetch: ApiFetch, date?: string) => requestJson<DietRecord[]>(apiFetch, `/api/v1/diet-records${date ? `?date=${encodeURIComponent(date)}` : ""}`),

@@ -2218,6 +2218,18 @@ const migrations: Migration[] = [
     CREATE INDEX idx_household_meal_events_meal ON household_meal_events(meal_id,created_at);
     CREATE INDEX idx_household_meal_events_diet ON household_meal_events(diet_record_id,user_id);`);
   } },
+  { version: 73, name: "household_meal_intake_corrections", up(database) {
+    database.exec(`CREATE TABLE household_meal_intake_corrections (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_id TEXT REFERENCES household_meal_events(id) ON DELETE SET NULL,
+      original_diet_record_id INTEGER NOT NULL,
+      mode TEXT NOT NULL CHECK(mode IN ('undo_eating','delete_intake')),
+      result_json TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,original_diet_record_id)
+    );`);
+  } },
 ];
 
 export function runMigrations(database: Database.Database) {

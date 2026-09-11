@@ -1,4 +1,4 @@
-import { verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating } from "./householdDiningAssertions.js";
+import { verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
@@ -4295,6 +4295,8 @@ test("household dining preferences are explicit, self-owned and revoked on leavi
     const records = db.prepare("SELECT amount,calories FROM diet_records WHERE user_id=? AND food_name='家庭蛋饭'").all(userId);
     assert.deepEqual(records,[{ amount: "1份",calories: null }]);
   }
+  const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
+  await verifyHouseholdCorrections(service,new SqliteDietRecordsRepository(db),Number(family.id),owner.user.id,member.user.id,"DINING01");
   const staleMembership = await verifyHouseholdDining(service,Number(family.id),owner.user.id,member.user.id,diningRecipeId);
   const endpoint = `/api/v1/households/${family.id}/dining-preferences`;
   assert.equal((await api(endpoint,{ token: member.token })).response.status,403);

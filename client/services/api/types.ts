@@ -3,6 +3,7 @@ export type { InventoryItem } from "@dietdigidose/contracts";
 export type DietRecord = {
   id: number;
   prepared_meal_id?: string | null;
+  household_meal_id?: string | null;
   meal_type: string;
   food_name: string;
   amount: string;

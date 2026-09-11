@@ -56,3 +56,15 @@ export function transitionMeal(meal: PreparedMeal, input: PreparedMealEventInput
   if (amount > meal.remaining_servings) throw new InventoryQuantityError("PREPARED_MEAL_INSUFFICIENT", "待吃餐剩余份量不足");
   return { ...meal, remaining_servings: roundServings(meal.remaining_servings - amount), version: meal.version + 1 };
 }
+
+export function undoHouseholdMealIntake(meal: Record<string,unknown>,event: Record<string,unknown>) {
+  const result = typeof event.result_json === "string" ? JSON.parse(event.result_json) : event.result_json;
+  const previous = result as { meal?: { version?: number } };
+  const servings = Number(event.servings);
+  if (Number(meal.version) !== previous.meal?.version || !Number.isFinite(servings) || servings <= 0)
+    throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","家庭批次在此次食用后已有变化，不能直接归还份量；可仅删除个人摄入");
+  const remaining = roundServings(Number(meal.remaining_servings)+servings);
+  if (!Number.isFinite(remaining) || remaining > Number(meal.produced_servings))
+    throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT","家庭食用份量与批次不一致，无法撤销");
+  return remaining;
+}

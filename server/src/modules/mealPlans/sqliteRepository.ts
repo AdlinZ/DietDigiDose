@@ -155,6 +155,11 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   }
 
   async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
+    return this.updateItemInTransaction(userId,planId,itemId,input,source,reason);
+  }
+
+  /** Synchronous so maintenance can atomically commit a whole batch and its acknowledgement. */
+  updateItemInTransaction(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
     return this.database.transaction(() => {
       const item = this.getItem(planId, itemId, userId);
       if (!item) return { kind: "not_found" as const };

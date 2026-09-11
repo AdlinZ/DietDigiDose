@@ -178,7 +178,11 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
   }
 
   async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
-    return this.transaction(async client => {
+    return this.transaction(client => this.updateItemWithClient(client,userId,planId,itemId,input,source,reason));
+  }
+
+  /** Uses the caller's transaction; changes and acknowledgement must commit together. */
+  async updateItemWithClient(client: PoolClient, userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
       await lockMealPlanning(client,userId);
       const item = await this.getItem(client,planId,itemId,userId,true);
       if (!item) return { kind: "not_found" as const };
@@ -203,7 +207,6 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
         [id,userId,planId,itemId,fingerprint,source,reason,facts.decision === "apply" ? "applied" : facts.decision === "suggest" ? "pending" : "blocked",input.version,
           facts.decision === "apply" ? next.version : null,JSON.stringify(facts.snapshot),JSON.stringify(proposal),facts.decision === "apply"]);
       return { kind: "updated" as const, value: { ...next, change: formatMealChange(changed.rows[0]) } };
-    });
   }
 
   async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {

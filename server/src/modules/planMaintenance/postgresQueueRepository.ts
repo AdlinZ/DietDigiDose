@@ -1,3 +1,6 @@
+import { lockMealPlanning } from "../mealPlans/postgresLock.js";
+import { PostgresMealPlansRepository } from "../mealPlans/postgresRepository.js";
+import { MaintenanceApplyConflict, type MaintenanceApplication, type MaintenanceChange } from "./queue.js";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { batchLimit, leaseDuration, MAINTENANCE_MAX_ATTEMPTS, MAINTENANCE_RULE_VERSION, retryAt, type MaintenanceJob, type MaintenanceQueueRepository } from "./queue.js";
@@ -47,6 +50,39 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
       const members = (await client.query("SELECT event_id FROM plan_maintenance_job_events WHERE job_id=$1 ORDER BY event_id",[row.id])).rows;
       return { id: row.id,userId: row.user_id,attempt: row.attempts+1,leaseToken: token,eventIds: members.map(row => row.event_id) };
     });
+  }
+
+  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[]): Promise<MaintenanceApplication> {
+    try {
+      return await this.transaction(async client => {
+        await lockMealPlanning(client,job.userId);
+        const lease = (await client.query(`SELECT id FROM plan_maintenance_jobs WHERE id=$1 AND user_id=$2
+          AND status='running' AND attempts=$3 AND lease_token=$4 AND lease_expires_at>clock_timestamp() FOR UPDATE`,
+          [job.id,job.userId,job.attempt,job.leaseToken])).rows[0];
+        if (!lease) throw new MaintenanceApplyConflict("lease_lost");
+        const plans = new PostgresMealPlansRepository(this.pool);
+        const results: Record<string, unknown>[] = [];
+        for (const change of changes) {
+          const current = (await client.query(`SELECT i.version,p.version AS plan_version,p.start_date,p.end_date FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id
+            WHERE i.id=$1 AND i.plan_id=$2 AND i.user_id=$3 AND p.user_id=i.user_id AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active' FOR UPDATE OF i,p`,
+            [change.itemId,change.planId,job.userId])).rows[0];
+          if (!current || Number(current.version) !== change.input.version || Number(current.plan_version) !== change.planVersion
+            || (change.input.plannedDate && (change.input.plannedDate<current.start_date || change.input.plannedDate>current.end_date))) throw new MaintenanceApplyConflict("input_conflict");
+          const result = await plans.updateItemWithClient(client,job.userId,change.planId,change.itemId,change.input,"maintenance",change.reason);
+          if (result.kind !== "updated") throw new MaintenanceApplyConflict("input_conflict");
+          results.push(result.value);
+        }
+        const completed = await client.query(`UPDATE plan_maintenance_jobs SET status='completed',result_json=$1::jsonb,lease_token=NULL,
+          lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND lease_expires_at>clock_timestamp()`,[JSON.stringify({ changes: results }),job.id]);
+        if (completed.rowCount !== 1) throw new MaintenanceApplyConflict("lease_lost");
+        await client.query(`UPDATE plan_maintenance_events SET processed_at=CURRENT_TIMESTAMP WHERE user_id=$1
+          AND id IN (SELECT event_id FROM plan_maintenance_job_events WHERE job_id=$2)`,[job.userId,job.id]);
+        return { kind: "completed",changes: results };
+      });
+    } catch(error) {
+      if (error instanceof MaintenanceApplyConflict) return { kind: error.kind };
+      throw error;
+    }
   }
 
   async fail(job: MaintenanceJob, now: Date, error: string) {

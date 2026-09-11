@@ -1,3 +1,5 @@
+import { SqliteMealPlansRepository } from "../mealPlans/sqliteRepository.js";
+import { MaintenanceApplyConflict, type MaintenanceApplication, type MaintenanceChange } from "./queue.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { batchLimit, leaseDuration, MAINTENANCE_MAX_ATTEMPTS, MAINTENANCE_RULE_VERSION, retryAt, type MaintenanceJob, type MaintenanceQueueRepository } from "./queue.js";
@@ -40,6 +42,39 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
       const members = this.db.prepare("SELECT event_id FROM plan_maintenance_job_events WHERE job_id=? ORDER BY event_id").all(row.id) as { event_id: string }[];
       return { id: row.id,userId: row.user_id,attempt: row.attempts+1,leaseToken: token,eventIds: members.map(row => row.event_id) };
     })();
+  }
+
+  async applyChanges(job: MaintenanceJob, changes: MaintenanceChange[]): Promise<MaintenanceApplication> {
+    try {
+      return this.db.transaction(() => {
+        const valid = () => Boolean(this.db.prepare(`SELECT 1 FROM plan_maintenance_jobs WHERE id=? AND user_id=?
+          AND status='running' AND attempts=? AND lease_token=? AND julianday(lease_expires_at)>julianday('now')`)
+          .get(job.id,job.userId,job.attempt,job.leaseToken));
+        if (!valid()) throw new MaintenanceApplyConflict("lease_lost");
+        const plans = new SqliteMealPlansRepository(this.db);
+        const results: Record<string, unknown>[] = [];
+        for (const change of changes) {
+          // Check even when the manual change API could return a prior idempotent proposal.
+          const current = this.db.prepare(`SELECT i.version,p.version AS planVersion,p.start_date,p.end_date FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id
+            WHERE i.id=? AND i.plan_id=? AND i.user_id=? AND p.user_id=i.user_id AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active' `)
+            .get(change.itemId,change.planId,job.userId) as { version: number; planVersion: number; start_date: string; end_date: string } | undefined;
+          if (!current || current.version !== change.input.version || current.planVersion !== change.planVersion
+            || (change.input.plannedDate && (change.input.plannedDate<current.start_date || change.input.plannedDate>current.end_date))) throw new MaintenanceApplyConflict("input_conflict");
+          const result = plans.updateItemInTransaction(job.userId,change.planId,change.itemId,change.input,"maintenance",change.reason);
+          if (result.kind !== "updated") throw new MaintenanceApplyConflict("input_conflict");
+          results.push(result.value);
+        }
+        if (!valid()) throw new MaintenanceApplyConflict("lease_lost");
+        this.db.prepare(`UPDATE plan_maintenance_events SET processed_at=CURRENT_TIMESTAMP WHERE user_id=?
+          AND id IN (SELECT event_id FROM plan_maintenance_job_events WHERE job_id=?)`).run(job.userId,job.id);
+        this.db.prepare("UPDATE plan_maintenance_jobs SET status='completed',result_json=?,lease_token=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+          .run(JSON.stringify({ changes: results }),job.id);
+        return { kind: "completed" as const,changes: results };
+      })();
+    } catch(error) {
+      if (error instanceof MaintenanceApplyConflict) return { kind: error.kind };
+      throw error;
+    }
   }
 
   async fail(job: MaintenanceJob, now: Date, error: string) {

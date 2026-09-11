@@ -6,8 +6,11 @@ export async function verifyMaintenanceQueue(harness: {
   seed: (id: string,userId: number,at: string) => Promise<void>;
   unprocessed: () => Promise<number>;
   users: [number,number];
+  seedMeals: (userId: number) => Promise<void>;
+  mealState: (id: string) => Promise<{ version: number; plannedDate: string }>;
+  changeCount: () => Promise<number>;
 }) {
-  const now = new Date("2026-09-12T00:00:00Z");
+  const now = new Date(Date.now()+3_600_000);
   const later = (ms: number) => new Date(now.getTime()+ms);
   for (const [id,user] of [["queue-a",harness.users[0]],["queue-b",harness.users[0]],["queue-c",harness.users[1]]] as const) {
     await harness.seed(id,user,later(-31_000).toISOString());
@@ -46,4 +49,24 @@ export async function verifyMaintenanceQueue(harness: {
   assert.ok(fresh); assert.equal(fresh.attempt,1); assert.deepEqual(fresh.eventIds,["queue-fresh"]);
   assert.equal(await harness.unprocessed(),4);
   assert.equal(await harness.repository().enqueueEvents(later(304_000)),0);
+  await harness.seedMeals(harness.users[0]);
+  const change = (itemId: string,version = 1) => ({ planVersion: 1,planId: "maintenance-plan",itemId,
+    input: { version,plannedDate: "2026-09-13" },reason: "关联库存变化" });
+  assert.deepEqual(await harness.repository().applyChanges(first,[change("maintenance-mutable")]),{ kind: "lease_lost" });
+  assert.deepEqual(await harness.repository().applyChanges(fresh,[change("maintenance-mutable"),change("maintenance-confirmed",99)]),{ kind: "input_conflict" });
+  assert.deepEqual(await harness.repository().applyChanges(fresh,[{ ...change("maintenance-mutable"),planVersion: 99 }]),{ kind: "input_conflict" });
+  assert.deepEqual(await harness.repository().applyChanges(fresh,[{ ...change("maintenance-mutable"),input: { version: 1,plannedDate: "2026-10-01" } }]),{ kind: "input_conflict" });
+  assert.deepEqual(await harness.mealState("maintenance-mutable"),{ version: 1,plannedDate: "2026-09-12" });
+  assert.equal(await harness.changeCount(),0);
+  assert.equal(await harness.unprocessed(),4);
+  const applied = await harness.repository().applyChanges(fresh,["mutable","confirmed","cooking","purchased"].map(kind => change(`maintenance-${kind}`)));
+  assert.equal(applied.kind,"completed");
+  if (applied.kind !== "completed") assert.fail("expected completion");
+  assert.deepEqual(applied.changes.map(item => (item.change as { status: string }).status),["applied","pending","blocked","pending"]);
+  assert.deepEqual(await harness.mealState("maintenance-mutable"),{ version: 2,plannedDate: "2026-09-13" });
+  for (const kind of ["confirmed","cooking","purchased","untouched"]) assert.deepEqual(await harness.mealState(`maintenance-${kind}`),{ version: 1,plannedDate: "2026-09-12" });
+  assert.equal(await harness.unprocessed(),3);
+  assert.equal(await harness.changeCount(),4);
+  assert.deepEqual(await harness.repository().applyChanges(fresh,[]),{ kind: "lease_lost" });
+  assert.equal(await harness.changeCount(),4);
 }

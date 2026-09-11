@@ -339,6 +339,15 @@ describe("API security baseline", () => {
     await verifyMaintenanceQueue({ users: [owner.user.id,other.user.id], repository: () => new SqliteMaintenanceQueueRepository(db),
       seed: async (id,userId,at) => { db.prepare("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES(?,?,'eat',?,?,?)").run(id,userId,id,id,at); },
       unprocessed: async () => (db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE processed_at IS NULL").get() as JsonObject).n,
+      seedMeals: async userId => {
+        db.prepare("INSERT INTO meal_plans(id,user_id,title,start_date,end_date) VALUES('maintenance-plan',?,'维护回归','2026-09-12','2026-09-20')").run(userId);
+        for (const kind of ["mutable","confirmed","cooking","purchased","untouched"]) db.prepare(`INSERT INTO meal_plan_items
+          (id,plan_id,user_id,planned_date,meal_type,title,status,confirmed_at) VALUES(?,'maintenance-plan',?,'2026-09-12','午餐',?,?,?)`)
+          .run(`maintenance-${kind}`,userId,kind,kind === "cooking" ? "cooking" : "planned",kind === "confirmed" ? new Date().toISOString() : null);
+        db.prepare("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('maintenance-purchase',?,'meal-plan:maintenance-purchased:0','已采购',1)").run(userId);
+      },
+      mealState: async id => db.prepare("SELECT version,planned_date AS plannedDate FROM meal_plan_items WHERE id=?").get(id) as { version: number; plannedDate: string },
+      changeCount: async () => (db.prepare("SELECT COUNT(*) n FROM meal_plan_changes WHERE plan_id='maintenance-plan'").get() as JsonObject).n,
     });
     db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
   });

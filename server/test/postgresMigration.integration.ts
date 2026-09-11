@@ -2266,6 +2266,15 @@ try {
   await verifyMaintenanceQueue({ users: [user.id,queueOtherUser], repository: () => new PostgresMaintenanceQueueRepository(pool),
     seed: async (id,userId,at) => { await pool.query("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES($1,$2,'eat',$1,$1,$3)",[id,userId,at]); },
     unprocessed: async () => (await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE processed_at IS NULL")).rows[0].n,
+    seedMeals: async userId => {
+      await pool.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date) VALUES('maintenance-plan',$1,'维护回归','2026-09-12','2026-09-20')",[userId]);
+      for (const kind of ["mutable","confirmed","cooking","purchased","untouched"]) await pool.query(`INSERT INTO meal_plan_items
+        (id,plan_id,user_id,planned_date,meal_type,title,status,confirmed_at) VALUES($1,'maintenance-plan',$2,'2026-09-12','午餐',$3,$4,$5)`,
+        [`maintenance-${kind}`,userId,kind,kind === "cooking" ? "cooking" : "planned",kind === "confirmed" ? new Date().toISOString() : null]);
+      await pool.query("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('maintenance-purchase',$1,'meal-plan:maintenance-purchased:0','已采购',true)",[userId]);
+    },
+    mealState: async id => (await pool.query('SELECT version,planned_date AS "plannedDate" FROM meal_plan_items WHERE id=$1',[id])).rows[0],
+    changeCount: async () => (await pool.query("SELECT COUNT(*)::int n FROM meal_plan_changes WHERE plan_id='maintenance-plan'")).rows[0].n,
   });
   await pool.query("DELETE FROM plan_maintenance_jobs");
   await pool.query("DELETE FROM plan_maintenance_events");

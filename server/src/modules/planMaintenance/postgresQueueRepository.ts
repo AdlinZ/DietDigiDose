@@ -71,9 +71,11 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
     });
   }
 
-  private async readInputs(client: PoolClient, userId: number, recipeIds: number[], lock = false) {
+  private async readInputs(client: PoolClient, userId: number, recipeIds: number[], jobId: string, lock = false) {
     const data: Record<string,Record<string,unknown>[]> = {};
     const suffix = lock ? " FOR UPDATE" : "";
+    data.maintenance_events = (await client.query(`SELECT e.id,e.user_id,e.event_type,e.subject_id,e.details_json FROM plan_maintenance_events e
+      JOIN plan_maintenance_job_events m ON m.event_id=e.id WHERE m.job_id=$1 AND e.user_id=$2${lock ? " FOR UPDATE OF e" : ""}`,[jobId,userId])).rows;
     for (const table of maintenanceInputTables) data[table] = (await client.query(`SELECT * FROM ${table} WHERE user_id=$1${suffix}`,[userId])).rows;
     data.recipe_recommendation_events = (await client.query(`SELECT * FROM recipe_recommendation_events WHERE user_id=$1 AND event_type='skip'${suffix}`,[userId])).rows;
     recipeIds = [...new Set([...recipeIds,...data.meal_plan_items.map(row => Number(row.recipe_id)).filter(id => id>0)])];
@@ -86,7 +88,7 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
       await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
       const valid = (await client.query(`SELECT 1 FROM plan_maintenance_jobs WHERE id=$1 AND user_id=$2 AND lease_token=$3
         AND attempts=$4 AND status='running' AND lease_expires_at>clock_timestamp()`,[job.id,job.userId,job.leaseToken,job.attempt])).rows[0];
-      return valid ? this.readInputs(client,job.userId,recipeIds) : null;
+      return valid ? this.readInputs(client,job.userId,recipeIds,job.id) : null;
     });
   }
 
@@ -101,7 +103,7 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
         // The parent FK row blocks new owned inputs; existing input rows are locked
         // below. These locks last only for validation/application, never computation.
         await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[job.userId]);
-        const actual = await this.readInputs(client,job.userId,expected.recipeIds,true);
+        const actual = await this.readInputs(client,job.userId,expected.recipeIds,job.id,true);
         if (actual.fingerprint !== expected.fingerprint) throw new MaintenanceApplyConflict("input_conflict");
         const plans = new PostgresMealPlansRepository(this.pool);
         const results: Record<string, unknown>[] = [];

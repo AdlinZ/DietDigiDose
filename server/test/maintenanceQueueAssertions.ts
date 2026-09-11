@@ -1,3 +1,4 @@
+import { evaluateMaintenanceJob } from "../src/modules/planMaintenance/evaluate.js";
 import assert from "node:assert/strict";
 import type { MaintenanceQueueRepository } from "../src/modules/planMaintenance/queue.js";
 
@@ -60,6 +61,10 @@ export async function verifyMaintenanceQueue(harness: {
   let captured = await harness.repository().inputs(fresh);
   assert.ok(captured);
   assert.equal((await harness.repository().inputs(fresh))?.fingerprint,captured.fingerprint);
+  const evaluated = await evaluateMaintenanceJob(harness.repository(),fresh,"2026-09-12");
+  assert.ok(evaluated); assert.equal(evaluated.snapshot.fingerprint,captured.fingerprint);
+  assert.deepEqual(evaluated.scope,scope); assert.equal(evaluated.result.modelCalls,0);
+  assert.equal(await evaluateMaintenanceJob(harness.repository(),first,"2026-09-12"),null);
   const apply = (job: Parameters<MaintenanceQueueRepository["applyChanges"]>[0],changes: Parameters<MaintenanceQueueRepository["applyChanges"]>[1]) =>
     harness.repository().applyChanges(job,changes,captured!);
   const change = (itemId: string,version = 1) => ({ planVersion: 1,planId: "maintenance-plan",itemId,

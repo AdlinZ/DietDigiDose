@@ -36,6 +36,7 @@ export function createPlanningBudget(inventory: Row[], existing: Row[] = []) {
     }
     return preview;
   };
+  const commitmentPreviews = new Map<string,ReturnType<typeof consume>>();
   // An existing item's captured ingredients are its committed quantities. Missing
   // quantities cannot be guessed from a recipe or silently reused by another meal.
   for (const item of existing) {
@@ -43,7 +44,7 @@ export function createPlanningBudget(inventory: Row[], existing: Row[] = []) {
     const ingredients = parseJson<unknown[]>(item.ingredients_json,[]).map(ingredient).filter((value): value is NonNullable<ReturnType<typeof ingredient>> => Boolean(value));
     const demands = recipeDemands(ingredients,1,1);
     if (!demands) { unknownCommitment = true; checks.add(`已有安排「${item.title}」缺少明确原料用量，需先核对，未重复分配库存`); continue; }
-    consume(demands,String(item.planned_date),String(item.id));
+    commitmentPreviews.set(String(item.id),consume(demands,String(item.planned_date),String(item.id)));
   }
-  return { stock,checks,aggregate,consume,unknownCommitment };
+  return { stock,checks,aggregate,consume,commitmentPreviews,markUnknownCommitment: () => { unknownCommitment = true; },get unknownCommitment() { return unknownCommitment; } };
 }

@@ -63,8 +63,10 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
     })();
   }
 
-  private readInputs(userId: number, recipeIds: number[]) {
+  private readInputs(userId: number, recipeIds: number[], jobId: string) {
     const data: Record<string,Row[]> = {};
+    data.maintenance_events = this.db.prepare(`SELECT e.id,e.user_id,e.event_type,e.subject_id,e.details_json FROM plan_maintenance_events e
+      JOIN plan_maintenance_job_events m ON m.event_id=e.id WHERE m.job_id=? AND e.user_id=?`).all(jobId,userId) as Row[];
     for (const table of maintenanceInputTables) data[table] = this.db.prepare(`SELECT * FROM ${table} WHERE user_id=?`).all(userId) as Row[];
     data.recipe_recommendation_events = this.db.prepare("SELECT * FROM recipe_recommendation_events WHERE user_id=? AND event_type='skip'").all(userId) as Row[];
     recipeIds = [...new Set([...recipeIds,...data.meal_plan_items.map(row => Number(row.recipe_id)).filter(id => id>0)])];
@@ -76,7 +78,7 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
     return this.db.transaction(() => {
       const valid = this.db.prepare(`SELECT 1 FROM plan_maintenance_jobs WHERE id=? AND user_id=? AND lease_token=?
         AND attempts=? AND status='running' AND julianday(lease_expires_at)>julianday('now')`).get(job.id,job.userId,job.leaseToken,job.attempt);
-      return valid ? this.readInputs(job.userId,recipeIds) : null;
+      return valid ? this.readInputs(job.userId,recipeIds,job.id) : null;
     })();
   }
 
@@ -87,7 +89,7 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
           AND status='running' AND attempts=? AND lease_token=? AND julianday(lease_expires_at)>julianday('now')`)
           .get(job.id,job.userId,job.attempt,job.leaseToken));
         if (!valid()) throw new MaintenanceApplyConflict("lease_lost");
-        if (this.readInputs(job.userId,expected.recipeIds).fingerprint !== expected.fingerprint) throw new MaintenanceApplyConflict("input_conflict");
+        if (this.readInputs(job.userId,expected.recipeIds,job.id).fingerprint !== expected.fingerprint) throw new MaintenanceApplyConflict("input_conflict");
         const plans = new SqliteMealPlansRepository(this.db);
         const results: Record<string, unknown>[] = [];
         for (const change of changes) {

@@ -78,9 +78,10 @@ export function DiningAllocation({ householdId,members,recipeId,planItem }: { pl
       {preview.supply ? <View className="gap-2">
         <Text className="font-bold text-ink">同名家庭库存核算{preview.supply.status === "needs_review" ? "：待核对" : ""}</Text>
         <Text className="text-copy-muted">已考虑另外 {preview.supply.otherMealCount} 个共餐餐次，先保留受保护餐次的需求，再按日期分配；本次不预留或扣减库存。</Text>
-        {preview.supply.demands.map((demand,index) => <Text key={index} className="text-copy-muted">{demand.food_name}：{demand.covered === null || demand.missing === null ? "暂不能确定可用量与缺口" : `可覆盖 ${demand.covered} ${demand.unit}，尚缺 ${demand.missing} ${demand.unit}`}</Text>)}
+        {preview.supply.demands.map((demand,index) => <Text key={index} className="text-copy-muted">{demand.food_name}：{demand.covered === null || demand.missing === null ? "暂不能确定可用量与缺口" : `库存可覆盖 ${demand.covered} ${demand.unit}，库存缺口 ${demand.missing} ${demand.unit}`}</Text>)}
+        {preview.supply.demands.map((demand,index) => <Text key={`shopping-${index}`} className="text-copy-muted">{demand.food_name}：{demand.shoppingCovered == null || demand.unplanned == null ? "清单覆盖与尚未安排量待核对" : `清单已列入 ${demand.shoppingCovered} ${demand.unit}，尚未安排 ${demand.unplanned} ${demand.unit}`}</Text>)}
         {preview.supply.checks.map((check,index) => <Text key={index} className="text-copy-muted">{check}</Text>)}
-        <Text className="text-copy-muted">尚未抵扣采购清单或待吃餐，不是最终补买量。上方采购按钮仍按原料总需求同步。</Text>
+        <Text className="text-copy-muted">清单数量是采购安排，不代表已入库或可食用。尚未考虑待吃餐和持久预留，不是最终补买量；上方按钮仍同步原料总需求。</Text>
       </View> : null}
       <Text className="font-bold text-ink">共需 {preview.totalServings} 份</Text>
       {preview.participants.map(person => <Text key={person.membershipId} className="text-copy-muted">{person.name}：{person.servings} 份</Text>)}

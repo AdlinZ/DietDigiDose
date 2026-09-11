@@ -40,6 +40,7 @@ export const householdDiningSupplySchema = z.object({
   status: z.enum(["known","needs_review"]),otherMealCount: z.number().int().nonnegative(),checks: z.array(z.string()),
   demands: z.array(z.object({ food_name: z.string(),amount_value: z.number().finite().positive(),unit: inventoryUnitSchema,
     covered: z.number().finite().nonnegative().nullable(),missing: z.number().finite().nonnegative().nullable(),
+    shoppingCovered: z.number().finite().nonnegative().nullable(),unplanned: z.number().finite().nonnegative().nullable(),
   }).strict()),
 }).strict();
 export type HouseholdDiningSupply = z.infer<typeof householdDiningSupplySchema>;

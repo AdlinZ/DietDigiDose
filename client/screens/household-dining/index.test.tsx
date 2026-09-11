@@ -131,7 +131,7 @@ test("explicitly syncs reviewed total demand for the displayed saved meal versio
   mockParams = { planItem };
   const person = { membershipId: 1,userId: 1,name: "成员1",version: 2,shared: true,allergies: [],restrictions: [],servings: 3 };
   mockMembers.mockResolvedValue({ members: [person] });
-  mockPreview.mockResolvedValue({ planItem: { ...planItem,plannedDate: "2036-09-12",mealType: "lunch",title: "米饭",decision: "apply",applied: false },supply: { status: "known",otherMealCount: 1,demands: [{ food_name: "米",amount_value: 300,unit: "g",covered: 200,missing: 100 }],checks: [] },recipeCheck: { fingerprint: "a".repeat(64),title: "米饭",status: "needs_review",materials: { status: "known",demands: [{ food_name: "米",amount_value: 300,unit: "g" }] },conflicts: [],checks: [] },totalServings: 3,participants: [person],allergies: [],restrictions: [] });
+  mockPreview.mockResolvedValue({ planItem: { ...planItem,plannedDate: "2036-09-12",mealType: "lunch",title: "米饭",decision: "apply",applied: false },supply: { status: "known",otherMealCount: 1,demands: [{ food_name: "米",amount_value: 300,unit: "g",covered: 200,missing: 100,shoppingCovered: 50,unplanned: 50 }],checks: [] },recipeCheck: { fingerprint: "a".repeat(64),title: "米饭",status: "needs_review",materials: { status: "known",demands: [{ food_name: "米",amount_value: 300,unit: "g" }] },conflicts: [],checks: [] },totalServings: 3,participants: [person],allergies: [],restrictions: [] });
   mockShopping.mockResolvedValue({ added: 1,householdId: 8,mode: "total_demand" });
   let tree!: renderer.ReactTestRenderer;
   await act(async () => { tree = renderer.create(<HouseholdDiningScreen />); });
@@ -143,7 +143,8 @@ test("explicitly syncs reviewed total demand for the displayed saved meal versio
   expect(mockShopping).toHaveBeenCalledWith(mockFetch,"plan","meal",{ version: 4,idempotencyKey: `dining-shopping:meal:4:${"a".repeat(64)}`,householdRecipeFingerprint: "a".repeat(64),householdTotalDemand: { householdId: 8,constraintsReviewed: true,participants: [{ membershipId: 1,version: 2,servings: 3 }] } });
   expect(mockPlanSave).not.toHaveBeenCalled();
   expect(JSON.stringify(tree.toJSON())).toContain("未扣除库存或其他采购");
-  expect(JSON.stringify(tree.toJSON())).toContain("尚缺 100 g");
+  expect(JSON.stringify(tree.toJSON())).toContain("库存缺口 100 g");
+  expect(JSON.stringify(tree.toJSON())).toContain("清单已列入 50 g，尚未安排 50 g");
   expect(JSON.stringify(tree.toJSON())).toContain("不是最终补买量");
   act(() => tree.unmount());
 });

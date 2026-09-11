@@ -37,7 +37,8 @@ export class SqliteHouseholdsRepository implements HouseholdsRepository {
       const item = plans.find(row => String(row.id)===target.itemId && Number(row.user_id)===userId && String(row.plan_id)===target.planId && Number(row.version)===target.version);
       if (!item) throw new HouseholdsError(409,"餐次已变化，请重新读取后核对","PLAN_ITEM_CHANGED");
       const inventory = this.database.prepare("SELECT id,food_name,quantity,expiration_date,is_available FROM household_inventory_items WHERE household_id=?").all(householdId) as Row[];
-      return householdDiningSupplySchema.parse(diningSupply({ plans,inventory,targetId: target.itemId,totalServings,recipeFingerprint,today: currentDateKey() }));
+      const shopping = this.database.prepare("SELECT id,name,amount,checked,expiration_date,source_plan_item_id FROM household_shopping_items WHERE household_id=? AND deleted_at IS NULL AND transferred_at IS NULL").all(householdId) as Row[];
+      return householdDiningSupplySchema.parse(diningSupply({ plans,inventory,shopping,targetId: target.itemId,totalServings,recipeFingerprint,today: currentDateKey() }));
     })();
   }
 

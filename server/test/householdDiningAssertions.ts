@@ -298,6 +298,15 @@ export async function verifyDiningPlanChanges(service: HouseholdsService,plans: 
   assert.equal(shopping.value.added,1); assert.equal(shopping.value.householdId,householdId);
   let generated = (await service.shoppingList(owner,householdId)).find(row => (shopping.value.itemIds as string[]).includes(String(row.id)))!;
   assert.equal(generated.amount,'15ml'); assert.equal(generated.category,'共餐总需求');
+  const listedSupply = (await service.previewDiningAllocation(owner,householdId,supplyInput)).supply!;
+  assert.equal(listedSupply.demands[0]?.covered,0); assert.equal(listedSupply.demands[0]?.shoppingCovered,15); assert.equal(listedSupply.demands[0]?.unplanned,0);
+  const received = await service.createInventory(owner,householdId,{ food_name: '花生油',quantity: '5ml',expiration_date: '2036-09-30' });
+  await query("UPDATE household_shopping_items SET transferred_at=CURRENT_TIMESTAMP WHERE id=?",[generated.id]);
+  const receivedSupply = (await service.previewDiningAllocation(owner,householdId,supplyInput)).supply!;
+  assert.equal(receivedSupply.demands[0]?.covered,5); assert.equal(receivedSupply.demands[0]?.shoppingCovered,0); assert.equal(receivedSupply.demands[0]?.unplanned,10);
+  await query("UPDATE household_shopping_items SET transferred_at=NULL WHERE id=?",[generated.id]);
+  await query("DELETE FROM household_inventory_items WHERE id=?",[received.id]);
+
   assert.equal((await plans.addShopping(owner,planId,itemId,shoppingInput)).kind,'completed');
   await assert.rejects(() => plans.addShopping(owner,planId,itemId,{ ...shoppingInput,householdRecipeFingerprint: '0'.repeat(64) }),/采购编号已用于/);
   const freshSync = await plans.addShopping(owner,planId,itemId,{ ...shoppingInput,idempotencyKey: 'dining-total-shopping-second' });

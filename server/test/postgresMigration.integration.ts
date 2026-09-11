@@ -1599,6 +1599,14 @@ try {
   assert.equal((await pool.query("SELECT metadata_json->>'learningPaused' paused FROM recipe_recommendation_events WHERE user_id=$1 AND idempotency_key='learning-paused-0'",[user.id])).rows[0].paused,"true");
   assert.equal((await recommendationsService.learningState(householdMember)).version,1);
 
+  const timeMeal = (await pool.query("SELECT version,remaining_servings FROM prepared_meals WHERE id=$1",[prepared.id])).rows[0];
+  const timeCorrection = { idempotency_key: "pg-time-correction-197",version: Number(timeMeal.version),type: "reschedule" as const,reported_cooking_minutes: 18 };
+  const timeCorrections = await Promise.all([dietService.applyMealEvent(user.id,prepared.id,timeCorrection),dietService.applyMealEvent(user.id,prepared.id,timeCorrection)]);
+  assert.deepEqual(timeCorrections.map(result => result.repeated).sort(),[false,true]);
+  assert.equal((timeCorrections[0].prepared_meal as { reported_cooking_minutes: number }).reported_cooking_minutes,18);
+  const timeCleared = await dietService.applyMealEvent(user.id,prepared.id,{ ...timeCorrection,idempotency_key: "pg-time-clear-197",version: Number(timeMeal.version)+1,reported_cooking_minutes: null });
+  assert.equal((timeCleared.prepared_meal as { reported_cooking_minutes: number | null }).reported_cooking_minutes,null);
+  assert.equal(Number((await pool.query("SELECT remaining_servings FROM prepared_meals WHERE id=$1",[prepared.id])).rows[0].remaining_servings),Number(timeMeal.remaining_servings));
   const outcomeFacts = (await recommendationsService.learningState(user.id)).observations;
   assert(outcomeFacts.some(fact => fact.kind === "production"));
   assert(outcomeFacts.some(fact => fact.kind === "inventory" && fact.valid));

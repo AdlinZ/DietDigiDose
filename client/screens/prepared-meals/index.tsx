@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, Modal, ScrollView, Text, TextInput, Touchable
 import { useFocusEffect } from "expo-router";
 import * as Crypto from "expo-crypto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { PreparedMeal, PreparedMealEventInput } from "@dietdigidose/contracts";
+import { preparedMealEventSchema, type PreparedMeal, type PreparedMealEventInput } from "@dietdigidose/contracts";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
@@ -21,7 +21,9 @@ export default function PreparedMealsScreen() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [selection, setSelection] = useState<{ meal: PreparedMeal; type: PreparedMealEventInput["type"] } | null>(null);
+  const [selection, setSelection] = useState<{ meal: PreparedMeal; type: PreparedMealEventInput["type"]; editTime?: boolean } | null>(null);
+  const [reportedMinutes,setReportedMinutes] = useState("");
+  const [showHistory,setShowHistory] = useState(false);
   const [servings, setServings] = useState("1");
   const [date, setDate] = useState(toLocalDateKey());
   const [pending, setPending] = useState<Pending | null>(null);
@@ -64,9 +66,9 @@ export default function PreparedMealsScreen() {
     requestRevision.current += 1;
     setLoading(false);
     try {
-      const request = retry ?? { mealId: selection!.meal.id, input: (await import("@dietdigidose/contracts")).preparedMealEventSchema.parse({
+      const request = retry ?? { mealId: selection!.meal.id, input: preparedMealEventSchema.parse({
         idempotency_key: `prepared-meal:${Crypto.randomUUID()}`, version: selection!.meal.version, type: selection!.type,
-        ...(selection!.type === "reschedule" ? { planned_date: date } : { servings: Number(servings), recorded_at: date }),
+        ...(selection!.editTime ? { reported_cooking_minutes: reportedMinutes.trim() ? Number(reportedMinutes) : null } : selection!.type === "reschedule" ? { planned_date: date } : { servings: Number(servings), recorded_at: date }),
       }) };
       if (!await writeUserPrivateStorage("prepared-meal-pending", account, generation, JSON.stringify(request))) return;
       if (accountRef.current !== account || generation !== getPrivateStorageGeneration(account)) return;
@@ -79,7 +81,7 @@ export default function PreparedMealsScreen() {
       setPending(null); setSelection(null);
       setMeals(items => mergePreparedMeals(items, [result.prepared_meal]));
       void load();
-      Alert.alert("已保存", request.input.type === "eat" ? "实际食用已记入对应日期的饮食记录。" : request.input.type === "discard" ? "已减少待吃份量，未新增摄入。" : request.input.is_reserved === undefined ? "已调整计划日期，尚未记录食用。" : request.input.is_reserved ? "已标记保留，剩余份量不变。" : "已解除保留，可参与后续规划。");
+      Alert.alert("已保存", request.input.type === "eat" ? "实际食用已记入对应日期的饮食记录。" : request.input.type === "discard" ? "已减少待吃份量，未新增摄入。" : request.input.reported_cooking_minutes !== undefined ? "已纠正制作用时，份量与摄入不变。" : request.input.is_reserved === undefined ? "已调整计划日期，尚未记录食用。" : request.input.is_reserved ? "已标记保留，剩余份量不变。" : "已解除保留，可参与后续规划。");
     } catch (e) {
       if (accountRef.current === account && generation === getPrivateStorageGeneration(account) && e instanceof ApiError && [400, 404, 409, 422].includes(e.status)) {
         if (!await removeUserPrivateStorage("prepared-meal-pending", account, generation)) return;
@@ -101,20 +103,24 @@ export default function PreparedMealsScreen() {
       {error ? <Text className="text-danger">{error}</Text> : null}
       {pending ? <View className="rounded-2xl bg-warm-soft p-4 gap-3"><Text className="text-ink">上次提交尚未确认结果，先重试以避免重复记录。</Text><TouchableOpacity disabled={saving} onPress={() => void submit(pending)}><Text className="font-bold text-brand">重试原提交</Text></TouchableOpacity></View> : null}
       {!loading && !error && !meals.some(meal => meal.remaining_servings > 0) ? <Text className="text-copy-muted">还没有待吃餐。完成制作时可保存剩余份量。</Text> : null}
-      {meals.filter(meal => meal.remaining_servings > 0).map(meal => <View key={meal.id} className="rounded-2xl bg-surface border border-line p-4 gap-2">
+      <TouchableOpacity onPress={() => setShowHistory(value => !value)}><Text className="text-brand">{showHistory ? "只看待吃餐" : "同时查看已吃完或丢弃的制作记录"}</Text></TouchableOpacity>
+      {meals.filter(meal => showHistory || meal.remaining_servings > 0).map(meal => <View key={meal.id} className="rounded-2xl bg-surface border border-line p-4 gap-2">
         <Text className="font-bold text-lg text-ink">{meal.food_name}</Text><Text className="text-brand">剩余 {meal.remaining_servings} / 制作 {meal.produced_servings} 份</Text>
         <Text className="text-copy-muted text-xs">{meal.planned_date ? `计划 ${meal.planned_date} ${meal.meal_type}` : "尚未安排餐次"} · {meal.storage_location || "存放条件未记录"}</Text>
+        <Text className="text-copy-muted text-xs">用户报告制作用时：{meal.reported_cooking_minutes == null ? "未知" : `${meal.reported_cooking_minutes} 分钟`}</Text>
+        <TouchableOpacity disabled={Boolean(pending) || saving} onPress={() => { setReportedMinutes(meal.reported_cooking_minutes == null ? "" : String(meal.reported_cooking_minutes)); setSelection({ meal,type: "reschedule",editTime: true }); }}><Text className="text-brand">纠正制作用时</Text></TouchableOpacity>
         <Text className="text-copy-muted text-xs">每份热量：{meal.nutrition_per_serving.calories == null ? "未知" : `${meal.nutrition_per_serving.calories} kcal`}</Text>
-        <TouchableOpacity disabled={Boolean(pending) || saving} onPress={() => void submit({ mealId: meal.id, input: {
+        <TouchableOpacity disabled={Boolean(pending) || saving || meal.remaining_servings <= 0} onPress={() => void submit({ mealId: meal.id, input: {
           idempotency_key: `prepared-reserve:${Crypto.randomUUID()}`, version: meal.version, type: "reschedule", is_reserved: !meal.is_reserved,
         } })}><Text className="font-bold text-brand">{meal.is_reserved ? "已保留 · 解除保留" : "这份留着，暂不参与规划"}</Text></TouchableOpacity>
-        <View className="flex-row gap-5 mt-2">{(["eat", "discard", "reschedule"] as const).map(type => <TouchableOpacity disabled={Boolean(pending) || saving} key={type} onPress={() => open(meal, type)}><Text className="font-bold text-brand">{type === "eat" ? "我吃了" : type === "discard" ? "丢弃" : "延期"}</Text></TouchableOpacity>)}</View>
+        <View className="flex-row gap-5 mt-2">{(["eat", "discard", "reschedule"] as const).map(type => <TouchableOpacity disabled={Boolean(pending) || saving || meal.remaining_servings <= 0} key={type} onPress={() => open(meal, type)}><Text className="font-bold text-brand">{type === "eat" ? "我吃了" : type === "discard" ? "丢弃" : "延期"}</Text></TouchableOpacity>)}</View>
       </View>)}
     </ScrollView>
     <Modal visible={Boolean(selection)} transparent animationType="fade" onRequestClose={() => setSelection(null)}><View className="flex-1 bg-black/50 justify-center px-6"><View className="rounded-3xl bg-surface p-6 gap-4">
-      <Text className="text-xl font-bold text-ink">{selection?.type === "eat" ? "记录我实际吃的份量" : selection?.type === "discard" ? "记录丢弃" : "调整计划"}</Text>
+      <Text className="text-xl font-bold text-ink">{selection?.editTime ? "纠正实际制作用时" : selection?.type === "eat" ? "记录我实际吃的份量" : selection?.type === "discard" ? "记录丢弃" : "调整计划"}</Text>
       {selection?.type !== "reschedule" ? <><Text className="text-copy-muted">份量（可填 0.5）</Text><TextInput accessibilityLabel="食用或丢弃份量" value={servings} onChangeText={setServings} keyboardType="decimal-pad" className="border border-line rounded-xl p-3 text-ink" /></> : null}
-      <Text className="text-copy-muted">{selection?.type === "reschedule" ? "计划日期" : "实际日期"}（YYYY-MM-DD）</Text><TextInput accessibilityLabel="日期" value={date} onChangeText={setDate} className="border border-line rounded-xl p-3 text-ink" />
+      {selection?.editTime ? <><Text className="text-copy-muted">用户报告分钟，留空清除误记</Text><TextInput accessibilityLabel="纠正实际制作分钟" value={reportedMinutes} onChangeText={setReportedMinutes} keyboardType="number-pad" className="border border-line rounded-xl p-3 text-ink" /></> : <>
+      <Text className="text-copy-muted">{selection?.type === "reschedule" ? "计划日期" : "实际日期"}（YYYY-MM-DD）</Text><TextInput accessibilityLabel="日期" value={date} onChangeText={setDate} className="border border-line rounded-xl p-3 text-ink" /></>}
       <TouchableOpacity disabled={saving || Boolean(pending)} onPress={() => void submit()} className="bg-brand-fill rounded-xl p-3 items-center"><Text className="font-bold text-white">{saving ? "保存中…" : "确认保存"}</Text></TouchableOpacity>
       <TouchableOpacity onPress={() => setSelection(null)}><Text className="text-copy-muted text-center">返回</Text></TouchableOpacity>
     </View></View></Modal>

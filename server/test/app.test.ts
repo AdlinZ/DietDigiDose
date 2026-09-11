@@ -4074,6 +4074,17 @@ test("reported cooking time is optional, validated and unchanged by completion r
   assert.equal((first.body as JsonObject).prepared_meal.reported_cooking_minutes,27);
   const retry = await complete({ ...input,production: { ...input.production,reported_cooking_minutes: 99 } });
   assert.equal((retry.body as JsonObject).prepared_meal.reported_cooking_minutes,27);
+  const mealId = (first.body as JsonObject).prepared_meal.id;
+  const correct = (body: JsonObject) => api(`/api/v1/diet-records/prepared-meals/${mealId}/events`,{ token: account.token,method: "POST",body: JSON.stringify(body) });
+  const correction = { idempotency_key: "actual-time-correct-197",type: "reschedule",version: 1,reported_cooking_minutes: 19 };
+  const results = await Promise.all([correct(correction),correct(correction)]);
+  assert(results.every(result => result.response.status === 200 || result.response.status === 201));
+  assert(results.every(result => (result.body as JsonObject).prepared_meal.reported_cooking_minutes === 19 && (result.body as JsonObject).prepared_meal.remaining_servings === 1 && (result.body as JsonObject).diet_record === null));
+  const cleared = await correct({ ...correction,idempotency_key: "actual-time-clear-197",version: 2,reported_cooking_minutes: null });
+  assert.equal((cleared.body as JsonObject).prepared_meal.reported_cooking_minutes,null);
+  assert.equal((await correct({ ...correction,idempotency_key: "actual-time-stale-197" })).response.status,409);
+  assert.equal((await correct({ ...correction,idempotency_key: "actual-time-wrong-kind-197",type: "eat",servings: 1,version: 3 })).response.status,400);
+
   const empty = await complete({ ...input,idempotency_key: "actual-time-unknown-197",production: { food_name: "未知用时",produced_servings: 1,eaten_servings: 0 } });
   assert.equal((empty.body as JsonObject).prepared_meal.reported_cooking_minutes,null);
 });

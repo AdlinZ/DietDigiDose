@@ -1,6 +1,6 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
-import { Alert, Text, TouchableOpacity } from "react-native";
+import { Alert, Text, TextInput, TouchableOpacity } from "react-native";
 import type { PreparedMeal } from "@dietdigidose/contracts";
 
 const mockList = jest.fn();
@@ -19,6 +19,7 @@ jest.mock("@react-native-async-storage/async-storage", () => ({ __esModule: true
   setItem: jest.fn(async (key: string, value: string) => { mockStore.set(key, value); }),
   removeItem: jest.fn(async (key: string) => { mockStore.delete(key); }),
 } }));
+jest.mock("expo-crypto",() => ({ randomUUID: () => "stable-time-correction" }));
 import PreparedMealsScreen from "./index";
 const meal = (version: number, remaining: number) => ({ id: "meal", food_name: "饭", version, remaining_servings: remaining, produced_servings: 3, nutrition_per_serving: {} }) as PreparedMeal;
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
@@ -58,5 +59,19 @@ test("newest refresh wins even when earlier requests finish later", async () => 
   const freshOutput = output(tree);
   await act(async () => { oldGet.resolve([meal(1, 3)]); });
   expect(output(tree)).toBe(freshOutput);
+  act(() => tree.unmount());
+});
+
+test("finished production history permits clearing time without changing its date or portions",async () => {
+  const meal = { id: "meal",food_name: "已吃完的饭",remaining_servings: 0,produced_servings: 1,reported_cooking_minutes: 27,version: 1,nutrition_per_serving: {},planned_date: "2026-09-12" };
+  mockList.mockResolvedValue([meal]); mockEvent.mockResolvedValue({ prepared_meal: { ...meal,reported_cooking_minutes: null,version: 2 } });
+  jest.spyOn(Alert,"alert").mockImplementation(() => undefined);
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<PreparedMealsScreen />); });
+  await act(async () => { press(tree,"同时查看已吃完或丢弃的制作记录"); });
+  await act(async () => { press(tree,"纠正制作用时"); });
+  await act(async () => { tree.root.findAllByType(TextInput).find(node => node.props.accessibilityLabel === "纠正实际制作分钟")!.props.onChangeText(""); });
+  await act(async () => { press(tree,"确认保存"); });
+  expect(mockEvent).toHaveBeenCalledWith(mockAuthFetch,"meal",{ idempotency_key: "prepared-meal:stable-time-correction",version: 1,type: "reschedule",reported_cooking_minutes: null });
   act(() => tree.unmount());
 });

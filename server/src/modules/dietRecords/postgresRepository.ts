@@ -151,8 +151,8 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
     const meal = formatPreparedMeal(row);
     const next = transitionMeal(meal, input);
     const record = input.type === "eat" ? await insertRecord(client, userId, mealConsumptionRecord({ ...meal, meal_type: input.meal_type ?? meal.meal_type }, input.servings!, input.recorded_at!, input.recorded_time ?? null)) : null;
-    const changed = await client.query("UPDATE prepared_meals SET is_reserved=$7,remaining_servings=$1,planned_date=$2,meal_type=$3,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND user_id=$5 AND version=$6",
-      [next.remaining_servings, next.planned_date, next.meal_type, mealId, userId, input.version, next.is_reserved]);
+    const changed = await client.query("UPDATE prepared_meals SET reported_cooking_minutes=$8,is_reserved=$7,remaining_servings=$1,planned_date=$2,meal_type=$3,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND user_id=$5 AND version=$6",
+      [next.remaining_servings, next.planned_date, next.meal_type, mealId, userId, input.version, next.is_reserved,next.reported_cooking_minutes ?? null]);
     if (changed.rowCount !== 1) throw new InventoryQuantityError("PREPARED_MEAL_VERSION_CONFLICT", "待吃餐已变化，请刷新后重试");
     const result = { prepared_meal: next, diet_record: record, repeated: false };
     await client.query("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",

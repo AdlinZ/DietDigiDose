@@ -51,7 +51,7 @@ export function mealConsumptionRecord(meal: Pick<PreparedMeal, "food_name" | "me
 }
 export function transitionMeal(meal: PreparedMeal, input: PreparedMealEventInput) {
   if (meal.version !== input.version) throw new InventoryQuantityError("PREPARED_MEAL_VERSION_CONFLICT", "待吃餐已变化，请刷新后重试");
-  if (input.type === "reschedule") return { ...meal, is_reserved: input.is_reserved ?? meal.is_reserved, planned_date: input.planned_date === undefined ? meal.planned_date : input.planned_date, meal_type: input.meal_type ?? meal.meal_type, version: meal.version + 1 };
+  if (input.type === "reschedule") return { ...meal, reported_cooking_minutes: input.reported_cooking_minutes === undefined ? meal.reported_cooking_minutes : input.reported_cooking_minutes, is_reserved: input.is_reserved ?? meal.is_reserved, planned_date: input.planned_date === undefined ? meal.planned_date : input.planned_date, meal_type: input.meal_type ?? meal.meal_type, version: meal.version + 1 };
   const amount = input.servings!;
   if (amount > meal.remaining_servings) throw new InventoryQuantityError("PREPARED_MEAL_INSUFFICIENT", "待吃餐剩余份量不足");
   return { ...meal, remaining_servings: roundServings(meal.remaining_servings - amount), version: meal.version + 1 };

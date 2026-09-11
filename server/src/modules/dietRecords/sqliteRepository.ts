@@ -119,8 +119,8 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
       const meal = formatPreparedMeal(row);
       const next = transitionMeal(meal, input);
       const record = input.type === "eat" ? this.createSync(userId, mealConsumptionRecord({ ...meal, meal_type: input.meal_type ?? meal.meal_type }, input.servings!, input.recorded_at!, input.recorded_time ?? null)) : null;
-      const changed = this.database.prepare("UPDATE prepared_meals SET is_reserved=?,remaining_servings=?,planned_date=?,meal_type=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND version=?")
-        .run(Number(next.is_reserved), next.remaining_servings, next.planned_date, next.meal_type, mealId, userId, input.version);
+      const changed = this.database.prepare("UPDATE prepared_meals SET reported_cooking_minutes=?,is_reserved=?,remaining_servings=?,planned_date=?,meal_type=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND version=?")
+        .run(next.reported_cooking_minutes ?? null,Number(next.is_reserved), next.remaining_servings, next.planned_date, next.meal_type, mealId, userId, input.version);
       if (changed.changes !== 1) throw new InventoryQuantityError("PREPARED_MEAL_VERSION_CONFLICT", "待吃餐已变化，请刷新后重试");
       const result = { prepared_meal: next, diet_record: record, repeated: false };
       this.database.prepare("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES(?,?,?,?,?,?,?,?,?)")

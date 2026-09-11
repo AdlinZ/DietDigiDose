@@ -35,6 +35,7 @@ export const mealProductionSchema = z.object({
 });
 
 export const preparedMealEventSchema = z.object({
+  reported_cooking_minutes: z.number().int().min(1).max(1440).nullable().optional(),
   idempotency_key: z.string().trim().min(16).max(200),
   version: z.number().int().positive(),
   type: z.enum(["eat", "discard", "reschedule"]),
@@ -45,8 +46,9 @@ export const preparedMealEventSchema = z.object({
   is_reserved: z.boolean().optional(),
   meal_type: z.string().trim().max(30).optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.type !== "reschedule" && value.reported_cooking_minutes !== undefined) ctx.addIssue({ code: "custom",path: ["reported_cooking_minutes"],message: "制作用时请使用单独调整操作" });
   if (value.type !== "reschedule" && value.servings === undefined) ctx.addIssue({ code: "custom", path: ["servings"], message: "请填写实际食用或丢弃的份量" });
-  if (value.type === "reschedule" && (value.servings !== undefined || (value.planned_date === undefined && value.is_reserved === undefined))) ctx.addIssue({ code: "custom", path: ["planned_date"], message: "延期只修改计划日期，不改变剩余份量" });
+  if (value.type === "reschedule" && (value.servings !== undefined || (value.planned_date === undefined && value.is_reserved === undefined && value.reported_cooking_minutes === undefined))) ctx.addIssue({ code: "custom", path: ["planned_date"], message: "调整需指定日期、保留状态或制作用时，不能改变剩余份量" });
   if (value.type !== "reschedule" && value.is_reserved !== undefined) ctx.addIssue({ code: "custom", path: ["is_reserved"], message: "保留状态只能通过计划调整修改" });
   if (value.type !== "reschedule" && value.planned_date !== undefined) ctx.addIssue({ code: "custom", path: ["planned_date"], message: "请用延期操作修改计划日期" });
 });

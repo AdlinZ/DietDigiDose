@@ -1,3 +1,4 @@
+import { householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput } from "@dietdigidose/contracts";
 import { requestJson, type ApiFetch } from "./client";
 
 export interface HouseholdMember {
@@ -70,6 +71,11 @@ export interface HouseholdActivityLog {
 }
 
 export const householdApi = {
+  diningPreferences: (apiFetch: ApiFetch, householdId: number) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/dining-preferences`, {}, householdDiningPreferencesSchema),
+  saveDiningPreferences: (apiFetch: ApiFetch, householdId: number, input: HouseholdDiningPreferencesInput) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/dining-preferences`, { method: "PUT", body: JSON.stringify(input) }, householdDiningPreferencesSchema),
+
   create: (apiFetch: ApiFetch, name: string) =>
     requestJson<Household>(apiFetch, "/api/v1/households", {
       method: "POST",

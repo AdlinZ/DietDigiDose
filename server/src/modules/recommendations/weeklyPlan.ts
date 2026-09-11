@@ -16,7 +16,7 @@ export function buildWeeklyPlan(input: WeeklyPlanRequest, preferences: KitchenPr
   const mealTypes = [...(input.mealTypes ?? (preferences.usual_meals?.length ? preferences.usual_meals : ["breakfast","lunch","dinner"]))].sort((a,b) => ["breakfast","lunch","dinner","snack"].indexOf(a)-["breakfast","lunch","dinner","snack"].indexOf(b));
   const servings = input.servings ?? preferences.servings ?? 1;
   const timeBudget = preferences.meal_time_minutes ?? 30;
-  const { stock,checks,aggregate,consume,unknownCommitment } = createPlanningBudget(inventory,existing);
+  const { stock,checks,aggregate,consume,unknownCommitment } = createPlanningBudget(inventory,existing.filter(item => String(item.planned_date)>=days[0]),{ startDate: days[0],endDate: days[6] });
   if (preferences.avoid_spicy === true && prepared.length) checks.add("待吃餐辣度未核实，本次不自动分配");
   const budgets: ReturnType<typeof buildFefoConsumptionPreviewFromCandidates> = [];
   const batches = prepared.map(meal => ({ ...meal }));
@@ -55,7 +55,7 @@ export function buildWeeklyPlan(input: WeeklyPlanRequest, preferences: KitchenPr
   if (inventory.some(item => !item.expiration_date)) checks.add("部分库存缺少可用期限，未来餐次使用前需核对");
   if (preferences.carry_meals) checks.add("携带餐的冷藏与复热适用性需要逐餐核对");
   const draft = parts.length ? cookingPlanDraftSchema.parse({
-    weeklyShopping: [...aggregate.values()],planningMode: "weekly",status: "requires_validation",meals: parts.flatMap(part => part.meals),totalCookServings: round(parts.reduce((sum,part) => sum+part.totalCookServings,0)),
+    shoppingWindow: { startDate: days[0],endDate: days[6] },weeklyShopping: [...aggregate.values()],planningMode: "weekly",status: "requires_validation",meals: parts.flatMap(part => part.meals),totalCookServings: round(parts.reduce((sum,part) => sum+part.totalCookServings,0)),
     cooking: parts.flatMap(part => part.cooking),unresolved: parts.flatMap(part => part.unresolved),ingredientBudget: budgets,
     time: { sessionBudgetMinutes: timeBudget,budgetMinutes: timeBudget*parts.length,knownSequentialMinutes: parts.reduce((sum,part) => sum+part.time.knownSequentialMinutes,0),exceedsBudget: false,isEstimate: true,incomplete: true,missing: ["每餐分别制作，不能把一周累计时间当作一次制作时间", "收尾时间与设备容量待核对"] },
     checksPending: [...checks].slice(0,50),excludedPreparedMealIds: batches.filter(meal => meal.is_reserved).map(meal => meal.id),effectivePreferences: preferences,

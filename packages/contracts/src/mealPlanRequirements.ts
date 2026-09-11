@@ -25,6 +25,7 @@ export const weeklyShoppingSchema = z.array(z.object({
 })).max(2800);
 export const cookingPlanDraftSchema = z.object({
   weeklyShopping: weeklyShoppingSchema.optional(),
+  shoppingWindow: z.object({ startDate: date,endDate: date }).strict().refine(value => Date.parse(value.endDate)-Date.parse(value.startDate) === 6*86_400_000,"采购范围必须为七天").optional(),
   planningMode: z.enum(["single_session", "weekly"]).optional(),
   status: z.literal("requires_validation"),
   meals: z.array(z.object({
@@ -55,6 +56,9 @@ export const cookingPlanDraftSchema = z.object({
 }).superRefine((draft, context) => {
   const close = (left: number, right: number) => Math.abs(left - right) <= 0.00001;
   const invalid = (path: (string | number)[], message: string) => context.addIssue({ code: "custom", path, message });
+  if (draft.shoppingWindow && (draft.planningMode !== "weekly" || draft.meals.some(meal => meal.date < draft.shoppingWindow!.startDate || meal.date > draft.shoppingWindow!.endDate))) {
+    invalid(["shoppingWindow"],"七日采购范围必须包含方案餐次");
+  }
   const ids = new Set(draft.meals.map(meal => meal.id));
   if (ids.size !== draft.meals.length) invalid(["meals"], "餐次标识不能重复");
   const excluded = new Set(draft.excludedPreparedMealIds);

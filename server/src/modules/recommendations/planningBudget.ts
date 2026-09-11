@@ -8,7 +8,7 @@ const round = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
 const canonicalUnit = (unit: string) => ({ unit: unit === "kg" ? "g" : unit === "l" ? "ml" : unit, factor: unit === "kg" || unit === "l" ? 1000 : 1 });
 
 /** A disposable stock ledger: prior commitments are reserved before new meals. */
-export function createPlanningBudget(inventory: Row[], existing: Row[] = []) {
+export function createPlanningBudget(inventory: Row[], existing: Row[] = [], shoppingWindow?: { startDate: string; endDate: string }) {
   const stock = inventory.map(item => ({ ...item }));
   let unknownCommitment = false;
   const checks = new Set<string>();
@@ -19,15 +19,17 @@ export function createPlanningBudget(inventory: Row[], existing: Row[] = []) {
     for (const [index,part] of preview.entries()) {
       if (unknownCommitment) part.quantity_status = "unknown";
       const requested = demands[index].amount_value;
-      const normalized = canonicalUnit(part.unit);
-      const key = `${part.food_name.trim().toLocaleLowerCase()}:${normalized.unit}`;
-      const entry = aggregate.get(key) ?? { foodName: part.food_name,unit: normalized.unit,uncertain: false,required: 0,covered: 0,missing: 0,sources: [] };
-      entry.uncertain ||= part.quantity_status === "unknown";
-      entry.required = round(entry.required + requested * normalized.factor);
-      entry.covered = round(entry.covered + part.covered_value * normalized.factor);
-      entry.missing = round(entry.missing + part.missing_value * normalized.factor);
-      entry.sources.push({ mealId,required: round(requested*normalized.factor),missing: round(part.missing_value*normalized.factor) });
-      aggregate.set(key,entry);
+      if (!shoppingWindow || (date >= shoppingWindow.startDate && date <= shoppingWindow.endDate)) {
+        const normalized = canonicalUnit(part.unit);
+        const key = `${part.food_name.trim().toLocaleLowerCase()}:${normalized.unit}`;
+        const entry = aggregate.get(key) ?? { foodName: part.food_name,unit: normalized.unit,uncertain: false,required: 0,covered: 0,missing: 0,sources: [] };
+        entry.uncertain ||= part.quantity_status === "unknown";
+        entry.required = round(entry.required + requested * normalized.factor);
+        entry.covered = round(entry.covered + part.covered_value * normalized.factor);
+        entry.missing = round(entry.missing + part.missing_value * normalized.factor);
+        entry.sources.push({ mealId,required: round(requested*normalized.factor),missing: round(part.missing_value*normalized.factor) });
+        aggregate.set(key,entry);
+      }
       if (part.quantity_status === "unknown") checks.add(`${part.food_name} 的数量或规格无法换算，请核对采购缺口`);
       for (const deduction of part.deductions) {
         const item = stock.find(value => Number(value.id) === deduction.item_id);

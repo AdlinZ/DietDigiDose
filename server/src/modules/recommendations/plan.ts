@@ -65,7 +65,8 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
     const singleBudget = buildFefoConsumptionPreviewFromCandidates(unexpiredInventory(inventory, currentDateKey()).map(item => ({ id: item.id, food_name: item.food_name,
       quantity_evidence_status: item.quantity_evidence_status as "known" | "estimated" | "unknown" | undefined, quantity_value: item.quantity_value, quantity_unit: item.quantity_unit, expiration_date: item.expiration_date,
       batch_code: item.batch_code, version: item.version })), cooking.flatMap(item => item.demands));
-    const weeklyBudget = draft.planningMode === "weekly" ? createPlanningBudget(inventory,existing) : null;
+    const dates = draft.meals.map(meal => meal.date).sort();
+    const weeklyBudget = draft.planningMode === "weekly" ? createPlanningBudget(inventory,existing,draft.shoppingWindow ?? { startDate: dates[0],endDate: dates[dates.length-1] }) : null;
     const ingredientBudget = weeklyBudget ? [...draft.meals].sort((a,b) => a.date.localeCompare(b.date) || ["breakfast","lunch","dinner","snack"].indexOf(a.mealType)-["breakfast","lunch","dinner","snack"].indexOf(b.mealType)).flatMap(meal => weeklyBudget.consume(cooking.filter(item => item.targetMealId === meal.id).flatMap(item => item.demands),meal.date,meal.id)) : singleBudget;
     const missingTime: string[] = [];
     let knownTime = 0;

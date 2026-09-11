@@ -26,4 +26,14 @@ export async function verifyWeeklyRoll(userId: number,query: (sql: string,args?:
   assert.deepEqual(repeated.slots,first.slots); assert.deepEqual(repeated.shopping,first.shopping);
   assert.deepEqual(await query("SELECT * FROM meal_plan_items WHERE plan_id='roll-plan' ORDER BY id"),before);
   assert.equal(Number((await query("SELECT quantity_value FROM inventory_items WHERE id=?",[stockId]))[0].quantity_value),7);
+  await query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date) VALUES('roll-future',?,'下一周承诺','2036-09-20','2036-09-20')",[userId]);
+  await query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,confirmed_at) VALUES('roll-future-item','roll-future',?,'2036-09-20','午餐','后续已确认',?,?,'2036-09-11T00:00:00Z')",[userId,recipeId,ingredients]);
+  const protectedPreview = await preview();
+  const protectedBudget = protectedPreview.shopping.find(item => item.foodName === food)!;
+  assert.equal(protectedBudget.covered,6);
+  assert.ok(protectedPreview.shopping.some(item => item.sources.some(source => source.mealId === "week:2036-09-19:lunch" && source.missing>0)));
+  assert.ok(protectedPreview.draft?.ingredientBudget.every(item => (item.deductions ?? []).every(deduction => deduction.item_id !== stockId)));
+  assert.ok(protectedBudget.sources.every(source => source.mealId !== "roll-future-item"));
+  assert.deepEqual(await query("SELECT * FROM meal_plan_items WHERE plan_id='roll-plan' ORDER BY id"),before);
+
 }

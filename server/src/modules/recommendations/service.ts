@@ -52,7 +52,7 @@ export class RecommendationsService {
       const draft = cookingPlanDraftSchema.safeParse(constraints.currentCookingDraft ?? saved?.draft);
       if (!draft.success) continue;
       for (const meal of draft.data.meals) {
-        if (meal.date < request.startDate || meal.date > endDate) continue;
+        if (meal.date < request.startDate) continue;
         reservations.push(...meal.allocations);
         if (meal.cookServings === 0) items.push({ id: `prepared-plan:${plan.id}:${meal.id}`,planned_date: meal.date,meal_type: meal.mealType,title: meal.allocations.map(item => item.foodName).join("、"),prepared_only: true,status: "planned" });
       }
@@ -77,7 +77,7 @@ export class RecommendationsService {
     const request = replaceCookingPlanItemSchema.parse(input);
     const candidates = await this.compute(userId, { surface: "meal_plan" }, request.draft.effectivePreferences);
     const dates = request.draft.meals.map(meal => meal.date).sort();
-    const existing = request.draft.planningMode === "weekly" ? (await this.repository.planningState(userId,dates[0],dates[dates.length-1])).items : [];
+    const existing = request.draft.planningMode === "weekly" ? (await this.repository.planningState(userId,request.draft.shoppingWindow?.startDate ?? dates[0],request.draft.shoppingWindow?.endDate ?? dates[dates.length-1])).items : [];
     return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId),existing);
   }
 

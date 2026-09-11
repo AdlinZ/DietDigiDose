@@ -17,6 +17,7 @@ export interface RecommendationsRepository {
   preferenceOutcomes(userId: number): Promise<{ production: Row[]; events: Row[]; inventory?: Row[]; changes?: Row[]; statements?: Row[] }>;
   learningData(userId: number): Promise<import("./preferenceEvidence.js").LearningData>;
   updateLearning(userId: number,input: import("@dietdigidose/contracts").PreferenceLearningUpdate): Promise<boolean>;
+  /** Includes all commitments from startDate onward; callers limit shopping output to their requested window. */
   planningState(userId: number, startDate: string, endDate: string): Promise<{ items: Row[]; plans: Row[]; shopping: Row[] }>;
   preparedMeals(userId: number): Promise<Row[]>;
   profile(userId: number): Promise<Row | null>;

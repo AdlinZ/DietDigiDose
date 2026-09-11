@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildWeeklyPlan } from "../src/modules/recommendations/weeklyPlan.js";
-import type { PreparedMeal } from "@dietdigidose/contracts";
+import { cookingPlanDraftSchema, type PreparedMeal } from "@dietdigidose/contracts";
 const startDate = "2099-09-12";
 const candidate = { recipeId: 1,score: 100,recipe: { title: "蛋羹",ingredients: [{ name: "鸡蛋",amount: "1个" }],serving_size: 1,cook_time: 10,prep_time: 2 } } as Parameters<typeof buildWeeklyPlan>[2][number];
 const stock = (id: number, count: number, expiry = "2099-09-30") => ({ id,food_name: "鸡蛋",quantity_value: count,quantity_unit: "piece",expiration_date: expiry,version: 1,batch_code: null });
@@ -77,4 +77,19 @@ test("no-spicy weekly planning does not assume a prepared batch has verified spi
   const preview = buildWeeklyPlan(input,{ avoid_spicy: true },[candidate],[],[batch],[],[]);
   assert(preview.draft!.meals.every(meal => meal.preparedServings === 0));
   assert(preview.checksPending.some(message => message.includes("辣度未核实")));
+});
+
+
+test("future commitments reserve stock without adding outside-week shopping demand", () => {
+  const future = { id: "future",planned_date: "2099-09-20",meal_type: "午餐",title: "已确认后续餐",status: "planned",confirmed_at: "now",ingredients_json: [{ name: "鸡蛋",amount: "2个" }] };
+  const result = buildWeeklyPlan(input,{},[candidate],[stock(1,4)],[],[future],[]);
+  assert.deepEqual(result.shopping.map(item => [item.required,item.covered,item.missing]),[[7,2,5]]);
+  assert.ok(result.shopping[0].sources.every(source => source.mealId !== "future"));
+  assert.deepEqual(result.draft?.shoppingWindow,{ startDate: "2099-09-12",endDate: "2099-09-18" });
+});
+
+
+test("weekly shopping window cannot exclude its cooking dates", () => {
+  const draft = buildWeeklyPlan(input,{},[candidate],[stock(1,7)],[],[],[]).draft!;
+  assert.equal(cookingPlanDraftSchema.safeParse({ ...draft,shoppingWindow: { startDate: "2099-09-13",endDate: "2099-09-19" } }).success,false);
 });

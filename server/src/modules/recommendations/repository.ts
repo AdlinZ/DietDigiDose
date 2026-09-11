@@ -33,6 +33,7 @@ export interface RecommendationsRepository {
   createRequest(input: RecommendationRequestWrite): Promise<void>;
   findEvent(userId: number, idempotencyKey: string): Promise<Row | null>;
   recipeAvailable(recipeId: number): Promise<boolean>;
-  requestScoringVersion(userId: number, requestId: string): Promise<string | null>;
+  /** Reads immutable provenance even after pagination expiry. */
+  requestEvidence(userId: number, requestId: string): Promise<Row | null>;
   createEvent(id: string, userId: number, input: RecommendationEventInput): Promise<{ id: string; repeated: boolean }>;
 }

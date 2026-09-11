@@ -137,16 +137,38 @@ export class RecommendationsService {
 
   async event(userId: number, input: RecommendationEventInput) {
     const existing = await this.repository.findEvent(userId, input.idempotencyKey);
-    if (existing) return { eventId: String(existing.id), repeated: true };
+    const assertIdentity = (event: Row) => {
+      if ((event.request_id ?? null) !== (input.requestId ?? null) || Number(event.recipe_id) !== input.recipeId
+        || event.event_type !== input.eventType || event.scoring_version !== input.scoringVersion || event.surface !== input.surface)
+        throw new RecommendationsError(409, "此操作编号已用于另一条推荐反馈", "RECOMMENDATION_EVENT_CONFLICT");
+    };
+    if (existing) { assertIdentity(existing); return { eventId: String(existing.id), repeated: true }; }
     if (!await this.repository.recipeAvailable(input.recipeId)) {
       throw new RecommendationsError(404, "菜谱不存在或当前不可推荐", "RECIPE_NOT_AVAILABLE");
     }
+    // Client metadata must never supply the evidence later used by metrics.
+    const metadata = { ...input.metadata };
+    delete metadata.selectionEvidence;
     if (input.requestId) {
-      const version = await this.repository.requestScoringVersion(userId, input.requestId);
-      if (!version) throw new RecommendationsError(404, "推荐请求不存在", "RECOMMENDATION_REQUEST_NOT_FOUND");
-      if (version !== input.scoringVersion) throw new RecommendationsError(409, "评分版本与推荐请求不一致", "RECOMMENDATION_VERSION_MISMATCH");
+      const request = await this.repository.requestEvidence(userId, input.requestId);
+      if (!request) throw new RecommendationsError(404, "推荐请求不存在", "RECOMMENDATION_REQUEST_NOT_FOUND");
+      if (request.scoring_version !== input.scoringVersion) throw new RecommendationsError(409, "评分版本与推荐请求不一致", "RECOMMENDATION_VERSION_MISMATCH");
+      const candidate = (parseArray(request.results_json) as Row[]).find(row => Number(row.recipeId) === input.recipeId);
+      if (!candidate) throw new RecommendationsError(409, "菜谱不属于本轮推荐，请刷新后重试", "RECOMMENDATION_RECIPE_MISMATCH");
+      const features = candidate.features as Row | undefined;
+      // A view only proves opening the recipe. Cooking/intake evidence must be
+      // linked separately before any weekly metric can count this selection.
+      if (["view", "queue", "start"].includes(input.eventType)) metadata.selectionEvidence = {
+        version: 1, requestId: input.requestId, recipeId: input.recipeId,
+        inventory: features?.inventoryEvidence ?? null,
+      };
     }
-    const result = await this.repository.createEvent(randomUUID(), userId, input);
+    const result = await this.repository.createEvent(randomUUID(), userId, { ...input, metadata });
+    if (result.repeated) {
+      const winner = await this.repository.findEvent(userId, input.idempotencyKey);
+      if (!winner) throw new RecommendationsError(409, "推荐反馈已变化，请重试", "RECOMMENDATION_EVENT_CONFLICT");
+      assertIdentity(winner);
+    }
     return { eventId: result.id, repeated: result.repeated };
   }
 }

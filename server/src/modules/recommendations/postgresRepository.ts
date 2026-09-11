@@ -92,8 +92,8 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
     WHERE user_id = $1 AND idempotency_key = $2`, [userId, idempotencyKey])).rows[0] as Row | undefined) || null; }
   async recipeAvailable(recipeId: number) { return Boolean((await this.pool.query(`SELECT id FROM recipes
     WHERE id = $1 AND status = 'approved' AND deleted_at IS NULL`, [recipeId])).rows[0]); }
-  async requestScoringVersion(userId: number, requestId: string) { return (await this.pool.query(`SELECT scoring_version FROM recipe_recommendation_requests
-    WHERE id = $1 AND user_id = $2`, [requestId, userId])).rows[0]?.scoring_version || null; }
+  async requestEvidence(userId: number, requestId: string) { return (await this.pool.query(`SELECT id,scoring_version,results_json FROM recipe_recommendation_requests
+    WHERE id = $1 AND user_id = $2`, [requestId, userId])).rows[0] ?? null; }
   async createEvent(id: string, userId: number, input: RecommendationEventInput) {
     const result = await this.pool.query(`INSERT INTO recipe_recommendation_events
       (id, user_id, request_id, recipe_id, event_type, scoring_version, surface, metadata_json, idempotency_key)

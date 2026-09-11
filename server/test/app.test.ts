@@ -2102,6 +2102,19 @@ describe("user data isolation", () => {
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM recipe_recommendation_events WHERE user_id = ? AND idempotency_key = ?")
       .get(account.user.id, eventPayload.idempotencyKey) as { count: number }).count, 1);
 
+    const selection = await api("/api/v1/recommendations/events", { method: "POST", token: account.token,
+      body: JSON.stringify({ ...eventPayload, eventType: "view", idempotencyKey: "selection-evidence-test-0001", metadata: { selectionEvidence: { forged: true } } }) });
+    assert.equal(selection.response.status, 201);
+    const savedSelection = db.prepare("SELECT metadata_json FROM recipe_recommendation_events WHERE id=?").get((selection.body as JsonObject).eventId) as JsonObject;
+    assert.deepEqual(JSON.parse(savedSelection.metadata_json).selectionEvidence, { version: 1, requestId: firstBody.requestId, recipeId: eventPayload.recipeId,
+      inventory: firstBody.items[0].features.inventoryEvidence });
+    const unlisted = await api("/api/v1/recommendations/events", { method: "POST", token: account.token,
+      body: JSON.stringify({ ...eventPayload, recipeId: newRecipe, idempotencyKey: "unlisted-recipe-test-0001" }) });
+    assert.equal(unlisted.response.status, 409);
+    const conflictingKey = await api("/api/v1/recommendations/events", { method: "POST", token: account.token,
+      body: JSON.stringify({ ...eventPayload, recipeId: originalSecond }) });
+    assert.equal(conflictingKey.response.status, 409);
+
     const refreshed = await api("/api/v1/recommendations/recipes", {
       method: "POST", token: account.token, body: JSON.stringify({ ...payload, pageSize: 10 }),
     });

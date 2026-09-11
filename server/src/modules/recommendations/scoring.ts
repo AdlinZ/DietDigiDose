@@ -189,7 +189,9 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
     return [{ recipeId: Number(recipe.id), recipe: recipeSummary(recipe, dataset.requirements.get(Number(recipe.id)) || []), score,
       scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION,
       hardConstraints: { satisfied: ["quality", "permission", "allergy", "time", "kitchenware"], unmet: [] as string[] },
-      features: { inventoryCoverage: Math.round(coverage * 100), matchedIngredients: matched, expiringIngredients: expiring,
+      features: { inventoryEvidence: { version: 1, scope: "personal", allocations: preview.flatMap(item => item.deductions.map(deduction => ({
+        itemId: Number(deduction.item_id), itemVersion: Number(deduction.version), amount: Number(deduction.amount_value), unit: String(deduction.unit),
+      }))) }, inventoryCoverage: Math.round(coverage * 100), matchedIngredients: matched, expiringIngredients: expiring,
         missingIngredients: missing, uncertainIngredients: uncertain, nameMatchedIngredients: nameMatched, timeBudgetMinutes: timeBudget, estimatedTimeMinutes: cookTime, nutritionFit: Math.round(nutritionFit * 100),
         favorite: favorites.has(Number(recipe.id)), recentRepeat: recent.has(Number(recipe.id)), skippedRecently: skipped.has(Number(recipe.id)) },
       reasons: reasons.slice(0, 3), dataUpdatedAt, degraded }];

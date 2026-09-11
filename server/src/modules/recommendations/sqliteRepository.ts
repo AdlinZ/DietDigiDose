@@ -85,8 +85,8 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
     WHERE user_id = ? AND idempotency_key = ?`).get(userId, idempotencyKey) as Row | undefined) || null; }
   async recipeAvailable(recipeId: number) { return Boolean(this.database.prepare(`SELECT id FROM recipes
     WHERE id = ? AND status = 'approved' AND deleted_at IS NULL`).get(recipeId)); }
-  async requestScoringVersion(userId: number, requestId: string) { const row = this.database.prepare(`SELECT scoring_version FROM recipe_recommendation_requests
-    WHERE id = ? AND user_id = ?`).get(requestId, userId) as { scoring_version: string } | undefined; return row?.scoring_version || null; }
+  async requestEvidence(userId: number, requestId: string) { return (this.database.prepare(`SELECT id,scoring_version,results_json FROM recipe_recommendation_requests
+    WHERE id = ? AND user_id = ?`).get(requestId, userId) as Row | undefined) ?? null; }
   async createEvent(id: string, userId: number, input: RecommendationEventInput) {
     try {
       this.database.prepare(`INSERT INTO recipe_recommendation_events

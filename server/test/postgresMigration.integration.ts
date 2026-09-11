@@ -1643,6 +1643,14 @@ try {
     recommendationsService.event(user.id, recommendationEventInput),
   ]);
   assert.deepEqual(recommendationEvents.map((result) => result.repeated).sort(), [false, true]);
+  const selectionEvent = await recommendationsRepository.findEvent(user.id, recommendationEventInput.idempotencyKey);
+  assert.deepEqual((selectionEvent?.metadata_json as Record<string, unknown>).selectionEvidence, {
+    version: 1, requestId: recommendationPage.requestId, recipeId: recommendedRecipeId,
+    inventory: recommendationPage.items[0]!.features.inventoryEvidence,
+  });
+  await assert.rejects(recommendationsService.event(user.id, { ...recommendationEventInput, eventType: "queue" }),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "RECOMMENDATION_EVENT_CONFLICT");
+
   assert.equal(recommendationEvents[0]!.eventId, recommendationEvents[1]!.eventId);
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_recommendation_events
     WHERE user_id = $1 AND idempotency_key = $2`, [user.id, recommendationEventInput.idempotencyKey])).rows[0]?.count), 1);

@@ -83,7 +83,7 @@ function storageKey(key: string, scope: CacheScope) {
 }
 
 export function apiCachePolicy(path: string): ApiCachePolicy | null {
-  if (/^\/api\/v1\/households\/\d+\/(?:dining-(?:preferences|members)|meals)(?:\/|\?|$)/.test(path)) return null;
+  if (/^\/api\/v1\/households\/\d+\/(?:dining-(?:preferences|members)|meals|inventory)(?:\/|\?|$)/.test(path)) return null;
   if (/^\/api\/v1\/(?:auth|ai|notifications)(?:\/|\?|$)/.test(path)) return null;
   if (/^\/api\/v1\/recipes\/\d+(?:\?|$)/.test(path)) return { ttlMs: 30 * 60_000, maxStaleMs: 7 * 86_400_000, persistent: true };
   if (/^\/api\/v1\/(?:recipes|community)(?:\/|\?|$)/.test(path)) return { ttlMs: 10 * 60_000, maxStaleMs: 24 * 60 * 60_000, persistent: true };

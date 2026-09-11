@@ -71,7 +71,11 @@ function MealsAccount({ userId,householdId }: { userId?: number; householdId: nu
     } catch (error) {
       if (!current()) return;
       const rejected = error instanceof ApiError && ["MEAL_VERSION_CONFLICT","MEAL_INSUFFICIENT"].includes(error.code ?? "");
-      if (rejected && await removeUserPrivateStorage(baseKey,userId,generation)) { setPending(null); setSelection(null); setMembershipId(null); setMeals([]); }
+      if (rejected) {
+        try {
+          if (await removeUserPrivateStorage(baseKey,userId,generation) && current()) { setPending(null); setSelection(null); setMembershipId(null); setMeals([]); }
+        } catch { if (current()) setMessage("本次未记录食用，但本地待确认项未能清除。请重试原提交以确认结果。"); return; }
+      }
       setMessage(!sent ? "未能保存待确认项，本次尚未提交。请重试。" : rejected ? "余量已变化，本次未记录。请刷新后重新填写。" : "提交结果尚未确认，请重试原提交。不要重新记录同一次食用。");
     } finally { if (current()) { writing.current = false; setBusy(false); if (refresh) void load(); } }
   };
@@ -88,6 +92,7 @@ function MealsAccount({ userId,householdId }: { userId?: number; householdId: nu
     <ScrollView contentContainerClassName="p-5 gap-4">
       <Text className="text-copy-muted">最近100个制作批次。只记录你实际吃掉的份量，不替其他成员填写；食用时不会再次扣原料。</Text>
       {!userId ? <Text className="text-ink">请登录后查看。</Text> : !Number.isSafeInteger(householdId) || householdId < 1 ? <Text className="text-ink">请从共餐设置选择家庭后进入。</Text> : <>
+        <TouchableOpacity accessibilityRole="button" disabled={busy || Boolean(pending) || pendingProblem} onPress={() => router.push({ pathname: "/household-production",params: { householdId } })}><Text className="font-bold text-brand">记录已完成的家庭制作</Text></TouchableOpacity>
         <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={() => void load()}><Text className="text-brand">{busy ? "处理中…" : "刷新家庭待吃"}</Text></TouchableOpacity>
         {message ? <Text accessibilityLiveRegion="polite" className="text-ink">{message}</Text> : null}
         {pending || pendingProblem ? <View className="gap-3 rounded-xl bg-surface p-4">

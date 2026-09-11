@@ -3,11 +3,11 @@ import { recipeDemands } from "./quantities.js";
 import { buildFefoConsumptionPreviewFromCandidates } from "../../services/inventoryQuantity.js";
 import type { RecommendationDataset, RecommendationInput, Row } from "./types.js";
 
-export const RECIPE_SCORING_VERSION = "rules-2026-09-09.2";
+export const RECIPE_SCORING_VERSION = "rules-2026-09-12.1";
 export const RECIPE_CANDIDATE_VERSION = "sql-public-v1";
 export const RECOMMENDATION_WEIGHTS = Object.freeze({
   inventoryCoverage: 35, expiringUse: 20, missingPenalty: 20, timeFit: 15, nutritionFit: 10,
-  skillFit: 5, favorite: 5, recentRepeatPenalty: 15, skipPenalty: 30,
+  skillFit: 5, favorite: 5, recentRepeatPenalty: 15, skipPenalty: 8,
 });
 
 const INGREDIENT_ALIASES: Record<string, string> = {
@@ -115,7 +115,7 @@ function hardConflict(recipe: Row, ingredients: Array<{ name: string }>, dataset
 export function scoreRecipeRecommendations(dataset: RecommendationDataset,
   input: Omit<RecommendationInput, "cursor" | "pageSize">, timeBudget: number | null, today: string) {
   dataset = { ...dataset, inventory: unexpiredInventory(dataset.inventory, today) };
-  const favorites = new Set(dataset.favoriteIds); const recent = new Set(dataset.recentIds); const skipped = new Set(dataset.skippedIds);
+  const favorites = new Set(dataset.favoriteIds); const recent = new Set(dataset.recentIds); const skipped = new Set(dataset.skippedIds.filter(id => !favorites.has(id)));
   const ownedTools = dataset.kitchenware.map((item) => String(item.name));
   const targetCalories = Number(dataset.profile.nutrition.calories_kcal || dataset.dailyCaloriesTarget || 2000);
   const targetProtein = Number(dataset.profile.nutrition.protein_g || 0);
@@ -165,6 +165,7 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
       + (favorites.has(Number(recipe.id)) ? RECOMMENDATION_WEIGHTS.favorite : 0) - (recent.has(Number(recipe.id)) ? RECOMMENDATION_WEIGHTS.recentRepeatPenalty : 0)
       - (skipped.has(Number(recipe.id)) ? RECOMMENDATION_WEIGHTS.skipPenalty : 0) - dislikedPenalty) * 100) / 100;
     const reasons: string[] = [];
+    if (skipped.has(Number(recipe.id))) reasons.push("近30天多次明确表示长期不喜欢，暂时降低排序；不会排除菜谱");
     if (expiring.length) reasons.push(`可优先使用 ${expiring.slice(0, 2).map((item) => item.name).join("、")} 等临期食材`);
     if (coverage > 0) reasons.push(`已知用量覆盖 ${Math.round(coverage * 100)}%，${matched.length} 项原料数量足够`);
     if (cookTime > 0) reasons.push(recipe.prep_time == null

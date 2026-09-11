@@ -1982,7 +1982,13 @@ describe("user data isolation", () => {
       method: "POST", token: account.token, body: JSON.stringify({ ...payload, pageSize: 10 }),
     });
     assert.equal((refreshed.body as JsonObject).total, 3);
-    assert.notEqual((refreshed.body as JsonObject).items[0].recipeId, firstBody.items[0].recipeId);
+    assert.equal((refreshed.body as JsonObject).items.find((item: JsonObject) => item.recipeId === eventPayload.recipeId).score,firstBody.items[0].score,"one unlabelled skip must not infer dislike");
+    for (let index=0;index<3;index++) {
+      const explicit = await api("/api/v1/recommendations/events",{ method: "POST",token: account.token,body: JSON.stringify({ ...eventPayload,idempotencyKey: `explicit-dislike-test-${index}`,metadata: { reason: "dislike",scope: "long_term" } }) });
+      assert.equal(explicit.response.status,201);
+    }
+    const { SqliteRecommendationsRepository } = await import("../src/modules/recommendations/sqliteRepository.js");
+    assert.deepEqual(await new SqliteRecommendationsRepository(db).skippedRecipeIds(account.user.id),[eventPayload.recipeId]);
     assert.ok((refreshed.body as JsonObject).items.some((item: JsonObject) => item.recipeId === newRecipe));
 
     const hiddenRequest = await api("/api/v1/recommendations/events", {

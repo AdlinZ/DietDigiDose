@@ -1,3 +1,4 @@
+import { repeatedDislikeRecipeIds } from "./preferenceEvidence.js";
 import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type Database from "better-sqlite3";
 import type { RecommendationRequestWrite, RecipeQuery, RecommendationsRepository } from "./repository.js";
@@ -33,8 +34,8 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
     .all(userId) as Array<{ recipe_id: number }>).map((row) => row.recipe_id); }
   async recentRecipeIds(userId: number) { return (this.database.prepare(`SELECT DISTINCT recipe_id FROM cooking_queue_items
     WHERE user_id = ? AND status = 'completed' AND updated_at >= datetime('now', '-30 day')`).all(userId) as Array<{ recipe_id: number }>).map((row) => row.recipe_id); }
-  async skippedRecipeIds(userId: number) { return (this.database.prepare(`SELECT DISTINCT recipe_id FROM recipe_recommendation_events
-    WHERE user_id = ? AND event_type = 'skip' AND created_at >= datetime('now', '-30 day')`).all(userId) as Array<{ recipe_id: number }>).map((row) => row.recipe_id); }
+  async skippedRecipeIds(userId: number) { return repeatedDislikeRecipeIds(this.database.prepare(`SELECT id,recipe_id,event_type,metadata_json,idempotency_key,created_at FROM recipe_recommendation_events
+    WHERE user_id = ? AND event_type = 'skip' AND created_at >= datetime('now', '-30 day')`).all(userId) as Row[]); }
   async dietTotals(userId: number, date: string) { const row = this.database.prepare(`SELECT COALESCE(SUM(calories), 0) AS calories,
     COALESCE(SUM(protein), 0) AS protein FROM diet_records WHERE user_id = ? AND recorded_at = ?`).get(userId, date) as { calories: number; protein: number };
     return { calories: Number(row.calories), protein: Number(row.protein) }; }

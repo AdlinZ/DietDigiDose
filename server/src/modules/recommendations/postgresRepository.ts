@@ -1,3 +1,4 @@
+import { repeatedDislikeRecipeIds } from "./preferenceEvidence.js";
 import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type { Pool } from "pg";
 import type { RecommendationRequestWrite, RecipeQuery, RecommendationsRepository } from "./repository.js";
@@ -34,8 +35,8 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
   async favoriteRecipeIds(userId: number) { return (await this.pool.query("SELECT recipe_id FROM recipe_favorites WHERE user_id = $1", [userId])).rows.map((row) => Number(row.recipe_id)); }
   async recentRecipeIds(userId: number) { return (await this.pool.query(`SELECT DISTINCT recipe_id FROM cooking_queue_items
     WHERE user_id = $1 AND status = 'completed' AND updated_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'`, [userId])).rows.map((row) => Number(row.recipe_id)); }
-  async skippedRecipeIds(userId: number) { return (await this.pool.query(`SELECT DISTINCT recipe_id FROM recipe_recommendation_events
-    WHERE user_id = $1 AND event_type = 'skip' AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'`, [userId])).rows.map((row) => Number(row.recipe_id)); }
+  async skippedRecipeIds(userId: number) { return repeatedDislikeRecipeIds((await this.pool.query(`SELECT id,recipe_id,event_type,metadata_json,idempotency_key,created_at FROM recipe_recommendation_events
+    WHERE user_id = $1 AND event_type = 'skip' AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'`, [userId])).rows); }
   async dietTotals(userId: number, date: string) { const row = (await this.pool.query(`SELECT COALESCE(SUM(calories), 0) AS calories,
     COALESCE(SUM(protein), 0) AS protein FROM diet_records WHERE user_id = $1 AND recorded_at = $2`, [userId, date])).rows[0];
     return { calories: Number(row.calories), protein: Number(row.protein) }; }

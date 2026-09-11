@@ -1580,6 +1580,14 @@ try {
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_recommendation_events
     WHERE user_id = $1 AND idempotency_key = $2`, [user.id, recommendationEventInput.idempotencyKey])).rows[0]?.count), 1);
 
+  for (const reason of ["no_time","too_much","dislike"]) {
+    for (let index=0;index<3;index++) await recommendationsService.event(user.id,{ ...recommendationEventInput,eventType: "skip",metadata: { reason,scope: "long_term" },idempotencyKey: `preference-${reason}-${index}` });
+    assert.deepEqual(await recommendationsRepository.skippedRecipeIds(user.id),reason === "dislike" ? [recommendedRecipeId] : []);
+  }
+  assert.deepEqual(await recommendationsRepository.skippedRecipeIds(-1),[]);
+  await pool.query("UPDATE recipe_recommendation_events SET metadata_json=metadata_json || '{\"withdrawn\":true}'::jsonb WHERE user_id=$1 AND idempotency_key='preference-dislike-0'",[user.id]);
+  assert.deepEqual(await recommendationsRepository.skippedRecipeIds(user.id),[]);
+
   const aiToolDataService = new AiToolDataService(new PostgresAiToolDataRepository(pool));
   await pool.query(`INSERT INTO recipes
     (title, cook_time, difficulty, calories, protein, carbs, fat, tags, ingredients_json, source, status, quality_status)

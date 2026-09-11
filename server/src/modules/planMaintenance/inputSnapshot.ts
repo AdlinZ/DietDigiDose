@@ -7,6 +7,9 @@ export const maintenanceInputTables = [
   "shopping_list_items", "cooking_queue_items", "user_health_profiles", "kitchenware_items",
   "recommendation_learning_settings", "recipe_favorites", "diet_records",
 ] as const;
+/** Shared governance inputs are read-only during planning, but part of validation. */
+export const maintenanceRuleTables = ["kitchenware_catalog","kitchenware_capabilities","kitchenware_catalog_capabilities",
+  "kitchenware_substitutions","recipe_kitchenware_requirements"] as const;
 export type MaintenanceInputSnapshot = { fingerprint: string; recipeIds: number[]; data: Record<string,Row[]> };
 function canonical(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();

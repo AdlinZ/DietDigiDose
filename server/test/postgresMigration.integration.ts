@@ -2319,6 +2319,8 @@ try {
       (error: unknown) => (error as { code: string }).code === "55P03");
     await assert.rejects(() => blockedWriter.query("UPDATE inventory_items SET quantity='2份' WHERE id=(SELECT MIN(id) FROM inventory_items WHERE user_id=$1)",[user.id]),
       (error: unknown) => (error as { code: string }).code === "55P03");
+    await assert.rejects(() => blockedWriter.query("UPDATE kitchenware_catalog SET name=name WHERE id=(SELECT MIN(id) FROM kitchenware_catalog)"),
+      (error: unknown) => (error as { code: string }).code === "55P03");
   } finally { await blockedWriter.query("SET lock_timeout=0"); blockedWriter.release(); allowCommit.resolve(); }
   assert.equal((await applyingInputs).kind,"completed");
   await pool.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'锁释放后','其他','1份','2026-09-20')",[user.id]);

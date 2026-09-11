@@ -1,4 +1,4 @@
-import { inputSnapshot, maintenanceInputTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
+import { inputSnapshot, maintenanceInputTables, maintenanceRuleTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import { maintenanceScope } from "./scope.js";
 import type { Row } from "../mealPlans/formatters.js";
 import { SqliteMealPlansRepository } from "../mealPlans/sqliteRepository.js";
@@ -68,6 +68,7 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
     data.maintenance_events = this.db.prepare(`SELECT e.id,e.user_id,e.event_type,e.subject_id,e.details_json FROM plan_maintenance_events e
       JOIN plan_maintenance_job_events m ON m.event_id=e.id WHERE m.job_id=? AND e.user_id=?`).all(jobId,userId) as Row[];
     for (const table of maintenanceInputTables) data[table] = this.db.prepare(`SELECT * FROM ${table} WHERE user_id=?`).all(userId) as Row[];
+    for (const table of maintenanceRuleTables) data[table] = this.db.prepare(`SELECT * FROM ${table}${table === "kitchenware_catalog" ? " ORDER BY category,name" : ""}`).all() as Row[];
     data.recipe_recommendation_events = this.db.prepare("SELECT * FROM recipe_recommendation_events WHERE user_id=? AND event_type='skip'").all(userId) as Row[];
     recipeIds = [...new Set([...recipeIds,...data.meal_plan_items.map(row => Number(row.recipe_id)).filter(id => id>0)])];
     data.recipes = recipeIds.length ? this.db.prepare(`SELECT * FROM recipes WHERE id IN (${recipeIds.map(() => "?").join(",")})`).all(...recipeIds) as Row[] : [];

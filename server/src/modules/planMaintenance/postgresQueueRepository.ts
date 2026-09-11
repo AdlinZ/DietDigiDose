@@ -1,4 +1,4 @@
-import { inputSnapshot, maintenanceInputTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
+import { inputSnapshot, maintenanceInputTables, maintenanceRuleTables, type MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import { maintenanceScope } from "./scope.js";
 import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 import { PostgresMealPlansRepository } from "../mealPlans/postgresRepository.js";
@@ -77,6 +77,10 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
     data.maintenance_events = (await client.query(`SELECT e.id,e.user_id,e.event_type,e.subject_id,e.details_json FROM plan_maintenance_events e
       JOIN plan_maintenance_job_events m ON m.event_id=e.id WHERE m.job_id=$1 AND e.user_id=$2${lock ? " FOR UPDATE OF e" : ""}`,[jobId,userId])).rows;
     for (const table of maintenanceInputTables) data[table] = (await client.query(`SELECT * FROM ${table} WHERE user_id=$1${suffix}`,[userId])).rows;
+    // Lock these infrequently edited governance tables against inserts as well as
+    // updates. Rule changes cannot slip into the validation/application window.
+    if (lock) await client.query(`LOCK TABLE ${maintenanceRuleTables.join(",")} IN SHARE MODE`);
+    for (const table of maintenanceRuleTables) data[table] = (await client.query(`SELECT * FROM ${table}${table === "kitchenware_catalog" ? " ORDER BY category,name" : ""}`)).rows;
     data.recipe_recommendation_events = (await client.query(`SELECT * FROM recipe_recommendation_events WHERE user_id=$1 AND event_type='skip'${suffix}`,[userId])).rows;
     recipeIds = [...new Set([...recipeIds,...data.meal_plan_items.map(row => Number(row.recipe_id)).filter(id => id>0)])];
     data.recipes = recipeIds.length ? (await client.query(`SELECT * FROM recipes WHERE id=ANY($1::integer[])${lock ? " FOR SHARE" : ""}`,[recipeIds])).rows : [];

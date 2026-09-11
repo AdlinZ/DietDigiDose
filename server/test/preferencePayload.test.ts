@@ -17,3 +17,8 @@ test("persistent preferences require explicit durable intent and remain high ris
   });
   assert.equal(actions[0].riskLevel, "high");
 });
+
+test("negated, quoted and interrogative permanent language cannot turn temporary choices into saved preferences",() => {
+  for (const text of ["不是长期，只是今天两个人", "我没有要求你记住这个设置", "不需要保存为默认", "今天不吃辣，不是默认设置", "要不要记住我在单位不能加热？", "以后都按两个人吗", "你说默认两个人，但今天只有一个", "比如‘以后都按两个人’是什么意思？", "例如以后都按两个人", "请解释“记住我的习惯”", "本次不用保存长期偏好", "只针对今天默认两个人"]) assert.equal(hasPermanentPreferenceIntent(text),false,text);
+  for (const text of ["今天两个人。以后默认一个人。", "请记住我平时在家吃晚饭", "今后都按两个人", "我通常不能在单位加热"]) assert.equal(hasPermanentPreferenceIntent(text),true,text);
+});

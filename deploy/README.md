@@ -39,6 +39,12 @@
    docker compose -f deploy/docker-compose.staging.yml --project-directory deploy exec worker node dist/worker.js --once --task=media-cleanup
    ```
 
+主动干预由 `intervention-scan` 和 `intervention-delivery` 两个独立进程处理，各自使用任务租约和运行记录，每次完成后间隔一分钟，单次任务超时50秒。传统 `worker` 继续每小时运行原有通知、媒体清理和计划维护。扫描失败或长时间读取不会占用投递进程；管理接口 `/api/v1/admin/worker-runs?task=intervention-scan`（或 `intervention-delivery`）可分别查询。
+
+`PROACTIVE_INTERVENTIONS_ENABLED` 默认0；客户端类型化操作与归因验收完成前保持关闭。关闭后扫描立即停止产生候选，投递任务取消已预留的 pending 候选，保留站内记录及历史决策；已向 Expo 提交的请求无法撤回。修改 `server.env` 后需要重建两个干预服务容器使环境变量生效。不要只停止扫描进程作为关闭投递的方式。
+
+本地或其他部署可使用 `pnpm --dir server worker -- --task=intervention-scan` 和 `--task=intervention-delivery` 分别启动。显式的 `WORKER_INTERVAL_MS` 会覆盖代码默认间隔，启用前应检查旧环境是否仍配置为一小时。分页扫描的持久进度尚待补齐，大账号量下不能仅依据一分钟间隔宣称扫描时效已达标。
+
 ## 备份与隔离恢复
 
 使用版本化工具将 PostgreSQL custom archive 在线备份到宿主机权限受限目录。执行机器需要与源服务器主版本兼容的 `pg_dump`、`pg_restore`（staging 为 PostgreSQL 16）；API runtime 镜像没有内置这些客户端工具。不要把备份写入 Git 工作区或公开对象存储。

@@ -410,6 +410,12 @@ describe("API security baseline", () => {
     const item = (visible.body as JsonObject).items.find((candidate: JsonObject) => candidate.id === "worker-visible-run");
     assert.deepEqual(item.result, { source: "test" });
     assert.equal(item.processed, 3);
+    for (const task of ["intervention-scan","intervention-delivery"]) {
+      db.prepare("UPDATE worker_task_runs SET task_name=? WHERE id='worker-visible-run'").run(task);
+      const filtered = await api(`/api/v1/admin/worker-runs?task=${task}`,{ token });
+      assert.equal(filtered.response.status,200);
+      assert((filtered.body as JsonObject).items.some((row: JsonObject) => row.id === "worker-visible-run"));
+    }
     db.prepare("DELETE FROM worker_task_runs WHERE id = 'worker-visible-run'").run();
   });
 

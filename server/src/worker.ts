@@ -1,4 +1,5 @@
 import { processMaintenanceJobs } from "./modules/planMaintenance/process.js";
+import { WORKER_TASK_NAMES, defaultWorkerInterval } from "./modules/worker/types.js";
 import type { WorkerTaskContext } from "./modules/worker/types.js";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
@@ -9,7 +10,7 @@ import { checkExpoPushReceipts, sendExpiringInventoryNotifications, sendInterven
 import type { WorkerTaskName, WorkerTaskRunResult } from "./modules/worker/types.js";
 import { logger } from "./utils/logger.js";
 
-const supportedTasks: WorkerTaskName[] = ["notifications", "media-cleanup", "plan-maintenance-dispatch", "plan-maintenance-process"];
+const supportedTasks: readonly WorkerTaskName[] = WORKER_TASK_NAMES;
 
 function numberFromEnv(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -37,23 +38,29 @@ export async function runWorkerCycle(workerId: string, runtime: WorkerRuntimeBun
     const run = taskName === "notifications"
       ? async (context: WorkerTaskContext) => {
           await context.assertActive();
-          const interventionScan = await scanInterventions(context);
-          const interventions = await sendInterventions(context);
-          await context.assertActive();
           const receipts = await checkExpoPushReceipts();
           const notifications = await sendExpiringInventoryNotifications();
           return {
-            processed: receipts.checked + notifications.recipients + interventions.processed + interventionScan.scanned + interventionScan.failed,
-            succeeded: receipts.checked + notifications.recipients - notifications.failedRecipients + interventions.accepted + interventionScan.scanned,
-            failed: notifications.failedRecipients + interventions.failed + interventions.uncertain + interventionScan.failed,
+            processed: receipts.checked + notifications.recipients,
+            succeeded: receipts.checked + notifications.recipients - notifications.failedRecipients,
+            failed: notifications.failedRecipients,
             details: {
-              interventions,interventionScan,
               receiptsChecked: receipts.checked,
               pushRecipients: notifications.recipients,
               pushMessages: notifications.messages,
               failedRecipients: notifications.failedRecipients,
             },
           };
+        }
+      : taskName === "intervention-scan"
+      ? async (context: WorkerTaskContext) => {
+          const scan = await scanInterventions(context);
+          return { processed: scan.scanned + scan.failed,succeeded: scan.scanned,failed: scan.failed,details: scan };
+        }
+      : taskName === "intervention-delivery"
+      ? async (context: WorkerTaskContext) => {
+          const delivery = await sendInterventions(context);
+          return { processed: delivery.processed,succeeded: delivery.accepted,failed: delivery.failed + delivery.uncertain,details: delivery };
         }
       : taskName === "plan-maintenance-dispatch"
       ? async () => {
@@ -88,7 +95,7 @@ async function main() {
   try {
     const workerId = `${os.hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
     const once = process.argv.includes("--once");
-    const intervalMs = numberFromEnv("WORKER_INTERVAL_MS", 60 * 60_000);
+    const intervalMs = numberFromEnv("WORKER_INTERVAL_MS", defaultWorkerInterval(selectedTasks()));
     let stopping = false;
     let running = false;
 

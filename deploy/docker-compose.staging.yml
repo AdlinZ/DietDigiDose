@@ -81,8 +81,51 @@ services:
       ENABLE_DEMO_SEED: "0"
       MEDIA_LOCAL_ROOT: /data/media
       WORKER_INTERVAL_MS: "3600000"
+      WORKER_TASKS: notifications,media-cleanup,plan-maintenance-dispatch,plan-maintenance-process
     volumes:
       - staging_media:/data/media
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [staging]
+
+  intervention-scan:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    restart: unless-stopped
+    command: ["node", "dist/worker.js", "--task=intervention-scan"]
+    env_file:
+      - ${SERVER_ENV_FILE:-server.env}
+    environment:
+      NODE_ENV: production
+      DEPLOYMENT_ENV: staging
+      DATABASE_DRIVER: postgresql
+      ENABLE_DEMO_SEED: "0"
+      WORKER_INTERVAL_MS: "60000"
+      WORKER_TASK_TIMEOUT_MS: "50000"
+      WORKER_LEASE_MS: "120000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [staging]
+
+  intervention-delivery:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    restart: unless-stopped
+    command: ["node", "dist/worker.js", "--task=intervention-delivery"]
+    env_file:
+      - ${SERVER_ENV_FILE:-server.env}
+    environment:
+      NODE_ENV: production
+      DEPLOYMENT_ENV: staging
+      DATABASE_DRIVER: postgresql
+      ENABLE_DEMO_SEED: "0"
+      WORKER_INTERVAL_MS: "60000"
+      WORKER_TASK_TIMEOUT_MS: "50000"
+      WORKER_LEASE_MS: "120000"
     depends_on:
       migrate:
         condition: service_completed_successfully

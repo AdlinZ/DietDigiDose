@@ -1,9 +1,10 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { sendError } from "../../utils/http.js";
 import type { WorkerRepository } from "./repository.js";
+import { WORKER_TASK_NAMES } from "./types.js";
 import type { WorkerRunStatus, WorkerTaskName } from "./types.js";
 
-const taskNames = new Set<WorkerTaskName>(["notifications", "media-cleanup", "plan-maintenance-dispatch", "plan-maintenance-process"]);
+const taskNames = new Set<WorkerTaskName>(WORKER_TASK_NAMES);
 const statuses = new Set<WorkerRunStatus>(["running", "completed", "failed"]);
 
 export function buildAdminWorkerRunsRouter(repository: WorkerRepository) {

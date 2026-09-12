@@ -173,3 +173,29 @@ test("a lease lost between checking and recording cannot report completion", asy
   assert.match(result.error ?? "", /before recording result/);
   assert.deepEqual(events, ["acquire", "create", "fail", "release"]);
 });
+
+test("intervention tasks have independent outcomes and do not call legacy notification routines", async () => {
+  const { runWorkerCycle } = await import("../src/worker.js");
+  const { configureNotificationsService } = await import("../src/modules/notifications/runtime.js");
+  const { defaultWorkerInterval,WORKER_TASK_NAMES } = await import("../src/modules/worker/types.js");
+  const calls: string[] = [];
+  configureNotificationsService({
+    scanInterventions: async () => { calls.push("scan");throw new Error("scan snapshot unavailable"); },
+    sendInterventions: async (context: WorkerTaskContext) => {
+      await context.assertActive();calls.push(context.taskName);
+      return { processed: 3,accepted: 1,failed: 1,uncertain: 1 };
+    },
+    checkExpoPushReceipts: async () => { throw new Error("legacy must run separately"); },
+    sendExpiringInventoryNotifications: async () => { throw new Error("legacy must run separately"); },
+  } as unknown as Parameters<typeof configureNotificationsService>[0]);
+  const { repository } = fakeRepository();
+  const bundle = { worker: new WorkerRuntime(repository) } as import("../src/composition/types.js").WorkerRuntimeBundle;
+  const result = await runWorkerCycle("worker",bundle,["intervention-scan","intervention-delivery"]);
+  assert.deepEqual(calls,["scan","intervention-delivery"]);
+  assert.deepEqual(result.map(row => row.status),["failed","failed"]);
+  assert.deepEqual(result[1].result,{ processed: 3,succeeded: 1,failed: 2,details: { processed: 3,accepted: 1,failed: 1,uncertain: 1 } });
+  assert.equal(defaultWorkerInterval(["notifications"]),3_600_000);
+  assert.equal(defaultWorkerInterval(["intervention-scan"]),60_000);
+  assert.equal(defaultWorkerInterval(["intervention-delivery"]),60_000);
+  assert.equal(WORKER_TASK_NAMES[0],"intervention-delivery");
+});

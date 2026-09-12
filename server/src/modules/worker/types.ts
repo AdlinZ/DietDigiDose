@@ -1,4 +1,8 @@
-export type WorkerTaskName = "notifications" | "media-cleanup" | "plan-maintenance-dispatch" | "plan-maintenance-process";
+export const WORKER_TASK_NAMES = ["intervention-delivery", "notifications", "media-cleanup", "plan-maintenance-dispatch", "plan-maintenance-process", "intervention-scan"] as const;
+export type WorkerTaskName = typeof WORKER_TASK_NAMES[number];
+export function defaultWorkerInterval(tasks: readonly WorkerTaskName[]) {
+  return tasks.some(task => task === "intervention-scan" || task === "intervention-delivery") ? 60_000 : 3_600_000;
+}
 export type WorkerRunStatus = "running" | "completed" | "failed";
 
 export type WorkerTaskResult = {

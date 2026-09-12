@@ -3,6 +3,7 @@ export type AppNotificationData = {
   kind?: "meal" | "water";
   sourceId?: string;
   notificationId?: number;
+  interventionId?: string;
   inventoryItemId?: number;
   recipeId?: number;
   userId?: number;
@@ -11,6 +12,7 @@ export type AppNotificationData = {
 export type ExpiringNotificationAction = "open" | "complete" | "plan_recipe";
 
 export type NotificationDestination =
+  | { pathname: "/intervention"; params: { id: string } }
   | { pathname: "/(tabs)/inventory"; params: { highlightItemId: number } }
   | { pathname: "/ai-assistant"; params: { prompt: string } }
   | { pathname: "/diet-record" }
@@ -29,6 +31,10 @@ export function resolveNotificationDestination(
   data: AppNotificationData,
   actionIdentifier: string,
 ): NotificationDestination {
+  if (data.type === "proactive_intervention") {
+    return typeof data.interventionId === "string" && /^[a-f0-9]{64}$/.test(data.interventionId)
+      ? { pathname: "/intervention",params: { id: data.interventionId } } : { pathname: "/notifications" };
+  }
   if (data.type === "expiring_inventory" && typeof data.notificationId === "number") {
     const action = getExpiringNotificationAction(actionIdentifier);
     if (action === "complete") return null;

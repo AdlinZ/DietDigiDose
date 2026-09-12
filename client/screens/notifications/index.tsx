@@ -18,7 +18,8 @@ import { useAppThemeColors } from "@/hooks/useAppThemeColors";
 type NotificationFilter = "all" | "pending" | "system";
 type NotificationItem = {
   id: number;
-  type: "expiring_inventory" | "admin_campaign" | "meal_reminder" | "water_reminder" | "plan_maintenance";
+  interventionId?: string | null;
+  type: "proactive_intervention" | "expiring_inventory" | "admin_campaign" | "meal_reminder" | "water_reminder" | "plan_maintenance";
   title: string;
   body: string;
   isRead: boolean;
@@ -59,6 +60,7 @@ function itemVisual(item: NotificationItem) {
       label: item.priority === "urgent" ? "今天到期" : item.priority === "high" ? "高优先级" : "临期任务",
     };
   }
+  if (item.type === "proactive_intervention") return { icon: "lightbulb" as const,colorClass: "accent-brand",textClass: "text-brand",background: "bg-brand/10",label: "食材与晚餐建议" };
   if (item.type === "plan_maintenance") return { icon: "clipboard-check" as const,colorClass: "accent-brand",textClass: "text-brand",background: "bg-brand/10",label: "计划检查" };
   if (item.type === "meal_reminder") return { icon: "utensils" as const, colorClass: "accent-brand", textClass: "text-brand", background: "bg-brand/10", label: "用餐习惯" };
   if (item.type === "water_reminder") return { icon: "droplet" as const, colorClass: "accent-info", textClass: "text-info", background: "bg-info-soft", label: "饮水习惯" };
@@ -147,6 +149,8 @@ export default function NotificationsScreen() {
       updateLocal(item.id, { isRead: true });
       if (action === "plan_recipe") {
         router.push("/ai-assistant", { prompt: "请优先使用我即将到期的库存食材，安排一份今天能完成的餐单。" });
+      } else if (item.type === "proactive_intervention" && item.interventionId) {
+        router.push("/intervention",{ id: item.interventionId });
       } else if (item.type === "expiring_inventory") {
         router.push("/(tabs)/inventory", { highlightItemId: item.inventoryItemId });
       } else if (item.type === "plan_maintenance") {

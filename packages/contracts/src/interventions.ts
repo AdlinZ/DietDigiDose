@@ -18,3 +18,17 @@ export const defaultInterventionPreferences: InterventionPreferences = {
   quiet_start: "22:00",quiet_end: "07:00",dinner_time: "18:00",dinner_lead_minutes: 60,
   daily_push_limit: 1,cooldown_minutes: 120,
 };
+
+export const interventionActionKindSchema = z.enum(["plan_recipe","view_alternatives","mark_consumed","mark_discarded","snooze","not_cooking_today","not_helpful"]);
+export const interventionCardSchema = z.object({
+  id: z.string().regex(/^[a-f0-9]{64}$/),
+  notificationId: z.number().int().positive(),
+  kind: z.enum(["expiry_rescue","dinner_window"]),
+  status: z.enum(["candidate","suppressed","inbox","sent","acted","expired"]),
+  title: z.string().min(1),body: z.string().min(1),whyNow: z.string().min(1),expiresLabel: z.string().min(1),
+  expiresAt: z.string().datetime(),localDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  inventoryIds: z.array(z.number().int().positive()),recipeIds: z.array(z.number().int().positive()).max(3),
+  actions: z.array(interventionActionKindSchema).max(7),
+  policyVersion: z.string().min(1),decisionReason: z.string().min(1),
+}).strict();
+export type InterventionCard = z.infer<typeof interventionCardSchema>;

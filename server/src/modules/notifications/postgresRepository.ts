@@ -13,6 +13,10 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async interventionCard(userId: number,id: string): Promise<Record<string,unknown> | null> {
+    return (await this.pool.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND id=$2 AND notification_id IS NOT NULL",[userId,id])).rows[0] ?? null;
+  }
+
   async interventionScanCursor(): Promise<number> {
     const row = (await this.pool.query("SELECT after_user_id FROM proactive_intervention_scan_cursor WHERE name='opportunities'")).rows[0];
     return Number(row?.after_user_id ?? 0);
@@ -146,7 +150,7 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
     else if (filter === "system") conditions.push("category='system'");
     if (cursor) { params.push(cursor); conditions.push(`id<$${params.length}`); }
     params.push(limit);
-    const rows = (await this.pool.query(`SELECT id,type,title,body,is_read AS "isRead",created_at AS "createdAt",
+    const rows = (await this.pool.query(`SELECT (SELECT p.id FROM proactive_interventions p WHERE p.notification_id=user_notification_inbox.id AND p.user_id=user_notification_inbox.user_id ORDER BY p.id LIMIT 1) AS "interventionId",id,type,title,body,is_read AS "isRead",created_at AS "createdAt",
       inventory_item_id AS "inventoryItemId",category,priority,action_status AS "actionStatus",snoozed_until AS "snoozedUntil",
       (SELECT COUNT(*)::integer FROM notification_inventory_items n WHERE n.notification_id=user_notification_inbox.id) AS "itemCount"
       FROM user_notification_inbox WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT $${params.length}`, params)).rows;

@@ -17,6 +17,14 @@ function run<T>(promise: Promise<T>, res: Response, next: NextFunction, respond:
   void promise.then(respond).catch(next);
 }
 
+router.get("/interventions/:id", (req: AuthRequest,res,next) => {
+  const id = String(req.params.id);
+  if (!/^[a-f0-9]{64}$/.test(id)) return res.status(400).json({ error: "干预 ID 无效" });
+  return run(notificationsService().interventionCard(req.userId!,id),res,next,value => {
+    if (!value) res.status(404).json({ error: "干预通知不存在" }); else res.json(value);
+  });
+});
+
 router.get("/intervention-preferences", (req: AuthRequest,res,next) =>
   run(notificationsService().interventionPreferences(req.userId!),res,next,value => res.json(value)));
 router.put("/intervention-preferences", validateBody(interventionPreferencesUpdateSchema), (req: AuthRequest,res,next) =>

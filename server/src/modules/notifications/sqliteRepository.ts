@@ -17,6 +17,10 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async interventionCard(userId: number,id: string): Promise<Record<string,unknown> | null> {
+    return (this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND id=? AND notification_id IS NOT NULL").get(userId,id) as Record<string,unknown> | undefined) ?? null;
+  }
+
   async interventionScanCursor(): Promise<number> {
     const row = this.database.prepare("SELECT after_user_id FROM proactive_intervention_scan_cursor WHERE name='opportunities'").get() as { after_user_id: number } | undefined;
     return row?.after_user_id ?? 0;
@@ -133,7 +137,7 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
     else if (filter === "system") conditions.push("category='system'");
     if (cursor) { conditions.push("id<?"); params.push(cursor); }
     params.push(limit);
-    const rows = this.database.prepare(`SELECT id,type,title,body,is_read AS isRead,created_at AS createdAt, inventory_item_id AS inventoryItemId,category,priority,action_status AS actionStatus,snoozed_until AS snoozedUntil, (SELECT COUNT(*) FROM notification_inventory_items n WHERE n.notification_id=user_notification_inbox.id) AS itemCount FROM user_notification_inbox WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params) as Array<Record<string, unknown>>;
+    const rows = this.database.prepare(`SELECT (SELECT p.id FROM proactive_interventions p WHERE p.notification_id=user_notification_inbox.id AND p.user_id=user_notification_inbox.user_id ORDER BY p.id LIMIT 1) AS interventionId,id,type,title,body,is_read AS isRead,created_at AS createdAt, inventory_item_id AS inventoryItemId,category,priority,action_status AS actionStatus,snoozed_until AS snoozedUntil, (SELECT COUNT(*) FROM notification_inventory_items n WHERE n.notification_id=user_notification_inbox.id) AS itemCount FROM user_notification_inbox WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params) as Array<Record<string, unknown>>;
     return rows.map((row) => ({ ...row, isRead: row.isRead !== 0 }));
   }
 

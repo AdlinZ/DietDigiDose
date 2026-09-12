@@ -5,6 +5,7 @@ import { createNotificationsService, DEFAULT_NOTIFICATION_PREFERENCES } from "..
 
 function repository(overrides: Partial<NotificationsRepository> = {}): NotificationsRepository {
   return {
+    interventionCard: async () => null,
     interventionScanCursor: async () => 0,advanceInterventionScan: async () => true,
     interventionScanUsers: async () => [],interventionQueue: async () => [],
     pendingInterventionUsers: async () => [],
@@ -256,4 +257,17 @@ test("worker cancellation interrupts account reads without advancing the scan cu
     release(null);
     if (flag===undefined) delete process.env.PROACTIVE_INTERVENTIONS_ENABLED;else process.env.PROACTIVE_INTERVENTIONS_ENABLED = flag;
   }
+});
+
+test("intervention cards expose explicit fields and expire actions without changing stored evidence", async () => {
+  const { interventionCard } = await import("../src/modules/interventions/card.js");
+  const now = Date.parse("2026-09-12T09:00:00Z");
+  const candidate = { title: "提醒",body: "查看建议",whyNow: "有临期食材",expiresLabel: "今晚前",localDate: "2026-09-12",inventoryIds: [1],recipeIds: [2],actions: ["plan_recipe"],secret: "internal" };
+  const row = { id: "a".repeat(64),notification_id: 7,kind: "expiry_rescue",status: "inbox",expires_at: "2026-09-12 10:00:00",candidate_json: JSON.stringify(candidate),policy_version: "v1",decision_reason: "eligible",policy_input_json: { tokens: ["secret"] } };
+  const card = interventionCard(row,now);
+  assert.equal(card.whyNow,candidate.whyNow);assert.equal(card.expiresAt,"2026-09-12T10:00:00.000Z");
+  assert(!JSON.stringify(card).includes("secret"));assert.deepEqual(card.actions,["plan_recipe"]);
+  assert.deepEqual(interventionCard({ ...row,candidate_json: candidate,expires_at: new Date("2026-09-12T10:00:00Z") },now),card);
+  const expired = interventionCard(row,now+3_600_000);
+  assert.equal(expired.status,"expired");assert.deepEqual(expired.actions,[]);assert.equal(row.status,"inbox");
 });

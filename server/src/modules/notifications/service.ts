@@ -1,3 +1,4 @@
+import { interventionCard } from "../interventions/card.js";
 import { scanInterventions } from "../interventions/scan.js";
 import type { RecommendationsService } from "../recommendations/service.js";
 import type { WorkerTaskContext } from "../worker/types.js";
@@ -93,6 +94,7 @@ export function createNotificationsService(repository: NotificationsRepository,r
   }
 
   return {
+    async interventionCard(userId: number,id: string) { const row = await repository.interventionCard(userId,id);return row ? interventionCard(row) : null; },
     scanInterventions: (context: WorkerTaskContext) => recommendations ? scanInterventions(repository,recommendations,context) : Promise.resolve({ scanned: 0,candidates: 0,failed: 0 }),
     async sendInterventions(context: WorkerTaskContext,limit = 100) {
       const result = { processed: 0,accepted: 0,failed: 0,uncertain: 0 };

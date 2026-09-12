@@ -14,7 +14,13 @@ export async function verifyInterventionReservation(repository: NotificationsRep
   const [first,replay] = await Promise.all([repository.reserveIntervention(input),repository.reserveIntervention(input)]);
   assert.equal(first.id,replay.id);assert.equal(first.notification_id,replay.notification_id);assert.equal(first.channel,'push');
   assert.equal(first.delivery_state,'pending');
+  const card = await repository.interventionCard(userId,String(first.id));
+  assert(card);assert.equal(card.id,first.id);
+  assert.equal(await repository.interventionCard(userId+1,String(first.id)),null);
+  const inbox = await repository.history(userId,"all",null,50);
+  assert.equal(inbox.find(row => Number(row.id)===Number(first.notification_id))?.interventionId,first.id);
   const another = await repository.reserveIntervention({ ...input,candidate: { ...input.candidate,sourceKey: `expiry:${userId}:b` } });
+  assert.equal(await repository.interventionCard(userId,String(another.id)),null);
   assert.equal(another.channel,'suppressed');assert.equal(another.decision_reason,'cooldown');assert.equal(another.notification_id,null);
   const later = await repository.reserveIntervention({ ...input,now: now+2*60*60_000,candidate: { ...input.candidate,sourceKey: `expiry:${userId}:c` } });
   assert.equal(later.channel,'inbox_only');assert.equal(later.decision_reason,'daily_push_limit');assert.equal(later.push_reserved_at,null);

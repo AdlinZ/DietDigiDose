@@ -4618,6 +4618,16 @@ test("intervention reservations atomically persist decisions, quota and a single
   await verifyInterventionReservation(new SqliteNotificationsRepository(db),account.user.id);
   assert.equal((db.prepare("SELECT COUNT(*) n FROM user_notification_inbox WHERE user_id=? AND type='proactive_intervention'").get(account.user.id) as JsonObject).n,2);
   const { verifyInterventionDelivery } = await import("./interventionReservationAssertions.js");
+  const intervention = db.prepare("SELECT id FROM proactive_interventions WHERE user_id=? AND notification_id IS NOT NULL LIMIT 1").get(account.user.id) as { id: string };
+  const card = await api(`/api/v1/notifications/interventions/${intervention.id}`,{ token: account.token });
+  assert.equal(card.response.status,200);
+  assert.equal((card.body as JsonObject).id,intervention.id);
+  assert.equal((card.body as JsonObject).policy_input_json,undefined);
+  assert.equal((card.body as JsonObject).user_id,undefined);
+  assert.equal((await api(`/api/v1/notifications/interventions/${intervention.id}`)).response.status,401);
+  const other = await register("int-card-other@example.com");
+  assert.equal((await api(`/api/v1/notifications/interventions/${intervention.id}`,{ token: other.token })).response.status,404);
+  assert.equal((await api("/api/v1/notifications/interventions/invalid",{ token: account.token })).response.status,400);
   await verifyInterventionDelivery(new SqliteNotificationsRepository(db),account.user.id);
   const { verifyInterventionScanCursor } = await import("./interventionReservationAssertions.js");
   const { SqliteWorkerRepository } = await import("../src/modules/worker/sqliteRepository.js");

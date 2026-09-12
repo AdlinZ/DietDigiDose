@@ -24,13 +24,15 @@ export function snapshotKitchenware(snapshot: MaintenanceInputSnapshot) {
     })),
     ownedItems: async userId => data.kitchenware_items.filter(row => Number(row.user_id) === userId && !row.deleted_at && row.status !== "维修中"),
     capabilityCodesForCatalogIds: async ids => [...new Set(data.kitchenware_catalog_capabilities.filter(row => ids.includes(Number(row.catalog_id))).map(row => String(row.capability_code)))],
+    substitutionsForCatalog: async id => data.kitchenware_substitutions.filter(row => Number(row.source_catalog_id) === id && catalog(row.substitute_catalog_id))
+      .map(row => ({ ...row,id: Number(row.substitute_catalog_id),name: catalog(row.substitute_catalog_id)!.name })),
     substitutionFor: async (sourceId,ownedIds) => {
       const relation = data.kitchenware_substitutions.filter(row => Number(row.source_catalog_id) === sourceId && ownedIds.includes(Number(row.substitute_catalog_id))
         && row.relation_type !== "forbidden" && catalog(row.substitute_catalog_id)).sort((a,b) => Number(a.relation_type !== "equivalent")-Number(b.relation_type !== "equivalent"))[0];
       return relation ? { ...relation,name: catalog(relation.substitute_catalog_id)!.name } : null;
     },
     recipeAvailable: async id => data.recipes.some(row => Number(row.id) === id && row.status === "approved" && !row.deleted_at),
-    listItems: unavailable,listCapabilities: unavailable,substitutionsForCatalog: unavailable,findOwnedItem: unavailable,
+    listItems: unavailable,listCapabilities: unavailable,findOwnedItem: unavailable,
     createItem: unavailable,updateItem: unavailable,maintainItem: unavailable,removeItem: unavailable,upsertMappingReview: unavailable,
   };
   const service = new KitchenwareService(repository);

@@ -1369,7 +1369,7 @@ describe("user data isolation", () => {
     const airFryer = db.prepare("SELECT id FROM kitchenware_catalog WHERE name = '空气炸锅'").get() as { id: number };
     db.prepare(`INSERT INTO recipe_kitchenware_requirements
       (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
-      VALUES (?, ?, NULL, 'required', 'test', 1, '空气炸锅测试')`).run(recipeId, airFryer.id);
+      VALUES (?, ?, 'bake', 'required', 'test', 1, '空气炸锅测试')`).run(recipeId, airFryer.id);
     await api("/api/v1/kitchenware", {
       method: "POST", token: first.token,
       body: JSON.stringify({ name: "烤箱", category: "小家电", status: "良好", note: "", image_url: "", purchase_date: "" }),

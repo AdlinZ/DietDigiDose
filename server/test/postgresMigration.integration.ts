@@ -1601,7 +1601,7 @@ try {
   const airFryerId = Number(kitchenwareCatalogIds.rows.find((row) => row.name === "空气炸锅")!.id);
   await pool.query(`INSERT INTO recipe_kitchenware_requirements
     (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
-    VALUES ($1, $2, NULL, 'required', 'test', 1, 'Postgres 空气炸锅测试')`, [kitchenwareRecipeId, airFryerId]);
+    VALUES ($1, $2, 'bake', 'required', 'test', 1, 'Postgres 空气炸锅测试')`, [kitchenwareRecipeId, airFryerId]);
   await kitchenwareService.create(user.id, {
     name: "烤箱", category: "小家电", status: "良好", note: "", image_url: "", purchase_date: "",
   });

@@ -69,4 +69,17 @@ describe("kitchenware module", () => {
     assert.equal(saved[2].name,"平底锅");
     assert.equal(reviews.length,2);
   });
+  test("a shared capability cannot bypass a prohibited or conditional equipment substitution", async () => {
+    for (const relation of ["forbidden","conditional","equivalent"]) {
+      const service = new KitchenwareService(repository({
+        requirementsForRecipe: async () => [{ role: "required",catalog_id: 1,capability_code: "fry",confidence: 1 }],
+        ownedItems: async () => [{ id: 7,name: "替代设备",catalog_id: 2 }],
+        substitutionsForCatalog: async () => [{ id: 2,relation_type: relation }],
+        capabilityCodesForCatalogIds: async ids => ids.includes(2) ? ["fry"] : [],
+        substitutionFor: async () => relation === "forbidden" ? null : { name: "替代设备",relation_type: relation },
+      }));
+      const result = await service.evaluateRequirements(1,99);
+      assert.equal(result.blocking.length,relation === "equivalent" ? 0 : 1,relation);
+    }
+  });
 });

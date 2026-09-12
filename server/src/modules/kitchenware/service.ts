@@ -112,10 +112,15 @@ export class KitchenwareService {
         if (resolved?.confidence === 1) ownedCatalogIds.add(resolved.id);
       }
     }
-    const ownedCapabilities = new Set(await this.repository.capabilityCodesForCatalogIds([...ownedCatalogIds]));
     const evaluated = await Promise.all(requirements.map(async (requirement) => {
       const exact = Boolean(requirement.catalogId && ownedCatalogIds.has(requirement.catalogId));
-      const capability = Boolean(requirement.capabilityCode && ownedCapabilities.has(requirement.capabilityCode));
+      // A generic capability must not override a governed prohibition or an
+      // unverified conditional relationship for the specific required device.
+      const relations = requirement.catalogId ? await this.repository.substitutionsForCatalog(requirement.catalogId) : [];
+      const restricted = new Set(relations.filter(row => row.relation_type !== "equivalent").map(row => Number(row.id)));
+      const capabilityOwners = [...ownedCatalogIds].filter(id => !restricted.has(id));
+      const capabilities = requirement.capabilityCode ? await this.repository.capabilityCodesForCatalogIds(capabilityOwners) : [];
+      const capability = Boolean(requirement.capabilityCode && capabilities.includes(requirement.capabilityCode));
       if (exact || capability) return { ...requirement, satisfied: true, substitution: null };
       if (!requirement.catalogId || ownedCatalogIds.size === 0) return { ...requirement, satisfied: false, substitution: null };
       const substitution = await this.repository.substitutionFor(requirement.catalogId, [...ownedCatalogIds]);

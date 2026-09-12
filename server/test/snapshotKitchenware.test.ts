@@ -33,6 +33,8 @@ test("repair status, required capabilities and forbidden substitutions remain en
   data.kitchenware_substitutions[0].relation_type = "equivalent";
   assert.equal((await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10)).blocking.length,0);
   data.kitchenware_substitutions[0].relation_type = "conditional";
+  data.recipe_kitchenware_requirements[0].capability_code = "steam";
+  data.kitchenware_catalog_capabilities = [{ catalog_id: 2,capability_code: "steam" }];
   const conditional = await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10);
   assert.equal(conditional.blocking.length,1);
   assert.equal(conditional.requirements[0].substitution?.relationType,"conditional");

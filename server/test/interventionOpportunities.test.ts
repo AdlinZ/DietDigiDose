@@ -6,7 +6,7 @@ function fixture(): OpportunityInput {
   return { userId: 1,now: Date.parse("2026-09-12T17:00:00+08:00"),dataObservedAt: Date.parse("2026-09-12T16:59:00+08:00"),
     preferences: { ...defaultInterventionPreferences,enabled: true,expiry_rescue: true,dinner_window: true },
     inventory: [{ id: 1,userId: 1,expirationDate: "2026-09-12",available: true,remaining: 1,deleted: false },{ id: 2,userId: 1,expirationDate: "2026-09-15",available: true,remaining: 2,deleted: false }],
-    recommendations: [{ recipeId: 5,quality: 0.8,hardConstraintsPassed: true,inventoryIds: [2] }],dinnerAlreadyPlanned: false,cookingInProgress: false,notCookingToday: false };
+    recommendations: [{ recipeId: 5,quality: 0.8,hardConstraintsPassed: true,inventoryIds: [2] }],cookingInProgress: false,dinnerDays: [{ localDate: "2026-09-12",alreadyPlanned: false,notCooking: false }] };
 }
 test("opportunities merge only owned usable three-day inventory and keep stable restart identities", () => {
   const input = fixture(),before = structuredClone(input);
@@ -36,10 +36,12 @@ test("dinner is opt-in, bounded by the local meal time and suppressed by existin
     const input = fixture();input.now = Date.parse(`2026-09-12T${time}:00+08:00`);
     assert.equal(interventionOpportunities(input).some(row => row.kind === "dinner_window"),expected);
   }
-  for (const key of ["dinnerAlreadyPlanned","cookingInProgress","notCookingToday"] as const) {
-    const input = fixture(); input[key] = true;
+  for (const key of ["alreadyPlanned","notCooking"] as const) {
+    const input = fixture(); input.dinnerDays[0][key] = true;
     assert.equal(interventionOpportunities(input).some(row => row.kind === "dinner_window"),false);
   }
+  const cooking = fixture(); cooking.cookingInProgress = true;
+  assert.equal(interventionOpportunities(cooking).some(row => row.kind === "dinner_window"),false);
   const input = fixture();input.preferences.dinner_window = false;
   assert.equal(interventionOpportunities(input).length,1);
   input.preferences.enabled = false;assert.deepEqual(interventionOpportunities(input),[]);
@@ -49,4 +51,20 @@ test("expiry cutoff uses the real DST midnight rather than adding 24 hours", () 
   input.inventory = [{ ...input.inventory[0],id: 2,expirationDate: "2026-03-08" }];
   const candidate = interventionOpportunities(input)[0];
   assert.equal(candidate.expiresAt-candidate.startsAt,23*60*60*1000);
+});
+
+test("midnight-crossing dinner windows keep the target meal date and identity across midnight", () => {
+  const input = fixture();input.preferences.dinner_time = "00:30";
+  input.now = Date.parse("2026-09-12T23:45:00+08:00");
+  input.dinnerDays.push({ localDate: "2026-09-13",alreadyPlanned: false,notCooking: false });
+  const first = interventionOpportunities(input).find(row => row.kind === "dinner_window")!;
+  assert(first);assert.equal(first.localDate,"2026-09-13");
+  assert.equal(first.expiresAt,Date.parse("2026-09-13T00:30:00+08:00"));
+  input.now = Date.parse("2026-09-13T00:15:00+08:00");
+  const second = interventionOpportunities(input).find(row => row.kind === "dinner_window")!;
+  assert.equal(interventionCandidateId(first),interventionCandidateId(second));
+  input.dinnerDays[1].notCooking = true;
+  assert.equal(interventionOpportunities(input).some(row => row.kind === "dinner_window"),false);
+  input.dinnerDays = [];
+  assert.equal(interventionOpportunities(input).some(row => row.kind === "dinner_window"),false,"unknown day status cannot permit a reminder");
 });

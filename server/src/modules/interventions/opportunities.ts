@@ -15,7 +15,9 @@ export type InterventionCandidate = {
 export type OpportunityInput = {
   userId: number; now: number; dataObservedAt: number; preferences: InterventionPreferences;
   inventory: InterventionInventory[]; recommendations: InterventionRecommendation[];
-  dinnerAlreadyPlanned: boolean; cookingInProgress: boolean; notCookingToday: boolean;
+  cookingInProgress: boolean;
+  /** Authoritative plan/opt-out state for the meal date, including tomorrow for a midnight-crossing window. */
+  dinnerDays: Array<{ localDate: string; alreadyPlanned: boolean; notCooking: boolean }>;
 };
 function localDate(now: number, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA",{ timeZone,year: "numeric",month: "2-digit",day: "2-digit" }).formatToParts(now);
@@ -45,7 +47,7 @@ export function interventionOpportunities(input: OpportunityInput): Intervention
   if (!preferences.enabled) return [];
   const today = localDate(input.now,preferences.time_zone), candidates: InterventionCandidate[] = [];
   const common = { userId: input.userId,localDate: today,dataObservedAt: input.dataObservedAt };
-  const source = (kind: string) => `${kind}:${input.userId}:${today}`;
+  const source = (kind: string, date = today) => `${kind}:${input.userId}:${date}`;
   if (preferences.expiry_rescue) {
     const deadline = addDays(today,3);
     const eligible = input.inventory.filter(item => item.userId === input.userId && Number.isSafeInteger(item.id) && item.id>0 && !item.deleted && item.available
@@ -66,15 +68,18 @@ export function interventionOpportunities(input: OpportunityInput): Intervention
       });
     }
   }
-  if (preferences.dinner_window && !input.dinnerAlreadyPlanned && !input.cookingInProgress && !input.notCookingToday) {
-    const expiresAt = occurrence(today,preferences.dinner_time,preferences.time_zone);
+  if (preferences.dinner_window && !input.cookingInProgress) for (const mealDate of [today,addDays(today,1)]) {
+    const states = input.dinnerDays.filter(day => day.localDate === mealDate);
+    // Missing or conflicting date-scoped evidence cannot assert an empty dinner plan.
+    if (states.length !== 1 || states[0].alreadyPlanned || states[0].notCooking) continue;
+    const expiresAt = occurrence(mealDate,preferences.dinner_time,preferences.time_zone);
     const recipes = recommendations(input);
     if (expiresAt !== null) {
       const startsAt = expiresAt-preferences.dinner_lead_minutes*60_000;
       if (recipes.length && input.now>=startsAt && input.now<expiresAt) candidates.push({ ...common,
-        sourceKey: source("dinner_window"),kind: "dinner_window",startsAt,expiresAt,inventoryIds: [],recipeIds: recipes.map(row => row.recipeId),recommendationQuality: recipes[0].quality,
+        localDate: mealDate,sourceKey: source("dinner_window",mealDate),kind: "dinner_window",startsAt,expiresAt,inventoryIds: [],recipeIds: recipes.map(row => row.recipeId),recommendationQuality: recipes[0].quality,
         title: "现在可以安排晚餐",body: "已有可执行的菜谱建议，查看并选择今晚的安排。",
-        whyNow: "已进入你设置的晚餐决策窗口，今天尚未安排或开始烹饪。",expiresLabel: `今日 ${preferences.dinner_time} 前（${preferences.time_zone}）`,
+        whyNow: "已进入你设置的晚餐决策窗口，该用餐日尚未安排或开始烹饪。",expiresLabel: `${mealDate} ${preferences.dinner_time} 前（${preferences.time_zone}）`,
         actions: ["plan_recipe","view_alternatives","not_cooking_today","not_helpful"],
       });
     }

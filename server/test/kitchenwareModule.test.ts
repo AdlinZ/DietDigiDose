@@ -82,4 +82,16 @@ describe("kitchenware module", () => {
       assert.equal(result.blocking.length,relation === "equivalent" ? 0 : 1,relation);
     }
   });
+  test("named equipment does not silently become a generic capability requirement", async () => {
+    let catalogId: number | null = 1;
+    const service = new KitchenwareService(repository({
+      requirementsForRecipe: async () => [{ role: "required",catalog_id: catalogId,capability_code: "boil",confidence: 1 }],
+      ownedItems: async () => [{ id: 7,name: "其他煮炖设备",catalog_id: 2 }],
+      capabilityCodesForCatalogIds: async () => ["boil"],
+      substitutionFor: async () => null,
+    }));
+    assert.equal((await service.evaluateRequirements(1,99)).blocking.length,1);
+    catalogId = null;
+    assert.equal((await service.evaluateRequirements(1,99)).blocking.length,0);
+  });
 });

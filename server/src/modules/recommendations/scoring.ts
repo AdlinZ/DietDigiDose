@@ -3,7 +3,7 @@ import { recipeDemands } from "./quantities.js";
 import { buildFefoConsumptionPreviewFromCandidates } from "../../services/inventoryQuantity.js";
 import type { RecommendationDataset, RecommendationInput, Row } from "./types.js";
 
-export const RECIPE_SCORING_VERSION = "rules-2026-09-12.5";
+export const RECIPE_SCORING_VERSION = "rules-2026-09-12.6";
 export const RECIPE_CANDIDATE_VERSION = "sql-public-v1";
 export const RECOMMENDATION_WEIGHTS = Object.freeze({
   inventoryCoverage: 35, expiringUse: 20, missingPenalty: 20, timeFit: 15, nutritionFit: 10,

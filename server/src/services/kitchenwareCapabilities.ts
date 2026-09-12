@@ -216,7 +216,7 @@ export function evaluateKitchenwareRequirements(userId: number, recipeId: number
 
   const evaluated = requirements.map((requirement) => {
     const exact = Boolean(requirement.catalogId && ownedCatalogIds.has(requirement.catalogId));
-    const capability = Boolean(requirement.capabilityCode && ownedCapabilities.has(requirement.capabilityCode));
+    const capability = Boolean(!requirement.catalogId && requirement.capabilityCode && ownedCapabilities.has(requirement.capabilityCode));
     if (exact || capability) return { ...requirement, satisfied: true, substitution: null };
     if (!requirement.catalogId) return { ...requirement, satisfied: false, substitution: null };
     if (!tableExists("kitchenware_substitutions") || ownedCatalogIds.size === 0) {

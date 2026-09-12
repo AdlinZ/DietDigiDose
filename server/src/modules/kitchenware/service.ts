@@ -119,12 +119,10 @@ export class KitchenwareService {
       if (requirement.catalogId && !trustedCatalogIds.has(requirement.catalogId))
         return { ...requirement, satisfied: false, substitution: null };
       const exact = Boolean(requirement.catalogId && ownedCatalogIds.has(requirement.catalogId));
-      // A generic capability must not override a governed prohibition or an
-      // unverified conditional relationship for the specific required device.
-      const relations = requirement.catalogId ? await this.repository.substitutionsForCatalog(requirement.catalogId) : [];
-      const restricted = new Set(relations.filter(row => row.relation_type !== "equivalent").map(row => Number(row.id)));
-      const capabilityOwners = [...ownedCatalogIds].filter(id => !restricted.has(id));
-      const capabilities = requirement.capabilityCode ? await this.repository.capabilityCodesForCatalogIds(capabilityOwners) : [];
+      // A named device is a device requirement, even when its capability is
+      // annotated. Only a capability-only requirement permits generic matching.
+      const capabilities = !requirement.catalogId && requirement.capabilityCode
+        ? await this.repository.capabilityCodesForCatalogIds([...ownedCatalogIds]) : [];
       const capability = Boolean(requirement.capabilityCode && capabilities.includes(requirement.capabilityCode));
       if (exact || capability) return { ...requirement, satisfied: true, substitution: null };
       if (!requirement.catalogId || ownedCatalogIds.size === 0) return { ...requirement, satisfied: false, substitution: null };

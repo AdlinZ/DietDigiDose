@@ -2272,6 +2272,81 @@ const migrations: Migration[] = [
     );`);
   } },
 
+  { version: 79, name: "proactive_intervention_state", up(database) {
+    database.exec(`CREATE TABLE proactive_intervention_preferences (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+      expiry_rescue INTEGER NOT NULL DEFAULT 0 CHECK(expiry_rescue IN (0,1)),
+      dinner_window INTEGER NOT NULL DEFAULT 0 CHECK(dinner_window IN (0,1)),
+      time_zone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+      quiet_start TEXT NOT NULL DEFAULT '22:00',
+      quiet_end TEXT NOT NULL DEFAULT '07:00',
+      dinner_time TEXT NOT NULL DEFAULT '18:00',
+      dinner_lead_minutes INTEGER NOT NULL DEFAULT 60 CHECK(dinner_lead_minutes BETWEEN 15 AND 180),
+      daily_push_limit INTEGER NOT NULL DEFAULT 1 CHECK(daily_push_limit BETWEEN 0 AND 3),
+      cooldown_minutes INTEGER NOT NULL DEFAULT 120 CHECK(cooldown_minutes BETWEEN 60 AND 10080),
+      not_cooking_date TEXT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE proactive_interventions (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_key TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('expiry_rescue','dinner_window')),
+      status TEXT NOT NULL DEFAULT 'candidate' CHECK(status IN ('candidate','suppressed','inbox','sent','acted','expired')),
+      candidate_json TEXT NOT NULL,
+      policy_input_json TEXT,
+      policy_version TEXT,
+      decision_reason TEXT,
+      channel TEXT CHECK(channel IN ('push','inbox_only','suppressed')),
+      priority TEXT CHECK(priority IN ('normal','high')),
+      starts_at DATETIME NOT NULL,
+      expires_at DATETIME NOT NULL,
+      decided_at DATETIME,
+      push_reserved_at DATETIME,
+      delivery_state TEXT NOT NULL DEFAULT 'none' CHECK(delivery_state IN ('none','pending','sending','accepted','failed','uncertain','cancelled')),
+      delivery_attempts INTEGER NOT NULL DEFAULT 0 CHECK(delivery_attempts >= 0),
+      lease_owner TEXT,
+      lease_until DATETIME,
+      next_attempt_at DATETIME,
+      notification_id INTEGER REFERENCES user_notification_inbox(id) ON DELETE SET NULL,
+      snoozed_until DATETIME,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,source_key),
+      UNIQUE(id,user_id),
+      CHECK(expires_at > starts_at)
+    );
+    CREATE INDEX idx_proactive_user_quota ON proactive_interventions(user_id,push_reserved_at);
+    CREATE INDEX idx_proactive_delivery ON proactive_interventions(delivery_state,next_attempt_at,lease_until);
+    CREATE INDEX idx_proactive_expiry ON proactive_interventions(status,expires_at);
+    CREATE TABLE proactive_intervention_actions (
+      id TEXT PRIMARY KEY,
+      intervention_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      idempotency_key TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('plan_recipe','view_alternatives','mark_consumed','mark_discarded','snooze','not_cooking_today','not_helpful')),
+      request_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,idempotency_key),
+      FOREIGN KEY(intervention_id,user_id) REFERENCES proactive_interventions(id,user_id) ON DELETE CASCADE
+    );
+    CREATE TABLE proactive_intervention_outcomes (
+      id TEXT PRIMARY KEY,
+      intervention_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      outcome_type TEXT NOT NULL CHECK(outcome_type IN ('cooking_started','inventory_used','inventory_discarded')),
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      occurred_at DATETIME NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(intervention_id,outcome_type,source_type,source_id),
+      FOREIGN KEY(intervention_id,user_id) REFERENCES proactive_interventions(id,user_id) ON DELETE CASCADE
+    );`);
+  } },
+
 ];
 
 export function runMigrations(database: Database.Database) {

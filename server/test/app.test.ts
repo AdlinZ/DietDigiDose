@@ -4555,3 +4555,29 @@ test("admin kitchenware capability conditions validate, persist and reject stale
   assert.deepEqual(((await api(url,{ token: admin })).body as JsonObject).capabilities,[]);
   assert.equal((await api('/api/v1/admin/kitchenware/catalog/999999999/capabilities',{ token: admin })).response.status,404);
 });
+
+test("proactive intervention schema preserves defaults, dedupe and account ownership", async () => {
+  const account = await register("intervention-owner@example.invalid");
+  const other = await register("intervention-other@example.invalid");
+  db.prepare("INSERT INTO proactive_intervention_preferences(user_id) VALUES(?)").run(account.user.id);
+  const preferences = db.prepare("SELECT enabled,expiry_rescue,dinner_window FROM proactive_intervention_preferences WHERE user_id=?").get(account.user.id);
+  assert.deepEqual(preferences,{ enabled: 0,expiry_rescue: 0,dinner_window: 0 });
+  const insert = db.prepare(`INSERT INTO proactive_interventions(id,user_id,source_key,kind,candidate_json,starts_at,expires_at)
+    VALUES(?,?,?,'expiry_rescue','{}','2026-09-12 00:00:00','2026-09-13 00:00:00')`);
+  insert.run('schema-intervention',account.user.id,'expiry-day');
+  assert.throws(() => insert.run('duplicate-intervention',account.user.id,'expiry-day'),/UNIQUE/);
+  insert.run('other-intervention',other.user.id,'expiry-day');
+  const action = db.prepare(`INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json)
+    VALUES(?,'schema-intervention',?,?,'snooze','{}','{}')`);
+  assert.throws(() => action.run('cross-account',other.user.id,'cross'),/FOREIGN KEY/);
+  action.run('valid-action',account.user.id,'once');
+  assert.throws(() => action.run('repeated-action',account.user.id,'once'),/UNIQUE/);
+  const outcome = db.prepare(`INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at)
+    VALUES(?,'schema-intervention',?,'inventory_used','inventory_event','source-1',CURRENT_TIMESTAMP)`);
+  assert.throws(() => outcome.run('cross-outcome',other.user.id),/FOREIGN KEY/);
+  outcome.run('valid-outcome',account.user.id);
+  assert.throws(() => outcome.run('duplicate-outcome',account.user.id),/UNIQUE/);
+  assert.throws(() => db.prepare("UPDATE proactive_interventions SET status='invalid' WHERE id='schema-intervention'").run(),/CHECK/);
+  const saved = db.prepare("SELECT status,delivery_state FROM proactive_interventions WHERE id='schema-intervention'").get();
+  assert.deepEqual(saved,{ status: 'candidate',delivery_state: 'none' });
+});

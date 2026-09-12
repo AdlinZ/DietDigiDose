@@ -1547,6 +1547,17 @@ try {
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs
     WHERE resource_type = 'voice_pack_version' AND resource_id = $1`, [String(voiceId)])).rows[0]?.count), 3);
 
+  await pool.query("INSERT INTO proactive_intervention_preferences(user_id) VALUES($1)",[user.id]);
+  assert.deepEqual((await pool.query("SELECT enabled,expiry_rescue,dinner_window FROM proactive_intervention_preferences WHERE user_id=$1",[user.id])).rows[0],{ enabled: 0,expiry_rescue: 0,dinner_window: 0 });
+  await pool.query("INSERT INTO proactive_interventions(id,user_id,source_key,kind,candidate_json,starts_at,expires_at) VALUES('pg-intervention',$1,'expiry-day','expiry_rescue','{}'::jsonb,'2026-09-12T00:00:00Z','2026-09-13T00:00:00Z')",[user.id]);
+  await assert.rejects(pool.query("INSERT INTO proactive_interventions(id,user_id,source_key,kind,candidate_json,starts_at,expires_at) VALUES('pg-duplicate',$1,'expiry-day','expiry_rescue','{}'::jsonb,'2026-09-12T00:00:00Z','2026-09-13T00:00:00Z')",[user.id]),(error: unknown) => (error as {code:string}).code === '23505');
+  const otherInterventionUser = Number((await pool.query("SELECT id FROM users WHERE id<>$1 LIMIT 1",[user.id])).rows[0].id);
+  const insertInterventionAction = (id: string,owner: number) => pool.query("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json) VALUES($1,'pg-intervention',$2,'once','snooze','{}'::jsonb,'{}'::jsonb)",[id,owner]);
+  await assert.rejects(insertInterventionAction('pg-cross',otherInterventionUser),(error: unknown) => (error as {code:string}).code === '23503');
+  await insertInterventionAction('pg-action',user.id);
+  await assert.rejects(insertInterventionAction('pg-repeat',user.id),(error: unknown) => (error as {code:string}).code === '23505');
+  await assert.rejects(pool.query("INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at) VALUES('pg-cross-outcome','pg-intervention',$1,'cooking_started','queue','1',CURRENT_TIMESTAMP)",[otherInterventionUser]),(error: unknown) => (error as {code:string}).code === '23503');
+
   const kitchenwareRepository = new PostgresKitchenwareRepository(pool);
   const kitchenwareService = new KitchenwareService(kitchenwareRepository);
   const postgresCatalog = await kitchenwareService.catalog("不粘锅");

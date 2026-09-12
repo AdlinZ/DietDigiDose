@@ -1,3 +1,4 @@
+import { capabilityUpdateSchema } from "./capabilities.js";
 import { z } from "zod";
 import { reviewToken } from "./mappingReview.js";
 import { AdminKitchenwareError } from "./errors.js";
@@ -15,6 +16,17 @@ export class AdminKitchenwareService {
   private readonly repository: AdminKitchenwareRepository;
   constructor(repository: AdminKitchenwareRepository) { this.repository = repository; }
 
+  async capabilityConfiguration(id: number) {
+    const value = await this.repository.capabilityConfiguration(id);
+    if (!value) throw new AdminKitchenwareError(404,"官方厨具不存在");
+    return value;
+  }
+  async updateCapabilities(id: number, body: unknown, context: AuditContext) {
+    const parsed = capabilityUpdateSchema.safeParse(body);
+    if (!parsed.success) throw new AdminKitchenwareError(400,"能力条件无效，请核对容量、直径和热源");
+    if (!await this.repository.updateCapabilities(id,parsed.data,context)) throw new AdminKitchenwareError(404,"官方厨具不存在");
+    return { success: true };
+  }
   async mappingReviews(query: Row) {
     const status = typeof query.status === "string" ? query.status : "pending";
     if (!["pending","approved","rejected"].includes(status)) throw new AdminKitchenwareError(400,"审核状态无效");

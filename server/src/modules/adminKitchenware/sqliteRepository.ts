@@ -1,3 +1,4 @@
+import { capabilityConfiguration, assertCapabilityUpdate, type CapabilityUpdate } from "./capabilities.js";
 import { assertReview, reviewedAliases, reviewedRecipeRoles, type MappingDecision } from "./mappingReview.js";
 import type Database from "better-sqlite3";
 import type { AdminKitchenwareRepository } from "./repository.js";
@@ -8,6 +9,23 @@ function duplicate(error: unknown) { return String((error as { message?: string 
 export class SqliteAdminKitchenwareRepository implements AdminKitchenwareRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+
+  async capabilityConfiguration(id: number) { return this.database.transaction(() => {
+    if (!this.catalogById(id)) return null;
+    return capabilityConfiguration(id,this.database.prepare("SELECT capability_code,constraints_json FROM kitchenware_catalog_capabilities WHERE catalog_id=?").all(id) as Row[],
+      this.database.prepare("SELECT code,name,safety_level FROM kitchenware_capabilities ORDER BY code").all() as Row[]);
+  })(); }
+  async updateCapabilities(id: number,input: CapabilityUpdate,audit: AuditContext) { return this.database.transaction(() => {
+    if (!this.catalogById(id)) return false;
+    const rows = this.database.prepare("SELECT capability_code,constraints_json FROM kitchenware_catalog_capabilities WHERE catalog_id=?").all(id) as Row[];
+    const available = this.database.prepare("SELECT code,name,safety_level FROM kitchenware_capabilities ORDER BY code").all() as Row[];
+    assertCapabilityUpdate(id,rows,available,input);
+    this.database.prepare("DELETE FROM kitchenware_catalog_capabilities WHERE catalog_id=?").run(id);
+    for (const capability of input.capabilities) this.database.prepare("INSERT INTO kitchenware_catalog_capabilities(catalog_id,capability_code,constraints_json) VALUES(?,?,?)")
+      .run(id,capability.code,JSON.stringify(capability.constraints));
+    this.insertAudit(audit,"kitchenware_capabilities.update","kitchenware_catalog",id,JSON.stringify({ before: capabilityConfiguration(id,rows,available).capabilities,after: input.capabilities }));
+    return true;
+  })(); }
 
   async mappingReviews(status: string) { return this.database.prepare("SELECT * FROM kitchenware_mapping_reviews WHERE status=? ORDER BY id LIMIT 201").all(status) as Row[]; }
   async decideMapping(id: number,input: MappingDecision,audit: AuditContext) { this.database.transaction(() => {

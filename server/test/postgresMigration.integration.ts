@@ -1584,6 +1584,20 @@ try {
   const adminCatalog = await adminKitchenwareService.createCatalog({
     name: "Postgres 管理炖锅", category: "烹饪锅具", aliases: ["PG 炖锅"], cooking_methods: ["炖"], care_note: "保持干燥",
   }, adminKitchenwareContext);
+  const capabilityBefore = await adminKitchenwareService.capabilityConfiguration(Number(adminCatalog.id));
+  const capabilityPayload = { token: capabilityBefore.token,capabilities: [{ code: "boil",constraints: { minCapacityMl: 2000 } }] };
+  const concurrentCapabilities = await Promise.allSettled([
+    adminKitchenwareService.updateCapabilities(Number(adminCatalog.id),capabilityPayload,adminKitchenwareContext),
+    adminKitchenwareService.updateCapabilities(Number(adminCatalog.id),capabilityPayload,adminKitchenwareContext),
+  ]);
+  assert.equal(concurrentCapabilities.filter(result => result.status === "fulfilled").length,1);
+  const rejectedCapability = concurrentCapabilities.find(result => result.status === "rejected");
+  assert.equal(rejectedCapability?.status === "rejected" ? rejectedCapability.reason.status : null,409);
+  const capabilityAfter = await adminKitchenwareService.capabilityConfiguration(Number(adminCatalog.id));
+  assert.deepEqual(capabilityAfter.capabilities,capabilityPayload.capabilities);
+  await assert.rejects(adminKitchenwareService.updateCapabilities(Number(adminCatalog.id),{ token: capabilityAfter.token,capabilities: [{ code: "nonexistent",constraints: {} }] },adminKitchenwareContext));
+  assert.equal((await adminKitchenwareService.capabilityConfiguration(Number(adminCatalog.id))).token,capabilityAfter.token);
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM admin_audit_logs WHERE action='kitchenware_capabilities.update' AND resource_id=$1",[String(adminCatalog.id)])).rows[0].n),1);
   assert.equal(adminCatalog.aliases, '["PG 炖锅"]');
   assert.equal((await adminKitchenwareService.catalog({ search: "PG 炖锅" })).some((item) => Number(item.id) === Number(adminCatalog.id)), true);
   await assert.rejects(() => adminKitchenwareService.createCatalog({

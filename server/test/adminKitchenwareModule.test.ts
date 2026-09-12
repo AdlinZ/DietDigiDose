@@ -6,6 +6,7 @@ import { reviewedAliases, reviewedRecipeRoles, reviewToken, assertReview } from 
 
 function repository(overrides: Partial<AdminKitchenwareRepository> = {}): AdminKitchenwareRepository {
   return {
+    capabilityConfiguration: async () => null, updateCapabilities: async () => false,
     mappingReviews: async () => [],decideMapping: async () => {},
     listCatalog: async () => [], createCatalog: async () => ({ kind: "created", item: { id: 1 } }),
     updateCatalog: async () => ({ kind: "missing" }), removeCatalog: async () => false,

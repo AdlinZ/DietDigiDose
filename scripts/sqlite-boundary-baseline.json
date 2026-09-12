@@ -13,7 +13,7 @@
     "server/src/modules/adminFoodAssets/index.ts": 1,
     "server/src/modules/adminFoodAssets/sqliteRepository.ts": 36,
     "server/src/modules/adminKitchenware/index.ts": 1,
-    "server/src/modules/adminKitchenware/sqliteRepository.ts": 24,
+    "server/src/modules/adminKitchenware/sqliteRepository.ts": 32,
     "server/src/modules/adminRecipes/index.ts": 1,
     "server/src/modules/adminRecipes/sqliteRepository.ts": 30,
     "server/src/modules/adminUsers/sqliteRepository.ts": 25,

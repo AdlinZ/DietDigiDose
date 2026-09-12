@@ -4523,3 +4523,28 @@ test("kitchenware compatibility enforces stored capability conditions on SQLite"
   await api(`/api/v1/kitchenware/${pan.id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes: { capacityMl: 2999,diameterCm: 28,heatSources: ["induction"] } }) });
   assert.equal((await compatibility()).blocking.length,1);
 });
+
+test("admin kitchenware capability conditions validate, persist and reject stale edits", async () => {
+  const admin = await loginAdmin();
+  const account = await register("capability-admin-fixture@example.invalid");
+  const catalog = db.prepare("SELECT id FROM kitchenware_catalog WHERE name='平底锅'").get() as JsonObject;
+  const url = `/api/v1/admin/kitchenware/catalog/${catalog.id}/capabilities`;
+  assert.equal((await api(url,{ token: account.token })).response.status,403);
+  assert.equal((await api(url,{ method: "PUT",token: account.token,body: '{}' })).response.status,403);
+  const current = (await api(url,{ token: admin })).body as JsonObject;
+  const payload = { token: current.token,capabilities: [{ code: "fry",constraints: { minCapacityMl: 3000,heatSource: "induction" } }] };
+  const put = (body: unknown) => api(url,{ method: "PUT",token: admin,body: JSON.stringify(body) });
+  for (const capabilities of [[{ code: "missing",constraints: {} }],[{ code: "fry",constraints: { unexpected: true } }],[{ code: "fry",constraints: { minCapacityMl: -1 } }],[{ code: "fry",constraints: {} },{ code: "fry",constraints: {} }]])
+    assert.equal((await put({ token: current.token,capabilities })).response.status,400);
+  assert.equal(((await api(url,{ token: admin })).body as JsonObject).token,current.token);
+  assert.equal((await put(payload)).response.status,200);
+  const saved = (await api(url,{ token: admin })).body as JsonObject;
+  assert.deepEqual(saved.capabilities,payload.capabilities);
+  assert.equal((await put(payload)).response.status,409);
+  const audit = db.prepare("SELECT summary FROM admin_audit_logs WHERE action='kitchenware_capabilities.update' AND resource_id=?").all(String(catalog.id)) as JsonObject[];
+  assert.equal(audit.length,1);
+  assert.deepEqual(JSON.parse(audit[0].summary).after,payload.capabilities);
+  assert.equal((await put({ token: saved.token,capabilities: [] })).response.status,200);
+  assert.deepEqual(((await api(url,{ token: admin })).body as JsonObject).capabilities,[]);
+  assert.equal((await api('/api/v1/admin/kitchenware/catalog/999999999/capabilities',{ token: admin })).response.status,404);
+});

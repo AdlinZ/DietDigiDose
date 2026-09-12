@@ -821,3 +821,12 @@ PostgreSQL集成演练进一步覆盖完整应用模式：在源API注册两个�
 - 覆盖两设备不能拼凑规格、阈值边界、未知/不兼容热源、畸形条件、restricted 能力及 SQLite JSON 文本。SQLite HTTP 真实保存→兼容性响应验证，PostgreSQL 完整运行时验证 JSONB 条件/规格及不匹配阻断；独立空库 issue66_constraints_20260912a 完整迁移/恢复演练退出 0。
 - 服务端全量 450 项、三端 lint、共享 contract/OpenAPI、架构/SQL 边界、服务端构建通过。无数据库 schema 或生产 SQL 变更；推荐版本 rules-2026-09-12.7。日志 kitchenware-constraints-tests.log、kitchenware-constraints-lint.log、kitchenware-constraints-postgres.log。
 - 本批完成现有条件字段的执行基础，尚未补齐目录条件的管理编辑、历史错误映射治理、电器功能属性和条件替代完整验收。旧未被运行时引用的同步 evaluateKitchenwareRequirements 辅助函数也未统一此条件逻辑，后续需治理。#66 仍开放，GitHub 认证尚待恢复，提交仅本地。
+
+### #66 管理员能力条件编辑（2026-09-12）
+
+- 官方目录新增“能力条件”面板，独立读取并编辑标准能力、最低容量、最小直径、所需热源。修改经页面内二次确认，说明影响全局推荐；旧未知条件显示原值并阻止静默覆盖，须人工核对后移除/重新登记。目录基础信息编辑不改写能力关系。
+- 管理员 GET/PUT /api/v1/admin/kitchenware/catalog/:id/capabilities 使用共享严格条件验证和内容指纹。未知能力、重复能力、无效条件拒绝；过期编辑返回 409。SQLite 事务和 PostgreSQL 目录行锁保护读取/替换关系/审计，审计保存 before/after，空数组可明确移除能力。
+- SQLite HTTP 回归验证普通用户读写 403、非法输入不变更、实际保存、过期编辑、审计和清空。PostgreSQL 并发同指纹两次提交仅一次成功、另一次 409；未知能力不改变现有内容，审计一次。
+- 旧 /tmp PostgreSQL 实例目录已不存在，连接拒绝后新建隔离实例 artifacts/issue-implementation/pg-adminconditions/data（127.0.0.1:55439），独立空库 issue66_adminconditions_20260912a 完整迁移/运行时/备份恢复演练成功。未复用失败迁移库。
+- 服务端全量 451 项、三端 lint、管理端/服务端构建、架构检查和原构建预算通过。SQL 边界仍 72 文件；新增访问仅在已有 adminKitchenware SQLite repository（24→32），具备 PostgreSQL 对等实现，更新计数基线。没有数据库结构变化。
+- 新面板尚未完成浏览器实际交互验收，不能以构建替代 UI 验收。条件替代、功能属性、历史映射治理等仍待处理；#66 不标记完成。本批本地提交，GitHub 认证此前失效尚无恢复证据。

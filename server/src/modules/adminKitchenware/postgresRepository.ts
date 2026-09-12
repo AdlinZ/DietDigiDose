@@ -1,3 +1,4 @@
+import { capabilityConfiguration, assertCapabilityUpdate, type CapabilityUpdate } from "./capabilities.js";
 import { assertReview, reviewedAliases, reviewedRecipeRoles, type MappingDecision } from "./mappingReview.js";
 import type { Pool, PoolClient } from "pg";
 import type { AdminKitchenwareRepository } from "./repository.js";
@@ -8,6 +9,22 @@ function duplicate(error: unknown) { return typeof error === "object" && error !
 export class PostgresAdminKitchenwareRepository implements AdminKitchenwareRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+
+  async capabilityConfiguration(id: number) { return this.tx(async client => {
+    if (!(await client.query("SELECT id FROM kitchenware_catalog WHERE id=$1 FOR SHARE",[id])).rows.length) return null;
+    return capabilityConfiguration(id,(await client.query("SELECT capability_code,constraints_json FROM kitchenware_catalog_capabilities WHERE catalog_id=$1",[id])).rows,
+      (await client.query("SELECT code,name,safety_level FROM kitchenware_capabilities ORDER BY code")).rows);
+  }); }
+  async updateCapabilities(id: number,input: CapabilityUpdate,audit: AuditContext) { return this.tx(async client => {
+    if (!(await client.query("SELECT id FROM kitchenware_catalog WHERE id=$1 FOR UPDATE",[id])).rows.length) return false;
+    const rows = (await client.query("SELECT capability_code,constraints_json FROM kitchenware_catalog_capabilities WHERE catalog_id=$1",[id])).rows;
+    const available = (await client.query("SELECT code,name,safety_level FROM kitchenware_capabilities ORDER BY code")).rows;
+    assertCapabilityUpdate(id,rows,available,input);
+    await client.query("DELETE FROM kitchenware_catalog_capabilities WHERE catalog_id=$1",[id]);
+    for (const capability of input.capabilities) await client.query("INSERT INTO kitchenware_catalog_capabilities(catalog_id,capability_code,constraints_json) VALUES($1,$2,$3::jsonb)",[id,capability.code,JSON.stringify(capability.constraints)]);
+    await this.insertAudit(client,audit,"kitchenware_capabilities.update","kitchenware_catalog",id,JSON.stringify({ before: capabilityConfiguration(id,rows,available).capabilities,after: input.capabilities }));
+    return true;
+  }); }
 
   async mappingReviews(status: string) { return (await this.pool.query("SELECT * FROM kitchenware_mapping_reviews WHERE status=$1 ORDER BY id LIMIT 201",[status])).rows as Row[]; }
   async decideMapping(id: number,input: MappingDecision,audit: AuditContext) { await this.tx(async client => {

@@ -898,3 +898,12 @@ PostgreSQL集成演练进一步覆盖完整应用模式：在源API注册两个�
 - 两数据库共用回归断言：同来源并发返回相同候选/通知、冷却抑制、两小时后额度不足仅站内、关闭取消 pending、新来源受未授权抑制。SQLite/PG 均确认只建立两条站内通知。历史 push 决策在 feature flag 关闭的重放中仍保留原结论，发送器必须依据当前状态复核而非重放历史决策发送。
 - 服务端全量 465 项、tsc、架构通过；PG 独立空库 issue179_reservation_20260912a 完整迁移/恢复/运行时演练通过。SQL 仍在现有 repository、PG 对等，边界保持 72 文件并更新计数。无 schema 变化。
 - 本批仓库方法尚未由 worker 调用，未产生真实智能通知；投递租约、发送前复核、实际机会数据读取和推荐调用、操作与归因仍待实现。先前 head 2b2a234 CI 34676878544 本轮复核仍 in_progress，不宣称通过。
+
+### #179 投递领取、过期租约及 CI 演练补齐（2026-09-12）
+
+- 新增 claimIntervention/finishIntervention 仓库方法。领取前读取最新开关、类型授权、有效期、安静时段与活跃设备；不符合条件取消 pending，失效候选标 expired。领取设两分钟租约并增加尝试计数，完成须持有未过期 owner，accepted 才标 sent。
+- sending 租约过期转 uncertain，不再自动领取重发，避免进程在 Expo 已收请求后崩溃造成重复通知。这是显式不确定结果，不能宣称 exactly-once 外部投递或保证所有不确定任务最终送达；后续 sender/worker 需支持该状态的观测与处理。
+- SQLite/PG 共用用例覆盖并发仅一次领取、错误 owner 拒绝、一次完成、过期后旧 owner 拒绝、不确定任务不重发、功能关闭取消及过期候选。服务端 465 项、tsc/架构通过；PG 空库 issue179_delivery_20260912a 完整集成/迁移/恢复演练通过。SQL仅既有通知仓库，72 文件边界计数更新。
+- 前一推送 session35246 最终因 HTTP2 framing error 退出128；确认终止后使用 HTTP/1.1 重试，5d6684f 已成功推送。CI 34676878544（2b2a234）verify失败，stability/windows成功，失败原因是数据库演练未支持迁移79回退夹具。
+- 已为仅隔离演练使用的旧版本夹具添加79反向删除顺序（outcomes/actions先于候选/偏好），扩展支持版本列表；不作为生产 downgrade。运行 pnpm --dir server db:rehearse -- --owner=issue179-validation 退出0，完整 fresh/upgrade/rollback旅程通过，日志 issue179-rehearsal.log。
+- 当前仅实现仓库投递状态机，尚未接入worker与实际Expo请求，也未完成结果归因，#179仍开放。本轮修复需远端CI重新验证。

@@ -1948,6 +1948,8 @@ try {
     const { verifyInterventionReservation } = await import("./interventionReservationAssertions.js");
     await verifyInterventionReservation(notificationsRepository,notificationUserId);
     assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM user_notification_inbox WHERE user_id=$1 AND type='proactive_intervention'",[notificationUserId])).rows[0].n),2);
+    const { verifyInterventionDelivery } = await import("./interventionReservationAssertions.js");
+    await verifyInterventionDelivery(notificationsRepository,notificationUserId);
 
     const { defaultInterventionPreferences } = await import("@dietdigidose/contracts");
     const currentInterventionPreferences = await notificationsRepository.interventionPreferences(user.id);

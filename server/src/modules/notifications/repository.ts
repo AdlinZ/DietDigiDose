@@ -13,6 +13,8 @@ import type {
 } from "./types.js";
 
 export interface NotificationsRepository {
+  claimIntervention(userId: number,now: number,owner: string,featureEnabled: boolean): Promise<import("../interventions/delivery.js").InterventionDeliveryClaim | null>;
+  finishIntervention(id: string,owner: string,now: number,result: import("../interventions/delivery.js").InterventionDeliveryResult): Promise<boolean>;
   reserveIntervention(input: import("../interventions/reservation.js").InterventionReservation): Promise<Record<string,unknown>>;
   interventionPreferences(userId: number): Promise<Record<string,unknown> | null>;
   saveInterventionPreferences(userId: number,input: import("@dietdigidose/contracts").InterventionPreferencesUpdate): Promise<Record<string,unknown> | null>;

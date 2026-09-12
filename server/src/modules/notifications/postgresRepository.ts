@@ -1,3 +1,4 @@
+import { interventionDeliveryBlock, type InterventionDeliveryClaim, type InterventionDeliveryResult } from "../interventions/delivery.js";
 import { interventionCandidateId } from "../interventions/opportunities.js";
 import { reservationDecision, type InterventionReservation } from "../interventions/reservation.js";
 import type { Pool, PoolClient } from "pg";
@@ -12,6 +13,31 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async claimIntervention(userId: number,now: number,owner: string,featureEnabled: boolean): Promise<InterventionDeliveryClaim | null> {
+    if (!owner.trim() || owner.length>200 || !Number.isFinite(now)) throw new Error("Invalid delivery claim");
+    return this.tx(async client => {
+      const at = new Date(now).toISOString();
+      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[userId]);
+      await client.query("UPDATE proactive_interventions SET delivery_state='uncertain',lease_owner=NULL,lease_until=NULL,updated_at=$1 WHERE user_id=$2 AND delivery_state='sending' AND lease_until<=$1",[at,userId]);
+      const row = (await client.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND delivery_state='pending' AND next_attempt_at<=$2 ORDER BY next_attempt_at,id LIMIT 1 FOR UPDATE",[userId,at])).rows[0];
+      if (!row) return null;
+      const prefs = (await client.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[userId])).rows[0] ?? null;
+      const block = interventionDeliveryBlock(row,prefs,now,featureEnabled);
+      const devices = (await client.query("SELECT expo_push_token FROM push_devices WHERE user_id=$1 AND is_active=TRUE ORDER BY id",[userId])).rows;
+      if (block || !devices.length) {
+        await client.query("UPDATE proactive_interventions SET delivery_state='cancelled',decision_reason=$1,updated_at=$2,status=CASE WHEN expires_at<=$2 THEN 'expired' ELSE status END WHERE id=$3",[block ?? 'delivery_no_device',at,row.id]);
+        return null;
+      }
+      await client.query("UPDATE proactive_interventions SET delivery_state='sending',lease_owner=$1,lease_until=$2,delivery_attempts=delivery_attempts+1,updated_at=$3 WHERE id=$4",[owner,new Date(now+120_000).toISOString(),at,row.id]);
+      const candidate = row.candidate_json as {title:string;body:string};
+      return { id: String(row.id),owner,userId,title: candidate.title,body: candidate.body,notificationId: Number(row.notification_id),priority: row.priority === 'high' ? 'high' : 'normal',tokens: devices.map(device => String(device.expo_push_token)) };
+    });
+  }
+  async finishIntervention(id: string,owner: string,now: number,result: InterventionDeliveryResult) {
+    if (!["accepted","failed","uncertain"].includes(result)) throw new Error("Invalid delivery result");
+    const at = new Date(now).toISOString();
+    return ((await this.pool.query("UPDATE proactive_interventions SET delivery_state=$1,status=CASE WHEN $1='accepted' THEN 'sent' ELSE status END,lease_owner=NULL,lease_until=NULL,updated_at=$2 WHERE id=$3 AND delivery_state='sending' AND lease_owner=$4 AND lease_until>$2",[result,at,id,owner])).rowCount ?? 0)===1;
+  }
   async reserveIntervention(input: InterventionReservation) { return this.tx(async client => {
     const candidate = input.candidate;
     // Same account lock as preference changes: serializes quota reservations and opt-out.

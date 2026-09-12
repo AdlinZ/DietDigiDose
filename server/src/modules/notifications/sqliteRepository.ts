@@ -1,3 +1,4 @@
+import { interventionDeliveryBlock, type InterventionDeliveryClaim, type InterventionDeliveryResult } from "../interventions/delivery.js";
 import { interventionCandidateId } from "../interventions/opportunities.js";
 import { reservationDecision, type InterventionReservation } from "../interventions/reservation.js";
 import type Database from "better-sqlite3";
@@ -16,6 +17,30 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async claimIntervention(userId: number,now: number,owner: string,featureEnabled: boolean): Promise<InterventionDeliveryClaim | null> {
+    if (!owner.trim() || owner.length>200 || !Number.isFinite(now)) throw new Error("Invalid delivery claim");
+    return this.database.transaction(() => {
+      const at = new Date(now).toISOString();
+      this.database.prepare("UPDATE proactive_interventions SET delivery_state='uncertain',lease_owner=NULL,lease_until=NULL,updated_at=? WHERE user_id=? AND delivery_state='sending' AND lease_until<=?").run(at,userId,at);
+      const row = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND delivery_state='pending' AND next_attempt_at<=? ORDER BY next_attempt_at,id LIMIT 1").get(userId,at) as Record<string,unknown> | undefined;
+      if (!row) return null;
+      const prefs = this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as Record<string,unknown> | undefined;
+      const block = interventionDeliveryBlock(row,prefs ?? null,now,featureEnabled);
+      const devices = this.database.prepare("SELECT expo_push_token FROM push_devices WHERE user_id=? AND is_active=1 ORDER BY id").all(userId) as Array<{expo_push_token:string}>;
+      if (block || !devices.length) {
+        this.database.prepare("UPDATE proactive_interventions SET delivery_state='cancelled',decision_reason=?,updated_at=?,status=CASE WHEN expires_at<=? THEN 'expired' ELSE status END WHERE id=?").run(block ?? 'delivery_no_device',at,at,String(row.id));
+        return null;
+      }
+      this.database.prepare("UPDATE proactive_interventions SET delivery_state='sending',lease_owner=?,lease_until=?,delivery_attempts=delivery_attempts+1,updated_at=? WHERE id=?").run(owner,new Date(now+120_000).toISOString(),at,String(row.id));
+      const candidate = JSON.parse(String(row.candidate_json)) as {title:string;body:string};
+      return { id: String(row.id),owner,userId,title: candidate.title,body: candidate.body,notificationId: Number(row.notification_id),priority: row.priority === 'high' ? 'high' as const : 'normal' as const,tokens: devices.map(device => device.expo_push_token) };
+    })();
+  }
+  async finishIntervention(id: string,owner: string,now: number,result: InterventionDeliveryResult) {
+    if (!["accepted","failed","uncertain"].includes(result)) throw new Error("Invalid delivery result");
+    const at = new Date(now).toISOString();
+    return this.database.prepare("UPDATE proactive_interventions SET delivery_state=?,status=CASE WHEN ?='accepted' THEN 'sent' ELSE status END,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND delivery_state='sending' AND lease_owner=? AND lease_until>?").run(result,result,at,id,owner,at).changes===1;
+  }
   async reserveIntervention(input: InterventionReservation) { return this.database.transaction(() => {
     const candidate = input.candidate;
     const existing = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND source_key=?").get(candidate.userId,candidate.sourceKey) as Record<string,unknown> | undefined;

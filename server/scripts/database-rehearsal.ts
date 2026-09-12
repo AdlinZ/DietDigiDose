@@ -316,12 +316,13 @@ async function main() {
     const legacyDatabase = new Database(legacyPath);
     const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
       .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 20 }, (_, index) => 59 + index).includes(migration.version));
+    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 21 }, (_, index) => 59 + index).includes(migration.version));
     if (unsupportedVersions.length) {
       legacyDatabase.close();
       throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
     }
     for (const migration of newerVersions) {
+      if (migration.version === 79) legacyDatabase.exec("DROP TABLE proactive_intervention_outcomes; DROP TABLE proactive_intervention_actions; DROP TABLE proactive_interventions; DROP TABLE proactive_intervention_preferences;");
       if (migration.version === 78) legacyDatabase.exec("DROP TABLE core_loop_actor_classifications; DROP TABLE core_loop_metric_settings;");
       // These destructive reversals apply only to this newly created, empty drill
       // fixture. They are deliberately not exposed as a production downgrade.

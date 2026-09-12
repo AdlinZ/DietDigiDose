@@ -35,6 +35,7 @@ export async function verifyInterventionDelivery(repository: NotificationsReposi
     candidate: { userId,sourceKey: `delivery:${userId}:${day}`,kind: 'expiry_rescue',startsAt: base+day*86_400_000,expiresAt: base+day*86_400_000+3*60*60_000,dataObservedAt: base+day*86_400_000,
       localDate: '2026-09-15',inventoryIds: [1],recipeIds: [1],recommendationQuality: 0.8,title: '领取测试',body: '领取正文',whyNow: '测试',expiresLabel: '测试',actions: ['plan_recipe'] } });
   const first = await reserve(0);
+  assert((await repository.pendingInterventionUsers(base,100)).includes(userId));
   const claims = await Promise.all([repository.claimIntervention(userId,base,'worker-a',true),repository.claimIntervention(userId,base,'worker-b',true)]);
   assert.equal(claims.filter(Boolean).length,1);
   const claim = claims.find(Boolean)!;
@@ -42,8 +43,11 @@ export async function verifyInterventionDelivery(repository: NotificationsReposi
   assert.equal(await repository.finishIntervention(claim.id,'wrong-owner',base+1,'accepted'),false);
   assert.equal(await repository.finishIntervention(claim.id,claim.owner,base+1,'accepted'),true);
   assert.equal(await repository.finishIntervention(claim.id,claim.owner,base+2,'accepted'),false);
+  assert(!(await repository.pendingInterventionUsers(base,100)).includes(userId));
   const crashed = await reserve(1);
   assert(await repository.claimIntervention(userId,base+86_400_000,'crashed-worker',true));
+  assert(!(await repository.pendingInterventionUsers(base+86_400_000+1,100)).includes(userId));
+  assert((await repository.pendingInterventionUsers(base+86_400_000+120_000,100)).includes(userId));
   assert.equal(await repository.claimIntervention(userId,base+86_400_000+120_000,'restarted-worker',true),null);
   assert.equal(await repository.finishIntervention(String(crashed.id),'crashed-worker',base+86_400_000+120_001,'accepted'),false);
   assert.equal((await reserve(1)).delivery_state,'uncertain');

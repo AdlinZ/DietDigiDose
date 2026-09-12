@@ -907,3 +907,12 @@ PostgreSQL集成演练进一步覆盖完整应用模式：在源API注册两个�
 - 前一推送 session35246 最终因 HTTP2 framing error 退出128；确认终止后使用 HTTP/1.1 重试，5d6684f 已成功推送。CI 34676878544（2b2a234）verify失败，stability/windows成功，失败原因是数据库演练未支持迁移79回退夹具。
 - 已为仅隔离演练使用的旧版本夹具添加79反向删除顺序（outcomes/actions先于候选/偏好），扩展支持版本列表；不作为生产 downgrade。运行 pnpm --dir server db:rehearse -- --owner=issue179-validation 退出0，完整 fresh/upgrade/rollback旅程通过，日志 issue179-rehearsal.log。
 - 当前仅实现仓库投递状态机，尚未接入worker与实际Expo请求，也未完成结果归因，#179仍开放。本轮修复需远端CI重新验证。
+
+### #179 实际发送与 worker 接线（2026-09-12）
+
+- notifications worker 现会有界扫描待发送用户，并清理发送租约超时记录；SQLite/PG 提供同语义查询。实际发送调用既有 Expo 通道和 ticket/receipt 归档，保留策略的 normal/high 优先级，载荷包含候选与站内通知 ID。旧通知默认 high 行为保留。
+- PROACTIVE_INTERVENTIONS_ENABLED 必须精确为 1 才领取发送，默认关闭并补充环境示例。领取仍读取最新授权、安静时间和有效期。所有设备批次共用 60 秒请求截止，低于两分钟领取租约；每批请求前检查 worker 所有权、取消信号和功能开关。
+- 全部有效 ticket 接受才 accepted；全部明确 error 为 failed；空响应、缺失/混合 ticket、网络或归档异常为 uncertain。完成写入仍校验领取 owner/租约；worker 单独记录 accepted/failed/uncertain，不能把不确定发送算成功。不确定任务不自动重发，未作外部 exactly-once 保证。
+- 定向测试用模拟 fetch 验证普通优先级、载荷关联、成功/拒绝/空响应/断连归档、功能关闭和租约失效阻断网络；没有发送真实 Expo 推送。两数据库共用断言增加 pending 扫描、有效 sending 排除及过期 sending 纳入。
+- 服务端全量 466 项、client/server/admin 静态校验、架构边界和 SQL 冻结检查通过；PG 空库 issue179_sender_20260912a 完整迁移/备份恢复/运行时集成通过。仅现有通知仓库增加 SQL，72 文件边界计数更新。前一 head 7c0b647 的 CI 34677309285 已确认 success。
+- 尚未接通实际库存/推荐快照的机会扫描、类型化卡片操作和结果归因。当前 sender 能处理已原子预留的候选，不会自行生成智能通知；#179 仍未完成，不关闭 issue。

@@ -1,3 +1,5 @@
+import type { WorkerTaskContext } from "../worker/types.js";
+import type { InterventionDeliveryResult } from "../interventions/delivery.js";
 import { formatInterventionPreferences } from "../interventions/preferences.js";
 import type { InterventionPreferencesUpdate } from "@dietdigidose/contracts";
 import { currentDateKey, dateKeyAfterDays } from "../../utils/date.js";
@@ -22,15 +24,18 @@ function isExpoPushToken(value: string) {
 export function createNotificationsService(repository: NotificationsRepository) {
   const timeZone = process.env.APP_TIME_ZONE?.trim() || "Asia/Shanghai";
 
-  async function sendPush(messages: PushMessage[]) {
+  async function sendPush(messages: PushMessage[], control?: { signal: AbortSignal; assertActive: () => Promise<void> }) {
     if (!messages.length) return [];
     const tickets: ExpoTicket[] = [];
     for (let start = 0; start < messages.length; start += 100) {
+      await control?.assertActive();
+      control?.signal.throwIfAborted();
       const batch = messages.slice(start, start + 100);
       const response = await fetchWithTimeout(EXPO_PUSH_URL, {
+        ...(control ? { signal: control.signal } : {}),
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(batch.map((message) => ({ ...message, sound: "default", priority: "high",
+        body: JSON.stringify(batch.map((message) => ({ ...message, sound: "default", priority: message.priority ?? "high",
           ...(message.data.type === "expiring_inventory" ? { categoryId: "inventory-expiring" } : {}) }))),
       });
       if (!response.ok) throw new Error(`Expo Push returned ${response.status}`);
@@ -86,6 +91,45 @@ export function createNotificationsService(repository: NotificationsRepository) 
   }
 
   return {
+    async sendInterventions(context: WorkerTaskContext,limit = 100) {
+      const result = { processed: 0,accepted: 0,failed: 0,uncertain: 0 };
+      await context.assertActive();
+      const users = await repository.pendingInterventionUsers(Date.now(),limit);
+      for (const userId of users) {
+        await context.assertActive();
+        context.signal.throwIfAborted();
+        const started = Date.now();
+        const claim = await repository.claimIntervention(userId,started,context.leaseOwnerId,process.env.PROACTIVE_INTERVENTIONS_ENABLED === "1");
+        if (!claim) continue;
+        // One total deadline across all device batches stays below the delivery lease.
+        const signal = AbortSignal.any([context.signal,AbortSignal.timeout(60_000)]);
+        let outcome: InterventionDeliveryResult = "uncertain";
+        try {
+          const tokens = [...new Set(claim.tokens.filter(isExpoPushToken))];
+          if (!tokens.length) outcome = "failed";
+          else {
+            const tickets = await sendPush(tokens.map(to => ({ to,title: claim.title,body: claim.body,priority: claim.priority,
+              data: { type: "proactive_intervention",interventionId: claim.id,notificationId: claim.notificationId } })),{
+              signal,assertActive: async () => {
+                await context.assertActive();
+                if (Date.now()-started>=60_000 || process.env.PROACTIVE_INTERVENTIONS_ENABLED !== "1") throw new Error("Intervention delivery stopped");
+              },
+            });
+            if (tickets.length===tokens.length && tickets.every(ticket => ticket?.status === "ok" && typeof ticket.id === "string" && ticket.id.length>0)) outcome = "accepted";
+            else if (tickets.length===tokens.length && tickets.every(ticket => ticket?.status === "error")) outcome = "failed";
+          }
+        } catch {
+          // A transport/recording failure may follow Expo acceptance. Never blindly retry.
+          outcome = "uncertain";
+        }
+        const finished = await repository.finishIntervention(claim.id,claim.owner,Date.now(),outcome);
+        result.processed += 1;
+        result[finished ? outcome : "uncertain"] += 1;
+        await context.assertActive();
+        context.signal.throwIfAborted();
+      }
+      return result;
+    },
     async interventionPreferences(userId: number) { return formatInterventionPreferences(await repository.interventionPreferences(userId)); },
     async saveInterventionPreferences(userId: number,input: InterventionPreferencesUpdate) {
       const row = await repository.saveInterventionPreferences(userId,input);

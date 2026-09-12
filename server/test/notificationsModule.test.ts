@@ -5,6 +5,7 @@ import { createNotificationsService, DEFAULT_NOTIFICATION_PREFERENCES } from "..
 
 function repository(overrides: Partial<NotificationsRepository> = {}): NotificationsRepository {
   return {
+    pendingInterventionUsers: async () => [],
     claimIntervention: async () => null,finishIntervention: async () => false,
     reserveIntervention: async () => ({}),
     interventionPreferences: async () => null, saveInterventionPreferences: async () => null,
@@ -87,4 +88,50 @@ describe("notifications module", () => {
     assert.deepEqual(await service.sendCampaign(1, "维护", "已完成"), { id: 3, recipients: 2, success: 0, failure: 0 });
     assert.equal(finished.length, 1);
   });
+});
+
+test("intervention sender preserves priority, archives ambiguous delivery, and fences network calls", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalFlag = process.env.PROACTIVE_INTERVENTIONS_ENABLED;
+  const controller = new AbortController();
+  const context = { runId: "run",taskName: "notifications" as const,leaseOwnerId: "owner",signal: controller.signal,assertActive: async () => {} };
+  const claim = { id: "candidate",owner: "owner",userId: 42,title: "提醒",body: "查看建议",notificationId: 9,priority: "normal" as const,tokens: ["ExpoPushToken[test]"] };
+  const outcomes: string[] = [];
+  const requests: Array<Record<string,unknown>> = [];
+  let response: unknown = [{ status: "ok",id: "ticket" }];
+  let crash = false;
+  globalThis.fetch = (async (_input: unknown,init: RequestInit) => {
+    requests.push(...JSON.parse(String(init.body)));
+    if (crash) throw new Error("connection lost after submission");
+    return new Response(JSON.stringify({ data: response }),{ status: 200 });
+  }) as typeof fetch;
+  process.env.PROACTIVE_INTERVENTIONS_ENABLED = "1";
+  try {
+    const service = createNotificationsService(repository({
+      pendingInterventionUsers: async () => [42],claimIntervention: async (_user,_now,_owner,enabled) => enabled ? claim : null,
+      finishIntervention: async (_id,_owner,_now,outcome) => { outcomes.push(outcome);return true; },
+    }));
+    assert.deepEqual(await service.sendInterventions(context),{ processed: 1,accepted: 1,failed: 0,uncertain: 0 });
+    assert.equal(requests[0]!.priority,"normal");
+    assert.deepEqual(requests[0]!.data,{ type: "proactive_intervention",interventionId: "candidate",notificationId: 9 });
+    response = [{ status: "error",details: { error: "DeviceNotRegistered" } }];
+    assert.equal((await service.sendInterventions(context)).failed,1);
+    response = [];
+    assert.equal((await service.sendInterventions(context)).uncertain,1);
+    crash = true;
+    assert.equal((await service.sendInterventions(context)).uncertain,1);
+    assert.deepEqual(outcomes,["accepted","failed","uncertain","uncertain"]);
+    process.env.PROACTIVE_INTERVENTIONS_ENABLED = "0";
+    assert.equal((await service.sendInterventions(context)).processed,0);
+    assert.equal(requests.length,4);
+    process.env.PROACTIVE_INTERVENTIONS_ENABLED = "1";
+    let checks = 0;
+    await assert.rejects(service.sendInterventions({ ...context,assertActive: async () => { if (++checks>=3) throw new Error("lease lost"); } }),/lease lost/);
+    assert.equal(requests.length,4);
+    assert.equal(outcomes.at(-1),"uncertain");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalFlag===undefined) delete process.env.PROACTIVE_INTERVENTIONS_ENABLED;
+    else process.env.PROACTIVE_INTERVENTIONS_ENABLED = originalFlag;
+  }
 });

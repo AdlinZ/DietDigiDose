@@ -13,6 +13,12 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async pendingInterventionUsers(now: number,limit: number): Promise<number[]> {
+    if (!Number.isFinite(now) || !Number.isInteger(limit) || limit<1 || limit>500) throw new Error("Invalid delivery scan");
+    const at = new Date(now).toISOString();
+    return (await this.pool.query("SELECT user_id FROM proactive_interventions WHERE (delivery_state='pending' AND next_attempt_at<=$1) OR (delivery_state='sending' AND lease_until<=$1) GROUP BY user_id ORDER BY MIN(COALESCE(next_attempt_at,lease_until)),user_id LIMIT $2",[at,limit])).rows.map(row => Number(row.user_id));
+  }
+
   async claimIntervention(userId: number,now: number,owner: string,featureEnabled: boolean): Promise<InterventionDeliveryClaim | null> {
     if (!owner.trim() || owner.length>200 || !Number.isFinite(now)) throw new Error("Invalid delivery claim");
     return this.tx(async client => {

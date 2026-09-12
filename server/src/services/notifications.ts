@@ -12,3 +12,7 @@ export function checkExpoPushReceipts() {
 export function sendExpiringInventoryNotifications() {
   return notificationsService().sendExpiringInventoryNotifications();
 }
+
+export function sendInterventions(context: import("../modules/worker/types.js").WorkerTaskContext) {
+  return notificationsService().sendInterventions(context);
+}

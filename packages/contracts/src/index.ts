@@ -10,3 +10,5 @@ export * from "./preferenceLearning.ts";
 export * from "./planMaintenance.ts";
 
 export * from "./householdDining.ts";
+
+export * from "./kitchenware.ts";

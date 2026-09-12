@@ -1557,6 +1557,12 @@ try {
     image_url: "", purchase_date: "2026-08-31",
   });
   assert.equal(postgresPan.name, "平底锅");
+  const panAttributes = { capacityMl: 3000,diameterCm: 28,heatSources: ["induction"] };
+  assert.deepEqual((await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",attributes: panAttributes })).attributes,panAttributes);
+  assert.deepEqual((await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",note: "preserve" })).attributes,panAttributes);
+  assert.deepEqual((await kitchenwareService.list(user.id)).find(item => Number(item.id) === Number(postgresPan.id))?.attributes,panAttributes);
+  assert.deepEqual((await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",attributes: { capacityMl: null,heatSources: null } })).attributes,{ capacityMl: null,heatSources: null });
+
   assert.equal((await kitchenwareRepository.listItems(user.id + 1)).length, 0);
   assert.equal(await kitchenwareRepository.findOwnedItem(user.id + 1, Number(postgresPan.id)), null);
   const maintainedPan = await kitchenwareRepository.maintainItem(user.id, Number(postgresPan.id));

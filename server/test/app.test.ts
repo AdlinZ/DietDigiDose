@@ -4484,3 +4484,21 @@ test("admin mapping review atomically approves aliases and current recipe requir
   assert.equal((await api(`${base}/${expiredId}`,{ token: admin,method: "POST",body: JSON.stringify({ token: expired.token,decision: "rejected" }) })).response.status,200);
   assert.equal((db.prepare("SELECT status FROM kitchenware_mapping_reviews WHERE id=?").get(expiredId) as JsonObject).status,"rejected");
 });
+
+test("kitchenware specifications round-trip, preserve omitted updates and support explicit unknowns", async () => {
+  const account = await register("kitchenware-attributes@example.invalid");
+  const input = { name: "平底锅",attributes: { capacityMl: 3000,diameterCm: 28,heatSources: ["gas","induction"] } };
+  const created = await api("/api/v1/kitchenware",{ method: "POST",token: account.token,body: JSON.stringify(input) });
+  assert.equal(created.response.status,201);
+  assert.deepEqual((created.body as JsonObject).attributes,input.attributes);
+  const id = (created.body as JsonObject).id;
+  const updated = await api(`/api/v1/kitchenware/${id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",note: "只修改备注" }) });
+  assert.equal(updated.response.status,200);
+  assert.deepEqual((updated.body as JsonObject).attributes,input.attributes);
+  const listed = await api("/api/v1/kitchenware",{ token: account.token });
+  assert.deepEqual((listed.body as JsonObject[]).find(item => item.id === id)?.attributes,input.attributes);
+  const unknown = { capacityMl: null,diameterCm: null,heatSources: null };
+  assert.deepEqual(((await api(`/api/v1/kitchenware/${id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes: unknown }) })).body as JsonObject).attributes,unknown);
+  for (const attributes of [{ capacityMl: -1 },{ diameterCm: 0 },{ heatSources: ["gas","gas"] },{ heatSources: ["unknown"] },{ untrustedCapability: "bake" }])
+    assert.equal((await api(`/api/v1/kitchenware/${id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes }) })).response.status,400);
+});

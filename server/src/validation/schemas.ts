@@ -1,3 +1,4 @@
+import { kitchenwareAttributesSchema } from "@dietdigidose/contracts";
 import { householdDiningPlanSchema, mealProductionSchema, kitchenPreferencesSchema } from "@dietdigidose/contracts";
 import { z } from "zod";
 import { inventoryConsumptionItemSchema } from "@dietdigidose/contracts";
@@ -581,6 +582,7 @@ export const recipeRecommendationEventSchema = z.object({
 }).strict();
 
 export const kitchenwareSchema = z.object({
+  attributes: kitchenwareAttributesSchema.optional(),
   name: trimmedString(1, 80, "厨具名称"),
   category: z.enum(["小家电", "烹饪锅具", "刀具餐具", "烘焙工具", "其他"]).default("其他"),
   status: z.enum(["常用", "良好", "需保养", "维修中", "闲置"]).default("良好"),

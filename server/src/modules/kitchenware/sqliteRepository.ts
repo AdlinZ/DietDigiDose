@@ -24,7 +24,7 @@ export class SqliteKitchenwareRepository implements KitchenwareRepository {
     c.id AS catalog_id, c.name AS catalog_name FROM recipe_kitchenware_requirements r
     LEFT JOIN kitchenware_catalog c ON c.id = r.catalog_id WHERE r.recipe_id = ?
     ORDER BY CASE r.role WHEN 'required' THEN 0 WHEN 'optional' THEN 1 ELSE 2 END, r.id`).all(recipeId) as Row[]; }
-  async ownedItems(userId: number) { return this.database.prepare(`SELECT id, name, catalog_id FROM kitchenware_items
+  async ownedItems(userId: number) { return this.database.prepare(`SELECT id, name, catalog_id, attributes_json FROM kitchenware_items
     WHERE user_id = ? AND deleted_at IS NULL AND status <> '维修中'`).all(userId) as Row[]; }
   async capabilityCodesForCatalogIds(catalogIds: number[]) {
     if (!catalogIds.length) return [];
@@ -44,16 +44,16 @@ export class SqliteKitchenwareRepository implements KitchenwareRepository {
     WHERE id = ? AND user_id = ? AND deleted_at IS NULL`).get(id, userId) as Row | undefined) || null; }
   async createItem(userId: number, input: StoredKitchenwareInput) {
     const result = this.database.prepare(`INSERT INTO kitchenware_items
-      (user_id, name, original_name, catalog_id, category, status, note, image_url, purchase_date)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(userId, input.name, input.originalName, input.catalogId, input.category,
-      input.status, input.note || null, input.imageUrl || null, input.purchaseDate || null);
+      (user_id, name, original_name, catalog_id, category, status, note, image_url, purchase_date, attributes_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(userId, input.name, input.originalName, input.catalogId, input.category,
+      input.status, input.note || null, input.imageUrl || null, input.purchaseDate || null,JSON.stringify(input.attributes ?? {}));
     return this.database.prepare("SELECT * FROM kitchenware_items WHERE id = ?").get(result.lastInsertRowid) as Row;
   }
   async updateItem(userId: number, id: number, input: StoredKitchenwareInput) {
     const result = this.database.prepare(`UPDATE kitchenware_items SET name = ?, original_name = ?, catalog_id = ?, category = ?,
-      status = ?, note = ?, image_url = ?, purchase_date = ?, updated_at = CURRENT_TIMESTAMP
+      status = ?, note = ?, image_url = ?, purchase_date = ?, attributes_json = COALESCE(?,attributes_json), updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND user_id = ? AND deleted_at IS NULL`).run(input.name, input.originalName, input.catalogId, input.category,
-      input.status, input.note || null, input.imageUrl || null, input.purchaseDate || null, id, userId);
+      input.status, input.note || null, input.imageUrl || null, input.purchaseDate || null,input.attributes === undefined ? null : JSON.stringify(input.attributes), id, userId);
     return result.changes ? this.findOwnedItem(userId, id) : null;
   }
   async maintainItem(userId: number, id: number) {

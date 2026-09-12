@@ -1,3 +1,4 @@
+import { useKitchenwareAttributesForm } from "./useKitchenwareAttributesForm";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Animated,
@@ -148,6 +149,7 @@ export default function InventoryScreen() {
   const [kwNote, setKwNote] = useState("");
   const [kwImageUrl, setKwImageUrl] = useState("");
   const [kwPurchaseDate, setKwPurchaseDate] = useState("");
+  const kitchenwareAttributesForm = useKitchenwareAttributesForm();
   const [savingKitchenware, setSavingKitchenware] = useState(false);
   const [selectedCatalogKitchenware, setSelectedCatalogKitchenware] = useState<KitchenwareCatalogItem | null>(null);
   const [addingStarterKit, setAddingStarterKit] = useState<string | null>(null);
@@ -160,6 +162,7 @@ export default function InventoryScreen() {
     setKwNote(item?.note || "");
     setKwImageUrl(item?.image_url || "");
     setKwPurchaseDate(item?.purchase_date || "");
+    kitchenwareAttributesForm.reset(item?.attributes);
     setKitchenwareModalVisible(true);
   };
 
@@ -168,10 +171,13 @@ export default function InventoryScreen() {
       Alert.alert("提示", "请输入厨具名称");
       return;
     }
+    const attributes = kitchenwareAttributesForm.parse();
+    if (!attributes.success) { Alert.alert("规格无效","请输入有效的正数容量或直径；未核对可留空。"); return; }
     try {
       setSavingKitchenware(true);
       const payload = {
           name: kwName,
+          attributes: attributes.data,
           category: kwCategory,
           status: kwStatus,
           note: kwNote,
@@ -2625,6 +2631,8 @@ export default function InventoryScreen() {
                     </ScrollView>
                   </View>
                 </View>
+
+                {kitchenwareAttributesForm.fields}
 
                 <View>
                   <Text className="text-xs font-bold text-copy-muted mb-1">规格 / 备注</Text>

@@ -1,6 +1,7 @@
 export type Row = Record<string, unknown>;
 
 export type KitchenwareInput = {
+  attributes?: import("@dietdigidose/contracts").KitchenwareAttributes;
   name: string;
   category: string;
   status: string;

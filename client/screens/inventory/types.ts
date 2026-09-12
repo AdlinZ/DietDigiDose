@@ -24,6 +24,7 @@ export interface Recipe {
 }
 
 export interface KitchenwareItem {
+  attributes?: import("@dietdigidose/contracts").KitchenwareAttributes;
   id: number;
   name: string;
   category: string;

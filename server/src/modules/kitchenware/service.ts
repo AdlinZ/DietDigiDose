@@ -1,6 +1,7 @@
+import { kitchenwareAttributesSchema } from "@dietdigidose/contracts";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
 import { KitchenwareError } from "./errors.js";
-import { formatCatalogItem, formatRequirement, parseJson } from "./formatters.js";
+import { formatCatalogItem, formatRequirement, formatOwnedKitchenware, parseJson } from "./formatters.js";
 import type { KitchenwareRepository } from "./repository.js";
 import type { KitchenwareInput, ResolvedCatalog, Row, StoredKitchenwareInput } from "./types.js";
 
@@ -11,7 +12,7 @@ export class KitchenwareService {
   private readonly repository: KitchenwareRepository;
   constructor(repository: KitchenwareRepository) { this.repository = repository; }
 
-  list(userId: number) { return this.repository.listItems(userId); }
+  async list(userId: number) { return (await this.repository.listItems(userId)).map(formatOwnedKitchenware); }
   capabilities() { return this.repository.listCapabilities(); }
 
   async catalog(query: string) {
@@ -45,7 +46,7 @@ export class KitchenwareService {
     if (!catalog || catalog.confidence < 1) {
       await this.enqueueReview(input.name, "user_kitchenware", userId, catalog?.confidence || 0, catalog?.id || null);
     }
-    return this.repository.createItem(userId, this.storedInput(input, catalog?.confidence === 1 ? catalog : null));
+    return formatOwnedKitchenware(await this.repository.createItem(userId, this.storedInput(input, catalog?.confidence === 1 ? catalog : null)));
   }
 
   async update(userId: number, id: number, body: Row) {
@@ -58,13 +59,13 @@ export class KitchenwareService {
     }
     const item = await this.repository.updateItem(userId, id, this.storedInput(input, catalog?.confidence === 1 ? catalog : null));
     if (!item) throw new KitchenwareError(404, "厨具不存在或无权修改");
-    return item;
+    return formatOwnedKitchenware(item);
   }
 
   async maintain(userId: number, id: number) {
     const item = await this.repository.maintainItem(userId, id);
     if (!item) throw new KitchenwareError(404, "厨具不存在或无权修改");
-    return item;
+    return formatOwnedKitchenware(item);
   }
 
   async remove(userId: number, id: number) {
@@ -140,9 +141,12 @@ export class KitchenwareService {
   }
 
   private normalizeInput(body: Row): KitchenwareInput {
+    const attributes = body.attributes === undefined ? undefined : kitchenwareAttributesSchema.safeParse(body.attributes);
+    if (attributes && !attributes.success) throw new KitchenwareError(400,"厨具规格无效，请核对容量、尺寸和热源");
     const category = String(body.category || "其他").trim();
     const status = String(body.status || "良好").trim();
     return {
+      ...(attributes?.success ? { attributes: attributes.data } : {}),
       name: String(body.name || "").trim(), category: CATEGORIES.has(category) ? category : "其他",
       status: STATUSES.has(status) ? status : "良好", note: String(body.note || "").trim(),
       imageUrl: String(body.image_url || "").trim(), purchaseDate: String(body.purchase_date || "").trim(),

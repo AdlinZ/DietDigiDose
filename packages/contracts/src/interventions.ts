@@ -32,3 +32,19 @@ export const interventionCardSchema = z.object({
   policyVersion: z.string().min(1),decisionReason: z.string().min(1),
 }).strict();
 export type InterventionCard = z.infer<typeof interventionCardSchema>;
+
+export const interventionFeedbackSchema = z.object({
+  action: z.enum(["snooze","not_cooking_today","not_helpful"]),
+  confirmed: z.literal(true),
+  idempotencyKey: z.string().uuid(),
+}).strict();
+export type InterventionFeedback = z.infer<typeof interventionFeedbackSchema>;
+export const interventionFeedbackResultSchema = z.object({
+  interventionId: z.string().regex(/^[a-f0-9]{64}$/),
+  action: interventionFeedbackSchema.shape.action,
+  idempotencyKey: z.string().uuid(),
+  snoozedUntil: z.string().datetime().nullable(),
+  notCookingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  repeated: z.boolean(),
+}).strict();
+export type InterventionFeedbackResult = z.infer<typeof interventionFeedbackResultSchema>;

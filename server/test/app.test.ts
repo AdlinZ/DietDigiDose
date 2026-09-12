@@ -4611,6 +4611,24 @@ test("intervention preference API requires explicit consent and cancels pending 
   assert.equal(read.expiry_rescue,false);assert.equal(read.dinner_window,true);
 });
 
+test("notification snoozes expire within the same UTC day for ISO and SQLite timestamps", async () => {
+  const account = await register('snooze-format@example.invalid');
+  const other = await register('snooze-format-other@example.invalid');
+  const { SqliteNotificationsRepository } = await import('../src/modules/notifications/sqliteRepository.js');
+  const repository = new SqliteNotificationsRepository(db);
+  const dates = db.prepare(`SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now','start of day') AS iso,
+    datetime('now','start of day') AS legacy, strftime('%Y-%m-%dT%H:%M:%fZ','now','+1 day') AS future`).get() as { iso: string; legacy: string; future: string };
+  const insert = db.prepare(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,snoozed_until)
+    VALUES(?,'proactive_intervention','提醒','内容','action_required','normal','pending',?)`);
+  const ids = [dates.iso,dates.legacy,null].map(date => Number(insert.run(account.user.id,date).lastInsertRowid));
+  insert.run(account.user.id,dates.future);
+  insert.run(other.user.id,dates.iso);
+  assert.equal(await repository.unreadCount(account.user.id),3);
+  for (const filter of ['all','pending'] as const) {
+    assert.deepEqual((await repository.history(account.user.id,filter,null,20)).map(row => (row as JsonObject).id),[...ids].reverse());
+  }
+});
+
 test("intervention reservations atomically persist decisions, quota and a single inbox item", async () => {
   const account = await register('reserve-int@example.invalid');
   const { SqliteNotificationsRepository } = await import('../src/modules/notifications/sqliteRepository.js');

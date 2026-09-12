@@ -8,6 +8,11 @@ function parseJson(value: unknown) {
 
 function round(value: unknown) { return Math.round((Number(value) || 0) * 10) / 10; }
 
+function scaleNutrient(value: unknown, multiplier: number) {
+  if (value == null || value === "" || !Number.isFinite(Number(value))) return null;
+  return round(Number(value) * multiplier);
+}
+
 export class AiToolDataService {
   private readonly repository: AiToolDataRepository;
 
@@ -30,13 +35,17 @@ export class AiToolDataService {
       matchedFoodName: String(row.name), matchType: row.name === foodName ? "exact_brand" : "fuzzy",
       confidence: row.name === foodName ? 0.9 : 0.55, amount, unit,
       nutrition: {
-        caloriesKcal: round(Number(row.calories_100g) * multiplier),
-        proteinG: round(Number(row.protein_100g) * multiplier),
-        carbohydrateG: round(Number(row.carbs_100g) * multiplier),
-        fatG: round(Number(row.fat_100g) * multiplier),
+        caloriesKcal: scaleNutrient(row.calories_100g, multiplier),
+        proteinG: scaleNutrient(row.protein_100g, multiplier),
+        carbohydrateG: scaleNutrient(row.carbs_100g, multiplier),
+        fatG: scaleNutrient(row.fat_100g, multiplier),
       },
       source: row.source,
-      warnings: row.name === foodName ? [] : ["基于模糊食材匹配，品牌和烹饪方式会影响结果"],
+      warnings: [
+        ...(row.name === foodName ? [] : ["基于模糊食材匹配，品牌和烹饪方式会影响结果"]),
+        ...([row.calories_100g, row.protein_100g, row.carbs_100g, row.fat_100g]
+          .some((value) => scaleNutrient(value, multiplier) === null) ? ["部分营养数据未知，不可按零计算"] : []),
+      ],
     })) };
   }
 

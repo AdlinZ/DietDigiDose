@@ -53,6 +53,9 @@ jobs:
       - run: pnpm --dir server test:postgres-migration
         env:
           POSTGRES_MIGRATION_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration
+      - run: pnpm --dir server test:base-data-import
+        env:
+          TEST_BASE_DATA_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration
       - run: pnpm -w quality:test-quarantine
       - run: pnpm -w lint:all
       - run: pnpm -w test:all

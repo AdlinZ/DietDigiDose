@@ -22,6 +22,10 @@ export function selectMaintenanceReplacements(snapshot: MaintenanceInputSnapshot
     const assessment = before.assessments.find(value => value.itemId === target.itemId);
     if (!assessment || assessment.decision === "keep") continue;
     const item = working.data.meal_plan_items.find(value => String(value.id) === target.itemId)!;
+    if (item.dining_json) {
+      checks.push(`餐次 ${target.itemId} 的共餐安排需重新核对参与成员、共享原料与份量，未自动换菜`);
+      continue;
+    }
     const plan = working.data.meal_plans.find(value => String(value.id) === target.planId)!;
     const constraints = parseObject(plan.constraints_json);
     const saved = parseObject(constraints.savedCookingDraft);

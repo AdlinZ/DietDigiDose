@@ -158,11 +158,11 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
   }
 
   async unreadCount(userId: number) {
-    return Number((this.database.prepare(`SELECT COUNT(*) AS count FROM user_notification_inbox WHERE user_id=? AND is_read=0 AND(snoozed_until IS NULL OR snoozed_until<=CURRENT_TIMESTAMP)`).get(userId) as { count: number }).count);
+    return Number((this.database.prepare(`SELECT COUNT(*) AS count FROM user_notification_inbox WHERE user_id=? AND is_read=0 AND(snoozed_until IS NULL OR julianday(snoozed_until)<=julianday('now'))`).get(userId) as { count: number }).count);
   }
 
   async history(userId: number, filter: NotificationFilter, cursor: number | null, limit: number) {
-    const conditions = ["user_id=?", "(snoozed_until IS NULL OR snoozed_until<=CURRENT_TIMESTAMP)"];
+    const conditions = ["user_id=?", "(snoozed_until IS NULL OR julianday(snoozed_until)<=julianday('now'))"];
     const params: Array<number | string> = [userId];
     if (filter === "pending") conditions.push("category='action_required'", "action_status='pending'");
     else if (filter === "system") conditions.push("category='system'");

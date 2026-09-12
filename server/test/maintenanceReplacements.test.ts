@@ -29,6 +29,16 @@ test("replacement solves a shortage without assigning the same stock twice", () 
   assert.deepEqual(snapshot,original);
 });
 
+test("shared dining remains a review check without blocking other meal replacements", () => {
+  const { snapshot,scope,compatibility } = fixture();
+  snapshot.data.meal_plan_items[0].dining_json = { householdId: 1,participants: [{ membershipId: 1,version: 1,servings: 1 }] };
+  const original = structuredClone(snapshot);
+  const result = selectMaintenanceReplacements(snapshot,scope,compatibility,"2026-09-12");
+  assert.deepEqual(result.changes.map(change => change.itemId),["b"]);
+  assert.ok(result.checks.some(check => check.includes("餐次 a 的共餐安排")));
+  assert.deepEqual(snapshot,original);
+});
+
 test("allergy, missing required tools and conditional substitutions block automatic selection", () => {
   const { snapshot,scope,compatibility } = fixture();
   snapshot.data.user_health_profiles = [{ allergies_json: [{ name: "大米" }] }];

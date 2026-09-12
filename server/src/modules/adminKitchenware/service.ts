@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { reviewToken } from "./mappingReview.js";
 import { AdminKitchenwareError } from "./errors.js";
 import type { AdminKitchenwareRepository } from "./repository.js";
 import type { AuditContext, CatalogInput, Row } from "./types.js";
@@ -12,6 +14,22 @@ function formatCatalog(row: Row): Row {
 export class AdminKitchenwareService {
   private readonly repository: AdminKitchenwareRepository;
   constructor(repository: AdminKitchenwareRepository) { this.repository = repository; }
+
+  async mappingReviews(query: Row) {
+    const status = typeof query.status === "string" ? query.status : "pending";
+    if (!["pending","approved","rejected"].includes(status)) throw new AdminKitchenwareError(400,"审核状态无效");
+    const rows = await this.repository.mappingReviews(status);
+    return { items: rows.slice(0,200).map<Row & { token: string }>(row => ({ ...row,token: reviewToken(row) })),hasMore: rows.length>200 };
+  }
+  async decideMapping(id: number,body: unknown,context: AuditContext) {
+    const parsed = z.discriminatedUnion("decision",[
+      z.object({ decision: z.literal("approved"),catalogId: z.number().int().positive(),token: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+      z.object({ decision: z.literal("rejected"),token: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+    ]).safeParse(body);
+    if (!parsed.success) throw new AdminKitchenwareError(400,"审核请求无效");
+    await this.repository.decideMapping(id,parsed.data,context);
+    return { success: true };
+  }
 
   async catalog(query: Row) {
     const rows = await this.repository.listCatalog({

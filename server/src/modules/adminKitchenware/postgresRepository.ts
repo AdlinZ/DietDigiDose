@@ -1,3 +1,4 @@
+import { assertReview, reviewedAliases, reviewedRecipeRoles, type MappingDecision } from "./mappingReview.js";
 import type { Pool, PoolClient } from "pg";
 import type { AdminKitchenwareRepository } from "./repository.js";
 import type { AssetQuery, AuditContext, CatalogInput, CatalogQuery, Row } from "./types.js";
@@ -7,6 +8,27 @@ function duplicate(error: unknown) { return typeof error === "object" && error !
 export class PostgresAdminKitchenwareRepository implements AdminKitchenwareRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+
+  async mappingReviews(status: string) { return (await this.pool.query("SELECT * FROM kitchenware_mapping_reviews WHERE status=$1 ORDER BY id LIMIT 201",[status])).rows as Row[]; }
+  async decideMapping(id: number,input: MappingDecision,audit: AuditContext) { await this.tx(async client => {
+    const candidate = (await client.query("SELECT * FROM kitchenware_mapping_reviews WHERE id=$1",[id])).rows[0] as Row | undefined;
+    assertReview(candidate,input);
+    // Recipe writers lock the recipe before upserting its review; use that order.
+    const recipe = input.decision === "approved" && candidate.source_type === "recipe"
+      ? (await client.query("SELECT required_kitchenware_json,optional_kitchenware_json,deleted_at FROM recipes WHERE id=$1 FOR UPDATE",[candidate.source_id])).rows[0] : undefined;
+    const row = (await client.query("SELECT * FROM kitchenware_mapping_reviews WHERE id=$1 FOR UPDATE",[id])).rows[0] as Row | undefined;
+    assertReview(row,input);
+    if (input.decision === "approved") {
+      await client.query("LOCK TABLE kitchenware_catalog IN SHARE ROW EXCLUSIVE MODE");
+      const aliases = reviewedAliases(row,(await client.query("SELECT * FROM kitchenware_catalog")).rows,input.catalogId!);
+      const roles = row.source_type === "recipe" ? reviewedRecipeRoles(row,recipe) : [];
+      await client.query("UPDATE kitchenware_catalog SET aliases=$1::jsonb WHERE id=$2",[JSON.stringify(aliases),input.catalogId!]);
+      for (const role of roles) await client.query(`INSERT INTO recipe_kitchenware_requirements(recipe_id,catalog_id,role,source,confidence,notes)
+        SELECT $1,$2,$3,'reviewed',1,$4 WHERE NOT EXISTS(SELECT 1 FROM recipe_kitchenware_requirements WHERE recipe_id=$1 AND catalog_id=$2 AND role=$3)`,[row.source_id,input.catalogId!,role,row.raw_name]);
+    }
+    await client.query("UPDATE kitchenware_mapping_reviews SET status=$1,suggested_catalog_id=$2,reviewed_at=CURRENT_TIMESTAMP WHERE id=$3",[input.decision,input.decision === "approved" ? input.catalogId! : row.suggested_catalog_id,id]);
+    await this.insertAudit(client,audit,"kitchenware_mapping."+input.decision,"kitchenware_mapping",id,`厨具映射 ${input.decision}：${row.raw_name} → ${input.catalogId ?? '未映射'}`);
+  }); }
 
   async listCatalog(input: CatalogQuery) {
     const filters: string[] = []; const values: string[] = [];

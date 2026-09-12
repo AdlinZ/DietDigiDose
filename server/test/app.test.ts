@@ -4456,3 +4456,31 @@ for (const intakeSource of ["manual", "image", "receipt", "shopping"] as const) 
     if (previousEnvironment === undefined) delete process.env.CORE_LOOP_ENVIRONMENT; else process.env.CORE_LOOP_ENVIRONMENT = previousEnvironment;
   }
 });
+
+test("admin mapping review atomically approves aliases and current recipe requirements, rejects stale decisions", async () => {
+  const admin = await loginAdmin(); const account = await register("mapping-review-fixture@example.invalid");
+  const base = "/api/v1/admin/kitchenware/mapping-reviews";
+  assert.equal((await api(base,{ token: account.token })).response.status,403);
+  const catalog = db.prepare("SELECT id FROM kitchenware_catalog WHERE name='烤箱'").get() as JsonObject;
+  const raw = "映射审核专用烤炉";
+  const recipe = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,steps_json,required_kitchenware_json,optional_kitchenware_json) VALUES('映射审核夹具','[]','[]',?,'[]')").run(JSON.stringify([raw])).lastInsertRowid);
+  const reviewId = Number(db.prepare("INSERT INTO kitchenware_mapping_reviews(raw_name,normalized_name,source_type,source_id,confidence) VALUES(?,?,'recipe',?,0.72)").run(raw,raw,String(recipe)).lastInsertRowid);
+  const getReview = async () => ((await api(base,{ token: admin })).body as JsonObject).items.find((row: JsonObject) => row.id === reviewId);
+  const first = await getReview(); assert(first);
+  const approve = (token: string) => api(`${base}/${reviewId}`,{ token: admin,method: "POST",body: JSON.stringify({ token,decision: "approved",catalogId: catalog.id }) });
+  db.prepare("UPDATE kitchenware_mapping_reviews SET confidence=0.6 WHERE id=?").run(reviewId);
+  assert.equal((await approve(first.token)).response.status,409);
+  const current = await getReview(); assert.equal((await approve(current.token)).response.status,200);
+  assert.equal((await approve(current.token)).response.status,409);
+  assert(JSON.parse((db.prepare("SELECT aliases FROM kitchenware_catalog WHERE id=?").get(catalog.id) as JsonObject).aliases).includes(raw));
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM recipe_kitchenware_requirements WHERE recipe_id=? AND catalog_id=? AND role='required'").get(recipe,catalog.id) as JsonObject).n,1);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM admin_audit_logs WHERE action='kitchenware_mapping.approved' AND resource_id=?").get(String(reviewId)) as JsonObject).n,1);
+  assert.equal((await api(`${base}/${reviewId}`,{ token: account.token,method: "POST",body: JSON.stringify({ token: current.token,decision: "rejected" }) })).response.status,403);
+  const expiredRaw = "已从菜谱移除的厨具词";
+  const expiredId = Number(db.prepare("INSERT INTO kitchenware_mapping_reviews(raw_name,normalized_name,source_type,source_id,confidence) VALUES(?,?,'recipe',?,0.72)").run(expiredRaw,expiredRaw,String(recipe)).lastInsertRowid);
+  const expired = ((await api(base,{ token: admin })).body as JsonObject).items.find((row: JsonObject) => row.id === expiredId);
+  assert.equal((await api(`${base}/${expiredId}`,{ token: admin,method: "POST",body: JSON.stringify({ token: expired.token,decision: "approved",catalogId: catalog.id }) })).response.status,409);
+  assert(!JSON.parse((db.prepare("SELECT aliases FROM kitchenware_catalog WHERE id=?").get(catalog.id) as JsonObject).aliases).includes(expiredRaw));
+  assert.equal((await api(`${base}/${expiredId}`,{ token: admin,method: "POST",body: JSON.stringify({ token: expired.token,decision: "rejected" }) })).response.status,200);
+  assert.equal((db.prepare("SELECT status FROM kitchenware_mapping_reviews WHERE id=?").get(expiredId) as JsonObject).status,"rejected");
+});

@@ -1590,6 +1590,18 @@ try {
     WHERE resource_type='kitchenware' AND resource_id=$1`, [String(moderatedAsset.id)])).rows[0]?.count), 2);
   await adminKitchenwareService.removeCatalog(Number(adminCatalog.id), adminKitchenwareContext);
 
+  const mappingRaw = "PG映射审核专用炉";
+  const mappingCatalog = Number((await pool.query("SELECT id FROM kitchenware_catalog WHERE name='烤箱'")).rows[0].id);
+  const mappingRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,required_kitchenware_json,optional_kitchenware_json) VALUES('PG映射审核','[]'::jsonb,'[]'::jsonb,$1::jsonb,'[]'::jsonb) RETURNING id",[JSON.stringify([mappingRaw])])).rows[0].id);
+  const mappingId = Number((await pool.query("INSERT INTO kitchenware_mapping_reviews(raw_name,normalized_name,source_type,source_id,confidence) VALUES($1,$3,'recipe',$2,0.72) RETURNING id",[mappingRaw,String(mappingRecipe),mappingRaw.toLowerCase()])).rows[0].id);
+  const mappingRow = (await adminKitchenwareService.mappingReviews({})).items.find(row => Number(row.id) === mappingId)!;
+  const mappingDecision = { token: mappingRow.token,decision: "approved",catalogId: mappingCatalog };
+  const mappingResults = await Promise.allSettled([adminKitchenwareService.decideMapping(mappingId,mappingDecision,adminKitchenwareContext),adminKitchenwareService.decideMapping(mappingId,mappingDecision,adminKitchenwareContext)]);
+  assert.equal(mappingResults.filter(item => item.status === "fulfilled").length,1,JSON.stringify(mappingResults.map(item => item.status === "rejected" ? String(item.reason) : item.status)));
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM recipe_kitchenware_requirements WHERE recipe_id=$1 AND catalog_id=$2",[mappingRecipe,mappingCatalog])).rows[0].n),1);
+  assert((await pool.query("SELECT aliases FROM kitchenware_catalog WHERE id=$1",[mappingCatalog])).rows[0].aliases.includes(mappingRaw));
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM admin_audit_logs WHERE action='kitchenware_mapping.approved' AND resource_id=$1",[String(mappingId)])).rows[0].n),1);
+
   const kitchenwareRecipe = await pool.query(`INSERT INTO recipes
     (title, cook_time, steps_json, ingredients_json, source, status, quality_status, data_license,
      source_revision, serving_size, required_kitchenware_json)

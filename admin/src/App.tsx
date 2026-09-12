@@ -7,6 +7,7 @@ const AdminLayout = lazy(() => import('./layout/AdminLayout'));
 const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
+const KitchenwareMappingReviews = lazy(() => import('./pages/KitchenwareMappingReviews'));
 const CoreLoops = lazy(() => import('./pages/CoreLoops'));
 const Users = lazy(() => import('./pages/Users'));
 const Recipes = lazy(() => import('./pages/Recipes'));
@@ -101,6 +102,7 @@ function App() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="kitchenware-mapping-reviews" element={<KitchenwareMappingReviews />} />
         <Route path="core-loops" element={<CoreLoops />} />
         <Route path="users" element={<Users />} />
         <Route path="user-level-rule" element={<UserLevelRule />} />

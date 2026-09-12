@@ -5,6 +5,7 @@ import { createNotificationsService, DEFAULT_NOTIFICATION_PREFERENCES } from "..
 
 function repository(overrides: Partial<NotificationsRepository> = {}): NotificationsRepository {
   return {
+    interventionScanCursor: async () => 0,advanceInterventionScan: async () => true,
     interventionScanUsers: async () => [],interventionQueue: async () => [],
     pendingInterventionUsers: async () => [],
     claimIntervention: async () => null,finishIntervention: async () => false,
@@ -166,5 +167,39 @@ test("opportunity scan pages consented users and derives stable candidates from 
   } finally {
     Date.now = originalNow;
     if (originalFlag===undefined) delete process.env.PROACTIVE_INTERVENTIONS_ENABLED;else process.env.PROACTIVE_INTERVENTIONS_ENABLED = originalFlag;
+  }
+});
+
+test("scan checkpoints resume after restart, bound each batch, and refuse lost ownership", async () => {
+  const { defaultInterventionPreferences } = await import("@dietdigidose/contracts");
+  const flag = process.env.PROACTIVE_INTERVENTIONS_ENABLED;
+  process.env.PROACTIVE_INTERVENTIONS_ENABLED = "1";
+  let cursor = 0,owner = "one";
+  const scanned: number[] = [];
+  const repo = repository({
+    interventionScanCursor: async () => cursor,
+    advanceInterventionScan: async (expected,next,currentOwner) => {
+      if (expected!==cursor || currentOwner!==owner) return false;
+      cursor = next;return true;
+    },
+    interventionScanUsers: async (after,limit) => Array.from({ length: 30 },(_,index) => index+1).filter(id => id>after).slice(0,limit),
+    interventionPreferences: async () => ({ ...defaultInterventionPreferences,enabled: true,expiry_rescue: true,version: 1 }),
+  });
+  const engine = { interventionSnapshot: async (id: number) => {
+    scanned.push(id);return { dates: [],items: [],plans: [],inventory: [],recommendations: [] };
+  } };
+  const context = { runId: "scan",taskName: "intervention-scan" as const,leaseOwnerId: owner,signal: new AbortController().signal,assertActive: async () => {} };
+  try {
+    assert.equal((await createNotificationsService(repo,engine).scanInterventions(context)).scanned,25);
+    assert.equal(cursor,25);
+    owner = "two";
+    await assert.rejects(createNotificationsService(repo,engine).scanInterventions(context),/checkpoint lease or cursor changed/);
+    assert.equal(cursor,25);
+    scanned.length = 0;
+    assert.equal((await createNotificationsService(repo,engine).scanInterventions({ ...context,leaseOwnerId: owner })).scanned,5);
+    assert.deepEqual(scanned,[26,27,28,29,30]);
+    assert.equal(cursor,0,"completed sweep wraps to include newly opted-in accounts");
+  } finally {
+    if (flag===undefined) delete process.env.PROACTIVE_INTERVENTIONS_ENABLED;else process.env.PROACTIVE_INTERVENTIONS_ENABLED = flag;
   }
 });

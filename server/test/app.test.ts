@@ -4619,4 +4619,7 @@ test("intervention reservations atomically persist decisions, quota and a single
   assert.equal((db.prepare("SELECT COUNT(*) n FROM user_notification_inbox WHERE user_id=? AND type='proactive_intervention'").get(account.user.id) as JsonObject).n,2);
   const { verifyInterventionDelivery } = await import("./interventionReservationAssertions.js");
   await verifyInterventionDelivery(new SqliteNotificationsRepository(db),account.user.id);
+  const { verifyInterventionScanCursor } = await import("./interventionReservationAssertions.js");
+  const { SqliteWorkerRepository } = await import("../src/modules/worker/sqliteRepository.js");
+  await verifyInterventionScanCursor(new SqliteNotificationsRepository(db),new SqliteWorkerRepository(db));
 });

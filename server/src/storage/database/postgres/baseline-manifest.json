@@ -1,8 +1,8 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "1e9c1e869a38b90320636eecdee90699c07ab40b7851a003a5b3deadf19c6a33",
-  "tableCount": 111,
+  "sourceSchemaSha256": "1356d28356683051dcad12774e377ceede7f4fa26372195c62c5f4eeca78dfe0",
+  "tableCount": 112,
   "indexCount": 164,
   "foreignKeyCount": 179,
   "tables": [
@@ -7098,6 +7098,37 @@
         },
         {
           "name": "version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "proactive_intervention_scan_cursor",
+      "autoIncrement": false,
+      "primaryKey": [
+        "name"
+      ],
+      "foreignKeys": [],
+      "columns": [
+        {
+          "name": "name",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "after_user_id",
           "sqliteType": "INTEGER",
           "postgresType": "integer",
           "transform": "identity",

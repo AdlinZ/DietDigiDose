@@ -61,3 +61,19 @@ export async function verifyInterventionDelivery(repository: NotificationsReposi
   assert.equal(await repository.claimIntervention(userId,base+3*86_400_000+3*60*60_000,'late-worker',true),null);
   assert.equal((await reserve(3)).status,'expired');
 }
+
+export async function verifyInterventionScanCursor(repository: NotificationsRepository,worker: import("../src/modules/worker/repository.js").WorkerRepository) {
+  assert.equal(await repository.interventionScanCursor(),0);
+  assert.equal(await repository.advanceInterventionScan(0,10,"not-owner"),false);
+  assert(await worker.acquireLease("intervention-scan","scan-checkpoint-owner",60_000));
+  assert.equal(await repository.advanceInterventionScan(0,10,"scan-checkpoint-owner"),true);
+  assert.equal(await repository.interventionScanCursor(),10);
+  assert.equal(await repository.advanceInterventionScan(0,20,"scan-checkpoint-owner"),false,"stale cursor cannot move progress");
+  assert(await worker.releaseLease("intervention-scan","scan-checkpoint-owner"));
+  assert(await worker.acquireLease("intervention-scan","scan-new-owner",60_000));
+  assert.equal(await repository.advanceInterventionScan(10,20,"scan-checkpoint-owner"),false);
+  assert.equal(await repository.advanceInterventionScan(10,20,"scan-new-owner"),true);
+  assert.equal(await repository.interventionScanCursor(),20);
+  assert.equal(await repository.advanceInterventionScan(20,0,"scan-new-owner"),true);
+  assert(await worker.releaseLease("intervention-scan","scan-new-owner"));
+}

@@ -2347,6 +2347,13 @@ const migrations: Migration[] = [
     );`);
   } },
 
+  { version: 80, name: "intervention_scan_cursor", up(database) {
+    database.exec(`CREATE TABLE proactive_intervention_scan_cursor (
+      name TEXT PRIMARY KEY NOT NULL CHECK(name='opportunities'),
+      after_user_id INTEGER NOT NULL DEFAULT 0 CHECK(after_user_id>=0),
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`);
+  } },
 ];
 
 export function runMigrations(database: Database.Database) {

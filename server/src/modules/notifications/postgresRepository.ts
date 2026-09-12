@@ -13,6 +13,19 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async interventionScanCursor(): Promise<number> {
+    const row = (await this.pool.query("SELECT after_user_id FROM proactive_intervention_scan_cursor WHERE name='opportunities'")).rows[0];
+    return Number(row?.after_user_id ?? 0);
+  }
+  async advanceInterventionScan(expected: number,next: number,owner: string): Promise<boolean> {
+    if (![expected,next].every(value => Number.isSafeInteger(value) && value>=0) || !owner) throw new Error("Invalid scan checkpoint");
+    return this.tx(async client => {
+      if (!(await client.query("SELECT 1 FROM worker_task_leases WHERE task_name='intervention-scan' AND owner_id=$1 AND lease_expires_at>clock_timestamp() FOR UPDATE",[owner])).rows.length) return false;
+      await client.query("INSERT INTO proactive_intervention_scan_cursor(name) VALUES('opportunities') ON CONFLICT(name) DO NOTHING");
+      return (await client.query("UPDATE proactive_intervention_scan_cursor SET after_user_id=$1,updated_at=clock_timestamp() WHERE name='opportunities' AND after_user_id=$2 AND EXISTS (SELECT 1 FROM worker_task_leases WHERE task_name='intervention-scan' AND owner_id=$3 AND lease_expires_at>clock_timestamp())",[next,expected,owner])).rowCount===1;
+    });
+  }
+
   async interventionScanUsers(afterId: number,limit: number): Promise<number[]> {
     if (!Number.isSafeInteger(afterId) || afterId<0 || !Number.isInteger(limit) || limit<1 || limit>100) throw new Error("Invalid opportunity scan");
     return (await this.pool.query("SELECT user_id FROM proactive_intervention_preferences WHERE enabled=1 AND (expiry_rescue=1 OR dinner_window=1) AND user_id>$1 ORDER BY user_id LIMIT $2",[afterId,limit])).rows.map(row => Number(row.user_id));

@@ -17,6 +17,19 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async interventionScanCursor(): Promise<number> {
+    const row = this.database.prepare("SELECT after_user_id FROM proactive_intervention_scan_cursor WHERE name='opportunities'").get() as { after_user_id: number } | undefined;
+    return row?.after_user_id ?? 0;
+  }
+  async advanceInterventionScan(expected: number,next: number,owner: string): Promise<boolean> {
+    if (![expected,next].every(value => Number.isSafeInteger(value) && value>=0) || !owner) throw new Error("Invalid scan checkpoint");
+    return this.database.transaction(() => {
+      if (!this.database.prepare("SELECT 1 FROM worker_task_leases WHERE task_name='intervention-scan' AND owner_id=? AND lease_expires_at>CURRENT_TIMESTAMP").get(owner)) return false;
+      this.database.prepare("INSERT INTO proactive_intervention_scan_cursor(name) VALUES('opportunities') ON CONFLICT(name) DO NOTHING").run();
+      return this.database.prepare("UPDATE proactive_intervention_scan_cursor SET after_user_id=?,updated_at=CURRENT_TIMESTAMP WHERE name='opportunities' AND after_user_id=?").run(next,expected).changes===1;
+    })();
+  }
+
   async interventionScanUsers(afterId: number,limit: number): Promise<number[]> {
     if (!Number.isSafeInteger(afterId) || afterId<0 || !Number.isInteger(limit) || limit<1 || limit>100) throw new Error("Invalid opportunity scan");
     return (this.database.prepare("SELECT user_id FROM proactive_intervention_preferences WHERE enabled=1 AND (expiry_rescue=1 OR dinner_window=1) AND user_id>? ORDER BY user_id LIMIT ?").all(afterId,limit) as Array<{user_id:number}>).map(row => row.user_id);

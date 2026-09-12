@@ -51,3 +51,16 @@ test("omitted governance inputs fail closed and rule edits change the input fing
   delete data.kitchenware_substitutions;
   assert.throws(() => snapshotKitchenware(inputSnapshot(1,[10],data)),/Missing maintenance input/);
 });
+
+test("withdrawn catalog entries cannot supply capabilities or satisfy retired requirements", async () => {
+  const data = fixture();
+  data.kitchenware_items = [{ id: 2,user_id: 1,name: "电饭煲",catalog_id: 2,status: "常用" }];
+  data.recipe_kitchenware_requirements[0].capability_code = "steam";
+  data.kitchenware_catalog_capabilities = [{ catalog_id: 2,capability_code: "steam" }];
+  assert.equal((await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10)).blocking.length,0);
+  data.kitchenware_catalog[1].quality_status = "needs_review";
+  assert.equal((await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10)).blocking.length,1);
+  data.kitchenware_catalog[1].quality_status = "trusted";
+  data.kitchenware_catalog[0].quality_status = "needs_review";
+  assert.equal((await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10)).blocking.length,1);
+});

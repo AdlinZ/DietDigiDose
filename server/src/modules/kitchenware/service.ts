@@ -104,15 +104,20 @@ export class KitchenwareService {
     const requirements = await this.requirements(recipeId);
     const owned = await this.repository.ownedItems(userId);
     const catalog = await this.repository.listCatalog();
+    const trustedCatalogIds = new Set(catalog.map(item => Number(item.id)));
     const ownedCatalogIds = new Set<number>();
     for (const item of owned) {
-      if (item.catalog_id) ownedCatalogIds.add(Number(item.catalog_id));
+      if (item.catalog_id) {
+        if (trustedCatalogIds.has(Number(item.catalog_id))) ownedCatalogIds.add(Number(item.catalog_id));
+      }
       else {
         const resolved = await this.resolveCatalog(String(item.name), catalog);
         if (resolved?.confidence === 1) ownedCatalogIds.add(resolved.id);
       }
     }
     const evaluated = await Promise.all(requirements.map(async (requirement) => {
+      if (requirement.catalogId && !trustedCatalogIds.has(requirement.catalogId))
+        return { ...requirement, satisfied: false, substitution: null };
       const exact = Boolean(requirement.catalogId && ownedCatalogIds.has(requirement.catalogId));
       // A generic capability must not override a governed prohibition or an
       // unverified conditional relationship for the specific required device.

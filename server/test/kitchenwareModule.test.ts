@@ -6,7 +6,7 @@ import { KitchenwareService } from "../src/modules/kitchenware/service.js";
 
 function repository(overrides: Partial<KitchenwareRepository> = {}) {
   return {
-    listCatalog: async () => [{ id: 1, name: "平底锅", category: "烹饪锅具", aliases: ["不粘锅"], attributes_json: { coating: true } }],
+    listCatalog: async () => [{ id: 1, name: "平底锅", category: "烹饪锅具", aliases: ["不粘锅"], attributes_json: { coating: true } }, { id: 2,name: "空气炸锅",aliases: [] }, { id: 3,name: "烤箱",aliases: [] }],
     capabilitiesForCatalog: async () => [{ code: "fry", name: "煎炒", safety_level: "normal", constraints_json: {} }],
     substitutionsForCatalog: async () => [],
     recipeAvailable: async () => false,

@@ -622,6 +622,10 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        <TouchableOpacity onPress={() => router.push("/intervention-settings")} className="mb-4 rounded-2xl border border-line bg-surface p-4">
+          <Text className="font-bold text-ink">主动食物提醒偏好</Text>
+          <Text className="mt-1 text-xs text-copy-muted">管理临期抢救、晚餐窗口及打扰额度</Text>
+        </TouchableOpacity>
         {/* Section 2: 智能预警与推送 */}
         <View className="mb-6">
           <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">

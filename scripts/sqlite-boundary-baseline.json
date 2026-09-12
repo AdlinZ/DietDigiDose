@@ -48,7 +48,7 @@
     "server/src/modules/insights/sqliteRepository.ts": 22,
     "server/src/modules/inventory/index.ts": 1,
     "server/src/modules/inventory/sqliteRepository.ts": 40,
-    "server/src/modules/kitchenware/sqliteRepository.ts": 18,
+    "server/src/modules/kitchenware/sqliteRepository.ts": 17,
     "server/src/modules/mealPlans/index.ts": 1,
     "server/src/modules/mealPlans/sqliteRepository.ts": 62,
     "server/src/modules/mediaCleanup/sqliteRepository.ts": 11,
@@ -69,7 +69,7 @@
     "server/src/services/contentGovernance.ts": 5,
     "server/src/services/importGovernance.ts": 12,
     "server/src/services/inventoryQuantity.ts": 5,
-    "server/src/services/kitchenwareCapabilities.ts": 14,
+    "server/src/services/kitchenwareCapabilities.ts": 10,
     "server/src/storage/database/postgres/migration.ts": 8,
     "server/src/storage/db.ts": 110,
     "server/src/storage/migrations.ts": 108

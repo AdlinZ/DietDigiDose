@@ -39,7 +39,6 @@ describe("kitchenware module", () => {
       recipeAvailable: async () => true,
       requirementsForRecipe: async () => [{ role: "required", catalog_id: 2, catalog_name: "空气炸锅", confidence: 1, notes: "" }],
       ownedItems: async () => [{ id: 4, name: "烤箱", catalog_id: 3 }],
-      capabilityCodesForCatalogIds: async () => ["bake"],
       substitutionFor: async () => ({ name: "烤箱", relation_type: "conditional", impact_json: { time: "延长" }, safety_note: "检查温度" }),
     }));
     const result = await service.compatibility(7, 99);
@@ -57,7 +56,6 @@ describe("kitchenware module", () => {
       updateItem: async (_userId,_id,input) => { saved.push(input); return input; },
       requirementsForRecipe: async () => [{ role: "required",catalog_id: 1,catalog_name: "平底锅",confidence: 1 }],
       ownedItems: async () => [{ id: 4,name: "迷你平底锅玩具",catalog_id: null }],
-      capabilityCodesForCatalogIds: async ids => { assert.deepEqual(ids,[]); return []; },
     }));
     await service.create(7,{ name: "迷你平底锅玩具" });
     await service.update(7,4,{ name: "迷你平底锅玩具" });
@@ -75,7 +73,6 @@ describe("kitchenware module", () => {
         requirementsForRecipe: async () => [{ role: "required",catalog_id: 1,capability_code: "fry",confidence: 1 }],
         ownedItems: async () => [{ id: 7,name: "替代设备",catalog_id: 2 }],
         substitutionsForCatalog: async () => [{ id: 2,relation_type: relation }],
-        capabilityCodesForCatalogIds: async ids => ids.includes(2) ? ["fry"] : [],
         substitutionFor: async () => relation === "forbidden" ? null : { name: "替代设备",relation_type: relation },
       }));
       const result = await service.evaluateRequirements(1,99);

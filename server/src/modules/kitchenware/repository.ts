@@ -9,7 +9,6 @@ export interface KitchenwareRepository {
   recipeAvailable(recipeId: number): Promise<boolean>;
   requirementsForRecipe(recipeId: number): Promise<Row[]>;
   ownedItems(userId: number): Promise<Row[]>;
-  capabilityCodesForCatalogIds(catalogIds: number[]): Promise<string[]>;
   substitutionFor(sourceCatalogId: number, ownedCatalogIds: number[]): Promise<Row | null>;
   findOwnedItem(userId: number, id: number): Promise<Row | null>;
   createItem(userId: number, input: StoredKitchenwareInput): Promise<Row>;

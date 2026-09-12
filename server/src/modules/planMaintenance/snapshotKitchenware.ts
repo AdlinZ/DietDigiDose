@@ -23,7 +23,6 @@ export function snapshotKitchenware(snapshot: MaintenanceInputSnapshot) {
       catalog_id: catalog(row.catalog_id)?.id ?? null,catalog_name: catalog(row.catalog_id)?.name ?? null,
     })),
     ownedItems: async userId => data.kitchenware_items.filter(row => Number(row.user_id) === userId && !row.deleted_at && row.status !== "维修中"),
-    capabilityCodesForCatalogIds: async ids => [...new Set(data.kitchenware_catalog_capabilities.filter(row => ids.includes(Number(row.catalog_id))).map(row => String(row.capability_code)))],
     substitutionsForCatalog: async id => data.kitchenware_substitutions.filter(row => Number(row.source_catalog_id) === id && catalog(row.substitute_catalog_id))
       .map(row => ({ ...row,id: Number(row.substitute_catalog_id),name: catalog(row.substitute_catalog_id)!.name })),
     substitutionFor: async (sourceId,ownedIds) => {

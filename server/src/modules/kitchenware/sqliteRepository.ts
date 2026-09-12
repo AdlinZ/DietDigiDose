@@ -26,12 +26,6 @@ export class SqliteKitchenwareRepository implements KitchenwareRepository {
     ORDER BY CASE r.role WHEN 'required' THEN 0 WHEN 'optional' THEN 1 ELSE 2 END, r.id`).all(recipeId) as Row[]; }
   async ownedItems(userId: number) { return this.database.prepare(`SELECT id, name, catalog_id, attributes_json FROM kitchenware_items
     WHERE user_id = ? AND deleted_at IS NULL AND status <> '维修中'`).all(userId) as Row[]; }
-  async capabilityCodesForCatalogIds(catalogIds: number[]) {
-    if (!catalogIds.length) return [];
-    const placeholders = catalogIds.map(() => "?").join(",");
-    return (this.database.prepare(`SELECT DISTINCT capability_code FROM kitchenware_catalog_capabilities
-      WHERE catalog_id IN (${placeholders})`).all(...catalogIds) as Array<{ capability_code: string }>).map((row) => row.capability_code);
-  }
   async substitutionFor(sourceCatalogId: number, ownedCatalogIds: number[]) {
     if (!ownedCatalogIds.length) return null;
     const placeholders = ownedCatalogIds.map(() => "?").join(",");

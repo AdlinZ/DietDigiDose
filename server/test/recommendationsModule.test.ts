@@ -7,6 +7,9 @@ import { RecommendationsService } from "../src/modules/recommendations/service.j
 
 function repository(overrides: Partial<RecommendationsRepository> = {}) {
   return {
+    preferenceOutcomes: async () => ({ production: [],events: [] }),
+    learningData: async () => ({ settings: null,events: [],recipes: [] }),
+    planningState: async () => ({ items: [],plans: [],shopping: [] }),
     preparedMeals: async () => [], profile: async () => null, inventory: async () => [], kitchenware: async () => [],
     recipes: async () => [{ id: 1, title: "番茄汤", ingredients_json: [{ name: "番茄" }], steps_json: ["煮熟"], status: "approved" }],
     favoriteRecipeIds: async () => [], recentRecipeIds: async () => [], skippedRecipeIds: async () => [],
@@ -39,14 +42,14 @@ describe("recommendations module", () => {
 
   test("maps missing and mismatched request versions to stable errors", async () => {
     const missing = new RecommendationsService(repository({
-      findEvent: async () => null, recipeAvailable: async () => true, requestScoringVersion: async () => null,
+      findEvent: async () => null, recipeAvailable: async () => true, requestEvidence: async () => null,
     }), kitchenware);
     await assert.rejects(missing.event(7, { requestId: "missing", recipeId: 1, eventType: "view", scoringVersion: "v1",
       surface: "home", idempotencyKey: "event-key-0001" }), (error: unknown) => {
       assert(error instanceof RecommendationsError); assert.equal(error.code, "RECOMMENDATION_REQUEST_NOT_FOUND"); return true;
     });
     const mismatch = new RecommendationsService(repository({
-      findEvent: async () => null, recipeAvailable: async () => true, requestScoringVersion: async () => "v2",
+      findEvent: async () => null, recipeAvailable: async () => true, requestEvidence: async () => ({ scoring_version: "v2" }),
     }), kitchenware);
     await assert.rejects(mismatch.event(7, { requestId: "request", recipeId: 1, eventType: "view", scoringVersion: "v1",
       surface: "home", idempotencyKey: "event-key-0002" }), (error: unknown) => {
@@ -183,11 +186,13 @@ test("full-stock recommendations require enough known quantities for the request
   const full = await service.compute(7, { surface: "inventory", matchStatus: "full" });
   assert.equal(full.results.length, 1);
   assert.equal(full.results[0].features.inventoryCoverage, 100);
+  assert.deepEqual(full.results[0].features.inventoryEvidence, { version: 1, scope: "personal", allocations: [{ itemId: 1, itemVersion: 1, amount: 2, unit: "piece" }] });
   assert.equal((await service.compute(7, { surface: "inventory", matchStatus: "full" }, { servings: 2 })).results.length, 0);
   stock = { ...stock, expiration_date: "2000-01-01" };
   assert.equal((await service.compute(7, { surface: "inventory", matchStatus: "full" })).results.length, 0);
   const expired = await service.compute(7, { surface: "inventory" });
   assert.equal(expired.results[0].features.inventoryCoverage, 0);
+  assert.deepEqual(expired.results[0].features.inventoryEvidence.allocations, []);
   assert.deepEqual(expired.results[0].features.missingIngredients, [{ name: "鸡蛋", amount: "2枚" }]);
   stock = { ...stock, expiration_date: "2030-09-20" };
   stock = { ...stock, quantity_evidence_status: "estimated" };
@@ -206,4 +211,92 @@ test("cooking drafts do not allocate expired raw ingredients", async () => {
   const draft = await service.cookingPlan(7, { excludedPreparedMealIds: [], meals: [{ id: "dinner", date: "2030-09-10", mealType: "dinner", servings: 1 }] });
   assert.equal(draft.ingredientBudget[0].fully_covered, false);
   assert.deepEqual(draft.ingredientBudget[0].deductions, []);
+});
+
+test("weekly replacement reloads current commitments for the owner and week", async () => {
+  const recipes = [1,2].map(id => ({ id,title: `蛋羹${id}`,ingredients_json: [{ name: "鸡蛋",amount: "1个" }],steps_json: ["蒸熟"],status: "approved",cook_time: 5,prep_time: 2,serving_size: 1 }));
+  const stock = { id: 1,food_name: "鸡蛋",quantity_value: 4,quantity_unit: "piece",expiration_date: "2099-09-30",version: 1,batch_code: null };
+  let committed = false;
+  const service = new RecommendationsService(repository({ recipes: async () => recipes,inventory: async () => [stock],planningState: async (userId,start,end) => {
+    assert.equal(userId,7); assert.equal(start,"2099-09-12"); assert.equal(end,"2099-09-18");
+    return { plans: [],shopping: [],items: committed ? [{ id: "other",planned_date: "2099-09-12",meal_type: "晚餐",title: "已确认",status: "planned",ingredients_json: [{ name: "鸡蛋",amount: "2个" }] }] : [] };
+  } }),kitchenware);
+  const preview = await service.weeklyPlan(7,{ startDate: "2099-09-12",mealTypes: ["lunch"] });
+  committed = true;
+  const target = preview.draft!.cooking[0];
+  const updated = await service.replaceCookingItem(7,{ draft: preview.draft!,targetMealId: target.targetMealId,recipeId: target.recipeId === 1 ? 2 : 1 });
+  assert.equal(updated.draft.weeklyShopping![0].required,9);
+  assert.equal(updated.draft.weeklyShopping![0].missing,5);
+});
+
+test("today's no-spicy condition filters known spicy recipes without saving long-term preferences",async () => {
+  const stored = { kitchen_constraints_json: { avoid_spicy: false,meal_time_minutes: 30 } };
+  const recipes = [
+    { id: 1,title: "辣椒炒蛋",ingredients_json: [{ name: "辣椒",amount: "1个" }],tags: [] as string[],steps_json: ["炒熟"],status: "approved",cook_time: 5,prep_time: 2,serving_size: 1 },
+    { id: 2,title: "蒸蛋",ingredients_json: [{ name: "鸡蛋",amount: "1个" }],tags: [] as string[],steps_json: ["蒸熟"],status: "approved",cook_time: 5,prep_time: 2,serving_size: 1 },
+  ];
+  recipes.push({ ...recipes[1],id: 3,title: "辣味标记",tags: ["香辣"] } as typeof recipes[number]);
+  recipes.push({ ...recipes[1],id: 4,title: "原料不明",ingredients_json: [] });
+  const service = new RecommendationsService(repository({ profile: async () => stored,recipes: async () => recipes }),kitchenware);
+  const transient = await service.compute(7,{ surface: "meal_plan" },{ avoid_spicy: true });
+  assert.deepEqual(transient.results.map(item => item.recipeId),[2]);
+  assert.equal(stored.kitchen_constraints_json.avoid_spicy,false);
+  assert.equal((await service.compute(7,{ surface: "meal_plan" })).results.length,4);
+  stored.kitchen_constraints_json.avoid_spicy = true;
+  assert.deepEqual((await service.compute(7,{ surface: "meal_plan" })).results.map(item => item.recipeId),[2]);
+  assert.equal((await service.compute(7,{ surface: "meal_plan" },{ avoid_spicy: false })).results.length,4);
+  assert.equal(stored.kitchen_constraints_json.avoid_spicy,true);
+});
+
+test("selection evidence is taken from the saved candidate and cannot be forged in client metadata", async () => {
+  let stored: Record<string, unknown> | undefined;
+  let candidates: unknown = [{ recipeId: 1, features: { inventoryEvidence: { version: 1, scope: "personal", allocations: [{ itemId: 12, itemVersion: 3, amount: 1, unit: "piece" }] } } }];
+  const service = new RecommendationsService(repository({
+    findEvent: async () => null, recipeAvailable: async () => true,
+    requestEvidence: async () => ({ scoring_version: "v1", results_json: candidates }),
+    createEvent: async (_id, _userId, input) => { stored = input; return { id: "event", repeated: false }; },
+  }), kitchenware);
+  const input = { requestId: "request", recipeId: 1, eventType: "view", scoringVersion: "v1", surface: "inventory", idempotencyKey: "evidence-key", metadata: { selectionEvidence: { forged: true } } };
+  await service.event(7, input);
+  assert.deepEqual(stored?.metadata, { selectionEvidence: { version: 1, requestId: "request", recipeId: 1,
+    inventory: { version: 1, scope: "personal", allocations: [{ itemId: 12, itemVersion: 3, amount: 1, unit: "piece" }] } } });
+  candidates = JSON.stringify([{ recipeId: 1, features: {} }]);
+  await service.event(7, input);
+  assert.equal(((stored?.metadata as Record<string, unknown>).selectionEvidence as Record<string, unknown>).inventory, null, "historical missing evidence stays unknown");
+  await service.event(7, { ...input, requestId: undefined });
+  assert.deepEqual(stored?.metadata, {}, "standalone events cannot invent request provenance");
+  await assert.rejects(service.event(7, { ...input, recipeId: 2 }), (error: unknown) => error instanceof RecommendationsError && error.code === "RECOMMENDATION_RECIPE_MISMATCH");
+});
+
+test("feedback keys cannot be reused for another recipe or for a different concurrent winner", async () => {
+  const input = { recipeId: 1, eventType: "view", scoringVersion: "v1", surface: "inventory", idempotencyKey: "identity-key" };
+  const winner = { id: "winner", request_id: null, recipe_id: 2, event_type: "view", scoring_version: "v1", surface: "inventory" };
+  for (const race of [false, true]) {
+    let reads = 0;
+    const service = new RecommendationsService(repository({
+      findEvent: async () => race && reads++ === 0 ? null : winner,
+      recipeAvailable: async () => true,
+      createEvent: async () => ({ id: "winner", repeated: true }),
+    }), kitchenware);
+    await assert.rejects(service.event(7, input), (error: unknown) => error instanceof RecommendationsError && error.code === "RECOMMENDATION_EVENT_CONFLICT");
+  }
+});
+
+test("intervention snapshots use local-day stock and preserve engine hard-constraint filtering", async () => {
+  const dates: string[] = [];
+  const stock = [{ id: 11,food_name: "番茄",expiration_date: "2026-09-12",quantity_value: 5,quantity_unit: "piece",version: 1 }];
+  const recipe = { id: 1,title: "番茄汤",ingredients_json: [{ name: "番茄",amount: "1个" }],steps_json: ["煮熟"],status: "approved",cook_time: 10,prep_time: 5,serving_size: 1 };
+  const service = new RecommendationsService(repository({ inventory: async () => stock,recipes: async () => [recipe],
+    planningState: async (_user,start,end) => { dates.push(start,end);return { items: [],plans: [],shopping: [] }; },
+    dietTotals: async (_user,date) => { dates.push(date);return { calories: 0,protein: 0 }; },
+  }),kitchenware);
+  const snapshot = await service.interventionSnapshot(7,Date.parse("2026-09-13T00:30:00Z"),"America/Los_Angeles");
+  assert.deepEqual(snapshot.dates,["2026-09-12","2026-09-13"]);
+  assert.deepEqual(dates.sort(),["2026-09-12","2026-09-12","2026-09-13"]);
+  assert.equal(snapshot.inventory[0].userId,7);
+  assert.deepEqual(snapshot.recommendations[0].inventoryIds,[11]);
+  const blocked = new RecommendationsService(repository({ inventory: async () => stock,recipes: async () => [recipe],
+    profile: async () => ({ allergies_json: [{ name: "番茄" }] }),planningState: async () => ({ items: [],plans: [],shopping: [] }),
+  }),kitchenware);
+  assert.deepEqual((await blocked.interventionSnapshot(7,Date.parse("2026-09-13T00:30:00Z"),"America/Los_Angeles")).recommendations,[]);
 });

@@ -2,7 +2,7 @@ import type { MealProduction, PreparedMeal, PreparedMealEventInput } from "@diet
 import { requestJson, type ApiFetch } from "./client";
 import type { DietRecord } from "./types";
 
-export type DietRecordInput = Omit<DietRecord, "id">;
+export type DietRecordInput = Omit<DietRecord, "id" | "prepared_meal_id" | "household_meal_id">;
 
 export const dietApi = {
   list: (apiFetch: ApiFetch, date?: string) => requestJson<DietRecord[]>(apiFetch, `/api/v1/diet-records${date ? `?date=${encodeURIComponent(date)}` : ""}`),
@@ -29,5 +29,5 @@ export const dietApi = {
   ),
   preparedMeals: (apiFetch: ApiFetch) => requestJson<PreparedMeal[]>(apiFetch, "/api/v1/diet-records/prepared-meals"),
   mealEvent: (apiFetch: ApiFetch, id: string, input: PreparedMealEventInput) => requestJson<{ prepared_meal: PreparedMeal; diet_record: DietRecord | null; repeated: boolean }>(apiFetch, `/api/v1/diet-records/prepared-meals/${encodeURIComponent(id)}/events`, { method: "POST", body: JSON.stringify(input) }),
-  remove: (apiFetch: ApiFetch, id: number) => requestJson<{ message: string }>(apiFetch, `/api/v1/diet-records/${id}`, { method: "DELETE" }),
+  remove: (apiFetch: ApiFetch, id: number, mode?: "undo_eating" | "delete_intake") => requestJson<{ message: string }>(apiFetch, `/api/v1/diet-records/${id}${mode ? `?mode=${mode}` : ""}`, { method: "DELETE" }),
 };

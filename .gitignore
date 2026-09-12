@@ -27,7 +27,8 @@ server/backups/
 .parcel-cache
 .cache
 coverage
-artifacts/quality/
+# Local validation databases, logs, and build artifacts.
+/artifacts/
 storybook-static
 
 # Package manager artifacts

@@ -52,7 +52,7 @@ export function writeRecipeKitchenwareRequirements(
 
       for (const rawName of normalizedNames) {
         const resolved = options.resolve(rawName);
-        if (!resolved || resolved.confidence < 0.7) {
+        if (!resolved || resolved.confidence < 1) {
           options.enqueueReview(rawName, resolved?.confidence || 0);
           result.unresolved.push(rawName);
           continue;

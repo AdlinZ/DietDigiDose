@@ -1,3 +1,10 @@
+import { verifyDiningPlanChanges, verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
+import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
+import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
+import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
+import { SqlitePlanMaintenanceRepository } from "../src/modules/planMaintenance/sqliteRepository.js";
+import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
+import { SqliteMaintenanceQueueRepository } from "../src/modules/planMaintenance/sqliteQueueRepository.js";
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -258,8 +265,11 @@ describe("API security baseline", () => {
     const runtime = await import("../src/modules/worker/index.js");
     assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-a", 60_000), true);
     assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), false);
+    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-a", 60_000), false);
     db.prepare("UPDATE worker_task_leases SET lease_expires_at = datetime('now', '-1 second') WHERE task_name = 'media-cleanup'").run();
     assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), true);
+    assert.equal(await runtime.releaseWorkerTaskLease("media-cleanup", "worker-a"), false);
+    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-c", 60_000), false);
     assert.equal(await runtime.releaseWorkerTaskLease("media-cleanup", "worker-b"), true);
 
     const completed = await runtime.runManagedWorkerTask({
@@ -272,6 +282,22 @@ describe("API security baseline", () => {
       failed_count AS failed FROM worker_task_runs WHERE id = ?`).get(completed.runId) as JsonObject;
     assert.deepEqual(completedRow, { status: "completed", processed: 2, succeeded: 2, failed: 0 });
 
+    const { SqliteWorkerRepository } = await import("../src/modules/worker/sqliteRepository.js");
+    const workerRepository = new SqliteWorkerRepository(db);
+    assert.equal(await workerRepository.acquireLease("media-cleanup", "stale-owner", 60_000), true);
+    await workerRepository.createRun("stale-worker-result", "media-cleanup", "worker-test");
+    assert.equal(await workerRepository.ownsLease("media-cleanup", "stale-owner"), true);
+    db.prepare("UPDATE worker_task_leases SET lease_expires_at = datetime('now','-1 second') WHERE task_name='media-cleanup'").run();
+    assert.equal(await workerRepository.ownsLease("media-cleanup", "stale-owner"), false);
+    assert.equal(await workerRepository.completeRun("stale-worker-result", "completed", 1,
+      { processed: 1, succeeded: 1, failed: 0 }, null, "stale-owner"), false);
+    assert.equal(await workerRepository.acquireLease("media-cleanup", "new-owner", 60_000), true);
+    assert.equal(await workerRepository.completeRun("stale-worker-result", "completed", 1,
+      { processed: 1, succeeded: 1, failed: 0 }, null, "stale-owner"), false);
+    assert.equal((db.prepare("SELECT status FROM worker_task_runs WHERE id='stale-worker-result'").get() as JsonObject).status, "running");
+    await workerRepository.failRun("stale-worker-result", 1, "lease lost");
+    assert.equal(await workerRepository.releaseLease("media-cleanup", "new-owner"), true);
+
     const partialFailure = await runtime.runManagedWorkerTask({
       taskName: "media-cleanup",
       workerId: "worker-test",
@@ -282,6 +308,92 @@ describe("API security baseline", () => {
       .get(partialFailure.runId) as JsonObject;
     assert.deepEqual(failedRow, { status: "failed", error: "1 item(s) failed" });
     db.prepare("DELETE FROM worker_task_runs WHERE worker_id = 'worker-test'").run();
+  });
+
+  test("daily maintenance settings require a user's time and persist with ownership and version checks", async () => {
+    const owner = await register("maintenance-owner@example.com");
+    const stranger = await register("maintenance-stranger@example.com");
+    const url = "/api/v1/plan-maintenance/settings";
+    assert.equal((await api(url)).response.status, 401);
+    assert.deepEqual((await api(url, { token: owner.token })).body,
+      { enabled: false, timeZone: null, localTime: null, nextCheckAt: null, nextLocalDate: null, lastCompletedLocalDate: null, version: 0 });
+    for (const body of [{ enabled: true, version: 0 }, { enabled: true, version: 0, timeZone: "bad", localTime: "24:00" }]) {
+      assert.equal((await api(url, { token: owner.token, method: "PATCH", body: JSON.stringify(body) })).response.status, 400);
+    }
+    const change = { enabled: true, version: 0, timeZone: "Asia/Shanghai", localTime: "08:15" };
+    const saved = await api(url, { token: owner.token, method: "PATCH", body: JSON.stringify(change) });
+    assert.equal(saved.response.status, 200);
+    assert.equal((saved.body as JsonObject).version, 1);
+    assert.equal((saved.body as JsonObject).nextCheckAt.slice(11), "00:15:00.000Z");
+    assert.deepEqual((await api(url, { token: owner.token })).body, saved.body);
+    assert.equal(((await api(url, { token: stranger.token })).body as JsonObject).enabled, false);
+    assert.equal((await api(url, { token: owner.token, method: "PATCH", body: JSON.stringify(change) })).response.status, 409);
+    const attempts = await Promise.all(["09:00", "10:00"].map(localTime => api(url, { token: owner.token, method: "PATCH",
+      body: JSON.stringify({ ...change, version: 1, localTime }) })));
+    assert.deepEqual(attempts.map(value => value.response.status).sort(), [200,409]);
+    const disabled = await api(url, { token: owner.token, method: "PATCH", body: JSON.stringify({ enabled: false, version: 2 }) });
+    assert.equal(disabled.response.status, 200);
+    assert.equal((disabled.body as JsonObject).nextCheckAt, null);
+    assert.equal((disabled.body as JsonObject).timeZone, "Asia/Shanghai");
+  });
+
+  test("maintenance queue coalesces events, fences recovery and bounds retries", async () => {
+    const owner = await register("queue-owner@example.com");
+    const other = await register("queue-other@example.com");
+    db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
+    await verifyMaintenanceQueue({ repeatReport: async id => {
+      const duplicate = `${id}-repeat`;
+      db.prepare("INSERT INTO plan_maintenance_jobs(id,user_id,status,attempts,rule_version,result_json) SELECT ?,user_id,status,attempts,rule_version,json_remove(result_json,'$.notificationRecorded') FROM plan_maintenance_jobs WHERE id=?").run(duplicate,id);
+      return duplicate;
+    },noticeCount: async id => (db.prepare("SELECT COUNT(*) n FROM notification_events WHERE json_extract(metadata_json,'$.jobId')=?").get(id) as JsonObject).n,settings: new SqlitePlanMaintenanceRepository(db),users: [owner.user.id,other.user.id], repository: () => new SqliteMaintenanceQueueRepository(db),
+      seed: async (id,userId,at) => { db.prepare("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES(?,?,'eat',?,?,?)").run(id,userId,id,id,at); },
+      unprocessed: async () => (db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE processed_at IS NULL").get() as JsonObject).n,
+      seedMeals: async userId => {
+        db.prepare("INSERT INTO meal_plans(id,user_id,title,start_date,end_date) VALUES('maintenance-plan',?,'维护回归','2026-09-12','2026-09-20')").run(userId);
+        for (const kind of ["mutable","confirmed","cooking","purchased","untouched"]) db.prepare(`INSERT INTO meal_plan_items
+          (id,plan_id,user_id,planned_date,meal_type,title,status,confirmed_at) VALUES(?,'maintenance-plan',?,'2026-09-12','午餐',?,?,?)`)
+          .run(`maintenance-${kind}`,userId,kind,kind === "cooking" ? "cooking" : "planned",kind === "confirmed" ? new Date().toISOString() : null);
+        db.prepare("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('maintenance-purchase',?,'meal-plan:maintenance-purchased:0','已采购',1)").run(userId);
+      },
+      mealState: async id => db.prepare("SELECT version,planned_date AS plannedDate FROM meal_plan_items WHERE id=?").get(id) as { version: number; plannedDate: string },
+      jobResult: async id => { const value = (db.prepare("SELECT result_json FROM plan_maintenance_jobs WHERE id=?").get(id) as JsonObject).result_json; return value ? JSON.parse(value) : null; },
+      changeCount: async () => (db.prepare("SELECT COUNT(*) n FROM meal_plan_changes WHERE plan_id='maintenance-plan'").get() as JsonObject).n,
+      mutateInventory: async userId => { db.prepare("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES(?,'新入库','其他','1份','2026-09-20')").run(userId); },
+    });
+    db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
+  });
+
+  test("worker dispatch persists event assignments without claiming plan completion", async () => {
+    const owner = await register("dispatch-owner@example.com");
+    db.prepare("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES('dispatch-event',?,'eat','dispatch-event','meal',datetime('now','-1 minute'))").run(owner.user.id);
+    const { initializeSqliteWorker } = await import("../src/composition/sqliteRuntime.js");
+    const { runWorkerCycle } = await import("../src/worker.js");
+    const worker = initializeSqliteWorker();
+    const first = await runWorkerCycle("dispatch-test",worker,["plan-maintenance-dispatch"]);
+    assert.equal(first[0].status,"completed");
+    assert.deepEqual(first[0].result?.details,{ phase: "event_dispatch",eventsEnqueued: 1,dailyChecksCreated: 0 });
+    const repeated = await runWorkerCycle("dispatch-test",worker,["plan-maintenance-dispatch"]);
+    assert.equal(repeated[0].result?.processed,0);
+    assert.equal((db.prepare("SELECT processed_at FROM plan_maintenance_events WHERE id='dispatch-event'").get() as JsonObject).processed_at,null);
+    assert.equal((db.prepare("SELECT status FROM plan_maintenance_jobs WHERE user_id=?").get(owner.user.id) as JsonObject).status,"queued");
+    const processed = await runWorkerCycle("processor-test",worker,["plan-maintenance-process"]);
+    assert.equal(processed[0].status,"completed");
+    assert.equal(processed[0].result?.succeeded,1);
+    const completed = db.prepare("SELECT status,result_json FROM plan_maintenance_jobs WHERE user_id=?").get(owner.user.id) as JsonObject;
+    assert.equal(completed.status,"completed");
+    const stored = JSON.parse(completed.result_json);
+    assert.equal(stored.diagnostics.modelCalls,0);
+    assert.equal(stored.diagnostics.cost,0);
+    assert.ok(stored.diagnostics.inputFingerprint);
+    assert.ok(stored.diagnostics.checks.length);
+    assert.ok((db.prepare("SELECT processed_at FROM plan_maintenance_events WHERE id='dispatch-event'").get() as JsonObject).processed_at);
+    const history = await api("/api/v1/plan-maintenance/runs", { token: owner.token });
+    assert.equal(history.response.status,200);
+    assert.equal((history.body as JsonObject).items[0].status,"completed");
+    assert.equal((await api("/api/v1/plan-maintenance/runs")).response.status,401);
+    const replay = await runWorkerCycle("processor-test",worker,["plan-maintenance-process"]);
+    assert.equal(replay[0].result?.processed,0);
+    db.exec("DELETE FROM plan_maintenance_jobs; DELETE FROM plan_maintenance_events");
   });
 
   test("worker batch history is visible only to administrators", async () => {
@@ -298,6 +410,12 @@ describe("API security baseline", () => {
     const item = (visible.body as JsonObject).items.find((candidate: JsonObject) => candidate.id === "worker-visible-run");
     assert.deepEqual(item.result, { source: "test" });
     assert.equal(item.processed, 3);
+    for (const task of ["intervention-scan","intervention-delivery"]) {
+      db.prepare("UPDATE worker_task_runs SET task_name=? WHERE id='worker-visible-run'").run(task);
+      const filtered = await api(`/api/v1/admin/worker-runs?task=${task}`,{ token });
+      assert.equal(filtered.response.status,200);
+      assert((filtered.body as JsonObject).items.some((row: JsonObject) => row.id === "worker-visible-run"));
+    }
     db.prepare("DELETE FROM worker_task_runs WHERE id = 'worker-visible-run'").run();
   });
 
@@ -1167,6 +1285,9 @@ describe("notification preferences", () => {
       (user_id, food_name, category, quantity, expiration_date, storage_location)
       VALUES (?, '测试牛奶', '乳制品', '1盒', ?, '冷藏')`).run(account.user.id, currentDateKey());
 
+    db.prepare(`INSERT INTO inventory_items (user_id,food_name,category,quantity,expiration_date,storage_location)
+      VALUES (?,'测试酸奶','乳制品','2盒',?,'冷藏')`).run(account.user.id,currentDateKey());
+    const beforeItems = db.prepare("SELECT * FROM inventory_items WHERE user_id=? ORDER BY id").all(account.user.id);
     const { sendExpiringInventoryNotifications } = await import("../src/services/notifications.js");
     const sent = await sendExpiringInventoryNotifications();
     assert.ok(sent.recipients >= 1);
@@ -1190,12 +1311,16 @@ describe("notification preferences", () => {
     assert.equal(completed.response.status, 200);
     const inventory = db.prepare("SELECT is_available FROM inventory_items WHERE id = ?")
       .get(notification.inventoryItemId) as { is_available: number };
-    assert.equal(inventory.is_available, 0);
+    assert.equal(inventory.is_available, 1);
+    const replay = await api(`/api/v1/notifications/${notification.id}/actions`, { method: "POST",token: account.token,body: JSON.stringify({ action: "complete" }) });
+    assert.equal(replay.response.status,200);
+    assert.equal(notification.itemCount,2);
+    assert.deepEqual(db.prepare("SELECT * FROM inventory_items WHERE user_id=? ORDER BY id").all(account.user.id),beforeItems);
     const after = await api("/api/v1/notifications/unread-count", { token: account.token });
     assert.equal((after.body as JsonObject).count, 0);
     const events = db.prepare("SELECT event_type FROM notification_events WHERE notification_id = ?").all(notification.id) as Array<{ event_type: string }>;
     assert.ok(events.some((event) => event.event_type === "created"));
-    assert.ok(events.some((event) => event.event_type === "action_complete"));
+    assert.equal(events.filter((event) => event.event_type === "action_complete").length,1);
   });
 
   test("materializes configured local routine reminders into traceable inbox history", async () => {
@@ -1257,14 +1382,14 @@ describe("user data isolation", () => {
     const airFryer = db.prepare("SELECT id FROM kitchenware_catalog WHERE name = '空气炸锅'").get() as { id: number };
     db.prepare(`INSERT INTO recipe_kitchenware_requirements
       (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
-      VALUES (?, ?, NULL, 'required', 'test', 1, '空气炸锅测试')`).run(recipeId, airFryer.id);
+      VALUES (?, ?, 'bake', 'required', 'test', 1, '空气炸锅测试')`).run(recipeId, airFryer.id);
     await api("/api/v1/kitchenware", {
       method: "POST", token: first.token,
       body: JSON.stringify({ name: "烤箱", category: "小家电", status: "良好", note: "", image_url: "", purchase_date: "" }),
     });
     const compatibility = await api(`/api/v1/kitchenware/recipes/${recipeId}/compatibility`, { token: first.token });
     assert.equal(compatibility.response.status, 200);
-    assert.equal((compatibility.body as JsonObject).blocking.length, 0);
+    assert.equal((compatibility.body as JsonObject).blocking.length, 1);
     assert.equal((compatibility.body as JsonObject).requirements[0].substitution.name, "烤箱");
     assert.equal((compatibility.body as JsonObject).requirements[0].substitution.relationType, "conditional");
     db.prepare("DELETE FROM recipes WHERE id = ?").run(recipeId);
@@ -1467,6 +1592,18 @@ describe("user data isolation", () => {
     });
     assert.equal(retried.response.status, 200);
     assert.equal((retried.body as JsonObject).repeated, true);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND source_id LIKE 'consume:structured-consume-test-0001:%'").get(first.user.id) as JsonObject).n,2);
+    const available = consumedItems.find(item => item.quantity_value === 400)!;
+    const exhausted = consumedItems.find(item => !item.is_available)!;
+    const partialFailure = await api("/api/v1/inventory/consume", { method: "POST",token: first.token,body: JSON.stringify({
+      idempotency_key: "structured-consume-rollback",source: "manual",items: [
+        { item_id: available.id,version: available.version,mode: "amount",amount_value: 1,unit: "g" },
+        { item_id: exhausted.id,version: exhausted.version,mode: "all" },
+      ],
+    }) });
+    assert.equal(partialFailure.response.status,409);
+    assert.equal((db.prepare("SELECT quantity_value FROM inventory_items WHERE id=?").get(available.id) as JsonObject).quantity_value,400);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND source_id LIKE 'consume:structured-consume-rollback:%'").get(first.user.id) as JsonObject).n,0);
     const crossUser = await api("/api/v1/inventory/consume", {
       method: "POST", token: second.token,
       body: JSON.stringify({ ...consumePayload, idempotency_key: "structured-consume-cross-user", items: [consumePayload.items[1]] }),
@@ -1978,12 +2115,48 @@ describe("user data isolation", () => {
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM recipe_recommendation_events WHERE user_id = ? AND idempotency_key = ?")
       .get(account.user.id, eventPayload.idempotencyKey) as { count: number }).count, 1);
 
+    const selection = await api("/api/v1/recommendations/events", { method: "POST", token: account.token,
+      body: JSON.stringify({ ...eventPayload, eventType: "view", idempotencyKey: "selection-evidence-test-0001", metadata: { selectionEvidence: { forged: true } } }) });
+    assert.equal(selection.response.status, 201);
+    const savedSelection = db.prepare("SELECT metadata_json FROM recipe_recommendation_events WHERE id=?").get((selection.body as JsonObject).eventId) as JsonObject;
+    assert.deepEqual(JSON.parse(savedSelection.metadata_json).selectionEvidence, { version: 1, requestId: firstBody.requestId, recipeId: eventPayload.recipeId,
+      inventory: firstBody.items[0].features.inventoryEvidence });
+    const unlisted = await api("/api/v1/recommendations/events", { method: "POST", token: account.token,
+      body: JSON.stringify({ ...eventPayload, recipeId: newRecipe, idempotencyKey: "unlisted-recipe-test-0001" }) });
+    assert.equal(unlisted.response.status, 409);
+    const conflictingKey = await api("/api/v1/recommendations/events", { method: "POST", token: account.token,
+      body: JSON.stringify({ ...eventPayload, recipeId: originalSecond }) });
+    assert.equal(conflictingKey.response.status, 409);
+
     const refreshed = await api("/api/v1/recommendations/recipes", {
       method: "POST", token: account.token, body: JSON.stringify({ ...payload, pageSize: 10 }),
     });
     assert.equal((refreshed.body as JsonObject).total, 3);
-    assert.notEqual((refreshed.body as JsonObject).items[0].recipeId, firstBody.items[0].recipeId);
+    assert.equal((refreshed.body as JsonObject).items.find((item: JsonObject) => item.recipeId === eventPayload.recipeId).score,firstBody.items[0].score,"one unlabelled skip must not infer dislike");
+    for (let index=0;index<3;index++) {
+      const explicit = await api("/api/v1/recommendations/events",{ method: "POST",token: account.token,body: JSON.stringify({ ...eventPayload,idempotencyKey: `explicit-dislike-test-${index}`,metadata: { reason: "dislike",scope: "long_term" } }) });
+      assert.equal(explicit.response.status,201);
+    }
+    const { SqliteRecommendationsRepository } = await import("../src/modules/recommendations/sqliteRepository.js");
+    assert.deepEqual(await new SqliteRecommendationsRepository(db).skippedRecipeIds(account.user.id),[eventPayload.recipeId]);
     assert.ok((refreshed.body as JsonObject).items.some((item: JsonObject) => item.recipeId === newRecipe));
+
+    const sourceQueue = await api("/api/v1/cooking-queue", { method: "POST", token: account.token,
+      body: JSON.stringify({ recipeId: eventPayload.recipeId, recommendationRequestId: firstBody.requestId }) });
+    assert.equal(sourceQueue.response.status, 201);
+    const sourceItem = (sourceQueue.body as JsonObject).item;
+    const queuedEvidence = JSON.parse((db.prepare("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=?").get(sourceItem.id) as JsonObject).recipe_snapshot_json).selectionEvidence;
+    assert.equal(queuedEvidence.requestId, firstBody.requestId);
+    const productionPayload = { idempotency_key: "selection-to-production-186", recipe_id: eventPayload.recipeId,
+      production: { food_name: "选择来源测试", produced_servings: 1, eaten_servings: 0, queue_item_id: sourceItem.id, queue_version: sourceItem.version } };
+    const sourceProduction = await api("/api/v1/diet-records/cooking-completions", { method: "POST", token: account.token, body: JSON.stringify(productionPayload) });
+    assert.equal(sourceProduction.response.status, 201);
+    assert.deepEqual((sourceProduction.body as JsonObject).selection_evidence, queuedEvidence);
+    assert.equal((sourceProduction.body as JsonObject).diet_record, null, "source evidence alone is not actual eating");
+    db.prepare("DELETE FROM cooking_queue_items WHERE id=?").run(sourceItem.id);
+    const sourceRetry = await api("/api/v1/diet-records/cooking-completions", { method: "POST", token: account.token, body: JSON.stringify(productionPayload) });
+    assert.equal(sourceRetry.response.status, 200);
+    assert.deepEqual((sourceRetry.body as JsonObject).selection_evidence, queuedEvidence);
 
     const hiddenRequest = await api("/api/v1/recommendations/events", {
       method: "POST", token: second.token,
@@ -3393,6 +3566,21 @@ test("prepared meals separate production, later eating and discard atomically", 
   const saved = await api("/api/v1/diet-records/prepared-meals", { token: first.token });
   assert.equal((saved.body as JsonObject[]).find(item => item.id === meal.id)?.remaining_servings, 0);
 
+  const maintenanceEvents = db.prepare("SELECT event_type,details_json FROM plan_maintenance_events WHERE user_id=? AND subject_id=? ORDER BY event_type").all(first.user.id,meal.id) as JsonObject[];
+  assert.deepEqual(maintenanceEvents.map(item => item.event_type), ["discard","eat","eat","production","reschedule"]);
+  assert.deepEqual(JSON.parse(maintenanceEvents.find(item => item.event_type === "production")!.details_json).inventoryItemIds, [stockId]);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=?").get(second.user.id) as JsonObject).n, 0);
+  db.exec("CREATE TRIGGER fail_maintenance_outbox_test BEFORE INSERT ON plan_maintenance_events WHEN NEW.event_type='production' BEGIN SELECT RAISE(ABORT,'test outbox failure'); END");
+  try {
+    const failed = await api("/api/v1/diet-records/cooking-completions", { token: first.token, method: "POST", body: JSON.stringify({
+      ...payload, idempotency_key: "production-outbox-rollback", inventory_consumptions: [{ item_id: stockId, version: 2, mode: "amount", amount_value: 1, unit: "piece" }],
+    }) });
+    assert.equal(failed.response.status, 500);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM prepared_meals WHERE idempotency_key='production-outbox-rollback'").get() as JsonObject).n, 0);
+    assert.equal((db.prepare("SELECT quantity_value FROM inventory_items WHERE id=?").get(stockId) as JsonObject).quantity_value, 7);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND subject_id=?").get(first.user.id,meal.id) as JsonObject).n, 5);
+  } finally { db.exec("DROP TRIGGER fail_maintenance_outbox_test"); }
+
   db.exec("CREATE TRIGGER fail_prepared_meal_test BEFORE INSERT ON prepared_meals WHEN NEW.food_name='强制回滚制作' BEGIN SELECT RAISE(ABORT,'test production failure'); END");
   try {
     const failed = await api("/api/v1/diet-records/cooking-completions", { token: first.token, method: "POST", body: JSON.stringify({
@@ -3577,12 +3765,14 @@ test("request kitchen overrides reach AI context without changing saved preferen
   const { buildAIPromptMessages, buildUserContext } = await import("../src/services/contextBuilder.js");
   const account = await register("meal-override-192@example.com");
   await api("/api/v1/health-data/profile", { token: account.token, method: "PUT", body: JSON.stringify({ kitchen_constraints: {
-    servings: 1, meal_time_minutes: 45, refrigeration_available: true, reheating_available: false,
+    servings: 1, meal_time_minutes: 45, refrigeration_available: true, reheating_available: false, avoid_spicy: false,
   } }) });
   const storedContext = await buildUserContext(account.user.id);
   const context = (override = {}) => JSON.parse(buildAIPromptMessages(storedContext, override).at(-1)!.content.split("\n")[1]) as JsonObject;
-  const current = context({ servings: 2, meal_time_minutes: 20, refrigeration_available: false });
+  const current = context({ servings: 2, meal_time_minutes: 20, refrigeration_available: false,avoid_spicy: true });
   assert.equal(current.servings, 2);
+  assert.equal(current.meal_preparation_preferences.avoid_spicy,true);
+  assert.equal(current.stored_meal_preferences.avoid_spicy,false);
   assert.equal(current.available_time_minutes, 20);
   assert.equal(current.meal_preparation_preferences.refrigeration_available, false);
   assert.equal(current.meal_preparation_preferences.reheating_available, false);
@@ -3615,6 +3805,12 @@ test("Agent permanent kitchen preferences preserve profile fields and replay ide
   assert.deepEqual((profile.body as JsonObject).allergies, [allergy]);
   assert.deepEqual((profile.body as JsonObject).kitchen_constraints, { meal_time_minutes: 45, servings: 2,
     refrigeration_available: false, reheating_available: false });
+  const evidence = await api("/api/v1/recommendations/preferences",{ token: account.token });
+  assert((evidence.body as JsonObject).observations.some((fact: JsonObject) => fact.id === `preference-statement:${runId}` && fact.valid));
+  await api("/api/v1/health-data/profile",{ token: account.token,method: "PUT",body: JSON.stringify({ allergies: [allergy],kitchen_constraints: { servings: 3 } }) });
+  const correctedEvidence = await api("/api/v1/recommendations/preferences",{ token: account.token });
+  assert((correctedEvidence.body as JsonObject).observations.some((fact: JsonObject) => fact.id === `preference-statement:${runId}` && !fact.valid));
+
 });
 
 test("prepared meal reservations persist without consumption and leave automatic allocation context", async () => {
@@ -3865,6 +4061,7 @@ test("scan review uses owned completed server artifacts and performs no implicit
   const undo = () => api(`/api/v1/inventory/scan-jobs/${jobId}/undo`, { token: account.token, method: "POST" });
   assert.deepEqual((await undo()).body, { undone: 2, repeated: false });
   assert.deepEqual((await undo()).body, { undone: 0, repeated: true });
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND event_type='inventory_changed'").get(account.user.id) as JsonObject).n,2);
   assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_items WHERE user_id=? AND deleted_at IS NULL").get(account.user.id) as JsonObject).n, 0);
   const afterUndo = await accept();
   assert.equal((afterUndo.body as JsonObject).items.length, 0);
@@ -3890,7 +4087,580 @@ test("scan undo conflicts roll back the entire batch when a later item was chang
     body: JSON.stringify({ version: 1, quantity: "1个", quantity_value: 1, quantity_unit: "piece" }) });
   const undone = await api(`/api/v1/inventory/scan-jobs/${jobId}/undo`, { token: account.token, method: "POST" });
   assert.equal(undone.response.status, 409);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND source_id LIKE 'intake-undo:%'").get(account.user.id) as JsonObject).n,0);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events WHERE user_id=? AND event_type='inventory_changed'").get(account.user.id) as JsonObject).n,1);
   const current = db.prepare("SELECT version,deleted_at,quantity_value FROM inventory_items WHERE user_id=? ORDER BY id").all(account.user.id);
   assert.deepEqual(current, [{ version: 1, deleted_at: null, quantity_value: 2 }, { version: 2, deleted_at: null, quantity_value: 1 }]);
   assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE user_id=? AND idempotency_key LIKE 'intake-undo:%'").get(account.user.id) as JsonObject).n, 0);
+});
+
+test("prepared meals clear sub-millith remainders with idempotent concurrent events", async () => {
+  const account = await register("prepared-precision-205@example.com");
+  const made = await api("/api/v1/diet-records/cooking-completions", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "production-precision-205", production: { food_name: "小余量", produced_servings: 1, eaten_servings: 0.9995 },
+  }) });
+  assert.equal(made.response.status, 201);
+  const meal = (made.body as JsonObject).prepared_meal;
+  assert.equal(meal.remaining_servings, 0.0005);
+  const input = { idempotency_key: "discard-precision-205", version: 1, type: "discard", servings: 0.0005 };
+  const event = (body: JsonObject) => api(`/api/v1/diet-records/prepared-meals/${meal.id}/events`, { token: account.token, method: "POST", body: JSON.stringify(body) });
+  const results = await Promise.all([event(input), event(input)]);
+  assert.deepEqual(results.map(result => result.response.status).sort(), [200, 201]);
+  assert.equal((results[0].body as JsonObject).prepared_meal.remaining_servings, 0);
+  assert.equal((await event({ ...input, idempotency_key: "precision-too-small-205", servings: 0.0000001 })).response.status, 400);
+  const list = await api("/api/v1/diet-records/prepared-meals", { token: account.token });
+  assert.equal((list.body as JsonObject[]).find(row => row.id === meal.id)?.remaining_servings, 0);
+});
+
+test("prepared meal intake correction is explicit, atomic, idempotent and does not restore ingredients", async () => {
+  const account = await register("prepared-correction-203@example.com");
+  const stock = await api("/api/v1/inventory", { token: account.token, method: "POST", body: JSON.stringify({ food_name: "纠错米", category: "粮油干货", quantity: "5g", quantity_value: 5, quantity_unit: "g", expiration_date: "2026-10-01", storage_location: "常温" }) });
+  const stockId = (stock.body as JsonObject).id;
+  const made = await api("/api/v1/diet-records/cooking-completions", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "production-correction-203", inventory_consumptions: [{ item_id: stockId, version: 1, mode: "amount", amount_value: 1, unit: "g" }],
+    production: { food_name: "纠错饭", produced_servings: 3, eaten_servings: 1 },
+  }) });
+  const meal = (made.body as JsonObject).prepared_meal;
+  const record = (made.body as JsonObject).diet_record;
+  const remove = (id: number, mode = "") => api(`/api/v1/diet-records/${id}${mode ? `?mode=${mode}` : ""}`, { token: account.token, method: "DELETE" });
+  assert.equal((await remove(record.id)).response.status, 409);
+  const list = await api("/api/v1/diet-records", { token: account.token });
+  assert.equal((list.body as JsonObject[]).find(row => row.id === record.id)?.prepared_meal_id, meal.id);
+  // Inject a late transaction failure; no quantity change or correction may survive.
+  db.exec(`CREATE TRIGGER fail_intake_correction BEFORE INSERT ON prepared_meal_intake_corrections BEGIN SELECT RAISE(ABORT, 'injected correction failure'); END`);
+  try { assert.equal((await remove(record.id, "undo_eating")).response.status, 500); }
+  finally { db.exec("DROP TRIGGER fail_intake_correction"); }
+  assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 2);
+  assert.ok(db.prepare("SELECT id FROM diet_records WHERE id=?").get(record.id));
+  const results = await Promise.all([remove(record.id, "undo_eating"), remove(record.id, "undo_eating")]);
+  assert.deepEqual(results.map(result => result.response.status), [200, 200]);
+  assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 3);
+  assert.equal((db.prepare("SELECT quantity_value FROM inventory_items WHERE id=?").get(stockId) as JsonObject).quantity_value, 4);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM prepared_meal_intake_corrections WHERE user_id=?").get(account.user.id) as JsonObject).n, 1);
+  const eat = await api(`/api/v1/diet-records/prepared-meals/${meal.id}/events`, { token: account.token, method: "POST", body: JSON.stringify({ idempotency_key: "correction-eat-again-203", version: 2, type: "eat", servings: 1 }) });
+  await api(`/api/v1/diet-records/prepared-meals/${meal.id}/events`, { token: account.token, method: "POST", body: JSON.stringify({ idempotency_key: "correction-later-discard-203", version: 3, type: "discard", servings: 1 }) });
+  const secondId = (eat.body as JsonObject).diet_record.id;
+  assert.equal((await remove(secondId, "undo_eating")).response.status, 409);
+  assert.equal((await remove(secondId, "delete_intake")).response.status, 200);
+  assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 1);
+  assert.equal((await remove(secondId, "undo_eating")).response.status, 409);
+  const evidence = await api("/api/v1/recommendations/preferences",{ token: account.token });
+  const observations = (evidence.body as JsonObject).observations as JsonObject[];
+  assert.equal(observations.find(fact => fact.id === `production:${meal.id}`)?.remainingServings,1);
+  assert.ok(observations.find(fact => fact.id === `production:${meal.id}`)?.observedAt);
+  assert.equal(observations.filter(fact => fact.kind === "eat").length,2);
+  assert(observations.filter(fact => fact.kind === "eat").every(fact => fact.valid === false && fact.correctionId));
+  assert.equal(observations.filter(fact => fact.kind === "discard" && fact.valid).length,1);
+});
+
+test("meal plan change reviews protect confirmation, purchases and cooking with replay-safe restoration", async () => {
+  const account = await register("plan-protection-195@example.com");
+  const planId = "19500000-0000-4000-8000-000000000001";
+  const itemId = "19500000-0000-4000-8000-000000000002";
+  db.prepare("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES(?,?,?,'2026-09-12','2026-09-18','active')").run(planId,account.user.id,"保护计划");
+  db.prepare("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title) VALUES(?,?,?,'2026-09-12','午餐','计划饭')").run(itemId,planId,account.user.id);
+  const path = `/api/v1/meal-plans/${planId}/items/${itemId}`;
+  const patch = (input: JsonObject) => api(path,{ token: account.token,method: "PATCH",body: JSON.stringify(input) });
+  const review = (id: string, action: string) => api(`/api/v1/meal-plans/${planId}/changes/${id}/review`,{ token: account.token,method: "POST",body: JSON.stringify({ action }) });
+  const first = await patch({ version: 1, mealType: "晚餐" });
+  assert.equal(first.response.status,200);
+  assert.equal((first.body as JsonObject).change.status,"applied");
+  assert.equal((first.body as JsonObject).version,2);
+  assert.equal((await review((first.body as JsonObject).change.id,"restore")).response.status,200);
+  assert.equal((db.prepare("SELECT meal_type FROM meal_plan_items WHERE id=?").get(itemId) as JsonObject).meal_type,"午餐");
+  assert.equal((await review((first.body as JsonObject).change.id,"restore")).response.status,200);
+  await api(`${path}/confirm`,{ token: account.token,method: "POST",body: JSON.stringify({ version: 3 }) });
+  const suggested = await patch({ version: 4,mealType: "早餐" });
+  assert.equal((suggested.body as JsonObject).change.status,"pending");
+  assert.equal((suggested.body as JsonObject).mealType,"午餐");
+  const suggestionId = (suggested.body as JsonObject).change.id;
+  const accepted = await Promise.all([review(suggestionId,"accept"),review(suggestionId,"accept")]);
+  assert.deepEqual(accepted.map(value => value.response.status),[200,200]);
+  assert.equal((db.prepare("SELECT version FROM meal_plan_items WHERE id=?").get(itemId) as JsonObject).version,5);
+  const rejectInput = { version: 5,mealType: "晚餐" };
+  const rejected = await patch(rejectInput);
+  await review((rejected.body as JsonObject).change.id,"reject");
+  assert.equal(((await patch(rejectInput)).body as JsonObject).change.status,"rejected");
+  const pending = await patch({ version: 5,plannedDate: "2026-09-13" });
+  // A purchase arrives after suggestion creation without changing the meal version.
+  db.prepare("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES(?,?,?,'米',1)").run("195-shopping",account.user.id,`meal-plan:${itemId}:米`);
+  assert.equal((await review((pending.body as JsonObject).change.id,"accept")).response.status,409);
+  assert.equal((await review(suggestionId,"restore")).response.status,409);
+  db.prepare("UPDATE meal_plan_items SET status='cooking' WHERE id=?").run(itemId);
+  const blocked = await patch({ version: 5,plannedDate: "2026-09-14" });
+  assert.equal((blocked.body as JsonObject).change.status,"blocked");
+  assert.equal((blocked.body as JsonObject).plannedDate,"2026-09-12");
+  const planPath = `/api/v1/meal-plans/${planId}`;
+  const metadata = (input: JsonObject) => api(planPath,{ token: account.token,method: "PATCH",body: JSON.stringify(input) });
+  assert.equal((await metadata({ version: 1,title: "仅改标题" })).response.status,200);
+  assert.equal((await metadata({ version: 2,startDate: "2026-09-13" })).response.status,409);
+  assert.equal((await metadata({ version: 2,status: "cancelled" })).response.status,409);
+  assert.equal((await api(planPath,{ token: account.token,method: "DELETE",body: JSON.stringify({ version: 2 }) })).response.status,409);
+  assert.equal((db.prepare("SELECT deleted_at FROM meal_plans WHERE id=?").get(planId) as JsonObject).deleted_at,null);
+  const runId = "19500000-0000-4000-8000-000000000003";
+  db.prepare("INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id) VALUES(?,?,'guard','text','assistant','running','{}',?)").run(runId,account.user.id,runId);
+  db.prepare("UPDATE meal_plans SET version=1,created_by_run_id=? WHERE id=?").run(runId,planId);
+  db.prepare("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,result_json,idempotency_key,executed_at) VALUES(?,?,?,'create_meal_plan','high','executed','{}',?,'195-undo-key',CURRENT_TIMESTAMP)").run("195-action",runId,account.user.id,JSON.stringify({ planId }));
+  const { SqliteAgentOperationsRepository } = await import("../src/modules/agentOperations/sqliteRepository.js");
+  await assert.rejects(new SqliteAgentOperationsRepository(db).undoActions(account.user.id,runId), /原安排已保留/);
+  assert.equal((db.prepare("SELECT deleted_at FROM meal_plans WHERE id=?").get(planId) as JsonObject).deleted_at,null);
+
+});
+
+test("weekly planning reads beyond fifteen inventory rows and rejects stale activation without touching existing plans", async () => {
+  const account = await register("weekly-plan-196@example.com");
+  for (let index=0;index<16;index++) db.prepare("INSERT INTO inventory_items(user_id,food_name,category,quantity,quantity_value,quantity_unit,expiration_date,is_available) VALUES(?,?,'其他','1个',1,'piece','2099-09-30',1)").run(account.user.id,`无关库存${index}`);
+  db.prepare("INSERT INTO inventory_items(user_id,food_name,category,quantity,quantity_value,quantity_unit,expiration_date,is_available) VALUES(?,'周规划鸡蛋','蛋类','4个',4,'piece','2099-09-30',1)").run(account.user.id);
+  const recipeId = Number(db.prepare("INSERT INTO recipes(title,cook_time,prep_time,ingredients_json,steps_json,status,serving_size,required_kitchenware_json) VALUES('周规划蛋羹',1,1,'[{\"name\":\"周规划鸡蛋\",\"amount\":\"1个\"}]','[\"制作\"]','approved',1,'[]')").run().lastInsertRowid);
+  db.prepare("INSERT INTO shopping_list_items(id,user_id,name,amount,checked) VALUES('weekly-user-shopping',?,'周规划鸡蛋','20个',0)").run(account.user.id);
+  const result = await api("/api/v1/recommendations/weekly-plan",{ token: account.token,method: "POST",body: JSON.stringify({ startDate: "2099-09-12",mealTypes: ["lunch"],servings: 1 }) });
+  assert.equal(result.response.status,200);
+  const value = result.body as JsonObject;
+  assert.equal(value.slots.length,7);
+  const eggs = value.shopping.find((item: JsonObject) => item.foodName === "周规划鸡蛋");
+  assert.equal(eggs.covered,4);
+  assert.equal(eggs.missing,3);
+  assert.equal(value.plannedPurchases[0].amount,"20个");
+  assert.equal((db.prepare("SELECT quantity_value FROM inventory_items WHERE user_id=? AND food_name='周规划鸡蛋'").get(account.user.id) as JsonObject).quantity_value,4);
+  assert.equal(value.draft.planningMode,"weekly");
+  const draftId = "19600000-0000-4000-8000-000000000001";
+  const saved = await api("/api/v1/meal-plans/drafts",{ token: account.token,method: "POST",body: JSON.stringify({ id: draftId,title: "七日草案",draft: value.draft }) });
+  assert.equal(saved.response.status,201);
+  const otherPlanId = "19600000-0000-4000-8000-000000000002";
+  db.prepare("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES(?,?,'后来确认','2099-09-12','2099-09-12','active')").run(otherPlanId,account.user.id);
+  db.prepare("INSERT INTO meal_plan_items(id,user_id,plan_id,planned_date,meal_type,title,recipe_id,confirmed_at) VALUES('weekly-existing',?,?,'2099-09-12','午餐','后来确认',?,CURRENT_TIMESTAMP)").run(account.user.id,otherPlanId,recipeId);
+  const activation = await api(`/api/v1/meal-plans/${draftId}/activate`,{ token: account.token,method: "POST",body: JSON.stringify({ version: 1 }) });
+  assert.equal(activation.response.status,409);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=?").get(draftId) as JsonObject).n,0);
+});
+
+test("preference controls suppress old evidence, pause accumulation and reject stale or cross-account updates", async () => {
+  const account = await register("preference-controls@example.com");
+  const other = await register("preference-controls-other@example.com");
+  const recipeId = Number((db.prepare("SELECT id FROM recipes WHERE status='approved' LIMIT 1").get() as JsonObject).id);
+  const send = (key: string) => api("/api/v1/recommendations/events",{ method: "POST",token: account.token,body: JSON.stringify({ recipeId,eventType: "skip",scoringVersion: "controls-test",surface: "meal_plan",idempotencyKey: key,metadata: { reason: "dislike",scope: "long_term" } }) });
+  const read = async () => { const result = await api("/api/v1/recommendations/preferences",{ token: account.token }); return { ...result,body: result.body as JsonObject }; };
+  const change = async (body: JsonObject) => { const result = await api("/api/v1/recommendations/preferences",{ token: account.token,method: "PATCH",body: JSON.stringify(body) }); return { ...result,body: result.body as JsonObject }; };
+  for (let index=0;index<3;index++) assert.equal((await send(`control-before-${index}`)).response.status,201);
+  assert.equal((await read()).body.items.length,1);
+  const removed = await change({ kind: "recipe",version: 1,recipeId,value: "neutral" });
+  assert.equal(removed.body.items.length,0);
+  await send("control-before-0");
+  assert.equal((await read()).body.items.length,0);
+  assert.equal((await change({ kind: "learning",version: 1,enabled: false })).response.status,409);
+  assert.equal((await change({ kind: "learning",version: 2,enabled: false })).body.enabled,false);
+  for (let index=0;index<3;index++) await send(`control-paused-${index}`);
+  assert.equal(JSON.parse((db.prepare("SELECT metadata_json FROM recipe_recommendation_events WHERE user_id=? AND idempotency_key='control-paused-0'").get(account.user.id) as JsonObject).metadata_json).learningPaused,true);
+  assert.equal((await change({ kind: "learning",version: 3,enabled: true })).body.items.length,0);
+  const confirmed = await change({ kind: "recipe",version: 4,recipeId,value: "dislike" });
+  assert.equal(confirmed.body.items[0].origin,"explicit");
+  const isolated = await api("/api/v1/recommendations/preferences",{ token: other.token });
+  assert.equal((isolated.body as JsonObject).version,1); assert.equal((isolated.body as JsonObject).items.length,0);
+  assert.equal((await api("/api/v1/recommendations/preferences")).response.status,401);
+});
+
+test("reported cooking time is optional, validated and unchanged by completion replay",async () => {
+  const account = await register("actual-cooking-time@example.com");
+  const input = { idempotency_key: "actual-time-production-197",production: { food_name: "实测饭",produced_servings: 1,eaten_servings: 0,reported_cooking_minutes: 27 } };
+  const complete = (body: JsonObject) => api("/api/v1/diet-records/cooking-completions",{ token: account.token,method: "POST",body: JSON.stringify(body) });
+  assert.equal((await complete({ ...input,production: { ...input.production,reported_cooking_minutes: -1 } })).response.status,400);
+  const first = await complete(input);
+  assert.equal(first.response.status,201);
+  assert.equal((first.body as JsonObject).prepared_meal.reported_cooking_minutes,27);
+  const retry = await complete({ ...input,production: { ...input.production,reported_cooking_minutes: 99 } });
+  assert.equal((retry.body as JsonObject).prepared_meal.reported_cooking_minutes,27);
+  const mealId = (first.body as JsonObject).prepared_meal.id;
+  const correct = (body: JsonObject) => api(`/api/v1/diet-records/prepared-meals/${mealId}/events`,{ token: account.token,method: "POST",body: JSON.stringify(body) });
+  const correction = { idempotency_key: "actual-time-correct-197",type: "reschedule",version: 1,reported_cooking_minutes: 19 };
+  const results = await Promise.all([correct(correction),correct(correction)]);
+  assert(results.every(result => result.response.status === 200 || result.response.status === 201));
+  assert(results.every(result => (result.body as JsonObject).prepared_meal.reported_cooking_minutes === 19 && (result.body as JsonObject).prepared_meal.remaining_servings === 1 && (result.body as JsonObject).diet_record === null));
+  const cleared = await correct({ ...correction,idempotency_key: "actual-time-clear-197",version: 2,reported_cooking_minutes: null });
+  assert.equal((cleared.body as JsonObject).prepared_meal.reported_cooking_minutes,null);
+  assert.equal((await correct({ ...correction,idempotency_key: "actual-time-stale-197" })).response.status,409);
+  assert.equal((await correct({ ...correction,idempotency_key: "actual-time-wrong-kind-197",type: "eat",servings: 1,version: 3 })).response.status,400);
+
+  const empty = await complete({ ...input,idempotency_key: "actual-time-unknown-197",production: { food_name: "未知用时",produced_servings: 1,eaten_servings: 0 } });
+  assert.equal((empty.body as JsonObject).prepared_meal.reported_cooking_minutes,null);
+});
+
+
+test("portion-aware recipe substitution and restoration preserve execution quantities", async () => {
+  const owner = await register("portion-swap@example.com");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  const original = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('原菜','[{\"name\":\"大米\",\"amount\":\"100g\"}]','[]','approved',1)").run().lastInsertRowid);
+  const replacement = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('新菜','[{\"name\":\"大米\",\"amount\":\"200g\"}]','[]','approved',4)").run().lastInsertRowid);
+  db.prepare("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,constraints_json) VALUES('portion-plan',?,'份量回归','2026-09-12','2026-09-20',?)")
+    .run(owner.user.id,JSON.stringify({ executionItems: { "portion-meal": { servings: 1.5,recipeId: original,targetMealId: "target" } } }));
+  db.prepare("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json) VALUES('portion-meal','portion-plan',?,'2026-09-12','午餐','原菜',?,'[{\"name\":\"大米\",\"amount\":\"150g\"}]')").run(owner.user.id,original);
+  await verifyPortionReplacement(new SqliteMealPlansRepository(db),owner.user.id,original,replacement,async () =>
+    JSON.parse((db.prepare("SELECT constraints_json FROM meal_plans WHERE id='portion-plan'").get() as JsonObject).constraints_json).executionItems["portion-meal"]);
+});
+
+
+test("maintenance event evaluates and applies one affected meal without changing a confirmed meal",async () => {
+  const owner = await register("maintenance-flow@example.com");
+  await verifyMaintenanceFlow(new SqliteMaintenanceQueueRepository(db),owner.user.id,async (sql,args = []) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...args) as JsonObject[];
+    statement.run(...args); return [];
+  });
+});
+
+
+test("rolling weekly preview preserves overlapping arrangements and fills only day seven",async () => {
+  const owner = await register("weekly-roll@example.com");
+  await verifyWeeklyRoll(owner.user.id,async (sql,args = []) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...args) as JsonObject[];
+    statement.run(...args); return [];
+  },async () => {
+    const result = await api("/api/v1/recommendations/weekly-plan",{ token: owner.token,method: "POST",body: JSON.stringify({ startDate: "2036-09-13",mealTypes: ["lunch"],servings: 1 }) });
+    assert.equal(result.response.status,200);
+    return result.body as unknown as import("@dietdigidose/contracts").WeeklyPlanPreview;
+  });
+});
+
+
+test("household dining preferences are explicit, self-owned and revoked on leaving",async () => {
+  const owner = await register("dining-owner@example.com"), member = await register("dining-member@example.com");
+  const { HouseholdsService } = await import("../src/modules/households/service.js");
+  const { SqliteHouseholdsRepository } = await import("../src/modules/households/sqliteRepository.js");
+  const service = new HouseholdsService(new SqliteHouseholdsRepository(db),() => "DINING01");
+  const family = await service.create(owner.user.id,"共餐设置");
+  await service.join(member.user.id,"DINING01");
+  const diningRecipeId = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,status,serving_size) VALUES('共餐花生菜','[{\"name\":\"花生油\",\"amount\":\"10ml\"}]','approved',2)").run().lastInsertRowid);
+  const dietBefore = db.prepare("SELECT count(*) AS n FROM diet_records").get() as JsonObject;
+  const produced = await verifyHouseholdProduction(service,Number(family.id),owner.user.id,member.user.id);
+  assert.deepEqual(db.prepare("SELECT count(*) AS n FROM diet_records").get(),dietBefore);
+  const third = await register("dining-third@example.com");
+  await service.join(third.user.id,"DINING01");
+  await verifyHouseholdEating(service,Number(family.id),String(produced.id),[owner.user.id,member.user.id,third.user.id]);
+  for (const userId of [owner.user.id,member.user.id,third.user.id]) {
+    const records = db.prepare("SELECT amount,calories FROM diet_records WHERE user_id=? AND food_name='家庭蛋饭'").all(userId);
+    assert.deepEqual(records,[{ amount: "1份",calories: null }]);
+  }
+  const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
+  await verifyHouseholdCorrections(service,new SqliteDietRecordsRepository(db),Number(family.id),owner.user.id,member.user.id,"DINING01");
+  await verifyHouseholdReservations(service,new SqliteDietRecordsRepository(db),Number(family.id),owner.user.id,member.user.id,"DINING01");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  await verifyDiningPlanChanges(service,new SqliteMealPlansRepository(db),new SqliteDietRecordsRepository(db),Number(family.id),owner.user.id,member.user.id,diningRecipeId,"DINING01",async (sql,args = []) => {
+    const statement = db.prepare(sql); if (statement.reader) return statement.all(...args) as JsonObject[];
+    statement.run(...args); return [];
+  });
+  await verifyHouseholdPlanProduction(service,new SqliteMealPlansRepository(db),Number(family.id),owner.user.id,member.user.id,async (sql,args = []) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...args) as JsonObject[];
+    statement.run(...args); return [];
+  });
+  await verifyHouseholdPlanPreview(service,Number(family.id),owner.user.id,member.user.id,diningRecipeId,async (sql,args = []) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...args) as JsonObject[];
+    statement.run(...args); return [];
+  });
+  const staleMembership = await verifyHouseholdDining(service,Number(family.id),owner.user.id,member.user.id,diningRecipeId);
+  const endpoint = `/api/v1/households/${family.id}/dining-preferences`;
+  assert.equal((await api(endpoint,{ token: member.token })).response.status,403);
+  const own = (await api(endpoint,{ token: owner.token })).body as JsonObject;
+  assert.equal((await api(endpoint,{ token: owner.token,method: "PUT",body: JSON.stringify({ ...own,userId: member.user.id }) })).response.status,400);
+  await service.join(member.user.id,"DINING01");
+  const fresh = await service.diningPreferences(member.user.id,Number(family.id));
+  assert.equal(fresh.shared,false); assert.deepEqual(fresh.allergies,[]);
+  assert.notEqual(fresh.membershipId,staleMembership.membershipId);
+  await assert.rejects(() => service.saveDiningPreferences(member.user.id,Number(family.id),{ ...staleMembership,shared: true }),/已变化/);
+});
+
+test("household inventory rejects stale edits and removal without changing quantity",async () => {
+  const owner = await register("family-cas-owner@example.com"), member = await register("family-cas-member@example.com");
+  const family = (await api("/api/v1/households",{ token: owner.token,method: "POST",body: JSON.stringify({ name: "并发库存" }) })).body as JsonObject;
+  await api("/api/v1/households/join",{ token: member.token,method: "POST",body: JSON.stringify({ invite_code: family.invite_code }) });
+  const base = `/api/v1/households/${family.id}/inventory`;
+  const created = (await api(base,{ token: owner.token,method: "POST",body: JSON.stringify({ food_name: "鸡蛋",quantity: "6个",expiration_date: "2099-01-01" }) })).body as JsonObject;
+  const endpoint = `${base}/${created.id}`;
+  const saved = await api(endpoint,{ token: member.token,method: "PUT",body: JSON.stringify({ version: created.version,quantity: "5个" }) });
+  assert.equal(saved.response.status,200); assert.equal((saved.body as JsonObject).version,Number(created.version)+1);
+  assert.equal((await api(endpoint,{ token: owner.token,method: "PUT",body: JSON.stringify({ version: created.version,quantity: "99个" }) })).response.status,409);
+  assert.equal((await api(`${endpoint}?version=${created.version}`,{ token: owner.token,method: "DELETE" })).response.status,409);
+  assert.equal((await api(endpoint,{ token: owner.token,method: "DELETE" })).response.status,400);
+  assert.equal((await api(endpoint,{ token: owner.token,method: "PUT",body: JSON.stringify({ quantity: "88个" }) })).response.status,400);
+  const rows = (await api(base,{ token: owner.token })).body as JsonObject[];
+  assert.equal(rows.find(row => row.id === created.id)?.quantity,"5个");
+  assert.equal((await api(`${endpoint}?version=${(saved.body as JsonObject).version}`,{ token: owner.token,method: "DELETE" })).response.status,200);
+});
+
+
+test("Agent explicit recipe preferences use guarded shared learning settings and retain provenance",async () => {
+  const { verifyAgentRecipePreference } = await import("./agentRecipePreferenceAssertions.js");
+  const { SqliteAgentOperationsRepository } = await import("../src/modules/agentOperations/sqliteRepository.js");
+  const { createRecommendationsRuntime } = await import("../src/modules/recommendations/index.js");
+  const account = await register("agent-taste-197@example.com");
+  const recipe = db.prepare("SELECT id FROM recipes WHERE status='approved' AND deleted_at IS NULL LIMIT 1").get() as JsonObject;
+  await verifyAgentRecipePreference(new SqliteAgentOperationsRepository(db),createRecommendationsRuntime(db).service,
+    async (sql,values) => db.prepare(sql).run(...values),account.user.id,Number(recipe.id));
+});
+
+test("staging smoke exercises current production and eating contracts and cleans up its account",async () => {
+  const { verifyStagingSmoke } = await import("./stagingSmokeAssertions.js");
+  await verifyStagingSmoke(baseUrl);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM users WHERE email LIKE 'staging-smoke-%@example.invalid'").get() as JsonObject).n,0);
+});
+
+for (const intakeSource of ["manual", "image", "receipt", "shopping"] as const) test(`weekly metrics reconstruct ${intakeSource} inventory-selection-production-intake and protect admin controls`, async () => {
+  const previousEnvironment = process.env.CORE_LOOP_ENVIRONMENT;
+  process.env.CORE_LOOP_ENVIRONMENT = "metric-fixture";
+  try {
+    const account = await register(`core-loop-${intakeSource}-fixture@example.invalid`);
+    const admin = await loginAdmin();
+    const adminGet = (path: string) => api(path,{ token: admin });
+    const actorPath = `/api/v1/admin/core-loops/actors/${account.user.id}`;
+    assert.equal((await api("/api/v1/admin/core-loops",{ token: account.token })).response.status,403);
+    assert.equal((await api(actorPath,{ method: "PUT",token: account.token,body: JSON.stringify({ kind: "real",version: 0 }) })).response.status,403);
+    const config = (await adminGet("/api/v1/admin/core-loops/settings")).body as JsonObject;
+    assert.equal((await api("/api/v1/admin/core-loops/settings",{ method: "PUT",token: admin,body: JSON.stringify({ enabled: true,version: config.version }) })).response.status,200);
+    const classify = (kind: string,version: number) => api(actorPath,{ method: "PUT",token: admin,body: JSON.stringify({ kind,version }) });
+    assert.equal((await classify("real",0)).response.status,200);
+    assert.equal((await classify("test",0)).response.status,409);
+    const stockInput = { food_name: "闭环鸡蛋",category: "蛋类",quantity: "2个",quantity_value: 2,quantity_unit: "piece",expiration_date: "2036-09-20",storage_location: "冷藏" };
+    const stockPath = intakeSource === "manual" ? "/api/v1/inventory" : intakeSource === "shopping" ? "/api/v1/inventory/import-shopping-list" : "/api/v1/inventory/bulk-intake";
+    const stockPayload = intakeSource === "manual" ? stockInput : intakeSource === "shopping"
+      ? { idempotency_key: "metric-shopping-import-186",items: [stockInput] }
+      : { idempotency_key: `metric-${intakeSource}-intake-186`,source: intakeSource,items: [{ ...stockInput,source: intakeSource,confirmed: true }] };
+    const stock = await api(stockPath,{ method: "POST",token: account.token,body: JSON.stringify(stockPayload) });
+    assert.equal(stock.response.status,201,JSON.stringify(stock.body));
+    const item = intakeSource === "manual" ? stock.body as JsonObject : (stock.body as JsonObject).items[0];
+    if (intakeSource === "shopping") {
+      assert.equal((await api(stockPath,{ method: "POST",token: account.token,body: JSON.stringify(stockPayload) })).response.status,200);
+      assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE inventory_item_id=? AND action='created'").get(item.id) as JsonObject).n,1);
+    }
+    const recipeId = Number(db.prepare("INSERT INTO recipes(title,description,cook_time,difficulty,category,ingredients_json,steps_json,status,quality_status,serving_size) VALUES('闭环蒸蛋','验收',10,'简单','闭环验收',?,?,'approved','trusted',1)").run(JSON.stringify([{ name: "闭环鸡蛋",amount: "1枚" }]),JSON.stringify(["蒸熟"])).lastInsertRowid);
+    const page = await api("/api/v1/recommendations/recipes",{ method: "POST",token: account.token,body: JSON.stringify({ surface: "inventory",category: "闭环验收",pageSize: 10 }) });
+    assert.equal(page.response.status,200);
+    assert((page.body as JsonObject).items.some((candidate: JsonObject) => candidate.recipeId === recipeId));
+    const queued = await api("/api/v1/cooking-queue",{ method: "POST",token: account.token,body: JSON.stringify({ recipeId,recommendationRequestId: (page.body as JsonObject).requestId }) });
+    const queue = (queued.body as JsonObject).item;
+    const input = { idempotency_key: "metric-production-186",recipe_id: recipeId,inventory_consumptions: [{ item_id: item.id,version: item.version,mode: "amount",amount_value: 1,unit: "piece" }],
+      production: { food_name: "闭环成品",produced_servings: 1,eaten_servings: 1,queue_item_id: queue.id,queue_version: queue.version } };
+    db.exec("CREATE TRIGGER fail_metric_funnel BEFORE INSERT ON funnel_events WHEN NEW.event_name='cooking_completed' BEGIN SELECT RAISE(ABORT,'injected analytics outage'); END");
+    const made = await api("/api/v1/diet-records/cooking-completions",{ method: "POST",token: account.token,body: JSON.stringify(input) });
+    db.exec("DROP TRIGGER fail_metric_funnel");
+    assert.equal(made.response.status,201);
+    const report = (await adminGet("/api/v1/admin/core-loops?details=1")).body as JsonObject;
+    assert.equal(report.verifiedUsers,1,JSON.stringify(report));
+    assert.equal(report.verifiedLoops,1);
+    process.env.CORE_LOOP_ENVIRONMENT = "other-fixture";
+    assert.equal(((await adminGet("/api/v1/admin/core-loops")).body as JsonObject).status,"not_collected");
+    assert.equal(((await adminGet("/api/v1/admin/core-loops/settings")).body as JsonObject).enabled,false);
+    process.env.CORE_LOOP_ENVIRONMENT = "metric-fixture";
+
+    assert.equal(report.evaluations.find((row: JsonObject) => row.actorKey === `user:${account.user.id}`).reason,"included");
+    const replay = await api("/api/v1/diet-records/cooking-completions",{ method: "POST",token: account.token,body: JSON.stringify(input) });
+    assert.equal(replay.response.status,200);
+    // Removing non-authoritative analytics cannot erase the committed business chain.
+    db.prepare("DELETE FROM funnel_events").run();
+    assert.equal(((await adminGet("/api/v1/admin/core-loops")).body as JsonObject).verifiedLoops,1);
+    assert.equal((await classify("automation",1)).response.status,200);
+    assert.equal(((await adminGet("/api/v1/admin/core-loops")).body as JsonObject).verifiedUsers,0);
+    assert.equal((await classify("real",2)).response.status,200);
+    const recordId = (made.body as JsonObject).diet_record.id;
+    assert.equal((await api(`/api/v1/diet-records/${recordId}?mode=undo_eating`,{ method: "DELETE",token: account.token })).response.status,200);
+    assert.equal(((await adminGet("/api/v1/admin/core-loops")).body as JsonObject).verifiedLoops,0);
+    assert.equal((await adminGet("/api/v1/admin/core-loops?date=bad")).response.status,400);
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.CORE_LOOP_ENVIRONMENT; else process.env.CORE_LOOP_ENVIRONMENT = previousEnvironment;
+  }
+});
+
+test("admin mapping review atomically approves aliases and current recipe requirements, rejects stale decisions", async () => {
+  const admin = await loginAdmin(); const account = await register("mapping-review-fixture@example.invalid");
+  const base = "/api/v1/admin/kitchenware/mapping-reviews";
+  assert.equal((await api(base,{ token: account.token })).response.status,403);
+  const catalog = db.prepare("SELECT id FROM kitchenware_catalog WHERE name='烤箱'").get() as JsonObject;
+  const raw = "映射审核专用烤炉";
+  const recipe = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,steps_json,required_kitchenware_json,optional_kitchenware_json) VALUES('映射审核夹具','[]','[]',?,'[]')").run(JSON.stringify([raw])).lastInsertRowid);
+  const reviewId = Number(db.prepare("INSERT INTO kitchenware_mapping_reviews(raw_name,normalized_name,source_type,source_id,confidence) VALUES(?,?,'recipe',?,0.72)").run(raw,raw,String(recipe)).lastInsertRowid);
+  const getReview = async () => ((await api(base,{ token: admin })).body as JsonObject).items.find((row: JsonObject) => row.id === reviewId);
+  const first = await getReview(); assert(first);
+  const approve = (token: string) => api(`${base}/${reviewId}`,{ token: admin,method: "POST",body: JSON.stringify({ token,decision: "approved",catalogId: catalog.id }) });
+  db.prepare("UPDATE kitchenware_mapping_reviews SET confidence=0.6 WHERE id=?").run(reviewId);
+  assert.equal((await approve(first.token)).response.status,409);
+  const current = await getReview(); assert.equal((await approve(current.token)).response.status,200);
+  assert.equal((await approve(current.token)).response.status,409);
+  assert(JSON.parse((db.prepare("SELECT aliases FROM kitchenware_catalog WHERE id=?").get(catalog.id) as JsonObject).aliases).includes(raw));
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM recipe_kitchenware_requirements WHERE recipe_id=? AND catalog_id=? AND role='required'").get(recipe,catalog.id) as JsonObject).n,1);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM admin_audit_logs WHERE action='kitchenware_mapping.approved' AND resource_id=?").get(String(reviewId)) as JsonObject).n,1);
+  assert.equal((await api(`${base}/${reviewId}`,{ token: account.token,method: "POST",body: JSON.stringify({ token: current.token,decision: "rejected" }) })).response.status,403);
+  const expiredRaw = "已从菜谱移除的厨具词";
+  const expiredId = Number(db.prepare("INSERT INTO kitchenware_mapping_reviews(raw_name,normalized_name,source_type,source_id,confidence) VALUES(?,?,'recipe',?,0.72)").run(expiredRaw,expiredRaw,String(recipe)).lastInsertRowid);
+  const expired = ((await api(base,{ token: admin })).body as JsonObject).items.find((row: JsonObject) => row.id === expiredId);
+  assert.equal((await api(`${base}/${expiredId}`,{ token: admin,method: "POST",body: JSON.stringify({ token: expired.token,decision: "approved",catalogId: catalog.id }) })).response.status,409);
+  assert(!JSON.parse((db.prepare("SELECT aliases FROM kitchenware_catalog WHERE id=?").get(catalog.id) as JsonObject).aliases).includes(expiredRaw));
+  assert.equal((await api(`${base}/${expiredId}`,{ token: admin,method: "POST",body: JSON.stringify({ token: expired.token,decision: "rejected" }) })).response.status,200);
+  assert.equal((db.prepare("SELECT status FROM kitchenware_mapping_reviews WHERE id=?").get(expiredId) as JsonObject).status,"rejected");
+});
+
+test("kitchenware specifications round-trip, preserve omitted updates and support explicit unknowns", async () => {
+  const account = await register("kitchenware-attributes@example.invalid");
+  const input = { name: "平底锅",attributes: { capacityMl: 3000,diameterCm: 28,heatSources: ["gas","induction"] } };
+  const created = await api("/api/v1/kitchenware",{ method: "POST",token: account.token,body: JSON.stringify(input) });
+  assert.equal(created.response.status,201);
+  assert.deepEqual((created.body as JsonObject).attributes,input.attributes);
+  const id = (created.body as JsonObject).id;
+  const updated = await api(`/api/v1/kitchenware/${id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",note: "只修改备注" }) });
+  assert.equal(updated.response.status,200);
+  assert.deepEqual((updated.body as JsonObject).attributes,input.attributes);
+  const listed = await api("/api/v1/kitchenware",{ token: account.token });
+  assert.deepEqual((listed.body as JsonObject[]).find(item => item.id === id)?.attributes,input.attributes);
+  const unknown = { capacityMl: null,diameterCm: null,heatSources: null };
+  assert.deepEqual(((await api(`/api/v1/kitchenware/${id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes: unknown }) })).body as JsonObject).attributes,unknown);
+  for (const attributes of [{ capacityMl: -1 },{ diameterCm: 0 },{ heatSources: ["gas","gas"] },{ heatSources: ["unknown"] },{ untrustedCapability: "bake" }])
+    assert.equal((await api(`/api/v1/kitchenware/${id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes }) })).response.status,400);
+});
+
+test("kitchenware compatibility enforces stored capability conditions on SQLite", async () => {
+  const account = await register("kitchenware-conditions@example.invalid");
+  const created = await api("/api/v1/kitchenware",{ method: "POST",token: account.token,body: JSON.stringify({ name: "平底锅" }) });
+  const pan = created.body as JsonObject;
+  db.prepare("INSERT INTO kitchenware_capabilities(code,name,safety_level) VALUES('spec_test','规格测试','normal')").run();
+  db.prepare("INSERT INTO kitchenware_catalog_capabilities(catalog_id,capability_code,constraints_json) VALUES(?,'spec_test',?)")
+    .run(pan.catalog_id,JSON.stringify({ minCapacityMl: 3000,minDiameterCm: 28,heatSource: "induction" }));
+  const recipe = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,steps_json,status) VALUES('规格约束验证','[]','[]','approved')").run().lastInsertRowid);
+  db.prepare("INSERT INTO recipe_kitchenware_requirements(recipe_id,capability_code,role,confidence) VALUES(?,'spec_test','required',1)").run(recipe);
+  const compatibility = async () => {
+    const response = await api(`/api/v1/kitchenware/recipes/${recipe}/compatibility`,{ token: account.token });
+    assert.equal(response.response.status,200);
+    return response.body as JsonObject;
+  };
+  assert.equal((await compatibility()).blocking.length,1);
+  await api(`/api/v1/kitchenware/${pan.id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes: { capacityMl: 3000,diameterCm: 28,heatSources: ["induction"] } }) });
+  assert.equal((await compatibility()).blocking.length,0);
+  await api(`/api/v1/kitchenware/${pan.id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes: { capacityMl: 2999,diameterCm: 28,heatSources: ["induction"] } }) });
+  assert.equal((await compatibility()).blocking.length,1);
+});
+
+test("admin kitchenware capability conditions validate, persist and reject stale edits", async () => {
+  const admin = await loginAdmin();
+  const account = await register("capability-admin-fixture@example.invalid");
+  const catalog = db.prepare("SELECT id FROM kitchenware_catalog WHERE name='平底锅'").get() as JsonObject;
+  const url = `/api/v1/admin/kitchenware/catalog/${catalog.id}/capabilities`;
+  assert.equal((await api(url,{ token: account.token })).response.status,403);
+  assert.equal((await api(url,{ method: "PUT",token: account.token,body: '{}' })).response.status,403);
+  const current = (await api(url,{ token: admin })).body as JsonObject;
+  const payload = { token: current.token,capabilities: [{ code: "fry",constraints: { minCapacityMl: 3000,heatSource: "induction" } }] };
+  const put = (body: unknown) => api(url,{ method: "PUT",token: admin,body: JSON.stringify(body) });
+  for (const capabilities of [[{ code: "missing",constraints: {} }],[{ code: "fry",constraints: { unexpected: true } }],[{ code: "fry",constraints: { minCapacityMl: -1 } }],[{ code: "fry",constraints: {} },{ code: "fry",constraints: {} }]])
+    assert.equal((await put({ token: current.token,capabilities })).response.status,400);
+  assert.equal(((await api(url,{ token: admin })).body as JsonObject).token,current.token);
+  assert.equal((await put(payload)).response.status,200);
+  const saved = (await api(url,{ token: admin })).body as JsonObject;
+  assert.deepEqual(saved.capabilities,payload.capabilities);
+  assert.equal((await put(payload)).response.status,409);
+  const audit = db.prepare("SELECT summary FROM admin_audit_logs WHERE action='kitchenware_capabilities.update' AND resource_id=?").all(String(catalog.id)) as JsonObject[];
+  assert.equal(audit.length,1);
+  assert.deepEqual(JSON.parse(audit[0].summary).after,payload.capabilities);
+  assert.equal((await put({ token: saved.token,capabilities: [] })).response.status,200);
+  assert.deepEqual(((await api(url,{ token: admin })).body as JsonObject).capabilities,[]);
+  assert.equal((await api('/api/v1/admin/kitchenware/catalog/999999999/capabilities',{ token: admin })).response.status,404);
+});
+
+test("proactive intervention schema preserves defaults, dedupe and account ownership", async () => {
+  const account = await register("intervention-owner@example.invalid");
+  const other = await register("intervention-other@example.invalid");
+  db.prepare("INSERT INTO proactive_intervention_preferences(user_id) VALUES(?)").run(account.user.id);
+  const preferences = db.prepare("SELECT enabled,expiry_rescue,dinner_window FROM proactive_intervention_preferences WHERE user_id=?").get(account.user.id);
+  assert.deepEqual(preferences,{ enabled: 0,expiry_rescue: 0,dinner_window: 0 });
+  const insert = db.prepare(`INSERT INTO proactive_interventions(id,user_id,source_key,kind,candidate_json,starts_at,expires_at)
+    VALUES(?,?,?,'expiry_rescue','{}','2026-09-12 00:00:00','2026-09-13 00:00:00')`);
+  insert.run('schema-intervention',account.user.id,'expiry-day');
+  assert.throws(() => insert.run('duplicate-intervention',account.user.id,'expiry-day'),/UNIQUE/);
+  insert.run('other-intervention',other.user.id,'expiry-day');
+  const action = db.prepare(`INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json)
+    VALUES(?,'schema-intervention',?,?,'snooze','{}','{}')`);
+  assert.throws(() => action.run('cross-account',other.user.id,'cross'),/FOREIGN KEY/);
+  action.run('valid-action',account.user.id,'once');
+  assert.throws(() => action.run('repeated-action',account.user.id,'once'),/UNIQUE/);
+  const outcome = db.prepare(`INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at)
+    VALUES(?,'schema-intervention',?,'inventory_used','inventory_event','source-1',CURRENT_TIMESTAMP)`);
+  assert.throws(() => outcome.run('cross-outcome',other.user.id),/FOREIGN KEY/);
+  outcome.run('valid-outcome',account.user.id);
+  assert.throws(() => outcome.run('duplicate-outcome',account.user.id),/UNIQUE/);
+  assert.throws(() => db.prepare("UPDATE proactive_interventions SET status='invalid' WHERE id='schema-intervention'").run(),/CHECK/);
+  const saved = db.prepare("SELECT status,delivery_state FROM proactive_interventions WHERE id='schema-intervention'").get();
+  assert.deepEqual(saved,{ status: 'candidate',delivery_state: 'none' });
+});
+
+test("intervention preference API requires explicit consent and cancels pending disabled deliveries", async () => {
+  const account = await register("int-prefs@example.invalid");
+  const other = await register("int-prefs-other@example.invalid");
+  const url = "/api/v1/notifications/intervention-preferences";
+  assert.equal((await api(url)).response.status,401);
+  const defaults = (await api(url,{ token: account.token })).body as JsonObject;
+  assert.equal(defaults.enabled,false);assert.equal(defaults.expiry_rescue,false);assert.equal(defaults.dinner_window,false);assert.equal(defaults.version,0);
+  const put = (body: unknown) => api(url,{ method: "PUT",token: account.token,body: JSON.stringify(body) });
+  for (const patch of [{ time_zone: 'invalid/zone' },{ quiet_start: '24:00' },{ daily_push_limit: 4 },{ enabled: 1 },{ user_id: other.user.id }])
+    assert.equal((await put({ ...defaults,...patch })).response.status,400);
+  const enabled = { ...defaults,enabled: true,expiry_rescue: true,dinner_window: true };
+  assert.equal((await put(enabled)).response.status,200);
+  assert.equal((await put(enabled)).response.status,409);
+  assert.equal(((await api(url,{ token: other.token })).body as JsonObject).enabled,false);
+  db.prepare(`INSERT INTO proactive_interventions(id,user_id,source_key,kind,candidate_json,starts_at,expires_at,delivery_state)
+    VALUES('prefs-pending',?,'prefs-source','expiry_rescue','{}','2026-09-12','2026-09-13','pending')`).run(account.user.id);
+  const disabled = await put({ ...enabled,version: 1,expiry_rescue: false });
+  assert.equal(disabled.response.status,200);assert.equal((disabled.body as JsonObject).version,2);
+  assert.equal((db.prepare("SELECT delivery_state FROM proactive_interventions WHERE id='prefs-pending'").get() as JsonObject).delivery_state,'cancelled');
+  const read = (await api(url,{ token: account.token })).body as JsonObject;
+  assert.equal(read.expiry_rescue,false);assert.equal(read.dinner_window,true);
+});
+
+test("notification snoozes expire within the same UTC day for ISO and SQLite timestamps", async () => {
+  const account = await register('snooze-format@example.invalid');
+  const other = await register('snooze-format-other@example.invalid');
+  const { SqliteNotificationsRepository } = await import('../src/modules/notifications/sqliteRepository.js');
+  const repository = new SqliteNotificationsRepository(db);
+  const dates = db.prepare(`SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now','start of day') AS iso,
+    datetime('now','start of day') AS legacy, strftime('%Y-%m-%dT%H:%M:%fZ','now','+1 day') AS future`).get() as { iso: string; legacy: string; future: string };
+  const insert = db.prepare(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,snoozed_until)
+    VALUES(?,'proactive_intervention','提醒','内容','action_required','normal','pending',?)`);
+  const ids = [dates.iso,dates.legacy,null].map(date => Number(insert.run(account.user.id,date).lastInsertRowid));
+  insert.run(account.user.id,dates.future);
+  insert.run(other.user.id,dates.iso);
+  assert.equal(await repository.unreadCount(account.user.id),3);
+  for (const filter of ['all','pending'] as const) {
+    assert.deepEqual((await repository.history(account.user.id,filter,null,20)).map(row => (row as JsonObject).id),[...ids].reverse());
+  }
+});
+
+test("intervention reservations atomically persist decisions, quota and a single inbox item", async () => {
+  const account = await register('reserve-int@example.invalid');
+  const { SqliteNotificationsRepository } = await import('../src/modules/notifications/sqliteRepository.js');
+  const { verifyInterventionReservation } = await import('./interventionReservationAssertions.js');
+  await verifyInterventionReservation(new SqliteNotificationsRepository(db),account.user.id);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM user_notification_inbox WHERE user_id=? AND type='proactive_intervention'").get(account.user.id) as JsonObject).n,2);
+  const { verifyInterventionDelivery } = await import("./interventionReservationAssertions.js");
+  const intervention = db.prepare("SELECT id FROM proactive_interventions WHERE user_id=? AND notification_id IS NOT NULL LIMIT 1").get(account.user.id) as { id: string };
+  const card = await api(`/api/v1/notifications/interventions/${intervention.id}`,{ token: account.token });
+  assert.equal(card.response.status,200);
+  assert.equal((card.body as JsonObject).id,intervention.id);
+  assert.equal((card.body as JsonObject).policy_input_json,undefined);
+  assert.equal((card.body as JsonObject).user_id,undefined);
+  assert.equal((await api(`/api/v1/notifications/interventions/${intervention.id}`)).response.status,401);
+  const other = await register("int-card-other@example.com");
+  assert.equal((await api(`/api/v1/notifications/interventions/${intervention.id}`,{ token: other.token })).response.status,404);
+  assert.equal((await api("/api/v1/notifications/interventions/invalid",{ token: account.token })).response.status,400);
+  await verifyInterventionDelivery(new SqliteNotificationsRepository(db),account.user.id);
+  const { verifyInterventionScanCursor } = await import("./interventionReservationAssertions.js");
+  const { SqliteWorkerRepository } = await import("../src/modules/worker/sqliteRepository.js");
+  await verifyInterventionScanCursor(new SqliteNotificationsRepository(db),new SqliteWorkerRepository(db));
+  const { verifyInterventionFeedback } = await import("./interventionReservationAssertions.js");
+  await verifyInterventionFeedback(new SqliteNotificationsRepository(db),account.user.id);
+  const feedbackRow = db.prepare("SELECT id FROM proactive_interventions WHERE user_id=? AND source_key=?").get(account.user.id,`feedback:${account.user.id}:snooze`) as { id: string };
+  const feedbackUrl = `/api/v1/notifications/interventions/${feedbackRow.id}/feedback`;
+  const feedback = { action: "snooze",confirmed: true,idempotencyKey: "11111111-1111-4111-8111-111111111111" };
+  const postFeedback = (token?: string,body: unknown = feedback) => api(feedbackUrl,{ method: "POST",token,body: JSON.stringify(body) });
+  assert.equal((await postFeedback()).response.status,401);
+  assert.equal((await postFeedback(other.token)).response.status,404);
+  assert.equal((await postFeedback(account.token,{ ...feedback,confirmed: false })).response.status,400);
+  assert.equal((await postFeedback(account.token,{ ...feedback,action: "not_helpful" })).response.status,409);
+  const feedbackReplay = await postFeedback(account.token);
+  assert.equal(feedbackReplay.response.status,200);
+  assert.equal((feedbackReplay.body as JsonObject).repeated,true);
 });

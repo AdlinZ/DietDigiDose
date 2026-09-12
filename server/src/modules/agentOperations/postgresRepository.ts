@@ -1,4 +1,7 @@
-import { permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
+import { learningOverrides } from "../recommendations/preferenceEvidence.js";
+import { lockMealPlanning } from "../mealPlans/postgresLock.js";
+import { PostgresMealPlansRepository } from "../mealPlans/postgresRepository.js";
+import { permanentRecipePreferencePayloadSchema, permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
 import { PostgresDietRecordsRepository } from "../dietRecords/postgresRepository.js";
 import { agentMealProduction, agentPreparedMealEvent } from "../../services/agent/mealPayload.js";
 import { agentInventoryCreate, agentInventoryUpdate, agentInventoryConsumption } from "../../services/agent/inventoryPayload.js";
@@ -33,6 +36,7 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
   async executeActions(userId: number, runId: string, proposals: ExecutableAgentAction[]) {
     try {
       return await this.transaction(async (client) => {
+      await lockMealPlanning(client,userId);
         const run = await client.query("SELECT status FROM agent_runs WHERE id=$1 AND user_id=$2 FOR UPDATE", [runId, userId]);
         if (!run.rows[0] || run.rows[0].status !== "running") throw new Error("Agent Run 已取消或不再允许执行操作");
         const executions = [];
@@ -54,6 +58,7 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
 
   async undoActions(userId: number, runId: string) {
     return this.transaction(async (client) => {
+      await lockMealPlanning(client,userId);
       const selected = await client.query<PgActionRow>(`SELECT id,action_type,status,before_json,result_json,executed_at,created_at
         FROM agent_actions WHERE run_id=$1 AND user_id=$2 AND status IN ('executed','undone')
         ORDER BY created_at,id FOR UPDATE`, [runId, userId]);
@@ -88,6 +93,7 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
             action.action_type === "add_inventory_item" ? null : before?.quantity_value ?? null,current.quantity_unit,
             `agent-undo:${action.id}`,JSON.stringify({ actionId: action.id, runId, actionType: action.action_type })]);
         } else if (action.action_type === "create_meal_plan" && result?.planId) {
+          await new PostgresMealPlansRepository(this.pool).assertPlanEditWithClient(client,userId,String(result.planId),{ archive: true });
           const changed = await client.query(`UPDATE meal_plans SET deleted_at=CURRENT_TIMESTAMP,status='cancelled',version=version+1
             WHERE id=$1 AND user_id=$2 AND created_by_run_id=$3 AND version=1 AND deleted_at IS NULL`, [result.planId, userId, runId]);
           if (changed.rowCount !== 1) throw new Error("餐单已在 Agent 执行后发生变化，无法安全撤销");
@@ -104,6 +110,7 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
             before.id, userId, Number(before.version) + 1]);
           if (changed.rowCount !== 1) throw new Error("采购项已在 Agent 执行后发生变化，无法安全撤销");
         } else if (action.action_type === "update_meal_plan" && before?.id) {
+          await new PostgresMealPlansRepository(this.pool).assertPlanEditWithClient(client,userId,String(before.id),{ startDate: String(before.start_date),endDate: String(before.end_date),status: String(before.status),constraints: before.constraints_json });
           const changed = await client.query(`UPDATE meal_plans SET title=$1,start_date=$2,end_date=$3,status=$4,constraints_json=$5,
             version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$6 AND user_id=$7 AND version=$8`,
           [before.title, before.start_date, before.end_date, before.status, before.constraints_json,
@@ -159,6 +166,7 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
         const selectedPlan = await client.query(`SELECT * FROM meal_plans WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE`, [planId, userId]);
         before = selectedPlan.rows[0];
         if (!before) throw new Error("餐单不存在或无权修改");
+        await new PostgresMealPlansRepository(this.pool).assertPlanEditWithClient(client,userId,planId,{ startDate: payload.startDate ? stringValue(payload.startDate) : undefined,endDate: payload.endDate ? stringValue(payload.endDate) : undefined,constraints: payload.constraints });
         await client.query(`UPDATE meal_plans SET title=COALESCE($1,title),start_date=COALESCE($2,start_date),
           end_date=COALESCE($3,end_date),constraints_json=COALESCE($4,constraints_json),version=version+1,
           updated_at=CURRENT_TIMESTAMP WHERE id=$5 AND user_id=$6`, [
@@ -279,6 +287,20 @@ export class PostgresAgentOperationsRepository implements AgentOperationsReposit
         const { input, reason } = agentInventoryConsumption(payload, `agent-inventory:${runId}:${action.id}`);
         const consumed = await consumeInventoryWithPostgresClient(client, userId, input, { reason, runId });
         result = { inventoryItemIds: input.items.map(item => item.item_id), ...consumed, reason };
+        break;
+      }
+      case "update_recipe_preference": {
+        const input = permanentRecipePreferencePayloadSchema.parse(payload);
+        const recipe = await client.query("SELECT id FROM recipes WHERE id=$1 AND status='approved' AND deleted_at IS NULL FOR SHARE",[input.recipeId]);
+        if (!recipe.rows[0]) throw new Error("菜谱不存在或不可设置偏好");
+        await client.query("INSERT INTO recommendation_learning_settings(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING",[userId]);
+        const stored = (await client.query("SELECT * FROM recommendation_learning_settings WHERE user_id=$1 FOR UPDATE",[userId])).rows[0];
+        if (Number(stored.version)!==input.version) throw new Error("偏好已更新，请重新核对提案");
+        const overrides = learningOverrides(stored);
+        before = { version: Number(stored.version),preference: overrides[String(input.recipeId)] ?? null };
+        overrides[String(input.recipeId)] = { value: input.value,updatedAt: new Date().toISOString(),sourceActionId: action.id! };
+        await client.query("UPDATE recommendation_learning_settings SET overrides_json=$1::jsonb,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=$2",[JSON.stringify(overrides),userId]);
+        result = { recipeId: input.recipeId,value: input.value,version: input.version+1,scope: "persistent" };
         break;
       }
       case "update_kitchen_preferences": {

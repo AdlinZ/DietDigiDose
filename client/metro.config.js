@@ -5,6 +5,16 @@ const { withUniwindConfig } = require('uniwind/metro');
 
 const config = getDefaultConfig(__dirname);
 
+// Keep Chinese UI text as UTF-8 instead of six-byte Unicode escapes.
+// This preserves the text while keeping exports within the shared size budget.
+config.transformer.minifierConfig = {
+  ...config.transformer.minifierConfig,
+  output: {
+    ...config.transformer.minifierConfig?.output,
+    ascii_only: false,
+  },
+};
+
 // 安全地获取 Expo 的默认排除列表
 const existingBlockList = [].concat(config.resolver.blockList || []);
 

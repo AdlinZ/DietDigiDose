@@ -1,3 +1,4 @@
+import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
 import { InventoryDomainError } from "./errors.js";
 import { quantityEvidenceStatus } from "./evidence.js";
 import { savedIntakeItems } from "./intakeIdentity.js";
@@ -82,6 +83,8 @@ export async function consumeInventoryWithPostgresClient(
       transition.storedUnit, transition.amountUsed === null ? null : -Math.round((transition.amountUsed + Number.EPSILON) * 1000) / 1000,
       `${input.idempotency_key}:${consumption.item_id}:${index}`, JSON.stringify(metadata),
     ]);
+    await appendPostgresMaintenanceEvent(client,{ userId,kind: "inventory_changed",sourceId: `consume:${input.idempotency_key}:${consumption.item_id}:${index}`,
+      subjectId: String(consumption.item_id),details: { version: consumption.version+1,mode: "consume" } });
     changes.push({
       item_id: consumption.item_id,
       quantity_before: transition.storedValue,
@@ -148,6 +151,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
       item.quantity_unit ?? null, item.package_size_value ?? null, item.package_size_unit ?? null,
       item.batch_code ?? null,
     ]);
+    await appendPostgresMaintenanceEvent(client, { userId, kind: "inventory_created", sourceId: String(result.rows[0].id), subjectId: String(result.rows[0].id) });
     return formatInventoryItem(result.rows[0]!);
   }
 
@@ -191,7 +195,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
       `, [userId, input.idempotency_key]);
       if (existing.rows[0]) return inventoryImportResponseSchema.parse({ items: existing.rows[0].result_json, repeated: true });
       const items = [];
-      for (const item of input.items) items.push(await this.insertInventoryItem(client, userId, item));
+      for (const item of input.items) items.push(await this.createWithClient(client, userId, item));
       await client.query(`
         INSERT INTO shopping_inventory_imports (user_id, idempotency_key, result_json) VALUES ($1, $2, $3::jsonb)
       `, [userId, input.idempotency_key, JSON.stringify(items)]);
@@ -213,6 +217,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
         await client.query("UPDATE inventory_items SET deleted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,version=version+1 WHERE id=$1 AND user_id=$2", [item.id,userId]);
         await client.query(`INSERT INTO inventory_change_logs(user_id,inventory_item_id,action,source,quantity_before,quantity_after,quantity_unit,delta_value,idempotency_key,metadata_json)
           VALUES($1,$2,'removed','manual',$3,$3,$4,0,$5,$6::jsonb)`, [userId,item.id,item.quantity_value ?? null,item.quantity_unit ?? null,key,JSON.stringify({ intake_undo_job: jobId })]);
+        await appendPostgresMaintenanceEvent(client, { userId,kind: "inventory_changed",sourceId: key,subjectId: String(item.id),details: { version: item.version+1,mode: "undo_intake" } });
         undone++;
       }
       return { undone, repeated: undone === 0 };
@@ -362,7 +367,9 @@ export class PostgresInventoryRepository implements InventoryRepository {
             ? { quantity: { status: "known", source: "user" } } : {} }),
       ]);
     }
-    return { kind: "updated", item: updated } as const;
+    await appendPostgresMaintenanceEvent(client, { userId,kind: "inventory_changed",sourceId: `update:${itemId}:${updated.version}`,subjectId: String(itemId),
+        details: { version: updated.version,previousFoodName: String(current.food_name),mode: "update" } });
+      return { kind: "updated", item: updated } as const;
   }
 
   async remove(userId: number, item: InventoryItem) {
@@ -379,6 +386,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
         VALUES ($1, $2, 'removed', 'manual', $3, $3, $4, 0, $5)
         ON CONFLICT (user_id, idempotency_key) DO NOTHING
       `, [userId, item.id, item.quantity_value ?? null, item.quantity_unit ?? null, `remove:${item.id}:${item.version}`]);
+      await appendPostgresMaintenanceEvent(client, { userId,kind: "inventory_changed",sourceId: `remove:${item.id}`,subjectId: String(item.id),details: { mode: "remove" } });
       return { kind: "removed" } as const;
     });
   }

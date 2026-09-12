@@ -316,12 +316,41 @@ async function main() {
     const legacyDatabase = new Database(legacyPath);
     const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
       .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => ![59, 60, 61, 62].includes(migration.version));
+    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 22 }, (_, index) => 59 + index).includes(migration.version));
     if (unsupportedVersions.length) {
       legacyDatabase.close();
       throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
     }
     for (const migration of newerVersions) {
+      if (migration.version === 80) legacyDatabase.exec("DROP TABLE proactive_intervention_scan_cursor;");
+      if (migration.version === 79) legacyDatabase.exec("DROP TABLE proactive_intervention_outcomes; DROP TABLE proactive_intervention_actions; DROP TABLE proactive_interventions; DROP TABLE proactive_intervention_preferences;");
+      if (migration.version === 78) legacyDatabase.exec("DROP TABLE core_loop_actor_classifications; DROP TABLE core_loop_metric_settings;");
+      // These destructive reversals apply only to this newly created, empty drill
+      // fixture. They are deliberately not exposed as a production downgrade.
+      if (migration.version === 77) legacyDatabase.exec(`
+        DROP INDEX idx_household_shopping_plan_demand;
+        ALTER TABLE household_shopping_items DROP COLUMN source_plan_item_id;
+        ALTER TABLE household_shopping_items DROP COLUMN source_demand_key;
+        ALTER TABLE household_shopping_items DROP COLUMN source_generated_version;
+      `);
+      if (migration.version === 76) legacyDatabase.exec("ALTER TABLE meal_plan_items DROP COLUMN dining_json; ALTER TABLE household_meal_batches DROP COLUMN dining_json;");
+      if (migration.version === 75) legacyDatabase.exec("DROP INDEX idx_household_meal_batches_plan; ALTER TABLE household_meal_batches DROP COLUMN plan_item_id;");
+      if (migration.version === 74) legacyDatabase.exec("DROP TABLE household_meal_reservations; ALTER TABLE household_meal_events DROP COLUMN reserved_servings_used;");
+      if (migration.version === 73) legacyDatabase.exec("DROP TABLE household_meal_intake_corrections;");
+      if (migration.version === 72) legacyDatabase.exec("DROP TABLE household_meal_events;");
+      if (migration.version === 71) legacyDatabase.exec("DROP TABLE household_meal_batches;");
+      if (migration.version === 70) legacyDatabase.exec(`
+        ALTER TABLE household_members DROP COLUMN dining_shared;
+        ALTER TABLE household_members DROP COLUMN dining_preferences_json;
+        ALTER TABLE household_members DROP COLUMN dining_version;
+      `);
+      if (migration.version === 69) legacyDatabase.exec("DROP TABLE plan_maintenance_job_events; DROP TABLE plan_maintenance_jobs;");
+      if (migration.version === 68) legacyDatabase.exec("DROP TABLE plan_maintenance_events;");
+      if (migration.version === 67) legacyDatabase.exec("DROP TABLE plan_maintenance_settings;");
+      if (migration.version === 66) legacyDatabase.exec("ALTER TABLE prepared_meals DROP COLUMN reported_cooking_minutes;");
+      if (migration.version === 65) legacyDatabase.exec("DROP TABLE recommendation_learning_settings;");
+      if (migration.version === 64) legacyDatabase.exec("DROP TABLE meal_plan_changes; ALTER TABLE meal_plan_items DROP COLUMN confirmed_at;");
+      if (migration.version === 63) legacyDatabase.exec("DROP TABLE prepared_meal_intake_corrections;");
       if (migration.version === 62) legacyDatabase.exec(`
         DROP INDEX idx_cooking_queue_active_plan_item;
         DROP INDEX idx_cooking_queue_active_recipe;

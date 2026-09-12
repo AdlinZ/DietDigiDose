@@ -101,6 +101,7 @@ export async function createApp() {
   app.use("/api/v1/meal-plans", routes.mealPlans);
   app.use("/api/v1/insights", routes.insights);
   app.use("/api/v1/recommendations", routes.recommendations);
+  app.use("/api/v1/plan-maintenance", routes.planMaintenance);
   app.use("/api/v1/kitchenware", routes.kitchenware);
   app.use("/api/v1/notifications", routes.notifications);
   app.use("/api/v1/media", routes.media);

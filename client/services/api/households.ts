@@ -1,3 +1,7 @@
+import { householdMealReservationResultSchema, type HouseholdMealReservationInput } from "@dietdigidose/contracts";
+import { householdMealSchema, type HouseholdMealProductionInput } from "@dietdigidose/contracts";
+import { householdMealsSchema, householdEatingResultSchema, type HouseholdMealEatingInput } from "@dietdigidose/contracts";
+import { householdDiningAllocationPreviewSchema, type HouseholdDiningAllocationInput, householdDiningMembersSchema, householdDiningPreferencesSchema, type HouseholdDiningPreferencesInput } from "@dietdigidose/contracts";
 import { requestJson, type ApiFetch } from "./client";
 
 export interface HouseholdMember {
@@ -70,6 +74,22 @@ export interface HouseholdActivityLog {
 }
 
 export const householdApi = {
+  reserveMeal: (apiFetch: ApiFetch,householdId: number,mealId: string,input: HouseholdMealReservationInput) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/meals/${encodeURIComponent(mealId)}/reservation`, { method: "PUT",body: JSON.stringify(input) },householdMealReservationResultSchema),
+  produceMeal: (apiFetch: ApiFetch, householdId: number, input: HouseholdMealProductionInput) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/meals`, { method: "POST",body: JSON.stringify(input) },householdMealSchema),
+  meals: (apiFetch: ApiFetch, householdId: number) => requestJson(apiFetch, `/api/v1/households/${householdId}/meals`, {}, householdMealsSchema),
+  eatMeal: (apiFetch: ApiFetch, householdId: number, mealId: string, input: HouseholdMealEatingInput) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/meals/${encodeURIComponent(mealId)}/eat`, { method: "POST",body: JSON.stringify(input) },householdEatingResultSchema),
+  previewDiningAllocation: (apiFetch: ApiFetch, householdId: number, input: HouseholdDiningAllocationInput) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/dining-allocation-preview`, { method: "POST", body: JSON.stringify(input) }, householdDiningAllocationPreviewSchema),
+  diningMembers: (apiFetch: ApiFetch, householdId: number) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/dining-members`, {}, householdDiningMembersSchema),
+  diningPreferences: (apiFetch: ApiFetch, householdId: number) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/dining-preferences`, {}, householdDiningPreferencesSchema),
+  saveDiningPreferences: (apiFetch: ApiFetch, householdId: number, input: HouseholdDiningPreferencesInput) =>
+    requestJson(apiFetch, `/api/v1/households/${householdId}/dining-preferences`, { method: "PUT", body: JSON.stringify(input) }, householdDiningPreferencesSchema),
+
   create: (apiFetch: ApiFetch, name: string) =>
     requestJson<Household>(apiFetch, "/api/v1/households", {
       method: "POST",
@@ -133,8 +153,8 @@ export const householdApi = {
       body: JSON.stringify(input),
     }),
 
-  inventoryRemove: (apiFetch: ApiFetch, householdId: number, itemId: number) =>
-    requestJson<{ message: string }>(apiFetch, `/api/v1/households/${householdId}/inventory/${itemId}`, {
+  inventoryRemove: (apiFetch: ApiFetch, householdId: number, itemId: number, version: number) =>
+    requestJson<{ message: string }>(apiFetch, `/api/v1/households/${householdId}/inventory/${itemId}?version=${version}`, {
       method: "DELETE",
     }),
 

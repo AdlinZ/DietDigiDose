@@ -1,6 +1,7 @@
 export type Row = Record<string, unknown>;
 
 export type KitchenwareInput = {
+  attributes?: import("@dietdigidose/contracts").KitchenwareAttributes;
   name: string;
   category: string;
   status: string;
@@ -25,8 +26,10 @@ export type ResolvedCatalog = {
 
 export type KitchenwareRequirement = {
   role: string;
+  /** Non-null means this device (or a governed equivalent) is required. */
   catalogId: number | null;
   catalogName: string | null;
+  /** Generic matching is allowed only when catalogId is null. */
   capabilityCode: string | null;
   confidence: number;
   notes: string;

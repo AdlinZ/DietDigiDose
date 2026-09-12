@@ -1,3 +1,4 @@
+import { coreLoopInventoryIds } from "./coreLoopProjection.js";
 import type Database from "better-sqlite3";
 import type { AdminConsoleRepository } from "./repository.js";
 import type { AdminAudit, AuditQuery, Row, ScanQuery, TrashResource, UsageQuery } from "./types.js";
@@ -9,6 +10,42 @@ const TABLES: Record<TrashResource, string> = {
 export class SqliteAdminConsoleRepository implements AdminConsoleRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+
+  async coreLoopSettings() { return (this.database.prepare("SELECT * FROM core_loop_metric_settings WHERE id=1").get() as Row | undefined) ?? { enabled: 0, coverage_start: null, version: 1 }; }
+  async updateCoreLoopSettings(enabled: boolean, version: number, environment: string | null, audit: AdminAudit) { return this.database.transaction(() => {
+    this.database.prepare("INSERT INTO core_loop_metric_settings(id) VALUES(1) ON CONFLICT(id) DO NOTHING").run();
+    const result = this.database.prepare("UPDATE core_loop_metric_settings SET enabled=?,coverage_start=CASE WHEN ?=1 THEN CASE WHEN environment=? THEN COALESCE(coverage_start,CURRENT_TIMESTAMP) ELSE CURRENT_TIMESTAMP END ELSE coverage_start END,environment=CASE WHEN ?=1 THEN ? ELSE environment END,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=1 AND version=?").run(Number(enabled),Number(enabled),environment,Number(enabled),environment,version);
+    if (!result.changes) return false; this.insertAudit(audit); return true;
+  })(); }
+  async coreLoopActor(userId: number) { return (this.database.prepare("SELECT u.id AS user_id,COALESCE(c.kind,'unknown') AS kind,COALESCE(c.version,0) AS version FROM users u LEFT JOIN core_loop_actor_classifications c ON c.user_id=u.id WHERE u.id=?").get(userId) as Row | undefined) ?? null; }
+  async updateCoreLoopActor(userId: number, kind: string, version: number, audit: AdminAudit) { return this.database.transaction(() => {
+    if (!this.database.prepare("SELECT id FROM users WHERE id=?").get(userId)) return false;
+    const result = version === 0 ? this.database.prepare("INSERT INTO core_loop_actor_classifications(user_id,kind,classified_by) VALUES(?,?,?) ON CONFLICT(user_id) DO NOTHING").run(userId,kind,audit.adminUserId)
+      : this.database.prepare("UPDATE core_loop_actor_classifications SET kind=?,classified_by=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND version=?").run(kind,audit.adminUserId,userId,version);
+    if (!result.changes) return false; this.insertAudit(audit); return true;
+  })(); }
+  async coreLoopData(start: string, end: string) { return this.database.transaction(() => {
+    const productions = this.database.prepare(`SELECT m.id,m.user_id,m.idempotency_key,m.recipe_id,m.produced_at,c.kind,
+      json_object('selection_evidence',json_extract(m.result_json,'$.selection_evidence'),'inventory_consumption_changes',json_extract(m.result_json,'$.inventory_consumption_changes'),'metric_environment',json_extract(m.result_json,'$.metric_environment')) AS result_json,
+      r.created_at AS selection_created_at FROM prepared_meals m JOIN users u ON u.id=m.user_id LEFT JOIN core_loop_actor_classifications c ON c.user_id=m.user_id
+      LEFT JOIN recipe_recommendation_requests r ON r.id=json_extract(m.result_json,'$.selection_evidence.requestId') AND r.user_id=m.user_id
+      WHERE EXISTS(SELECT 1 FROM prepared_meal_events e WHERE e.prepared_meal_id=m.id AND e.event_type='eat' AND e.created_at>=datetime(?) AND e.created_at<datetime(?))`).all(start,end) as Row[];
+    const ids = JSON.stringify(productions.map(row => row.id));
+    const intakes = this.database.prepare(`SELECT e.prepared_meal_id,e.user_id,e.servings,e.created_at,e.diet_record_id,d.id IS NOT NULL AS record_exists,
+      EXISTS(SELECT 1 FROM prepared_meal_intake_corrections c WHERE c.event_id=e.id) AS corrected
+      FROM prepared_meal_events e LEFT JOIN diet_records d ON d.id=e.diet_record_id AND d.user_id=e.user_id
+      WHERE e.event_type='eat' AND e.prepared_meal_id IN (SELECT value FROM json_each(?))`).all(ids) as Row[];
+    const logs = this.database.prepare("SELECT user_id,inventory_item_id,action,source,quantity_before,quantity_after,delta_value,idempotency_key,created_at,json_extract(metadata_json,'$.acceptance') AS acceptance FROM inventory_change_logs WHERE inventory_item_id IN (SELECT value FROM json_each(?)) AND (action='created' OR source='cooking')").all(JSON.stringify(coreLoopInventoryIds(productions))) as Row[];
+    const legacy = this.database.prepare(`SELECT m.id,m.user_id,m.recipe_id,m.diet_record_id,m.created_at,c.kind,d.id IS NOT NULL AS record_exists
+      FROM cooking_completions m JOIN users u ON u.id=m.user_id LEFT JOIN core_loop_actor_classifications c ON c.user_id=m.user_id
+      LEFT JOIN diet_records d ON d.id=m.diet_record_id AND d.user_id=m.user_id WHERE m.created_at>=datetime(?) AND m.created_at<datetime(?)`).all(start,end) as Row[];
+    const shared = this.database.prepare(`SELECT m.id,m.created_by_user_id,m.created_at AS produced_at,c.kind,e.diet_record_id,e.servings,e.created_at AS intake_at
+      FROM household_meal_batches m JOIN household_meal_events e ON e.meal_id=m.id AND e.user_id=m.created_by_user_id
+      JOIN diet_records d ON d.id=e.diet_record_id AND d.user_id=e.user_id LEFT JOIN core_loop_actor_classifications c ON c.user_id=e.user_id
+      WHERE e.created_at>=datetime(?) AND e.created_at<datetime(?) AND NOT EXISTS(SELECT 1 FROM household_meal_intake_corrections x WHERE x.event_id=e.id)`).all(start,end) as Row[];
+    const settings = (this.database.prepare("SELECT * FROM core_loop_metric_settings WHERE id=1").get() as Row | undefined) ?? { enabled: 0,version: 1,coverage_start: null };
+    return { productions,intakes,logs,legacy,shared,settings };
+  })(); }
 
   async stats() { const count = (sql: string) => Number((this.database.prepare(sql).get() as Row).count); return {
     users: count("SELECT COUNT(*) AS count FROM users"), posts: count("SELECT COUNT(*) AS count FROM community_posts WHERE deleted_at IS NULL"),

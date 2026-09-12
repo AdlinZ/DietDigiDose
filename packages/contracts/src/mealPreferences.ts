@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const kitchenPreferencesSchema = z.object({
+  avoid_spicy: z.boolean().nullable().optional().describe("明确不吃辣；本次条件只作用于请求，不覆盖长期设置"),
   meal_time_minutes: z.number().int().min(5).max(300).nullable().optional(),
   budget_per_meal: z.number().finite().min(0).max(100_000).nullable().optional(),
   cooking_level: z.enum(["beginner", "intermediate", "advanced"]).nullable().optional(),

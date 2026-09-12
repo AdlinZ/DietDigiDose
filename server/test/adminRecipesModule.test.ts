@@ -21,7 +21,7 @@ describe("admin recipes module", () => {
     const service = new AdminRecipesService(repository({
       duplicateSources: async () => [{ id: 9, title: "空气炸锅番茄", ingredients_json: [{ name: "番茄" }], steps_json: ["切块", "烤熟"] }],
       create: async (input) => { captured = input; return 42; },
-    }), { resolveCatalog: async (name) => name === "空气炸锅" ? { id: 3, confidence: 1, capabilities: [{ code: "dry_heat" }] } : null });
+    }), { resolveCatalog: async (name) => name === "空气炸锅" ? { id: 3, confidence: 1, capabilities: [{ code: "dry_heat" }] } : { id: 3,confidence: 0.72,capabilities: [{ code: "dry_heat" }] } });
     const result = await service.create(7, {
       title: "空气炸锅番茄", description: "", cook_time: 15, difficulty: "简单", calories: 100,
       protein: 3, carbs: 12, fat: 2, category: "晚餐", tags: ["快手"], steps: ["切块", "烤熟"],

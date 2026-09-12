@@ -1,4 +1,6 @@
-import { permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
+import { learningOverrides } from "../recommendations/preferenceEvidence.js";
+import { SqliteMealPlansRepository } from "../mealPlans/sqliteRepository.js";
+import { permanentRecipePreferencePayloadSchema, permanentPreferencePayloadSchema } from "../../services/agent/preferencePayload.js";
 import { SqliteDietRecordsRepository } from "../dietRecords/sqliteRepository.js";
 import { agentMealProduction, agentPreparedMealEvent } from "../../services/agent/mealPayload.js";
 import { agentInventoryCreate, agentInventoryUpdate, agentInventoryConsumption } from "../../services/agent/inventoryPayload.js";
@@ -81,6 +83,7 @@ export class SqliteAgentOperationsRepository implements AgentOperationsRepositor
               action.action_type === "add_inventory_item" ? null : before?.quantity_value ?? null,current.quantity_unit,
               `agent-undo:${action.id}`,JSON.stringify({ actionId: action.id, runId, actionType: action.action_type }));
         } else if (action.action_type === "create_meal_plan" && result?.planId) {
+          new SqliteMealPlansRepository(this.database).assertPlanEditInTransaction(userId,String(result.planId),{ archive: true });
           const changed = this.database.prepare(`UPDATE meal_plans SET deleted_at = CURRENT_TIMESTAMP,status = 'cancelled',version = version + 1
             WHERE id = ? AND user_id = ? AND created_by_run_id = ? AND version = 1 AND deleted_at IS NULL`)
             .run(result.planId, userId, runId).changes;
@@ -101,6 +104,7 @@ export class SqliteAgentOperationsRepository implements AgentOperationsRepositor
             ).changes;
           if (changed !== 1) throw new Error("采购项已在 Agent 执行后发生变化，无法安全撤销");
         } else if (action.action_type === "update_meal_plan" && before?.id) {
+          new SqliteMealPlansRepository(this.database).assertPlanEditInTransaction(userId,String(before.id),{ startDate: String(before.start_date),endDate: String(before.end_date),status: String(before.status),constraints: before.constraints_json });
           const changed = this.database.prepare(`UPDATE meal_plans SET title = ?,start_date = ?,end_date = ?,status = ?,
             constraints_json = ?,version = version + 1,updated_at = CURRENT_TIMESTAMP
             WHERE id = ? AND user_id = ? AND version = ?`).run(
@@ -160,6 +164,7 @@ export class SqliteAgentOperationsRepository implements AgentOperationsRepositor
         const planId = stringValue(payload.planId);
         before = this.database.prepare("SELECT * FROM meal_plans WHERE id = ? AND user_id = ? AND deleted_at IS NULL").get(planId, userId);
         if (!before) throw new Error("餐单不存在或无权修改");
+        new SqliteMealPlansRepository(this.database).assertPlanEditInTransaction(userId,planId,{ startDate: payload.startDate ? stringValue(payload.startDate) : undefined,endDate: payload.endDate ? stringValue(payload.endDate) : undefined,constraints: payload.constraints });
         this.database.prepare(`UPDATE meal_plans SET title = COALESCE(?,title),start_date = COALESCE(?,start_date),
           end_date = COALESCE(?,end_date),constraints_json = COALESCE(?,constraints_json),version = version + 1,
           updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`).run(
@@ -275,6 +280,20 @@ export class SqliteAgentOperationsRepository implements AgentOperationsRepositor
         const { input, reason } = agentInventoryConsumption(payload, `agent-inventory:${runId}:${action.id}`);
         const consumed = inventory.consumeInTransaction(userId, input, { reason, runId });
         result = { inventoryItemIds: input.items.map(item => item.item_id), ...consumed, reason };
+        break;
+      }
+      case "update_recipe_preference": {
+        const input = permanentRecipePreferencePayloadSchema.parse(payload);
+        const recipe = this.database.prepare("SELECT id FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(input.recipeId);
+        if (!recipe) throw new Error("菜谱不存在或不可设置偏好");
+        this.database.prepare("INSERT INTO recommendation_learning_settings(user_id) VALUES(?) ON CONFLICT(user_id) DO NOTHING").run(userId);
+        const stored = this.database.prepare("SELECT * FROM recommendation_learning_settings WHERE user_id=?").get(userId) as Record<string,unknown>;
+        if (Number(stored.version)!==input.version) throw new Error("偏好已更新，请重新核对提案");
+        const overrides = learningOverrides(stored);
+        before = { version: Number(stored.version),preference: overrides[String(input.recipeId)] ?? null };
+        overrides[String(input.recipeId)] = { value: input.value,updatedAt: new Date().toISOString(),sourceActionId: action.id! };
+        this.database.prepare("UPDATE recommendation_learning_settings SET overrides_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=?").run(JSON.stringify(overrides),userId);
+        result = { recipeId: input.recipeId,value: input.value,version: input.version+1,scope: "persistent" };
         break;
       }
       case "update_kitchen_preferences": {

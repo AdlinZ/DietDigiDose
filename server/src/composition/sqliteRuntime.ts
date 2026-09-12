@@ -1,3 +1,7 @@
+import { SqliteMaintenanceQueueRepository } from "../modules/planMaintenance/sqliteQueueRepository.js";
+import { PlanMaintenanceService } from "../modules/planMaintenance/service.js";
+import { createPlanMaintenanceRouter } from "../modules/planMaintenance/route.js";
+import { SqlitePlanMaintenanceRepository } from "../modules/planMaintenance/sqliteRepository.js";
 import { createAiContextService } from "../modules/aiContext/index.js";
 import { configureAiContextService } from "../modules/aiContext/runtime.js";
 import { SqliteAiContextRepository } from "../modules/aiContext/sqliteRepository.js";
@@ -114,6 +118,7 @@ export function initializeSqliteApplication(): ApplicationRuntime {
       mealPlans: mealPlanRoutes,
       insights: insightsRoutes,
       recommendations: recommendations.routes,
+        planMaintenance: createPlanMaintenanceRouter(new PlanMaintenanceService(new SqlitePlanMaintenanceRepository(db))),
       kitchenware: createKitchenwareModule(db),
       notifications: notificationsRoutes,
       media: mediaRoutes,
@@ -126,10 +131,11 @@ export function initializeSqliteApplication(): ApplicationRuntime {
 
 export function initializeSqliteWorker(): WorkerRuntimeBundle {
   initDatabase();
-  configureNotificationsService(createNotificationsService(new SqliteNotificationsRepository(db)));
+  configureNotificationsService(createNotificationsService(new SqliteNotificationsRepository(db),createRecommendationsRuntime(db).service));
   return {
     driver: "sqlite",
     worker: new WorkerRuntime(new SqliteWorkerRepository(db)),
+    maintenanceQueue: new SqliteMaintenanceQueueRepository(db),
     mediaCleanup: new MediaCleanupService(new SqliteMediaCleanupRepository(db), deleteStoredMediaReferences),
     async close() {},
   };

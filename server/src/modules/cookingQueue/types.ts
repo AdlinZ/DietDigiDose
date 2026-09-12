@@ -2,6 +2,7 @@ export type QueueRow = Record<string, unknown>;
 export type QueueStatus = "waiting" | "preparing" | "ready" | "cooking" | "completed" | "cancelled";
 
 export type QueueCreateInput = {
+  recommendationRequestId?: string;
   recipeId: number;
   idempotencyKey?: string;
   plannedAt?: string | null;

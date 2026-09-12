@@ -41,3 +41,11 @@ describe("notification response routing", () => {
     }, "COMPLETE")).toBeNull();
   });
 });
+
+describe("proactive intervention navigation", () => {
+  it("opens the owned-card route without treating a push action as an inventory write", () => {
+    const id = "a".repeat(64);
+    expect(resolveNotificationDestination({ type: "proactive_intervention",interventionId: id },"COMPLETE")).toEqual({ pathname: "/intervention",params: { id } });
+    expect(resolveNotificationDestination({ type: "proactive_intervention",interventionId: "invalid" },"DEFAULT")).toEqual({ pathname: "/notifications" });
+  });
+});

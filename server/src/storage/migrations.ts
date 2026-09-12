@@ -2077,6 +2077,283 @@ const migrations: Migration[] = [
     },
   },
 
+  {
+    version: 63,
+    name: "prepared_meal_intake_corrections",
+    up(database) {
+      database.exec(`CREATE TABLE prepared_meal_intake_corrections (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        event_id TEXT NOT NULL REFERENCES prepared_meal_events(id) ON DELETE CASCADE,
+        original_diet_record_id INTEGER NOT NULL,
+        mode TEXT NOT NULL CHECK(mode IN ('undo_eating','delete_intake')),
+        result_json TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id,original_diet_record_id), UNIQUE(event_id)
+      );`);
+    },
+  },
+
+  {
+    version: 64,
+    name: "meal_plan_change_review",
+    up(database) {
+      database.exec(`ALTER TABLE meal_plan_items ADD COLUMN confirmed_at DATETIME;
+        UPDATE meal_plan_items SET confirmed_at=created_at WHERE plan_id IN (SELECT id FROM meal_plans WHERE status='active');
+        CREATE TABLE meal_plan_changes (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          plan_id TEXT NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
+          item_id TEXT NOT NULL REFERENCES meal_plan_items(id) ON DELETE CASCADE,
+          fingerprint TEXT NOT NULL, source TEXT NOT NULL, reason TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('pending','applied','rejected','blocked','reverted','conflict')),
+          before_version INTEGER NOT NULL, after_version INTEGER,
+          before_json TEXT NOT NULL, after_json TEXT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, applied_at DATETIME,
+          UNIQUE(user_id,fingerprint)
+        );
+        CREATE INDEX idx_meal_plan_changes_plan ON meal_plan_changes(user_id,plan_id,created_at);`);
+    },
+  },
+
+  {
+    version: 65,
+    name: "recommendation_learning_controls",
+    up(database) {
+      database.exec(`CREATE TABLE recommendation_learning_settings (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        overrides_json TEXT NOT NULL DEFAULT '{}',
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`);
+    },
+  },
+
+  { version: 66,name: "reported_cooking_minutes",up(database) { database.exec("ALTER TABLE prepared_meals ADD COLUMN reported_cooking_minutes INTEGER CHECK(reported_cooking_minutes BETWEEN 1 AND 1440)"); } },
+
+  { version: 67, name: "plan_maintenance_settings", up(database) {
+    database.exec(`CREATE TABLE plan_maintenance_settings (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      time_zone TEXT, local_time TEXT,
+      next_check_at DATETIME, next_local_date TEXT, last_completed_local_date TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CHECK(NOT enabled OR (time_zone IS NOT NULL AND local_time IS NOT NULL AND next_check_at IS NOT NULL AND next_local_date IS NOT NULL))
+    );
+    CREATE INDEX idx_plan_maintenance_due ON plan_maintenance_settings(enabled,next_check_at);`);
+  } },
+
+  { version: 68, name: "plan_maintenance_business_events", up(database) {
+    database.exec(`CREATE TABLE plan_maintenance_events (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL, source_id TEXT NOT NULL, subject_id TEXT NOT NULL,
+      details_json TEXT NOT NULL DEFAULT '{}',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, processed_at DATETIME,
+      UNIQUE(user_id,event_type,source_id)
+    );
+    CREATE INDEX idx_plan_maintenance_events_pending ON plan_maintenance_events(processed_at,user_id,created_at,id);`);
+  } },
+
+  { version: 69, name: "plan_maintenance_event_jobs", up(database) {
+    database.exec(`CREATE TABLE plan_maintenance_jobs (
+      id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','completed','failed')),
+      attempts INTEGER NOT NULL DEFAULT 0, rule_version TEXT NOT NULL,
+      available_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      lease_token TEXT, lease_expires_at DATETIME,
+      last_error TEXT, result_json TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX idx_plan_maintenance_jobs_due ON plan_maintenance_jobs(status,available_at,lease_expires_at);
+    CREATE TABLE plan_maintenance_job_events (
+      event_id TEXT PRIMARY KEY REFERENCES plan_maintenance_events(id) ON DELETE CASCADE,
+      job_id TEXT NOT NULL REFERENCES plan_maintenance_jobs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX idx_plan_maintenance_job_events_job ON plan_maintenance_job_events(job_id,event_id);`);
+  } },
+
+  { version: 70, name: "household_dining_preferences", up(database) {
+    database.exec(`ALTER TABLE household_members ADD COLUMN dining_shared INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE household_members ADD COLUMN dining_preferences_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE household_members ADD COLUMN dining_version INTEGER NOT NULL DEFAULT 1;`);
+  } },
+
+  { version: 71, name: "household_meal_batches", up(database) {
+    database.exec(`CREATE TABLE household_meal_batches (
+      id TEXT PRIMARY KEY,
+      household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+      created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      membership_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      request_json TEXT NOT NULL,
+      food_name TEXT NOT NULL,
+      produced_servings REAL NOT NULL CHECK(produced_servings > 0),
+      remaining_servings REAL NOT NULL CHECK(remaining_servings >= 0 AND remaining_servings <= produced_servings),
+      inventory_json TEXT NOT NULL,
+      nutrition_per_serving_json TEXT NOT NULL DEFAULT '{}',
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(household_id,idempotency_key)
+    );
+    CREATE INDEX idx_household_meal_batches_household ON household_meal_batches(household_id,created_at,id);`);
+  } },
+  { version: 72, name: "household_meal_eating_events", up(database) {
+    database.exec(`CREATE TABLE household_meal_events (
+      id TEXT PRIMARY KEY,
+      household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+      meal_id TEXT NOT NULL REFERENCES household_meal_batches(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      membership_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      servings REAL NOT NULL CHECK(servings > 0),
+      request_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      diet_record_id INTEGER REFERENCES diet_records(id) ON DELETE SET NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,idempotency_key)
+    );
+    CREATE INDEX idx_household_meal_events_meal ON household_meal_events(meal_id,created_at);
+    CREATE INDEX idx_household_meal_events_diet ON household_meal_events(diet_record_id,user_id);`);
+  } },
+  { version: 73, name: "household_meal_intake_corrections", up(database) {
+    database.exec(`CREATE TABLE household_meal_intake_corrections (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_id TEXT REFERENCES household_meal_events(id) ON DELETE SET NULL,
+      original_diet_record_id INTEGER NOT NULL,
+      mode TEXT NOT NULL CHECK(mode IN ('undo_eating','delete_intake')),
+      result_json TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,original_diet_record_id)
+    );`);
+  } },
+  { version: 74, name: "household_meal_reservations", up(database) {
+    database.exec(`CREATE TABLE household_meal_reservations (
+      meal_id TEXT NOT NULL REFERENCES household_meal_batches(id) ON DELETE CASCADE,
+      membership_id INTEGER NOT NULL REFERENCES household_members(id) ON DELETE CASCADE,
+      servings REAL NOT NULL CHECK(servings > 0),
+      PRIMARY KEY(meal_id,membership_id)
+    );
+    ALTER TABLE household_meal_events ADD COLUMN reserved_servings_used REAL NOT NULL DEFAULT 0;`);
+  } },
+  { version: 75, name: "household_meal_plan_source", up(database) {
+    database.exec(`ALTER TABLE household_meal_batches ADD COLUMN plan_item_id TEXT REFERENCES meal_plan_items(id) ON DELETE SET NULL;
+    CREATE UNIQUE INDEX idx_household_meal_batches_plan ON household_meal_batches(plan_item_id) WHERE plan_item_id IS NOT NULL;`);
+  } },
+  { version: 76, name: "meal_plan_dining_allocation", up(database) {
+    database.exec(`ALTER TABLE meal_plan_items ADD COLUMN dining_json TEXT;
+    ALTER TABLE household_meal_batches ADD COLUMN dining_json TEXT;`);
+  } },
+  { version: 77, name: "household_shopping_plan_source", up(database) {
+    database.exec(`ALTER TABLE household_shopping_items ADD COLUMN source_plan_item_id TEXT REFERENCES meal_plan_items(id) ON DELETE SET NULL;
+    ALTER TABLE household_shopping_items ADD COLUMN source_demand_key TEXT;
+    ALTER TABLE household_shopping_items ADD COLUMN source_generated_version INTEGER;
+    CREATE UNIQUE INDEX idx_household_shopping_plan_demand ON household_shopping_items(source_plan_item_id,source_demand_key) WHERE source_plan_item_id IS NOT NULL;`);
+  } },
+  { version: 78, name: "core_loop_metric_configuration", up(database) {
+    database.exec(`CREATE TABLE core_loop_metric_settings (
+      id INTEGER PRIMARY KEY CHECK(id=1),
+      environment TEXT,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      coverage_start DATETIME,
+      version INTEGER NOT NULL DEFAULT 1,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO core_loop_metric_settings(id) VALUES(1);
+    CREATE TABLE core_loop_actor_classifications (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('real','demo','test','automation','unknown')),
+      version INTEGER NOT NULL DEFAULT 1,
+      classified_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`);
+  } },
+
+  { version: 79, name: "proactive_intervention_state", up(database) {
+    database.exec(`CREATE TABLE proactive_intervention_preferences (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+      expiry_rescue INTEGER NOT NULL DEFAULT 0 CHECK(expiry_rescue IN (0,1)),
+      dinner_window INTEGER NOT NULL DEFAULT 0 CHECK(dinner_window IN (0,1)),
+      time_zone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+      quiet_start TEXT NOT NULL DEFAULT '22:00',
+      quiet_end TEXT NOT NULL DEFAULT '07:00',
+      dinner_time TEXT NOT NULL DEFAULT '18:00',
+      dinner_lead_minutes INTEGER NOT NULL DEFAULT 60 CHECK(dinner_lead_minutes BETWEEN 15 AND 180),
+      daily_push_limit INTEGER NOT NULL DEFAULT 1 CHECK(daily_push_limit BETWEEN 0 AND 3),
+      cooldown_minutes INTEGER NOT NULL DEFAULT 120 CHECK(cooldown_minutes BETWEEN 60 AND 10080),
+      not_cooking_date TEXT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE proactive_interventions (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_key TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('expiry_rescue','dinner_window')),
+      status TEXT NOT NULL DEFAULT 'candidate' CHECK(status IN ('candidate','suppressed','inbox','sent','acted','expired')),
+      candidate_json TEXT NOT NULL,
+      policy_input_json TEXT,
+      policy_version TEXT,
+      decision_reason TEXT,
+      channel TEXT CHECK(channel IN ('push','inbox_only','suppressed')),
+      priority TEXT CHECK(priority IN ('normal','high')),
+      starts_at DATETIME NOT NULL,
+      expires_at DATETIME NOT NULL,
+      decided_at DATETIME,
+      push_reserved_at DATETIME,
+      delivery_state TEXT NOT NULL DEFAULT 'none' CHECK(delivery_state IN ('none','pending','sending','accepted','failed','uncertain','cancelled')),
+      delivery_attempts INTEGER NOT NULL DEFAULT 0 CHECK(delivery_attempts >= 0),
+      lease_owner TEXT,
+      lease_until DATETIME,
+      next_attempt_at DATETIME,
+      notification_id INTEGER REFERENCES user_notification_inbox(id) ON DELETE SET NULL,
+      snoozed_until DATETIME,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,source_key),
+      UNIQUE(id,user_id),
+      CHECK(expires_at > starts_at)
+    );
+    CREATE INDEX idx_proactive_user_quota ON proactive_interventions(user_id,push_reserved_at);
+    CREATE INDEX idx_proactive_delivery ON proactive_interventions(delivery_state,next_attempt_at,lease_until);
+    CREATE INDEX idx_proactive_expiry ON proactive_interventions(status,expires_at);
+    CREATE TABLE proactive_intervention_actions (
+      id TEXT PRIMARY KEY,
+      intervention_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      idempotency_key TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('plan_recipe','view_alternatives','mark_consumed','mark_discarded','snooze','not_cooking_today','not_helpful')),
+      request_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,idempotency_key),
+      FOREIGN KEY(intervention_id,user_id) REFERENCES proactive_interventions(id,user_id) ON DELETE CASCADE
+    );
+    CREATE TABLE proactive_intervention_outcomes (
+      id TEXT PRIMARY KEY,
+      intervention_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      outcome_type TEXT NOT NULL CHECK(outcome_type IN ('cooking_started','inventory_used','inventory_discarded')),
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      occurred_at DATETIME NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(intervention_id,outcome_type,source_type,source_id),
+      FOREIGN KEY(intervention_id,user_id) REFERENCES proactive_interventions(id,user_id) ON DELETE CASCADE
+    );`);
+  } },
+
+  { version: 80, name: "intervention_scan_cursor", up(database) {
+    database.exec(`CREATE TABLE proactive_intervention_scan_cursor (
+      name TEXT PRIMARY KEY NOT NULL CHECK(name='opportunities'),
+      after_user_id INTEGER NOT NULL DEFAULT 0 CHECK(after_user_id>=0),
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`);
+  } },
 ];
 
 export function runMigrations(database: Database.Database) {

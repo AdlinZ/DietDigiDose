@@ -20,7 +20,7 @@ function createDatabase(extraConstraint = "") {
 
 const kitchenware = new Map([
   ["平底锅", { id: 1, name: "平底锅", confidence: 1 }],
-  ["烤箱", { id: 2, name: "烤箱", confidence: 0.95 }],
+  ["烤箱", { id: 2, name: "烤箱", confidence: 1 }],
 ]);
 
 function write(database: Database.Database, names: string[]) {
@@ -53,6 +53,19 @@ function write(database: Database.Database, names: string[]) {
 }
 
 describe("writeRecipeKitchenwareRequirements", () => {
+  test("partial catalog guesses are queued for review rather than persisted as requirements", () => {
+    const reviews: unknown[] = [];
+    const result = writeRecipeKitchenwareRequirements(["迷你烤箱玩具"],{
+      replace: false,isAvailable: () => true,
+      resolve: () => ({ id: 2,name: "烤箱",confidence: 0.72 }),
+      enqueueReview: (name,confidence) => { reviews.push({ name,confidence }); },
+      prepareRemove: () => () => {},
+      prepareInsert: () => () => { assert.fail("unreviewed mapping was persisted"); },
+      runAtomically: operation => operation(),
+    });
+    assert.deepEqual(result,{ mapped: [],unresolved: ["迷你烤箱玩具"] });
+    assert.deepEqual(reviews,[{ name: "迷你烤箱玩具",confidence: 0.72 }]);
+  });
   test("atomically replaces existing requirements and reports persisted mappings", () => {
     const database = createDatabase();
     try {
@@ -67,7 +80,7 @@ describe("writeRecipeKitchenwareRequirements", () => {
       assert.deepEqual(result, {
         mapped: [
           { rawName: "平底锅", catalogId: 1, catalogName: "平底锅", confidence: 1 },
-          { rawName: "烤箱", catalogId: 2, catalogName: "烤箱", confidence: 0.95 },
+          { rawName: "烤箱", catalogId: 2, catalogName: "烤箱", confidence: 1 },
         ],
         unresolved: [],
       });

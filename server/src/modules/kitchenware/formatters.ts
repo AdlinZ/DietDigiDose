@@ -1,3 +1,4 @@
+import { kitchenwareAttributesSchema } from "@dietdigidose/contracts";
 import type { KitchenwareRequirement, Row } from "./types.js";
 
 export function parseJson<T>(value: unknown, fallback: T): T {
@@ -39,4 +40,9 @@ export function formatCatalogItem(item: Row, capabilities: Row[], substitutions:
       impact_json: undefined,
     })),
   };
+}
+
+export function formatOwnedKitchenware(row: Row): Row & { attributes: import("@dietdigidose/contracts").KitchenwareAttributes } {
+  const parsed = kitchenwareAttributesSchema.safeParse(parseJson(row.attributes_json,{}));
+  return { ...row,attributes: parsed.success ? parsed.data : {} };
 }

@@ -1,3 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { decideInterventionFeedback, feedbackRequest, replayInterventionFeedback, type InterventionFeedbackDecision } from "../interventions/feedback.js";
+import type { InterventionFeedback } from "@dietdigidose/contracts";
+import { interventionDeliveryBlock, type InterventionDeliveryClaim, type InterventionDeliveryResult } from "../interventions/delivery.js";
+import { interventionCandidateId } from "../interventions/opportunities.js";
+import { reservationDecision, type InterventionReservation } from "../interventions/reservation.js";
 import type { Pool, PoolClient } from "pg";
 import { expiryContent, type ExpiryItem } from "./expiry.js";
 import type { NotificationsRepository } from "./repository.js";
@@ -10,6 +16,122 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async activeInterventionSnooze(userId: number,now: number): Promise<number | null> {
+    const row = (await this.pool.query("SELECT MAX(snoozed_until) AS until FROM proactive_interventions WHERE user_id=$1 AND kind='expiry_rescue' AND snoozed_until>$2",[userId,new Date(now).toISOString()])).rows[0];
+    return row.until ? new Date(row.until).getTime() : null;
+  }
+  async feedbackIntervention(userId: number,id: string,input: InterventionFeedback,now: number): Promise<InterventionFeedbackDecision> {
+    const request = feedbackRequest(id,input);
+    return this.tx(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[userId]);
+      const existing = (await client.query("SELECT request_json,result_json FROM proactive_intervention_actions WHERE user_id=$1 AND idempotency_key=$2",[userId,input.idempotencyKey])).rows[0] ?? null;
+      const replay = replayInterventionFeedback(existing,id,input);
+      if (replay) return replay;
+      const row = (await client.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND id=$2 FOR UPDATE",[userId,id])).rows[0] ?? null;
+      const preferences = (await client.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[userId])).rows[0] ?? null;
+      const decision = decideInterventionFeedback(row,preferences,input,now);
+      if (!decision.ok) return decision;
+      const result = decision.result,at = new Date(now).toISOString();
+      await client.query("UPDATE proactive_interventions SET status='acted',snoozed_until=$1,delivery_state=CASE WHEN delivery_state='pending' THEN 'cancelled' ELSE delivery_state END,updated_at=$2 WHERE user_id=$3 AND id=$4",[result.snoozedUntil,at,userId,id]);
+      await client.query("UPDATE user_notification_inbox SET action_status='completed',is_read=TRUE,read_at=$1,snoozed_until=$2,updated_at=$1 WHERE user_id=$3 AND id=$4",[at,result.snoozedUntil,userId,row.notification_id]);
+      if (result.notCookingDate) {
+        await client.query("UPDATE proactive_intervention_preferences SET not_cooking_date=$1,version=version+1,updated_at=$2 WHERE user_id=$3",[result.notCookingDate,at,userId]);
+        await client.query("UPDATE proactive_interventions SET delivery_state='cancelled',updated_at=$1 WHERE user_id=$2 AND kind='dinner_window' AND delivery_state='pending' AND candidate_json->>'localDate'=$3",[at,userId,result.notCookingDate]);
+      }
+      if (result.snoozedUntil) await client.query("UPDATE proactive_interventions SET delivery_state='cancelled',updated_at=$1 WHERE user_id=$2 AND kind='expiry_rescue' AND delivery_state='pending'",[at,userId]);
+      await client.query("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json,created_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)",[randomUUID(),id,userId,input.idempotencyKey,input.action,JSON.stringify(request),JSON.stringify(result),at]);
+      return decision;
+    });
+  }
+
+  async interventionCard(userId: number,id: string): Promise<Record<string,unknown> | null> {
+    return (await this.pool.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND id=$2 AND notification_id IS NOT NULL",[userId,id])).rows[0] ?? null;
+  }
+
+  async interventionScanCursor(): Promise<number> {
+    const row = (await this.pool.query("SELECT after_user_id FROM proactive_intervention_scan_cursor WHERE name='opportunities'")).rows[0];
+    return Number(row?.after_user_id ?? 0);
+  }
+  async advanceInterventionScan(expected: number,next: number,owner: string): Promise<boolean> {
+    if (![expected,next].every(value => Number.isSafeInteger(value) && value>=0) || !owner) throw new Error("Invalid scan checkpoint");
+    return this.tx(async client => {
+      if (!(await client.query("SELECT 1 FROM worker_task_leases WHERE task_name='intervention-scan' AND owner_id=$1 AND lease_expires_at>clock_timestamp() FOR UPDATE",[owner])).rows.length) return false;
+      await client.query("INSERT INTO proactive_intervention_scan_cursor(name) VALUES('opportunities') ON CONFLICT(name) DO NOTHING");
+      return (await client.query("UPDATE proactive_intervention_scan_cursor SET after_user_id=$1,updated_at=clock_timestamp() WHERE name='opportunities' AND after_user_id=$2 AND EXISTS (SELECT 1 FROM worker_task_leases WHERE task_name='intervention-scan' AND owner_id=$3 AND lease_expires_at>clock_timestamp())",[next,expected,owner])).rowCount===1;
+    });
+  }
+
+  async interventionScanUsers(afterId: number,limit: number): Promise<number[]> {
+    if (!Number.isSafeInteger(afterId) || afterId<0 || !Number.isInteger(limit) || limit<1 || limit>100) throw new Error("Invalid opportunity scan");
+    return (await this.pool.query("SELECT user_id FROM proactive_intervention_preferences WHERE enabled=1 AND (expiry_rescue=1 OR dinner_window=1) AND user_id>$1 ORDER BY user_id LIMIT $2",[afterId,limit])).rows.map(row => Number(row.user_id));
+  }
+  async interventionQueue(userId: number): Promise<Record<string,unknown>[]> {
+    return (await this.pool.query("SELECT status,planned_at,deleted_at FROM cooking_queue_items WHERE user_id=$1 AND deleted_at IS NULL AND status IN ('waiting','preparing','ready','cooking')",[userId])).rows;
+  }
+
+  async pendingInterventionUsers(now: number,limit: number): Promise<number[]> {
+    if (!Number.isFinite(now) || !Number.isInteger(limit) || limit<1 || limit>500) throw new Error("Invalid delivery scan");
+    const at = new Date(now).toISOString();
+    return (await this.pool.query("SELECT user_id FROM proactive_interventions WHERE (delivery_state='pending' AND next_attempt_at<=$1) OR (delivery_state='sending' AND lease_until<=$1) GROUP BY user_id ORDER BY MIN(COALESCE(next_attempt_at,lease_until)),user_id LIMIT $2",[at,limit])).rows.map(row => Number(row.user_id));
+  }
+
+  async claimIntervention(userId: number,now: number,owner: string,featureEnabled: boolean): Promise<InterventionDeliveryClaim | null> {
+    if (!owner.trim() || owner.length>200 || !Number.isFinite(now)) throw new Error("Invalid delivery claim");
+    return this.tx(async client => {
+      const at = new Date(now).toISOString();
+      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[userId]);
+      await client.query("UPDATE proactive_interventions SET delivery_state='uncertain',lease_owner=NULL,lease_until=NULL,updated_at=$1 WHERE user_id=$2 AND delivery_state='sending' AND lease_until<=$1",[at,userId]);
+      const row = (await client.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND delivery_state='pending' AND next_attempt_at<=$2 ORDER BY next_attempt_at,id LIMIT 1 FOR UPDATE",[userId,at])).rows[0];
+      if (!row) return null;
+      const prefs = (await client.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[userId])).rows[0] ?? null;
+      const block = interventionDeliveryBlock(row,prefs,now,featureEnabled);
+      const devices = (await client.query("SELECT expo_push_token FROM push_devices WHERE user_id=$1 AND is_active=TRUE ORDER BY id",[userId])).rows;
+      if (block || !devices.length) {
+        await client.query("UPDATE proactive_interventions SET delivery_state='cancelled',decision_reason=$1,updated_at=$2,status=CASE WHEN expires_at<=$2 THEN 'expired' ELSE status END WHERE id=$3",[block ?? 'delivery_no_device',at,row.id]);
+        return null;
+      }
+      await client.query("UPDATE proactive_interventions SET delivery_state='sending',lease_owner=$1,lease_until=$2,delivery_attempts=delivery_attempts+1,updated_at=$3 WHERE id=$4",[owner,new Date(now+120_000).toISOString(),at,row.id]);
+      const candidate = row.candidate_json as {title:string;body:string};
+      return { id: String(row.id),owner,userId,title: candidate.title,body: candidate.body,notificationId: Number(row.notification_id),priority: row.priority === 'high' ? 'high' : 'normal',tokens: devices.map(device => String(device.expo_push_token)) };
+    });
+  }
+  async finishIntervention(id: string,owner: string,now: number,result: InterventionDeliveryResult) {
+    if (!["accepted","failed","uncertain"].includes(result)) throw new Error("Invalid delivery result");
+    const at = new Date(now).toISOString();
+    return ((await this.pool.query("UPDATE proactive_interventions SET delivery_state=$1,status=CASE WHEN $1='accepted' AND status='inbox' THEN 'sent' ELSE status END,lease_owner=NULL,lease_until=NULL,updated_at=$2 WHERE id=$3 AND delivery_state='sending' AND lease_owner=$4 AND lease_until>$2",[result,at,id,owner])).rowCount ?? 0)===1;
+  }
+  async reserveIntervention(input: InterventionReservation) { return this.tx(async client => {
+    const candidate = input.candidate;
+    // Same account lock as preference changes: serializes quota reservations and opt-out.
+    await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[candidate.userId]);
+    const existing = (await client.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND source_key=$2",[candidate.userId,candidate.sourceKey])).rows[0];
+    if (existing) return existing;
+    const preferences = (await client.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[candidate.userId])).rows[0] ?? null;
+    const history = (await client.query("SELECT kind,snoozed_until,decided_at,push_reserved_at,channel FROM proactive_interventions WHERE user_id=$1 AND decided_at>=$2",[candidate.userId,new Date(input.now-7*86_400_000).toISOString()])).rows;
+    const hasPushDevice = (await client.query("SELECT id FROM push_devices WHERE user_id=$1 AND is_active=TRUE LIMIT 1",[candidate.userId])).rows.length>0;
+    const decision = reservationDecision(input,preferences,history,hasPushDevice);
+    if (decision.reason === "snoozed") return { deferred: true,reason: decision.reason };
+    const id = interventionCandidateId(candidate),now = new Date(input.now).toISOString();
+    let notificationId: number | null = null;
+    if (decision.channel !== "suppressed") notificationId = Number((await client.query(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)
+      VALUES($1,'proactive_intervention',$2,$3,'action_required',$4,'pending',$5) RETURNING id`,[candidate.userId,candidate.title,candidate.body,decision.priority ?? "normal",`intervention:${id}`])).rows[0].id);
+    return (await client.query(`INSERT INTO proactive_interventions(id,user_id,source_key,kind,status,candidate_json,policy_input_json,policy_version,decision_reason,channel,priority,starts_at,expires_at,decided_at,push_reserved_at,delivery_state,notification_id,next_attempt_at)
+      VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,[id,candidate.userId,candidate.sourceKey,candidate.kind,decision.channel === "suppressed" ? "suppressed" : "inbox",JSON.stringify(candidate),JSON.stringify({ input,preferences,history,hasPushDevice }),decision.policyVersion,decision.reason,decision.channel,decision.priority,new Date(candidate.startsAt).toISOString(),new Date(candidate.expiresAt).toISOString(),now,decision.channel === "push" ? now : null,decision.channel === "push" ? "pending" : "none",notificationId,decision.channel === "push" ? now : null])).rows[0];
+  }); }
+  async interventionPreferences(userId: number) { return (await this.pool.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[userId])).rows[0] ?? null; }
+  async saveInterventionPreferences(userId: number,input: import("@dietdigidose/contracts").InterventionPreferencesUpdate) {
+    return this.tx(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[userId]);
+      const current = (await client.query("SELECT version FROM proactive_intervention_preferences WHERE user_id=$1",[userId])).rows[0];
+      if (Number(current?.version ?? 0) !== input.version) return null;
+      const result = await client.query(`INSERT INTO proactive_intervention_preferences(user_id,enabled,expiry_rescue,dinner_window,time_zone,quiet_start,quiet_end,dinner_time,dinner_lead_minutes,daily_push_limit,cooldown_minutes,version)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,expiry_rescue=excluded.expiry_rescue,dinner_window=excluded.dinner_window,time_zone=excluded.time_zone,quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,dinner_time=excluded.dinner_time,dinner_lead_minutes=excluded.dinner_lead_minutes,daily_push_limit=excluded.daily_push_limit,cooldown_minutes=excluded.cooldown_minutes,version=excluded.version,updated_at=CURRENT_TIMESTAMP RETURNING *`,
+        [userId,Number(input.enabled),Number(input.expiry_rescue),Number(input.dinner_window),input.time_zone,input.quiet_start,input.quiet_end,input.dinner_time,input.dinner_lead_minutes,input.daily_push_limit,input.cooldown_minutes,input.version+1]);
+      await client.query(`UPDATE proactive_interventions SET delivery_state='cancelled',lease_owner=NULL,lease_until=NULL,updated_at=CURRENT_TIMESTAMP
+        WHERE user_id=$1 AND delivery_state='pending' AND ($2=0 OR (kind='expiry_rescue' AND $3=0) OR (kind='dinner_window' AND $4=0))`,[userId,Number(input.enabled),Number(input.expiry_rescue),Number(input.dinner_window)]);
+      return result.rows[0];
+    });
+  }
   async preferences(userId: number) {
     const row = (await this.pool.query(`SELECT expiring_alert,meal_reminder,water_reminder,breakfast_time,lunch_time,dinner_time,
       water_start_time,water_end_time,water_interval_minutes,quiet_start_time,quiet_end_time,weekdays_enabled,weekends_enabled
@@ -60,7 +182,7 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
     else if (filter === "system") conditions.push("category='system'");
     if (cursor) { params.push(cursor); conditions.push(`id<$${params.length}`); }
     params.push(limit);
-    const rows = (await this.pool.query(`SELECT id,type,title,body,is_read AS "isRead",created_at AS "createdAt",
+    const rows = (await this.pool.query(`SELECT (SELECT p.id FROM proactive_interventions p WHERE p.notification_id=user_notification_inbox.id AND p.user_id=user_notification_inbox.user_id ORDER BY p.id LIMIT 1) AS "interventionId",id,type,title,body,is_read AS "isRead",created_at AS "createdAt",
       inventory_item_id AS "inventoryItemId",category,priority,action_status AS "actionStatus",snoozed_until AS "snoozedUntil",
       (SELECT COUNT(*)::integer FROM notification_inventory_items n WHERE n.notification_id=user_notification_inbox.id) AS "itemCount"
       FROM user_notification_inbox WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT $${params.length}`, params)).rows;
@@ -88,14 +210,13 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
 
   async action(userId: number, notificationId: number, action: NotificationAction, metadata?: unknown) {
     return this.tx(async (client) => {
-      const item = (await client.query(`SELECT inventory_item_id AS "inventoryItemId" FROM user_notification_inbox
+      const item = (await client.query(`SELECT action_status AS "actionStatus" FROM user_notification_inbox
         WHERE id=$1 AND user_id=$2 FOR UPDATE`, [notificationId, userId])).rows[0];
       if (!item) return false;
+      if (action === "complete" && item.actionStatus === "completed") return true;
       if (action === "complete") {
         await client.query(`UPDATE user_notification_inbox SET action_status='completed',is_read=TRUE,
           read_at=COALESCE(read_at,CURRENT_TIMESTAMP),snoozed_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2`, [notificationId, userId]);
-        if (item.inventoryItemId != null) await client.query(`UPDATE inventory_items SET is_available=FALSE WHERE user_id=$1 AND id IN
-          (SELECT inventory_item_id FROM notification_inventory_items WHERE notification_id=$2 AND user_id=$1)`, [userId, notificationId]);
       } else if (action === "snooze_today") await client.query(`UPDATE user_notification_inbox SET
         snoozed_until=date_trunc('day',CURRENT_TIMESTAMP)+INTERVAL '1 day',is_read=TRUE,
         read_at=COALESCE(read_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2`, [notificationId, userId]);

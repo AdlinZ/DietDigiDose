@@ -24,6 +24,7 @@ export type ApplicationRoutes = {
   mealPlans: Router;
   insights: Router;
   recommendations: Router;
+  planMaintenance: Router;
   kitchenware: Router;
   notifications: Router;
   media: Router;
@@ -42,5 +43,6 @@ export type WorkerRuntimeBundle = {
   driver: DatabaseDriver;
   worker: WorkerRuntime;
   mediaCleanup: MediaCleanupService;
+  maintenanceQueue: import("../modules/planMaintenance/queue.js").MaintenanceQueueRepository;
   close(): Promise<void>;
 };

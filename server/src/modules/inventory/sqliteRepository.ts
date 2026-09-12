@@ -1,3 +1,4 @@
+import { appendSqliteMaintenanceEvent } from "../planMaintenance/sqliteEventWriter.js";
 import { InventoryDomainError } from "./errors.js";
 import { quantityEvidenceStatus } from "./evidence.js";
 import { savedIntakeItems } from "./intakeIdentity.js";
@@ -57,6 +58,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
       item.quantity_value ?? null, item.quantity_unit ?? null,
       item.package_size_value ?? null, item.package_size_unit ?? null, item.batch_code ?? null,
     );
+    appendSqliteMaintenanceEvent(this.database, { userId, kind: "inventory_created", sourceId: String(row.lastInsertRowid), subjectId: String(row.lastInsertRowid) });
     return this.database.prepare("SELECT * FROM inventory_items WHERE id = ?").get(row.lastInsertRowid) as Record<string, unknown>;
   }
 
@@ -106,7 +108,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
         return inventoryImportResponseSchema.parse({ items: JSON.parse(existing.result_json), repeated: true });
       }
 
-      const items = input.items.map((item) => formatInventoryItem(this.insertInventoryItem(userId, item)));
+      const items = input.items.map((item) => this.createInTransaction(userId, item));
       this.database.prepare(`
         INSERT INTO shopping_inventory_imports (user_id, idempotency_key, result_json) VALUES (?, ?, ?)
       `).run(userId, input.idempotency_key, JSON.stringify(items));
@@ -127,6 +129,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
         this.database.prepare("UPDATE inventory_items SET deleted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,version=version+1 WHERE id=? AND user_id=?").run(item.id,userId);
         this.database.prepare(`INSERT INTO inventory_change_logs(user_id,inventory_item_id,action,source,quantity_before,quantity_after,quantity_unit,delta_value,idempotency_key,metadata_json)
           VALUES(?,?,'removed','manual',?,?,?,?,?,?)`).run(userId,item.id,item.quantity_value ?? null,item.quantity_value ?? null,item.quantity_unit ?? null,0,key,JSON.stringify({ intake_undo_job: jobId }));
+        appendSqliteMaintenanceEvent(this.database, { userId,kind: "inventory_changed",sourceId: key,subjectId: String(item.id),details: { version: item.version+1,mode: "undo_intake" } });
         undone++;
       }
       return { undone, repeated: undone === 0 };
@@ -324,6 +327,8 @@ export class SqliteInventoryRepository implements InventoryRepository {
             ? { quantity: { status: "known", source: "user" } } : {} }),
         );
       }
+      appendSqliteMaintenanceEvent(this.database, { userId,kind: "inventory_changed",sourceId: `update:${itemId}:${updated.version}`,subjectId: String(itemId),
+        details: { version: updated.version,previousFoodName: String(current.food_name),mode: "update" } });
       return { kind: "updated", item: updated } as const;
     })();
   }
@@ -345,6 +350,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
         userId, item.id, item.quantity_value ?? null, item.quantity_value ?? null,
         item.quantity_unit ?? null, `remove:${item.id}:${item.version}`,
       );
+      appendSqliteMaintenanceEvent(this.database, { userId,kind: "inventory_changed",sourceId: `remove:${item.id}`,subjectId: String(item.id),details: { mode: "remove" } });
       return { kind: "removed" } as const;
     })();
   }

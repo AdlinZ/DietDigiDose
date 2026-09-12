@@ -7,7 +7,7 @@ export interface DietRecordsRepository {
   recordFunnelEvent(eventName: FunnelEventName, actorHash: string): Promise<void>;
   list(userId: number, date?: string): Promise<Array<Record<string, unknown>>>;
   create(userId: number, record: PreparedDietRecord): Promise<Record<string, unknown>>;
-  remove(userId: number, id: number): Promise<boolean>;
+  remove(userId: number, id: number, mode?: "undo_eating" | "delete_intake"): Promise<boolean>;
   listPreparedMeals(userId: number): Promise<PreparedMeal[]>;
   applyMealEvent(userId: number, mealId: string, input: PreparedMealEventInput): Promise<CookingCompletionResult>;
   completeCooking(userId: number, input: PreparedCookingCompletion): Promise<CookingCompletionResult>;

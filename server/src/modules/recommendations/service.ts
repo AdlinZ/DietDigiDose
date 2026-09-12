@@ -1,3 +1,11 @@
+import { interventionDates, interventionRecommendations } from "../interventions/snapshot.js";
+import { weeklyHistoryStart } from "./shoppingWindow.js";
+import { formatOutcomeEvidence } from "./outcomeEvidence.js";
+import { effectiveDislikeRecipeIds, learningOverrides, formatLearningState } from "./preferenceEvidence.js";
+import { preferenceLearningUpdateSchema, type PreferenceLearningUpdate } from "@dietdigidose/contracts";
+import { buildWeeklyPlan } from "./weeklyPlan.js";
+import { weeklyPlanRequestSchema, type WeeklyPlanRequest } from "@dietdigidose/contracts";
+import { parseJson } from "../mealPlans/formatters.js";
 import { buildCookingDraft, replaceCookingDraft } from "./plan.js";
 import { cookingPlanDraftSchema, replaceCookingPlanItemSchema, mealPlanRequirementsSchema, type ReplaceCookingPlanItemInput, type MealPlanRequirementsInput } from "@dietdigidose/contracts";
 import { formatPreparedMeal } from "../dietRecords/preparedMeals.js";
@@ -20,9 +28,55 @@ export class RecommendationsService {
     this.kitchenware = kitchenware;
   }
 
+  async interventionSnapshot(userId: number,now: number,timeZone: string) {
+    const dates = interventionDates(now,timeZone);
+    const [computed,stock,state] = await Promise.all([
+      this.compute(userId,{ surface: "inventory",mealType: "dinner" },{},dates[0]),
+      this.repository.inventory(userId),this.repository.planningState(userId,dates[0],dates[1]),
+    ]);
+    return { dates,recommendations: interventionRecommendations(computed.results),items: state.items,plans: state.plans,
+      inventory: stock.map(row => ({ id: Number(row.id),userId,expirationDate: typeof row.expiration_date === "string" ? row.expiration_date : null,
+        available: true,deleted: false,remaining: row.quantity_evidence_status === "unknown" ? 0 : Number(row.quantity_value) })) };
+  }
+
+  async learningState(userId: number) {
+    const [data,outcomes] = await Promise.all([this.repository.learningData(userId),this.repository.preferenceOutcomes(userId)]);
+    return { ...formatLearningState(data),observations: formatOutcomeEvidence(outcomes.production,outcomes.events,outcomes.inventory,outcomes.changes,outcomes.statements) };
+  }
+  async updateLearning(userId: number,input: PreferenceLearningUpdate) {
+    const request = preferenceLearningUpdateSchema.parse(input);
+    if (request.kind === "recipe" && !await this.repository.recipeAvailable(request.recipeId)) {
+      const own = await this.repository.learningData(userId);
+      if (request.value !== "neutral" || (!learningOverrides(own.settings)[String(request.recipeId)] && !own.events.some(event => Number(event.recipe_id) === request.recipeId))) throw new RecommendationsError(404,"菜谱不存在或当前不可设置偏好","RECIPE_NOT_AVAILABLE");
+    }
+    if (!await this.repository.updateLearning(userId,request)) throw new RecommendationsError(409,"偏好已更新，请刷新后重试","PREFERENCE_VERSION_CONFLICT");
+    return this.learningState(userId);
+  }
+  async weeklyPlan(userId: number, input: WeeklyPlanRequest) {
+    const request = weeklyPlanRequestSchema.parse(input);
+    const end = new Date(`${request.startDate}T00:00:00Z`); end.setUTCDate(end.getUTCDate()+6);
+    const endDate = end.toISOString().slice(0,10);
+    const [computed,stock,batches,state] = await Promise.all([this.compute(userId,{ surface: "meal_plan" }),this.repository.inventory(userId),this.repository.preparedMeals(userId),this.repository.planningState(userId,request.startDate,endDate)]);
+    const reservations: Array<{ preparedMealId: string; servings: number }> = [];
+    const items = [...state.items];
+    for (const plan of state.plans) {
+      const constraints = parseJson<Row>(plan.constraints_json,{});
+      const saved = constraints.savedCookingDraft as { draft?: unknown } | undefined;
+      const draft = cookingPlanDraftSchema.safeParse(constraints.currentCookingDraft ?? saved?.draft);
+      if (!draft.success) continue;
+      for (const meal of draft.data.meals) {
+        if (meal.date < request.startDate) continue;
+        reservations.push(...meal.allocations);
+        if (meal.cookServings === 0) items.push({ id: `prepared-plan:${plan.id}:${meal.id}`,planned_date: meal.date,meal_type: meal.mealType,title: meal.allocations.map(item => item.foodName).join("、"),prepared_only: true,status: "planned" });
+      }
+    }
+    return buildWeeklyPlan(request,computed.profile.kitchen,computed.results,stock,batches.map(formatPreparedMeal),items,state.shopping,reservations);
+  }
+
   async planRequirements(userId: number, input: MealPlanRequirementsInput) {
     const request = mealPlanRequirementsSchema.parse(input);
-    return allocatePreparedMeals(request, (await this.repository.preparedMeals(userId)).map(formatPreparedMeal));
+    const preferences = resolveKitchenPreferences(formatRecommendationProfile(await this.repository.profile(userId)).kitchen,request.preferences);
+    return allocatePreparedMeals({ ...request,preferences }, (await this.repository.preparedMeals(userId)).map(formatPreparedMeal));
   }
 
   async cookingPlan(userId: number, input: MealPlanRequirementsInput) {
@@ -35,30 +89,32 @@ export class RecommendationsService {
   async replaceCookingItem(userId: number, input: ReplaceCookingPlanItemInput) {
     const request = replaceCookingPlanItemSchema.parse(input);
     const candidates = await this.compute(userId, { surface: "meal_plan" }, request.draft.effectivePreferences);
-    return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId));
+    const dates = request.draft.meals.map(meal => meal.date).sort();
+    const existing = request.draft.planningMode === "weekly" ? (await this.repository.planningState(userId,weeklyHistoryStart(request.draft),request.draft.shoppingWindow?.endDate ?? dates[dates.length-1])).items : [];
+    return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId),existing);
   }
 
   versions() { return { scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION }; }
 
-  async compute(userId: number, input: Omit<RecommendationInput, "cursor" | "pageSize">, override: KitchenPreferences = {}) {
+  async compute(userId: number, input: Omit<RecommendationInput, "cursor" | "pageSize">, override: KitchenPreferences = {}, date = currentDateKey()) {
     const profile = formatRecommendationProfile(await this.repository.profile(userId));
     profile.kitchen = resolveKitchenPreferences(profile.kitchen, override);
     const timeBudget = input.maxCookTime ?? resolveKitchenPreferences(profile.kitchen).meal_time_minutes;
-    const [inventory, kitchenware, recipes, favoriteIds, recentIds, skippedIds, diet, dailyCaloriesTarget] = await Promise.all([
+    const [inventory, kitchenware, recipes, favoriteIds, recentIds, learning, diet, dailyCaloriesTarget] = await Promise.all([
       this.repository.inventory(userId), this.repository.kitchenware(userId), this.repository.recipes({
         category: input.category, search: input.search, timeBudget,
       }), this.repository.favoriteRecipeIds(userId), this.repository.recentRecipeIds(userId),
-      this.repository.skippedRecipeIds(userId), this.repository.dietTotals(userId, currentDateKey()),
+      this.repository.learningData(userId), this.repository.dietTotals(userId, date),
       this.repository.dailyCaloriesTarget(userId),
     ]);
     const requirementEntries = await Promise.all(recipes.map(async (recipe) => [Number(recipe.id), await this.kitchenware.requirements(Number(recipe.id))] as const));
     const compatibilityEntries = await Promise.all(recipes.map(async (recipe) => [Number(recipe.id), await this.kitchenware.evaluateRequirements(userId, Number(recipe.id))] as const));
     const dataset: RecommendationDataset = {
-      profile, inventory, kitchenware, recipes, favoriteIds, recentIds, skippedIds, diet, dailyCaloriesTarget,
+      profile, inventory, kitchenware, recipes, favoriteIds, recentIds, skippedIds: effectiveDislikeRecipeIds(learning), explicitDislikedIds: Object.entries(learningOverrides(learning.settings)).filter(([,value]) => value.value === "dislike").map(([id]) => Number(id)), diet, dailyCaloriesTarget,
       requirements: new Map(requirementEntries) as RecommendationDataset["requirements"],
       compatibility: new Map(compatibilityEntries) as RecommendationDataset["compatibility"],
     };
-    return scoreRecipeRecommendations(dataset, input, timeBudget, currentDateKey());
+    return scoreRecipeRecommendations(dataset, input, timeBudget, date);
   }
 
   async page(userId: number, input: RecommendationInput) {
@@ -93,16 +149,38 @@ export class RecommendationsService {
 
   async event(userId: number, input: RecommendationEventInput) {
     const existing = await this.repository.findEvent(userId, input.idempotencyKey);
-    if (existing) return { eventId: String(existing.id), repeated: true };
+    const assertIdentity = (event: Row) => {
+      if ((event.request_id ?? null) !== (input.requestId ?? null) || Number(event.recipe_id) !== input.recipeId
+        || event.event_type !== input.eventType || event.scoring_version !== input.scoringVersion || event.surface !== input.surface)
+        throw new RecommendationsError(409, "此操作编号已用于另一条推荐反馈", "RECOMMENDATION_EVENT_CONFLICT");
+    };
+    if (existing) { assertIdentity(existing); return { eventId: String(existing.id), repeated: true }; }
     if (!await this.repository.recipeAvailable(input.recipeId)) {
       throw new RecommendationsError(404, "菜谱不存在或当前不可推荐", "RECIPE_NOT_AVAILABLE");
     }
+    // Client metadata must never supply the evidence later used by metrics.
+    const metadata = { ...input.metadata };
+    delete metadata.selectionEvidence;
     if (input.requestId) {
-      const version = await this.repository.requestScoringVersion(userId, input.requestId);
-      if (!version) throw new RecommendationsError(404, "推荐请求不存在", "RECOMMENDATION_REQUEST_NOT_FOUND");
-      if (version !== input.scoringVersion) throw new RecommendationsError(409, "评分版本与推荐请求不一致", "RECOMMENDATION_VERSION_MISMATCH");
+      const request = await this.repository.requestEvidence(userId, input.requestId);
+      if (!request) throw new RecommendationsError(404, "推荐请求不存在", "RECOMMENDATION_REQUEST_NOT_FOUND");
+      if (request.scoring_version !== input.scoringVersion) throw new RecommendationsError(409, "评分版本与推荐请求不一致", "RECOMMENDATION_VERSION_MISMATCH");
+      const candidate = (parseArray(request.results_json) as Row[]).find(row => Number(row.recipeId) === input.recipeId);
+      if (!candidate) throw new RecommendationsError(409, "菜谱不属于本轮推荐，请刷新后重试", "RECOMMENDATION_RECIPE_MISMATCH");
+      const features = candidate.features as Row | undefined;
+      // A view only proves opening the recipe. Cooking/intake evidence must be
+      // linked separately before any weekly metric can count this selection.
+      if (["view", "queue", "start"].includes(input.eventType)) metadata.selectionEvidence = {
+        version: 1, requestId: input.requestId, recipeId: input.recipeId,
+        inventory: features?.inventoryEvidence ?? null,
+      };
     }
-    const result = await this.repository.createEvent(randomUUID(), userId, input);
+    const result = await this.repository.createEvent(randomUUID(), userId, { ...input, metadata });
+    if (result.repeated) {
+      const winner = await this.repository.findEvent(userId, input.idempotencyKey);
+      if (!winner) throw new RecommendationsError(409, "推荐反馈已变化，请重试", "RECOMMENDATION_EVENT_CONFLICT");
+      assertIdentity(winner);
+    }
     return { eventId: result.id, repeated: result.repeated };
   }
 }

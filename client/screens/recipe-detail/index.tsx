@@ -1,3 +1,4 @@
+import { RecipePreferenceFeedback } from "@/components/RecipePreferenceFeedback";
 import { useState, useCallback, useEffect, useRef, type ComponentProps } from "react";
 import {
   View,
@@ -60,7 +61,7 @@ interface Recipe {
 
 export default function RecipeDetailScreen() {
   const router = useSafeRouter();
-  const { id, pendingAction } = useSafeSearchParams<{ id: number; pendingAction?: "favorite" | "shopping-list" | "queue" }>();
+  const { id, pendingAction, recommendationRequestId } = useSafeSearchParams<{ id: number; recommendationRequestId?: string; pendingAction?: "favorite" | "shopping-list" | "queue" }>();
   const { isAuthenticated } = useAuth();
   const authFetch = useAuthFetch();
   const [recipe, setRecipe] = useState<Recipe | null>(null);
@@ -301,7 +302,7 @@ export default function RecipeDetailScreen() {
     }
     if (!isAuthenticated) {
       router.push("/login", {
-        returnTo: { pathname: "/recipe-detail", params: { id: recipe.id, pendingAction: "queue" } },
+        returnTo: { pathname: "/recipe-detail", params: { id: recipe.id, pendingAction: "queue", recommendationRequestId } },
       });
       return;
     }
@@ -313,7 +314,7 @@ export default function RecipeDetailScreen() {
 
     setQueueSaving(true);
     try {
-      const result = await cookingQueueApi.add(authFetch, { recipeId: recipe.id });
+      const result = await cookingQueueApi.add(authFetch, { recipeId: recipe.id, recommendationRequestId });
       setIsQueued(true);
       if (!result.added) {
         router.push("/cooking-queue");
@@ -469,6 +470,7 @@ export default function RecipeDetailScreen() {
           ) : null}
 
           <View className="mx-4 mt-4 rounded-[24px] border border-line bg-surface p-5 md:mx-8 md:p-6">
+            <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/household-dining",params: { recipeId: recipe.id } })} className="mb-4 rounded-xl bg-brand-soft p-3"><Text className="font-bold text-brand">检查这道菜的共餐忌口</Text></TouchableOpacity>
             <SectionTitle icon="chart-pie" eyebrow="每份参考" title={nutritionPresentation.title} />
             {nutritionPresentation.disclosure ? (
               <Text testID="nutrition-estimate-label" className="mt-3 rounded-xl bg-warm-soft px-3 py-2 text-xs font-bold leading-5 text-warm">
@@ -596,6 +598,7 @@ export default function RecipeDetailScreen() {
 
           <View className="h-6" />
         </View>
+        <RecipePreferenceFeedback recipeId={recipe.id} />
       </ScrollView>
 
       <View className="border-t border-line bg-surface px-4 py-3">

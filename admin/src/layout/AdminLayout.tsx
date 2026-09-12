@@ -74,6 +74,8 @@ export default function AdminLayout() {
 
   const primaryNavItems = [
     { to: '/admin', icon: LayoutDashboard, label: '数据看板', end: true },
+    { to: '/admin/kitchenware-mapping-reviews', icon: LayoutDashboard, label: '厨具映射审核' },
+    { to: '/admin/core-loops', icon: LayoutDashboard, label: '周核心闭环' },
     { to: '/admin/users', icon: Users, label: '用户管理' },
   ];
   const assetNavItems = [

@@ -1,4 +1,4 @@
-import { replaceCookingPlanItemSchema, mealPlanRequirementsSchema } from "@dietdigidose/contracts";
+import { preferenceLearningUpdateSchema, weeklyPlanRequestSchema, replaceCookingPlanItemSchema, mealPlanRequirementsSchema } from "@dietdigidose/contracts";
 import { Router, type NextFunction, type Response } from "express";
 import { authMiddleware, type AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
@@ -14,6 +14,11 @@ function handle(error: unknown, res: Response, next: NextFunction) {
 export function createRecommendationsRouter(service: RecommendationsService) {
   const router = Router();
   router.use(authMiddleware);
+  router.post("/weekly-plan", validateBody(weeklyPlanRequestSchema), (req: AuthRequest,res: Response,next: NextFunction) => {
+    void service.weeklyPlan(req.userId!,req.body).then(value => res.json(value)).catch(error => handle(error,res,next));
+  });
+  router.get("/preferences",(req: AuthRequest,res,next) => { void service.learningState(req.userId!).then(value => res.json(value)).catch(error => handle(error,res,next)); });
+  router.patch("/preferences",validateBody(preferenceLearningUpdateSchema),(req: AuthRequest,res,next) => { void service.updateLearning(req.userId!,req.body).then(value => res.json(value)).catch(error => handle(error,res,next)); });
   router.get("/versions", (_req, res) => res.json(service.versions()));
   router.post("/plan-requirements", validateBody(mealPlanRequirementsSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
     void service.planRequirements(req.userId!, req.body).then(value => res.json(value)).catch((error: unknown) => handle(error, res, next));

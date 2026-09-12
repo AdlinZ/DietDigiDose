@@ -3,11 +3,11 @@ import { recipeDemands } from "./quantities.js";
 import { buildFefoConsumptionPreviewFromCandidates } from "../../services/inventoryQuantity.js";
 import type { RecommendationDataset, RecommendationInput, Row } from "./types.js";
 
-export const RECIPE_SCORING_VERSION = "rules-2026-09-09.2";
+export const RECIPE_SCORING_VERSION = "rules-2026-09-12.7";
 export const RECIPE_CANDIDATE_VERSION = "sql-public-v1";
 export const RECOMMENDATION_WEIGHTS = Object.freeze({
   inventoryCoverage: 35, expiringUse: 20, missingPenalty: 20, timeFit: 15, nutritionFit: 10,
-  skillFit: 5, favorite: 5, recentRepeatPenalty: 15, skipPenalty: 30,
+  skillFit: 5, favorite: 5, recentRepeatPenalty: 15, skipPenalty: 8,
 });
 
 const INGREDIENT_ALIASES: Record<string, string> = {
@@ -56,7 +56,7 @@ function requiredTools(row: Row) {
     [/(?:破壁机|料理机|搅拌机)/, "破壁机"], [/(?:烤箱|烘焙)/, "烤箱"], [/(?:电饭煲|电饭锅)/, "电饭煲"], [/(?:蒸锅|蒸笼)/, "蒸锅"]];
   return rules.filter(([pattern]) => pattern.test(text)).map(([, tool]) => tool);
 }
-function allergyTerms(name: string) {
+export function allergyTerms(name: string) {
   const normalized = normalizeRecommendationName(name);
   const alias = Object.entries(ALLERGEN_ALIASES).find(([key]) => normalized.includes(normalizeRecommendationName(key)));
   return [...new Set([name, ...(alias?.[1] || [])])].map(normalizeRecommendationName).filter(Boolean);
@@ -100,6 +100,11 @@ function hardConflict(recipe: Row, ingredients: Array<{ name: string }>, dataset
     const name = String(allergy.name || "").trim();
     if (name && allergyTerms(name).some((term) => recipeText.includes(term))) return true;
   }
+  if (profile.kitchen.avoid_spicy === true) {
+    const knownSpicy = /辣椒|辣酱|辣油|辣粉|剁椒|朝天椒|小米椒|花椒|藤椒|芥末/.test(ingredients.map(item => item.name).join("、"));
+    const spicyTags = parseArray(recipe.tags).some(tag => /辣/.test(String(tag)) && !/不辣|无辣/.test(String(tag)));
+    if (!ingredients.length || knownSpicy || spicyTags) return true;
+  }
   const restrictionText = profile.restrictions.join("、");
   if (/素食|纯素/.test(restrictionText) && /(猪|牛|羊|鸡|鸭|鱼|虾|蟹|肉|蛋|奶)/.test(recipeText)) return true;
   if (/清真/.test(restrictionText) && /(猪|料酒|酒精)/.test(recipeText)) return true;
@@ -115,7 +120,7 @@ function hardConflict(recipe: Row, ingredients: Array<{ name: string }>, dataset
 export function scoreRecipeRecommendations(dataset: RecommendationDataset,
   input: Omit<RecommendationInput, "cursor" | "pageSize">, timeBudget: number | null, today: string) {
   dataset = { ...dataset, inventory: unexpiredInventory(dataset.inventory, today) };
-  const favorites = new Set(dataset.favoriteIds); const recent = new Set(dataset.recentIds); const skipped = new Set(dataset.skippedIds);
+  const favorites = new Set(dataset.favoriteIds); const recent = new Set(dataset.recentIds); const skipped = new Set(dataset.skippedIds.filter(id => !favorites.has(id) || dataset.explicitDislikedIds?.includes(id)));
   const ownedTools = dataset.kitchenware.map((item) => String(item.name));
   const targetCalories = Number(dataset.profile.nutrition.calories_kcal || dataset.dailyCaloriesTarget || 2000);
   const targetProtein = Number(dataset.profile.nutrition.protein_g || 0);
@@ -165,6 +170,7 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
       + (favorites.has(Number(recipe.id)) ? RECOMMENDATION_WEIGHTS.favorite : 0) - (recent.has(Number(recipe.id)) ? RECOMMENDATION_WEIGHTS.recentRepeatPenalty : 0)
       - (skipped.has(Number(recipe.id)) ? RECOMMENDATION_WEIGHTS.skipPenalty : 0) - dislikedPenalty) * 100) / 100;
     const reasons: string[] = [];
+    if (skipped.has(Number(recipe.id))) reasons.push(dataset.explicitDislikedIds?.includes(Number(recipe.id)) ? "按你明确设置的不喜欢降低排序" : "近30天多次明确表示长期不喜欢，暂时降低排序；不会排除菜谱");
     if (expiring.length) reasons.push(`可优先使用 ${expiring.slice(0, 2).map((item) => item.name).join("、")} 等临期食材`);
     if (coverage > 0) reasons.push(`已知用量覆盖 ${Math.round(coverage * 100)}%，${matched.length} 项原料数量足够`);
     if (cookTime > 0) reasons.push(recipe.prep_time == null
@@ -175,6 +181,7 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
     const degraded: string[] = [];
     if (uncertain.length) degraded.push("inventory_quantity_unknown");
     if (!ingredients.length) degraded.push("ingredients_unstructured");
+    if (dataset.profile.kitchen.avoid_spicy === true) degraded.push("spiciness_requires_ingredient_confirmation");
     degraded.push("whole_plan_time_unverified");
     if (!cookTime || recipe.prep_time == null) degraded.push("preparation_time_unknown");
     if (dataset.profile.kitchen.budget_per_meal) degraded.push("recipe_price_unavailable");
@@ -182,7 +189,9 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
     return [{ recipeId: Number(recipe.id), recipe: recipeSummary(recipe, dataset.requirements.get(Number(recipe.id)) || []), score,
       scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION,
       hardConstraints: { satisfied: ["quality", "permission", "allergy", "time", "kitchenware"], unmet: [] as string[] },
-      features: { inventoryCoverage: Math.round(coverage * 100), matchedIngredients: matched, expiringIngredients: expiring,
+      features: { inventoryEvidence: { version: 1, scope: "personal", allocations: preview.flatMap(item => item.deductions.map(deduction => ({
+        itemId: Number(deduction.item_id), itemVersion: Number(deduction.version), amount: Number(deduction.amount_value), unit: String(deduction.unit),
+      }))) }, inventoryCoverage: Math.round(coverage * 100), matchedIngredients: matched, expiringIngredients: expiring,
         missingIngredients: missing, uncertainIngredients: uncertain, nameMatchedIngredients: nameMatched, timeBudgetMinutes: timeBudget, estimatedTimeMinutes: cookTime, nutritionFit: Math.round(nutritionFit * 100),
         favorite: favorites.has(Number(recipe.id)), recentRepeat: recent.has(Number(recipe.id)), skippedRecently: skipped.has(Number(recipe.id)) },
       reasons: reasons.slice(0, 3), dataUpdatedAt, degraded }];

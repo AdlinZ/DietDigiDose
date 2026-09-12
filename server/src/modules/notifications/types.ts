@@ -18,6 +18,7 @@ export type NotificationFilter = "all" | "pending" | "system";
 export type NotificationAction = "complete" | "snooze_today" | "open" | "plan_recipe";
 
 export interface PushMessage {
+  priority?: "normal" | "high";
   to: string;
   title: string;
   body: string;

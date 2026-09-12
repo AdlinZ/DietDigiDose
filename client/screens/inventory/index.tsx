@@ -1,3 +1,4 @@
+import { useKitchenwareAttributesForm } from "./useKitchenwareAttributesForm";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Animated,
@@ -148,6 +149,7 @@ export default function InventoryScreen() {
   const [kwNote, setKwNote] = useState("");
   const [kwImageUrl, setKwImageUrl] = useState("");
   const [kwPurchaseDate, setKwPurchaseDate] = useState("");
+  const kitchenwareAttributesForm = useKitchenwareAttributesForm();
   const [savingKitchenware, setSavingKitchenware] = useState(false);
   const [selectedCatalogKitchenware, setSelectedCatalogKitchenware] = useState<KitchenwareCatalogItem | null>(null);
   const [addingStarterKit, setAddingStarterKit] = useState<string | null>(null);
@@ -160,6 +162,7 @@ export default function InventoryScreen() {
     setKwNote(item?.note || "");
     setKwImageUrl(item?.image_url || "");
     setKwPurchaseDate(item?.purchase_date || "");
+    kitchenwareAttributesForm.reset(item?.attributes);
     setKitchenwareModalVisible(true);
   };
 
@@ -168,10 +171,13 @@ export default function InventoryScreen() {
       Alert.alert("提示", "请输入厨具名称");
       return;
     }
+    const attributes = kitchenwareAttributesForm.parse();
+    if (!attributes.success) { Alert.alert("规格无效","请输入有效的正数容量或直径；未核对可留空。"); return; }
     try {
       setSavingKitchenware(true);
       const payload = {
           name: kwName,
+          attributes: attributes.data,
           category: kwCategory,
           status: kwStatus,
           note: kwNote,
@@ -1137,7 +1143,7 @@ export default function InventoryScreen() {
           quantity_value: parsedQuantity.amount,
           quantity_unit: parsedQuantity.unit,
         } : {}),
-        ...(!activeHousehold && editingItem?.version ? { version: editingItem.version } : {}),
+        ...(editingItem?.version ? { version: editingItem.version } : {}),
       };
 
       if (activeHousehold && editingItem) {
@@ -1161,7 +1167,7 @@ export default function InventoryScreen() {
       }
       setModalVisible(false);
     } catch (e) {
-      Alert.alert("错误", "网络异常");
+      Alert.alert("保存失败", e instanceof Error ? e.message : "网络异常，请重试");
     } finally {
       setSaving(false);
     }
@@ -1176,7 +1182,7 @@ export default function InventoryScreen() {
         onPress: async () => {
           try {
             if (activeHousehold) {
-              await householdApi.inventoryRemove(authFetch, activeHousehold.id, id);
+              await householdApi.inventoryRemove(authFetch, activeHousehold.id, id, items.find(item => item.id === id)?.version ?? 0);
               await loadFamilyInventory();
             } else {
               await inventoryMutations.removeInventory.mutateAsync(id);
@@ -1184,7 +1190,7 @@ export default function InventoryScreen() {
             setModalVisible(false);
             setEditingItem(null);
           } catch (e) {
-            console.error(e);
+            Alert.alert("移除失败", e instanceof Error ? e.message : "请刷新后重试");
           }
         },
       },
@@ -1226,19 +1232,20 @@ export default function InventoryScreen() {
 
     try {
       if (activeHousehold) {
-        await householdApi.inventoryUpdate(authFetch, activeHousehold.id, item.id, { storage_location: storageLocation });
+        await householdApi.inventoryUpdate(authFetch, activeHousehold.id, item.id, { storage_location: storageLocation,version: item.version });
+        await loadFamilyInventory();
       } else {
         await inventoryMutations.updateInventory.mutateAsync({ id: item.id, input: { storage_location: storageLocation } });
       }
-    } catch {
+    } catch (error) {
       setItems((currentItems) =>
         currentItems.map((currentItem) =>
           currentItem.id === item.id ? { ...currentItem, storage_location: previousLocation } : currentItem,
         ),
       );
-      Alert.alert("移动失败", "未能更新食材的存放位置，请稍后重试。");
+      Alert.alert("移动失败", error instanceof Error ? error.message : "未能更新食材的存放位置，请稍后重试。");
     }
-  }, [activeHousehold, authFetch]);
+  }, [activeHousehold, authFetch, loadFamilyInventory]);
 
   const handleItemDrop = useCallback(async (item: InventoryItem, pageX: number, pageY: number) => {
     const destination = await getStorageLocationAtPoint(pageX, pageY);
@@ -2099,7 +2106,7 @@ export default function InventoryScreen() {
                                 idempotencyKey: `inventory-view-${recommendationRequestId}-${recipe.id}`,
                               }).catch(() => undefined);
                             }
-                            router.push("/recipe-detail", { id: recipe.id });
+                            router.push("/recipe-detail", { id: recipe.id, recommendationRequestId: recommendation ? recommendationRequestId ?? undefined : undefined });
                           }}
                         >
                           <View className="relative">
@@ -2624,6 +2631,8 @@ export default function InventoryScreen() {
                     </ScrollView>
                   </View>
                 </View>
+
+                {kitchenwareAttributesForm.fields}
 
                 <View>
                   <Text className="text-xs font-bold text-copy-muted mb-1">规格 / 备注</Text>

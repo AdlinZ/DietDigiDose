@@ -686,6 +686,14 @@ export default function ProfileScreen() {
               onPress={() => router.push("/meal-plans")}
             />
             <ServiceRow
+              icon="users"
+              title="共餐忌口设置"
+              subtitle="管理自己在家庭中共享的饮食限制"
+              colorClass="accent-brand"
+              backgroundClass="bg-brand-soft"
+              onPress={() => router.push("/household-dining")}
+            />
+            <ServiceRow
               icon="chart-line"
               title="库存结果周报"
               subtitle="查看临期使用、浪费结果与真实趋势"

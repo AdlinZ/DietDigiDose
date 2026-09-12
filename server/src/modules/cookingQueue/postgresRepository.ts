@@ -22,6 +22,9 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
     this.pool = pool;
   }
 
+  async recommendationRequest(userId: number, requestId: string) {
+    return (await this.pool.query("SELECT id,scoring_version,results_json FROM recipe_recommendation_requests WHERE user_id=$1 AND id=$2",[userId,requestId])).rows[0] ?? null;
+  }
   async list(userId: number, includeHistory: boolean) {
     const where = includeHistory ? "q.user_id = $1" : `q.user_id = $1 AND q.deleted_at IS NULL AND q.status IN (${active})`;
     const order = includeHistory

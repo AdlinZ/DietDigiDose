@@ -215,4 +215,19 @@ describe("API client", () => {
     });
     expect(apiFetch).toHaveBeenCalledTimes(2);
   });
+  it("refreshes personal plans and intake after household meal mutations without evicting another account",async () => {
+    const fetchA: ApiFetch = jest.fn(async () => jsonResponse({ ok: true }));
+    const fetchB: ApiFetch = jest.fn(async () => jsonResponse({ ok: true }));
+    registerApiFetchScope(fetchA,901); registerApiFetchScope(fetchB,902);
+    for (const path of ["/api/v1/meal-plans","/api/v1/diet-records"]) {
+      await requestJson(fetchA,path); await requestJson(fetchB,path);
+    }
+    await requestJson(fetchA,"/api/v1/households/8/meals",{ method: "POST",body: "{}" });
+    for (const path of ["/api/v1/meal-plans","/api/v1/diet-records"]) {
+      await requestJson(fetchA,path); await requestJson(fetchB,path);
+    }
+    expect(fetchA).toHaveBeenCalledTimes(5);
+    expect(fetchB).toHaveBeenCalledTimes(2);
+  });
+
 });

@@ -83,6 +83,7 @@ function storageKey(key: string, scope: CacheScope) {
 }
 
 export function apiCachePolicy(path: string): ApiCachePolicy | null {
+  if (/^\/api\/v1\/households\/\d+\/(?:dining-(?:preferences|members)|meals|inventory)(?:\/|\?|$)/.test(path)) return null;
   if (/^\/api\/v1\/(?:auth|ai|notifications)(?:\/|\?|$)/.test(path)) return null;
   if (/^\/api\/v1\/recipes\/\d+(?:\?|$)/.test(path)) return { ttlMs: 30 * 60_000, maxStaleMs: 7 * 86_400_000, persistent: true };
   if (/^\/api\/v1\/(?:recipes|community)(?:\/|\?|$)/.test(path)) return { ttlMs: 10 * 60_000, maxStaleMs: 24 * 60 * 60_000, persistent: true };
@@ -213,6 +214,7 @@ export async function cachedApiGet<T>(apiFetch: ApiFetch, path: string, policy: 
 }
 
 function invalidationPrefixes(path: string) {
+  if (/^\/api\/v1\/households\/\d+\/meals(?:\/|\?|$)/.test(path)) return ["/api/v1/households", "/api/v1/meal-plans", "/api/v1/diet-records", "/api/v1/health-data", "/api/v1/insights"];
   if (path.startsWith("/api/v1/inventory")) return ["/api/v1/inventory", "/api/v1/insights"];
   if (path.startsWith("/api/v1/diet-records")) return ["/api/v1/diet-records", "/api/v1/health-data"];
   if (path.startsWith("/api/v1/health-data")) return ["/api/v1/health-data"];
@@ -220,7 +222,7 @@ function invalidationPrefixes(path: string) {
   if (path.startsWith("/api/v1/community")) return ["/api/v1/community"];
   if (path.startsWith("/api/v1/shopping-list")) return ["/api/v1/shopping-list"];
   if (path.startsWith("/api/v1/cooking-queue")) return ["/api/v1/cooking-queue"];
-  if (path.startsWith("/api/v1/meal-plans")) return ["/api/v1/meal-plans"];
+  if (path.startsWith("/api/v1/meal-plans")) return ["/api/v1/meal-plans", "/api/v1/households"];
   if (path.startsWith("/api/v1/kitchenware")) return ["/api/v1/kitchenware"];
   if (path.startsWith("/api/v1/households")) return ["/api/v1/households"];
   return [];

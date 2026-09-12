@@ -229,7 +229,7 @@ export class RecipesService {
     ];
     return Promise.all(values.map(async ({ rawName, role }) => {
       const resolved = await this.catalog.resolveCatalog(rawName);
-      const accepted = resolved && resolved.confidence >= 0.7 ? resolved : null;
+      const accepted = resolved && resolved.confidence === 1 ? resolved : null;
       return { rawName, normalizedName: normalizeContentTerm(rawName), role,
         catalogId: accepted?.id || null, confidence: resolved?.confidence || 0 };
     }));

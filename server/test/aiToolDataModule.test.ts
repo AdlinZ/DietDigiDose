@@ -37,6 +37,16 @@ describe("AI tool data module", () => {
     assert.deepEqual(result.matches[1]?.warnings, ["基于模糊食材匹配，品牌和烹饪方式会影响结果"]);
   });
 
+  test("preserves unknown nutrition and distinguishes genuine zero", async () => {
+    const service = new AiToolDataService(repository({ lookupFoodNutrition: async () => [
+      { name: "番茄", calories_100g: null, protein_100g: undefined, carbs_100g: "", fat_100g: 0 },
+    ] }));
+    const result = await service.lookupFoodNutrition("番茄", 50, "g");
+    assert.deepEqual(result.matches[0]?.nutrition,
+      { caloriesKcal: null, proteinG: null, carbohydrateG: null, fatG: 0 });
+    assert.ok(result.matches[0]?.warnings.includes("部分营养数据未知，不可按零计算"));
+  });
+
   test("returns the repository-generated diet record id", async () => {
     const service = new AiToolDataService(repository({ recordDietMeal: async (input) => {
       assert.equal(input.foodName, "测试餐");

@@ -714,7 +714,7 @@ export default function HomeScreen() {
                             idempotencyKey: `home-view-${homeRecommendationRequestId}-${activeSmartCard.recipeId}`,
                           }).catch(() => undefined);
                         }
-                        router.push(`/recipe-detail?id=${activeSmartCard.recipeId}`);
+                        router.push("/recipe-detail", { id: activeSmartCard.recipeId, recommendationRequestId: homeRecommendationRequestId ?? undefined });
                         return;
                       }
                       router.push({

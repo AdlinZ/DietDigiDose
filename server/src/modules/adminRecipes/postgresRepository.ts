@@ -157,7 +157,7 @@ export class PostgresAdminRecipesRepository implements AdminRecipesRepository {
       if (item.catalogId || item.capabilityCode) await client.query(`INSERT INTO recipe_kitchenware_requirements
         (recipe_id, catalog_id, capability_code, role, source, confidence, notes) VALUES ($1,$2,$3,$4,'admin',$5,$6)
         ON CONFLICT DO NOTHING`, [recipeId, item.catalogId, item.capabilityCode, item.role, item.confidence, item.rawName]);
-      if (!item.catalogId || item.confidence < 0.7) await client.query(`INSERT INTO kitchenware_mapping_reviews
+      if (!item.catalogId || item.confidence < 1) await client.query(`INSERT INTO kitchenware_mapping_reviews
         (raw_name, normalized_name, source_type, source_id, confidence, suggested_catalog_id) VALUES ($1,$2,'recipe',$3,$4,$5)
         ON CONFLICT(normalized_name, source_type, source_id) DO UPDATE SET raw_name=excluded.raw_name,
         confidence=excluded.confidence, suggested_catalog_id=excluded.suggested_catalog_id, status='pending', reviewed_at=NULL`,

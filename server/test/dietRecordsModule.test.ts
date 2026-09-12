@@ -69,3 +69,23 @@ describe("diet records module", () => {
     assert.equal(funnelEvents, 1);
   });
 });
+
+describe("prepared meal quantity conservation", () => {
+  test("repeated decimal consumption and exact small-remainder disposal preserve quantity", async () => {
+    const { transitionMeal, prepareMealEvent } = await import("../src/modules/dietRecords/preparedMeals.js");
+    const { mealProductionSchema } = await import("@dietdigidose/contracts");
+    mealProductionSchema.parse({ food_name: "饭", produced_servings: 1, eaten_servings: 0.9995 });
+    let meal: import("@dietdigidose/contracts").PreparedMeal = { id: "meal", food_name: "饭", produced_servings: 1, remaining_servings: 1, version: 1,
+      is_reserved: false, recipe_id: null, nutrition_per_serving: {}, planned_date: null, meal_type: "午餐",
+      storage_location: null, produced_at: "2026-09-12", queue_item_id: null, plan_item_id: null };
+    for (let index = 0; index < 10; index++) {
+      meal = transitionMeal(meal, prepareMealEvent({ idempotency_key: `precision-loop-${index}`, version: meal.version, type: "eat", servings: 0.09995 }));
+    }
+    assert.equal(meal.remaining_servings, 0.0005);
+    const staleVersion = meal.version;
+    meal = transitionMeal(meal, prepareMealEvent({ idempotency_key: "precision-discard-last", version: meal.version, type: "discard", servings: 0.0005 }));
+    assert.equal(meal.remaining_servings, 0);
+    assert.throws(() => transitionMeal(meal, { idempotency_key: "precision-stale-event", version: staleVersion, type: "eat", servings: 0.0005 }), /刷新/);
+    assert.throws(() => transitionMeal(meal, { idempotency_key: "precision-empty-event", version: meal.version, type: "eat", servings: 0.000001 }), /不足/);
+  });
+});

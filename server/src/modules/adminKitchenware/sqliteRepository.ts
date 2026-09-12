@@ -1,3 +1,5 @@
+import { capabilityConfiguration, assertCapabilityUpdate, type CapabilityUpdate } from "./capabilities.js";
+import { assertReview, reviewedAliases, reviewedRecipeRoles, type MappingDecision } from "./mappingReview.js";
 import type Database from "better-sqlite3";
 import type { AdminKitchenwareRepository } from "./repository.js";
 import type { AssetQuery, AuditContext, CatalogInput, CatalogQuery, Row } from "./types.js";
@@ -7,6 +9,40 @@ function duplicate(error: unknown) { return String((error as { message?: string 
 export class SqliteAdminKitchenwareRepository implements AdminKitchenwareRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+
+  async capabilityConfiguration(id: number) { return this.database.transaction(() => {
+    if (!this.catalogById(id)) return null;
+    return capabilityConfiguration(id,this.database.prepare("SELECT capability_code,constraints_json FROM kitchenware_catalog_capabilities WHERE catalog_id=?").all(id) as Row[],
+      this.database.prepare("SELECT code,name,safety_level FROM kitchenware_capabilities ORDER BY code").all() as Row[]);
+  })(); }
+  async updateCapabilities(id: number,input: CapabilityUpdate,audit: AuditContext) { return this.database.transaction(() => {
+    if (!this.catalogById(id)) return false;
+    const rows = this.database.prepare("SELECT capability_code,constraints_json FROM kitchenware_catalog_capabilities WHERE catalog_id=?").all(id) as Row[];
+    const available = this.database.prepare("SELECT code,name,safety_level FROM kitchenware_capabilities ORDER BY code").all() as Row[];
+    assertCapabilityUpdate(id,rows,available,input);
+    this.database.prepare("DELETE FROM kitchenware_catalog_capabilities WHERE catalog_id=?").run(id);
+    for (const capability of input.capabilities) this.database.prepare("INSERT INTO kitchenware_catalog_capabilities(catalog_id,capability_code,constraints_json) VALUES(?,?,?)")
+      .run(id,capability.code,JSON.stringify(capability.constraints));
+    this.insertAudit(audit,"kitchenware_capabilities.update","kitchenware_catalog",id,JSON.stringify({ before: capabilityConfiguration(id,rows,available).capabilities,after: input.capabilities }));
+    return true;
+  })(); }
+
+  async mappingReviews(status: string) { return this.database.prepare("SELECT * FROM kitchenware_mapping_reviews WHERE status=? ORDER BY id LIMIT 201").all(status) as Row[]; }
+  async decideMapping(id: number,input: MappingDecision,audit: AuditContext) { this.database.transaction(() => {
+    const row = this.database.prepare("SELECT * FROM kitchenware_mapping_reviews WHERE id=?").get(id) as Row | undefined;
+    assertReview(row,input);
+    if (input.decision === "approved") {
+      const aliases = reviewedAliases(row,this.database.prepare("SELECT * FROM kitchenware_catalog").all() as Row[],input.catalogId!);
+      const roles = row.source_type === "recipe" ? reviewedRecipeRoles(row,this.database.prepare("SELECT required_kitchenware_json,optional_kitchenware_json,deleted_at FROM recipes WHERE id=?").get(row.source_id) as Row | undefined) : [];
+      this.database.prepare("UPDATE kitchenware_catalog SET aliases=? WHERE id=?").run(JSON.stringify(aliases),input.catalogId!);
+      for (const role of roles) this.database.prepare(`INSERT INTO recipe_kitchenware_requirements(recipe_id,catalog_id,role,source,confidence,notes)
+        SELECT ?,?,?,'reviewed',1,? WHERE NOT EXISTS(SELECT 1 FROM recipe_kitchenware_requirements WHERE recipe_id=? AND catalog_id=? AND role=?)`)
+        .run(row.source_id,input.catalogId!,role,String(row.raw_name),row.source_id,input.catalogId!,role);
+    }
+    this.database.prepare("UPDATE kitchenware_mapping_reviews SET status=?,suggested_catalog_id=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=?")
+      .run(input.decision,input.decision === "approved" ? input.catalogId! : row.suggested_catalog_id,id);
+    this.insertAudit(audit,"kitchenware_mapping."+input.decision,"kitchenware_mapping",id,`厨具映射 ${input.decision}：${row.raw_name} → ${input.catalogId ?? '未映射'}`);
+  })(); }
 
   async listCatalog(input: CatalogQuery) {
     const filters: string[] = []; const values: string[] = [];

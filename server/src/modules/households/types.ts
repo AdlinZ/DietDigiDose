@@ -23,7 +23,7 @@ export type InventoryCreateInput = {
   image_url?: string | null;
 };
 
-export type InventoryUpdateInput = Partial<InventoryCreateInput> & { is_available?: boolean };
+export type InventoryUpdateInput = Partial<InventoryCreateInput> & { version: number; is_available?: boolean };
 export type IntakeResult = { batchId: string; inventoryIds: number[]; count: number; repeated: boolean };
 
 export type JoinResult = { kind: "not_found" } | { kind: "existing" | "joined"; household: Row };
@@ -38,5 +38,5 @@ export type ShoppingMutationResult = { kind: "not_member" } | { kind: "not_found
 export type ShoppingDeleteResult = "not_member" | "not_found" | "version_conflict" | "deleted";
 export type IntakeRepositoryResult = { kind: "not_member" } | { kind: "version_conflict" }
   | { kind: "created"; value: IntakeResult } | { kind: "repeated"; value: IntakeResult };
-export type InventoryMutationResult = { kind: "not_member" } | { kind: "not_found" }
+export type InventoryMutationResult = { kind: "version_conflict" } | { kind: "not_member" } | { kind: "not_found" }
   | { kind: "completed"; item: Row };

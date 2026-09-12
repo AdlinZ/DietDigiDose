@@ -21,6 +21,9 @@ const view = formatMealPlan({
 
 function fakeRepository(overrides: Partial<MealPlansRepository> = {}): MealPlansRepository {
   return {
+    listChanges: async () => [],
+    reviewChange: async () => ({ kind: "updated", value: formatMealPlanItem(item) }),
+    confirmItem: async () => ({ kind: "updated", value: formatMealPlanItem(item) }),
     activateDraft: async () => ({ kind: "updated", value: { plan: view, repeated: false } }),
     updateDraft: async () => ({ kind: "updated", value: { plan: view, repeated: false } }),
     saveDraft: async () => ({ plan: view, repeated: false }),
@@ -67,4 +70,12 @@ describe("meal plans module", () => {
       (error: unknown) => error instanceof MealPlansError && error.code === "DIET_RECORD_NOT_FOUND",
     );
   });
+});
+
+test("automatic meal changes distinguish shopping-list intent, actual purchases, confirmation and cooking", async () => {
+  const { mealChangeDecision } = await import("../src/modules/mealPlans/changePolicy.js");
+  assert.equal(mealChangeDecision({ status: "planned" }, undefined, [{ checked: false }]), "apply");
+  assert.equal(mealChangeDecision({ status: "planned", confirmed_at: "2026-09-12" }, undefined, []), "suggest");
+  assert.equal(mealChangeDecision({ status: "planned" }, undefined, [{ checked: true }]), "suggest");
+  for (const status of ["preparing", "ready", "cooking", "completed"]) assert.equal(mealChangeDecision({ status: "planned" }, { status }, []), "keep");
 });

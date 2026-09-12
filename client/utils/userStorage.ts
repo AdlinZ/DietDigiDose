@@ -14,6 +14,53 @@ const LEGACY_UNSCOPED_PRIVATE_KEYS = [
   SEARCH_HISTORY_STORAGE_KEY,
 ];
 const CLEARABLE_CACHE_PREFIXES = ["offline_cache_"];
+const privateStorageGenerations = new Map<number, number>();
+const invalidatedPrivateStorage = new Set<number>();
+const privateStorageWrites = new Map<number, Set<Promise<unknown>>>();
+
+export function getPrivateStorageGeneration(userId: number) {
+  return privateStorageGenerations.get(userId) ?? 0;
+}
+
+export function invalidatePrivateStorage(userId?: number | null) {
+  if (userId) {
+    privateStorageGenerations.set(userId, getPrivateStorageGeneration(userId) + 1);
+    invalidatedPrivateStorage.add(userId);
+  }
+}
+
+export function activatePrivateStorage(userId: number) {
+  invalidatedPrivateStorage.delete(userId);
+}
+
+/** Persist before sending a mutation; an expired account session cannot leave a retry behind. */
+export async function writeUserPrivateStorage(baseKey: string, userId: number, generation: number, value: string) {
+  const key = getUserStorageKey(baseKey, userId);
+  if (!key || invalidatedPrivateStorage.has(userId) || generation !== getPrivateStorageGeneration(userId)) return false;
+  const writes = privateStorageWrites.get(userId) ?? new Set<Promise<unknown>>();
+  privateStorageWrites.set(userId, writes);
+  const write = AsyncStorage.setItem(key, value);
+  writes.add(write);
+  try {
+    await write;
+    return generation === getPrivateStorageGeneration(userId);
+  } finally {
+    writes.delete(write);
+  }
+}
+
+export async function removeUserPrivateStorage(baseKey: string, userId: number, generation: number) {
+  const key = getUserStorageKey(baseKey, userId);
+  if (!key || invalidatedPrivateStorage.has(userId) || generation !== getPrivateStorageGeneration(userId)) return false;
+  const writes = privateStorageWrites.get(userId) ?? new Set<Promise<unknown>>();
+  privateStorageWrites.set(userId, writes);
+  const removal = AsyncStorage.removeItem(key);
+  writes.add(removal);
+  try {
+    await removal;
+    return generation === getPrivateStorageGeneration(userId);
+  } finally { writes.delete(removal); }
+}
 
 export function getUserStorageKey(baseKey: string, userId?: number | null) {
   if (!Number.isInteger(userId) || Number(userId) <= 0) return null;
@@ -37,9 +84,11 @@ export async function purgeLegacyUnscopedPrivateStorage() {
 
 export async function purgeUserPrivateStorage(userId?: number | null) {
   if (!Number.isInteger(userId) || Number(userId) <= 0) return;
+  invalidatePrivateStorage(userId);
+  await Promise.allSettled([...(privateStorageWrites.get(userId!) ?? [])]);
   const suffix = `:user:${userId}`;
   const keys = await AsyncStorage.getAllKeys();
-  const userKeys = keys.filter((key) => key.endsWith(suffix));
+  const userKeys = keys.filter((key) => key.endsWith(suffix) || key === `prepared-meal-pending:${userId}`);
   if (userKeys.length) await AsyncStorage.multiRemove(userKeys);
 }
 

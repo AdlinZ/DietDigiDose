@@ -27,7 +27,7 @@ export class DietRecordsService {
     return this.repository.create(userId, this.prepareRecord(record));
   }
 
-  remove(userId: number, id: number) { return this.repository.remove(userId, id); }
+  remove(userId: number, id: number, mode?: "undo_eating" | "delete_intake") { return this.repository.remove(userId, id, mode); }
 
   listPreparedMeals(userId: number) { return this.repository.listPreparedMeals(userId); }
   applyMealEvent(userId: number, mealId: string, input: PreparedMealEventInput) {

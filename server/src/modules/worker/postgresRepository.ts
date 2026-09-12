@@ -17,10 +17,17 @@ export class PostgresWorkerRepository implements WorkerRepository {
         owner_id = EXCLUDED.owner_id,
         lease_expires_at = EXCLUDED.lease_expires_at,
         updated_at = CURRENT_TIMESTAMP
-      WHERE worker_task_leases.owner_id = EXCLUDED.owner_id
-        OR worker_task_leases.lease_expires_at <= CURRENT_TIMESTAMP
+      WHERE worker_task_leases.lease_expires_at <= CURRENT_TIMESTAMP
       RETURNING task_name
     `, [taskName, workerId, leaseMs]);
+    return result.rowCount === 1;
+  }
+
+  async ownsLease(taskName: WorkerTaskName, ownerId: string) {
+    const result = await this.pool.query(`
+      SELECT 1 FROM worker_task_leases
+      WHERE task_name = $1 AND owner_id = $2 AND lease_expires_at > CURRENT_TIMESTAMP
+    `, [taskName, ownerId]);
     return result.rowCount === 1;
   }
 
@@ -38,11 +45,13 @@ export class PostgresWorkerRepository implements WorkerRepository {
     `, [runId, taskName, workerId]);
   }
 
-  async completeRun(runId: string, status: "completed" | "failed", durationMs: number, result: WorkerTaskResult, errorMessage: string | null) {
-    await this.pool.query(`
+  async completeRun(runId: string, status: "completed" | "failed", durationMs: number, result: WorkerTaskResult, errorMessage: string | null, leaseOwnerId: string) {
+    const updated = await this.pool.query(`
       UPDATE worker_task_runs SET status = $1, finished_at = CURRENT_TIMESTAMP,
         duration_ms = $2, processed_count = $3, succeeded_count = $4, failed_count = $5,
-        result_json = $6::jsonb, error_message = $7 WHERE id = $8
+        result_json = $6::jsonb, error_message = $7 WHERE id = $8 AND status = 'running'
+        AND EXISTS (SELECT 1 FROM worker_task_leases
+          WHERE task_name = worker_task_runs.task_name AND owner_id = $9 AND lease_expires_at > CURRENT_TIMESTAMP)
     `, [
       status,
       durationMs,
@@ -52,7 +61,9 @@ export class PostgresWorkerRepository implements WorkerRepository {
       JSON.stringify(result.details ?? {}),
       errorMessage,
       runId,
+      leaseOwnerId,
     ]);
+    return updated.rowCount === 1;
   }
 
   async failRun(runId: string, durationMs: number, errorMessage: string) {

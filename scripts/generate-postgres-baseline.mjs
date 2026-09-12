@@ -18,6 +18,8 @@ const generatedSchemaPath = path.join(serverRoot, "src", "storage", "database", 
 const manifestPath = path.join(serverRoot, "src", "storage", "database", "postgres", "baseline-manifest.json");
 
 const BOOLEAN_COLUMNS = new Set([
+  "recommendation_learning_settings.enabled",
+  "plan_maintenance_settings.enabled",
   "ai_usage_logs.success",
   "household_inventory_items.is_available",
   "household_shopping_items.checked",
@@ -221,14 +223,21 @@ function renderDrizzle(tables, sourceHash) {
     `// SQLite final-schema SHA-256: ${sourceHash}`,
     'import { sql } from "drizzle-orm";',
     'import type { AnyPgColumn } from "drizzle-orm/pg-core";',
-    'import { bigint, boolean, check, customType, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex } from "drizzle-orm/pg-core";',
+    'import { bigint, boolean, check, customType, doublePrecision, foreignKey, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex } from "drizzle-orm/pg-core";',
     'const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });',
     "",
   ];
   for (const table of tables) {
     const tableVariable = variableName(table.name);
+    const groupedForeignKeys = new Map();
+    for (const key of table.foreignKeys) {
+      const group = groupedForeignKeys.get(key.id) || [];
+      group.push(key);
+      groupedForeignKeys.set(key.id, group);
+    }
     const foreignKeysByColumn = new Map();
     for (const foreignKey of table.foreignKeys) {
+      if (groupedForeignKeys.get(foreignKey.id).length > 1) continue;
       const entries = foreignKeysByColumn.get(foreignKey.from) || [];
       entries.push(foreignKey);
       foreignKeysByColumn.set(foreignKey.from, entries);
@@ -238,6 +247,13 @@ function renderDrizzle(tables, sourceHash) {
       lines.push(`  ${propertyName(column.name)}: ${renderDrizzleColumn(table, column, foreignKeysByColumn)},`);
     }
     lines.push("}, (table) => [");
+    for (const [id, group] of groupedForeignKeys) {
+      if (group.length < 2) continue;
+      const keys = group.sort((a,b) => a.sequence-b.sequence);
+      const columns = keys.map(key => `table.${propertyName(key.from)}`).join(", ");
+      const targets = keys.map(key => `${variableName(key.table)}.${propertyName(key.to)}`).join(", ");
+      lines.push(`  foreignKey({ name: ${escapeString(`${table.name}_composite_fk_${id}`)}, columns: [${columns}], foreignColumns: [${targets}] }).onDelete(${escapeString(keys[0].onDelete)}).onUpdate(${escapeString(keys[0].onUpdate)}),`);
+    }
     const primaryKeyColumns = table.columns.filter((column) => column.primaryKeyOrder > 0).sort((left, right) => left.primaryKeyOrder - right.primaryKeyOrder);
     if (primaryKeyColumns.length > 1) {
       lines.push(`  primaryKey({ name: ${escapeString(`${table.name}_pkey`)}, columns: [${primaryKeyColumns.map((column) => `table.${propertyName(column.name)}`).join(", ")}] }),`);

@@ -1,3 +1,7 @@
+import { PostgresMaintenanceQueueRepository } from "../modules/planMaintenance/postgresQueueRepository.js";
+import { PlanMaintenanceService } from "../modules/planMaintenance/service.js";
+import { createPlanMaintenanceRouter } from "../modules/planMaintenance/route.js";
+import { PostgresPlanMaintenanceRepository } from "../modules/planMaintenance/postgresRepository.js";
 import { Pool } from "pg";
 import { configureAccessControlService, AccessControlService } from "../modules/accessControl/index.js";
 import { PostgresAccessControlRepository } from "../modules/accessControl/postgresRepository.js";
@@ -227,6 +231,7 @@ export async function initializePostgresApplication(): Promise<ApplicationRuntim
         mealPlans: createMealPlansRouter(new MealPlansService(new PostgresMealPlansRepository(pool))),
         insights: createInsightsRouter(new InsightsService(new PostgresInsightsRepository(pool))),
         recommendations: createRecommendationsRouter(recommendations),
+        planMaintenance: createPlanMaintenanceRouter(new PlanMaintenanceService(new PostgresPlanMaintenanceRepository(pool))),
         kitchenware: createKitchenwareRouter(kitchenware),
         notifications: notificationsRoutes,
         media: mediaRoutes,
@@ -245,10 +250,11 @@ export async function initializePostgresWorker(): Promise<WorkerRuntimeBundle> {
   const pool = poolFromEnvironment();
   try {
     await assertRuntimeSchema(pool);
-    configureNotificationsService(createNotificationsService(new PostgresNotificationsRepository(pool)));
+    configureNotificationsService(createNotificationsService(new PostgresNotificationsRepository(pool),new RecommendationsService(new PostgresRecommendationsRepository(pool),new KitchenwareService(new PostgresKitchenwareRepository(pool)))));
     return {
       driver: "postgresql",
       worker: new WorkerRuntime(new PostgresWorkerRepository(pool)),
+      maintenanceQueue: new PostgresMaintenanceQueueRepository(pool),
       mediaCleanup: new MediaCleanupService(new PostgresMediaCleanupRepository(pool), deleteStoredMediaReferences),
       close: () => pool.end(),
     };

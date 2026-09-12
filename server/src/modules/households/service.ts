@@ -1,3 +1,6 @@
+import { mealChangeDecision } from "../mealPlans/changePolicy.js";
+import { checkDiningRecipe } from "./recipeConstraints.js";
+import { householdMealReservationSchema, type HouseholdMealReservationInput, householdMealEatingSchema, type HouseholdMealEatingInput, householdMealProductionSchema, type HouseholdMealProductionInput, householdDiningAllocationSchema, householdDiningMembersSchema, type HouseholdDiningAllocationInput, type HouseholdDiningAllocationPreview } from "@dietdigidose/contracts";
 import crypto from "node:crypto";
 import { HouseholdsError } from "./errors.js";
 import { formatInventory, formatShoppingItem, normalizeItemName } from "./formatters.js";
@@ -16,6 +19,78 @@ export class HouseholdsService {
 
   constructor(repository: HouseholdsRepository, codeFactory: () => string = inviteCode) {
     this.repository = repository; this.codeFactory = codeFactory;
+  }
+
+  async reserveMeal(userId: number,householdId: number,mealId: string,input: HouseholdMealReservationInput) {
+    return this.repository.reserveMeal(userId,householdId,mealId,householdMealReservationSchema.parse(input));
+  }
+  async meals(userId: number,householdId: number) { return this.repository.meals(userId,householdId); }
+  async eatMeal(userId: number,householdId: number,mealId: string,input: HouseholdMealEatingInput) {
+    return this.repository.eatMeal(userId,householdId,mealId,householdMealEatingSchema.parse(input));
+  }
+  async produceMeal(userId: number, householdId: number, input: HouseholdMealProductionInput) {
+    return this.repository.produceMeal(userId,householdId,householdMealProductionSchema.parse(input));
+  }
+
+  async previewDiningAllocation(userId: number, householdId: number, raw: HouseholdDiningAllocationInput) {
+    const input = householdDiningAllocationSchema.parse(raw);
+    const current = await this.diningMembers(userId,householdId);
+    const participants = input.participants.map(selection => {
+      const member = current.members.find(value => value.membershipId === selection.membershipId);
+      if (!member || member.version !== selection.version)
+        throw new HouseholdsError(409,"共餐成员或忌口已变化，请重新读取后选择","DINING_MEMBERS_CHANGED");
+      if (!member.shared)
+        throw new HouseholdsError(409,"参与成员尚未授权共餐忌口，请先由本人确认并授权","DINING_CONSENT_REQUIRED");
+      return { ...member,servings: selection.servings };
+    });
+    const totalServings = participants.reduce((sum,item) => sum + Math.round(item.servings * 1_000_000),0) / 1_000_000;
+    let recipeCheck; let planItem: HouseholdDiningAllocationPreview["planItem"]; let supplyEligible = false; let recipeId = input.recipeId;
+    if (input.planItem) {
+      const context = await this.repository.diningPlanContext(userId,input.planItem.planId,input.planItem.itemId);
+      if (!context) throw new HouseholdsError(404,"个人餐次不存在或不可用于共餐预览","PLAN_ITEM_UNAVAILABLE");
+      if (Number(context.item.version) !== input.planItem.version) throw new HouseholdsError(409,"个人餐次已变化，请刷新后重新预览","PLAN_ITEM_CHANGED");
+      supplyEligible = context.item.status === "planned";
+      const currentRecipe = context.item.recipe_id == null ? undefined : Number(context.item.recipe_id);
+      if (recipeId !== undefined && recipeId !== currentRecipe) throw new HouseholdsError(409,"所选菜谱与当前餐次不一致，请刷新后重试","PLAN_RECIPE_CHANGED");
+      recipeId = currentRecipe;
+      planItem = { ...input.planItem,plannedDate: String(context.item.planned_date),mealType: String(context.item.meal_type),title: String(context.item.title),decision: mealChangeDecision(context.item,context.queue,context.purchases),applied: false as const };
+    }
+    if (recipeId !== undefined) {
+      const recipe = await this.repository.diningRecipe(recipeId);
+      if (!recipe) throw new HouseholdsError(404,"菜谱不可用于共餐检查","RECIPE_UNAVAILABLE");
+      recipeCheck = checkDiningRecipe(recipe,participants,totalServings);
+    }
+    const supply = supplyEligible && planItem && planItem.decision!=="keep" && recipeCheck ? await this.repository.diningSupply(userId,householdId,planItem,totalServings,recipeCheck.fingerprint) : undefined;
+    return {
+      ...(supply ? { supply } : {}),householdId,totalServings,participants,...(recipeCheck ? { recipeCheck } : {}),...(planItem ? { planItem } : {}),
+      // These are requirements for subsequent recipe checking, never proof a dish is safe.
+      allergies: [...new Set(participants.flatMap(member => member.allergies))],
+      restrictions: [...new Set(participants.flatMap(member => member.restrictions))],
+      recipeValidationRequired: true as const,
+    };
+  }
+
+  async diningMembers(userId: number, householdId: number) {
+    const rows = await this.repository.diningMembers(userId,householdId);
+    if (!rows.length) throw new HouseholdsError(403,"你不是该家庭的成员","NOT_MEMBER");
+    return householdDiningMembersSchema.parse({ members: rows.map(row => {
+      const identity = { membershipId: Number(row.id),userId: Number(row.user_id),name: String(row.name),version: Number(row.dining_version) };
+      if (!row.dining_shared) return { ...identity,shared: false };
+      const preferences = typeof row.dining_preferences_json === "string" ? JSON.parse(row.dining_preferences_json) : row.dining_preferences_json as { allergies?: string[]; restrictions?: string[] };
+      return { ...identity,shared: true,allergies: preferences?.allergies ?? [],restrictions: preferences?.restrictions ?? [] };
+    }) });
+  }
+
+  async diningPreferences(userId: number, householdId: number) {
+    const row = await this.repository.diningPreferences(userId,householdId);
+    if (!row) throw new HouseholdsError(403,"你不是该家庭的成员","NOT_MEMBER");
+    const preferences = typeof row.dining_preferences_json === "string" ? JSON.parse(row.dining_preferences_json) : row.dining_preferences_json as { allergies?: string[]; restrictions?: string[] };
+    return { membershipId: Number(row.id),version: Number(row.dining_version),shared: Boolean(row.dining_shared),allergies: preferences?.allergies ?? [],restrictions: preferences?.restrictions ?? [] };
+  }
+  async saveDiningPreferences(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdDiningPreferencesInput) {
+    await this.diningPreferences(userId,householdId);
+    if (!await this.repository.saveDiningPreferences(userId,householdId,input)) throw new HouseholdsError(409,"共餐设置或家庭成员状态已变化，请刷新后重试","VERSION_CONFLICT");
+    return { ...input,version: input.version+1 };
   }
 
   async create(userId: number, rawName: unknown) {
@@ -107,14 +182,18 @@ export class HouseholdsService {
   }
 
   async updateInventory(userId: number, householdId: number, itemId: number, input: InventoryUpdateInput) {
+    if (!Number.isSafeInteger(input.version) || input.version < 1) throw new HouseholdsError(400,"请读取食材最新版本后再修改","VERSION_REQUIRED");
     const result = await this.repository.updateInventory(userId, householdId, itemId, input);
+    if (result.kind === "version_conflict") throw new HouseholdsError(409,"家庭食材已被其他成员更新，请刷新后重试","VERSION_CONFLICT");
     if (result.kind === "not_member") throw new HouseholdsError(403, "无权修改该家庭食材", "FORBIDDEN");
     if (result.kind === "not_found") throw new HouseholdsError(404, "食材不存在", "NOT_FOUND");
     return formatInventory(result.item);
   }
 
-  async removeInventory(userId: number, householdId: number, itemId: number) {
-    const result = await this.repository.removeInventory(userId, householdId, itemId);
+  async removeInventory(userId: number, householdId: number, itemId: number, version: number) {
+    if (!Number.isSafeInteger(version) || version < 1) throw new HouseholdsError(400,"请读取食材最新版本后再移除","VERSION_REQUIRED");
+    const result = await this.repository.removeInventory(userId, householdId, itemId, version);
+    if (result === "version_conflict") throw new HouseholdsError(409,"家庭食材已被其他成员更新，请刷新后重试","VERSION_CONFLICT");
     if (result === "not_member") throw new HouseholdsError(403, "无权操作该家庭食材", "FORBIDDEN");
     if (result === "not_found") throw new HouseholdsError(404, "食材不存在", "NOT_FOUND");
     return { message: "家庭食材已用完下架" };

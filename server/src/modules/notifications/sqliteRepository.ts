@@ -1,3 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { decideInterventionFeedback, feedbackRequest, replayInterventionFeedback, type InterventionFeedbackDecision } from "../interventions/feedback.js";
+import type { InterventionFeedback } from "@dietdigidose/contracts";
+import { interventionDeliveryBlock, type InterventionDeliveryClaim, type InterventionDeliveryResult } from "../interventions/delivery.js";
+import { interventionCandidateId } from "../interventions/opportunities.js";
+import { reservationDecision, type InterventionReservation } from "../interventions/reservation.js";
 import type Database from "better-sqlite3";
 import { expiryContent, type ExpiryItem } from "./expiry.js";
 import type { NotificationsRepository } from "./repository.js";
@@ -14,6 +20,119 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async activeInterventionSnooze(userId: number,now: number): Promise<number | null> {
+    const row = this.database.prepare("SELECT MAX(snoozed_until) AS until FROM proactive_interventions WHERE user_id=? AND kind='expiry_rescue' AND snoozed_until>?").get(userId,new Date(now).toISOString()) as {until:string|null};
+    return row.until ? Date.parse(row.until) : null;
+  }
+  async feedbackIntervention(userId: number,id: string,input: InterventionFeedback,now: number): Promise<InterventionFeedbackDecision> {
+    const request = feedbackRequest(id,input);
+    return this.database.transaction(() => {
+      const existing = this.database.prepare("SELECT request_json,result_json FROM proactive_intervention_actions WHERE user_id=? AND idempotency_key=?").get(userId,input.idempotencyKey) as Record<string,unknown> | undefined;
+      const replay = replayInterventionFeedback(existing ?? null,id,input);
+      if (replay) return replay;
+      const row = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND id=?").get(userId,id) as Record<string,unknown> | undefined;
+      const preferences = this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as Record<string,unknown> | undefined;
+      const decision = decideInterventionFeedback(row ?? null,preferences ?? null,input,now);
+      if (!decision.ok) return decision;
+      const result = decision.result,at = new Date(now).toISOString();
+      this.database.prepare("UPDATE proactive_interventions SET status='acted',snoozed_until=?,delivery_state=CASE WHEN delivery_state='pending' THEN 'cancelled' ELSE delivery_state END,updated_at=? WHERE user_id=? AND id=?").run(result.snoozedUntil,at,userId,id);
+      this.database.prepare("UPDATE user_notification_inbox SET action_status='completed',is_read=1,read_at=?,snoozed_until=?,updated_at=? WHERE user_id=? AND id=?").run(at,result.snoozedUntil,at,userId,row!.notification_id);
+      if (result.notCookingDate) {
+        this.database.prepare("UPDATE proactive_intervention_preferences SET not_cooking_date=?,version=version+1,updated_at=? WHERE user_id=?").run(result.notCookingDate,at,userId);
+        this.database.prepare("UPDATE proactive_interventions SET delivery_state='cancelled',updated_at=? WHERE user_id=? AND kind='dinner_window' AND delivery_state='pending' AND json_extract(candidate_json,'$.localDate')=?").run(at,userId,result.notCookingDate);
+      }
+      if (result.snoozedUntil) this.database.prepare("UPDATE proactive_interventions SET delivery_state='cancelled',updated_at=? WHERE user_id=? AND kind='expiry_rescue' AND delivery_state='pending'").run(at,userId);
+      this.database.prepare("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json,created_at) VALUES(?,?,?,?,?,?,?,?)").run(randomUUID(),id,userId,input.idempotencyKey,input.action,JSON.stringify(request),JSON.stringify(result),at);
+      return decision;
+    })();
+  }
+
+  async interventionCard(userId: number,id: string): Promise<Record<string,unknown> | null> {
+    return (this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND id=? AND notification_id IS NOT NULL").get(userId,id) as Record<string,unknown> | undefined) ?? null;
+  }
+
+  async interventionScanCursor(): Promise<number> {
+    const row = this.database.prepare("SELECT after_user_id FROM proactive_intervention_scan_cursor WHERE name='opportunities'").get() as { after_user_id: number } | undefined;
+    return row?.after_user_id ?? 0;
+  }
+  async advanceInterventionScan(expected: number,next: number,owner: string): Promise<boolean> {
+    if (![expected,next].every(value => Number.isSafeInteger(value) && value>=0) || !owner) throw new Error("Invalid scan checkpoint");
+    return this.database.transaction(() => {
+      if (!this.database.prepare("SELECT 1 FROM worker_task_leases WHERE task_name='intervention-scan' AND owner_id=? AND lease_expires_at>CURRENT_TIMESTAMP").get(owner)) return false;
+      this.database.prepare("INSERT INTO proactive_intervention_scan_cursor(name) VALUES('opportunities') ON CONFLICT(name) DO NOTHING").run();
+      return this.database.prepare("UPDATE proactive_intervention_scan_cursor SET after_user_id=?,updated_at=CURRENT_TIMESTAMP WHERE name='opportunities' AND after_user_id=?").run(next,expected).changes===1;
+    })();
+  }
+
+  async interventionScanUsers(afterId: number,limit: number): Promise<number[]> {
+    if (!Number.isSafeInteger(afterId) || afterId<0 || !Number.isInteger(limit) || limit<1 || limit>100) throw new Error("Invalid opportunity scan");
+    return (this.database.prepare("SELECT user_id FROM proactive_intervention_preferences WHERE enabled=1 AND (expiry_rescue=1 OR dinner_window=1) AND user_id>? ORDER BY user_id LIMIT ?").all(afterId,limit) as Array<{user_id:number}>).map(row => row.user_id);
+  }
+  async interventionQueue(userId: number): Promise<Record<string,unknown>[]> {
+    return this.database.prepare("SELECT status,planned_at,deleted_at FROM cooking_queue_items WHERE user_id=? AND deleted_at IS NULL AND status IN ('waiting','preparing','ready','cooking')").all(userId) as Array<Record<string,unknown>>;
+  }
+
+  async pendingInterventionUsers(now: number,limit: number): Promise<number[]> {
+    if (!Number.isFinite(now) || !Number.isInteger(limit) || limit<1 || limit>500) throw new Error("Invalid delivery scan");
+    const at = new Date(now).toISOString();
+    return (this.database.prepare("SELECT user_id FROM proactive_interventions WHERE (delivery_state='pending' AND next_attempt_at<=?) OR (delivery_state='sending' AND lease_until<=?) GROUP BY user_id ORDER BY MIN(COALESCE(next_attempt_at,lease_until)),user_id LIMIT ?").all(at,at,limit) as Array<{user_id:number}>).map(row => row.user_id);
+  }
+
+  async claimIntervention(userId: number,now: number,owner: string,featureEnabled: boolean): Promise<InterventionDeliveryClaim | null> {
+    if (!owner.trim() || owner.length>200 || !Number.isFinite(now)) throw new Error("Invalid delivery claim");
+    return this.database.transaction(() => {
+      const at = new Date(now).toISOString();
+      this.database.prepare("UPDATE proactive_interventions SET delivery_state='uncertain',lease_owner=NULL,lease_until=NULL,updated_at=? WHERE user_id=? AND delivery_state='sending' AND lease_until<=?").run(at,userId,at);
+      const row = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND delivery_state='pending' AND next_attempt_at<=? ORDER BY next_attempt_at,id LIMIT 1").get(userId,at) as Record<string,unknown> | undefined;
+      if (!row) return null;
+      const prefs = this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as Record<string,unknown> | undefined;
+      const block = interventionDeliveryBlock(row,prefs ?? null,now,featureEnabled);
+      const devices = this.database.prepare("SELECT expo_push_token FROM push_devices WHERE user_id=? AND is_active=1 ORDER BY id").all(userId) as Array<{expo_push_token:string}>;
+      if (block || !devices.length) {
+        this.database.prepare("UPDATE proactive_interventions SET delivery_state='cancelled',decision_reason=?,updated_at=?,status=CASE WHEN expires_at<=? THEN 'expired' ELSE status END WHERE id=?").run(block ?? 'delivery_no_device',at,at,String(row.id));
+        return null;
+      }
+      this.database.prepare("UPDATE proactive_interventions SET delivery_state='sending',lease_owner=?,lease_until=?,delivery_attempts=delivery_attempts+1,updated_at=? WHERE id=?").run(owner,new Date(now+120_000).toISOString(),at,String(row.id));
+      const candidate = JSON.parse(String(row.candidate_json)) as {title:string;body:string};
+      return { id: String(row.id),owner,userId,title: candidate.title,body: candidate.body,notificationId: Number(row.notification_id),priority: row.priority === 'high' ? 'high' as const : 'normal' as const,tokens: devices.map(device => device.expo_push_token) };
+    })();
+  }
+  async finishIntervention(id: string,owner: string,now: number,result: InterventionDeliveryResult) {
+    if (!["accepted","failed","uncertain"].includes(result)) throw new Error("Invalid delivery result");
+    const at = new Date(now).toISOString();
+    return this.database.prepare("UPDATE proactive_interventions SET delivery_state=?,status=CASE WHEN ?='accepted' AND status='inbox' THEN 'sent' ELSE status END,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND delivery_state='sending' AND lease_owner=? AND lease_until>?").run(result,result,at,id,owner,at).changes===1;
+  }
+  async reserveIntervention(input: InterventionReservation) { return this.database.transaction(() => {
+    const candidate = input.candidate;
+    const existing = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND source_key=?").get(candidate.userId,candidate.sourceKey) as Record<string,unknown> | undefined;
+    if (existing) return existing;
+    const preferences = this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(candidate.userId) as Record<string,unknown> | undefined;
+    const history = this.database.prepare("SELECT kind,snoozed_until,decided_at,push_reserved_at,channel FROM proactive_interventions WHERE user_id=? AND decided_at>=?").all(candidate.userId,new Date(input.now-7*86_400_000).toISOString()) as Record<string,unknown>[];
+    const device = this.database.prepare("SELECT id FROM push_devices WHERE user_id=? AND is_active=1 LIMIT 1").get(candidate.userId);
+    const decision = reservationDecision(input,preferences ?? null,history,Boolean(device));
+    if (decision.reason === "snoozed") return { deferred: true,reason: decision.reason };
+    const id = interventionCandidateId(candidate), now = new Date(input.now).toISOString();
+    let notificationId: number | null = null;
+    if (decision.channel !== "suppressed") notificationId = Number(this.database.prepare(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)
+      VALUES(?,'proactive_intervention',?,?,'action_required',?,'pending',?)`).run(candidate.userId,candidate.title,candidate.body,decision.priority ?? "normal",`intervention:${id}`).lastInsertRowid);
+    this.database.prepare(`INSERT INTO proactive_interventions(id,user_id,source_key,kind,status,candidate_json,policy_input_json,policy_version,decision_reason,channel,priority,starts_at,expires_at,decided_at,push_reserved_at,delivery_state,notification_id,next_attempt_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,candidate.userId,candidate.sourceKey,candidate.kind,decision.channel === "suppressed" ? "suppressed" : "inbox",JSON.stringify(candidate),JSON.stringify({ input,preferences: preferences ?? null,history,hasPushDevice: Boolean(device) }),decision.policyVersion,decision.reason,decision.channel,decision.priority,new Date(candidate.startsAt).toISOString(),new Date(candidate.expiresAt).toISOString(),now,decision.channel === "push" ? now : null,decision.channel === "push" ? "pending" : "none",notificationId,decision.channel === "push" ? now : null);
+    return this.database.prepare("SELECT * FROM proactive_interventions WHERE id=?").get(id) as Record<string,unknown>;
+  })(); }
+  async interventionPreferences(userId: number) { return (this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as Record<string,unknown> | undefined) ?? null; }
+  async saveInterventionPreferences(userId: number,input: import("@dietdigidose/contracts").InterventionPreferencesUpdate) {
+    return this.database.transaction(() => {
+      const current = this.database.prepare("SELECT version FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as {version:number} | undefined;
+      if ((current?.version ?? 0) !== input.version) return null;
+      this.database.prepare(`INSERT INTO proactive_intervention_preferences(user_id,enabled,expiry_rescue,dinner_window,time_zone,quiet_start,quiet_end,dinner_time,dinner_lead_minutes,daily_push_limit,cooldown_minutes,version)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,expiry_rescue=excluded.expiry_rescue,dinner_window=excluded.dinner_window,time_zone=excluded.time_zone,quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,dinner_time=excluded.dinner_time,dinner_lead_minutes=excluded.dinner_lead_minutes,daily_push_limit=excluded.daily_push_limit,cooldown_minutes=excluded.cooldown_minutes,version=excluded.version,updated_at=CURRENT_TIMESTAMP`)
+        .run(userId,Number(input.enabled),Number(input.expiry_rescue),Number(input.dinner_window),input.time_zone,input.quiet_start,input.quiet_end,input.dinner_time,input.dinner_lead_minutes,input.daily_push_limit,input.cooldown_minutes,input.version+1);
+      this.database.prepare(`UPDATE proactive_interventions SET delivery_state='cancelled',lease_owner=NULL,lease_until=NULL,updated_at=CURRENT_TIMESTAMP
+        WHERE user_id=? AND delivery_state='pending' AND (?=0 OR (kind='expiry_rescue' AND ?=0) OR (kind='dinner_window' AND ?=0))`)
+        .run(userId,Number(input.enabled),Number(input.expiry_rescue),Number(input.dinner_window));
+      return this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as Record<string,unknown>;
+    })();
+  }
   async preferences(userId: number) {
     const row = this.database.prepare(`SELECT expiring_alert,meal_reminder,water_reminder,breakfast_time,lunch_time,dinner_time, water_start_time,water_end_time,water_interval_minutes,quiet_start_time,quiet_end_time,weekdays_enabled,weekends_enabled FROM user_notification_preferences WHERE user_id=?`).get(userId) as PreferenceRow | undefined;
     return row ? this.preference(row) : null;
@@ -39,17 +158,17 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
   }
 
   async unreadCount(userId: number) {
-    return Number((this.database.prepare(`SELECT COUNT(*) AS count FROM user_notification_inbox WHERE user_id=? AND is_read=0 AND(snoozed_until IS NULL OR snoozed_until<=CURRENT_TIMESTAMP)`).get(userId) as { count: number }).count);
+    return Number((this.database.prepare(`SELECT COUNT(*) AS count FROM user_notification_inbox WHERE user_id=? AND is_read=0 AND(snoozed_until IS NULL OR julianday(snoozed_until)<=julianday('now'))`).get(userId) as { count: number }).count);
   }
 
   async history(userId: number, filter: NotificationFilter, cursor: number | null, limit: number) {
-    const conditions = ["user_id=?", "(snoozed_until IS NULL OR snoozed_until<=CURRENT_TIMESTAMP)"];
+    const conditions = ["user_id=?", "(snoozed_until IS NULL OR julianday(snoozed_until)<=julianday('now'))"];
     const params: Array<number | string> = [userId];
     if (filter === "pending") conditions.push("category='action_required'", "action_status='pending'");
     else if (filter === "system") conditions.push("category='system'");
     if (cursor) { conditions.push("id<?"); params.push(cursor); }
     params.push(limit);
-    const rows = this.database.prepare(`SELECT id,type,title,body,is_read AS isRead,created_at AS createdAt, inventory_item_id AS inventoryItemId,category,priority,action_status AS actionStatus,snoozed_until AS snoozedUntil, (SELECT COUNT(*) FROM notification_inventory_items n WHERE n.notification_id=user_notification_inbox.id) AS itemCount FROM user_notification_inbox WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params) as Array<Record<string, unknown>>;
+    const rows = this.database.prepare(`SELECT (SELECT p.id FROM proactive_interventions p WHERE p.notification_id=user_notification_inbox.id AND p.user_id=user_notification_inbox.user_id ORDER BY p.id LIMIT 1) AS interventionId,id,type,title,body,is_read AS isRead,created_at AS createdAt, inventory_item_id AS inventoryItemId,category,priority,action_status AS actionStatus,snoozed_until AS snoozedUntil, (SELECT COUNT(*) FROM notification_inventory_items n WHERE n.notification_id=user_notification_inbox.id) AS itemCount FROM user_notification_inbox WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params) as Array<Record<string, unknown>>;
     return rows.map((row) => ({ ...row, isRead: row.isRead !== 0 }));
   }
 
@@ -71,14 +190,13 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
 
   async action(userId: number, notificationId: number, action: NotificationAction, metadata?: unknown) {
     return this.database.transaction(() => {
-      const item = this.database.prepare("SELECT inventory_item_id AS inventoryItemId FROM user_notification_inbox WHERE id=? AND user_id=?")
-        .get(notificationId, userId) as { inventoryItemId: number | null } | undefined;
+      const item = this.database.prepare("SELECT action_status AS actionStatus FROM user_notification_inbox WHERE id=? AND user_id=?")
+        .get(notificationId, userId) as { actionStatus: string } | undefined;
       if (!item) return false;
+      if (action === "complete" && item.actionStatus === "completed") return true;
       if (action === "complete") {
         this.database.prepare(`UPDATE user_notification_inbox SET action_status='completed',is_read=1, read_at=COALESCE(read_at,CURRENT_TIMESTAMP),snoozed_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`)
           .run(notificationId, userId);
-        if (item.inventoryItemId) this.database.prepare(`UPDATE inventory_items SET is_available=0 WHERE user_id=? AND id IN (SELECT inventory_item_id FROM notification_inventory_items WHERE notification_id=? AND user_id=?)`)
-          .run(userId, notificationId, userId);
       } else if (action === "snooze_today") {
         this.database.prepare(`UPDATE user_notification_inbox SET snoozed_until=datetime(date('now','+1 day')),is_read=1, read_at=COALESCE(read_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`).run(notificationId, userId);
       } else this.database.prepare(`UPDATE user_notification_inbox SET is_read=1,read_at=COALESCE(read_at,CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`).run(notificationId, userId);

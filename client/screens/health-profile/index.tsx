@@ -690,7 +690,7 @@ export default function HealthProfileScreen() {
               <ChoiceRow label="通常在哪里吃" value={mealPreparation.eating_location ?? null}
                 options={[{ value: 'home', label: '家里' }, { value: 'work', label: '单位' }, { value: 'school', label: '学校' }, { value: 'other', label: '其他' }]}
                 onChange={eating_location => setMealPreparation(current => ({ ...current, eating_location }))} />
-              {([['carry_meals', '需要携带饭菜'], ['refrigeration_available', '用餐前可冷藏'], ['reheating_available', '用餐时可加热']] as const).map(([field, label]) => (
+              {([['avoid_spicy', '长期不吃辣'], ['carry_meals', '需要携带饭菜'], ['refrigeration_available', '用餐前可冷藏'], ['reheating_available', '用餐时可加热']] as const).map(([field, label]) => (
                 <ChoiceRow key={field} label={label} value={mealPreparation[field] == null ? 'unknown' : mealPreparation[field] ? 'yes' : 'no'}
                   options={[{ value: 'yes', label: '可以 / 是' }, { value: 'no', label: '不可以 / 否' }, { value: 'unknown', label: '尚不确定' }]}
                   onChange={value => setMealPreparation(current => ({ ...current, [field]: value === 'unknown' ? null : value === 'yes' }))} />

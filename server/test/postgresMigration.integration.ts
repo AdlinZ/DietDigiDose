@@ -1,3 +1,12 @@
+import { verifyDiningPlanChanges, verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
+import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
+import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
+import { randomUUID } from "node:crypto";
+import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
+import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
+import { PostgresMaintenanceQueueRepository } from "../src/modules/planMaintenance/postgresQueueRepository.js";
+import { PostgresPlanMaintenanceRepository } from "../src/modules/planMaintenance/postgresRepository.js";
+import { PlanMaintenanceService } from "../src/modules/planMaintenance/service.js";
 import type { SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
 import assert from "node:assert/strict";
 import { currentDateKey } from "../src/utils/date.js";
@@ -49,6 +58,7 @@ import { PostgresAdminKitchenwareRepository } from "../src/modules/adminKitchenw
 import { AdminKitchenwareService } from "../src/modules/adminKitchenware/service.js";
 import { PostgresAdminRecipesRepository } from "../src/modules/adminRecipes/postgresRepository.js";
 import { AdminRecipesService } from "../src/modules/adminRecipes/service.js";
+import { CookingQueueService } from "../src/modules/cookingQueue/service.js";
 import { PostgresCookingQueueRepository } from "../src/modules/cookingQueue/postgresRepository.js";
 import { PostgresCommunityRepository } from "../src/modules/community/postgresRepository.js";
 import { CommunityService } from "../src/modules/community/service.js";
@@ -212,7 +222,7 @@ try {
     validationClient.release();
   }
   assert.equal(report.ok, true, report.failures.join("\n"));
-  assert.equal(report.tableCount, 94);
+  assert.equal(report.tableCount, baseline.tables.length);
   assert.equal(report.criticalMetrics["inventory.quantity_value"], 250);
   assert.equal(report.criticalMetrics["diet.calories"], 45);
   assert.equal(report.criticalMetrics["health.weight"], 62.5);
@@ -261,6 +271,9 @@ try {
   })));
   assert.deepEqual(imported.map((result) => result.repeated).sort(), [false, true]);
   assert.equal(imported[0]!.items[0]!.id, imported[1]!.items[0]!.id);
+  const importedHistory = await inventoryService.history(user.id,imported[0]!.items[0]!.id);
+  assert.equal(importedHistory.filter(event => event.action === "created").length,1);
+  assert.equal(importedHistory.find(event => event.action === "created")?.source,"manual");
   const consumed = await inventoryRepository.consume(user.id, {
     idempotency_key: "postgres-consume-0001",
     source: "cooking",
@@ -274,6 +287,11 @@ try {
   });
   assert.equal(repeatedConsumption.repeated, true);
   assert.equal(repeatedConsumption.items[0]!.quantity_value, 200);
+  assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE user_id=$1 AND source_id LIKE 'consume:postgres-consume-0001:%'",[user.id])).rows[0].n,1);
+  await assert.rejects(() => inventoryRepository.consume(user.id,{ idempotency_key: "postgres-consume-rollback",source: "manual",
+    items: [0,1].map(() => ({ item_id: migratedTomato.id,version: consumed.items[0]!.version,mode: "amount" as const,amount_value: 1,unit: "g" as const })) }));
+  assert.equal((await inventoryRepository.findOwned(user.id,migratedTomato.id))?.quantity_value,200);
+  assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE user_id=$1 AND source_id LIKE 'consume:postgres-consume-rollback:%'",[user.id])).rows[0].n,0);
   const updated = await inventoryRepository.update(user.id, created.id, created.version, {
     nextQuantityValue: 500,
     nextQuantityUnit: "ml",
@@ -285,6 +303,9 @@ try {
   assert(history?.some((entry) => entry.action === "consume_partial"));
   assert.deepEqual(await inventoryRepository.remove(user.id, created), { kind: "removed" });
 
+  const inventoryChanges = (await pool.query("SELECT details_json FROM plan_maintenance_events WHERE user_id=$1 AND subject_id=$2 AND event_type='inventory_changed'",[user.id,String(created.id)])).rows;
+  assert.deepEqual(inventoryChanges.map(row => row.details_json.mode).sort(),["remove","update"]);
+  assert.equal(inventoryChanges.find(row => row.details_json.mode === "update").details_json.previousFoodName,created.food_name);
   const unknownExpiry = await inventoryRepository.create(user.id, {
     food_name: "未知日期大米", category: "粮油干货", quantity: "一袋", expiration_date: "", storage_location: "常温",
   });
@@ -312,11 +333,13 @@ try {
   const undoResults = await Promise.all([inventoryRepository.undoScan(user.id, winningJob), inventoryRepository.undoScan(user.id, winningJob)]);
   assert.deepEqual(undoResults.map(result => result.undone).sort(), [0, 1]);
   assert.deepEqual(await inventoryRepository.undoneScanItemIds(user.id, winningJob), [autoItem.id]);
+  assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE user_id=$1 AND subject_id=$2 AND event_type='inventory_changed'",[user.id,String(autoItem.id)])).rows[0].n,1);
   const conflictBatch = await inventoryRepository.bulkIntake(user.id, { idempotency_key: "pg-undo-conflict-batch", source: "image", source_reference: "pg-undo-conflict",
     items: [0,1].map(index => ({ source_item_id: `pg-undo-conflict:${index}`, food_name: `PG撤销冲突${index}`, category: "其他", quantity: "2个", quantity_value: 2,
       quantity_unit: "piece" as const, expiration_date: "", storage_location: "常温" as const, source: "image" as const, confirmed: true })) });
   await inventoryRepository.update(user.id, conflictBatch.items[1]!.id, 1, { patch: { quantity: "1个" }, nextQuantityValue: 1, nextQuantityUnit: "piece" });
   await assert.rejects(() => inventoryRepository.undoScan(user.id, "pg-undo-conflict"), /整批未撤销/);
+  assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE user_id=$1 AND source_id LIKE 'intake-undo:pg-undo-conflict:%'",[user.id])).rows[0].n,0);
   const conflictRows = (await pool.query("SELECT version,deleted_at,quantity_value FROM inventory_items WHERE id=ANY($1::integer[]) ORDER BY id", [conflictBatch.items.map(item => item.id)])).rows;
   assert.equal(conflictRows[0].version, 1);
   assert(conflictRows.every(row => row.deleted_at === null));
@@ -386,11 +409,12 @@ try {
 
   const production = await dietService.completeCooking(user.id, {
     idempotency_key: "postgres-prepared-production-190", inventory_item_ids: [], inventory_consumptions: [],
-    production: { food_name: "Postgres 三份待吃餐", produced_servings: 3, eaten_servings: 1,
+    production: { food_name: "Postgres 三份待吃餐", reported_cooking_minutes: 27, produced_servings: 3, eaten_servings: 1,
       meal_type: "晚餐", eaten_at: "2026-09-08", nutrition_per_serving: { calories: 100, protein: null } },
   });
   const prepared = production.prepared_meal as { id: string; remaining_servings: number };
   assert.equal(prepared.remaining_servings, 2);
+  assert.equal((production.prepared_meal as { reported_cooking_minutes: number }).reported_cooking_minutes,27);
   const halfMeal = { idempotency_key: "postgres-prepared-half-190", version: 1, type: "eat" as const,
     servings: 0.5, recorded_at: "2026-09-09" };
   const halves = await Promise.all([dietService.applyMealEvent(user.id, prepared.id, halfMeal), dietService.applyMealEvent(user.id, prepared.id, halfMeal)]);
@@ -407,6 +431,55 @@ try {
   })));
   assert.equal(raceMeals.filter(result => result.status === "fulfilled").length, 1);
   assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === prepared.id)?.remaining_servings, 0);
+
+  const maintenanceEvents = await pool.query("SELECT event_type FROM plan_maintenance_events WHERE user_id=$1 AND subject_id=$2 ORDER BY event_type",[user.id,prepared.id]);
+  assert.deepEqual(maintenanceEvents.rows.map(row => row.event_type), ["discard","eat","eat","production"]);
+  const outboxClient = await pool.connect();
+  try {
+    await outboxClient.query("BEGIN");
+    const uncommitted = await dietRepository.completeCookingWithClient(outboxClient,user.id, {
+      idempotency_key: "outbox-rollback-test", inventory_item_ids: [], inventory_consumptions: [],
+      production: { food_name: "Rollback outbox", produced_servings: 1, eaten_servings: 0, meal_type: "午餐", nutrition_per_serving: {} },
+    });
+    const uncommittedMeal = uncommitted.prepared_meal as { id: string };
+    assert.equal((await outboxClient.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE subject_id=$1",[uncommittedMeal.id])).rows[0].n,1);
+    assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE subject_id=$1",[uncommittedMeal.id])).rows[0].n,0);
+    await outboxClient.query("ROLLBACK");
+    assert.equal((await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE subject_id=$1",[uncommittedMeal.id])).rows[0].n,0);
+    assert.equal((await pool.query("SELECT COUNT(*)::int n FROM prepared_meals WHERE id=$1",[uncommittedMeal.id])).rows[0].n,0);
+  } finally { await outboxClient.query("ROLLBACK"); outboxClient.release(); }
+
+  const tinyProduction = await dietService.completeCooking(user.id, {
+    idempotency_key: "postgres-precision-produce-205", inventory_item_ids: [], inventory_consumptions: [],
+    production: { food_name: "Postgres 小余量", produced_servings: 1, eaten_servings: 0.9995, meal_type: "午餐", nutrition_per_serving: {} },
+  });
+  const tinyMeal = tinyProduction.prepared_meal as { id: string; remaining_servings: number };
+  assert.equal(tinyMeal.remaining_servings, 0.0005);
+  const tinyEvent = { idempotency_key: "postgres-precision-discard-205", version: 1, type: "discard" as const, servings: 0.0005 };
+  const tinyResults = await Promise.all([dietService.applyMealEvent(user.id, tinyMeal.id, tinyEvent), dietService.applyMealEvent(user.id, tinyMeal.id, tinyEvent)]);
+  assert.deepEqual(tinyResults.map(result => result.repeated).sort(), [false, true]);
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === tinyMeal.id)?.remaining_servings, 0);
+
+  const correctProduction = await dietService.completeCooking(user.id, {
+    idempotency_key: "postgres-correction-produce-203", inventory_item_ids: [], inventory_consumptions: [],
+    production: { food_name: "Postgres 纠错饭", produced_servings: 3, eaten_servings: 1, meal_type: "午餐", nutrition_per_serving: {} },
+  });
+  const correctMeal = correctProduction.prepared_meal as { id: string };
+  const correctRecord = correctProduction.diet_record as { id: number };
+  await assert.rejects(dietService.remove(user.id, correctRecord.id), /选择/);
+  await pool.query(`CREATE FUNCTION fail_intake_correction() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected correction failure'; END $$;
+    CREATE TRIGGER fail_intake_correction BEFORE INSERT ON prepared_meal_intake_corrections FOR EACH ROW EXECUTE FUNCTION fail_intake_correction();`);
+  try { await assert.rejects(dietService.remove(user.id, correctRecord.id, "undo_eating"), /injected/); }
+  finally { await pool.query("DROP TRIGGER fail_intake_correction ON prepared_meal_intake_corrections; DROP FUNCTION fail_intake_correction()"); }
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === correctMeal.id)?.remaining_servings, 2);
+  assert.deepEqual(await Promise.all([dietService.remove(user.id, correctRecord.id, "undo_eating"), dietService.remove(user.id, correctRecord.id, "undo_eating")]), [true, true]);
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === correctMeal.id)?.remaining_servings, 3);
+  const correctionEat = await dietService.applyMealEvent(user.id, correctMeal.id, { idempotency_key: "postgres-correction-eat-203", version: 2, type: "eat", servings: 1 });
+  await dietService.applyMealEvent(user.id, correctMeal.id, { idempotency_key: "postgres-correction-later-203", version: 3, type: "discard", servings: 1 });
+  const laterRecordId = Number((correctionEat.diet_record as { id: number }).id);
+  await assert.rejects(dietService.remove(user.id, laterRecordId, "undo_eating"), /其他变更/);
+  assert.equal(await dietService.remove(user.id, laterRecordId, "delete_intake"), true);
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === correctMeal.id)?.remaining_servings, 1);
 
   const intakeItem = { field_evidence: { quantity: { status: "estimated" as const, source: "recognition" as const } }, source_item_id: "postgres-scan:0", food_name: "PG 恢复入库米", category: "粮油干货",
     quantity: "1袋", expiration_date: "2026-10-01", storage_location: "常温" as const, source: "image" as const, confirmed: true };
@@ -627,6 +700,31 @@ try {
   const postgresHousehold = await householdsService.create(user.id, "Postgres 协作家庭");
   const postgresHouseholdId = Number(postgresHousehold.id);
   assert.equal((await householdsService.join(householdMember, "pghouse1")).status, 201);
+  const diningRecipeId = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,status,serving_size) VALUES('共餐花生菜','[{\"name\":\"花生油\",\"amount\":\"10ml\"}]','approved',2) RETURNING id")).rows[0]?.id);
+  const dietBeforeProduction = (await pool.query("SELECT count(*) AS n FROM diet_records")).rows[0];
+  const producedHouseholdMeal = await verifyHouseholdProduction(householdsService,postgresHouseholdId,user.id,householdMember);
+  assert.deepEqual((await pool.query("SELECT count(*) AS n FROM diet_records")).rows[0],dietBeforeProduction);
+  const thirdDiner = Number((await pool.query("INSERT INTO users(username,email,password_hash) VALUES('third-diner','third-diner@example.com','hash') RETURNING id")).rows[0]?.id);
+  await householdsService.join(thirdDiner,"PGHOUSE1");
+  await verifyHouseholdEating(householdsService,postgresHouseholdId,String(producedHouseholdMeal.id),[user.id,householdMember,thirdDiner]);
+  for (const dinerId of [user.id,householdMember,thirdDiner]) assert.deepEqual((await pool.query("SELECT amount,calories FROM diet_records WHERE user_id=$1 AND food_name='家庭蛋饭'",[dinerId])).rows,[{ amount: "1份",calories: null }]);
+  await verifyHouseholdCorrections(householdsService,dietRepository,postgresHouseholdId,user.id,householdMember,"PGHOUSE1");
+  await verifyHouseholdReservations(householdsService,dietRepository,postgresHouseholdId,user.id,householdMember,"PGHOUSE1");
+  await verifyDiningPlanChanges(householdsService,new PostgresMealPlansRepository(pool),dietRepository,postgresHouseholdId,user.id,householdMember,diningRecipeId,"PGHOUSE1",async (sql,args = []) => {
+    let index = 0; return (await pool.query(sql.replace(/\?/g,() => `$${++index}`),args)).rows;
+  });
+  await verifyHouseholdPlanProduction(householdsService,new PostgresMealPlansRepository(pool),postgresHouseholdId,user.id,householdMember,async (sql,args = []) => {
+    let index = 0;
+    return (await pool.query(sql.replace(/\?/g,() => `$${++index}`),args)).rows;
+  });
+  await verifyHouseholdPlanPreview(householdsService,postgresHouseholdId,user.id,householdMember,diningRecipeId,async (sql,args = []) => {
+    let index = 0;
+    return (await pool.query(sql.replace(/\?/g,() => `$${++index}`),args)).rows;
+  });
+  const staleDiningMembership = await verifyHouseholdDining(householdsService,postgresHouseholdId,user.id,householdMember,diningRecipeId);
+  await householdsService.join(householdMember,"PGHOUSE1");
+  assert.equal((await householdsService.diningPreferences(householdMember,postgresHouseholdId)).shared,false);
+  await assert.rejects(() => householdsService.saveDiningPreferences(householdMember,postgresHouseholdId,{ ...staleDiningMembership,shared: true }),/已变化/);
   const firstHouseholdShopping = await householdsService.createShopping(user.id, postgresHouseholdId,
     "77777777-7777-4777-8777-777777777771", { name: "Postgres 家庭牛奶", amount: "2盒", category: "乳制品" });
   const secondHouseholdShopping = await householdsService.createShopping(householdMember, postgresHouseholdId,
@@ -659,10 +757,15 @@ try {
   const manualHouseholdInventory = await householdsService.createInventory(user.id, postgresHouseholdId, {
     food_name: "Postgres 家庭鸡蛋", expiration_date: "2026-09-09", quantity: "6个",
   });
-  const updatedHouseholdInventory = await householdsService.updateInventory(householdMember, postgresHouseholdId,
-    Number(manualHouseholdInventory.id), { quantity: "5个", is_available: true });
+  const inventoryRace = await Promise.allSettled([user.id,householdMember].map(actor => householdsService.updateInventory(actor, postgresHouseholdId,
+    Number(manualHouseholdInventory.id), { quantity: "5个", is_available: true,version: Number(manualHouseholdInventory.version) })));
+  assert.equal(inventoryRace.filter(result => result.status === "fulfilled").length,1);
+  assert.equal(inventoryRace.filter(result => result.status === "rejected").length,1);
+  const updatedHouseholdInventory = (inventoryRace.find(result => result.status === "fulfilled") as PromiseFulfilledResult<Record<string,unknown>>).value;
   assert.equal(updatedHouseholdInventory.quantity, "5个");
-  await householdsService.removeInventory(user.id, postgresHouseholdId, Number(manualHouseholdInventory.id));
+  await assert.rejects(() => householdsService.updateInventory(householdMember, postgresHouseholdId,Number(manualHouseholdInventory.id),{ quantity: "99个",version: Number(manualHouseholdInventory.version) }),/其他成员更新/);
+  await assert.rejects(() => householdsService.removeInventory(user.id, postgresHouseholdId, Number(manualHouseholdInventory.id),Number(manualHouseholdInventory.version)),/其他成员更新/);
+  await householdsService.removeInventory(user.id, postgresHouseholdId, Number(manualHouseholdInventory.id),Number(updatedHouseholdInventory.version));
   assert((await householdsService.history(user.id, postgresHouseholdId)).length >= 7);
   await assert.rejects(() => householdsService.transferOwner(user.id, postgresHouseholdId,
     { newOwnerUserId: householdMember, version: 999 }), /家庭空间已更新/);
@@ -1209,6 +1312,47 @@ try {
   assert.equal(await cookingQueueRepository.cancel("66666666-6666-4666-8666-666666666666", user.id), true);
 
   const mealPlanRepository = new PostgresMealPlansRepository(pool);
+  const protectedPlanId = "19500000-0000-4000-8000-000000000001";
+  const protectedItemId = "19500000-0000-4000-8000-000000000002";
+  await pool.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES($1,$2,'PG保护计划','2026-09-12','2026-09-18','active')", [protectedPlanId,user.id]);
+  await pool.query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title) VALUES($1,$2,$3,'2026-09-12','午餐','PG饭')", [protectedItemId,protectedPlanId,user.id]);
+  const autoChange = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 1,mealType: "晚餐" },"worker","规则调整");
+  assert.equal(autoChange.kind,"updated");
+  if (autoChange.kind !== "updated") throw new Error("auto change failed");
+  assert.equal((autoChange.value.change as Record<string,unknown>).status,"applied");
+  const autoId = String((autoChange.value.change as Record<string,unknown>).id);
+  assert.equal((await mealPlanRepository.reviewChange(user.id,protectedPlanId,autoId,"restore")).kind,"updated");
+  await mealPlanRepository.confirmItem(user.id,protectedPlanId,protectedItemId,3);
+  const suggestion = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 4,mealType: "早餐" },"worker","条件变化");
+  if (suggestion.kind !== "updated") throw new Error("suggestion failed");
+  assert.equal((suggestion.value.change as Record<string,unknown>).status,"pending");
+  const changeId = String((suggestion.value.change as Record<string,unknown>).id);
+  const reviews = await Promise.all([mealPlanRepository.reviewChange(user.id,protectedPlanId,changeId,"accept"),mealPlanRepository.reviewChange(user.id,protectedPlanId,changeId,"accept")]);
+  assert.deepEqual(reviews.map(result => result.kind),["updated","updated"]);
+  assert.equal((await pool.query("SELECT version FROM meal_plan_items WHERE id=$1",[protectedItemId])).rows[0].version,5);
+  await pool.query("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('pg-protection-purchase',$1,$2,'米',TRUE)",[user.id,`meal-plan:${protectedItemId}:米`]);
+  assert.equal((await mealPlanRepository.reviewChange(user.id,protectedPlanId,changeId,"restore")).kind,"protected");
+  const rejectedSuggestion = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,mealType: "晚餐" });
+  if (rejectedSuggestion.kind !== "updated") throw new Error("suggestion failed");
+  const rejectedId = String((rejectedSuggestion.value.change as Record<string,unknown>).id);
+  await mealPlanRepository.reviewChange(user.id,protectedPlanId,rejectedId,"reject");
+  const replayRejected = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,mealType: "晚餐" });
+  if (replayRejected.kind !== "updated") throw new Error("replay failed");
+  assert.equal((replayRejected.value.change as Record<string,unknown>).status,"rejected");
+  await pool.query("UPDATE meal_plan_items SET status='cooking' WHERE id=$1",[protectedItemId]);
+  const blockedChange = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,plannedDate: "2026-09-13" });
+  if (blockedChange.kind !== "updated") throw new Error("blocked result missing");
+  assert.equal((blockedChange.value.change as Record<string,unknown>).status,"blocked");
+  assert.equal((await mealPlanRepository.updatePlan(user.id,protectedPlanId,{ version: 1,title: "安全改标题" })).kind,"updated");
+  await assert.rejects(mealPlanRepository.updatePlan(user.id,protectedPlanId,{ version: 2,startDate: "2026-09-13" }),/原安排已保留/);
+  await assert.rejects(mealPlanRepository.removePlan(user.id,protectedPlanId,2),/原安排已保留/);
+  const protectedRunId = "19500000-0000-4000-8000-000000000003";
+  await pool.query("INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id) VALUES($1,$2,'guard','text','assistant','running','{}',$1)",[protectedRunId,user.id]);
+  await pool.query("UPDATE meal_plans SET version=1,created_by_run_id=$1 WHERE id=$2",[protectedRunId,protectedPlanId]);
+  await pool.query("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,result_json,idempotency_key,executed_at) VALUES('195-action',$1,$2,'create_meal_plan','high','executed','{}',$3::jsonb,'195-undo-key',CURRENT_TIMESTAMP)",[protectedRunId,user.id,JSON.stringify({ planId: protectedPlanId })]);
+  await assert.rejects(new PostgresAgentOperationsRepository(pool).undoActions(user.id,protectedRunId),/原安排已保留/);
+
+
   const savedDraftInput: SaveCookingPlanDraftInput = {
     id: "7cd0c614-438c-45ab-a3cc-50507798a194", title: "可恢复草案",
     draft: { status: "requires_validation", meals: [{ id: "dinner", date: "2026-09-09", mealType: "dinner",
@@ -1243,6 +1387,29 @@ try {
   const activationInput: SaveCookingPlanDraftInput = { ...savedDraftInput, id: "1b5e226a-8e80-413b-bf8e-bfe60cf43194",
     draft: { ...savedDraftInput.draft, unresolved: [], cooking: [{ targetMealId: "dinner", recipeId: Number(secondRecipe.id),
       title: String(secondRecipe.title), servings: 1, recipeYield: 1, demands: [{ food_name: "番茄", amount_value: 200, unit: "g" }] }] } };
+  const lockDraft = { ...activationInput,id: "19600000-0000-4000-8000-000000000099",draft: { ...activationInput.draft,planningMode: "weekly" as const,meals: activationInput.draft.meals.map(meal => ({ ...meal,date: "2099-09-12" })) } };
+  await mealPlanRepository.saveDraft(user.id,lockDraft);
+  const blocker = await pool.connect();
+  const { lockMealPlanning } = await import("../src/modules/mealPlans/postgresLock.js");
+  await blocker.query("BEGIN");
+  await lockMealPlanning(blocker,user.id);
+  const blockedActivation = mealPlanRepository.activateDraft(user.id,lockDraft.id,1);
+  const blockedAgent = new PostgresAgentOperationsRepository(pool).executeActions(user.id,"missing-lock-probe",[]).catch(error => error as Error);
+  let observedWait = false;
+  try {
+    for (let attempt=0;attempt<100;attempt++) {
+      const waiting = await pool.query("SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())");
+      if (Number(waiting.rowCount) >= 2) { observedWait = true; break; }
+      await new Promise(resolve => setTimeout(resolve,10));
+    }
+    await blocker.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES('weekly-concurrent-plan',$1,'并发安排','2099-09-12','2099-09-12','active')",[user.id]);
+    await blocker.query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title) VALUES('weekly-concurrent-item','weekly-concurrent-plan',$1,'2099-09-12','晚餐','已安排')",[user.id]);
+    await blocker.query("COMMIT");
+  } catch (error) { await blocker.query("ROLLBACK"); throw error; }
+  finally { blocker.release(); }
+  assert.equal((await blockedActivation).kind,"version_conflict");
+  assert.match(String(await blockedAgent),/Agent Run 已取消/);
+  assert.equal(observedWait,true,"activation must wait for the competing meal writer before reading occupancy");
   await mealPlanRepository.saveDraft(user.id, activationInput);
   const activatedDrafts = await Promise.all([
     mealPlanRepository.activateDraft(user.id, activationInput.id, 1), mealPlanRepository.activateDraft(user.id, activationInput.id, 1),
@@ -1380,6 +1547,17 @@ try {
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs
     WHERE resource_type = 'voice_pack_version' AND resource_id = $1`, [String(voiceId)])).rows[0]?.count), 3);
 
+  await pool.query("INSERT INTO proactive_intervention_preferences(user_id) VALUES($1)",[user.id]);
+  assert.deepEqual((await pool.query("SELECT enabled,expiry_rescue,dinner_window FROM proactive_intervention_preferences WHERE user_id=$1",[user.id])).rows[0],{ enabled: 0,expiry_rescue: 0,dinner_window: 0 });
+  await pool.query("INSERT INTO proactive_interventions(id,user_id,source_key,kind,candidate_json,starts_at,expires_at) VALUES('pg-intervention',$1,'expiry-day','expiry_rescue','{}'::jsonb,'2026-09-12T00:00:00Z','2026-09-13T00:00:00Z')",[user.id]);
+  await assert.rejects(pool.query("INSERT INTO proactive_interventions(id,user_id,source_key,kind,candidate_json,starts_at,expires_at) VALUES('pg-duplicate',$1,'expiry-day','expiry_rescue','{}'::jsonb,'2026-09-12T00:00:00Z','2026-09-13T00:00:00Z')",[user.id]),(error: unknown) => (error as {code:string}).code === '23505');
+  const otherInterventionUser = Number((await pool.query("SELECT id FROM users WHERE id<>$1 LIMIT 1",[user.id])).rows[0].id);
+  const insertInterventionAction = (id: string,owner: number) => pool.query("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json) VALUES($1,'pg-intervention',$2,'once','snooze','{}'::jsonb,'{}'::jsonb)",[id,owner]);
+  await assert.rejects(insertInterventionAction('pg-cross',otherInterventionUser),(error: unknown) => (error as {code:string}).code === '23503');
+  await insertInterventionAction('pg-action',user.id);
+  await assert.rejects(insertInterventionAction('pg-repeat',user.id),(error: unknown) => (error as {code:string}).code === '23505');
+  await assert.rejects(pool.query("INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at) VALUES('pg-cross-outcome','pg-intervention',$1,'cooking_started','queue','1',CURRENT_TIMESTAMP)",[otherInterventionUser]),(error: unknown) => (error as {code:string}).code === '23503');
+
   const kitchenwareRepository = new PostgresKitchenwareRepository(pool);
   const kitchenwareService = new KitchenwareService(kitchenwareRepository);
   const postgresCatalog = await kitchenwareService.catalog("不粘锅");
@@ -1390,8 +1568,24 @@ try {
     image_url: "", purchase_date: "2026-08-31",
   });
   assert.equal(postgresPan.name, "平底锅");
+  const panAttributes = { capacityMl: 3000,diameterCm: 28,heatSources: ["induction"] };
+  assert.deepEqual((await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",attributes: panAttributes })).attributes,panAttributes);
+  assert.deepEqual((await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",note: "preserve" })).attributes,panAttributes);
+  assert.deepEqual((await kitchenwareService.list(user.id)).find(item => Number(item.id) === Number(postgresPan.id))?.attributes,panAttributes);
+  assert.deepEqual((await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",attributes: { capacityMl: null,heatSources: null } })).attributes,{ capacityMl: null,heatSources: null });
+
   assert.equal((await kitchenwareRepository.listItems(user.id + 1)).length, 0);
   assert.equal(await kitchenwareRepository.findOwnedItem(user.id + 1, Number(postgresPan.id)), null);
+  await pool.query("INSERT INTO kitchenware_capabilities(code,name,safety_level) VALUES('spec_test','规格测试','normal')");
+  await pool.query("INSERT INTO kitchenware_catalog_capabilities(catalog_id,capability_code,constraints_json) VALUES($1,'spec_test',$2::jsonb)",
+    [postgresPan.catalog_id,JSON.stringify({ minCapacityMl: 3000,minDiameterCm: 28,heatSource: "induction" })]);
+  const specificationRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json) VALUES('规格约束验证','[]'::jsonb,'[]'::jsonb) RETURNING id")).rows[0].id);
+  await pool.query("INSERT INTO recipe_kitchenware_requirements(recipe_id,capability_code,role,confidence) VALUES($1,'spec_test','required',1)",[specificationRecipe]);
+  assert.equal((await kitchenwareService.evaluateRequirements(user.id,specificationRecipe)).blocking.length,1);
+  await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",attributes: panAttributes });
+  assert.equal((await kitchenwareService.evaluateRequirements(user.id,specificationRecipe)).blocking.length,0);
+  await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",attributes: { ...panAttributes,heatSources: ["gas"] } });
+  assert.equal((await kitchenwareService.evaluateRequirements(user.id,specificationRecipe)).blocking.length,1);
   const maintainedPan = await kitchenwareRepository.maintainItem(user.id, Number(postgresPan.id));
   assert.equal(maintainedPan?.status, "良好");
 
@@ -1401,6 +1595,20 @@ try {
   const adminCatalog = await adminKitchenwareService.createCatalog({
     name: "Postgres 管理炖锅", category: "烹饪锅具", aliases: ["PG 炖锅"], cooking_methods: ["炖"], care_note: "保持干燥",
   }, adminKitchenwareContext);
+  const capabilityBefore = await adminKitchenwareService.capabilityConfiguration(Number(adminCatalog.id));
+  const capabilityPayload = { token: capabilityBefore.token,capabilities: [{ code: "boil",constraints: { minCapacityMl: 2000 } }] };
+  const concurrentCapabilities = await Promise.allSettled([
+    adminKitchenwareService.updateCapabilities(Number(adminCatalog.id),capabilityPayload,adminKitchenwareContext),
+    adminKitchenwareService.updateCapabilities(Number(adminCatalog.id),capabilityPayload,adminKitchenwareContext),
+  ]);
+  assert.equal(concurrentCapabilities.filter(result => result.status === "fulfilled").length,1);
+  const rejectedCapability = concurrentCapabilities.find(result => result.status === "rejected");
+  assert.equal(rejectedCapability?.status === "rejected" ? rejectedCapability.reason.status : null,409);
+  const capabilityAfter = await adminKitchenwareService.capabilityConfiguration(Number(adminCatalog.id));
+  assert.deepEqual(capabilityAfter.capabilities,capabilityPayload.capabilities);
+  await assert.rejects(adminKitchenwareService.updateCapabilities(Number(adminCatalog.id),{ token: capabilityAfter.token,capabilities: [{ code: "nonexistent",constraints: {} }] },adminKitchenwareContext));
+  assert.equal((await adminKitchenwareService.capabilityConfiguration(Number(adminCatalog.id))).token,capabilityAfter.token);
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM admin_audit_logs WHERE action='kitchenware_capabilities.update' AND resource_id=$1",[String(adminCatalog.id)])).rows[0].n),1);
   assert.equal(adminCatalog.aliases, '["PG 炖锅"]');
   assert.equal((await adminKitchenwareService.catalog({ search: "PG 炖锅" })).some((item) => Number(item.id) === Number(adminCatalog.id)), true);
   await assert.rejects(() => adminKitchenwareService.createCatalog({
@@ -1423,6 +1631,18 @@ try {
     WHERE resource_type='kitchenware' AND resource_id=$1`, [String(moderatedAsset.id)])).rows[0]?.count), 2);
   await adminKitchenwareService.removeCatalog(Number(adminCatalog.id), adminKitchenwareContext);
 
+  const mappingRaw = "PG映射审核专用炉";
+  const mappingCatalog = Number((await pool.query("SELECT id FROM kitchenware_catalog WHERE name='烤箱'")).rows[0].id);
+  const mappingRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,required_kitchenware_json,optional_kitchenware_json) VALUES('PG映射审核','[]'::jsonb,'[]'::jsonb,$1::jsonb,'[]'::jsonb) RETURNING id",[JSON.stringify([mappingRaw])])).rows[0].id);
+  const mappingId = Number((await pool.query("INSERT INTO kitchenware_mapping_reviews(raw_name,normalized_name,source_type,source_id,confidence) VALUES($1,$3,'recipe',$2,0.72) RETURNING id",[mappingRaw,String(mappingRecipe),mappingRaw.toLowerCase()])).rows[0].id);
+  const mappingRow = (await adminKitchenwareService.mappingReviews({})).items.find(row => Number(row.id) === mappingId)!;
+  const mappingDecision = { token: mappingRow.token,decision: "approved",catalogId: mappingCatalog };
+  const mappingResults = await Promise.allSettled([adminKitchenwareService.decideMapping(mappingId,mappingDecision,adminKitchenwareContext),adminKitchenwareService.decideMapping(mappingId,mappingDecision,adminKitchenwareContext)]);
+  assert.equal(mappingResults.filter(item => item.status === "fulfilled").length,1,JSON.stringify(mappingResults.map(item => item.status === "rejected" ? String(item.reason) : item.status)));
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM recipe_kitchenware_requirements WHERE recipe_id=$1 AND catalog_id=$2",[mappingRecipe,mappingCatalog])).rows[0].n),1);
+  assert((await pool.query("SELECT aliases FROM kitchenware_catalog WHERE id=$1",[mappingCatalog])).rows[0].aliases.includes(mappingRaw));
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM admin_audit_logs WHERE action='kitchenware_mapping.approved' AND resource_id=$1",[String(mappingId)])).rows[0].n),1);
+
   const kitchenwareRecipe = await pool.query(`INSERT INTO recipes
     (title, cook_time, steps_json, ingredients_json, source, status, quality_status, data_license,
      source_revision, serving_size, required_kitchenware_json)
@@ -1434,18 +1654,26 @@ try {
   const airFryerId = Number(kitchenwareCatalogIds.rows.find((row) => row.name === "空气炸锅")!.id);
   await pool.query(`INSERT INTO recipe_kitchenware_requirements
     (recipe_id, catalog_id, capability_code, role, source, confidence, notes)
-    VALUES ($1, $2, NULL, 'required', 'test', 1, 'Postgres 空气炸锅测试')`, [kitchenwareRecipeId, airFryerId]);
+    VALUES ($1, $2, 'bake', 'required', 'test', 1, 'Postgres 空气炸锅测试')`, [kitchenwareRecipeId, airFryerId]);
   await kitchenwareService.create(user.id, {
     name: "烤箱", category: "小家电", status: "良好", note: "", image_url: "", purchase_date: "",
   });
   const postgresCompatibility = await kitchenwareService.compatibility(user.id, kitchenwareRecipeId);
-  assert.equal(postgresCompatibility.blocking.length, 0);
+  assert.equal(postgresCompatibility.blocking.length, 1);
   assert.equal(postgresCompatibility.requirements[0]?.substitution?.name, "烤箱");
   assert.equal(await kitchenwareRepository.removeItem(user.id + 1, Number(postgresPan.id)), false);
   assert.equal(await kitchenwareRepository.removeItem(user.id, Number(postgresPan.id)), true);
 
   const recommendationsRepository = new PostgresRecommendationsRepository(pool);
   const recommendationsService = new RecommendationsService(recommendationsRepository, kitchenwareService);
+  const weeklyState = await recommendationsRepository.planningState(user.id,"2026-09-12","2026-09-18");
+  assert(weeklyState.items.some(item => item.id === protectedItemId));
+  assert.equal((await recommendationsRepository.planningState(-1,"2026-09-12","2026-09-18")).items.length,0);
+  const stockBeforeWeekly = await recommendationsRepository.inventory(user.id);
+  const weeklyPreview = await recommendationsService.weeklyPlan(user.id,{ startDate: "2026-09-12",mealTypes: ["breakfast","lunch","dinner"] });
+  assert.equal(weeklyPreview.slots.length,21);
+  assert(weeklyPreview.slots.some(slot => slot.preservedItemIds.includes(protectedItemId)));
+  assert.deepEqual(await recommendationsRepository.inventory(user.id),stockBeforeWeekly);
   const recommendationPage = await recommendationsService.page(user.id, {
     surface: "home", matchStatus: "all", pageSize: 1,
   });
@@ -1472,9 +1700,124 @@ try {
     recommendationsService.event(user.id, recommendationEventInput),
   ]);
   assert.deepEqual(recommendationEvents.map((result) => result.repeated).sort(), [false, true]);
+  const selectionEvent = await recommendationsRepository.findEvent(user.id, recommendationEventInput.idempotencyKey);
+  assert.deepEqual((selectionEvent?.metadata_json as Record<string, unknown>).selectionEvidence, {
+    version: 1, requestId: recommendationPage.requestId, recipeId: recommendedRecipeId,
+    inventory: (recommendationPage.items[0]!.features as Record<string, unknown>).inventoryEvidence,
+  });
+  await assert.rejects(recommendationsService.event(user.id, { ...recommendationEventInput, eventType: "queue" }),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "RECOMMENDATION_EVENT_CONFLICT");
+
   assert.equal(recommendationEvents[0]!.eventId, recommendationEvents[1]!.eventId);
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_recommendation_events
     WHERE user_id = $1 AND idempotency_key = $2`, [user.id, recommendationEventInput.idempotencyKey])).rows[0]?.count), 1);
+
+  const selectedQueue = await new CookingQueueService(cookingQueueRepository).create(user.id, {
+    recipeId: recommendedRecipeId, recommendationRequestId: recommendationPage.requestId,
+  });
+  assert.equal(selectedQueue.added, true);
+  const queuedSelection = (await pool.query("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=$1",[selectedQueue.item.id])).rows[0].recipe_snapshot_json.selectionEvidence;
+  assert.equal(queuedSelection.requestId, recommendationPage.requestId);
+  const selectedProductionInput = { idempotency_key: "pg-selection-production-186", recipe_id: recommendedRecipeId, inventory_item_ids: [], inventory_consumptions: [],
+    production: { food_name: "PG 选择来源", produced_servings: 1, eaten_servings: 0, meal_type: "午餐", nutrition_per_serving: {}, queue_item_id: selectedQueue.item.id, queue_version: selectedQueue.item.version } };
+  const selectedProduction = await dietService.completeCooking(user.id, selectedProductionInput);
+  assert.deepEqual(selectedProduction.selection_evidence, queuedSelection);
+  assert.equal(selectedProduction.diet_record, null);
+  await pool.query("DELETE FROM cooking_queue_items WHERE id=$1",[selectedQueue.item.id]);
+  assert.deepEqual((await dietService.completeCooking(user.id, selectedProductionInput)).selection_evidence, queuedSelection);
+
+  const oldMetricEnvironment = process.env.CORE_LOOP_ENVIRONMENT;
+  process.env.CORE_LOOP_ENVIRONMENT = "pg-metric-fixture";
+  try {
+    const settings = await adminConsoleService.coreLoopSettings();
+    await adminConsoleService.configureCoreLoops({ enabled: true,version: settings.version },adminFoodContext);
+    const classifications = await Promise.allSettled([
+      adminConsoleService.classifyCoreLoopActor(user.id,{ kind: "real",version: 0 },adminFoodContext),
+      adminConsoleService.classifyCoreLoopActor(user.id,{ kind: "real",version: 0 },adminFoodContext),
+    ]);
+    assert.equal(classifications.filter(item => item.status === "fulfilled").length,1);
+    const metricStock = (await inventoryService.bulkIntake(user.id,{ idempotency_key: "pg-confirmed-scan-metric-186",source: "image",items: [{ food_name: "PG闭环鸡蛋",category: "蛋类",quantity: "2个",quantity_value: 2,quantity_unit: "piece",expiration_date: "2036-09-20",storage_location: "冷藏",source: "image",confirmed: true }] })).items[0];
+    const metricRecipe = (await pool.query("INSERT INTO recipes(title,description,cook_time,difficulty,category,ingredients_json,steps_json,status,quality_status,serving_size) VALUES('PG闭环蒸蛋','验收',10,'简单','PG闭环验收',$1::jsonb,$2::jsonb,'approved','trusted',1) RETURNING id",[JSON.stringify([{ name: "PG闭环鸡蛋",amount: "1枚" }]),JSON.stringify(["蒸熟"])])).rows[0].id;
+    const metricPage = await recommendationsService.page(user.id,{ surface: "inventory",category: "PG闭环验收",pageSize: 10 });
+    assert.equal(metricPage.items[0].recipeId,metricRecipe);
+    const metricQueue = await new CookingQueueService(cookingQueueRepository).create(user.id,{ recipeId: metricRecipe,recommendationRequestId: metricPage.requestId });
+    const metricInput = { idempotency_key: "pg-core-loop-metric",recipe_id: metricRecipe,inventory_item_ids: [],inventory_consumptions: [{ item_id: metricStock.id,version: metricStock.version,mode: "amount" as const,amount_value: 1,unit: "piece" as const }],
+      production: { food_name: "PG闭环制作",produced_servings: 1,eaten_servings: 1,meal_type: "午餐",nutrition_per_serving: {},queue_item_id: metricQueue.item.id,queue_version: metricQueue.item.version } };
+    const oldFunnelWriter = dietRepository.recordFunnelEvent;
+    dietRepository.recordFunnelEvent = async () => { throw new Error("injected analytics outage"); };
+    let metricMade;
+    try { metricMade = await dietService.completeCooking(user.id,metricInput); } finally { dietRepository.recordFunnelEvent = oldFunnelWriter; }
+    const metricReport = await adminConsoleService.coreLoops({ details: "1" });
+    assert.equal(metricReport.verifiedUsers,1,JSON.stringify(metricReport));
+    assert.equal(metricReport.verifiedLoops,1);
+    process.env.CORE_LOOP_ENVIRONMENT = "pg-other-fixture";
+    assert.equal((await adminConsoleService.coreLoops({})).status,"not_collected");
+    assert.equal((await adminConsoleService.coreLoopSettings()).enabled,false);
+    process.env.CORE_LOOP_ENVIRONMENT = "pg-metric-fixture";
+
+    await dietService.completeCooking(user.id,metricInput);
+    assert.equal((await adminConsoleService.coreLoops({})).verifiedLoops,1);
+    await adminConsoleService.classifyCoreLoopActor(user.id,{ kind: "automation",version: 1 },adminFoodContext);
+    assert.equal((await adminConsoleService.coreLoops({})).verifiedLoops,0);
+    await adminConsoleService.classifyCoreLoopActor(user.id,{ kind: "real",version: 2 },adminFoodContext);
+    await dietService.remove(user.id,Number((metricMade.diet_record as Record<string,unknown>).id),"undo_eating");
+    assert.equal((await adminConsoleService.coreLoops({})).verifiedLoops,0);
+    assert(Number((await pool.query("SELECT COUNT(*) n FROM admin_audit_logs WHERE action='core_loop.classify' AND resource_id=$1",[String(user.id)])).rows[0].n)>=3);
+  } finally {
+    if (oldMetricEnvironment === undefined) delete process.env.CORE_LOOP_ENVIRONMENT; else process.env.CORE_LOOP_ENVIRONMENT = oldMetricEnvironment;
+  }
+
+  for (const reason of ["no_time","too_much","dislike"]) {
+    for (let index=0;index<3;index++) await recommendationsService.event(user.id,{ ...recommendationEventInput,eventType: "skip",metadata: { reason,scope: "long_term" },idempotencyKey: `preference-${reason}-${index}` });
+    assert.deepEqual(await recommendationsRepository.skippedRecipeIds(user.id),reason === "dislike" ? [recommendedRecipeId] : []);
+  }
+  assert.deepEqual(await recommendationsRepository.skippedRecipeIds(-1),[]);
+  await pool.query("UPDATE recipe_recommendation_events SET metadata_json=metadata_json || '{\"withdrawn\":true}'::jsonb WHERE user_id=$1 AND idempotency_key='preference-dislike-0'",[user.id]);
+  assert.deepEqual(await recommendationsRepository.skippedRecipeIds(user.id),[]);
+
+  const learningUpdates = await Promise.all([recommendationsRepository.updateLearning(user.id,{ kind: "learning",version: 1,enabled: false }),recommendationsRepository.updateLearning(user.id,{ kind: "learning",version: 1,enabled: false })]);
+  assert.deepEqual(learningUpdates.sort(),[false,true]);
+  for (let index=0;index<3;index++) await recommendationsService.event(user.id,{ ...recommendationEventInput,eventType: "skip",metadata: { reason: "dislike",scope: "long_term" },idempotencyKey: `learning-paused-${index}` });
+  assert.equal((await recommendationsService.learningState(user.id)).enabled,false);
+  assert.equal(await recommendationsRepository.updateLearning(user.id,{ kind: "recipe",version: 2,recipeId: recommendedRecipeId,value: "neutral" }),true);
+  await recommendationsRepository.updateLearning(user.id,{ kind: "learning",version: 3,enabled: true });
+  assert.equal((await recommendationsService.learningState(user.id)).items.length,0);
+  assert.equal((await pool.query("SELECT metadata_json->>'learningPaused' paused FROM recipe_recommendation_events WHERE user_id=$1 AND idempotency_key='learning-paused-0'",[user.id])).rows[0].paused,"true");
+  assert.equal((await recommendationsService.learningState(householdMember)).version,1);
+
+  const timeMeal = (await pool.query("SELECT version,remaining_servings FROM prepared_meals WHERE id=$1",[prepared.id])).rows[0];
+  const timeCorrection = { idempotency_key: "pg-time-correction-197",version: Number(timeMeal.version),type: "reschedule" as const,reported_cooking_minutes: 18 };
+  const timeCorrections = await Promise.all([dietService.applyMealEvent(user.id,prepared.id,timeCorrection),dietService.applyMealEvent(user.id,prepared.id,timeCorrection)]);
+  assert.deepEqual(timeCorrections.map(result => result.repeated).sort(),[false,true]);
+  assert.equal((timeCorrections[0].prepared_meal as { reported_cooking_minutes: number }).reported_cooking_minutes,18);
+  const timeCleared = await dietService.applyMealEvent(user.id,prepared.id,{ ...timeCorrection,idempotency_key: "pg-time-clear-197",version: Number(timeMeal.version)+1,reported_cooking_minutes: null });
+  assert.equal((timeCleared.prepared_meal as { reported_cooking_minutes: number | null }).reported_cooking_minutes,null);
+  assert.equal(Number((await pool.query("SELECT remaining_servings FROM prepared_meals WHERE id=$1",[prepared.id])).rows[0].remaining_servings),Number(timeMeal.remaining_servings));
+  await pool.query("INSERT INTO user_health_profiles(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING",[user.id]);
+  const previousKitchen = (await pool.query("SELECT kitchen_constraints_json FROM user_health_profiles WHERE user_id=$1",[user.id])).rows[0].kitchen_constraints_json;
+  await pool.query("UPDATE user_health_profiles SET kitchen_constraints_json=kitchen_constraints_json || '{\"servings\":2}'::jsonb WHERE user_id=$1",[user.id]);
+  await pool.query("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,before_json,result_json,idempotency_key,executed_at) VALUES('dialogue-evidence-action',$1,$2,'update_kitchen_preferences','high','executed','{}','{\"servings\":1}','{\"scope\":\"persistent\",\"kitchenPreferences\":{\"servings\":2}}','dialogue-evidence-action',CURRENT_TIMESTAMP)",[protectedRunId,user.id]);
+  assert((await recommendationsService.learningState(user.id)).observations.some(fact => fact.id === "preference-statement:dialogue-evidence-action" && fact.valid));
+  await pool.query("UPDATE user_health_profiles SET kitchen_constraints_json=kitchen_constraints_json || '{\"servings\":3}'::jsonb WHERE user_id=$1",[user.id]);
+  assert((await recommendationsService.learningState(user.id)).observations.some(fact => fact.id === "preference-statement:dialogue-evidence-action" && !fact.valid));
+  await pool.query("UPDATE user_health_profiles SET kitchen_constraints_json=$1::jsonb WHERE user_id=$2",[JSON.stringify(previousKitchen),user.id]);
+  const outcomeFacts = (await recommendationsService.learningState(user.id)).observations;
+  assert(outcomeFacts.some(fact => fact.kind === "production"));
+  const remainingFacts = (await pool.query("SELECT id,remaining_servings FROM prepared_meals WHERE user_id=$1",[user.id])).rows;
+  for (const fact of outcomeFacts.filter(fact => fact.kind === "production")) {
+    assert.equal(fact.remainingServings,Number(remainingFacts.find(row => `production:${row.id}`===fact.id)?.remaining_servings));
+    assert.ok(fact.observedAt);
+  }
+  assert(outcomeFacts.some(fact => fact.kind === "inventory" && fact.valid));
+  assert(outcomeFacts.some(fact => fact.kind === "inventory" && !fact.valid));
+  assert(outcomeFacts.some(fact => fact.kind === "plan_change" && !fact.valid));
+  assert(outcomeFacts.some(fact => fact.correctionId && !fact.valid));
+  assert.equal(new Set(outcomeFacts.map(fact => fact.id)).size,outcomeFacts.length);
+  assert.deepEqual(await recommendationsRepository.preferenceOutcomes(-1),{ production: [],events: [],inventory: [],changes: [],statements: [] });
+  const { verifyAgentRecipePreference } = await import("./agentRecipePreferenceAssertions.js");
+  await verifyAgentRecipePreference(new PostgresAgentOperationsRepository(pool),recommendationsService,
+    async (sql,values) => { let position = 0; return pool.query(sql.replace(/\?/g,() => `$${++position}`),values); },user.id,recommendedRecipeId);
+
 
   const aiToolDataService = new AiToolDataService(new PostgresAiToolDataRepository(pool));
   await pool.query(`INSERT INTO recipes
@@ -1602,6 +1945,28 @@ try {
   if (postgresRegistration.status === "created") {
     const notificationUserId = postgresRegistration.userId;
     const notificationsRepository = new PostgresNotificationsRepository(pool);
+    const { verifyInterventionReservation } = await import("./interventionReservationAssertions.js");
+    await verifyInterventionReservation(notificationsRepository,notificationUserId);
+    assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM user_notification_inbox WHERE user_id=$1 AND type='proactive_intervention'",[notificationUserId])).rows[0].n),2);
+    const { verifyInterventionDelivery } = await import("./interventionReservationAssertions.js");
+    await verifyInterventionDelivery(notificationsRepository,notificationUserId);
+    const { verifyInterventionScanCursor } = await import("./interventionReservationAssertions.js");
+    await verifyInterventionScanCursor(notificationsRepository,new PostgresWorkerRepository(pool));
+    const { verifyInterventionFeedback } = await import("./interventionReservationAssertions.js");
+    await verifyInterventionFeedback(notificationsRepository,notificationUserId);
+
+    const { defaultInterventionPreferences } = await import("@dietdigidose/contracts");
+    const currentInterventionPreferences = await notificationsRepository.interventionPreferences(user.id);
+    const preferenceInput = { ...defaultInterventionPreferences,enabled: true,expiry_rescue: true,version: Number(currentInterventionPreferences?.version ?? 0) };
+    const concurrentPreferenceChanges = await Promise.all([
+      notificationsRepository.saveInterventionPreferences(user.id,preferenceInput),
+      notificationsRepository.saveInterventionPreferences(user.id,preferenceInput),
+    ]);
+    assert.equal(concurrentPreferenceChanges.filter(Boolean).length,1);
+    await pool.query("UPDATE proactive_interventions SET delivery_state='pending' WHERE id='pg-intervention'");
+    assert(await notificationsRepository.saveInterventionPreferences(user.id,{ ...preferenceInput,enabled: false,version: preferenceInput.version+1 }));
+    assert.equal((await pool.query("SELECT delivery_state FROM proactive_interventions WHERE id='pg-intervention'")).rows[0].delivery_state,'cancelled');
+
     const notificationsService = createNotificationsService(notificationsRepository);
     const preferences = { ...await notificationsService.preferences(notificationUserId), breakfast_time: "07:30", expiring_alert: true };
     await notificationsService.savePreferences(notificationUserId, preferences);
@@ -1623,7 +1988,9 @@ try {
     assert(pendingHistory.some((item) => Number(item.id) === preparedNotification.notificationId));
     const expiryNotificationId = preparedNotification.notificationId;
     assert.equal(await notificationsRepository.action(notificationUserId, expiryNotificationId, "complete", { postgres: true }), true);
-    assert.equal((await pool.query("SELECT is_available FROM inventory_items WHERE food_name='Postgres 临期苹果'")).rows[0].is_available, false);
+    assert.equal((await pool.query("SELECT is_available FROM inventory_items WHERE food_name='Postgres 临期苹果'")).rows[0].is_available, true);
+    assert.equal(await notificationsRepository.action(notificationUserId, expiryNotificationId, "complete"), true);
+    assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM notification_events WHERE notification_id=$1 AND event_type='action_complete'",[expiryNotificationId])).rows[0].n),1);
     const campaign = await notificationsRepository.beginCampaign(user.id, "Postgres 活动", "Postgres 活动正文");
     assert(campaign.devices.some((device) => device.userId === notificationUserId));
     await notificationsRepository.recordPushTickets([{ message: { to: "ExpoPushToken[postgres-notifications]", title: "Postgres 活动",
@@ -2091,15 +2458,132 @@ try {
     assert.equal(await mediaCleanupService.process(id), true);
   }
 
+  await pool.query("DELETE FROM plan_maintenance_jobs");
+  await pool.query("DELETE FROM plan_maintenance_events");
+  const queueOtherUser = Number((await pool.query("SELECT id FROM users WHERE id<>$1 LIMIT 1",[user.id])).rows[0].id);
+  await verifyMaintenanceQueue({ repeatReport: async id => {
+    const duplicate = randomUUID();
+    await pool.query("INSERT INTO plan_maintenance_jobs(id,user_id,status,attempts,rule_version,result_json) SELECT $1,user_id,status,attempts,rule_version,result_json-'notificationRecorded' FROM plan_maintenance_jobs WHERE id=$2",[duplicate,id]);
+    return duplicate;
+  },noticeCount: async id => (await pool.query("SELECT COUNT(*)::int n FROM notification_events WHERE metadata_json->>'jobId'=$1",[id])).rows[0].n,settings: new PostgresPlanMaintenanceRepository(pool),users: [user.id,queueOtherUser], repository: () => new PostgresMaintenanceQueueRepository(pool),
+    seed: async (id,userId,at) => { await pool.query("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES($1,$2,'eat',$1,$1,$3)",[id,userId,at]); },
+    unprocessed: async () => (await pool.query("SELECT COUNT(*)::int n FROM plan_maintenance_events WHERE processed_at IS NULL")).rows[0].n,
+    seedMeals: async userId => {
+      await pool.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date) VALUES('maintenance-plan',$1,'维护回归','2026-09-12','2026-09-20')",[userId]);
+      for (const kind of ["mutable","confirmed","cooking","purchased","untouched"]) await pool.query(`INSERT INTO meal_plan_items
+        (id,plan_id,user_id,planned_date,meal_type,title,status,confirmed_at) VALUES($1,'maintenance-plan',$2,'2026-09-12','午餐',$3,$4,$5)`,
+        [`maintenance-${kind}`,userId,kind,kind === "cooking" ? "cooking" : "planned",kind === "confirmed" ? new Date().toISOString() : null]);
+      await pool.query("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('maintenance-purchase',$1,'meal-plan:maintenance-purchased:0','已采购',true)",[userId]);
+    },
+    mealState: async id => (await pool.query('SELECT version,planned_date AS "plannedDate" FROM meal_plan_items WHERE id=$1',[id])).rows[0],
+    jobResult: async id => (await pool.query("SELECT result_json FROM plan_maintenance_jobs WHERE id=$1",[id])).rows[0].result_json,
+    changeCount: async () => (await pool.query("SELECT COUNT(*)::int n FROM meal_plan_changes WHERE plan_id='maintenance-plan'")).rows[0].n,
+    mutateInventory: async userId => { await pool.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'新入库','其他','1份','2026-09-20')",[userId]); },
+  });
+  await pool.query("DELETE FROM plan_maintenance_jobs");
+  await pool.query("DELETE FROM plan_maintenance_events");
+
+  // Pause after the input rows are locked and prove both a new row and an update
+  // cannot slip between fingerprint validation and commit.
+  await pool.query("INSERT INTO plan_maintenance_events(id,user_id,event_type,source_id,subject_id,created_at) VALUES('input-lock-event',$1,'eat','input-lock-event','batch',CURRENT_TIMESTAMP - INTERVAL '1 minute')",[user.id]);
+  const inputQueue = new PostgresMaintenanceQueueRepository(pool);
+  await inputQueue.enqueueEvents(new Date());
+  const inputJob = await inputQueue.claim(new Date());
+  assert.ok(inputJob);
+  const capturedInputs = await inputQueue.inputs(inputJob);
+  assert.ok(capturedInputs);
+  const inputsLocked = Promise.withResolvers<void>();
+  const allowCommit = Promise.withResolvers<void>();
+  const guardedPool = new Proxy(pool, { get(target,key) {
+    if (key === "connect") return async () => {
+      const connection = await target.connect();
+      return new Proxy(connection, { get(client,property) {
+        if (property === "query") return async (...args: unknown[]) => {
+          const result = await (client.query.bind(client) as (...args: unknown[]) => Promise<unknown>)(...args);
+          if (typeof args[0] === "string" && args[0].startsWith("SELECT * FROM recipe_recommendation_events") && args[0].endsWith("FOR UPDATE")) {
+            inputsLocked.resolve(); await allowCommit.promise;
+          }
+          return result;
+        };
+        const value = Reflect.get(client,property);
+        return typeof value === "function" ? value.bind(client) : value;
+      } });
+    };
+    const value = Reflect.get(target,key);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+  const applyingInputs = new PostgresMaintenanceQueueRepository(guardedPool).applyChanges(inputJob,[],capturedInputs);
+  await Promise.race([inputsLocked.promise,applyingInputs.then(() => { throw new Error("application ended before input lock check"); })]);
+  const blockedWriter = await pool.connect();
+  try {
+    await blockedWriter.query("SET lock_timeout='100ms'");
+    await assert.rejects(() => blockedWriter.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'锁回归','其他','1份','2026-09-20')",[user.id]),
+      (error: unknown) => (error as { code: string }).code === "55P03");
+    await assert.rejects(() => blockedWriter.query("UPDATE inventory_items SET quantity='2份' WHERE id=(SELECT MIN(id) FROM inventory_items WHERE user_id=$1)",[user.id]),
+      (error: unknown) => (error as { code: string }).code === "55P03");
+    await assert.rejects(() => blockedWriter.query("UPDATE kitchenware_catalog SET name=name WHERE id=(SELECT MIN(id) FROM kitchenware_catalog)"),
+      (error: unknown) => (error as { code: string }).code === "55P03");
+  } finally { await blockedWriter.query("SET lock_timeout=0"); blockedWriter.release(); allowCommit.resolve(); }
+  assert.equal((await applyingInputs).kind,"completed");
+  await pool.query("INSERT INTO inventory_items(user_id,food_name,category,quantity,expiration_date) VALUES($1,'锁释放后','其他','1份','2026-09-20')",[user.id]);
+
+  await verifyMaintenanceFlow(new PostgresMaintenanceQueueRepository(pool),queueOtherUser,async (sql,args = []) => {
+    let parameter = 0;
+    return (await pool.query(sql.replace(/\?/g,() => `$${++parameter}`),args)).rows;
+  });
+
+  await verifyWeeklyRoll(queueOtherUser,async (sql,args = []) => {
+    let parameter = 0; return (await pool.query(sql.replace(/\?/g,() => `$${++parameter}`),args)).rows;
+  },() => recommendationsService.weeklyPlan(queueOtherUser,{ startDate: "2036-09-13",mealTypes: ["lunch"],servings: 1 }));
+
+  const originalPortionRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('原菜','[{\"name\":\"大米\",\"amount\":\"100g\"}]','[]','approved',1) RETURNING id")).rows[0].id);
+  const replacementPortionRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json,status,serving_size) VALUES('新菜','[{\"name\":\"大米\",\"amount\":\"200g\"}]','[]','approved',4) RETURNING id")).rows[0].id);
+  await pool.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,constraints_json) VALUES('portion-plan',$1,'份量回归','2026-09-12','2026-09-20',$2::jsonb)",
+    [user.id,JSON.stringify({ executionItems: { "portion-meal": { servings: 1.5,recipeId: originalPortionRecipe,targetMealId: "target" } } })]);
+  await pool.query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json) VALUES('portion-meal','portion-plan',$1,'2026-09-12','午餐','原菜',$2,'[{\"name\":\"大米\",\"amount\":\"150g\"}]')",[user.id,originalPortionRecipe]);
+  await verifyPortionReplacement(new PostgresMealPlansRepository(pool),user.id,originalPortionRecipe,replacementPortionRecipe,async () =>
+    (await pool.query("SELECT constraints_json FROM meal_plans WHERE id='portion-plan'")).rows[0].constraints_json.executionItems["portion-meal"]);
+
+  const maintenance = new PlanMaintenanceService(new PostgresPlanMaintenanceRepository(pool), () => new Date("2026-09-12T05:00:00Z"));
+  assert.equal((await maintenance.settings(user.id)).version, 0);
+  const settingsInput = { enabled: true as const, version: 0, timeZone: "Asia/Shanghai", localTime: "08:15" };
+  const maintenanceSaved = await maintenance.updateSettings(user.id, settingsInput);
+  assert.equal(maintenanceSaved.nextCheckAt, "2026-09-12T00:15:00.000Z");
+  assert.deepEqual(await new PlanMaintenanceService(new PostgresPlanMaintenanceRepository(pool)).settings(user.id), maintenanceSaved);
+  await assert.rejects(() => maintenance.updateSettings(user.id, settingsInput), /刷新/);
+  const settingsResults = await Promise.allSettled(["09:00", "10:00"].map(localTime => maintenance.updateSettings(user.id,
+    { ...settingsInput, version: 1, localTime })));
+  assert.equal(settingsResults.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(settingsResults.filter(result => result.status === "rejected").length, 1);
+  const pausedMaintenance = await maintenance.updateSettings(user.id, { enabled: false, version: 2 });
+  assert.equal(pausedMaintenance.nextCheckAt, null);
+  assert.equal(pausedMaintenance.timeZone, "Asia/Shanghai");
+
   const workerRepository = new PostgresWorkerRepository(pool);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), true);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), false);
+  assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-a", 60_000), false);
+  assert.equal(await workerRepository.ownsLease("media-cleanup", "postgres-worker-a"), true);
   await pool.query(`
     UPDATE worker_task_leases SET lease_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second'
     WHERE task_name = 'media-cleanup'
   `);
+  assert.equal(await workerRepository.ownsLease("media-cleanup", "postgres-worker-a"), false);
   assert.equal(await workerRepository.acquireLease("media-cleanup", "postgres-worker-b", 60_000), true);
+  assert.equal(await workerRepository.releaseLease("media-cleanup", "postgres-worker-a"), false);
+  assert.equal(await workerRepository.ownsLease("media-cleanup", "postgres-worker-b"), true);
   assert.equal(await workerRepository.releaseLease("media-cleanup", "postgres-worker-b"), true);
+  assert.equal(await workerRepository.acquireLease("media-cleanup", "stale-owner", 60_000), true);
+  await workerRepository.createRun("stale-worker-result", "media-cleanup", "postgres-worker");
+  await pool.query("UPDATE worker_task_leases SET lease_expires_at=CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE task_name='media-cleanup'");
+  assert.equal(await workerRepository.completeRun("stale-worker-result", "completed", 1,
+    { processed: 1, succeeded: 1, failed: 0 }, null, "stale-owner"), false);
+  assert.equal(await workerRepository.acquireLease("media-cleanup", "new-owner", 60_000), true);
+  assert.equal(await workerRepository.completeRun("stale-worker-result", "completed", 1,
+    { processed: 1, succeeded: 1, failed: 0 }, null, "stale-owner"), false);
+  assert.equal((await pool.query("SELECT status FROM worker_task_runs WHERE id='stale-worker-result'")).rows[0].status, "running");
+  await workerRepository.failRun("stale-worker-result", 1, "lease lost");
+  assert.equal(await workerRepository.releaseLease("media-cleanup", "new-owner"), true);
   const workerRuntime = new WorkerRuntime(workerRepository);
   const workerResult = await workerRuntime.run({
     taskName: "media-cleanup",
@@ -2144,6 +2628,8 @@ try {
   const rolledBack = await pool.query("SELECT quantity_value FROM inventory_items WHERE food_name = '番茄'");
   assert.equal(Number(rolledBack.rows[0]?.quantity_value), 200);
 
+  // Repository assertions above leave synthetic runs in flight; they must not start model calls during the HTTP smoke.
+  await pool.query("UPDATE agent_runs SET status='cancelled' WHERE status IN ('queued','running','awaiting_approval','awaiting_input')");
   process.env.DATABASE_DRIVER = "postgresql";
   process.env.DATABASE_URL = connectionString;
   process.env.REQUIRE_HTTPS = "0";
@@ -2156,8 +2642,19 @@ try {
   const health = await fetch(`http://127.0.0.1:${address.port}/api/v1/health`);
   assert.equal(health.status, 200);
   assert.equal((await health.json() as { databaseDriver: string }).databaseDriver, "postgresql");
-  await new Promise<void>((resolve, reject) => runtimeServer.close((error) => error ? reject(error) : resolve()));
-  await app.locals.closeRuntime();
+  const { verifyStagingSmoke } = await import("./stagingSmokeAssertions.js");
+  try {
+    await verifyStagingSmoke(`http://127.0.0.1:${address.port}`);
+    assert.equal(Number((await pool.query("SELECT COUNT(*) AS n FROM users WHERE email LIKE 'staging-smoke-%@example.invalid'")).rows[0].n),0);
+  } finally {
+    await new Promise<void>((resolve, reject) => runtimeServer.close((error) => error ? reject(error) : resolve()));
+    await app.locals.closeRuntime();
+  }
+
+  const { verifyPostgresBackup } = await import("./postgresBackupAssertions.js");
+  await verifyPostgresBackup(connectionString);
+  const { verifyPostgresRecoveryApi } = await import("./postgresRecoveryApiAssertions.js");
+  await verifyPostgresRecoveryApi(connectionString);
 
   console.log(JSON.stringify({
     ok: true,
@@ -2202,6 +2699,8 @@ try {
     postgresNotificationsRepositoryVerified: true,
     leastPrivilegeGrantVerified: true,
     rollbackVerified: true,
+    postgresBackupRestoreVerified: true,
+    postgresRecoveryHttpVerified: true,
     postgresApplicationRuntimeVerified: true,
   }, null, 2));
 } finally {

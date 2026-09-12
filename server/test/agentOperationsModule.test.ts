@@ -89,6 +89,8 @@ test("Agent inventory uses quantity transactions, versions, history and rollback
     CREATE TABLE agent_runs(id TEXT PRIMARY KEY,user_id INTEGER,status TEXT);
     CREATE TABLE agent_actions(id TEXT PRIMARY KEY,run_id TEXT,user_id INTEGER,action_type TEXT,status TEXT,
       before_json TEXT,result_json TEXT,executed_at TEXT,undone_at TEXT,updated_at TEXT);
+    CREATE TABLE plan_maintenance_events(id TEXT PRIMARY KEY,user_id INTEGER,event_type TEXT,source_id TEXT,subject_id TEXT,
+      details_json TEXT,UNIQUE(user_id,event_type,source_id));
     CREATE TABLE inventory_items(id INTEGER PRIMARY KEY,user_id INTEGER,food_name TEXT,category TEXT,quantity TEXT,
       expiration_date TEXT,storage_location TEXT,image_url TEXT,is_available INTEGER DEFAULT 1,
       quantity_value REAL,quantity_unit TEXT,package_size_value REAL,package_size_unit TEXT,batch_code TEXT,
@@ -112,6 +114,13 @@ test("Agent inventory uses quantity transactions, versions, history and rollback
   const row = () => db.prepare("SELECT quantity,quantity_value,quantity_unit,is_available,version FROM inventory_items WHERE id=1").get();
   await run([proposal("add_inventory_item", { name: "鸡蛋", quantity: "十枚", expirationDate: "2026-09-20" })]);
   assert.deepEqual(row(), { quantity: "10个", quantity_value: 10, quantity_unit: "piece", is_available: 1, version: 1 });
+  const eventCount = () => (db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events").get() as { n: number }).n;
+  assert.equal(eventCount(), 1);
+  await assert.rejects(() => run([
+    proposal("add_inventory_item", { name: "应回滚的入库", quantity: "1个", expirationDate: "2026-09-20" }),
+    proposal("update_inventory_item", { itemId: 999, version: 1, quantity: "5个" }),
+  ]));
+  assert.equal(eventCount(), 1);
   const consume = proposal("consume_inventory_items", { items: [{ itemId: 1, version: 1, mode: "amount", amountValue: 2, unit: "piece" }] });
   const result = await run([consume]);
   assert.deepEqual(await run([consume]), result);

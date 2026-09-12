@@ -1,4 +1,5 @@
-import { mealProductionSchema, kitchenPreferencesSchema } from "@dietdigidose/contracts";
+import { kitchenwareAttributesSchema } from "@dietdigidose/contracts";
+import { householdDiningPlanSchema, mealProductionSchema, kitchenPreferencesSchema } from "@dietdigidose/contracts";
 import { z } from "zod";
 import { inventoryConsumptionItemSchema } from "@dietdigidose/contracts";
 
@@ -148,6 +149,7 @@ const cookingQueueMealType = z.enum(["breakfast", "lunch", "dinner", "snack"]);
 const nullableDateTime = z.string().datetime({ offset: true, message: "计划时间必须是包含时区的 ISO 时间" }).nullable();
 
 export const cookingQueueCreateSchema = z.object({
+  recommendationRequestId: z.string().uuid().optional(),
   recipeId: z.number().int().positive(),
   idempotencyKey: z.string().trim().min(8).max(200).optional(),
   plannedAt: nullableDateTime.optional(),
@@ -426,7 +428,7 @@ const agentActionEditSchema = z.object({
     "create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item",
     "delete_meal_plan", "delete_shopping_item", "record_diet_meal", "add_inventory_item",
     "update_inventory_item", "consume_inventory_items", "produce_meal", "record_prepared_meal_event", "add_kitchenware_item", "submit_recipe",
-    "update_kitchen_preferences", "record_health_log",
+    "update_kitchen_preferences", "update_recipe_preference", "record_health_log",
   ]),
   summary: z.string().trim().min(1).max(300),
   payload: z.record(z.string(), z.unknown()),
@@ -485,6 +487,7 @@ export const mealPlanVersionSchema = z.object({
 }).strict();
 
 export const mealPlanItemUpdateSchema = z.object({
+  dining: householdDiningPlanSchema.nullable().optional(),
   version: z.number().int().positive(),
   plannedDate: isoDate.optional(),
   mealType: trimmedString(1, 30, "餐次").optional(),
@@ -497,7 +500,7 @@ const mealPlanExecutionBaseSchema = z.object({
   idempotencyKey: z.string().trim().min(16).max(200),
 }).strict();
 
-export const mealPlanShoppingSchema = mealPlanExecutionBaseSchema;
+export const mealPlanShoppingSchema = mealPlanExecutionBaseSchema.extend({ householdNetFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),householdRecipeFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),householdTotalDemand: householdDiningPlanSchema.optional() }).strict();
 export const mealPlanQueueSchema = mealPlanExecutionBaseSchema;
 export const mealPlanCompleteSchema = mealPlanExecutionBaseSchema.extend({
   dietRecordId: z.number().int().positive().optional(),
@@ -579,6 +582,7 @@ export const recipeRecommendationEventSchema = z.object({
 }).strict();
 
 export const kitchenwareSchema = z.object({
+  attributes: kitchenwareAttributesSchema.optional(),
   name: trimmedString(1, 80, "厨具名称"),
   category: z.enum(["小家电", "烹饪锅具", "刀具餐具", "烘焙工具", "其他"]).default("其他"),
   status: z.enum(["常用", "良好", "需保养", "维修中", "闲置"]).default("良好"),

@@ -22,6 +22,9 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
     this.database = database;
   }
 
+  async recommendationRequest(userId: number, requestId: string) {
+    return (this.database.prepare("SELECT id,scoring_version,results_json FROM recipe_recommendation_requests WHERE user_id=? AND id=?").get(userId,requestId) as QueueRow | undefined) ?? null;
+  }
   async list(userId: number, includeHistory: boolean) {
     const where = includeHistory ? "q.user_id = ?" : `q.user_id = ? AND q.deleted_at IS NULL AND q.status IN (${activeStatuses})`;
     const order = includeHistory

@@ -13,6 +13,10 @@ function handle(error: unknown, res: Response, next: NextFunction) {
 
 export function createAdminKitchenwareRouter(service: AdminKitchenwareService) {
   const router = Router(); router.param("id", positiveIntegerParam);
+  router.get("/kitchenware/mapping-reviews", (req,res,next) => { void service.mappingReviews(req.query).then(value => res.json(value)).catch(error => handle(error,res,next)); });
+  router.post("/kitchenware/mapping-reviews/:id", (req: AuthRequest,res,next) => { void service.decideMapping(Number(req.params.id),req.body,context(req)).then(value => res.json(value)).catch(error => handle(error,res,next)); });
+  router.get("/kitchenware/catalog/:id/capabilities", (req,res,next) => { void service.capabilityConfiguration(Number(req.params.id)).then(value => res.json(value)).catch(error => handle(error,res,next)); });
+  router.put("/kitchenware/catalog/:id/capabilities", (req: AuthRequest,res,next) => { void service.updateCapabilities(Number(req.params.id),req.body,context(req)).then(value => res.json(value)).catch(error => handle(error,res,next)); });
   router.get("/kitchenware/catalog", (req, res, next) => { void service.catalog(req.query).then((value) => res.json(value)).catch(next); });
   router.post("/kitchenware/catalog", validateBody(adminKitchenwareCatalogSchema), (req: AuthRequest, res, next) => {
     void service.createCatalog(req.body, context(req)).then((value) => res.status(201).json(value)).catch((error) => handle(error, res, next));

@@ -1,4 +1,5 @@
 
+import { MealPlanChanges } from "@/components/MealPlanChanges";
 import { MealProductionFields } from "@/components/MealProductionFields";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
@@ -35,6 +36,7 @@ export default function MealPlansScreen() {
   const router = useSafeRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const authFetch = useAuthFetch();
+  const [changeRevision, setChangeRevision] = useState(0);
   const [plans, setPlans] = useState<MealPlan[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState(toLocalDateKey());
@@ -102,7 +104,13 @@ export default function MealPlansScreen() {
     try {
       const next = await mealPlansApi.updateItem(authFetch, selectedPlan.id, detailItem.id, { version: detailItem.version, ...input });
       replaceItem(next);
-      if (typeof input.plannedDate === "string") setSelectedDate(input.plannedDate);
+      setChangeRevision(value => value + 1);
+      if (next.change?.status === "pending") {
+        setDetailItem(null);
+        Alert.alert("变更建议已保存", "这餐已确认或已购买，请在安排变更中审阅后接受。");
+      } else if (next.change?.status === "blocked") {
+        Alert.alert("原安排已保留", "这餐已进入烹饪队列、开始制作或完成，不能直接调整。");
+      } else if (next.change?.status === "applied" && typeof input.plannedDate === "string") setSelectedDate(input.plannedDate);
     } catch (error) {
       Alert.alert("修改失败", error instanceof Error ? error.message : "请刷新后重试");
       await load();
@@ -113,6 +121,7 @@ export default function MealPlansScreen() {
 
   const addShopping = async (item: MealPlanItem) => {
     if (!selectedPlan || savingAction) return;
+    if (item.dining) { router.push({ pathname: "/household-dining",params: { planItem: { planId: selectedPlan.id,itemId: item.id,version: item.version } } }); return; }
     setSavingAction(`shopping:${item.id}`);
     try {
       const result = await mealPlansApi.addShopping(authFetch, selectedPlan.id, item.id, {
@@ -242,7 +251,11 @@ export default function MealPlansScreen() {
           </View>
         ) : null}
 
+        <TouchableOpacity onPress={() => router.push("/plan-maintenance")} className="mx-5 mt-4"><Text className="font-bold text-brand">每日计划检查 · 设置时间</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => router.push("/preference-learning")} className="mx-5 mt-4"><Text className="font-bold text-brand">系统记住了什么 · 管理偏好</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => router.push("/weekly-plan")} className="mx-5 mt-4 rounded-2xl bg-brand-soft p-4"><Text className="font-black text-brand">计算未来七日安排与合并采购</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => router.push("/cooking-plan")} className="mx-5 mt-4 rounded-2xl bg-brand-soft p-4"><Text className="font-black text-brand">按待吃餐和库存计算这次备餐</Text></TouchableOpacity>
+        {selectedPlan ? <MealPlanChanges key={selectedPlan.id} planId={selectedPlan.id} revision={changeRevision} items={selectedPlan.items} onChanged={next => { replaceItem(next); setDetailItem(null); }} /> : null}
         {selectedPlan?.constraints.savedCookingDraft && !selectedPlan.archived ? <TouchableOpacity onPress={() => router.push({ pathname: "/cooking-plan", params: { planId: selectedPlan.id } })} className="mx-5 rounded-2xl bg-brand-soft p-4"><Text className="font-bold text-brand">恢复备餐方案草案 · 查看份量、原料与时间</Text></TouchableOpacity> : null}
         {!selectedPlan ? (
           <View className="mx-5 mt-10 items-center rounded-3xl border border-dashed border-line bg-surface p-8">
@@ -334,6 +347,18 @@ export default function MealPlansScreen() {
                 <TouchableOpacity onPress={() => setDetailItem(null)} className="h-9 w-9 items-center justify-center rounded-full bg-background-secondary"><FontAwesome6 name="xmark" size={14} colorClassName="accent-copy-muted" /></TouchableOpacity>
               </View>
               <ScrollView className="mt-4" showsVerticalScrollIndicator={false}>
+                <TouchableOpacity disabled={!selectedPlan || Boolean(savingAction)} className="rounded-2xl bg-brand-soft p-3 mb-3" onPress={() => {
+                  if (!selectedPlan) return;
+                  const planItem = { planId: selectedPlan.id,itemId: detailItem.id,version: detailItem.version };
+                  setDetailItem(null); router.push({ pathname: "/household-dining",params: { planItem } });
+                }}><Text className="font-bold text-brand">预览这餐的家庭共餐需求</Text></TouchableOpacity>
+                <TouchableOpacity disabled={Boolean(detailItem.confirmedAt) || Boolean(savingAction)} className="rounded-2xl bg-brand-soft p-3 mb-3" onPress={async () => {
+                  if (!selectedPlan || savingAction) return;
+                  setSavingAction("confirm");
+                  try { replaceItem(await mealPlansApi.confirmItem(authFetch,selectedPlan.id,detailItem.id,detailItem.version)); setChangeRevision(value => value + 1); }
+                  catch (reason) { Alert.alert("确认失败",reason instanceof Error ? reason.message : "请刷新后重试"); }
+                  finally { setSavingAction(null); }
+                }}><Text className="font-bold text-brand">{detailItem.confirmedAt ? "已确认 · 自动调整需先审阅" : "确认这餐安排"}</Text></TouchableOpacity>
                 <View className="flex-row gap-2">
                   {MEAL_TYPES.map((mealType) => <TouchableOpacity key={mealType} onPress={() => void updateItem({ mealType })} className={`rounded-xl px-3 py-2 ${detailItem.mealType === mealType ? "bg-brand-fill" : "bg-background-secondary"}`}><Text className={`text-[10px] font-black ${detailItem.mealType === mealType ? "text-white" : "text-copy-muted"}`}>{mealType}</Text></TouchableOpacity>)}
                 </View>
@@ -357,7 +382,10 @@ export default function MealPlansScreen() {
                   <MealProductionFields produced={produced} eaten={eaten} onProducedChange={setProduced} onEatenChange={setEaten} />
                   <TouchableOpacity onPress={() => setWithoutStock(value => !value)}><Text className="text-brand">{withoutStock ? "已确认：" : "点击确认："} 本次未使用库存原料</Text></TouchableOpacity>
                 </> : null}
-                {detailItem.status !== "completed" ? <TouchableOpacity onPress={() => void complete(detailItem)} className="mb-4 mt-3 items-center rounded-2xl bg-brand-fill py-3.5"><Text className="font-black text-white">保存制作与食用分配</Text></TouchableOpacity> : <View className="mb-4 mt-3 items-center rounded-2xl bg-brand-soft py-3.5"><Text className="font-black text-brand">{detailItem.dietRecordId ? `已关联饮食记录 #${detailItem.dietRecordId}` : "制作已保存，请到待吃餐确认食用"}</Text></View>}
+                {detailItem.dining ? <Text className="mb-3 text-copy-muted">已安排 {detailItem.dining.participants.length} 人共餐，共 {detailItem.dining.participants.reduce((sum,person) => sum+Math.round(person.servings*1_000_000),0)/1_000_000} 份；请从共餐入口记录家庭制作。</Text> : null}
+                {detailItem.dining && detailItem.status !== "completed" ? <TouchableOpacity accessibilityRole="button" disabled={Boolean(savingAction)} onPress={() => void updateItem({ dining: null })}><Text className="font-bold text-brand">取消这餐的共餐安排</Text></TouchableOpacity> : null}
+                {detailItem.householdMealId && detailItem.householdId ? <TouchableOpacity accessibilityRole="button" onPress={() => { const householdId = detailItem.householdId!; setDetailItem(null); router.push({ pathname: "/household-meals",params: { householdId } }); }}><Text className="font-bold text-brand">查看这餐的家庭待吃</Text></TouchableOpacity> : null}
+                {detailItem.status !== "completed" ? <TouchableOpacity onPress={() => void complete(detailItem)} className="mb-4 mt-3 items-center rounded-2xl bg-brand-fill py-3.5"><Text className="font-black text-white">保存制作与食用分配</Text></TouchableOpacity> : <View className="mb-4 mt-3 items-center rounded-2xl bg-brand-soft py-3.5"><Text className="font-black text-brand">{detailItem.householdMealId ? "家庭制作已保存，请到家庭待吃记录本人食用" : detailItem.dietRecordId ? `已关联饮食记录 #${detailItem.dietRecordId}` : "制作已保存，请到待吃餐确认食用"}</Text></View>}
               </ScrollView>
             </View>
           ) : null}

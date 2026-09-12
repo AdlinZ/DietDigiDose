@@ -9,6 +9,7 @@ export type MealPlanUpdateInput = {
 };
 
 export type MealPlanItemUpdateInput = {
+  dining?: import("@dietdigidose/contracts").HouseholdDiningPlan | null;
   version: number;
   plannedDate?: string;
   mealType?: string;
@@ -16,7 +17,7 @@ export type MealPlanItemUpdateInput = {
   status?: "planned" | "skipped";
 };
 
-export type MealPlanExecutionInput = { version: number; idempotencyKey: string };
+export type MealPlanExecutionInput = { householdNetFingerprint?: string; householdRecipeFingerprint?: string; householdTotalDemand?: import("@dietdigidose/contracts").HouseholdDiningPlan; version: number; idempotencyKey: string };
 export type MealPlanCompleteInput = MealPlanExecutionInput & { dietRecordId?: number; production?: MealProduction; inventory_consumptions?: InventoryConsumption[] };
 export type MealPlanView = Record<string, unknown> & { id: string; version: number };
 export type MealPlanItemView = Record<string, unknown> & { id: string; version: number };
@@ -27,7 +28,8 @@ export type MutationResult<T> =
   | { kind: "not_found" }
   | { kind: "version_conflict" }
   | { kind: "invalid_date_range" }
-  | { kind: "recipe_not_available" };
+  | { kind: "recipe_not_available" }
+  | { kind: "protected" };
 
 export type ExecutionRepositoryResult =
   | { kind: "completed"; value: ExecutionResult }
@@ -36,3 +38,5 @@ export type ExecutionRepositoryResult =
   | { kind: "recipe_unavailable" }
   | { kind: "queue_full" }
   | { kind: "diet_record_not_found" };
+
+export type MealPlanChangeReview = "accept" | "reject" | "restore";

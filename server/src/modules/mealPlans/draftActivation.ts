@@ -16,6 +16,6 @@ export function prepareDraftActivation(current: Row, version: number) {
       ingredients: cooking.demands.map(demand => ({ name: demand.food_name, amount: `${Number(demand.amount_value.toFixed(6))}${units[demand.unit] ?? demand.unit}` })),
       allocation: { ...cooking, plannedDate: target.date, mealType: target.mealType } };
   });
-  return { repeated: false as const, items, constraints: { ...constraints, activatedFromVersion: version,
+  return { repeated: false as const, weekly: parsed.data.planningMode === "weekly", targets: parsed.data.meals, items, constraints: { ...constraints, activatedFromVersion: version,
     executionItems: Object.fromEntries(items.map(item => [item.id, item.allocation])) } };
 }

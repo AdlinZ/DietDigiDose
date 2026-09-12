@@ -14,6 +14,11 @@ export type RecommendationRequestWrite = {
 };
 
 export interface RecommendationsRepository {
+  preferenceOutcomes(userId: number): Promise<{ production: Row[]; events: Row[]; inventory?: Row[]; changes?: Row[]; statements?: Row[] }>;
+  learningData(userId: number): Promise<import("./preferenceEvidence.js").LearningData>;
+  updateLearning(userId: number,input: import("@dietdigidose/contracts").PreferenceLearningUpdate): Promise<boolean>;
+  /** Includes all commitments from startDate onward; callers limit shopping output to their requested window. */
+  planningState(userId: number, startDate: string, endDate: string): Promise<{ items: Row[]; plans: Row[]; shopping: Row[] }>;
   preparedMeals(userId: number): Promise<Row[]>;
   profile(userId: number): Promise<Row | null>;
   inventory(userId: number): Promise<Row[]>;
@@ -28,6 +33,7 @@ export interface RecommendationsRepository {
   createRequest(input: RecommendationRequestWrite): Promise<void>;
   findEvent(userId: number, idempotencyKey: string): Promise<Row | null>;
   recipeAvailable(recipeId: number): Promise<boolean>;
-  requestScoringVersion(userId: number, requestId: string): Promise<string | null>;
+  /** Reads immutable provenance even after pagination expiry. */
+  requestEvidence(userId: number, requestId: string): Promise<Row | null>;
   createEvent(id: string, userId: number, input: RecommendationEventInput): Promise<{ id: string; repeated: boolean }>;
 }

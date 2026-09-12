@@ -1,3 +1,15 @@
+import { readPostgresDiningSupply } from "./postgresDiningSupply.js";
+import { diningNetShopping } from "./diningNetShopping.js";
+import { householdDiningSupplySchema } from "@dietdigidose/contracts";
+import { diningSupply } from "./diningSupply.js";
+import { validatePostgresDiningPlan } from "./postgresDiningPlan.js";
+import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
+import { lockMealPlanning } from "../mealPlans/postgresLock.js";
+import { reservationTotals, validateReservation } from "./reservations.js";
+import { eatingRequest, prepareEating, repeatEating } from "./eating.js";
+import { randomUUID } from "node:crypto";
+import { HouseholdsError } from "./errors.js";
+import { validateProductionPlan, consumeProductionItem, productionRequest, productionResult, repeatProduction } from "./production.js";
 import type { Pool, PoolClient } from "pg";
 import type { HouseholdsRepository } from "./repository.js";
 import type {
@@ -21,6 +33,140 @@ function json<T>(value: unknown): T {
 export class PostgresHouseholdsRepository implements HouseholdsRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+
+  async diningSupply(userId: number,householdId: number,target: { planId: string; itemId: string; version: number },totalServings: number,recipeFingerprint: string) {
+    return this.tx(async client => {
+      await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+      if (!await this.member(client,householdId,userId)) throw new HouseholdsError(403,"你不是该家庭的成员","NOT_MEMBER");
+      const snapshot = await readPostgresDiningSupply(client,userId,householdId,target,totalServings,recipeFingerprint);
+      return householdDiningSupplySchema.parse({ ...diningSupply(snapshot),netShopping: diningNetShopping(snapshot) });
+    });
+  }
+
+  async diningPlanContext(userId: number,planId: string,itemId: string) {
+    return this.tx(async client => {
+      await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+      const item = (await client.query("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=$1 AND i.plan_id=$2 AND i.user_id=$3 AND p.user_id=$3 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active'",[itemId,planId,userId])).rows[0] as Row | undefined;
+      if (!item) return null;
+      const queue = item.queue_item_id ? (await client.query("SELECT id,version,status FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",[item.queue_item_id,userId])).rows[0] as Row | undefined : undefined;
+      const purchases = (await client.query("SELECT id,version,checked FROM shopping_list_items WHERE user_id=$1 AND client_id LIKE $2 ORDER BY id",[userId,`meal-plan:${item.id}:%`])).rows as Row[];
+    const sharedPurchases = (await client.query("SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=$1 ORDER BY id",[item.id])).rows as Row[];
+    purchases.push(...sharedPurchases.map(row => ({ ...row,id: `household:${row.id}` })));
+      return { item,queue,purchases };
+    });
+  }
+  async reserveMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealReservationInput) {
+    return this.tx(async client => {
+      const member = await this.member(client,householdId,userId,true);
+      if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
+      const meal = (await client.query("SELECT * FROM household_meal_batches WHERE id=$1 AND household_id=$2 FOR UPDATE",[mealId,householdId])).rows[0] as Row | undefined;
+      if (!meal) throw new HouseholdsError(404,"家庭批次不存在","MEAL_NOT_FOUND");
+      const totals = reservationTotals((await client.query("SELECT membership_id,servings FROM household_meal_reservations WHERE meal_id=$1",[mealId])).rows,input.membershipId);
+      validateReservation(meal,input,totals);
+      if (input.servings > 0) await client.query("INSERT INTO household_meal_reservations(meal_id,membership_id,servings) VALUES($1,$2,$3) ON CONFLICT(meal_id,membership_id) DO UPDATE SET servings=excluded.servings",[mealId,input.membershipId,input.servings]);
+      else await client.query("DELETE FROM household_meal_reservations WHERE meal_id=$1 AND membership_id=$2",[mealId,input.membershipId]);
+      await client.query("UPDATE household_meal_batches SET version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1",[mealId]);
+      return { version: input.version+1,myReservedServings: input.servings };
+    });
+  }
+  async meals(userId: number,householdId: number) {
+    return this.tx(async client => {
+      const member = await this.member(client,householdId,userId,true);
+      if (!member) throw new HouseholdsError(403,"你不是该家庭的成员","NOT_MEMBER");
+      return (await client.query(`SELECT b.*,
+        COALESCE((SELECT sum(servings) FROM household_meal_reservations WHERE meal_id=b.id),0) AS reserved_total,
+        COALESCE((SELECT servings FROM household_meal_reservations WHERE meal_id=b.id AND membership_id=$2),0) AS reserved_mine
+        FROM household_meal_batches b WHERE household_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100`,[householdId,member!.id])).rows.map(row => productionResult(row,false));
+    });
+  }
+  async eatMeal(userId: number,householdId: number,mealId: string,input: import("@dietdigidose/contracts").HouseholdMealEatingInput) {
+    return this.tx(async client => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`household-eat:${userId}:${input.idempotencyKey}`]);
+      const member = await this.member(client,householdId,userId,true);
+      if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
+      const existing = (await client.query("SELECT * FROM household_meal_events WHERE user_id=$1 AND idempotency_key=$2",[userId,input.idempotencyKey])).rows[0] as Row | undefined;
+      if (existing) return repeatEating(existing,householdId,mealId,input);
+      const meal = (await client.query("SELECT * FROM household_meal_batches WHERE id=$1 AND household_id=$2 FOR UPDATE",[mealId,householdId])).rows[0] as Row | undefined;
+      if (!meal) throw new HouseholdsError(404,"家庭待吃餐不存在","MEAL_NOT_FOUND");
+      const totals = reservationTotals((await client.query("SELECT membership_id,servings FROM household_meal_reservations WHERE meal_id=$1",[mealId])).rows,input.membershipId);
+      const next = prepareEating(meal,input,totals); const record = next.record;
+      const diet = (await client.query("INSERT INTO diet_records(user_id,food_name,meal_type,amount,calories,protein,carbs,fat,recorded_at,recorded_time) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id",
+        [userId,record.food_name,record.meal_type,record.amount,record.calories ?? null,record.protein ?? null,record.carbs ?? null,record.fat ?? null,record.recorded_at,record.recorded_time])).rows[0];
+      await client.query("UPDATE household_meal_batches SET remaining_servings=$1,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$2",[next.remaining,mealId]);
+      if (next.reservedUsed > 0) {
+        if (next.reservedUsed >= totals.mine) await client.query("DELETE FROM household_meal_reservations WHERE meal_id=$1 AND membership_id=$2",[mealId,input.membershipId]);
+        else await client.query("UPDATE household_meal_reservations SET servings=$1 WHERE meal_id=$2 AND membership_id=$3",[Math.round((totals.mine-next.reservedUsed)*1_000_000)/1_000_000,mealId,input.membershipId]);
+      }
+      const result = { meal: productionResult({ ...meal,remaining_servings: next.remaining,version: input.version+1 },false),dietRecordId: Number(diet.id),repeated: false };
+      await client.query("INSERT INTO household_meal_events(id,household_id,meal_id,user_id,membership_id,idempotency_key,servings,request_json,result_json,diet_record_id,reserved_servings_used) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11)",
+        [randomUUID(),householdId,mealId,userId,input.membershipId,input.idempotencyKey,input.servings,JSON.stringify(eatingRequest(input)),JSON.stringify(result),result.dietRecordId,next.reservedUsed]);
+      return result;
+    });
+  }
+
+  async produceMeal(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdMealProductionInput) {
+    return this.tx(async client => {
+      if (input.planItem) {
+        await lockMealPlanning(client,userId);
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`prepared-meals:${userId}`]);
+      }
+      await client.query("SELECT id FROM households WHERE id=$1 FOR UPDATE",[householdId]);
+      const member = await this.member(client,householdId,userId,true);
+      if (!member || Number(member.id) !== input.membershipId) throw new HouseholdsError(403,"家庭成员身份已变化，请重新读取","NOT_MEMBER");
+      const existing = (await client.query("SELECT * FROM household_meal_batches WHERE household_id=$1 AND idempotency_key=$2",[householdId,input.idempotencyKey])).rows[0] as Row | undefined;
+      if (existing) return repeatProduction(existing,userId,input);
+      let dining: import("@dietdigidose/contracts").HouseholdDiningPlan | null = null;
+      if (input.planItem) {
+        const item = (await client.query("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=$1 AND i.plan_id=$2 AND i.user_id=$3 AND p.user_id=$3 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active' FOR UPDATE OF i,p",[input.planItem.itemId,input.planItem.planId,userId])).rows[0] as Row | undefined;
+        validateProductionPlan(item,input);
+        dining = item?.dining_json ? (typeof item.dining_json === "string" ? JSON.parse(item.dining_json) : item.dining_json) as import("@dietdigidose/contracts").HouseholdDiningPlan : null;
+        if (dining) {
+          if (dining.householdId !== householdId) throw new HouseholdsError(409,"共餐安排属于另一家庭，请回到原安排","DINING_HOUSEHOLD_CHANGED");
+          await validatePostgresDiningPlan(client,userId,item?.recipe_id,dining);
+        }
+      }
+      const snapshot: Row[] = [];
+      for (const consumption of productionRequest(input).inventory) {
+        const item = (await client.query("SELECT * FROM household_inventory_items WHERE id=$1 AND household_id=$2 FOR UPDATE",[consumption.itemId,householdId])).rows[0] as Row | undefined;
+        if (!item) throw new HouseholdsError(409,"家庭原料不存在或不属于该家庭","INVENTORY_CONFLICT");
+        const next = consumeProductionItem(item,consumption);
+        await client.query("UPDATE household_inventory_items SET quantity=$1,is_available=$2,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$3 AND household_id=$4",
+          [next.nextQuantity,next.available,consumption.itemId,householdId]);
+        snapshot.push({ ...consumption,foodName: item.food_name,before: item.quantity,after: next.nextQuantity });
+        await this.activity(client,householdId,userId,"consume",String(item.food_name),`${consumption.amount}${consumption.unit}`,String(item.storage_location));
+      }
+      const id = randomUUID();
+      const row = (await client.query(`INSERT INTO household_meal_batches(id,household_id,created_by_user_id,membership_id,idempotency_key,request_json,food_name,produced_servings,remaining_servings,inventory_json)
+        VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb) RETURNING *`,[id,householdId,userId,input.membershipId,input.idempotencyKey,JSON.stringify(productionRequest(input)),input.foodName,input.producedServings,input.producedServings,JSON.stringify(snapshot)])).rows[0] as Row;
+      if (input.planItem) {
+        await client.query("UPDATE household_meal_batches SET plan_item_id=$1,dining_json=$3::jsonb WHERE id=$2",[input.planItem.itemId,id,dining ? JSON.stringify(dining) : null]);
+        await client.query("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2",[input.planItem.itemId,userId]);
+        await appendPostgresMaintenanceEvent(client,{ userId,kind: "cooking_completion",sourceId: `household:${id}`,subjectId: id,details: { planItemId: input.planItem.itemId,version: input.planItem.version+1,mode: "household" } });
+      }
+      return productionResult(row,false);
+    });
+  }
+
+  async diningRecipe(recipeId: number) {
+    return (await this.pool.query("SELECT id,title,description,ingredients_json,serving_size FROM recipes WHERE id=$1 AND deleted_at IS NULL AND status='approved' AND COALESCE(quality_status,'trusted') <> 'needs_review'",[recipeId])).rows[0] as Row | undefined ?? null;
+  }
+
+  async diningMembers(userId: number, householdId: number) {
+    return (await this.pool.query(`SELECT hm.id,hm.user_id,COALESCE(u.nickname,u.username) AS name,hm.dining_shared,hm.dining_version,
+      CASE WHEN hm.dining_shared=1 THEN hm.dining_preferences_json ELSE NULL END AS dining_preferences_json
+      FROM household_members hm JOIN users u ON u.id=hm.user_id
+      WHERE hm.household_id=$1 AND EXISTS (
+        SELECT 1 FROM household_members viewer WHERE viewer.household_id=hm.household_id AND viewer.user_id=$2)
+      ORDER BY hm.id`,[householdId,userId])).rows as Row[];
+  }
+
+  async diningPreferences(userId: number, householdId: number) {
+    return (await this.pool.query("SELECT id,dining_shared,dining_preferences_json,dining_version FROM household_members WHERE household_id=$1 AND user_id=$2",[householdId,userId])).rows[0] as Row | undefined ?? null;
+  }
+  async saveDiningPreferences(userId: number, householdId: number, input: import("@dietdigidose/contracts").HouseholdDiningPreferencesInput) {
+    return (await this.pool.query("UPDATE household_members SET dining_shared=$1,dining_preferences_json=$2::jsonb,dining_version=dining_version+1 WHERE household_id=$3 AND user_id=$4 AND dining_version=$5 AND id=$6",
+      [Number(input.shared),JSON.stringify({ allergies: input.allergies,restrictions: input.restrictions }),householdId,userId,input.version,input.membershipId])).rowCount === 1;
+  }
 
   async create(userId: number, name: string, inviteCode: string) {
     try {
@@ -215,12 +361,13 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
 
   async updateInventory(userId: number, householdId: number, itemId: number, input: InventoryUpdateInput) {
     return this.tx(async (client) => {
-      if (!await this.member(client, householdId, userId)) return { kind: "not_member" as const };
+      if (!await this.member(client, householdId, userId, true)) return { kind: "not_member" as const };
       const current = (await client.query("SELECT * FROM household_inventory_items WHERE id=$1 AND household_id=$2 FOR UPDATE",
       [itemId, householdId])).rows[0] as Row | undefined;
       if (!current) return { kind: "not_found" as const };
+      if (Number(current.version) !== input.version) return { kind: "version_conflict" as const };
       await client.query(`UPDATE household_inventory_items SET food_name=$1,category=$2,quantity=$3,expiration_date=$4,
-        storage_location=$5,image_url=$6,is_available=$7,updated_at=CURRENT_TIMESTAMP WHERE id=$8 AND household_id=$9`, [
+        storage_location=$5,image_url=$6,is_available=$7,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$8 AND household_id=$9`, [
         input.food_name ?? current.food_name, input.category ?? current.category, input.quantity ?? current.quantity,
         input.expiration_date ?? current.expiration_date, input.storage_location ?? current.storage_location,
         input.image_url ?? current.image_url, input.is_available ?? current.is_available, itemId, householdId,
@@ -232,12 +379,13 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
     });
   }
 
-  async removeInventory(userId: number, householdId: number, itemId: number) {
+  async removeInventory(userId: number, householdId: number, itemId: number, version: number) {
     return this.tx(async (client) => {
-      if (!await this.member(client, householdId, userId)) return "not_member" as const;
+      if (!await this.member(client, householdId, userId, true)) return "not_member" as const;
       const item = (await client.query("SELECT * FROM household_inventory_items WHERE id=$1 AND household_id=$2 FOR UPDATE",
       [itemId, householdId])).rows[0] as Row | undefined;
       if (!item) return "not_found" as const;
+      if (Number(item.version) !== version) return "version_conflict" as const;
       await client.query("DELETE FROM household_inventory_items WHERE id=$1", [itemId]);
       await this.activity(client, householdId, userId, "consume", String(item.food_name), String(item.quantity), String(item.storage_location));
       return "removed" as const;
@@ -251,8 +399,10 @@ export class PostgresHouseholdsRepository implements HouseholdsRepository {
       ORDER BY hl.created_at DESC LIMIT 100`, [householdId])).rows as Row[];
   }
 
-  private async member(client: Pool | PoolClient, householdId: number, userId: number) {
-    return (await client.query("SELECT * FROM household_members WHERE household_id=$1 AND user_id=$2", [householdId, userId]))
+  private async member(client: Pool | PoolClient, householdId: number, userId: number, lock = false) {
+    // Match leave/dissolve lock order before holding the membership through a mutation.
+    if (lock) await client.query("SELECT id FROM households WHERE id=$1 FOR KEY SHARE",[householdId]);
+    return (await client.query(`SELECT * FROM household_members WHERE household_id=$1 AND user_id=$2${lock ? " FOR SHARE" : ""}`, [householdId, userId]))
       .rows[0] as Row | undefined;
   }
   private activity(client: PoolClient, householdId: number, userId: number, action: string, name: string, quantity: string, location = "") {

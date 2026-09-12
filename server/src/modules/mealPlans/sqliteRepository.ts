@@ -1,3 +1,10 @@
+import { readSqliteDiningSupply } from "../households/sqliteDiningSupply.js";
+import { prepareNetDiningShopping } from "../households/diningNetShopping.js";
+import { prepareDiningShopping } from "../households/diningShopping.js";
+import { validateSqliteDiningPlan } from "../households/sqliteDiningPlan.js";
+import { replacementAllocation } from "./replacementAllocation.js";
+import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
+import { mealChangeDecision, mealChangeSnapshot, mealChangeFingerprint, formatMealChange, isMealChangeNoop, planMetadataPreservesItem, type PlanMetadataEdit } from "./changePolicy.js";
 import { prepareDraftActivation } from "./draftActivation.js";
 import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@dietdigidose/contracts";
 import { isDeepStrictEqual } from "node:util";
@@ -10,7 +17,9 @@ import { formatMealPlan, formatMealPlanItem, ingredient, normalizedName, parseJs
 import type { MealPlansRepository } from "./repository.js";
 import type { MealPlanCompleteInput, MealPlanExecutionInput, MealPlanItemUpdateInput, MealPlanUpdateInput } from "./types.js";
 
-const itemSelect = `SELECT i.*, p.constraints_json AS plan_constraints_json, r.title AS recipe_title, r.image_url AS recipe_image_url,
+const itemSelect = `SELECT i.*,
+  (SELECT hm.id FROM household_meal_batches hm WHERE hm.plan_item_id=i.id AND hm.created_by_user_id=i.user_id) AS household_meal_id,
+  (SELECT hm.household_id FROM household_meal_batches hm WHERE hm.plan_item_id=i.id AND hm.created_by_user_id=i.user_id) AS household_id, p.constraints_json AS plan_constraints_json, r.title AS recipe_title, r.image_url AS recipe_image_url,
   r.cook_time AS recipe_cook_time, r.difficulty AS recipe_difficulty,
   r.status AS recipe_status, r.deleted_at AS recipe_deleted_at
   FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id LEFT JOIN recipes r ON r.id = i.recipe_id`;
@@ -27,12 +36,22 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       const activation = prepareDraftActivation(current, version);
       if (!activation) return { kind: "version_conflict" as const };
       if (activation.repeated) return { kind: "updated" as const, value: { plan: this.formatPlan(current, userId), repeated: true } };
+      if (activation.weekly) {
+        const occupied = this.database.prepare("SELECT i.planned_date,i.meal_type FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.status<>'skipped'").all(userId) as Row[];
+        const activePlans = this.database.prepare("SELECT constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active'").all(userId) as Row[];
+        for (const plan of activePlans) {
+          const saved = parseJson<Row>(plan.constraints_json,{});
+          const draft = (saved.currentCookingDraft ?? (saved.savedCookingDraft as { draft?: unknown } | undefined)?.draft) as { meals?: Array<{ date: string; mealType: string; cookServings: number }> } | undefined;
+          for (const meal of draft?.meals ?? []) if (meal.cookServings === 0) occupied.push({ planned_date: meal.date,meal_type: meal.mealType });
+        }
+        if (activation.targets.some(target => occupied.some(item => String(item.planned_date) === target.date && queueMealType(item.meal_type) === target.mealType))) return { kind: "version_conflict" as const };
+      }
       if (this.getItems(id, userId).length) return { kind: "version_conflict" as const };
       const recipes = activation.items.map(item => this.database.prepare("SELECT steps_json FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(item.recipeId) as Row | undefined);
       if (recipes.some(recipe => !recipe)) return { kind: "recipe_not_available" as const };
       activation.items.forEach((item, index) => this.database.prepare(`INSERT INTO meal_plan_items
-        (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),recipes[index]!.steps_json));
+        (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json,confirmed_at)
+        VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).run(item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),recipes[index]!.steps_json));
       this.database.prepare("UPDATE meal_plans SET status='active',constraints_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?")
         .run(JSON.stringify(activation.constraints),id,userId);
       return { kind: "updated" as const, value: { plan: this.formatPlan(this.getPlan(id,userId,false)!,userId), repeated: false } };
@@ -88,59 +107,197 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   }
 
   async updatePlan(userId: number, id: string, input: MealPlanUpdateInput) {
+    return this.database.transaction(() => {
     const current = this.getPlan(id, userId, false);
     if (!current) return { kind: "not_found" as const };
     const startDate = input.startDate ?? String(current.start_date);
     const endDate = input.endDate ?? String(current.end_date);
     if (startDate > endDate) return { kind: "invalid_date_range" as const };
+    this.assertPlanEditInTransaction(userId,id,input);
     const changed = this.database.prepare(`UPDATE meal_plans SET title = ?, start_date = ?, end_date = ?, status = ?,
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL`)
       .run(input.title ?? current.title, startDate, endDate, input.status ?? current.status, id, userId, input.version);
     if (changed.changes !== 1) return { kind: "version_conflict" as const };
     return { kind: "updated" as const, value: this.formatPlan(this.getPlan(id, userId, false)!, userId) };
+  })();
   }
 
   async removePlan(userId: number, id: string, version: number) {
+    return this.database.transaction(() => {
+    this.assertPlanEditInTransaction(userId,id,{ archive: true });
     const changed = this.database.prepare(`UPDATE meal_plans SET deleted_at = CURRENT_TIMESTAMP, status = 'cancelled',
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL`)
       .run(id, userId, version);
     if (changed.changes === 1) return "removed" as const;
     return this.getPlan(id, userId, false) ? "version_conflict" as const : "not_found" as const;
+  })();
   }
 
-  async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
+  assertPlanEditInTransaction(userId: number, planId: string, edit: PlanMetadataEdit) {
+    const items = this.database.prepare("SELECT * FROM meal_plan_items WHERE plan_id=? AND user_id=? AND deleted_at IS NULL ORDER BY id").all(planId,userId) as Row[];
+    for (const item of items) {
+      const facts = this.changeFacts(item,userId);
+      if (!planMetadataPreservesItem(item,facts.decision,edit)) throw new InventoryQuantityError("MEAL_PLAN_PROTECTED", "餐单包含已确认、已采购或已进入制作的安排，或日期将排除已有餐次；请先逐餐审阅调整，原安排已保留");
+    }
+  }
+
+  private changeFacts(item: Row, userId: number) {
+    const queue = item.queue_item_id ? this.database.prepare("SELECT id,version,status FROM cooking_queue_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(item.queue_item_id, userId) as Row | undefined : undefined;
+    const purchases = this.database.prepare("SELECT id,version,checked FROM shopping_list_items WHERE user_id=? AND client_id LIKE ? ORDER BY id").all(userId, `meal-plan:${item.id}:%`) as Row[];
+    const sharedPurchases = this.database.prepare("SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=? ORDER BY id").all(item.id) as Row[];
+    purchases.push(...sharedPurchases.map(row => ({ ...row,id: `household:${row.id}` })));
+    return { decision: mealChangeDecision(item, queue, purchases), snapshot: mealChangeSnapshot(item, queue, purchases) };
+  }
+
+  async confirmItem(userId: number, planId: string, itemId: string, version: number) {
+    return this.database.transaction(() => {
+      const item = this.getItem(planId, itemId, userId);
+      if (!item) return { kind: "not_found" as const };
+      if (Number(item.version) !== version) return { kind: "version_conflict" as const };
+      if (!item.confirmed_at) this.database.prepare("UPDATE meal_plan_items SET confirmed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(itemId, userId);
+      return { kind: "updated" as const, value: formatMealPlanItem(this.getItem(planId, itemId, userId)!) };
+    })();
+  }
+
+  async listChanges(userId: number, planId: string) {
+    return (this.database.prepare("SELECT * FROM meal_plan_changes WHERE user_id=? AND plan_id=? ORDER BY created_at DESC,id DESC").all(userId, planId) as Row[]).map(formatMealChange);
+  }
+
+  async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
+    return this.updateItemInTransaction(userId,planId,itemId,input,source,reason);
+  }
+
+  /** Synchronous so maintenance can atomically commit a whole batch and its acknowledgement. */
+  updateItemInTransaction(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
+    return this.database.transaction(() => {
+      const item = this.getItem(planId, itemId, userId);
+      if (!item) return { kind: "not_found" as const };
+      const facts = this.changeFacts(item, userId);
+      if (Number(item.version) === input.version && isMealChangeNoop(item,input)) return { kind: "updated" as const, value: formatMealPlanItem(item) };
+      const fingerprint = mealChangeFingerprint(itemId, facts.snapshot, input);
+      const existing = this.database.prepare("SELECT * FROM meal_plan_changes WHERE user_id=? AND fingerprint=?").get(userId, fingerprint) as Row | undefined;
+      if (existing) return { kind: "updated" as const, value: { ...formatMealPlanItem(item), change: formatMealChange(existing) } };
+      if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      const replacement = input.recipeId ? this.database.prepare("SELECT title FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(input.recipeId) as Row | undefined : undefined;
+      if (input.recipeId && !replacement) return { kind: "recipe_not_available" as const };
+      if (item.dining_json && input.dining === undefined && input.recipeId !== undefined && input.recipeId !== item.recipe_id)
+        throw new InventoryQuantityError("DINING_REVIEW_REQUIRED","更换共餐菜谱前，请重新核对所有参与成员的限制并提交共餐安排");
+      const dining = input.dining === undefined ? parseJson<import("@dietdigidose/contracts").HouseholdDiningPlan | null>(item.dining_json,null) : input.dining;
+      if (dining) validateSqliteDiningPlan(this.database,userId,input.recipeId === undefined ? item.recipe_id : input.recipeId,dining);
+      const proposal = { ...input, title: String(replacement?.title || item.recipe_title || item.title) };
+      const id = randomUUID();
+      let next = formatMealPlanItem(item);
+      if (facts.decision === "apply") {
+        const applied = this.applyItemChange(userId, planId, itemId, input);
+        if (applied.kind !== "updated") return applied;
+        next = applied.value;
+      }
+      this.database.prepare(`INSERT INTO meal_plan_changes(id,user_id,plan_id,item_id,fingerprint,source,reason,status,before_version,after_version,before_json,after_json,applied_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END)`).run(id,userId,planId,itemId,fingerprint,source,reason,
+        facts.decision === "apply" ? "applied" : facts.decision === "suggest" ? "pending" : "blocked", input.version,
+        facts.decision === "apply" ? next.version : null,JSON.stringify(facts.snapshot),JSON.stringify(proposal),facts.decision === "apply" ? 1 : 0);
+      return { kind: "updated" as const, value: { ...next, change: formatMealChange(this.database.prepare("SELECT * FROM meal_plan_changes WHERE id=?").get(id) as Row) } };
+    })();
+  }
+
+  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {
+    return this.database.transaction(() => {
+      const change = this.database.prepare("SELECT * FROM meal_plan_changes WHERE id=? AND user_id=? AND plan_id=?").get(changeId,userId,planId) as Row | undefined;
+      if (!change) return { kind: "not_found" as const };
+      const item = this.getItem(planId,String(change.item_id),userId);
+      if (!item) return { kind: "not_found" as const };
+      if ((action === "accept" && change.status === "applied") || (action === "reject" && change.status === "rejected") || (action === "restore" && change.status === "reverted")) return { kind: "updated" as const, value: formatMealPlanItem(item) };
+      if (action === "reject" && change.status === "pending") {
+        this.database.prepare("UPDATE meal_plan_changes SET status='rejected' WHERE id=?").run(changeId);
+        return { kind: "updated" as const, value: formatMealPlanItem(item) };
+      }
+      if ((action === "accept" && change.status !== "pending") || (action === "restore" && change.status !== "applied") || action === "reject") return { kind: "version_conflict" as const };
+      const facts = this.changeFacts(item,userId);
+      const before = parseJson<ReturnType<typeof mealChangeSnapshot>>(change.before_json, {} as ReturnType<typeof mealChangeSnapshot>);
+      const expectedVersion = action === "restore" ? Number(change.after_version) : Number(change.before_version);
+      const unchangedFacts = { ...facts.snapshot, version: before.version, input: before.input,title: before.title };
+      if (facts.decision === "keep" || Number(item.version) !== expectedVersion || !isDeepStrictEqual(unchangedFacts,before)) return { kind: "protected" as const };
+      const patch = action === "restore" ? before.input : parseJson<MealPlanItemUpdateInput>(change.after_json, { version: expectedVersion });
+      const result = this.applyItemChange(userId,planId,String(item.id),{ ...patch, version: expectedVersion });
+      if (result.kind !== "updated") return result;
+      if (action === "restore") this.database.prepare("UPDATE meal_plan_changes SET status='reverted',after_json=json_set(after_json,'$.restoredVersion',?,'$.restoredAt',CURRENT_TIMESTAMP) WHERE id=?").run(result.value.version,changeId);
+      else this.database.prepare("UPDATE meal_plan_changes SET status='applied',after_version=?,applied_at=CURRENT_TIMESTAMP WHERE id=?").run(result.value.version,changeId);
+      return result;
+    })();
+  }
+
+  private applyItemChange(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
     const current = this.getItem(planId, itemId, userId);
     if (!current) return { kind: "not_found" as const };
+    if (current.dining_json && input.dining === undefined && input.recipeId !== undefined && input.recipeId !== current.recipe_id)
+      throw new InventoryQuantityError("DINING_REVIEW_REQUIRED","更换共餐菜谱前，请重新核对所有参与成员的限制并提交共餐安排");
+    const dining = input.dining === undefined ? parseJson<import("@dietdigidose/contracts").HouseholdDiningPlan | null>(current.dining_json,null) : input.dining;
+    if (dining) validateSqliteDiningPlan(this.database,userId,input.recipeId === undefined ? current.recipe_id : input.recipeId,dining);
     let replacement: Row | undefined;
     if (input.recipeId !== undefined && input.recipeId !== null) {
-      replacement = this.database.prepare(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat
+      replacement = this.database.prepare(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat, serving_size
         FROM recipes WHERE id = ? AND status = 'approved' AND deleted_at IS NULL`).get(input.recipeId) as Row | undefined;
       if (!replacement) return { kind: "recipe_not_available" as const };
     }
+    const allocation = replacement ? replacementAllocation(current,replacement) : undefined;
+    if (allocation === null) return { kind: "protected" as const };
     const changed = this.database.prepare(`UPDATE meal_plan_items SET planned_date = ?, meal_type = ?, recipe_id = ?, title = ?,
       ingredients_json = ?, steps_json = ?, calories = ?, protein = ?, carbs = ?, fat = ?, status = ?,
-      queue_item_id = CASE WHEN ? THEN NULL ELSE queue_item_id END,
+      queue_item_id = CASE WHEN ? THEN NULL ELSE queue_item_id END, dining_json = ?,
       version = version + 1, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND plan_id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL`).run(
       input.plannedDate ?? current.planned_date, input.mealType ?? current.meal_type,
       input.recipeId === undefined ? current.recipe_id : input.recipeId,
-      replacement?.title ?? current.title, replacement?.ingredients_json ?? current.ingredients_json,
+      replacement?.title ?? current.title, allocation ? JSON.stringify(allocation.ingredients) : current.ingredients_json,
       replacement?.steps_json ?? current.steps_json, replacement?.calories ?? current.calories,
       replacement?.protein ?? current.protein, replacement?.carbs ?? current.carbs, replacement?.fat ?? current.fat,
-      input.status ?? current.status, input.recipeId !== undefined ? 1 : 0,
+      input.status ?? current.status, input.recipeId !== undefined ? 1 : 0,dining ? JSON.stringify(dining) : null,
       itemId, planId, userId, input.version,
     );
     if (changed.changes !== 1) return { kind: "version_conflict" as const };
+    if (allocation?.constraints) this.database.prepare("UPDATE meal_plans SET constraints_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?")
+      .run(JSON.stringify(allocation.constraints),planId,userId);
     return { kind: "updated" as const, value: formatMealPlanItem(this.getItem(planId, itemId, userId)!) };
   }
 
   async addShopping(userId: number, planId: string, itemId: string, input: MealPlanExecutionInput) {
     return this.database.transaction(() => {
+      if (input.householdNetFingerprint && !input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","净采购需关联已保存的共餐安排");
       const repeated = this.repeated(userId, input.idempotencyKey);
-      if (repeated) return { kind: "completed" as const, value: repeated };
+      if (repeated) {
+        if ((input.householdTotalDemand ? (input.householdNetFingerprint ? "net_demand" : "total_demand") : undefined)!==repeated.mode || input.householdNetFingerprint!==repeated.sourceNetFingerprint || (input.householdTotalDemand && (!isDeepStrictEqual(input.householdTotalDemand,repeated.sourceDining) || input.householdRecipeFingerprint!==repeated.sourceRecipeFingerprint)))
+          throw new InventoryQuantityError("DINING_PLAN_CHANGED","此采购编号已用于另一份需求，请重新核对原提交");
+        return { kind: "completed" as const, value: repeated };
+      }
       const item = this.getItem(planId, itemId, userId);
       if (!item) return { kind: "not_found" as const };
+      if (item.dining_json) {
+        if (Number(item.version)!==input.version || item.status!=="planned") return { kind: "version_conflict" as const };
+        if (!input.householdTotalDemand) throw new InventoryQuantityError("HOUSEHOLD_SHOPPING_REQUIRED","这是共餐安排，请按共餐总需求核对家庭采购");
+        const dining = parseJson<import("@dietdigidose/contracts").HouseholdDiningPlan>(item.dining_json,null!);
+        validateSqliteDiningPlan(this.database,userId,item.recipe_id,dining);
+        const recipe = this.database.prepare("SELECT * FROM recipes WHERE id=?").get(item.recipe_id) as Row;
+        const existing = this.database.prepare("SELECT * FROM household_shopping_items WHERE source_plan_item_id=? ORDER BY id").all(itemId) as Row[];
+        let demands = prepareDiningShopping(dining,input.householdTotalDemand,recipe,existing,input.householdRecipeFingerprint);
+        if (input.householdNetFingerprint) demands = prepareNetDiningShopping(readSqliteDiningSupply(this.database,userId,dining.householdId,{ planId,itemId,version: input.version },dining.participants.reduce((sum,person) => sum+Math.round(person.servings*1_000_000),0)/1_000_000,input.householdRecipeFingerprint!),input.householdNetFingerprint);
+        const itemIds: string[] = [];
+        for (const demand of demands) {
+          const previous = existing.find(row => row.source_demand_key===demand.key);
+          if (previous) {
+            if (previous.name!==demand.name || previous.amount!==demand.amount) this.database.prepare("UPDATE household_shopping_items SET name=?,amount=?,version=version+1,source_generated_version=version+1,updated_by_user_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(demand.name,demand.amount,userId,previous.id);
+          } else {
+            const id = randomUUID();
+            this.database.prepare("INSERT INTO household_shopping_items(id,household_id,name,amount,category,created_by_user_id,updated_by_user_id,source_plan_item_id,source_demand_key,source_generated_version) VALUES(?,?,?,?,'共餐总需求',?,?,?,?,1)").run(id,dining.householdId,demand.name,demand.amount,userId,userId,itemId,demand.key);
+            itemIds.push(id);
+          }
+        }
+        for (const row of existing) if (!demands.some(demand => demand.key===row.source_demand_key)) this.database.prepare("DELETE FROM household_shopping_items WHERE id=?").run(row.id);
+        const value = { added: itemIds.length,itemIds,householdId: dining.householdId,mode: input.householdNetFingerprint ? "net_demand" : "total_demand",...(input.householdNetFingerprint ? { sourceNetFingerprint: input.householdNetFingerprint } : {}),sourceDining: dining,sourceRecipeFingerprint: input.householdRecipeFingerprint,repeated: false };
+        this.saveExecution(userId,input.idempotencyKey,"shopping",itemId,value);
+        return { kind: "completed" as const,value };
+      }
       if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      if (input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","这餐已不是共餐安排，请重新核对");
       const ingredients = parseJson<unknown[]>(item.ingredients_json, []).map(ingredient)
         .filter((entry): entry is { name: string; amount: string } => Boolean(entry?.name));
       const stock = (this.database.prepare(`SELECT food_name FROM inventory_items
@@ -172,7 +329,8 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
         if (repeated) return { kind: "completed" as const, value: repeated };
         const item = this.getItem(planId, itemId, userId);
         if (!item) return { kind: "not_found" as const };
-        if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED","这是共餐安排，请从家庭制作入口记录产出");
+        if (["completed","skipped"].includes(String(item.status)) || Number(item.version) !== input.version) return { kind: "version_conflict" as const };
         if (!item.recipe_id || item.recipe_status !== "approved" || item.recipe_deleted_at) return { kind: "recipe_unavailable" as const };
         const existing = this.database.prepare(`SELECT id FROM cooking_queue_items WHERE user_id = ? AND source_plan_item_id = ?
           AND deleted_at IS NULL AND status IN ('waiting', 'preparing', 'ready', 'cooking')`).get(userId, itemId) as { id: string } | undefined;
@@ -213,6 +371,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       if (input.dietRecordId) throw new Error("制作分配不能同时关联旧饮食记录");
       const item = this.getItem(planId, itemId, userId);
       if (!item) return { kind: "not_found" as const };
+      if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED","这是共餐安排，请从家庭制作入口记录产出");
       const value = await new SqliteDietRecordsRepository(this.database).completeCooking(userId, {
         idempotency_key: input.idempotencyKey, recipe_id: item.recipe_id == null ? null : Number(item.recipe_id),
         inventory_item_ids: [], inventory_consumptions: input.inventory_consumptions ?? [],
@@ -226,13 +385,14 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
         if (repeated) return { kind: "completed" as const, value: repeated };
         const item = this.getItem(planId, itemId, userId);
         if (!item) return { kind: "not_found" as const };
+      if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED","这是共餐安排，请从家庭制作入口记录产出");
         const produced = this.database.prepare("SELECT result_json FROM prepared_meals WHERE user_id=? AND plan_item_id=?")
           .get(userId, itemId) as { result_json: string } | undefined;
         if (produced) return { kind: "completed" as const, value: { ...JSON.parse(produced.result_json), repeated: true } };
         if (item.status === "completed" && item.diet_record_id) {
           return { kind: "completed" as const, value: { dietRecordId: Number(item.diet_record_id), repeated: true } };
         }
-        if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+        if (item.status === "completed" || Number(item.version) !== input.version) return { kind: "version_conflict" as const };
         let dietRecordId = input.dietRecordId;
         if (dietRecordId) {
           if (!this.database.prepare("SELECT id FROM diet_records WHERE id = ? AND user_id = ?").get(dietRecordId, userId)) {
@@ -265,7 +425,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       .get(id, userId) as Row | undefined;
   }
   private getItem(planId: string, itemId: string, userId: number) {
-    return this.database.prepare(`${itemSelect} WHERE i.id = ? AND i.plan_id = ? AND i.user_id = ? AND i.deleted_at IS NULL`)
+    return this.database.prepare(`${itemSelect} WHERE i.id = ? AND i.plan_id = ? AND i.user_id = ? AND i.deleted_at IS NULL AND p.deleted_at IS NULL`)
       .get(itemId, planId, userId) as Row | undefined;
   }
   private getItems(planId: string, userId: number) {

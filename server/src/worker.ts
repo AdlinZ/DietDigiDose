@@ -1,13 +1,16 @@
+import { processMaintenanceJobs } from "./modules/planMaintenance/process.js";
+import { WORKER_TASK_NAMES, defaultWorkerInterval } from "./modules/worker/types.js";
+import type { WorkerTaskContext } from "./modules/worker/types.js";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { initializeWorkerRuntime } from "./composition/runtime.js";
 import type { WorkerRuntimeBundle } from "./composition/types.js";
-import { checkExpoPushReceipts, sendExpiringInventoryNotifications } from "./services/notifications.js";
+import { checkExpoPushReceipts, sendExpiringInventoryNotifications, sendInterventions, scanInterventions } from "./services/notifications.js";
 import type { WorkerTaskName, WorkerTaskRunResult } from "./modules/worker/types.js";
 import { logger } from "./utils/logger.js";
 
-const supportedTasks: WorkerTaskName[] = ["notifications", "media-cleanup"];
+const supportedTasks: readonly WorkerTaskName[] = WORKER_TASK_NAMES;
 
 function numberFromEnv(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -33,7 +36,8 @@ export async function runWorkerCycle(workerId: string, runtime: WorkerRuntimeBun
   const results: WorkerTaskRunResult[] = [];
   for (const taskName of tasks) {
     const run = taskName === "notifications"
-      ? async () => {
+      ? async (context: WorkerTaskContext) => {
+          await context.assertActive();
           const receipts = await checkExpoPushReceipts();
           const notifications = await sendExpiringInventoryNotifications();
           return {
@@ -47,6 +51,29 @@ export async function runWorkerCycle(workerId: string, runtime: WorkerRuntimeBun
               failedRecipients: notifications.failedRecipients,
             },
           };
+        }
+      : taskName === "intervention-scan"
+      ? async (context: WorkerTaskContext) => {
+          const scan = await scanInterventions(context);
+          return { processed: scan.scanned + scan.failed,succeeded: scan.scanned,failed: scan.failed,details: scan };
+        }
+      : taskName === "intervention-delivery"
+      ? async (context: WorkerTaskContext) => {
+          const delivery = await sendInterventions(context);
+          return { processed: delivery.processed,succeeded: delivery.accepted,failed: delivery.failed + delivery.uncertain,details: delivery };
+        }
+      : taskName === "plan-maintenance-dispatch"
+      ? async () => {
+          const daily = await runtime.maintenanceQueue.enqueueDaily(new Date(),numberFromEnv("PLAN_MAINTENANCE_EVENT_BATCH_SIZE",200));
+          const enqueued = await runtime.maintenanceQueue.enqueueEvents(new Date(),numberFromEnv("PLAN_MAINTENANCE_EVENT_BATCH_SIZE",200));
+          return { processed: enqueued, succeeded: enqueued, failed: 0, details: { phase: "event_dispatch", eventsEnqueued: enqueued, dailyChecksCreated: daily } };
+        }
+      : taskName === "plan-maintenance-process"
+      ? async (context: WorkerTaskContext) => {
+          const result = await processMaintenanceJobs(runtime.maintenanceQueue,context,numberFromEnv("PLAN_MAINTENANCE_JOB_BATCH_SIZE",10));
+          await context.assertActive();
+          const reportsPublished = await runtime.maintenanceQueue.publishResults(numberFromEnv("PLAN_MAINTENANCE_EVENT_BATCH_SIZE",200));
+          return { ...result,details: { ...result.details,reportsPublished } };
         }
       : async () => {
           const cleanup = await runtime.mediaCleanup.processPending(numberFromEnv("MEDIA_CLEANUP_BATCH_SIZE", 25));
@@ -68,7 +95,7 @@ async function main() {
   try {
     const workerId = `${os.hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
     const once = process.argv.includes("--once");
-    const intervalMs = numberFromEnv("WORKER_INTERVAL_MS", 60 * 60_000);
+    const intervalMs = numberFromEnv("WORKER_INTERVAL_MS", defaultWorkerInterval(selectedTasks()));
     let stopping = false;
     let running = false;
 

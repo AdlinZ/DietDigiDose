@@ -1,3 +1,5 @@
+import { interventionCandidateId } from "../interventions/opportunities.js";
+import { reservationDecision, type InterventionReservation } from "../interventions/reservation.js";
 import type { Pool, PoolClient } from "pg";
 import { expiryContent, type ExpiryItem } from "./expiry.js";
 import type { NotificationsRepository } from "./repository.js";
@@ -10,6 +12,23 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async reserveIntervention(input: InterventionReservation) { return this.tx(async client => {
+    const candidate = input.candidate;
+    // Same account lock as preference changes: serializes quota reservations and opt-out.
+    await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[candidate.userId]);
+    const existing = (await client.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND source_key=$2",[candidate.userId,candidate.sourceKey])).rows[0];
+    if (existing) return existing;
+    const preferences = (await client.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[candidate.userId])).rows[0] ?? null;
+    const history = (await client.query("SELECT decided_at,push_reserved_at,channel FROM proactive_interventions WHERE user_id=$1 AND decided_at>=$2",[candidate.userId,new Date(input.now-7*86_400_000).toISOString()])).rows;
+    const hasPushDevice = (await client.query("SELECT id FROM push_devices WHERE user_id=$1 AND is_active=TRUE LIMIT 1",[candidate.userId])).rows.length>0;
+    const decision = reservationDecision(input,preferences,history,hasPushDevice);
+    const id = interventionCandidateId(candidate),now = new Date(input.now).toISOString();
+    let notificationId: number | null = null;
+    if (decision.channel !== "suppressed") notificationId = Number((await client.query(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)
+      VALUES($1,'proactive_intervention',$2,$3,'action_required',$4,'pending',$5) RETURNING id`,[candidate.userId,candidate.title,candidate.body,decision.priority ?? "normal",`intervention:${id}`])).rows[0].id);
+    return (await client.query(`INSERT INTO proactive_interventions(id,user_id,source_key,kind,status,candidate_json,policy_input_json,policy_version,decision_reason,channel,priority,starts_at,expires_at,decided_at,push_reserved_at,delivery_state,notification_id,next_attempt_at)
+      VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,[id,candidate.userId,candidate.sourceKey,candidate.kind,decision.channel === "suppressed" ? "suppressed" : "inbox",JSON.stringify(candidate),JSON.stringify({ input,preferences,history,hasPushDevice }),decision.policyVersion,decision.reason,decision.channel,decision.priority,new Date(candidate.startsAt).toISOString(),new Date(candidate.expiresAt).toISOString(),now,decision.channel === "push" ? now : null,decision.channel === "push" ? "pending" : "none",notificationId,decision.channel === "push" ? now : null])).rows[0];
+  }); }
   async interventionPreferences(userId: number) { return (await this.pool.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[userId])).rows[0] ?? null; }
   async saveInterventionPreferences(userId: number,input: import("@dietdigidose/contracts").InterventionPreferencesUpdate) {
     return this.tx(async client => {

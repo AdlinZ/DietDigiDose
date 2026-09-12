@@ -1,3 +1,5 @@
+import { interventionCandidateId } from "../interventions/opportunities.js";
+import { reservationDecision, type InterventionReservation } from "../interventions/reservation.js";
 import type Database from "better-sqlite3";
 import { expiryContent, type ExpiryItem } from "./expiry.js";
 import type { NotificationsRepository } from "./repository.js";
@@ -14,6 +16,22 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async reserveIntervention(input: InterventionReservation) { return this.database.transaction(() => {
+    const candidate = input.candidate;
+    const existing = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND source_key=?").get(candidate.userId,candidate.sourceKey) as Record<string,unknown> | undefined;
+    if (existing) return existing;
+    const preferences = this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(candidate.userId) as Record<string,unknown> | undefined;
+    const history = this.database.prepare("SELECT decided_at,push_reserved_at,channel FROM proactive_interventions WHERE user_id=? AND decided_at>=?").all(candidate.userId,new Date(input.now-7*86_400_000).toISOString()) as Record<string,unknown>[];
+    const device = this.database.prepare("SELECT id FROM push_devices WHERE user_id=? AND is_active=1 LIMIT 1").get(candidate.userId);
+    const decision = reservationDecision(input,preferences ?? null,history,Boolean(device));
+    const id = interventionCandidateId(candidate), now = new Date(input.now).toISOString();
+    let notificationId: number | null = null;
+    if (decision.channel !== "suppressed") notificationId = Number(this.database.prepare(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)
+      VALUES(?,'proactive_intervention',?,?,'action_required',?,'pending',?)`).run(candidate.userId,candidate.title,candidate.body,decision.priority ?? "normal",`intervention:${id}`).lastInsertRowid);
+    this.database.prepare(`INSERT INTO proactive_interventions(id,user_id,source_key,kind,status,candidate_json,policy_input_json,policy_version,decision_reason,channel,priority,starts_at,expires_at,decided_at,push_reserved_at,delivery_state,notification_id,next_attempt_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id,candidate.userId,candidate.sourceKey,candidate.kind,decision.channel === "suppressed" ? "suppressed" : "inbox",JSON.stringify(candidate),JSON.stringify({ input,preferences: preferences ?? null,history,hasPushDevice: Boolean(device) }),decision.policyVersion,decision.reason,decision.channel,decision.priority,new Date(candidate.startsAt).toISOString(),new Date(candidate.expiresAt).toISOString(),now,decision.channel === "push" ? now : null,decision.channel === "push" ? "pending" : "none",notificationId,decision.channel === "push" ? now : null);
+    return this.database.prepare("SELECT * FROM proactive_interventions WHERE id=?").get(id) as Record<string,unknown>;
+  })(); }
   async interventionPreferences(userId: number) { return (this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as Record<string,unknown> | undefined) ?? null; }
   async saveInterventionPreferences(userId: number,input: import("@dietdigidose/contracts").InterventionPreferencesUpdate) {
     return this.database.transaction(() => {

@@ -5,6 +5,7 @@ import { createNotificationsService, DEFAULT_NOTIFICATION_PREFERENCES } from "..
 
 function repository(overrides: Partial<NotificationsRepository> = {}): NotificationsRepository {
   return {
+    reserveIntervention: async () => ({}),
     interventionPreferences: async () => null, saveInterventionPreferences: async () => null,
     preferences: async () => null,
     savePreferences: async () => {},

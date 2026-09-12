@@ -1945,6 +1945,10 @@ try {
   if (postgresRegistration.status === "created") {
     const notificationUserId = postgresRegistration.userId;
     const notificationsRepository = new PostgresNotificationsRepository(pool);
+    const { verifyInterventionReservation } = await import("./interventionReservationAssertions.js");
+    await verifyInterventionReservation(notificationsRepository,notificationUserId);
+    assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM user_notification_inbox WHERE user_id=$1 AND type='proactive_intervention'",[notificationUserId])).rows[0].n),2);
+
     const { defaultInterventionPreferences } = await import("@dietdigidose/contracts");
     const currentInterventionPreferences = await notificationsRepository.interventionPreferences(user.id);
     const preferenceInput = { ...defaultInterventionPreferences,enabled: true,expiry_rescue: true,version: Number(currentInterventionPreferences?.version ?? 0) };

@@ -4604,3 +4604,11 @@ test("intervention preference API requires explicit consent and cancels pending 
   const read = (await api(url,{ token: account.token })).body as JsonObject;
   assert.equal(read.expiry_rescue,false);assert.equal(read.dinner_window,true);
 });
+
+test("intervention reservations atomically persist decisions, quota and a single inbox item", async () => {
+  const account = await register('reserve-int@example.invalid');
+  const { SqliteNotificationsRepository } = await import('../src/modules/notifications/sqliteRepository.js');
+  const { verifyInterventionReservation } = await import('./interventionReservationAssertions.js');
+  await verifyInterventionReservation(new SqliteNotificationsRepository(db),account.user.id);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM user_notification_inbox WHERE user_id=? AND type='proactive_intervention'").get(account.user.id) as JsonObject).n,2);
+});

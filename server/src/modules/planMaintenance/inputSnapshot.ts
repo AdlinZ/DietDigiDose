@@ -21,5 +21,5 @@ export function inputSnapshot(userId: number, recipeIds: number[], data: Record<
   const ids = [...new Set(recipeIds)].sort((a,b) => a-b);
   if (ids.some(id => !Number.isSafeInteger(id) || id<=0)) throw new Error("Invalid recipe input IDs");
   const normalized = Object.fromEntries(Object.entries(data).map(([key,rows]) => [key,rows.map(row => canonical(row)).sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]));
-  return { recipeIds: ids,data,fingerprint: createHash("sha256").update(JSON.stringify(canonical({ userId,recipeIds: ids,data: normalized }))).digest("hex") };
+  return { recipeIds: ids,data: structuredClone(data),fingerprint: createHash("sha256").update(JSON.stringify(canonical({ userId,recipeIds: ids,data: normalized }))).digest("hex") };
 }

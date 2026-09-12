@@ -1565,6 +1565,16 @@ try {
 
   assert.equal((await kitchenwareRepository.listItems(user.id + 1)).length, 0);
   assert.equal(await kitchenwareRepository.findOwnedItem(user.id + 1, Number(postgresPan.id)), null);
+  await pool.query("INSERT INTO kitchenware_capabilities(code,name,safety_level) VALUES('spec_test','规格测试','normal')");
+  await pool.query("INSERT INTO kitchenware_catalog_capabilities(catalog_id,capability_code,constraints_json) VALUES($1,'spec_test',$2::jsonb)",
+    [postgresPan.catalog_id,JSON.stringify({ minCapacityMl: 3000,minDiameterCm: 28,heatSource: "induction" })]);
+  const specificationRecipe = Number((await pool.query("INSERT INTO recipes(title,ingredients_json,steps_json) VALUES('规格约束验证','[]'::jsonb,'[]'::jsonb) RETURNING id")).rows[0].id);
+  await pool.query("INSERT INTO recipe_kitchenware_requirements(recipe_id,capability_code,role,confidence) VALUES($1,'spec_test','required',1)",[specificationRecipe]);
+  assert.equal((await kitchenwareService.evaluateRequirements(user.id,specificationRecipe)).blocking.length,1);
+  await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",attributes: panAttributes });
+  assert.equal((await kitchenwareService.evaluateRequirements(user.id,specificationRecipe)).blocking.length,0);
+  await kitchenwareService.update(user.id,Number(postgresPan.id),{ name: "平底锅",attributes: { ...panAttributes,heatSources: ["gas"] } });
+  assert.equal((await kitchenwareService.evaluateRequirements(user.id,specificationRecipe)).blocking.length,1);
   const maintainedPan = await kitchenwareRepository.maintainItem(user.id, Number(postgresPan.id));
   assert.equal(maintainedPan?.status, "良好");
 

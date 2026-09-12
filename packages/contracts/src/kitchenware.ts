@@ -7,3 +7,11 @@ export const kitchenwareAttributesSchema = z.object({
     .refine(values => new Set(values).size === values.length,"热源不能重复").nullable().optional(),
 }).strict();
 export type KitchenwareAttributes = z.infer<typeof kitchenwareAttributesSchema>;
+
+/** Conditions on a catalog capability. All conditions apply to one owned device. */
+export const kitchenwareCapabilityConstraintsSchema = z.object({
+  minCapacityMl: z.number().finite().positive().max(1_000_000).optional(),
+  minDiameterCm: z.number().finite().positive().max(1_000).optional(),
+  heatSource: z.enum(["gas", "induction", "electric"]).optional(),
+}).strict();
+export type KitchenwareCapabilityConstraints = z.infer<typeof kitchenwareCapabilityConstraintsSchema>;

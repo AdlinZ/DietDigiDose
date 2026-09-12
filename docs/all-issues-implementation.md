@@ -812,3 +812,12 @@ PostgreSQL集成演练进一步覆盖完整应用模式：在源API注册两个�
 - 服务端全量 447 项、客户端 199 项、共享 contract 8 项及 OpenAPI 检查通过；三端 lint、服务端构建、Expo Web export、架构与 72 文件 SQL 边界通过。原预算通过，客户端 JavaScript 4,482,623 字节。首轮客户端架构限制失败已通过提取表单修复，测试断言的类型错误也已修复。
 - PostgreSQL 使用独立空库 issue66_attributes_20260912a 完整迁移/运行时/备份恢复演练通过，覆盖规格写入、省略保留和显式清空；无 schema 变更。日志 kitchenware-attributes-postgres.log。规格表单尚未进行浏览器/真机交互验收，容量和热源约束也尚未接入推荐条件执行，本次不宣称 #66 完成。
 - GitHub 登录仍失效，本批提交保留本地，尚未进入远端 PR/CI。
+
+### #66 能力条件执行与快照隔离（2026-09-12）
+
+- 新增共享 kitchenwareCapabilityConstraintsSchema，定义 minCapacityMl、minDiameterCm、heatSource，条件须在同一件已登记设备上全部满足。未知/格式错误/未识别条件不授予能力，显式未知规格不能替代核对；空条件保留既有无额外规格要求行为。
+- 实时 KitchenwareService 的纯能力要求改为读取完整目录能力关系，按拥有设备的 attributes_json 核对，不再只聚合能力代码。restricted/未知 safety_level 不自动授予能力；normal/caution 仍需通过其条件。指定设备与条件替代的既有语义保留，不把能力条件视为任意替代授权。
+- 计划快照复用服务的同一条件执行器。新增测试发现 inputSnapshot 返回原数据引用，后续修改会使数据脱离创建时指纹；现深拷贝捕获数据，验证后续规格变化不会修改既有快照。
+- 覆盖两设备不能拼凑规格、阈值边界、未知/不兼容热源、畸形条件、restricted 能力及 SQLite JSON 文本。SQLite HTTP 真实保存→兼容性响应验证，PostgreSQL 完整运行时验证 JSONB 条件/规格及不匹配阻断；独立空库 issue66_constraints_20260912a 完整迁移/恢复演练退出 0。
+- 服务端全量 450 项、三端 lint、共享 contract/OpenAPI、架构/SQL 边界、服务端构建通过。无数据库 schema 或生产 SQL 变更；推荐版本 rules-2026-09-12.7。日志 kitchenware-constraints-tests.log、kitchenware-constraints-lint.log、kitchenware-constraints-postgres.log。
+- 本批完成现有条件字段的执行基础，尚未补齐目录条件的管理编辑、历史错误映射治理、电器功能属性和条件替代完整验收。旧未被运行时引用的同步 evaluateKitchenwareRequirements 辅助函数也未统一此条件逻辑，后续需治理。#66 仍开放，GitHub 认证尚待恢复，提交仅本地。

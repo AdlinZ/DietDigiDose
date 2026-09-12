@@ -4502,3 +4502,24 @@ test("kitchenware specifications round-trip, preserve omitted updates and suppor
   for (const attributes of [{ capacityMl: -1 },{ diameterCm: 0 },{ heatSources: ["gas","gas"] },{ heatSources: ["unknown"] },{ untrustedCapability: "bake" }])
     assert.equal((await api(`/api/v1/kitchenware/${id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes }) })).response.status,400);
 });
+
+test("kitchenware compatibility enforces stored capability conditions on SQLite", async () => {
+  const account = await register("kitchenware-conditions@example.invalid");
+  const created = await api("/api/v1/kitchenware",{ method: "POST",token: account.token,body: JSON.stringify({ name: "平底锅" }) });
+  const pan = created.body as JsonObject;
+  db.prepare("INSERT INTO kitchenware_capabilities(code,name,safety_level) VALUES('spec_test','规格测试','normal')").run();
+  db.prepare("INSERT INTO kitchenware_catalog_capabilities(catalog_id,capability_code,constraints_json) VALUES(?,'spec_test',?)")
+    .run(pan.catalog_id,JSON.stringify({ minCapacityMl: 3000,minDiameterCm: 28,heatSource: "induction" }));
+  const recipe = Number(db.prepare("INSERT INTO recipes(title,ingredients_json,steps_json,status) VALUES('规格约束验证','[]','[]','approved')").run().lastInsertRowid);
+  db.prepare("INSERT INTO recipe_kitchenware_requirements(recipe_id,capability_code,role,confidence) VALUES(?,'spec_test','required',1)").run(recipe);
+  const compatibility = async () => {
+    const response = await api(`/api/v1/kitchenware/recipes/${recipe}/compatibility`,{ token: account.token });
+    assert.equal(response.response.status,200);
+    return response.body as JsonObject;
+  };
+  assert.equal((await compatibility()).blocking.length,1);
+  await api(`/api/v1/kitchenware/${pan.id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes: { capacityMl: 3000,diameterCm: 28,heatSources: ["induction"] } }) });
+  assert.equal((await compatibility()).blocking.length,0);
+  await api(`/api/v1/kitchenware/${pan.id}`,{ method: "PUT",token: account.token,body: JSON.stringify({ name: "平底锅",attributes: { capacityMl: 2999,diameterCm: 28,heatSources: ["induction"] } }) });
+  assert.equal((await compatibility()).blocking.length,1);
+});

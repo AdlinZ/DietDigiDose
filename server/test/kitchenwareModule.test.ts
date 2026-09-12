@@ -87,11 +87,48 @@ describe("kitchenware module", () => {
     const service = new KitchenwareService(repository({
       requirementsForRecipe: async () => [{ role: "required",catalog_id: catalogId,capability_code: "boil",confidence: 1 }],
       ownedItems: async () => [{ id: 7,name: "其他煮炖设备",catalog_id: 2 }],
-      capabilityCodesForCatalogIds: async () => ["boil"],
+      capabilitiesForCatalog: async () => [{ code: "boil", safety_level: "normal", constraints_json: {} }],
       substitutionFor: async () => null,
     }));
     assert.equal((await service.evaluateRequirements(1,99)).blocking.length,1);
     catalogId = null;
     assert.equal((await service.evaluateRequirements(1,99)).blocking.length,0);
   });
+});
+
+test("capability conditions require one verified device and reject malformed or restricted rules", async () => {
+  let attributes: Record<string,unknown>[] = [{ capacityMl: 3000 }, { diameterCm: 28,heatSources: ["induction"] }];
+  let constraints: unknown = { minCapacityMl: 3000,minDiameterCm: 28,heatSource: "induction" };
+  let safety = "normal";
+  const service = new KitchenwareService(repository({
+    requirementsForRecipe: async () => [{ role: "required",catalog_id: null,capability_code: "fry",confidence: 1 }],
+    ownedItems: async () => attributes.map((value,index) => ({ id: index+1,name: "平底锅",catalog_id: 1,attributes_json: value })),
+    capabilitiesForCatalog: async () => [{ code: "fry",safety_level: safety,constraints_json: constraints }],
+  }));
+  const blocked = async () => (await service.evaluateRequirements(1,99)).blocking.length;
+  assert.equal(await blocked(),1,"cannot pool specifications across two devices");
+  attributes = [{ capacityMl: 3000,diameterCm: 28,heatSources: ["induction"] }];
+  assert.equal(await blocked(),0,"inclusive boundary passes");
+  attributes[0].capacityMl = 2999;
+  assert.equal(await blocked(),1);
+  attributes[0].capacityMl = 3000;
+  attributes[0].heatSources = null;
+  assert.equal(await blocked(),1,"unknown heat source does not pass");
+  attributes[0].heatSources = ["gas"];
+  assert.equal(await blocked(),1,"incompatible heat source does not pass");
+  attributes[0].heatSources = ["induction"];
+  for (const invalid of ["broken-json",null,[],{ unsupportedCondition: true },{ minCapacityMl: -1 }]) {
+    constraints = invalid;
+    assert.equal(await blocked(),1);
+  }
+  constraints = JSON.stringify({ minCapacityMl: 3000 });
+  assert.equal(await blocked(),0,"SQLite JSON text is supported");
+  safety = "restricted";
+  assert.equal(await blocked(),1);
+  safety = "unrecognized";
+  assert.equal(await blocked(),1);
+  safety = "caution";
+  constraints = {};
+  attributes = [{}];
+  assert.equal(await blocked(),0,"unconditional capabilities retain existing behavior");
 });

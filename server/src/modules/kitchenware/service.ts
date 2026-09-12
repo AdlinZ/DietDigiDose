@@ -1,3 +1,4 @@
+import { satisfiesCapabilityConstraints } from "./capabilityConstraints.js";
 import { kitchenwareAttributesSchema } from "@dietdigidose/contracts";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
 import { KitchenwareError } from "./errors.js";
@@ -107,13 +108,23 @@ export class KitchenwareService {
     const catalog = await this.repository.listCatalog();
     const trustedCatalogIds = new Set(catalog.map(item => Number(item.id)));
     const ownedCatalogIds = new Set<number>();
+    const ownedByCatalog = new Map<number, Row[]>();
     for (const item of owned) {
-      if (item.catalog_id) {
-        if (trustedCatalogIds.has(Number(item.catalog_id))) ownedCatalogIds.add(Number(item.catalog_id));
+      const resolved = item.catalog_id ? Number(item.catalog_id) : await this.resolveCatalog(String(item.name), catalog)
+        .then(value => value?.confidence === 1 ? value.id : null);
+      if (resolved && trustedCatalogIds.has(resolved)) {
+        ownedCatalogIds.add(resolved);
+        ownedByCatalog.set(resolved, [...(ownedByCatalog.get(resolved) ?? []), item]);
       }
-      else {
-        const resolved = await this.resolveCatalog(String(item.name), catalog);
-        if (resolved?.confidence === 1) ownedCatalogIds.add(resolved.id);
+    }
+    const capabilities = new Set<string>();
+    if (requirements.some(requirement => !requirement.catalogId && requirement.capabilityCode)) {
+      for (const [catalogId, devices] of ownedByCatalog) {
+        for (const capability of await this.repository.capabilitiesForCatalog(catalogId)) {
+          if (!["normal", "caution"].includes(String(capability.safety_level))) continue;
+          if (devices.some(device => satisfiesCapabilityConstraints(capability.constraints_json, device.attributes_json)))
+            capabilities.add(String(capability.code));
+        }
       }
     }
     const evaluated = await Promise.all(requirements.map(async (requirement) => {
@@ -122,9 +133,7 @@ export class KitchenwareService {
       const exact = Boolean(requirement.catalogId && ownedCatalogIds.has(requirement.catalogId));
       // A named device is a device requirement, even when its capability is
       // annotated. Only a capability-only requirement permits generic matching.
-      const capabilities = !requirement.catalogId && requirement.capabilityCode
-        ? await this.repository.capabilityCodesForCatalogIds([...ownedCatalogIds]) : [];
-      const capability = Boolean(requirement.capabilityCode && capabilities.includes(requirement.capabilityCode));
+      const capability = Boolean(!requirement.catalogId && requirement.capabilityCode && capabilities.has(requirement.capabilityCode));
       if (exact || capability) return { ...requirement, satisfied: true, substitution: null };
       if (!requirement.catalogId || ownedCatalogIds.size === 0) return { ...requirement, satisfied: false, substitution: null };
       const substitution = await this.repository.substitutionFor(requirement.catalogId, [...ownedCatalogIds]);

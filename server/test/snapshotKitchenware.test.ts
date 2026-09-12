@@ -10,6 +10,7 @@ function fixture() {
     { id: 1,name: "蒸锅",category: "锅具",quality_status: "trusted",aliases: ["蒸笼"] },
     { id: 2,name: "电饭煲",category: "电器",quality_status: "trusted",aliases: [] },
   ];
+  data.kitchenware_capabilities = [{ code: "steam", safety_level: "caution" }];
   data.kitchenware_items = [{ id: 1,user_id: 1,name: "蒸笼",catalog_id: null,status: "常用" }];
   data.recipes = [{ id: 10,status: "approved" }];
   data.recipe_kitchenware_requirements = [{ id: 1,recipe_id: 10,catalog_id: 1,role: "required",confidence: 1 }];
@@ -34,14 +35,14 @@ test("repair status, required capabilities and forbidden substitutions remain en
   assert.equal((await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10)).blocking.length,0);
   data.kitchenware_substitutions[0].relation_type = "conditional";
   data.recipe_kitchenware_requirements[0].capability_code = "steam";
-  data.kitchenware_catalog_capabilities = [{ catalog_id: 2,capability_code: "steam" }];
+  data.kitchenware_catalog_capabilities = [{ catalog_id: 2,capability_code: "steam", constraints_json: {} }];
   const conditional = await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10);
   assert.equal(conditional.blocking.length,1);
   assert.equal(conditional.requirements[0].substitution?.relationType,"conditional");
   data.kitchenware_substitutions = [];
   data.recipe_kitchenware_requirements[0].catalog_id = null;
   data.recipe_kitchenware_requirements[0].capability_code = "steam";
-  data.kitchenware_catalog_capabilities = [{ catalog_id: 2,capability_code: "steam" }];
+  data.kitchenware_catalog_capabilities = [{ catalog_id: 2,capability_code: "steam", constraints_json: {} }];
   assert.equal((await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10)).blocking.length,0);
 });
 
@@ -58,7 +59,7 @@ test("withdrawn catalog entries cannot supply capabilities or satisfy retired re
   data.recipe_kitchenware_requirements[0].catalog_id = null;
   data.kitchenware_items = [{ id: 2,user_id: 1,name: "电饭煲",catalog_id: 2,status: "常用" }];
   data.recipe_kitchenware_requirements[0].capability_code = "steam";
-  data.kitchenware_catalog_capabilities = [{ catalog_id: 2,capability_code: "steam" }];
+  data.kitchenware_catalog_capabilities = [{ catalog_id: 2,capability_code: "steam", constraints_json: {} }];
   assert.equal((await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10)).blocking.length,0);
   data.kitchenware_catalog[1].quality_status = "needs_review";
   assert.equal((await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10)).blocking.length,1);
@@ -66,4 +67,18 @@ test("withdrawn catalog entries cannot supply capabilities or satisfy retired re
   data.recipe_kitchenware_requirements[0].catalog_id = 1;
   data.kitchenware_catalog[0].quality_status = "needs_review";
   assert.equal((await snapshotKitchenware(inputSnapshot(1,[10],data)).evaluateRequirements(1,10)).blocking.length,1);
+});
+
+test("capability constraints use captured device specifications and change the snapshot fingerprint", async () => {
+  const data = fixture();
+  data.recipe_kitchenware_requirements[0].catalog_id = null;
+  data.recipe_kitchenware_requirements[0].capability_code = "steam";
+  data.kitchenware_catalog_capabilities = [{ catalog_id: 1,capability_code: "steam",constraints_json: { minCapacityMl: 2000 } }];
+  const initial = inputSnapshot(1,[10],data);
+  assert.equal((await snapshotKitchenware(initial).evaluateRequirements(1,10)).blocking.length,1);
+  data.kitchenware_items[0].attributes_json = { capacityMl: 2000 };
+  const verified = inputSnapshot(1,[10],data);
+  assert.notEqual(initial.fingerprint,verified.fingerprint);
+  assert.equal((await snapshotKitchenware(verified).evaluateRequirements(1,10)).blocking.length,0);
+  assert.equal((await snapshotKitchenware(initial).evaluateRequirements(1,10)).blocking.length,1);
 });

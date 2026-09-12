@@ -197,8 +197,8 @@ export function evaluateKitchenwareRequirements(userId: number, recipeId: number
 
   for (const item of owned) {
     const maybeCatalogId = (item as Row & { catalog_id?: unknown }).catalog_id;
-    const resolved = maybeCatalogId ? { id: Number(maybeCatalogId) } : resolveKitchenwareCatalog(String(item.name));
-    if (!resolved) continue;
+    const resolved = maybeCatalogId ? { id: Number(maybeCatalogId), confidence: 1 } : resolveKitchenwareCatalog(String(item.name));
+    if (!resolved || resolved.confidence !== 1) continue;
     ownedCatalogIds.add(resolved.id);
 
     let rows: Array<{ capability_code: string }> = [];
@@ -240,7 +240,7 @@ export function evaluateKitchenwareRequirements(userId: number, recipeId: number
 
     return {
       ...requirement,
-      satisfied: Boolean(substitution),
+      satisfied: substitution?.relation_type === "equivalent",
       substitution: substitution ? {
         name: String(substitution.name), relationType: String(substitution.relation_type),
         impact: parseObject(substitution.impact_json), safetyNote: String(substitution.safety_note || ""),

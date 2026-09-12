@@ -1376,7 +1376,7 @@ describe("user data isolation", () => {
     });
     const compatibility = await api(`/api/v1/kitchenware/recipes/${recipeId}/compatibility`, { token: first.token });
     assert.equal(compatibility.response.status, 200);
-    assert.equal((compatibility.body as JsonObject).blocking.length, 0);
+    assert.equal((compatibility.body as JsonObject).blocking.length, 1);
     assert.equal((compatibility.body as JsonObject).requirements[0].substitution.name, "烤箱");
     assert.equal((compatibility.body as JsonObject).requirements[0].substitution.relationType, "conditional");
     db.prepare("DELETE FROM recipes WHERE id = ?").run(recipeId);

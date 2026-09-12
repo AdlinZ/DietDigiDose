@@ -42,10 +42,10 @@ export class KitchenwareService {
     const input = this.normalizeInput(body);
     this.validate(input);
     const catalog = await this.resolveCatalog(input.name);
-    if (!catalog || catalog.confidence < 0.7) {
+    if (!catalog || catalog.confidence < 1) {
       await this.enqueueReview(input.name, "user_kitchenware", userId, catalog?.confidence || 0, catalog?.id || null);
     }
-    return this.repository.createItem(userId, this.storedInput(input, catalog));
+    return this.repository.createItem(userId, this.storedInput(input, catalog?.confidence === 1 ? catalog : null));
   }
 
   async update(userId: number, id: number, body: Row) {
@@ -53,10 +53,10 @@ export class KitchenwareService {
     const input = this.normalizeInput(body);
     this.validate(input);
     const catalog = await this.resolveCatalog(input.name);
-    if (!catalog || catalog.confidence < 0.7) {
+    if (!catalog || catalog.confidence < 1) {
       await this.enqueueReview(input.name, "user_kitchenware", id, catalog?.confidence || 0, catalog?.id || null);
     }
-    const item = await this.repository.updateItem(userId, id, this.storedInput(input, catalog));
+    const item = await this.repository.updateItem(userId, id, this.storedInput(input, catalog?.confidence === 1 ? catalog : null));
     if (!item) throw new KitchenwareError(404, "厨具不存在或无权修改");
     return item;
   }
@@ -109,7 +109,7 @@ export class KitchenwareService {
       if (item.catalog_id) ownedCatalogIds.add(Number(item.catalog_id));
       else {
         const resolved = await this.resolveCatalog(String(item.name), catalog);
-        if (resolved) ownedCatalogIds.add(resolved.id);
+        if (resolved?.confidence === 1) ownedCatalogIds.add(resolved.id);
       }
     }
     const ownedCapabilities = new Set(await this.repository.capabilityCodesForCatalogIds([...ownedCatalogIds]));
@@ -121,7 +121,7 @@ export class KitchenwareService {
       const substitution = await this.repository.substitutionFor(requirement.catalogId, [...ownedCatalogIds]);
       return {
         ...requirement,
-        satisfied: Boolean(substitution),
+        satisfied: substitution?.relation_type === "equivalent",
         substitution: substitution ? {
           name: String(substitution.name), relationType: String(substitution.relation_type),
           impact: parseJson(substitution.impact_json, {}), safetyNote: String(substitution.safety_note || ""),

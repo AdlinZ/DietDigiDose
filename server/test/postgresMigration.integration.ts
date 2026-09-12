@@ -1606,7 +1606,7 @@ try {
     name: "烤箱", category: "小家电", status: "良好", note: "", image_url: "", purchase_date: "",
   });
   const postgresCompatibility = await kitchenwareService.compatibility(user.id, kitchenwareRecipeId);
-  assert.equal(postgresCompatibility.blocking.length, 0);
+  assert.equal(postgresCompatibility.blocking.length, 1);
   assert.equal(postgresCompatibility.requirements[0]?.substitution?.name, "烤箱");
   assert.equal(await kitchenwareRepository.removeItem(user.id + 1, Number(postgresPan.id)), false);
   assert.equal(await kitchenwareRepository.removeItem(user.id, Number(postgresPan.id)), true);

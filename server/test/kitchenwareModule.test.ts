@@ -34,7 +34,7 @@ describe("kitchenware module", () => {
     });
   });
 
-  test("accepts governed substitutions for required equipment", async () => {
+  test("conditional substitutions remain suggestions until their conditions are verified", async () => {
     const service = new KitchenwareService(repository({
       recipeAvailable: async () => true,
       requirementsForRecipe: async () => [{ role: "required", catalog_id: 2, catalog_name: "空气炸锅", confidence: 1, notes: "" }],
@@ -43,7 +43,30 @@ describe("kitchenware module", () => {
       substitutionFor: async () => ({ name: "烤箱", relation_type: "conditional", impact_json: { time: "延长" }, safety_note: "检查温度" }),
     }));
     const result = await service.compatibility(7, 99);
-    assert.equal(result.blocking.length, 0);
+    assert.equal(result.blocking.length, 1);
     assert.equal(result.requirements[0]?.substitution?.name, "烤箱");
+    assert.equal(result.requirements[0]?.substitution?.safetyNote, "检查温度");
+  });
+
+  test("partial names are reviewed without assigning ownership of the suggested catalog device", async () => {
+    const reviews: unknown[] = []; const saved: Record<string,unknown>[] = [];
+    const service = new KitchenwareService(repository({
+      upsertMappingReview: async input => { reviews.push(input); },
+      createItem: async (_userId,input) => { saved.push(input); return input; },
+      findOwnedItem: async () => ({ id: 4 }),
+      updateItem: async (_userId,_id,input) => { saved.push(input); return input; },
+      requirementsForRecipe: async () => [{ role: "required",catalog_id: 1,catalog_name: "平底锅",confidence: 1 }],
+      ownedItems: async () => [{ id: 4,name: "迷你平底锅玩具",catalog_id: null }],
+      capabilityCodesForCatalogIds: async ids => { assert.deepEqual(ids,[]); return []; },
+    }));
+    await service.create(7,{ name: "迷你平底锅玩具" });
+    await service.update(7,4,{ name: "迷你平底锅玩具" });
+    assert.equal(reviews.length,2);
+    assert(saved.every(item => item.catalogId === null && item.name === "迷你平底锅玩具"));
+    assert.equal((await service.evaluateRequirements(7,99)).blocking.length,1);
+    await service.create(7,{ name: "不粘锅" });
+    assert.equal(saved[2].catalogId,1);
+    assert.equal(saved[2].name,"平底锅");
+    assert.equal(reviews.length,2);
   });
 });

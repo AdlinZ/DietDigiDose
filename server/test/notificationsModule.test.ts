@@ -203,3 +203,57 @@ test("scan checkpoints resume after restart, bound each batch, and refuse lost o
     if (flag===undefined) delete process.env.PROACTIVE_INTERVENTIONS_ENABLED;else process.env.PROACTIVE_INTERVENTIONS_ENABLED = flag;
   }
 });
+
+test("a timed-out account advances the cursor without allowing a late snapshot to create candidates", async () => {
+  const { scanInterventions } = await import("../src/modules/interventions/scan.js");
+  const { defaultInterventionPreferences } = await import("@dietdigidose/contracts");
+  const originalFlag = process.env.PROACTIVE_INTERVENTIONS_ENABLED;
+  process.env.PROACTIVE_INTERVENTIONS_ENABLED = "1";
+  let cursor = 0,writes = 0;
+  let release!: (value: Awaited<ReturnType<import("../src/modules/recommendations/service.js").RecommendationsService["interventionSnapshot"]>>) => void;
+  const pending = new Promise<Awaited<ReturnType<import("../src/modules/recommendations/service.js").RecommendationsService["interventionSnapshot"]>>>(resolve => { release = resolve; });
+  const repo = repository({ interventionScanCursor: async () => cursor,advanceInterventionScan: async (_old,next) => { cursor=next;return true; },
+    interventionScanUsers: async after => [1,2].filter(id => id>after),
+    interventionPreferences: async () => ({ ...defaultInterventionPreferences,enabled: true,expiry_rescue: true,version: 1 }),
+    reserveIntervention: async () => { writes+=1;return {}; },
+  });
+  const empty = { dates: [],items: [],plans: [],inventory: [],recommendations: [] };
+  const engine = { interventionSnapshot: async (id: number) => id===1 ? pending : empty };
+  const context = { runId: "slow",taskName: "intervention-scan" as const,leaseOwnerId: "owner",signal: new AbortController().signal,assertActive: async () => {} };
+  try {
+    assert.deepEqual(await scanInterventions(repo,engine,context,5),{ scanned: 0,candidates: 0,failed: 1 });
+    assert.equal(cursor,1);
+    assert.deepEqual(await scanInterventions(repo,engine,context,100),{ scanned: 1,candidates: 0,failed: 0 });
+    const { interventionDates } = await import("../src/modules/interventions/snapshot.js");
+    const dates = interventionDates(Date.now(),"Asia/Shanghai");
+    release({ ...empty,dates,inventory: [{ id: 9,userId: 1,expirationDate: dates[1],available: true,deleted: false,remaining: 2 }],
+      recommendations: [{ recipeId: 1,quality: 0.9,hardConstraintsPassed: true,inventoryIds: [9] }] });
+    await pending;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(writes,0);
+  } finally {
+    release(empty);
+    if (originalFlag===undefined) delete process.env.PROACTIVE_INTERVENTIONS_ENABLED;else process.env.PROACTIVE_INTERVENTIONS_ENABLED = originalFlag;
+  }
+});
+
+test("worker cancellation interrupts account reads without advancing the scan cursor", async () => {
+  const { scanInterventions } = await import("../src/modules/interventions/scan.js");
+  const flag = process.env.PROACTIVE_INTERVENTIONS_ENABLED;
+  process.env.PROACTIVE_INTERVENTIONS_ENABLED = "1";
+  const controller = new AbortController();
+  let checkpoints = 0,compute = 0,release!: (row: null) => void;
+  const pending = new Promise<null>(resolve => { release=resolve; });
+  const context = { runId: "cancel",taskName: "intervention-scan" as const,leaseOwnerId: "owner",signal: controller.signal,assertActive: async () => { controller.signal.throwIfAborted(); } };
+  const service = createNotificationsService(repository({ interventionScanUsers: async () => [1],interventionPreferences: async () => { controller.abort(new Error("worker stopped"));return pending; },
+    advanceInterventionScan: async () => { checkpoints+=1;return true; },
+  }),{ interventionSnapshot: async () => { compute+=1;return { dates: [],items: [],plans: [],inventory: [],recommendations: [] }; } });
+  try {
+    await assert.rejects(service.scanInterventions(context),/worker stopped/);
+    release(null);await pending;
+    assert.equal(checkpoints,0);assert.equal(compute,0);
+  } finally {
+    release(null);
+    if (flag===undefined) delete process.env.PROACTIVE_INTERVENTIONS_ENABLED;else process.env.PROACTIVE_INTERVENTIONS_ENABLED = flag;
+  }
+});

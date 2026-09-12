@@ -1,3 +1,4 @@
+import { InterventionReadTimeout, withInterventionReadDeadline } from "./readDeadline.js";
 import type { NotificationsRepository } from "../notifications/repository.js";
 import type { RecommendationsService } from "../recommendations/service.js";
 import type { WorkerTaskContext } from "../worker/types.js";
@@ -5,7 +6,7 @@ import { interventionDinnerState } from "./snapshot.js";
 import { interventionOpportunities } from "./opportunities.js";
 import { formatInterventionPreferences } from "./preferences.js";
 
-export async function scanInterventions(repository: NotificationsRepository,recommendations: Pick<RecommendationsService,"interventionSnapshot">,context: WorkerTaskContext) {
+export async function scanInterventions(repository: NotificationsRepository,recommendations: Pick<RecommendationsService,"interventionSnapshot">,context: WorkerTaskContext,readTimeoutMs = 10_000) {
   const result = { scanned: 0,candidates: 0,failed: 0 };
   if (process.env.PROACTIVE_INTERVENTIONS_ENABLED !== "1") return result;
   await context.assertActive();context.signal.throwIfAborted();
@@ -20,12 +21,20 @@ export async function scanInterventions(repository: NotificationsRepository,reco
   for (const userId of users) {
     await context.assertActive();context.signal.throwIfAborted();
     if (process.env.PROACTIVE_INTERVENTIONS_ENABLED !== "1") return result;
+    let timedOut = false;
     try {
-      const row = await repository.interventionPreferences(userId);
-      const { version: _version,...preferences } = formatInterventionPreferences(row);
-      if (!preferences.enabled) { await checkpoint(userId);continue; }
-      const observedAt = Date.now();
-      const [snapshot,queue] = await Promise.all([recommendations.interventionSnapshot(userId,observedAt,preferences.time_zone),repository.interventionQueue(userId)]);
+      const data = await withInterventionReadDeadline(async signal => {
+        const row = await repository.interventionPreferences(userId);
+        signal.throwIfAborted();
+        const { version: _version,...preferences } = formatInterventionPreferences(row);
+        if (!preferences.enabled) return null;
+        const observedAt = Date.now();
+        const [snapshot,queue] = await Promise.all([recommendations.interventionSnapshot(userId,observedAt,preferences.time_zone),repository.interventionQueue(userId)]);
+        signal.throwIfAborted();
+        return { row,preferences,observedAt,snapshot,queue };
+      },context.signal,readTimeoutMs);
+      if (!data) { await checkpoint(userId);continue; }
+      const { row,preferences,observedAt,snapshot,queue } = data;
       const state = interventionDinnerState(snapshot.dates,preferences.time_zone,snapshot.items,snapshot.plans,queue,typeof row?.not_cooking_date === "string" ? row.not_cooking_date : null);
       const candidates = interventionOpportunities({ userId,now: Date.now(),dataObservedAt: observedAt,preferences,
         inventory: snapshot.inventory,recommendations: snapshot.recommendations,...state });
@@ -38,11 +47,14 @@ export async function scanInterventions(repository: NotificationsRepository,reco
         result.candidates += 1;
       }
       result.scanned += 1;
-    } catch {
+    } catch (error) {
       await context.assertActive();context.signal.throwIfAborted();
       result.failed += 1;
+      timedOut = error instanceof InterventionReadTimeout;
     }
     await checkpoint(userId);
+    // Stop this batch after a slow account; the next run resumes after it without accumulating more abandoned reads.
+    if (timedOut) return result;
   }
   if (users.length<25) await checkpoint(0);
   return result;

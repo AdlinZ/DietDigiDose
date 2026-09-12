@@ -13,6 +13,8 @@ import type {
 } from "./types.js";
 
 export interface NotificationsRepository {
+  interventionPreferences(userId: number): Promise<Record<string,unknown> | null>;
+  saveInterventionPreferences(userId: number,input: import("@dietdigidose/contracts").InterventionPreferencesUpdate): Promise<Record<string,unknown> | null>;
   preferences(userId: number): Promise<NotificationPreferences | null>;
   savePreferences(userId: number, preferences: NotificationPreferences): Promise<void>;
   saveDevice(userId: number, token: string, platform: string): Promise<void>;

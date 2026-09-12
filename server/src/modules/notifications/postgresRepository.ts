@@ -10,6 +10,20 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async interventionPreferences(userId: number) { return (await this.pool.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[userId])).rows[0] ?? null; }
+  async saveInterventionPreferences(userId: number,input: import("@dietdigidose/contracts").InterventionPreferencesUpdate) {
+    return this.tx(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[userId]);
+      const current = (await client.query("SELECT version FROM proactive_intervention_preferences WHERE user_id=$1",[userId])).rows[0];
+      if (Number(current?.version ?? 0) !== input.version) return null;
+      const result = await client.query(`INSERT INTO proactive_intervention_preferences(user_id,enabled,expiry_rescue,dinner_window,time_zone,quiet_start,quiet_end,dinner_time,dinner_lead_minutes,daily_push_limit,cooldown_minutes,version)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,expiry_rescue=excluded.expiry_rescue,dinner_window=excluded.dinner_window,time_zone=excluded.time_zone,quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,dinner_time=excluded.dinner_time,dinner_lead_minutes=excluded.dinner_lead_minutes,daily_push_limit=excluded.daily_push_limit,cooldown_minutes=excluded.cooldown_minutes,version=excluded.version,updated_at=CURRENT_TIMESTAMP RETURNING *`,
+        [userId,Number(input.enabled),Number(input.expiry_rescue),Number(input.dinner_window),input.time_zone,input.quiet_start,input.quiet_end,input.dinner_time,input.dinner_lead_minutes,input.daily_push_limit,input.cooldown_minutes,input.version+1]);
+      await client.query(`UPDATE proactive_interventions SET delivery_state='cancelled',lease_owner=NULL,lease_until=NULL,updated_at=CURRENT_TIMESTAMP
+        WHERE user_id=$1 AND delivery_state='pending' AND ($2=0 OR (kind='expiry_rescue' AND $3=0) OR (kind='dinner_window' AND $4=0))`,[userId,Number(input.enabled),Number(input.expiry_rescue),Number(input.dinner_window)]);
+      return result.rows[0];
+    });
+  }
   async preferences(userId: number) {
     const row = (await this.pool.query(`SELECT expiring_alert,meal_reminder,water_reminder,breakfast_time,lunch_time,dinner_time,
       water_start_time,water_end_time,water_interval_minutes,quiet_start_time,quiet_end_time,weekdays_enabled,weekends_enabled

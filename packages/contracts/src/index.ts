@@ -12,3 +12,4 @@ export * from "./planMaintenance.ts";
 export * from "./householdDining.ts";
 
 export * from "./kitchenware.ts";
+export * from "./interventions.ts";

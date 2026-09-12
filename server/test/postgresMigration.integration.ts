@@ -1945,6 +1945,18 @@ try {
   if (postgresRegistration.status === "created") {
     const notificationUserId = postgresRegistration.userId;
     const notificationsRepository = new PostgresNotificationsRepository(pool);
+    const { defaultInterventionPreferences } = await import("@dietdigidose/contracts");
+    const currentInterventionPreferences = await notificationsRepository.interventionPreferences(user.id);
+    const preferenceInput = { ...defaultInterventionPreferences,enabled: true,expiry_rescue: true,version: Number(currentInterventionPreferences?.version ?? 0) };
+    const concurrentPreferenceChanges = await Promise.all([
+      notificationsRepository.saveInterventionPreferences(user.id,preferenceInput),
+      notificationsRepository.saveInterventionPreferences(user.id,preferenceInput),
+    ]);
+    assert.equal(concurrentPreferenceChanges.filter(Boolean).length,1);
+    await pool.query("UPDATE proactive_interventions SET delivery_state='pending' WHERE id='pg-intervention'");
+    assert(await notificationsRepository.saveInterventionPreferences(user.id,{ ...preferenceInput,enabled: false,version: preferenceInput.version+1 }));
+    assert.equal((await pool.query("SELECT delivery_state FROM proactive_interventions WHERE id='pg-intervention'")).rows[0].delivery_state,'cancelled');
+
     const notificationsService = createNotificationsService(notificationsRepository);
     const preferences = { ...await notificationsService.preferences(notificationUserId), breakfast_time: "07:30", expiring_alert: true };
     await notificationsService.savePreferences(notificationUserId, preferences);

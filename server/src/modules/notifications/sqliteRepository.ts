@@ -14,6 +14,20 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
 
+  async interventionPreferences(userId: number) { return (this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as Record<string,unknown> | undefined) ?? null; }
+  async saveInterventionPreferences(userId: number,input: import("@dietdigidose/contracts").InterventionPreferencesUpdate) {
+    return this.database.transaction(() => {
+      const current = this.database.prepare("SELECT version FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as {version:number} | undefined;
+      if ((current?.version ?? 0) !== input.version) return null;
+      this.database.prepare(`INSERT INTO proactive_intervention_preferences(user_id,enabled,expiry_rescue,dinner_window,time_zone,quiet_start,quiet_end,dinner_time,dinner_lead_minutes,daily_push_limit,cooldown_minutes,version)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,expiry_rescue=excluded.expiry_rescue,dinner_window=excluded.dinner_window,time_zone=excluded.time_zone,quiet_start=excluded.quiet_start,quiet_end=excluded.quiet_end,dinner_time=excluded.dinner_time,dinner_lead_minutes=excluded.dinner_lead_minutes,daily_push_limit=excluded.daily_push_limit,cooldown_minutes=excluded.cooldown_minutes,version=excluded.version,updated_at=CURRENT_TIMESTAMP`)
+        .run(userId,Number(input.enabled),Number(input.expiry_rescue),Number(input.dinner_window),input.time_zone,input.quiet_start,input.quiet_end,input.dinner_time,input.dinner_lead_minutes,input.daily_push_limit,input.cooldown_minutes,input.version+1);
+      this.database.prepare(`UPDATE proactive_interventions SET delivery_state='cancelled',lease_owner=NULL,lease_until=NULL,updated_at=CURRENT_TIMESTAMP
+        WHERE user_id=? AND delivery_state='pending' AND (?=0 OR (kind='expiry_rescue' AND ?=0) OR (kind='dinner_window' AND ?=0))`)
+        .run(userId,Number(input.enabled),Number(input.expiry_rescue),Number(input.dinner_window));
+      return this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as Record<string,unknown>;
+    })();
+  }
   async preferences(userId: number) {
     const row = this.database.prepare(`SELECT expiring_alert,meal_reminder,water_reminder,breakfast_time,lunch_time,dinner_time, water_start_time,water_end_time,water_interval_minutes,quiet_start_time,quiet_end_time,weekdays_enabled,weekends_enabled FROM user_notification_preferences WHERE user_id=?`).get(userId) as PreferenceRow | undefined;
     return row ? this.preference(row) : null;

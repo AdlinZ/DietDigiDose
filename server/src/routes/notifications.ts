@@ -1,3 +1,4 @@
+import { interventionPreferencesUpdateSchema } from "@dietdigidose/contracts";
 import { Router, type NextFunction, type Response } from "express";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
@@ -15,6 +16,13 @@ router.use(authMiddleware);
 function run<T>(promise: Promise<T>, res: Response, next: NextFunction, respond: (value: T) => void) {
   void promise.then(respond).catch(next);
 }
+
+router.get("/intervention-preferences", (req: AuthRequest,res,next) =>
+  run(notificationsService().interventionPreferences(req.userId!),res,next,value => res.json(value)));
+router.put("/intervention-preferences", validateBody(interventionPreferencesUpdateSchema), (req: AuthRequest,res,next) =>
+  run(notificationsService().saveInterventionPreferences(req.userId!,req.body),res,next,value => {
+    if (!value) res.status(409).json({ error: "干预设置已变化，请重新加载后修改" }); else res.json(value);
+  }));
 
 router.get("/preferences", (req: AuthRequest, res, next) =>
   run(notificationsService().preferences(req.userId!), res, next, (value) => res.json(value)));

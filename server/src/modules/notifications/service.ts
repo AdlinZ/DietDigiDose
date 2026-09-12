@@ -1,3 +1,5 @@
+import { formatInterventionPreferences } from "../interventions/preferences.js";
+import type { InterventionPreferencesUpdate } from "@dietdigidose/contracts";
 import { currentDateKey, dateKeyAfterDays } from "../../utils/date.js";
 import { fetchWithTimeout } from "../../utils/fetchWithTimeout.js";
 import type { NotificationsRepository } from "./repository.js";
@@ -84,6 +86,11 @@ export function createNotificationsService(repository: NotificationsRepository) 
   }
 
   return {
+    async interventionPreferences(userId: number) { return formatInterventionPreferences(await repository.interventionPreferences(userId)); },
+    async saveInterventionPreferences(userId: number,input: InterventionPreferencesUpdate) {
+      const row = await repository.saveInterventionPreferences(userId,input);
+      return row ? formatInterventionPreferences(row) : null;
+    },
     async preferences(userId: number) { return (await repository.preferences(userId)) ?? DEFAULT_NOTIFICATION_PREFERENCES; },
     async savePreferences(userId: number, preferences: NotificationPreferences) { await repository.savePreferences(userId, preferences); return preferences; },
     async saveDevice(userId: number, token: string, platform: string) { await repository.saveDevice(userId, token, platform); },

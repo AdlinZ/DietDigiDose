@@ -4581,3 +4581,26 @@ test("proactive intervention schema preserves defaults, dedupe and account owner
   const saved = db.prepare("SELECT status,delivery_state FROM proactive_interventions WHERE id='schema-intervention'").get();
   assert.deepEqual(saved,{ status: 'candidate',delivery_state: 'none' });
 });
+
+test("intervention preference API requires explicit consent and cancels pending disabled deliveries", async () => {
+  const account = await register("int-prefs@example.invalid");
+  const other = await register("int-prefs-other@example.invalid");
+  const url = "/api/v1/notifications/intervention-preferences";
+  assert.equal((await api(url)).response.status,401);
+  const defaults = (await api(url,{ token: account.token })).body as JsonObject;
+  assert.equal(defaults.enabled,false);assert.equal(defaults.expiry_rescue,false);assert.equal(defaults.dinner_window,false);assert.equal(defaults.version,0);
+  const put = (body: unknown) => api(url,{ method: "PUT",token: account.token,body: JSON.stringify(body) });
+  for (const patch of [{ time_zone: 'invalid/zone' },{ quiet_start: '24:00' },{ daily_push_limit: 4 },{ enabled: 1 },{ user_id: other.user.id }])
+    assert.equal((await put({ ...defaults,...patch })).response.status,400);
+  const enabled = { ...defaults,enabled: true,expiry_rescue: true,dinner_window: true };
+  assert.equal((await put(enabled)).response.status,200);
+  assert.equal((await put(enabled)).response.status,409);
+  assert.equal(((await api(url,{ token: other.token })).body as JsonObject).enabled,false);
+  db.prepare(`INSERT INTO proactive_interventions(id,user_id,source_key,kind,candidate_json,starts_at,expires_at,delivery_state)
+    VALUES('prefs-pending',?,'prefs-source','expiry_rescue','{}','2026-09-12','2026-09-13','pending')`).run(account.user.id);
+  const disabled = await put({ ...enabled,version: 1,expiry_rescue: false });
+  assert.equal(disabled.response.status,200);assert.equal((disabled.body as JsonObject).version,2);
+  assert.equal((db.prepare("SELECT delivery_state FROM proactive_interventions WHERE id='prefs-pending'").get() as JsonObject).delivery_state,'cancelled');
+  const read = (await api(url,{ token: account.token })).body as JsonObject;
+  assert.equal(read.expiry_rescue,false);assert.equal(read.dinner_window,true);
+});

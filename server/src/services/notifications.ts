@@ -16,3 +16,7 @@ export function sendExpiringInventoryNotifications() {
 export function sendInterventions(context: import("../modules/worker/types.js").WorkerTaskContext) {
   return notificationsService().sendInterventions(context);
 }
+
+export function scanInterventions(context: import("../modules/worker/types.js").WorkerTaskContext) {
+  return notificationsService().scanInterventions(context);
+}

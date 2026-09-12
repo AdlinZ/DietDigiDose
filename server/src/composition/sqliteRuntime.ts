@@ -131,7 +131,7 @@ export function initializeSqliteApplication(): ApplicationRuntime {
 
 export function initializeSqliteWorker(): WorkerRuntimeBundle {
   initDatabase();
-  configureNotificationsService(createNotificationsService(new SqliteNotificationsRepository(db)));
+  configureNotificationsService(createNotificationsService(new SqliteNotificationsRepository(db),createRecommendationsRuntime(db).service));
   return {
     driver: "sqlite",
     worker: new WorkerRuntime(new SqliteWorkerRepository(db)),

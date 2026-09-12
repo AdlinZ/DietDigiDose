@@ -13,6 +13,8 @@ import type {
 } from "./types.js";
 
 export interface NotificationsRepository {
+  interventionScanUsers(afterId: number,limit: number): Promise<number[]>;
+  interventionQueue(userId: number): Promise<Record<string,unknown>[]>;
   pendingInterventionUsers(now: number,limit: number): Promise<number[]>;
   claimIntervention(userId: number,now: number,owner: string,featureEnabled: boolean): Promise<import("../interventions/delivery.js").InterventionDeliveryClaim | null>;
   finishIntervention(id: string,owner: string,now: number,result: import("../interventions/delivery.js").InterventionDeliveryResult): Promise<boolean>;

@@ -281,3 +281,22 @@ test("feedback keys cannot be reused for another recipe or for a different concu
     await assert.rejects(service.event(7, input), (error: unknown) => error instanceof RecommendationsError && error.code === "RECOMMENDATION_EVENT_CONFLICT");
   }
 });
+
+test("intervention snapshots use local-day stock and preserve engine hard-constraint filtering", async () => {
+  const dates: string[] = [];
+  const stock = [{ id: 11,food_name: "番茄",expiration_date: "2026-09-12",quantity_value: 5,quantity_unit: "piece",version: 1 }];
+  const recipe = { id: 1,title: "番茄汤",ingredients_json: [{ name: "番茄",amount: "1个" }],steps_json: ["煮熟"],status: "approved",cook_time: 10,prep_time: 5,serving_size: 1 };
+  const service = new RecommendationsService(repository({ inventory: async () => stock,recipes: async () => [recipe],
+    planningState: async (_user,start,end) => { dates.push(start,end);return { items: [],plans: [],shopping: [] }; },
+    dietTotals: async (_user,date) => { dates.push(date);return { calories: 0,protein: 0 }; },
+  }),kitchenware);
+  const snapshot = await service.interventionSnapshot(7,Date.parse("2026-09-13T00:30:00Z"),"America/Los_Angeles");
+  assert.deepEqual(snapshot.dates,["2026-09-12","2026-09-13"]);
+  assert.deepEqual(dates.sort(),["2026-09-12","2026-09-12","2026-09-13"]);
+  assert.equal(snapshot.inventory[0].userId,7);
+  assert.deepEqual(snapshot.recommendations[0].inventoryIds,[11]);
+  const blocked = new RecommendationsService(repository({ inventory: async () => stock,recipes: async () => [recipe],
+    profile: async () => ({ allergies_json: [{ name: "番茄" }] }),planningState: async () => ({ items: [],plans: [],shopping: [] }),
+  }),kitchenware);
+  assert.deepEqual((await blocked.interventionSnapshot(7,Date.parse("2026-09-13T00:30:00Z"),"America/Los_Angeles")).recommendations,[]);
+});

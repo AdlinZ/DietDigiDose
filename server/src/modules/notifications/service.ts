@@ -1,3 +1,5 @@
+import { scanInterventions } from "../interventions/scan.js";
+import type { RecommendationsService } from "../recommendations/service.js";
 import type { WorkerTaskContext } from "../worker/types.js";
 import type { InterventionDeliveryResult } from "../interventions/delivery.js";
 import { formatInterventionPreferences } from "../interventions/preferences.js";
@@ -21,7 +23,7 @@ function isExpoPushToken(value: string) {
   return /^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/.test(value);
 }
 
-export function createNotificationsService(repository: NotificationsRepository) {
+export function createNotificationsService(repository: NotificationsRepository,recommendations?: Pick<RecommendationsService,"interventionSnapshot">) {
   const timeZone = process.env.APP_TIME_ZONE?.trim() || "Asia/Shanghai";
 
   async function sendPush(messages: PushMessage[], control?: { signal: AbortSignal; assertActive: () => Promise<void> }) {
@@ -91,6 +93,7 @@ export function createNotificationsService(repository: NotificationsRepository) 
   }
 
   return {
+    scanInterventions: (context: WorkerTaskContext) => recommendations ? scanInterventions(repository,recommendations,context) : Promise.resolve({ scanned: 0,candidates: 0,failed: 0 }),
     async sendInterventions(context: WorkerTaskContext,limit = 100) {
       const result = { processed: 0,accepted: 0,failed: 0,uncertain: 0 };
       await context.assertActive();

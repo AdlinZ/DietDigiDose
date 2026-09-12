@@ -250,7 +250,7 @@ export async function initializePostgresWorker(): Promise<WorkerRuntimeBundle> {
   const pool = poolFromEnvironment();
   try {
     await assertRuntimeSchema(pool);
-    configureNotificationsService(createNotificationsService(new PostgresNotificationsRepository(pool)));
+    configureNotificationsService(createNotificationsService(new PostgresNotificationsRepository(pool),new RecommendationsService(new PostgresRecommendationsRepository(pool),new KitchenwareService(new PostgresKitchenwareRepository(pool)))));
     return {
       driver: "postgresql",
       worker: new WorkerRuntime(new PostgresWorkerRepository(pool)),

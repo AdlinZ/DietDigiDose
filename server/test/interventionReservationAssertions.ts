@@ -34,6 +34,9 @@ export async function verifyInterventionDelivery(repository: NotificationsReposi
   const reserve = (day: number) => repository.reserveIntervention({ now: base+day*86_400_000,featureEnabled: true,pushAuthorized: true,dinnerAlreadyPlanned: false,cookingInProgress: false,notCookingToday: false,
     candidate: { userId,sourceKey: `delivery:${userId}:${day}`,kind: 'expiry_rescue',startsAt: base+day*86_400_000,expiresAt: base+day*86_400_000+3*60*60_000,dataObservedAt: base+day*86_400_000,
       localDate: '2026-09-15',inventoryIds: [1],recipeIds: [1],recommendationQuality: 0.8,title: '领取测试',body: '领取正文',whyNow: '测试',expiresLabel: '测试',actions: ['plan_recipe'] } });
+  assert((await repository.interventionScanUsers(0,100)).includes(userId));
+  assert(!(await repository.interventionScanUsers(userId,100)).includes(userId));
+  assert.deepEqual(await repository.interventionQueue(userId),[]);
   const first = await reserve(0);
   assert((await repository.pendingInterventionUsers(base,100)).includes(userId));
   const claims = await Promise.all([repository.claimIntervention(userId,base,'worker-a',true),repository.claimIntervention(userId,base,'worker-b',true)]);

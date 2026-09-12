@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { initializeWorkerRuntime } from "./composition/runtime.js";
 import type { WorkerRuntimeBundle } from "./composition/types.js";
-import { checkExpoPushReceipts, sendExpiringInventoryNotifications, sendInterventions } from "./services/notifications.js";
+import { checkExpoPushReceipts, sendExpiringInventoryNotifications, sendInterventions, scanInterventions } from "./services/notifications.js";
 import type { WorkerTaskName, WorkerTaskRunResult } from "./modules/worker/types.js";
 import { logger } from "./utils/logger.js";
 
@@ -37,16 +37,17 @@ export async function runWorkerCycle(workerId: string, runtime: WorkerRuntimeBun
     const run = taskName === "notifications"
       ? async (context: WorkerTaskContext) => {
           await context.assertActive();
+          const interventionScan = await scanInterventions(context);
           const interventions = await sendInterventions(context);
           await context.assertActive();
           const receipts = await checkExpoPushReceipts();
           const notifications = await sendExpiringInventoryNotifications();
           return {
-            processed: receipts.checked + notifications.recipients + interventions.processed,
-            succeeded: receipts.checked + notifications.recipients - notifications.failedRecipients + interventions.accepted,
-            failed: notifications.failedRecipients + interventions.failed + interventions.uncertain,
+            processed: receipts.checked + notifications.recipients + interventions.processed + interventionScan.scanned + interventionScan.failed,
+            succeeded: receipts.checked + notifications.recipients - notifications.failedRecipients + interventions.accepted + interventionScan.scanned,
+            failed: notifications.failedRecipients + interventions.failed + interventions.uncertain + interventionScan.failed,
             details: {
-              interventions,
+              interventions,interventionScan,
               receiptsChecked: receipts.checked,
               pushRecipients: notifications.recipients,
               pushMessages: notifications.messages,

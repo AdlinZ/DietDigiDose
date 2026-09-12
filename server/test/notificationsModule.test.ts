@@ -5,6 +5,7 @@ import { createNotificationsService, DEFAULT_NOTIFICATION_PREFERENCES } from "..
 
 function repository(overrides: Partial<NotificationsRepository> = {}): NotificationsRepository {
   return {
+    interventionScanUsers: async () => [],interventionQueue: async () => [],
     pendingInterventionUsers: async () => [],
     claimIntervention: async () => null,finishIntervention: async () => false,
     reserveIntervention: async () => ({}),
@@ -133,5 +134,37 @@ test("intervention sender preserves priority, archives ambiguous delivery, and f
     globalThis.fetch = originalFetch;
     if (originalFlag===undefined) delete process.env.PROACTIVE_INTERVENTIONS_ENABLED;
     else process.env.PROACTIVE_INTERVENTIONS_ENABLED = originalFlag;
+  }
+});
+
+test("opportunity scan pages consented users and derives stable candidates from server snapshots", async () => {
+  const { defaultInterventionPreferences } = await import("@dietdigidose/contracts");
+  const originalFlag = process.env.PROACTIVE_INTERVENTIONS_ENABLED;
+  const originalNow = Date.now;
+  Date.now = () => Date.parse("2026-09-12T09:30:00Z");
+  process.env.PROACTIVE_INTERVENTIONS_ENABLED = "1";
+  const reserved: import("../src/modules/interventions/reservation.js").InterventionReservation[] = [];
+  const context = { runId: "scan",taskName: "notifications" as const,leaseOwnerId: "owner",signal: new AbortController().signal,assertActive: async () => {} };
+  try {
+    const service = createNotificationsService(repository({
+      interventionScanUsers: async after => after===0 ? [42,43] : [],
+      interventionPreferences: async () => ({ ...defaultInterventionPreferences,enabled: true,expiry_rescue: true,dinner_window: true,version: 1 }),
+      reserveIntervention: async input => { reserved.push(input);return {}; },
+    }),{ interventionSnapshot: async userId => {
+      if (userId===43) throw new Error("snapshot unavailable");
+      return { dates: ["2026-09-12","2026-09-13"],items: [],plans: [],inventory: [{ id: 9,userId,expirationDate: "2026-09-13",available: true,deleted: false,remaining: 2 }],
+        recommendations: [{ recipeId: 1,quality: 0.9,hardConstraintsPassed: true,inventoryIds: [9] }] };
+    } });
+    assert.deepEqual(await service.scanInterventions(context),{ scanned: 1,candidates: 2,failed: 1 });
+    assert.deepEqual(reserved.map(row => row.candidate.kind),["expiry_rescue","dinner_window"]);
+    assert(reserved.every(row => row.candidate.userId===42 && row.candidate.dataObservedAt===Date.now()));
+    await service.scanInterventions(context);
+    assert.equal(reserved[0].candidate.sourceKey,reserved[2].candidate.sourceKey);
+    process.env.PROACTIVE_INTERVENTIONS_ENABLED = "0";
+    assert.deepEqual(await service.scanInterventions(context),{ scanned: 0,candidates: 0,failed: 0 });
+    assert.equal(reserved.length,4);
+  } finally {
+    Date.now = originalNow;
+    if (originalFlag===undefined) delete process.env.PROACTIVE_INTERVENTIONS_ENABLED;else process.env.PROACTIVE_INTERVENTIONS_ENABLED = originalFlag;
   }
 });

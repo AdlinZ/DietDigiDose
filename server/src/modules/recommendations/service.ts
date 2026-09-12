@@ -1,3 +1,4 @@
+import { interventionDates, interventionRecommendations } from "../interventions/snapshot.js";
 import { weeklyHistoryStart } from "./shoppingWindow.js";
 import { formatOutcomeEvidence } from "./outcomeEvidence.js";
 import { effectiveDislikeRecipeIds, learningOverrides, formatLearningState } from "./preferenceEvidence.js";
@@ -25,6 +26,17 @@ export class RecommendationsService {
   constructor(repository: RecommendationsRepository, kitchenware: Pick<KitchenwareService, "requirements" | "evaluateRequirements">) {
     this.repository = repository;
     this.kitchenware = kitchenware;
+  }
+
+  async interventionSnapshot(userId: number,now: number,timeZone: string) {
+    const dates = interventionDates(now,timeZone);
+    const [computed,stock,state] = await Promise.all([
+      this.compute(userId,{ surface: "inventory",mealType: "dinner" },{},dates[0]),
+      this.repository.inventory(userId),this.repository.planningState(userId,dates[0],dates[1]),
+    ]);
+    return { dates,recommendations: interventionRecommendations(computed.results),items: state.items,plans: state.plans,
+      inventory: stock.map(row => ({ id: Number(row.id),userId,expirationDate: typeof row.expiration_date === "string" ? row.expiration_date : null,
+        available: true,deleted: false,remaining: row.quantity_evidence_status === "unknown" ? 0 : Number(row.quantity_value) })) };
   }
 
   async learningState(userId: number) {
@@ -84,7 +96,7 @@ export class RecommendationsService {
 
   versions() { return { scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION }; }
 
-  async compute(userId: number, input: Omit<RecommendationInput, "cursor" | "pageSize">, override: KitchenPreferences = {}) {
+  async compute(userId: number, input: Omit<RecommendationInput, "cursor" | "pageSize">, override: KitchenPreferences = {}, date = currentDateKey()) {
     const profile = formatRecommendationProfile(await this.repository.profile(userId));
     profile.kitchen = resolveKitchenPreferences(profile.kitchen, override);
     const timeBudget = input.maxCookTime ?? resolveKitchenPreferences(profile.kitchen).meal_time_minutes;
@@ -92,7 +104,7 @@ export class RecommendationsService {
       this.repository.inventory(userId), this.repository.kitchenware(userId), this.repository.recipes({
         category: input.category, search: input.search, timeBudget,
       }), this.repository.favoriteRecipeIds(userId), this.repository.recentRecipeIds(userId),
-      this.repository.learningData(userId), this.repository.dietTotals(userId, currentDateKey()),
+      this.repository.learningData(userId), this.repository.dietTotals(userId, date),
       this.repository.dailyCaloriesTarget(userId),
     ]);
     const requirementEntries = await Promise.all(recipes.map(async (recipe) => [Number(recipe.id), await this.kitchenware.requirements(Number(recipe.id))] as const));
@@ -102,7 +114,7 @@ export class RecommendationsService {
       requirements: new Map(requirementEntries) as RecommendationDataset["requirements"],
       compatibility: new Map(compatibilityEntries) as RecommendationDataset["compatibility"],
     };
-    return scoreRecipeRecommendations(dataset, input, timeBudget, currentDateKey());
+    return scoreRecipeRecommendations(dataset, input, timeBudget, date);
   }
 
   async page(userId: number, input: RecommendationInput) {

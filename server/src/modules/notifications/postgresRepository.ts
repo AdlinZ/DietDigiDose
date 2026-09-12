@@ -13,6 +13,14 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
 
+  async interventionScanUsers(afterId: number,limit: number): Promise<number[]> {
+    if (!Number.isSafeInteger(afterId) || afterId<0 || !Number.isInteger(limit) || limit<1 || limit>100) throw new Error("Invalid opportunity scan");
+    return (await this.pool.query("SELECT user_id FROM proactive_intervention_preferences WHERE enabled=1 AND (expiry_rescue=1 OR dinner_window=1) AND user_id>$1 ORDER BY user_id LIMIT $2",[afterId,limit])).rows.map(row => Number(row.user_id));
+  }
+  async interventionQueue(userId: number): Promise<Record<string,unknown>[]> {
+    return (await this.pool.query("SELECT status,planned_at,deleted_at FROM cooking_queue_items WHERE user_id=$1 AND deleted_at IS NULL AND status IN ('waiting','preparing','ready','cooking')",[userId])).rows;
+  }
+
   async pendingInterventionUsers(now: number,limit: number): Promise<number[]> {
     if (!Number.isFinite(now) || !Number.isInteger(limit) || limit<1 || limit>500) throw new Error("Invalid delivery scan");
     const at = new Date(now).toISOString();

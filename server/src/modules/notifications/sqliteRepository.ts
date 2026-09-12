@@ -71,14 +71,13 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
 
   async action(userId: number, notificationId: number, action: NotificationAction, metadata?: unknown) {
     return this.database.transaction(() => {
-      const item = this.database.prepare("SELECT inventory_item_id AS inventoryItemId FROM user_notification_inbox WHERE id=? AND user_id=?")
-        .get(notificationId, userId) as { inventoryItemId: number | null } | undefined;
+      const item = this.database.prepare("SELECT action_status AS actionStatus FROM user_notification_inbox WHERE id=? AND user_id=?")
+        .get(notificationId, userId) as { actionStatus: string } | undefined;
       if (!item) return false;
+      if (action === "complete" && item.actionStatus === "completed") return true;
       if (action === "complete") {
         this.database.prepare(`UPDATE user_notification_inbox SET action_status='completed',is_read=1, read_at=COALESCE(read_at,CURRENT_TIMESTAMP),snoozed_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`)
           .run(notificationId, userId);
-        if (item.inventoryItemId) this.database.prepare(`UPDATE inventory_items SET is_available=0 WHERE user_id=? AND id IN (SELECT inventory_item_id FROM notification_inventory_items WHERE notification_id=? AND user_id=?)`)
-          .run(userId, notificationId, userId);
       } else if (action === "snooze_today") {
         this.database.prepare(`UPDATE user_notification_inbox SET snoozed_until=datetime(date('now','+1 day')),is_read=1, read_at=COALESCE(read_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`).run(notificationId, userId);
       } else this.database.prepare(`UPDATE user_notification_inbox SET is_read=1,read_at=COALESCE(read_at,CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`).run(notificationId, userId);

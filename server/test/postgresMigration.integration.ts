@@ -1955,7 +1955,9 @@ try {
     assert(pendingHistory.some((item) => Number(item.id) === preparedNotification.notificationId));
     const expiryNotificationId = preparedNotification.notificationId;
     assert.equal(await notificationsRepository.action(notificationUserId, expiryNotificationId, "complete", { postgres: true }), true);
-    assert.equal((await pool.query("SELECT is_available FROM inventory_items WHERE food_name='Postgres 临期苹果'")).rows[0].is_available, false);
+    assert.equal((await pool.query("SELECT is_available FROM inventory_items WHERE food_name='Postgres 临期苹果'")).rows[0].is_available, true);
+    assert.equal(await notificationsRepository.action(notificationUserId, expiryNotificationId, "complete"), true);
+    assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM notification_events WHERE notification_id=$1 AND event_type='action_complete'",[expiryNotificationId])).rows[0].n),1);
     const campaign = await notificationsRepository.beginCampaign(user.id, "Postgres 活动", "Postgres 活动正文");
     assert(campaign.devices.some((device) => device.userId === notificationUserId));
     await notificationsRepository.recordPushTickets([{ message: { to: "ExpoPushToken[postgres-notifications]", title: "Postgres 活动",

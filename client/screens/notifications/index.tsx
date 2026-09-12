@@ -207,13 +207,13 @@ export default function NotificationsScreen() {
                   <Text className="text-[10px] font-black text-white">安排食谱</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  onPress={() => Alert.alert("标记已处理", "会同时把关联食材标记为已用完，是否继续？", [
+                  onPress={() => Alert.alert("处理提醒", "仅结束这条提醒。请在库存中记录实际使用或丢弃的食材。", [
                     { text: "取消", style: "cancel" },
                     { text: "确认", onPress: () => void runAction(item, "complete") },
                   ])}
                   className="rounded-lg border border-brand/30 bg-brand/5 px-3 py-2"
                 >
-                  <Text className="text-[10px] font-black text-brand">已处理</Text>
+                  <Text className="text-[10px] font-black text-brand">处理提醒</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => void runAction(item, "snooze_today")} className="rounded-lg bg-background-secondary px-3 py-2">
                   <Text className="text-[10px] font-black text-copy-muted">今天不再提醒</Text>

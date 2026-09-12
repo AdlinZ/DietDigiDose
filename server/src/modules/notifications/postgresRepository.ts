@@ -88,14 +88,13 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
 
   async action(userId: number, notificationId: number, action: NotificationAction, metadata?: unknown) {
     return this.tx(async (client) => {
-      const item = (await client.query(`SELECT inventory_item_id AS "inventoryItemId" FROM user_notification_inbox
+      const item = (await client.query(`SELECT action_status AS "actionStatus" FROM user_notification_inbox
         WHERE id=$1 AND user_id=$2 FOR UPDATE`, [notificationId, userId])).rows[0];
       if (!item) return false;
+      if (action === "complete" && item.actionStatus === "completed") return true;
       if (action === "complete") {
         await client.query(`UPDATE user_notification_inbox SET action_status='completed',is_read=TRUE,
           read_at=COALESCE(read_at,CURRENT_TIMESTAMP),snoozed_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2`, [notificationId, userId]);
-        if (item.inventoryItemId != null) await client.query(`UPDATE inventory_items SET is_available=FALSE WHERE user_id=$1 AND id IN
-          (SELECT inventory_item_id FROM notification_inventory_items WHERE notification_id=$2 AND user_id=$1)`, [userId, notificationId]);
       } else if (action === "snooze_today") await client.query(`UPDATE user_notification_inbox SET
         snoozed_until=date_trunc('day',CURRENT_TIMESTAMP)+INTERVAL '1 day',is_read=TRUE,
         read_at=COALESCE(read_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2`, [notificationId, userId]);

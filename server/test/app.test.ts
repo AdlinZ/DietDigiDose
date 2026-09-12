@@ -1279,6 +1279,9 @@ describe("notification preferences", () => {
       (user_id, food_name, category, quantity, expiration_date, storage_location)
       VALUES (?, '测试牛奶', '乳制品', '1盒', ?, '冷藏')`).run(account.user.id, currentDateKey());
 
+    db.prepare(`INSERT INTO inventory_items (user_id,food_name,category,quantity,expiration_date,storage_location)
+      VALUES (?,'测试酸奶','乳制品','2盒',?,'冷藏')`).run(account.user.id,currentDateKey());
+    const beforeItems = db.prepare("SELECT * FROM inventory_items WHERE user_id=? ORDER BY id").all(account.user.id);
     const { sendExpiringInventoryNotifications } = await import("../src/services/notifications.js");
     const sent = await sendExpiringInventoryNotifications();
     assert.ok(sent.recipients >= 1);
@@ -1302,12 +1305,16 @@ describe("notification preferences", () => {
     assert.equal(completed.response.status, 200);
     const inventory = db.prepare("SELECT is_available FROM inventory_items WHERE id = ?")
       .get(notification.inventoryItemId) as { is_available: number };
-    assert.equal(inventory.is_available, 0);
+    assert.equal(inventory.is_available, 1);
+    const replay = await api(`/api/v1/notifications/${notification.id}/actions`, { method: "POST",token: account.token,body: JSON.stringify({ action: "complete" }) });
+    assert.equal(replay.response.status,200);
+    assert.equal(notification.itemCount,2);
+    assert.deepEqual(db.prepare("SELECT * FROM inventory_items WHERE user_id=? ORDER BY id").all(account.user.id),beforeItems);
     const after = await api("/api/v1/notifications/unread-count", { token: account.token });
     assert.equal((after.body as JsonObject).count, 0);
     const events = db.prepare("SELECT event_type FROM notification_events WHERE notification_id = ?").all(notification.id) as Array<{ event_type: string }>;
     assert.ok(events.some((event) => event.event_type === "created"));
-    assert.ok(events.some((event) => event.event_type === "action_complete"));
+    assert.equal(events.filter((event) => event.event_type === "action_complete").length,1);
   });
 
   test("materializes configured local routine reminders into traceable inbox history", async () => {

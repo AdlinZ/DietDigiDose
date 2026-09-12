@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { decideInterventionFeedback, feedbackRequest, replayInterventionFeedback, type InterventionFeedbackDecision } from "../interventions/feedback.js";
+import type { InterventionFeedback } from "@dietdigidose/contracts";
 import { interventionDeliveryBlock, type InterventionDeliveryClaim, type InterventionDeliveryResult } from "../interventions/delivery.js";
 import { interventionCandidateId } from "../interventions/opportunities.js";
 import { reservationDecision, type InterventionReservation } from "../interventions/reservation.js";
@@ -12,6 +15,34 @@ import type {
 export class PostgresNotificationsRepository implements NotificationsRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+
+  async activeInterventionSnooze(userId: number,now: number): Promise<number | null> {
+    const row = (await this.pool.query("SELECT MAX(snoozed_until) AS until FROM proactive_interventions WHERE user_id=$1 AND kind='expiry_rescue' AND snoozed_until>$2",[userId,new Date(now).toISOString()])).rows[0];
+    return row.until ? new Date(row.until).getTime() : null;
+  }
+  async feedbackIntervention(userId: number,id: string,input: InterventionFeedback,now: number): Promise<InterventionFeedbackDecision> {
+    const request = feedbackRequest(id,input);
+    return this.tx(async client => {
+      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[userId]);
+      const existing = (await client.query("SELECT request_json,result_json FROM proactive_intervention_actions WHERE user_id=$1 AND idempotency_key=$2",[userId,input.idempotencyKey])).rows[0] ?? null;
+      const replay = replayInterventionFeedback(existing,id,input);
+      if (replay) return replay;
+      const row = (await client.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND id=$2 FOR UPDATE",[userId,id])).rows[0] ?? null;
+      const preferences = (await client.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[userId])).rows[0] ?? null;
+      const decision = decideInterventionFeedback(row,preferences,input,now);
+      if (!decision.ok) return decision;
+      const result = decision.result,at = new Date(now).toISOString();
+      await client.query("UPDATE proactive_interventions SET status='acted',snoozed_until=$1,delivery_state=CASE WHEN delivery_state='pending' THEN 'cancelled' ELSE delivery_state END,updated_at=$2 WHERE user_id=$3 AND id=$4",[result.snoozedUntil,at,userId,id]);
+      await client.query("UPDATE user_notification_inbox SET action_status='completed',is_read=TRUE,read_at=$1,snoozed_until=$2,updated_at=$1 WHERE user_id=$3 AND id=$4",[at,result.snoozedUntil,userId,row.notification_id]);
+      if (result.notCookingDate) {
+        await client.query("UPDATE proactive_intervention_preferences SET not_cooking_date=$1,version=version+1,updated_at=$2 WHERE user_id=$3",[result.notCookingDate,at,userId]);
+        await client.query("UPDATE proactive_interventions SET delivery_state='cancelled',updated_at=$1 WHERE user_id=$2 AND kind='dinner_window' AND delivery_state='pending' AND candidate_json->>'localDate'=$3",[at,userId,result.notCookingDate]);
+      }
+      if (result.snoozedUntil) await client.query("UPDATE proactive_interventions SET delivery_state='cancelled',updated_at=$1 WHERE user_id=$2 AND kind='expiry_rescue' AND delivery_state='pending'",[at,userId]);
+      await client.query("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json,created_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)",[randomUUID(),id,userId,input.idempotencyKey,input.action,JSON.stringify(request),JSON.stringify(result),at]);
+      return decision;
+    });
+  }
 
   async interventionCard(userId: number,id: string): Promise<Record<string,unknown> | null> {
     return (await this.pool.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND id=$2 AND notification_id IS NOT NULL",[userId,id])).rows[0] ?? null;
@@ -67,7 +98,7 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
   async finishIntervention(id: string,owner: string,now: number,result: InterventionDeliveryResult) {
     if (!["accepted","failed","uncertain"].includes(result)) throw new Error("Invalid delivery result");
     const at = new Date(now).toISOString();
-    return ((await this.pool.query("UPDATE proactive_interventions SET delivery_state=$1,status=CASE WHEN $1='accepted' THEN 'sent' ELSE status END,lease_owner=NULL,lease_until=NULL,updated_at=$2 WHERE id=$3 AND delivery_state='sending' AND lease_owner=$4 AND lease_until>$2",[result,at,id,owner])).rowCount ?? 0)===1;
+    return ((await this.pool.query("UPDATE proactive_interventions SET delivery_state=$1,status=CASE WHEN $1='accepted' AND status='inbox' THEN 'sent' ELSE status END,lease_owner=NULL,lease_until=NULL,updated_at=$2 WHERE id=$3 AND delivery_state='sending' AND lease_owner=$4 AND lease_until>$2",[result,at,id,owner])).rowCount ?? 0)===1;
   }
   async reserveIntervention(input: InterventionReservation) { return this.tx(async client => {
     const candidate = input.candidate;
@@ -76,9 +107,10 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
     const existing = (await client.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND source_key=$2",[candidate.userId,candidate.sourceKey])).rows[0];
     if (existing) return existing;
     const preferences = (await client.query("SELECT * FROM proactive_intervention_preferences WHERE user_id=$1",[candidate.userId])).rows[0] ?? null;
-    const history = (await client.query("SELECT decided_at,push_reserved_at,channel FROM proactive_interventions WHERE user_id=$1 AND decided_at>=$2",[candidate.userId,new Date(input.now-7*86_400_000).toISOString()])).rows;
+    const history = (await client.query("SELECT kind,snoozed_until,decided_at,push_reserved_at,channel FROM proactive_interventions WHERE user_id=$1 AND decided_at>=$2",[candidate.userId,new Date(input.now-7*86_400_000).toISOString()])).rows;
     const hasPushDevice = (await client.query("SELECT id FROM push_devices WHERE user_id=$1 AND is_active=TRUE LIMIT 1",[candidate.userId])).rows.length>0;
     const decision = reservationDecision(input,preferences,history,hasPushDevice);
+    if (decision.reason === "snoozed") return { deferred: true,reason: decision.reason };
     const id = interventionCandidateId(candidate),now = new Date(input.now).toISOString();
     let notificationId: number | null = null;
     if (decision.channel !== "suppressed") notificationId = Number((await client.query(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)

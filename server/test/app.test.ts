@@ -4632,4 +4632,17 @@ test("intervention reservations atomically persist decisions, quota and a single
   const { verifyInterventionScanCursor } = await import("./interventionReservationAssertions.js");
   const { SqliteWorkerRepository } = await import("../src/modules/worker/sqliteRepository.js");
   await verifyInterventionScanCursor(new SqliteNotificationsRepository(db),new SqliteWorkerRepository(db));
+  const { verifyInterventionFeedback } = await import("./interventionReservationAssertions.js");
+  await verifyInterventionFeedback(new SqliteNotificationsRepository(db),account.user.id);
+  const feedbackRow = db.prepare("SELECT id FROM proactive_interventions WHERE user_id=? AND source_key=?").get(account.user.id,`feedback:${account.user.id}:snooze`) as { id: string };
+  const feedbackUrl = `/api/v1/notifications/interventions/${feedbackRow.id}/feedback`;
+  const feedback = { action: "snooze",confirmed: true,idempotencyKey: "11111111-1111-4111-8111-111111111111" };
+  const postFeedback = (token?: string,body: unknown = feedback) => api(feedbackUrl,{ method: "POST",token,body: JSON.stringify(body) });
+  assert.equal((await postFeedback()).response.status,401);
+  assert.equal((await postFeedback(other.token)).response.status,404);
+  assert.equal((await postFeedback(account.token,{ ...feedback,confirmed: false })).response.status,400);
+  assert.equal((await postFeedback(account.token,{ ...feedback,action: "not_helpful" })).response.status,409);
+  const feedbackReplay = await postFeedback(account.token);
+  assert.equal(feedbackReplay.response.status,200);
+  assert.equal((feedbackReplay.body as JsonObject).repeated,true);
 });

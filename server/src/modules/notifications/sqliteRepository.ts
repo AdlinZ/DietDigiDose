@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { decideInterventionFeedback, feedbackRequest, replayInterventionFeedback, type InterventionFeedbackDecision } from "../interventions/feedback.js";
+import type { InterventionFeedback } from "@dietdigidose/contracts";
 import { interventionDeliveryBlock, type InterventionDeliveryClaim, type InterventionDeliveryResult } from "../interventions/delivery.js";
 import { interventionCandidateId } from "../interventions/opportunities.js";
 import { reservationDecision, type InterventionReservation } from "../interventions/reservation.js";
@@ -16,6 +19,33 @@ type PreferenceRow = Omit<NotificationPreferences, "expiring_alert" | "meal_remi
 export class SqliteNotificationsRepository implements NotificationsRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+
+  async activeInterventionSnooze(userId: number,now: number): Promise<number | null> {
+    const row = this.database.prepare("SELECT MAX(snoozed_until) AS until FROM proactive_interventions WHERE user_id=? AND kind='expiry_rescue' AND snoozed_until>?").get(userId,new Date(now).toISOString()) as {until:string|null};
+    return row.until ? Date.parse(row.until) : null;
+  }
+  async feedbackIntervention(userId: number,id: string,input: InterventionFeedback,now: number): Promise<InterventionFeedbackDecision> {
+    const request = feedbackRequest(id,input);
+    return this.database.transaction(() => {
+      const existing = this.database.prepare("SELECT request_json,result_json FROM proactive_intervention_actions WHERE user_id=? AND idempotency_key=?").get(userId,input.idempotencyKey) as Record<string,unknown> | undefined;
+      const replay = replayInterventionFeedback(existing ?? null,id,input);
+      if (replay) return replay;
+      const row = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND id=?").get(userId,id) as Record<string,unknown> | undefined;
+      const preferences = this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(userId) as Record<string,unknown> | undefined;
+      const decision = decideInterventionFeedback(row ?? null,preferences ?? null,input,now);
+      if (!decision.ok) return decision;
+      const result = decision.result,at = new Date(now).toISOString();
+      this.database.prepare("UPDATE proactive_interventions SET status='acted',snoozed_until=?,delivery_state=CASE WHEN delivery_state='pending' THEN 'cancelled' ELSE delivery_state END,updated_at=? WHERE user_id=? AND id=?").run(result.snoozedUntil,at,userId,id);
+      this.database.prepare("UPDATE user_notification_inbox SET action_status='completed',is_read=1,read_at=?,snoozed_until=?,updated_at=? WHERE user_id=? AND id=?").run(at,result.snoozedUntil,at,userId,row!.notification_id);
+      if (result.notCookingDate) {
+        this.database.prepare("UPDATE proactive_intervention_preferences SET not_cooking_date=?,version=version+1,updated_at=? WHERE user_id=?").run(result.notCookingDate,at,userId);
+        this.database.prepare("UPDATE proactive_interventions SET delivery_state='cancelled',updated_at=? WHERE user_id=? AND kind='dinner_window' AND delivery_state='pending' AND json_extract(candidate_json,'$.localDate')=?").run(at,userId,result.notCookingDate);
+      }
+      if (result.snoozedUntil) this.database.prepare("UPDATE proactive_interventions SET delivery_state='cancelled',updated_at=? WHERE user_id=? AND kind='expiry_rescue' AND delivery_state='pending'").run(at,userId);
+      this.database.prepare("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json,created_at) VALUES(?,?,?,?,?,?,?,?)").run(randomUUID(),id,userId,input.idempotencyKey,input.action,JSON.stringify(request),JSON.stringify(result),at);
+      return decision;
+    })();
+  }
 
   async interventionCard(userId: number,id: string): Promise<Record<string,unknown> | null> {
     return (this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND id=? AND notification_id IS NOT NULL").get(userId,id) as Record<string,unknown> | undefined) ?? null;
@@ -70,16 +100,17 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
   async finishIntervention(id: string,owner: string,now: number,result: InterventionDeliveryResult) {
     if (!["accepted","failed","uncertain"].includes(result)) throw new Error("Invalid delivery result");
     const at = new Date(now).toISOString();
-    return this.database.prepare("UPDATE proactive_interventions SET delivery_state=?,status=CASE WHEN ?='accepted' THEN 'sent' ELSE status END,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND delivery_state='sending' AND lease_owner=? AND lease_until>?").run(result,result,at,id,owner,at).changes===1;
+    return this.database.prepare("UPDATE proactive_interventions SET delivery_state=?,status=CASE WHEN ?='accepted' AND status='inbox' THEN 'sent' ELSE status END,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND delivery_state='sending' AND lease_owner=? AND lease_until>?").run(result,result,at,id,owner,at).changes===1;
   }
   async reserveIntervention(input: InterventionReservation) { return this.database.transaction(() => {
     const candidate = input.candidate;
     const existing = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND source_key=?").get(candidate.userId,candidate.sourceKey) as Record<string,unknown> | undefined;
     if (existing) return existing;
     const preferences = this.database.prepare("SELECT * FROM proactive_intervention_preferences WHERE user_id=?").get(candidate.userId) as Record<string,unknown> | undefined;
-    const history = this.database.prepare("SELECT decided_at,push_reserved_at,channel FROM proactive_interventions WHERE user_id=? AND decided_at>=?").all(candidate.userId,new Date(input.now-7*86_400_000).toISOString()) as Record<string,unknown>[];
+    const history = this.database.prepare("SELECT kind,snoozed_until,decided_at,push_reserved_at,channel FROM proactive_interventions WHERE user_id=? AND decided_at>=?").all(candidate.userId,new Date(input.now-7*86_400_000).toISOString()) as Record<string,unknown>[];
     const device = this.database.prepare("SELECT id FROM push_devices WHERE user_id=? AND is_active=1 LIMIT 1").get(candidate.userId);
     const decision = reservationDecision(input,preferences ?? null,history,Boolean(device));
+    if (decision.reason === "snoozed") return { deferred: true,reason: decision.reason };
     const id = interventionCandidateId(candidate), now = new Date(input.now).toISOString();
     let notificationId: number | null = null;
     if (decision.channel !== "suppressed") notificationId = Number(this.database.prepare(`INSERT INTO user_notification_inbox(user_id,type,title,body,category,priority,action_status,group_key)

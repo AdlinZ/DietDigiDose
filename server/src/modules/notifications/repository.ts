@@ -13,6 +13,8 @@ import type {
 } from "./types.js";
 
 export interface NotificationsRepository {
+  feedbackIntervention(userId: number,id: string,input: import("@dietdigidose/contracts").InterventionFeedback,now: number): Promise<import("../interventions/feedback.js").InterventionFeedbackDecision>;
+  activeInterventionSnooze(userId: number,now: number): Promise<number | null>;
   interventionCard(userId: number,id: string): Promise<Record<string,unknown> | null>;
   interventionScanCursor(): Promise<number>;
   advanceInterventionScan(expected: number,next: number,owner: string): Promise<boolean>;

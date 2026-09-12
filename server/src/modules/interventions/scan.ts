@@ -29,22 +29,23 @@ export async function scanInterventions(repository: NotificationsRepository,reco
         const { version: _version,...preferences } = formatInterventionPreferences(row);
         if (!preferences.enabled) return null;
         const observedAt = Date.now();
-        const [snapshot,queue] = await Promise.all([recommendations.interventionSnapshot(userId,observedAt,preferences.time_zone),repository.interventionQueue(userId)]);
+        const [snapshot,queue,snoozedUntil] = await Promise.all([recommendations.interventionSnapshot(userId,observedAt,preferences.time_zone),repository.interventionQueue(userId),repository.activeInterventionSnooze(userId,observedAt)]);
         signal.throwIfAborted();
-        return { row,preferences,observedAt,snapshot,queue };
+        return { row,preferences,observedAt,snapshot,queue,snoozedUntil };
       },context.signal,readTimeoutMs);
       if (!data) { await checkpoint(userId);continue; }
-      const { row,preferences,observedAt,snapshot,queue } = data;
+      const { row,preferences,observedAt,snapshot,queue,snoozedUntil } = data;
       const state = interventionDinnerState(snapshot.dates,preferences.time_zone,snapshot.items,snapshot.plans,queue,typeof row?.not_cooking_date === "string" ? row.not_cooking_date : null);
       const candidates = interventionOpportunities({ userId,now: Date.now(),dataObservedAt: observedAt,preferences,
         inventory: snapshot.inventory,recommendations: snapshot.recommendations,...state });
       for (const candidate of candidates) {
+        if (candidate.kind === "expiry_rescue" && snoozedUntil!==null && snoozedUntil>Date.now()) continue;
         await context.assertActive();context.signal.throwIfAborted();
         const day = state.dinnerDays.find(item => item.localDate===candidate.localDate);
-        await repository.reserveIntervention({ candidate,now: Date.now(),featureEnabled: process.env.PROACTIVE_INTERVENTIONS_ENABLED === "1",
+        const reserved = await repository.reserveIntervention({ candidate,now: Date.now(),featureEnabled: process.env.PROACTIVE_INTERVENTIONS_ENABLED === "1",
           // Explicit intervention consent authorizes pushes only when an active Expo device exists (checked atomically in reserve).
           pushAuthorized: preferences.enabled,dinnerAlreadyPlanned: day?.alreadyPlanned ?? true,cookingInProgress: state.cookingInProgress,notCookingToday: day?.notCooking ?? true });
-        result.candidates += 1;
+        if (reserved.deferred!==true) result.candidates += 1;
       }
       result.scanned += 1;
     } catch (error) {

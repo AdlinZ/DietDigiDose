@@ -5,6 +5,7 @@ import { createNotificationsService, DEFAULT_NOTIFICATION_PREFERENCES } from "..
 
 function repository(overrides: Partial<NotificationsRepository> = {}): NotificationsRepository {
   return {
+    feedbackIntervention: async () => ({ ok: false,status: 404,code: "INTERVENTION_NOT_FOUND" }),activeInterventionSnooze: async () => null,
     interventionCard: async () => null,
     interventionScanCursor: async () => 0,advanceInterventionScan: async () => true,
     interventionScanUsers: async () => [],interventionQueue: async () => [],

@@ -94,6 +94,7 @@ export function createNotificationsService(repository: NotificationsRepository,r
   }
 
   return {
+    feedbackIntervention: (userId: number,id: string,input: import("@dietdigidose/contracts").InterventionFeedback) => repository.feedbackIntervention(userId,id,input,Date.now()),
     async interventionCard(userId: number,id: string) { const row = await repository.interventionCard(userId,id);return row ? interventionCard(row) : null; },
     scanInterventions: (context: WorkerTaskContext) => recommendations ? scanInterventions(repository,recommendations,context) : Promise.resolve({ scanned: 0,candidates: 0,failed: 0 }),
     async sendInterventions(context: WorkerTaskContext,limit = 100) {

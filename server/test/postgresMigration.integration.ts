@@ -1952,6 +1952,8 @@ try {
     await verifyInterventionDelivery(notificationsRepository,notificationUserId);
     const { verifyInterventionScanCursor } = await import("./interventionReservationAssertions.js");
     await verifyInterventionScanCursor(notificationsRepository,new PostgresWorkerRepository(pool));
+    const { verifyInterventionFeedback } = await import("./interventionReservationAssertions.js");
+    await verifyInterventionFeedback(notificationsRepository,notificationUserId);
 
     const { defaultInterventionPreferences } = await import("@dietdigidose/contracts");
     const currentInterventionPreferences = await notificationsRepository.interventionPreferences(user.id);

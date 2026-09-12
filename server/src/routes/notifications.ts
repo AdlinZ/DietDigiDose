@@ -1,4 +1,4 @@
-import { interventionPreferencesUpdateSchema } from "@dietdigidose/contracts";
+import { interventionPreferencesUpdateSchema, interventionFeedbackSchema } from "@dietdigidose/contracts";
 import { Router, type NextFunction, type Response } from "express";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
@@ -16,6 +16,15 @@ router.use(authMiddleware);
 function run<T>(promise: Promise<T>, res: Response, next: NextFunction, respond: (value: T) => void) {
   void promise.then(respond).catch(next);
 }
+
+router.post("/interventions/:id/feedback",validateBody(interventionFeedbackSchema),(req: AuthRequest,res,next) => {
+  const id = String(req.params.id);
+  if (!/^[a-f0-9]{64}$/.test(id)) return res.status(400).json({ error: "干预 ID 无效" });
+  return run(notificationsService().feedbackIntervention(req.userId!,id,req.body),res,next,value => {
+    if (value.ok) res.json(value.result);
+    else res.status(value.status).json({ error: value.status === 404 ? "干预通知不存在" : "提醒或操作已变化，请刷新后重试",code: value.code });
+  });
+});
 
 router.get("/interventions/:id", (req: AuthRequest,res,next) => {
   const id = String(req.params.id);

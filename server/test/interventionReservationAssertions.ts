@@ -83,3 +83,46 @@ export async function verifyInterventionScanCursor(repository: NotificationsRepo
   assert.equal(await repository.advanceInterventionScan(20,0,"scan-new-owner"),true);
   assert(await worker.releaseLease("intervention-scan","scan-new-owner"));
 }
+
+export async function verifyInterventionFeedback(repository: NotificationsRepository,userId: number) {
+  const prefs = await repository.interventionPreferences(userId);
+  assert(await repository.saveInterventionPreferences(userId,{ ...defaultInterventionPreferences,enabled: true,expiry_rescue: true,dinner_window: true,version: Number(prefs!.version) }));
+  const base = Date.parse("2026-09-20T09:00:00Z");
+  const input = (at: number,key: string,kind: "expiry_rescue" | "dinner_window" = "expiry_rescue"): InterventionReservation => ({
+    now: at,featureEnabled: true,pushAuthorized: true,dinnerAlreadyPlanned: false,cookingInProgress: false,notCookingToday: false,
+    candidate: { userId,sourceKey: `feedback:${userId}:${key}`,kind,startsAt: at-60_000,expiresAt: at+3*3_600_000,dataObservedAt: at,
+      localDate: new Date(at+8*3_600_000).toISOString().slice(0,10),inventoryIds: [1],recipeIds: [1],recommendationQuality: 0.9,title: "反馈测试",body: "测试正文",whyNow: "测试原因",expiresLabel: "测试期限",actions: ["snooze","not_cooking_today","not_helpful"] },
+  });
+  const first = await repository.reserveIntervention(input(base,"snooze"));
+  const request = { action: "snooze" as const,confirmed: true as const,idempotencyKey: "11111111-1111-4111-8111-111111111111" };
+  const [one,two] = await Promise.all([repository.feedbackIntervention(userId,String(first.id),request,base+1),repository.feedbackIntervention(userId,String(first.id),request,base+1)]);
+  assert(one.ok && two.ok);assert.equal(Number(one.result.repeated)+Number(two.result.repeated),1);
+  const until = Date.parse(one.result.snoozedUntil!);
+  assert.equal(await repository.activeInterventionSnooze(userId,base+2),until);
+  assert.equal((await repository.interventionCard(userId,String(first.id)))!.delivery_state,"cancelled");
+  assert.equal((await repository.feedbackIntervention(userId+1,String(first.id),request,base+1)).ok,false);
+  assert.equal((await repository.feedbackIntervention(userId,String(first.id),{ ...request,action: "not_helpful" },base+1)).ok,false);
+  const future = input(until-60_000,"next-day");
+  assert.equal((await repository.reserveIntervention(future)).deferred,true);
+  const ready = await repository.reserveIntervention({ ...future,now: until });
+  assert.equal(ready.channel,"push","snooze must not permanently consume the next-day source");
+  assert.equal(await repository.activeInterventionSnooze(userId,until),null);
+  const resumed = await repository.claimIntervention(userId,until,"resumed-sender",true);
+  assert(resumed);assert.equal(resumed.id,ready.id);
+  assert(await repository.finishIntervention(resumed.id,resumed.owner,until+1,"accepted"));
+  const dinnerAt = base+2*86_400_000;
+  const dinner = await repository.reserveIntervention(input(dinnerAt,"dinner","dinner_window"));
+  const optOut = await repository.feedbackIntervention(userId,String(dinner.id),{ ...request,action: "not_cooking_today",idempotencyKey: "22222222-2222-4222-8222-222222222222" },dinnerAt+1);
+  assert(optOut.ok);assert.equal((await repository.interventionPreferences(userId))!.not_cooking_date,"2026-09-22");
+  const stale = await repository.reserveIntervention(input(dinnerAt+2,"stale-dinner","dinner_window"));
+  assert.equal(stale.decision_reason,"dinner_already_resolved");
+  const lastAt = base+3*86_400_000;
+  const last = await repository.reserveIntervention(input(lastAt,"sending"));
+  const claim = await repository.claimIntervention(userId,lastAt,"feedback-sender",true);
+  assert(claim);assert.equal(claim.id,last.id);
+  assert((await repository.feedbackIntervention(userId,String(last.id),{ ...request,action: "not_helpful",idempotencyKey: "33333333-3333-4333-8333-333333333333" },lastAt+1)).ok);
+  assert(await repository.finishIntervention(String(last.id),claim.owner,lastAt+2,"accepted"));
+  assert.equal((await repository.interventionCard(userId,String(last.id)))!.status,"acted","late receipt must preserve user action");
+  const replay = await repository.feedbackIntervention(userId,String(first.id),request,lastAt);
+  assert(replay.ok && replay.result.repeated);
+}

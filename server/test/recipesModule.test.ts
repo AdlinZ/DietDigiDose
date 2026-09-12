@@ -39,7 +39,7 @@ describe("recipes module", () => {
     let captured: RecipeSubmissionWrite | undefined;
     const service = new RecipesService(repository({
       createSubmission: async (input) => { captured = input; return 42; },
-    }), { resolveCatalog: async (name) => name === "空气炸锅" ? { id: 9, confidence: 1 } : null });
+    }), { resolveCatalog: async (name) => name === "空气炸锅" ? { id: 9, confidence: 1 } : { id: 9,confidence: 0.72 } });
     const result = await service.createSubmission(7, {
       title: "空气炸锅番茄", description: "", image_url: "", cook_time: 12, difficulty: "简单",
       calories: 100, protein: 4, carbs: 10, fat: 3, category: "晚餐", tags: ["快手"],

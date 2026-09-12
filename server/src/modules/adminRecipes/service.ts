@@ -239,8 +239,9 @@ export class AdminRecipesService {
         const explicitCapability = String(row?.capabilityCode || "").trim() || null;
         if (!rawName && !explicitCapability) continue;
         const resolved = rawName ? await this.catalog.resolveCatalog(rawName) : null;
+        const accepted = resolved?.confidence === 1 ? resolved : null;
         output.push({ rawName: rawName || explicitCapability!, normalizedName: normalizeContentTerm(rawName || explicitCapability!),
-          catalogId: resolved?.id || null, capabilityCode: explicitCapability || resolved?.capabilities[0]?.code || null,
+          catalogId: accepted?.id || null, capabilityCode: explicitCapability || accepted?.capabilities[0]?.code || null,
           role, confidence: resolved?.confidence || (explicitCapability ? 1 : 0) });
       }
     }

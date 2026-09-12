@@ -150,7 +150,7 @@ export class SqliteAdminRecipesRepository implements AdminRecipesRepository {
       confidence=excluded.confidence, suggested_catalog_id=excluded.suggested_catalog_id, status='pending', reviewed_at=NULL`);
     for (const item of requirements) {
       if (item.catalogId || item.capabilityCode) insert.run(recipeId, item.catalogId, item.capabilityCode, item.role, item.confidence, item.rawName);
-      if (!item.catalogId || item.confidence < 0.7) review.run(item.rawName, item.normalizedName, String(recipeId), item.confidence, item.catalogId);
+      if (!item.catalogId || item.confidence < 1) review.run(item.rawName, item.normalizedName, String(recipeId), item.confidence, item.catalogId);
     }
   }
 

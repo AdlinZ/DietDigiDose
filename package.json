@@ -44,7 +44,7 @@
     "quality:test-quarantine": "node scripts/check-test-quarantine.mjs",
     "quality:build-budgets": "node scripts/check-build-budgets.mjs",
     "audit:prod": "pnpm audit --prod --registry=https://registry.npmjs.org",
-    "test:staging-smoke": "node --test deploy/staging-smoke.test.mjs"
+    "test:staging-smoke": "node --test deploy/staging-smoke.test.mjs deploy/p0-report.test.mjs"
   },
   "dependencies": {},
   "devDependencies": {},

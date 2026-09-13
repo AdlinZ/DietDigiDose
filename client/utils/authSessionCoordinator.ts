@@ -23,6 +23,14 @@ export class AuthSessionCoordinator {
     });
   }
 
+  updateIfCurrent(expectedGeneration: number, writeSession: () => Promise<void>) {
+    return this.enqueue(async () => {
+      if (this.generation !== expectedGeneration) return false;
+      await writeSession();
+      return true;
+    });
+  }
+
   private enqueue<T>(operation: () => Promise<T>) {
     const run = this.tail.then(operation, operation);
     this.tail = run.then(() => undefined, () => undefined);

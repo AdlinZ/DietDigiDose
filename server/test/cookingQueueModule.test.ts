@@ -3,6 +3,75 @@ import { describe, test } from "node:test";
 import type { CookingQueueRepository } from "../src/modules/cookingQueue/repository.js";
 import { CookingQueueService, formatQueueItem } from "../src/modules/cookingQueue/service.js";
 import type { QueueRow } from "../src/modules/cookingQueue/types.js";
+import Database from "better-sqlite3";
+import { SqliteCookingQueueRepository } from "../src/modules/cookingQueue/sqliteRepository.js";
+import { mealChangeDecision } from "../src/modules/mealPlans/changePolicy.js";
+
+function cancellationFixture() {
+  const db = new Database(":memory:");
+  db.exec(`
+    CREATE TABLE cooking_queue_items(id TEXT PRIMARY KEY, user_id INTEGER, recipe_id INTEGER, status TEXT,
+      version INTEGER, deleted_at TEXT, updated_at TEXT, meal_type TEXT, planned_at TEXT,
+      prepared_ingredients_json TEXT, shopping_list_synced_at TEXT, completed_at TEXT);
+    CREATE TABLE meal_plan_items(id TEXT PRIMARY KEY, user_id INTEGER, queue_item_id TEXT, status TEXT,
+      version INTEGER, deleted_at TEXT, updated_at TEXT, confirmed_at TEXT);
+    CREATE TABLE recipes(id INTEGER, title TEXT, image_url TEXT, cook_time INTEGER, calories INTEGER,
+      difficulty TEXT, ingredients_json TEXT, deleted_at TEXT, status TEXT);
+  `);
+  for (const [id, userId, status] of [["a", 1, "waiting"], ["b", 1, "cooking"], ["done", 1, "completed"], ["other", 2, "waiting"]] as const) {
+    db.prepare("INSERT INTO cooking_queue_items(id,user_id,status,version) VALUES(?,?,?,1)").run(id, userId, status);
+    db.prepare("INSERT INTO meal_plan_items(id,user_id,queue_item_id,status,version) VALUES(?,?,?,?,2)")
+      .run(id, userId, id, status === "completed" ? "completed" : "queued");
+  }
+  return { db, repository: new SqliteCookingQueueRepository(db) };
+}
+
+test("cancelling a queue item unlocks only its linked meal and advances its version", async () => {
+  const { db, repository } = cancellationFixture();
+  try {
+    assert.equal(await repository.cancel("a", 2), false);
+    assert.equal(await repository.cancel("a", 1), true);
+    const meal = db.prepare("SELECT * FROM meal_plan_items WHERE id='a'").get() as Record<string, unknown>;
+    assert.equal(meal.status, "planned");
+    assert.equal(meal.queue_item_id, null);
+    assert.equal(meal.version, 3);
+    assert.equal(mealChangeDecision(meal, undefined, []), "apply");
+    assert.equal(await repository.cancel("a", 1), false);
+    assert.equal((db.prepare("SELECT version FROM meal_plan_items WHERE id='a'").get() as { version: number }).version, 3);
+    assert.equal((db.prepare("SELECT status FROM meal_plan_items WHERE id='b'").get() as { status: string }).status, "queued");
+  } finally { db.close(); }
+});
+
+test("clearing a queue preserves completed meals and other accounts", async () => {
+  const { db, repository } = cancellationFixture();
+  try {
+    assert.equal(await repository.cancelAll(1), 2);
+    assert.deepEqual(db.prepare("SELECT id,status,queue_item_id FROM meal_plan_items ORDER BY id").all(), [
+      { id: "a", status: "planned", queue_item_id: null }, { id: "b", status: "planned", queue_item_id: null },
+      { id: "done", status: "completed", queue_item_id: "done" }, { id: "other", status: "queued", queue_item_id: "other" },
+    ]);
+  } finally { db.close(); }
+});
+
+test("PATCH cancellation honors optimistic versions before releasing a meal", async () => {
+  const { db, repository } = cancellationFixture();
+  const patch = { status: "cancelled" as const, mealType: null, plannedAt: null, preparedIngredients: [], shoppingListSyncedAt: null, completedAt: null };
+  try {
+    assert.equal(await repository.update("a", 1, 9, patch), null);
+    assert.equal((db.prepare("SELECT status FROM meal_plan_items WHERE id='a'").get() as { status: string }).status, "queued");
+    assert.equal((await repository.update("a", 1, 1, patch))?.status, "cancelled");
+    assert.equal((db.prepare("SELECT status FROM meal_plan_items WHERE id='a'").get() as { status: string }).status, "planned");
+  } finally { db.close(); }
+});
+
+test("meal update failure rolls queue cancellation back", async () => {
+  const { db, repository } = cancellationFixture();
+  try {
+    db.exec("CREATE TRIGGER fail_meal_update BEFORE UPDATE ON meal_plan_items BEGIN SELECT RAISE(ABORT, 'write failed'); END");
+    await assert.rejects(repository.cancelAll(1), /write failed/);
+    assert.deepEqual(db.prepare("SELECT status,version FROM cooking_queue_items WHERE id='a'").get(), { status: "waiting", version: 1 });
+  } finally { db.close(); }
+});
 
 const row: QueueRow = {
   id: "11111111-1111-4111-8111-111111111111", recipe_id: 1, position: 0, status: "waiting",

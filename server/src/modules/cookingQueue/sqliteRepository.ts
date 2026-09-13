@@ -33,7 +33,9 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
     return this.database.prepare(`${selectQueue} WHERE ${where} ORDER BY ${order}`).all(userId) as QueueRow[];
   }
 
-  async findOwned(id: string, userId: number) {
+  async findOwned(id: string, userId: number) { return this.findOwnedRow(id, userId); }
+
+  private findOwnedRow(id: string, userId: number) {
     return (this.database.prepare(`${selectQueue} WHERE q.id = ? AND q.user_id = ?`).get(id, userId) as QueueRow | undefined) ?? null;
   }
 
@@ -56,7 +58,7 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
       `).get(input.userId, input.recipeId) as { id: string } | undefined)?.id;
       const foundId = existingId || activeId;
       if (foundId) {
-        return { kind: "existing" as const, row: this.database.prepare(`${selectQueue} WHERE q.id = ? AND q.user_id = ?`).get(foundId, input.userId) as QueueRow };
+        return { kind: "existing" as const, row: this.findOwnedRow(foundId, input.userId)! };
       }
       const count = Number((this.database.prepare(`
         SELECT COUNT(*) AS count FROM cooking_queue_items
@@ -73,19 +75,22 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(input.id, input.userId, input.recipeId, position, input.mealType ?? null, input.plannedAt ?? null,
         JSON.stringify(input.snapshot), input.idempotencyKey ?? null);
-      return { kind: "created" as const, row: this.database.prepare(`${selectQueue} WHERE q.id = ? AND q.user_id = ?`).get(input.id, input.userId) as QueueRow };
+      return { kind: "created" as const, row: this.findOwnedRow(input.id, input.userId)! };
     })();
   }
 
   async update(id: string, userId: number, version: number, patch: QueuePatch) {
-    const result = this.database.prepare(`
-      UPDATE cooking_queue_items SET status = ?, meal_type = ?, planned_at = ?, prepared_ingredients_json = ?,
-        shopping_list_synced_at = ?, completed_at = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND user_id = ? AND version = ?
-    `).run(patch.status, patch.mealType ?? null, patch.plannedAt ?? null, jsonValue(patch.preparedIngredients),
-      patch.shoppingListSyncedAt ?? null, patch.completedAt ?? null, id, userId, version);
-    if (result.changes !== 1) return null;
-    return this.database.prepare(`${selectQueue} WHERE q.id = ? AND q.user_id = ?`).get(id, userId) as QueueRow;
+    return this.database.transaction(() => {
+      const result = this.database.prepare(`
+        UPDATE cooking_queue_items SET status = ?, meal_type = ?, planned_at = ?, prepared_ingredients_json = ?,
+          shopping_list_synced_at = ?, completed_at = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ? AND version = ?
+      `).run(patch.status, patch.mealType ?? null, patch.plannedAt ?? null, jsonValue(patch.preparedIngredients),
+        patch.shoppingListSyncedAt ?? null, patch.completedAt ?? null, id, userId, version);
+      if (result.changes !== 1) return null;
+      if (patch.status === "cancelled") this.releasePlanItems(userId, [id]);
+      return this.findOwnedRow(id, userId)!;
+    })();
   }
 
   async reorder(userId: number, items: Array<{ id: string; version: number }>) {
@@ -118,16 +123,32 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
       : this.database.prepare(`UPDATE cooking_queue_items SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
           version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ?`).run(id, userId, version);
     if (result.changes !== 1) return null;
-    return this.database.prepare(`${selectQueue} WHERE q.id = ? AND q.user_id = ?`).get(id, userId) as QueueRow;
+    return this.findOwnedRow(id, userId)!;
   }
 
   async cancel(id: string, userId: number) {
-    return this.database.prepare(`UPDATE cooking_queue_items SET status = 'cancelled', version = version + 1, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status IN (${activeStatuses})`).run(id, userId).changes === 1;
+    return this.cancelItems(userId, id) === 1;
   }
 
   async cancelAll(userId: number) {
-    return this.database.prepare(`UPDATE cooking_queue_items SET status = 'cancelled', version = version + 1, updated_at = CURRENT_TIMESTAMP
-      WHERE user_id = ? AND deleted_at IS NULL AND status IN (${activeStatuses})`).run(userId).changes;
+    return this.cancelItems(userId);
+  }
+
+  private cancelItems(userId: number, id?: string) {
+    return this.database.transaction(() => {
+      const cancelled = this.database.prepare(`UPDATE cooking_queue_items SET status = 'cancelled',
+        version = version + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ? AND deleted_at IS NULL AND status IN (${activeStatuses})${id ? " AND id = ?" : ""}
+        RETURNING id`).all(...(id ? [userId, id] : [userId])) as Array<{ id: string }>;
+      this.releasePlanItems(userId, cancelled.map(item => item.id));
+      return cancelled.length;
+    })();
+  }
+
+  private releasePlanItems(userId: number, queueIds: string[]) {
+    const release = this.database.prepare(`UPDATE meal_plan_items SET status = 'planned', queue_item_id = NULL,
+      version = version + 1, updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND queue_item_id = ? AND status IN ('queued', 'cooking') AND deleted_at IS NULL`);
+    for (const id of queueIds) release.run(userId, id);
   }
 }

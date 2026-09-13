@@ -73,10 +73,10 @@ docker compose -f deploy/docker-compose.staging.yml --project-directory deploy e
 
 1. 停止所有 server 实例，确认没有进程继续写入数据库。
 2. 校验备份来源、大小、权限、校验值和可用磁盘空间。
-3. 在独立 PostgreSQL 实例/volume 创建空目标，先应用同一提交的 Drizzle migrations，再执行恢复。恢复演练不得连接当前服务数据库。
+3. 在独立 PostgreSQL 实例/volume 创建空目标；备份包含 schema 和数据，恢复前不要应用 migrations。恢复演练不得连接当前服务数据库。优先使用 `DATABASE_RESTORE_URL` 与 `pnpm --dir server db:postgres:restore <备份目录>`，该工具拒绝非空目标并核验清单与 SHA。
 
 ```bash
-pg_restore --dbname="$ISOLATED_RESTORE_URL" --clean --if-exists --no-owner --no-acl \
+pg_restore --dbname="$ISOLATED_RESTORE_URL" --single-transaction --exit-on-error --no-owner --no-acl \
   /secure-backups/dietdigidose/staging.dump
 ```
 

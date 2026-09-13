@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import type { CookingQueueRepository } from "./repository.js";
 import type { QueueEnqueueData, QueuePatch, QueueRecipe, QueueRow } from "./types.js";
+import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 
 const active = "'waiting', 'preparing', 'ready', 'cooking'";
 const selectQueue = `SELECT q.*, r.title AS current_title, r.image_url AS current_image_url,
@@ -82,12 +83,17 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
   }
 
   async update(id: string, userId: number, version: number, patch: QueuePatch) {
-    const result = await this.pool.query(`UPDATE cooking_queue_items SET status = $1, meal_type = $2, planned_at = $3,
-      prepared_ingredients_json = $4::jsonb, shopping_list_synced_at = $5, completed_at = $6,
-      version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $7 AND user_id = $8 AND version = $9`,
-    [patch.status, patch.mealType ?? null, patch.plannedAt ?? null, json(patch.preparedIngredients),
-      patch.shoppingListSyncedAt ?? null, patch.completedAt ?? null, id, userId, version]);
-    return result.rowCount === 1 ? owned(this.pool, id, userId) : null;
+    const update = async (client: Pool | PoolClient) => {
+      const result = await client.query(`UPDATE cooking_queue_items SET status = $1, meal_type = $2, planned_at = $3,
+        prepared_ingredients_json = $4::jsonb, shopping_list_synced_at = $5, completed_at = $6,
+        version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $7 AND user_id = $8 AND version = $9`,
+      [patch.status, patch.mealType ?? null, patch.plannedAt ?? null, json(patch.preparedIngredients),
+        patch.shoppingListSyncedAt ?? null, patch.completedAt ?? null, id, userId, version]);
+      if (result.rowCount !== 1) return null;
+      if (patch.status === "cancelled") await this.releasePlanItems(client, userId, [id]);
+      return owned(client, id, userId);
+    };
+    return patch.status === "cancelled" ? this.cancellationTransaction(userId, update) : update(this.pool);
   }
 
   async reorder(userId: number, items: Array<{ id: string; version: number }>) {
@@ -125,13 +131,41 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
   }
 
   async cancel(id: string, userId: number) {
-    return (await this.pool.query(`UPDATE cooking_queue_items SET status = 'cancelled', version = version + 1,
-      updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL AND status IN (${active})`,
-    [id, userId])).rowCount === 1;
+    return await this.cancelItems(userId, id) === 1;
   }
 
   async cancelAll(userId: number) {
-    return (await this.pool.query(`UPDATE cooking_queue_items SET status = 'cancelled', version = version + 1,
-      updated_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND deleted_at IS NULL AND status IN (${active})`, [userId])).rowCount ?? 0;
+    return this.cancelItems(userId);
+  }
+
+  private cancelItems(userId: number, id?: string) {
+    return this.cancellationTransaction(userId, async client => {
+      const cancelled = await client.query(`UPDATE cooking_queue_items SET status = 'cancelled', version = version + 1,
+        updated_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND deleted_at IS NULL AND status IN (${active})
+        ${id ? "AND id = $2" : ""} RETURNING id`, id ? [userId, id] : [userId]);
+      await this.releasePlanItems(client, userId, cancelled.rows.map(row => String(row.id)));
+      return cancelled.rows.length;
+    });
+  }
+
+  private async releasePlanItems(client: Pool | PoolClient, userId: number, queueIds: string[]) {
+    if (!queueIds.length) return;
+    await client.query(`UPDATE meal_plan_items SET status = 'planned', queue_item_id = NULL,
+      version = version + 1, updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = $1 AND queue_item_id = ANY($2::text[]) AND status IN ('queued', 'cooking') AND deleted_at IS NULL`, [userId, queueIds]);
+  }
+
+  private async cancellationTransaction<T>(userId: number, operation: (client: PoolClient) => Promise<T>) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await lockMealPlanning(client, userId);
+      const result = await operation(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
   }
 }

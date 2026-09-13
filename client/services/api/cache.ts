@@ -46,7 +46,7 @@ export type ApiCacheMetrics = {
 
 const scopes = new WeakMap<ApiFetch, CacheScope>();
 const memory = new Map<string, CacheEntry>();
-const inFlight = new Map<string, Promise<unknown>>();
+const inFlight = new Map<string, { epoch: number; promise: Promise<unknown> }>();
 const scopeEpochs = new Map<CacheScope, number>();
 let maintenance: Promise<void> = Promise.resolve();
 const metrics: ApiCacheMetrics = {
@@ -164,11 +164,12 @@ function store<T>(key: string, path: string, scope: CacheScope, policy: ApiCache
 
 async function refresh<T>(key: string, path: string, scope: CacheScope, policy: ApiCachePolicy, entry: CacheEntry<T> | null, loader: (etag?: string | null) => Promise<LoaderResult<T>>) {
   const existing = inFlight.get(key);
-  if (existing) {
-    metrics.coalescedRequests += 1;
-    return existing as Promise<T>;
-  }
   const startedEpoch = scopeEpochs.get(scope) || 0;
+  if (existing?.epoch === startedEpoch) {
+    metrics.coalescedRequests += 1;
+    return existing.promise as Promise<T>;
+  }
+  scopeEpochs.set(scope, startedEpoch);
   const request = (async () => {
     metrics.networkRequests += 1;
     try {
@@ -178,13 +179,13 @@ async function refresh<T>(key: string, path: string, scope: CacheScope, policy: 
       return wasInvalidated ? result.data as T : store(key, path, scope, policy, result.data as T, result.etag);
     } catch (error) {
       const status = (error as ApiError)?.status;
-      if (status === 401 || status === 403) await clearApiCacheScope(scope);
+      if ((status === 401 || status === 403) && (scopeEpochs.get(scope) || 0) === startedEpoch) await clearApiCacheScope(scope);
       throw error;
     }
   })();
-  inFlight.set(key, request);
+  inFlight.set(key, { epoch: startedEpoch, promise: request });
   void request.finally(() => {
-    if (inFlight.get(key) === request) inFlight.delete(key);
+    if (inFlight.get(key)?.promise === request) inFlight.delete(key);
   }).catch(() => undefined);
   return request;
 }
@@ -204,9 +205,7 @@ export async function cachedApiGet<T>(apiFetch: ApiFetch, path: string, policy: 
     if (now <= entry.expiresAt) return entry.data;
     metrics.staleFallbacks += 1;
     metrics.revalidations += 1;
-    void refresh(key, path, scope, policy, entry, loader).catch(async (error: ApiError) => {
-      if (error?.status === 401 || error?.status === 403) await clearApiCacheScope(scope);
-    });
+    void refresh(key, path, scope, policy, entry, loader).catch(() => undefined);
     return entry.data;
   }
   metrics.misses += 1;
@@ -216,13 +215,24 @@ export async function cachedApiGet<T>(apiFetch: ApiFetch, path: string, policy: 
 function invalidationPrefixes(path: string) {
   if (/^\/api\/v1\/households\/\d+\/meals(?:\/|\?|$)/.test(path)) return ["/api/v1/households", "/api/v1/meal-plans", "/api/v1/diet-records", "/api/v1/health-data", "/api/v1/insights"];
   if (path.startsWith("/api/v1/inventory")) return ["/api/v1/inventory", "/api/v1/insights"];
+  if (/^\/api\/v1\/diet-records\/cooking-completions(?:\?|$)/.test(path)) {
+    return ["/api/v1/diet-records", "/api/v1/health-data", "/api/v1/inventory", "/api/v1/cooking-queue", "/api/v1/meal-plans", "/api/v1/insights"];
+  }
   if (path.startsWith("/api/v1/diet-records")) return ["/api/v1/diet-records", "/api/v1/health-data"];
   if (path.startsWith("/api/v1/health-data")) return ["/api/v1/health-data"];
   if (path.startsWith("/api/v1/recipes")) return ["/api/v1/recipes"];
   if (path.startsWith("/api/v1/community")) return ["/api/v1/community"];
   if (path.startsWith("/api/v1/shopping-list")) return ["/api/v1/shopping-list"];
-  if (path.startsWith("/api/v1/cooking-queue")) return ["/api/v1/cooking-queue"];
-  if (path.startsWith("/api/v1/meal-plans")) return ["/api/v1/meal-plans", "/api/v1/households"];
+  if (path.startsWith("/api/v1/cooking-queue")) return ["/api/v1/cooking-queue", "/api/v1/meal-plans"];
+  if (path.startsWith("/api/v1/meal-plans")) {
+    const prefixes = ["/api/v1/meal-plans", "/api/v1/households"];
+    if (/\/items\/[^/]+\/shopping(?:\?|$)/.test(path)) prefixes.push("/api/v1/shopping-list");
+    if (/\/items\/[^/]+\/queue(?:\?|$)/.test(path)) prefixes.push("/api/v1/cooking-queue");
+    if (/\/items\/[^/]+\/complete(?:\?|$)/.test(path)) {
+      prefixes.push("/api/v1/diet-records", "/api/v1/health-data", "/api/v1/inventory", "/api/v1/insights", "/api/v1/cooking-queue");
+    }
+    return prefixes;
+  }
   if (path.startsWith("/api/v1/kitchenware")) return ["/api/v1/kitchenware"];
   if (path.startsWith("/api/v1/households")) return ["/api/v1/households"];
   return [];
@@ -251,7 +261,7 @@ export async function invalidateApiCacheForMutation(apiFetch: ApiFetch, path: st
 export async function clearApiCacheScope(scopeOrUserId?: CacheScope | number | null) {
   const scope: CacheScope | null = typeof scopeOrUserId === "number" ? `user:${scopeOrUserId}` : scopeOrUserId || null;
   if (scope) scopeEpochs.set(scope, (scopeEpochs.get(scope) || 0) + 1);
-  else for (const knownScope of new Set([...memory.values()].map((entry) => entry.scope))) scopeEpochs.set(knownScope, (scopeEpochs.get(knownScope) || 0) + 1);
+  else for (const knownScope of new Set([...scopeEpochs.keys(), ...[...memory.values()].map((entry) => entry.scope)])) scopeEpochs.set(knownScope, (scopeEpochs.get(knownScope) || 0) + 1);
   for (const [key, entry] of memory) if (!scope || entry.scope === scope) memory.delete(key);
   const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(API_CACHE_STORAGE_PREFIX));
   if (!scope) {

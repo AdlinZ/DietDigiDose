@@ -43,7 +43,6 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       const activation = prepareDraftActivation(current, version);
       if (!activation) return { kind: "version_conflict" as const };
       if (activation.repeated) return { kind: "updated" as const, value: { plan: await this.formatPlan(client,current,userId), repeated: true } };
-      const activePlans = (await client.query("SELECT constraints_json FROM meal_plans WHERE user_id=$1 AND deleted_at IS NULL AND status='active'",[userId])).rows as Row[];
       const batchIds = [...new Set(activation.targets.flatMap(target => target.allocations.map(item => item.preparedMealId)))];
       const batches = batchIds.length
         ? (await client.query("SELECT * FROM prepared_meals WHERE user_id=$1 AND id=ANY($2::text[]) ORDER BY id FOR UPDATE", [userId, batchIds])).rows.map(formatPreparedMeal) : [];
@@ -51,10 +50,10 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       if (!preparedAllocationsAvailable(activation.targets, batches, [{ prepared_allocations: allocations }])) return { kind: "version_conflict" as const };
       if (activation.weekly) {
         const occupied = (await client.query("SELECT i.planned_date,i.meal_type FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=$1 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.status<>'skipped'",[userId])).rows as Row[];
-        for (const plan of activePlans) {
-          const saved = parseJson<Row>(plan.constraints_json,{});
-          const draft = (saved.currentCookingDraft ?? (saved.savedCookingDraft as { draft?: unknown } | undefined)?.draft) as { meals?: Array<{ date: string; mealType: string; cookServings: number }> } | undefined;
-          for (const meal of draft?.meals ?? []) if (meal.cookServings === 0) occupied.push({ planned_date: meal.date,meal_type: meal.mealType });
+        for (const allocation of allocations) {
+          if (allocation.status === "conflict" || (allocation.status === "active" && allocation.remainingServings > 0)) {
+            occupied.push({ planned_date: allocation.plannedDate, meal_type: allocation.mealType });
+          }
         }
         if (activation.targets.some(target => occupied.some(item => String(item.planned_date) === target.date && queueMealType(item.meal_type) === target.mealType))) return { kind: "version_conflict" as const };
       }

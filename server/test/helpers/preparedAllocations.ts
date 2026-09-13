@@ -71,6 +71,17 @@ export async function verifyAllocationLifecycle(repository: MealPlansRepository,
   meal = await get();
   assert.equal(meal.planned_date, null);
   assert.equal(meal.allocations!.find(row => row.id === second.id)!.plannedDate, "2099-09-15");
+  const extra = await diet.completeCooking(userId, { idempotency_key: `ledger-weekly:${randomUUID()}`, inventory_item_ids: [], inventory_consumptions: [],
+    production: { food_name: "另一批", produced_servings: 1, eaten_servings: 0, meal_type: "", nutrition_per_serving: {} } });
+  const extraId = String((extra.prepared_meal as Record<string, unknown>).id);
+  for (const [date, expected] of [["2099-09-15", "version_conflict"], ["2099-09-11", "updated"]] as const) {
+    const weeklyId = randomUUID();
+    const weekly = cookingPlanDraftSchema.parse({ ...draft, planningMode: "weekly", meals: [{ ...draft.meals[0], date,
+      allocations: [{ ...draft.meals[0].allocations[0], preparedMealId: extraId }] }] });
+    await repository.saveDraft(userId, { id: weeklyId, title: "延期后的周计划", draft: weekly });
+    assert.equal((await repository.activateDraft(userId, weeklyId, 1)).kind, expected, "weekly activation uses current allocation dates");
+    assert.equal(await repository.removePlan(userId, weeklyId, expected === "updated" ? 2 : 1), "removed");
+  }
   const third = meal.allocations!.find(row => row.targetMealId === "meal-12")!;
   await diet.applyMealEvent(userId, batchId, { idempotency_key: `ledger-discard:${randomUUID()}`, type: "discard", version: meal.version, servings: 0.5,
     allocation_id: third.id, allocation_version: third.version });

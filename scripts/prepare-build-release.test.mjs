@@ -54,3 +54,14 @@ test("reserves different revisions when CI checks out the same old metadata agai
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test("explicit carryover reserves only the next unused revision without lowering version codes", () => {
+  const nextWeek = new Date("2026-09-14T00:00:00+08:00");
+  const used = ["26w37a", "26w37b", "26w37c"];
+  assert.deepEqual(nextBuildRelease(release, used, nextWeek, "26w37d"), { ...release, snapshot: "26w37d", buildNumber: 263704 });
+  assert.throws(() => nextBuildRelease(release, used, nextWeek, "26w37c"), /next unused/);
+  assert.throws(() => nextBuildRelease(release, used, nextWeek, "26w37e"), /next unused/);
+  assert.throws(() => nextBuildRelease(release, [...used, "26w38a"], nextWeek, "26w37d"), /precedes/);
+  assert.throws(() => nextBuildRelease(release, used, nextWeek, "26w00d"), /Invalid/);
+});

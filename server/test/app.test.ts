@@ -4716,5 +4716,11 @@ test("prepared allocation ledger settles, postpones and restores the selected me
   const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
   const { DietRecordsService } = await import("../src/modules/dietRecords/service.js");
   const account = await register("allocation-ledger@example.com");
-  await verifyAllocationLifecycle(new SqliteMealPlansRepository(db), new DietRecordsService(new SqliteDietRecordsRepository(db)), account.user.id);
+  await verifyAllocationLifecycle(new SqliteMealPlansRepository(db), new DietRecordsService(new SqliteDietRecordsRepository(db)), account.user.id, async operation => {
+    const before = (db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).n;
+    db.exec("CREATE TRIGGER ledger_injected_failure BEFORE INSERT ON prepared_meal_events WHEN NEW.idempotency_key='ledger-injected-failure' BEGIN SELECT RAISE(ABORT,'injected allocation failure'); END");
+    try { await assert.rejects(operation(),/injected allocation failure/); }
+    finally { db.exec("DROP TRIGGER ledger_injected_failure"); }
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).n,before);
+  });
 });

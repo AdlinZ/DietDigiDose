@@ -1387,7 +1387,14 @@ try {
 
   const mealPlanRepository = new PostgresMealPlansRepository(pool);
   const { verifyPreparedAllocations, verifyAllocationLifecycle } = await import("./helpers/preparedAllocations.js");
-  await verifyAllocationLifecycle(mealPlanRepository, dietService, user.id);
+  await verifyAllocationLifecycle(mealPlanRepository, dietService, user.id, async operation => {
+    const before = (await pool.query("SELECT COUNT(*) n FROM diet_records WHERE user_id=$1",[user.id])).rows[0].n;
+    await pool.query(`CREATE FUNCTION ledger_injected_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected allocation failure'; END $$;
+      CREATE TRIGGER ledger_injected_failure BEFORE INSERT ON prepared_meal_events FOR EACH ROW WHEN (NEW.idempotency_key='ledger-injected-failure') EXECUTE FUNCTION ledger_injected_failure();`);
+    try { await assert.rejects(operation(),/injected allocation failure/); }
+    finally { await pool.query("DROP TRIGGER ledger_injected_failure ON prepared_meal_events; DROP FUNCTION ledger_injected_failure()"); }
+    assert.equal((await pool.query("SELECT COUNT(*) n FROM diet_records WHERE user_id=$1",[user.id])).rows[0].n,before);
+  });
   const allocationProduction = await dietService.completeCooking(user.id, {
     idempotency_key: "pg-prepared-active-allocation", inventory_item_ids: [], inventory_consumptions: [],
     production: { food_name: "份量安排", produced_servings: 1, eaten_servings: 0, meal_type: "", nutrition_per_serving: {} },

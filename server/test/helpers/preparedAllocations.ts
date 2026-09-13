@@ -28,7 +28,7 @@ export async function verifyPreparedAllocations(repository: MealPlansRepository,
   assert.equal((await repository.activateDraft(userId + 1, staleId, 1)).kind, "not_found");
 }
 
-export async function verifyAllocationLifecycle(repository: MealPlansRepository, diet: import("../../src/modules/dietRecords/service.js").DietRecordsService, userId: number) {
+export async function verifyAllocationLifecycle(repository: MealPlansRepository, diet: import("../../src/modules/dietRecords/service.js").DietRecordsService, userId: number, injectFailure?: (operation: () => Promise<unknown>) => Promise<void>) {
   const production = await diet.completeCooking(userId, { idempotency_key: `ledger-production:${randomUUID()}`, inventory_item_ids: [], inventory_consumptions: [],
     production: { food_name: "三餐同一批", produced_servings: 3, eaten_servings: 0, meal_type: "", nutrition_per_serving: {} } });
   const batchId = String((production.prepared_meal as Record<string, unknown>).id);
@@ -49,6 +49,13 @@ export async function verifyAllocationLifecycle(repository: MealPlansRepository,
   await assert.rejects(diet.applyMealEvent(userId, batchId, input), /选择/);
   assert.equal((await get()).remaining_servings, 3);
   const first = before.allocations![0];
+  if (injectFailure) {
+    await injectFailure(() => diet.applyMealEvent(userId,batchId,{ ...input,idempotency_key: "ledger-injected-failure",allocation_id: first.id,allocation_version: first.version }));
+    const rolledBack = await get();
+    assert.equal(rolledBack.version,before.version); assert.equal(rolledBack.remaining_servings,3);
+    assert.deepEqual(rolledBack.allocations,before.allocations);
+  }
+
   const eaten = await diet.applyMealEvent(userId, batchId, { ...input, allocation_id: first.id, allocation_version: first.version });
   assert.equal((await get()).allocations![0].remainingServings, 0.5);
   await diet.remove(userId, Number((eaten.diet_record as Record<string, unknown>).id), "undo_eating");

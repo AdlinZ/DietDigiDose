@@ -1,3 +1,4 @@
+import { mealEventIdentity, replayMealEvent } from "./mealEventIdentity.js";
 import { coreLoopEnvironment } from "../../services/coreLoopEnvironment.js";
 import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
 import { randomUUID } from "node:crypto";
@@ -171,11 +172,8 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
 
   async applyMealEventWithClient(client: PoolClient, userId: number, mealId: string, input: PreparedMealEventInput) {
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`prepared-meals:${userId}`]);
-    const existing = (await client.query("SELECT prepared_meal_id,result_json FROM prepared_meal_events WHERE user_id=$1 AND idempotency_key=$2", [userId, input.idempotency_key])).rows[0];
-    if (existing) {
-      if (existing.prepared_meal_id !== mealId) throw new InventoryQuantityError("PREPARED_MEAL_KEY_CONFLICT", "该操作编号已用于另一份待吃餐");
-      return { ...existing.result_json, repeated: true };
-    }
+    const existing = (await client.query("SELECT prepared_meal_id,event_type,servings,result_json FROM prepared_meal_events WHERE user_id=$1 AND idempotency_key=$2", [userId, input.idempotency_key])).rows[0];
+    if (existing) return replayMealEvent(existing, mealId, input);
     const row = (await client.query("SELECT * FROM prepared_meals WHERE id=$1 AND user_id=$2 FOR UPDATE", [mealId, userId])).rows[0];
     if (!row) throw new InventoryQuantityError("PREPARED_MEAL_NOT_FOUND", "待吃餐不存在或不属于当前账号");
     const meal = formatPreparedMeal(row);
@@ -184,7 +182,7 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
     const changed = await client.query("UPDATE prepared_meals SET reported_cooking_minutes=$8,is_reserved=$7,remaining_servings=$1,planned_date=$2,meal_type=$3,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND user_id=$5 AND version=$6",
       [next.remaining_servings, next.planned_date, next.meal_type, mealId, userId, input.version, next.is_reserved,next.reported_cooking_minutes ?? null]);
     if (changed.rowCount !== 1) throw new InventoryQuantityError("PREPARED_MEAL_VERSION_CONFLICT", "待吃餐已变化，请刷新后重试");
-    const result = { prepared_meal: next, diet_record: record, repeated: false };
+    const result = { prepared_meal: next, diet_record: record, repeated: false, request_identity: mealEventIdentity(input) };
     await client.query("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
       [randomUUID(), userId, mealId, input.idempotency_key, input.type, input.servings ?? null, input.recorded_at!, record?.id ?? null, JSON.stringify(result)]);
     await appendPostgresMaintenanceEvent(client, { userId, kind: input.type, sourceId: input.idempotency_key,

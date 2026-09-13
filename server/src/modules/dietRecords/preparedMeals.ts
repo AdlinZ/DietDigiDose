@@ -1,3 +1,4 @@
+import { mealEventIdentity } from "./mealEventIdentity.js";
 import { mealProductionSchema, preparedMealEventSchema, type MealProduction, type PreparedMeal, type PreparedMealEventInput } from "@dietdigidose/contracts";
 import { currentDateKey, currentTimeKey } from "../../utils/date.js";
 import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
@@ -22,9 +23,9 @@ export function prepareProduction(input: MealProduction): MealProduction {
   const value = mealProductionSchema.parse(input);
   return { ...value, eaten_at: value.eaten_at ?? currentDateKey(), eaten_time: value.eaten_time ?? (value.eaten_at && value.eaten_at !== currentDateKey() ? null : currentTimeKey()) };
 }
-export function prepareMealEvent(input: PreparedMealEventInput): PreparedMealEventInput {
+export function prepareMealEvent(input: PreparedMealEventInput): PreparedMealEventInput & { requestIdentity: string } {
   const value = preparedMealEventSchema.parse(input);
-  return { ...value, recorded_at: value.recorded_at ?? currentDateKey(), recorded_time: value.recorded_time ?? (value.recorded_at && value.recorded_at !== currentDateKey() ? null : currentTimeKey()) };
+  return { ...value, requestIdentity: mealEventIdentity(value), recorded_at: value.recorded_at ?? currentDateKey(), recorded_time: value.recorded_time ?? (value.recorded_at && value.recorded_at !== currentDateKey() ? null : currentTimeKey()) };
 }
 export function formatPreparedMeal(row: Record<string, unknown>): PreparedMeal {
   const nutrition = typeof row.nutrition_per_serving_json === "string" ? JSON.parse(row.nutrition_per_serving_json) : row.nutrition_per_serving_json;

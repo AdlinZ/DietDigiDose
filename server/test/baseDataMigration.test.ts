@@ -43,6 +43,7 @@ test("base data migration preserves referenced rows, indexes, IDs and admin edit
       CREATE TABLE inventory_items(id INTEGER PRIMARY KEY);
       CREATE TABLE recipe_favorites(id INTEGER PRIMARY KEY);`);
     for (let version = 1; version <= 80; version++) db.prepare("INSERT INTO schema_migrations VALUES(?,'applied')").run(version);
+    db.prepare("INSERT INTO schema_migrations VALUES(82,'separate allocation fixture')").run();
     runMigrations(db);
     runMigrations(db);
     assert.equal(db.pragma("foreign_keys", { simple: true }), 1);

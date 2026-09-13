@@ -2357,6 +2357,42 @@ const migrations: Migration[] = [
     );`);
   } },
   { version: 81, name: "base_data_runtime_schema", rebuildsReferencedTable: true, up: migrateBaseData },
+  { version: 82, name: "prepared_meal_allocation_ledger", up(database) {
+    // Batch IDs intentionally retain orphaned legacy references as conflicts.
+    database.exec(`CREATE TABLE prepared_meal_allocations (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_id TEXT NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
+  target_meal_id TEXT NOT NULL,
+  prepared_meal_id TEXT NOT NULL,
+  servings REAL NOT NULL CHECK(servings >= 0),
+  remaining_servings REAL NOT NULL CHECK(remaining_servings >= 0 AND remaining_servings <= servings),
+  planned_date TEXT NOT NULL,
+  meal_type TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('active','conflict','released','settled')),
+  version INTEGER NOT NULL DEFAULT 1,
+  source_json TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(plan_id,target_meal_id,prepared_meal_id)
+);
+CREATE INDEX idx_prepared_allocations_user_batch ON prepared_meal_allocations(user_id,prepared_meal_id,status);
+
+INSERT INTO prepared_meal_allocations(id,user_id,plan_id,target_meal_id,prepared_meal_id,servings,remaining_servings,planned_date,meal_type,status,source_json)
+SELECT p.id||':'||json_extract(m.value,'$.id')||':'||json_extract(a.value,'$.preparedMealId'),p.user_id,p.id,
+  json_extract(m.value,'$.id'),json_extract(a.value,'$.preparedMealId'),MAX(0,COALESCE(json_extract(a.value,'$.servings'),0)),MAX(0,COALESCE(json_extract(a.value,'$.servings'),0)),
+  COALESCE(json_extract(m.value,'$.date'),''),COALESCE(json_extract(m.value,'$.mealType'),''),
+  CASE WHEN b.id IS NULL OR json_extract(a.value,'$.servings')<=0 OR b.is_reserved=1 OR b.version<>json_extract(a.value,'$.version') THEN 'conflict' ELSE 'active' END,a.value
+FROM meal_plans p,
+  json_each(COALESCE(json_extract(p.constraints_json,'$.currentCookingDraft.meals'),json_extract(p.constraints_json,'$.savedCookingDraft.draft.meals'),'[]')) m,
+  json_each(m.value,'$.allocations') a
+LEFT JOIN prepared_meals b ON b.id=json_extract(a.value,'$.preparedMealId') AND b.user_id=p.user_id
+WHERE p.status='active' AND p.deleted_at IS NULL;
+UPDATE prepared_meal_allocations AS target SET status='conflict' WHERE EXISTS (
+ SELECT 1 FROM prepared_meal_allocations a LEFT JOIN prepared_meals b ON b.id=a.prepared_meal_id AND b.user_id=a.user_id
+ WHERE a.user_id=target.user_id AND a.prepared_meal_id=target.prepared_meal_id
+ GROUP BY a.user_id,a.prepared_meal_id HAVING SUM(a.remaining_servings)>COALESCE(MAX(b.remaining_servings),0)+0.000001
+);
+`);
+  } },
 ];
 
 export function runMigrations(database: Database.Database) {

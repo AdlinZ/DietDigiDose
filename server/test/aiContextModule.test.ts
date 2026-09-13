@@ -61,6 +61,8 @@ describe("AI context module", () => {
       CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, daily_calories_target INTEGER);
       CREATE TABLE inventory_items (id INTEGER PRIMARY KEY, user_id INTEGER, food_name TEXT, quantity TEXT,
         expiration_date TEXT, storage_location TEXT, is_available INTEGER, version INTEGER DEFAULT 1, quantity_value REAL, quantity_unit TEXT, batch_code TEXT, deleted_at TEXT);
+      CREATE TABLE meal_plans(id TEXT,user_id INTEGER,status TEXT,deleted_at TEXT);
+      CREATE TABLE prepared_meal_allocations(id TEXT,user_id INTEGER,plan_id TEXT,prepared_meal_id TEXT,planned_date TEXT,meal_type TEXT);
       CREATE TABLE prepared_meals (id TEXT PRIMARY KEY,user_id INTEGER,remaining_servings REAL,produced_at TEXT);
       CREATE TABLE kitchenware_items (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, category TEXT, status TEXT,
         deleted_at TEXT, updated_at TEXT);

@@ -1,3 +1,5 @@
+import { SqliteMealAllocationsRepository } from "../mealAllocations/sqliteRepository.js";
+import { chooseAllocation, restoredAllocation, allocationMealType } from "../mealAllocations/model.js";
 import { mealEventIdentity, replayMealEvent } from "./mealEventIdentity.js";
 import { coreLoopEnvironment } from "../../services/coreLoopEnvironment.js";
 import { appendSqliteMaintenanceEvent } from "../planMaintenance/sqliteEventWriter.js";
@@ -76,6 +78,9 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
           const changed = this.database.prepare("UPDATE prepared_meals SET remaining_servings=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND version=?")
             .run(next.remaining_servings, meal.id, userId, meal.version);
           if (changed.changes !== 1) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "餐食已变化，请刷新后重试");
+          const allocationRepository = new SqliteMealAllocationsRepository(this.database);
+          const allocation = restoredAllocation(allocationRepository.list(userId, meal.id), event.result_json, Number(event.servings));
+          if (allocation) allocationRepository.update(userId, allocation);
         }
         this.database.prepare("INSERT INTO prepared_meal_intake_corrections(id,user_id,event_id,original_diet_record_id,mode,result_json) VALUES(?,?,?,?,?,?)")
           .run(randomUUID(), userId, event.id, id, mode, JSON.stringify({ prepared_meal: next, original_event: event.id, original_diet_record_id: id, mode }));
@@ -132,7 +137,8 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
   async listPreparedMeals(userId: number) { return this.listPreparedMealsInTransaction(userId); }
 
   listPreparedMealsInTransaction(userId: number) {
-    return (this.database.prepare("SELECT * FROM prepared_meals WHERE user_id=? ORDER BY produced_at DESC,id DESC").all(userId) as Record<string, unknown>[]).map(formatPreparedMeal);
+    const allocations = new SqliteMealAllocationsRepository(this.database).list(userId);
+    return (this.database.prepare("SELECT * FROM prepared_meals WHERE user_id=? ORDER BY produced_at DESC,id DESC").all(userId) as Record<string, unknown>[]).map(row => ({ ...formatPreparedMeal(row), allocations: allocations.filter(item => item.preparedMealId === row.id) }));
   }
 
   async applyMealEvent(userId: number, mealId: string, input: PreparedMealEventInput) {
@@ -146,12 +152,17 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
       const row = this.database.prepare("SELECT * FROM prepared_meals WHERE id=? AND user_id=?").get(mealId, userId) as Record<string, unknown> | undefined;
       if (!row) throw new InventoryQuantityError("PREPARED_MEAL_NOT_FOUND", "待吃餐不存在或不属于当前账号");
       const meal = formatPreparedMeal(row);
-      const next = transitionMeal(meal, input);
-      const record = input.type === "eat" ? this.createSync(userId, mealConsumptionRecord({ ...meal, meal_type: input.meal_type ?? meal.meal_type }, input.servings!, input.recorded_at!, input.recorded_time ?? null)) : null;
+      const allocationRepository = new SqliteMealAllocationsRepository(this.database);
+      const existingAllocations = allocationRepository.list(userId, mealId);
+      const allocation = chooseAllocation(existingAllocations, input, meal.remaining_servings);
+      const next = transitionMeal(meal, allocation && input.type === "reschedule" ? { ...input, planned_date: undefined, meal_type: undefined } : input);
+      const record = input.type === "eat" ? this.createSync(userId, mealConsumptionRecord({ ...meal, meal_type: input.meal_type ?? allocationMealType(allocation, meal.meal_type) }, input.servings!, input.recorded_at!, input.recorded_time ?? null)) : null;
       const changed = this.database.prepare("UPDATE prepared_meals SET reported_cooking_minutes=?,is_reserved=?,remaining_servings=?,planned_date=?,meal_type=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND version=?")
         .run(next.reported_cooking_minutes ?? null,Number(next.is_reserved), next.remaining_servings, next.planned_date, next.meal_type, mealId, userId, input.version);
       if (changed.changes !== 1) throw new InventoryQuantityError("PREPARED_MEAL_VERSION_CONFLICT", "待吃餐已变化，请刷新后重试");
-      const result = { prepared_meal: next, diet_record: record, repeated: false, request_identity: mealEventIdentity(input) };
+      if (allocation) allocationRepository.update(userId, allocation);
+      next.allocations = existingAllocations.map(row => row.id === allocation?.id ? allocation : row);
+      const result = { prepared_meal: next, allocation, diet_record: record, repeated: false, request_identity: mealEventIdentity(input) };
       this.database.prepare("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES(?,?,?,?,?,?,?,?,?)")
         .run(randomUUID(), userId, mealId, input.idempotency_key, input.type, input.servings ?? null, input.recorded_at!, record?.id ?? null, JSON.stringify(result));
       appendSqliteMaintenanceEvent(this.database, { userId, kind: input.type, sourceId: input.idempotency_key,

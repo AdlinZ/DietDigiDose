@@ -237,6 +237,25 @@ try {
     legacyBaseData.release();
   }
 
+  const legacyAllocations = await pool.connect();
+  try {
+    await legacyAllocations.query("BEGIN");
+    await legacyAllocations.query(`CREATE TABLE users(id integer PRIMARY KEY); INSERT INTO users VALUES(1),(2);
+      CREATE TABLE meal_plans(id text PRIMARY KEY,user_id integer,status text,deleted_at text,constraints_json jsonb);
+      CREATE TABLE prepared_meals(id text PRIMARY KEY,user_id integer,remaining_servings double precision,version integer,is_reserved boolean);
+      INSERT INTO prepared_meals VALUES('b1',1,1,1,false),('b2',1,2,1,false);`);
+    for (const [id,owner,batch] of [["p1",1,"b1"],["p2",1,"b1"],["p3",2,"b2"],["p4",1,"b2"],["p5",1,"missing"]]) {
+      const source = { savedCookingDraft: { draft: { meals: [{ id: "dinner",date: "2099-09-10",mealType: "dinner",allocations: [{ preparedMealId: batch,version: 1,servings: 1 }] }] } } };
+      await legacyAllocations.query("INSERT INTO meal_plans VALUES($1,$2,'active',NULL,$3::jsonb)",[id,owner,JSON.stringify(source)]);
+    }
+    await legacyAllocations.query(fs.readFileSync(path.join(serverRoot,"drizzle/0024_awesome_guardian.sql"),"utf8"));
+    assert.deepEqual((await legacyAllocations.query("SELECT plan_id,status FROM prepared_meal_allocations ORDER BY plan_id")).rows,[
+      { plan_id: "p1",status: "conflict" },{ plan_id: "p2",status: "conflict" },{ plan_id: "p3",status: "conflict" },
+      { plan_id: "p4",status: "active" },{ plan_id: "p5",status: "conflict" },
+    ]);
+    assert.equal(Number((await legacyAllocations.query("SELECT remaining_servings FROM prepared_meals WHERE id='b1'")).rows[0].remaining_servings),1);
+  } finally { await legacyAllocations.query("ROLLBACK"); legacyAllocations.release(); }
+
   await migrate(drizzle(pool), { migrationsFolder: path.join(serverRoot, "drizzle") });
   const first = await pool.connect();
   try {
@@ -1367,7 +1386,8 @@ try {
   assert.equal(await cookingQueueRepository.cancel("66666666-6666-4666-8666-666666666666", user.id), true);
 
   const mealPlanRepository = new PostgresMealPlansRepository(pool);
-  const { verifyPreparedAllocations } = await import("./helpers/preparedAllocations.js");
+  const { verifyPreparedAllocations, verifyAllocationLifecycle } = await import("./helpers/preparedAllocations.js");
+  await verifyAllocationLifecycle(mealPlanRepository, dietService, user.id);
   const allocationProduction = await dietService.completeCooking(user.id, {
     idempotency_key: "pg-prepared-active-allocation", inventory_item_ids: [], inventory_consumptions: [],
     production: { food_name: "份量安排", produced_servings: 1, eaten_servings: 0, meal_type: "", nutrition_per_serving: {} },

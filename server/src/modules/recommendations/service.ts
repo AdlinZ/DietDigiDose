@@ -61,6 +61,13 @@ export class RecommendationsService {
     const reservations = activePreparedAllocations(state.plans);
     const items = [...state.items];
     for (const plan of state.plans) {
+      if (Array.isArray(plan.prepared_allocations)) {
+        for (const row of plan.prepared_allocations) if (row.status === "active" && row.remainingServings > 0 && row.plannedDate >= request.startDate) {
+          items.push({ id: `prepared-plan:${row.id}`, planned_date: row.plannedDate, meal_type: row.mealType,
+            title: String(batches.find(batch => String(batch.id) === row.preparedMealId)?.food_name ?? "已安排待吃餐"), prepared_only: true, status: "planned" });
+        }
+        continue;
+      }
       const constraints = parseJson<Row>(plan.constraints_json,{});
       const saved = constraints.savedCookingDraft as { draft?: unknown } | undefined;
       const draft = cookingPlanDraftSchema.safeParse(constraints.currentCookingDraft ?? saved?.draft);

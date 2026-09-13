@@ -2,7 +2,9 @@ import { cookingPlanDraftSchema, type CookingPlanDraft, type PreparedMeal } from
 import { parseJson, type Row } from "./formatters.js";
 
 export function activePreparedAllocations(plans: Row[]) {
-  return plans.flatMap(plan => {
+  return plans.flatMap<{ preparedMealId: string; servings: number }>(plan => {
+    if (Array.isArray(plan.prepared_allocations)) return plan.prepared_allocations.filter(row => row.status === "active" || row.status === "conflict")
+      .map(row => ({ preparedMealId: String(row.preparedMealId), servings: row.status === "conflict" ? Number.MAX_SAFE_INTEGER : Number(row.remainingServings) }));
     const constraints = parseJson<Row>(plan.constraints_json, {});
     const saved = constraints.savedCookingDraft as { draft?: unknown } | undefined;
     const draft = cookingPlanDraftSchema.safeParse(constraints.currentCookingDraft ?? saved?.draft);

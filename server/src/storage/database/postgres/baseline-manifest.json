@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "254e112b335a262a6c4134394b1faf7d8cb6777d137a3637417514fb26e4bedc",
-  "tableCount": 113,
-  "indexCount": 164,
-  "foreignKeyCount": 179,
+  "sourceSchemaSha256": "77b3e154388fc4182da2720e785082aa879923c90e65ffdc9799a26209358cef",
+  "tableCount": 114,
+  "indexCount": 166,
+  "foreignKeyCount": 181,
   "tables": [
     {
       "name": "admin_audit_logs",
@@ -6563,6 +6563,115 @@
           "sqliteType": "DATETIME",
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "prepared_meal_allocations",
+      "autoIncrement": false,
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "plan_id",
+          "referencedTable": "meal_plans",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        },
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "plan_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "target_meal_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "prepared_meal_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "servings",
+          "sqliteType": "REAL",
+          "postgresType": "double precision",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "remaining_servings",
+          "sqliteType": "REAL",
+          "postgresType": "double precision",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "planned_date",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "meal_type",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "source_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
           "nullable": false
         }
       ]

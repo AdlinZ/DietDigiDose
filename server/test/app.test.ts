@@ -4708,3 +4708,13 @@ test("active drafts reserve prepared portions atomically and cancellation releas
     db.prepare("UPDATE prepared_meals SET version=version+1 WHERE id=?").run(meal.id);
   });
 });
+
+
+test("prepared allocation ledger settles, postpones and restores the selected meal only", async () => {
+  const { verifyAllocationLifecycle } = await import("./helpers/preparedAllocations.js");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
+  const { DietRecordsService } = await import("../src/modules/dietRecords/service.js");
+  const account = await register("allocation-ledger@example.com");
+  await verifyAllocationLifecycle(new SqliteMealPlansRepository(db), new DietRecordsService(new SqliteDietRecordsRepository(db)), account.user.id);
+});

@@ -1,3 +1,4 @@
+import { SqliteMealAllocationsRepository } from "../mealAllocations/sqliteRepository.js";
 import type Database from "better-sqlite3";
 import type { AiContextRepository } from "./repository.js";
 import type { AiContextRows, Row } from "./types.js";
@@ -21,7 +22,8 @@ export class SqliteAiContextRepository implements AiContextRepository {
       medical_notes, dietary_restrictions_json, disliked_foods, kitchen_constraints_json, nutrition_targets_json
       FROM user_health_profiles WHERE user_id = ?`).get(userId) as Row | undefined;
     const setting = this.database.prepare("SELECT value FROM system_settings WHERE key = 'AI_SYSTEM_PROMPT'").get() as { value: string } | undefined;
-    return { user: user || null, inventory, preparedMeals, kitchenware, todayDiet, latestHealth: latestHealth || null,
+    const allocations = new SqliteMealAllocationsRepository(this.database).list(userId);
+    return { user: user || null, inventory, preparedMeals: preparedMeals.map(row => ({ ...row, allocations: allocations.filter(item => item.preparedMealId === row.id) })), kitchenware, todayDiet, latestHealth: latestHealth || null,
       healthProfile: healthProfile || null, personaPrompt: setting?.value || "" };
   }
 }

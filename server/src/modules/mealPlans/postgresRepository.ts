@@ -1,3 +1,4 @@
+import { PostgresMealAllocationsRepository } from "../mealAllocations/postgresRepository.js";
 import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readPostgresDiningSupply } from "../households/postgresDiningSupply.js";
 import { prepareNetDiningShopping } from "../households/diningNetShopping.js";
@@ -46,7 +47,8 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       const batchIds = [...new Set(activation.targets.flatMap(target => target.allocations.map(item => item.preparedMealId)))];
       const batches = batchIds.length
         ? (await client.query("SELECT * FROM prepared_meals WHERE user_id=$1 AND id=ANY($2::text[]) ORDER BY id FOR UPDATE", [userId, batchIds])).rows.map(formatPreparedMeal) : [];
-      if (!preparedAllocationsAvailable(activation.targets, batches, activePlans)) return { kind: "version_conflict" as const };
+      const allocations = await new PostgresMealAllocationsRepository(client).list(userId);
+      if (!preparedAllocationsAvailable(activation.targets, batches, [{ prepared_allocations: allocations }])) return { kind: "version_conflict" as const };
       if (activation.weekly) {
         const occupied = (await client.query("SELECT i.planned_date,i.meal_type FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=$1 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.status<>'skipped'",[userId])).rows as Row[];
         for (const plan of activePlans) {
@@ -67,6 +69,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
         (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json,confirmed_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,CURRENT_TIMESTAMP)`, [item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),JSON.stringify(recipes[index].steps_json)]);
       const updated = await client.query("UPDATE meal_plans SET status='active',constraints_json=$1::jsonb,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND user_id=$3 RETURNING *", [JSON.stringify(activation.constraints),id,userId]);
+      await new PostgresMealAllocationsRepository(client).reserve(userId,id,activation.targets);
       return { kind: "updated" as const, value: { plan: await this.formatPlan(client,updated.rows[0],userId), repeated: false } };
     });
   }
@@ -140,10 +143,12 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     const endDate = input.endDate ?? String(current.end_date);
     if (startDate > endDate) return { kind: "invalid_date_range" as const };
     await this.assertPlanEditWithClient(client,userId,id,input);
+    if (input.status && ["active", "draft"].includes(input.status) && current.status !== input.status && parseJson<Row>(current.constraints_json, {}).savedCookingDraft) return { kind: "version_conflict" as const };
     const changed = await client.query(`UPDATE meal_plans SET title = $1, start_date = $2, end_date = $3, status = $4,
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $5 AND user_id = $6 AND version = $7 AND deleted_at IS NULL`,
     [input.title ?? current.title, startDate, endDate, input.status ?? current.status, id, userId, input.version]);
     if (changed.rowCount !== 1) return { kind: "version_conflict" as const };
+    if (input.status && input.status !== "active") await new PostgresMealAllocationsRepository(client).release(userId,id);
     return { kind: "updated" as const, value: await this.formatPlan(client, (await this.getPlan(client, id, userId, false))!, userId) };
   });
   }
@@ -155,7 +160,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     const changed = await client.query(`UPDATE meal_plans SET deleted_at = CURRENT_TIMESTAMP, status = 'cancelled',
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND version = $3 AND deleted_at IS NULL`,
     [id, userId, version]);
-    if (changed.rowCount === 1) return "removed" as const;
+    if (changed.rowCount === 1) { await new PostgresMealAllocationsRepository(client).release(userId,id); return "removed" as const; }
     return await this.getPlan(client, id, userId, false) ? "version_conflict" as const : "not_found" as const;
   });
   }

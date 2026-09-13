@@ -1,3 +1,4 @@
+import { PostgresMealAllocationsRepository } from "../mealAllocations/postgresRepository.js";
 import type { Pool } from "pg";
 import type { AiContextRepository } from "./repository.js";
 import type { AiContextRows, Row } from "./types.js";
@@ -23,9 +24,10 @@ export class PostgresAiContextRepository implements AiContextRepository {
         FROM user_health_profiles WHERE user_id = $1`, [userId]),
       this.pool.query("SELECT value FROM system_settings WHERE key = 'AI_SYSTEM_PROMPT'"),
     ]);
+    const allocations = await new PostgresMealAllocationsRepository(this.pool).list(userId);
     return {
       user: (user.rows[0] as Row | undefined) || null,
-      inventory: inventory.rows as Row[], preparedMeals: preparedMeals.rows as Row[], kitchenware: kitchenware.rows as Row[], todayDiet: todayDiet.rows as Row[],
+      inventory: inventory.rows as Row[], preparedMeals: preparedMeals.rows.map(row => ({ ...row, allocations: allocations.filter(item => item.preparedMealId === row.id) })), kitchenware: kitchenware.rows as Row[], todayDiet: todayDiet.rows as Row[],
       latestHealth: (latestHealth.rows[0] as Row | undefined) || null,
       healthProfile: (healthProfile.rows[0] as Row | undefined) || null,
       personaPrompt: String(setting.rows[0]?.value || ""),

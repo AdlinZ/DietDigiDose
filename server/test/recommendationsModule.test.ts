@@ -300,3 +300,22 @@ test("intervention snapshots use local-day stock and preserve engine hard-constr
   }),kitchenware);
   assert.deepEqual((await blocked.interventionSnapshot(7,Date.parse("2026-09-13T00:30:00Z"),"America/Los_Angeles")).recommendations,[]);
 });
+
+test("single-session recommendations use only unallocated portions across all active plans", async () => {
+  const batch = { id: "52a6a5f0-4fa8-45a2-812f-8dbb1461d194", version: 1, food_name: "昨天的饭", remaining_servings: 2,
+    produced_servings: 2, produced_at: "2030-09-08T12:00:00Z", nutrition_per_serving_json: {} };
+  let plans: Array<Record<string, unknown>> = [];
+  const service = new RecommendationsService(repository({ preparedMeals: async () => [batch], planningState: async () => ({ items: [], shopping: [], plans }) }), kitchenware);
+  const request = { meals: [{ id: "dinner", date: "2030-09-09", mealType: "dinner" as const, servings: 1 }], excludedPreparedMealIds: [] };
+  const initial = await service.cookingPlan(7, request);
+  const draft = { ...initial, meals: initial.meals.map(meal => ({ ...meal, date: "2030-09-08" })) };
+  plans = [{ constraints_json: JSON.stringify({ savedCookingDraft: { draft } }) }];
+  const partial = await service.planRequirements(7, { ...request, meals: [{ ...request.meals[0], servings: 2 }] });
+  assert.equal(partial.meals[0].preparedServings, 1);
+  assert.equal(partial.meals[0].cookServings, 1);
+  plans.push({ constraints_json: { currentCookingDraft: initial } });
+  assert.equal((await service.planRequirements(7, request)).meals[0].preparedServings, 0);
+  plans = [];
+  assert.equal((await service.planRequirements(7, request)).meals[0].preparedServings, 1);
+  assert.equal(batch.remaining_servings, 2, "recommendation must not consume the batch");
+});

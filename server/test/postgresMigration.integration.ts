@@ -1361,6 +1361,17 @@ try {
   assert.equal(await cookingQueueRepository.cancel("66666666-6666-4666-8666-666666666666", user.id), true);
 
   const mealPlanRepository = new PostgresMealPlansRepository(pool);
+  const { verifyPreparedAllocations } = await import("./helpers/preparedAllocations.js");
+  const allocationProduction = await dietService.completeCooking(user.id, {
+    idempotency_key: "pg-prepared-active-allocation", inventory_item_ids: [], inventory_consumptions: [],
+    production: { food_name: "份量安排", produced_servings: 1, eaten_servings: 0, meal_type: "", nutrition_per_serving: {} },
+  });
+  const allocationBatch = allocationProduction.prepared_meal as { id: string };
+  await verifyPreparedAllocations(mealPlanRepository, user.id, allocationBatch.id, async () => {
+    assert.equal(Number((await pool.query("SELECT remaining_servings FROM prepared_meals WHERE id=$1", [allocationBatch.id])).rows[0].remaining_servings), 1);
+    await pool.query("UPDATE prepared_meals SET version=version+1 WHERE id=$1", [allocationBatch.id]);
+  });
+
   const protectedPlanId = "19500000-0000-4000-8000-000000000001";
   const protectedItemId = "19500000-0000-4000-8000-000000000002";
   await pool.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES($1,$2,'PG保护计划','2026-09-12','2026-09-18','active')", [protectedPlanId,user.id]);

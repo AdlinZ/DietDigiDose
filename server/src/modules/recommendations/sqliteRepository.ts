@@ -10,7 +10,7 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
   async planningState(userId: number, startDate: string, _endDate: string) {
     return {
       items: this.database.prepare("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.planned_date>=? ORDER BY i.planned_date,i.id").all(userId,startDate) as Row[],
-      plans: this.database.prepare("SELECT id,constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active' AND end_date>=?").all(userId,startDate) as Row[],
+      plans: this.database.prepare("SELECT id,constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active'").all(userId) as Row[],
       shopping: this.database.prepare("SELECT id,name,amount,checked FROM shopping_list_items WHERE user_id=? AND deleted_at IS NULL ORDER BY id").all(userId) as Row[],
     };
   }

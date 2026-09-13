@@ -128,7 +128,9 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
     })();
   }
 
-  async listPreparedMeals(userId: number) {
+  async listPreparedMeals(userId: number) { return this.listPreparedMealsInTransaction(userId); }
+
+  listPreparedMealsInTransaction(userId: number) {
     return (this.database.prepare("SELECT * FROM prepared_meals WHERE user_id=? ORDER BY produced_at DESC,id DESC").all(userId) as Record<string, unknown>[]).map(formatPreparedMeal);
   }
 

@@ -4724,3 +4724,16 @@ test("prepared allocation ledger settles, postpones and restores the selected me
     assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=?").get(account.user.id) as JsonObject).n,before);
   });
 });
+
+
+test("inactive meal plans reject fresh production from plan and queue while preserving committed retries", async () => {
+  const { verifyCancelledProduction } = await import("./helpers/cancelledProduction.js");
+  const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
+  const { DietRecordsService } = await import("../src/modules/dietRecords/service.js");
+  const account = await register("cancelled-production@example.com");
+  await verifyCancelledProduction(new DietRecordsService(new SqliteDietRecordsRepository(db)),account.user.id,async (sql,values=[]) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...values) as Record<string,unknown>[];
+    statement.run(...values); return [];
+  });
+});

@@ -6,6 +6,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = path.join(root, "server", "src");
 const baselinePath = path.join(root, "scripts", "sqlite-boundary-baseline.json");
 const update = process.argv.includes("--update");
+// Forward schema migrations must issue DDL on both supported databases. They are
+// validated by schema parity and migration tests, not the runtime-access freeze.
+// Keep this explicit: services, import scripts and new storage helpers do not
+// acquire a blanket exemption by living under storage/.
+const schemaMigrationFiles = new Set([
+  "server/src/storage/migrations.ts",
+  "server/src/storage/baseDataMigration.ts",
+]);
 const patterns = [
   /\bdb\.(?:prepare|exec|transaction|pragma)\s*\(/g,
   /\b(?:database|this\.database)\.(?:prepare|exec|transaction|pragma)\s*\(/g,
@@ -22,6 +30,7 @@ function filesBelow(directory) {
 
 const counts = Object.fromEntries(filesBelow(sourceRoot)
   .filter((filePath) => filePath.endsWith(".ts"))
+  .filter((filePath) => !schemaMigrationFiles.has(path.relative(root, filePath).split(path.sep).join("/")))
   .map((filePath) => {
     const source = fs.readFileSync(filePath, "utf8");
     const count = patterns.reduce((total, pattern) => total + [...source.matchAll(pattern)].length, 0);
@@ -31,7 +40,7 @@ const counts = Object.fromEntries(filesBelow(sourceRoot)
   .sort(([left], [right]) => left.localeCompare(right)));
 
 const payload = `${JSON.stringify({
-  policy: "Existing SQLite access is frozen. Counts may only decrease or move behind repository adapters during PostgreSQL migration.",
+  policy: "Runtime SQLite access is frozen. Counts may only decrease or move behind repository adapters. Explicit schema migration files are checked by migration tests and schema parity.",
   files: counts,
 }, null, 2)}\n`;
 

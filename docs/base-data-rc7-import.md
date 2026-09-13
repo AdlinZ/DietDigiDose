@@ -2,6 +2,9 @@
 
 `server/scripts/import-base-data-runtime.mjs` 将已校验的 `base_data.files` 中的 rc.7 数据映射到实际业务表，默认事务预演并回滚；传入 `--apply` 才提交。需要部署环境的 `DATABASE_URL` 和 `DDD_DEMO_PASSWORD_1/2/3`。这些密码不得提交到仓库。
 
+运行前必须先执行正式数据库迁移（SQLite 81 / PostgreSQL 0023）。导入器不再自行执行 DDL；迁移将旧 `base_data.runtime_ids` 映射原样接管到 `public.base_data_runtime_ids`，保留业务主键、管理员修改、未知营养及 `is_demo`。原附件归档仍使用独立 `base_data` schema。新导入厨具保留 `needs_review`；目录概念不等于已审核的容量或替代关系。
+
+
 ```sh
 node scripts/import-base-data-runtime.mjs
 node scripts/import-base-data-runtime.mjs --apply
@@ -16,7 +19,7 @@ node scripts/import-base-data-runtime.mjs --apply
 - `kitchenware_catalog`：241 条目录条目，仅精确别名；不创建能力或替代关系。
 - `users`：保留已有管理员，新增 3 个普通示例账号，bcrypt 成本 12，首次登录要求改密。登录标识为 `ddd_demo_1@demo.dietdigidose.invalid` 等保留域名测试邮箱，不发送邮件。
 - `community_posts`：100 条；评论、库存、收藏各 6 条。均保留 `is_demo`，不制造点赞和浏览量。
-- `base_data.runtime_ids`：稳定逻辑 ID 与业务主键的映射；原始完整包继续保存在 `base_data`。
+- `public.base_data_runtime_ids`：稳定逻辑 ID 与业务主键的映射；原始完整包继续保存在 `base_data`。
 
 本脚本自行执行 PostgreSQL 的增量 DDL，不修改已有迁移版本号。后续标准迁移须保留新增字段、NULL 营养以及菜谱扣减限制。`is_demo` 已持久化；所有历史管理端统计尚未全面适配该标记，不应将原始账户/帖子总量当作真实用户指标。
 

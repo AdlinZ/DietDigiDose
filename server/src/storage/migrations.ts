@@ -1,11 +1,13 @@
 import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { assessRecipeQuality } from "../services/recipeQuality.js";
+import { migrateBaseData } from "./baseDataMigration.js";
 
 type Migration = {
   version: number;
   name: string;
   up: (database: Database.Database) => void;
+  rebuildsReferencedTable?: boolean;
 };
 
 function addColumn(database: Database.Database, table: string, column: string, definition: string) {
@@ -2354,6 +2356,7 @@ const migrations: Migration[] = [
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );`);
   } },
+  { version: 81, name: "base_data_runtime_schema", rebuildsReferencedTable: true, up: migrateBaseData },
 ];
 
 export function runMigrations(database: Database.Database) {
@@ -2371,9 +2374,21 @@ export function runMigrations(database: Database.Database) {
   const record = database.prepare("INSERT INTO schema_migrations (version, name) VALUES (?, ?)");
   for (const migration of migrations) {
     if (applied.has(migration.version)) continue;
-    database.transaction(() => {
-      migration.up(database);
-      record.run(migration.version, migration.name);
-    })();
+    const foreignKeys = database.pragma("foreign_keys", { simple: true });
+    if (migration.rebuildsReferencedTable) {
+      if (database.inTransaction) throw new Error("Table rebuild migration requires an outermost transaction");
+      database.pragma("foreign_keys = OFF");
+    }
+    try {
+      database.transaction(() => {
+        migration.up(database);
+        if (migration.rebuildsReferencedTable && (database.pragma("foreign_key_check") as unknown[]).length) {
+          throw new Error("Foreign key verification failed; migration rolled back");
+        }
+        record.run(migration.version, migration.name);
+      })();
+    } finally {
+      if (migration.rebuildsReferencedTable) database.pragma(`foreign_keys = ${foreignKeys ? "ON" : "OFF"}`);
+    }
   }
 }

@@ -1,8 +1,8 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "1356d28356683051dcad12774e377ceede7f4fa26372195c62c5f4eeca78dfe0",
-  "tableCount": 112,
+  "sourceSchemaSha256": "254e112b335a262a6c4134394b1faf7d8cb6777d137a3637417514fb26e4bedc",
+  "tableCount": 113,
   "indexCount": 164,
   "foreignKeyCount": 179,
   "tables": [
@@ -1479,6 +1479,59 @@
       ]
     },
     {
+      "name": "base_data_runtime_ids",
+      "autoIncrement": false,
+      "primaryKey": [
+        "collection",
+        "logical_id"
+      ],
+      "foreignKeys": [],
+      "columns": [
+        {
+          "name": "collection",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "logical_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "target_table",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "target_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "imported_version",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "imported_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
       "name": "community_comment_likes",
       "autoIncrement": false,
       "primaryKey": [
@@ -1617,6 +1670,13 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": true
+        },
+        {
+          "name": "is_demo",
+          "sqliteType": "INTEGER",
+          "postgresType": "boolean",
+          "transform": "0/1 -> false/true",
+          "nullable": false
         }
       ]
     },
@@ -1883,6 +1943,13 @@
           "postgresType": "integer",
           "transform": "identity",
           "nullable": true
+        },
+        {
+          "name": "is_demo",
+          "sqliteType": "INTEGER",
+          "postgresType": "boolean",
+          "transform": "0/1 -> false/true",
+          "nullable": false
         }
       ]
     },
@@ -3893,7 +3960,7 @@
           "sqliteType": "REAL",
           "postgresType": "double precision",
           "transform": "identity",
-          "nullable": false
+          "nullable": true
         },
         {
           "name": "protein_100g",
@@ -4054,6 +4121,20 @@
           "sqliteType": "TEXT",
           "postgresType": "text",
           "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "nutrition_status",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "base_data_payload",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
           "nullable": true
         }
       ]
@@ -4434,6 +4515,13 @@
           "sqliteType": "DATETIME",
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "is_demo",
+          "sqliteType": "INTEGER",
+          "postgresType": "boolean",
+          "transform": "0/1 -> false/true",
           "nullable": false
         }
       ]
@@ -4826,6 +4914,13 @@
           "sqliteType": "DATETIME",
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "base_data_payload",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
           "nullable": true
         }
       ]
@@ -8101,6 +8196,13 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": true
+        },
+        {
+          "name": "is_demo",
+          "sqliteType": "INTEGER",
+          "postgresType": "boolean",
+          "transform": "0/1 -> false/true",
+          "nullable": false
         }
       ]
     },
@@ -8880,6 +8982,20 @@
           "sqliteType": "DATETIME",
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "automatic_inventory_write_allowed",
+          "sqliteType": "INTEGER",
+          "postgresType": "boolean",
+          "transform": "0/1 -> false/true",
+          "nullable": false
+        },
+        {
+          "name": "base_data_payload",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
           "nullable": true
         }
       ]
@@ -10122,6 +10238,13 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": true
+        },
+        {
+          "name": "is_demo",
+          "sqliteType": "INTEGER",
+          "postgresType": "boolean",
+          "transform": "0/1 -> false/true",
+          "nullable": false
         }
       ]
     },

@@ -25,42 +25,18 @@ try {
   const read = name => JSON.parse(files.find(f => f.path === `clean/${name}.json`).content.toString());
   const ingredients = read('ingredients'), recipes = read('recipes'), kitchenware = read('kitchenware'), initial = read('initial-data');
   if (ingredients.length !== 447 || recipes.length !== 341 || kitchenware.length !== 241 || initial.posts.length !== 100) throw new Error('Unexpected counts');
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS base_data.runtime_ids (
-      collection text NOT NULL, logical_id text NOT NULL, target_table text NOT NULL,
-      target_id text NOT NULL, imported_version text NOT NULL REFERENCES base_data.releases(version),
-      imported_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(collection,logical_id));
-    ALTER TABLE ingredients_library ALTER COLUMN calories_100g DROP NOT NULL;
-    ALTER TABLE ingredients_library ADD COLUMN IF NOT EXISTS nutrition_status text NOT NULL DEFAULT 'unspecified';
-    ALTER TABLE recipes ADD COLUMN IF NOT EXISTS automatic_inventory_write_allowed boolean NOT NULL DEFAULT true;
-    ALTER TABLE recipes ADD COLUMN IF NOT EXISTS base_data_payload jsonb;
-    ALTER TABLE ingredients_library ADD COLUMN IF NOT EXISTS base_data_payload jsonb;
-    ALTER TABLE kitchenware_catalog ADD COLUMN IF NOT EXISTS base_data_payload jsonb;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
-    ALTER TABLE community_posts ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
-    ALTER TABLE community_comments ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
-    ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
-    ALTER TABLE recipe_favorites ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
-    CREATE OR REPLACE FUNCTION base_data.reject_unreviewed_cooking() RETURNS trigger LANGUAGE plpgsql AS $$
-    BEGIN
-      IF EXISTS (SELECT 1 FROM public.recipes WHERE id=NEW.recipe_id AND automatic_inventory_write_allowed=false) THEN
-        RAISE EXCEPTION 'Recipe is reference-only; automatic inventory writes are disabled' USING ERRCODE='23514';
-      END IF;
-      RETURN NEW;
-    END $$;
-    DROP TRIGGER IF EXISTS base_data_recipe_cooking_guard ON cooking_completions;
-    CREATE TRIGGER base_data_recipe_cooking_guard BEFORE INSERT OR UPDATE OF recipe_id ON cooking_completions
-      FOR EACH ROW EXECUTE FUNCTION base_data.reject_unreviewed_cooking();
-  `);
+  if (!(await db.query("SELECT to_regclass('public.base_data_runtime_ids') AS name")).rows[0]?.name) {
+    throw new Error('Apply the formal base_data_runtime_schema migration before importing; importer never changes schema');
+  }
   const mapping = new Map();
-  for (const r of (await db.query('SELECT * FROM base_data.runtime_ids')).rows) mapping.set(`${r.collection}:${r.logical_id}`, r.target_id);
+  for (const r of (await db.query('SELECT * FROM public.base_data_runtime_ids')).rows) mapping.set(`${r.collection}:${r.logical_id}`, r.target_id);
   const id = (collection, logical) => {
     const found = mapping.get(`${collection}:${logical}`);
     if (!found) throw new Error(`Missing mapping ${collection}:${logical}`);
     return Number(found);
   };
   async function map(collection, logical, table, target) {
-    await db.query('INSERT INTO base_data.runtime_ids(collection,logical_id,target_table,target_id,imported_version) VALUES($1,$2,$3,$4,$5)', [collection, logical, table, String(target), version]);
+    await db.query('INSERT INTO public.base_data_runtime_ids(collection,logical_id,target_table,target_id,imported_version) VALUES($1,$2,$3,$4,$5)', [collection, logical, table, String(target), version]);
     mapping.set(`${collection}:${logical}`, String(target));
     counts[collection] = (counts[collection] || 0) + 1;
   }
@@ -100,7 +76,7 @@ try {
     if (mapping.has(`kitchenware:${r.id}`)) continue;
     if ((await db.query('SELECT 1 FROM kitchenware_catalog WHERE name=$1', [r.name])).rowCount) throw new Error(`Kitchenware name collision: ${r.name}`);
     const created = await insert('kitchenware_catalog', { name: r.name, category: r.category,
-      aliases: encoded(r.aliases), source: 'base_data', quality_status: 'trusted',
+      aliases: encoded(r.aliases), source: 'base_data', quality_status: 'needs_review',
       cooking_methods: '[]', attributes_json: encoded({ automatic_substitution_allowed: false, source_url: r.source_url, source_release: r.source_release }),
       base_data_payload: encoded(r) });
     await map('kitchenware', r.id, 'kitchenware_catalog', created.id);
@@ -163,7 +139,7 @@ try {
     await insert('recipe_favorites', { user_id: userId, recipe_id: recipeId, is_demo: true });
     await map('favorites', r.id, 'recipe_favorites', `${userId}:${recipeId}`);
   }
-  const total = Number((await db.query('SELECT count(*) FROM base_data.runtime_ids WHERE imported_version=$1', [version])).rows[0].count);
+  const total = Number((await db.query('SELECT count(*) FROM public.base_data_runtime_ids WHERE imported_version=$1', [version])).rows[0].count);
   if (total !== 1151) throw new Error(`Mapping count mismatch: ${total}`);
   await db.query(apply ? 'COMMIT' : 'ROLLBACK');
   console.log(JSON.stringify({ mode: apply ? 'committed' : 'dry_run_rolled_back', version, newMappings: counts, repairedRecipeKitchenware, totalMappings: total }));

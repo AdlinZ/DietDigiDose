@@ -24,6 +24,8 @@ test("queue migration separates legacy shared meal links without discarding cook
       INSERT INTO meal_plan_items VALUES('b',1,'q','queued',NULL,3,NULL,'[]','2026-09-11','plan','2026-09-01');`);
     const record = db.prepare("INSERT INTO schema_migrations VALUES(?, 'existing')");
     for (let version = 1; version <= 61; version++) record.run(version);
+    // This fixture isolates queue migrations and has no ingredient/catalog tables.
+    record.run(81);
     runMigrations(db);
     assert.equal((db.prepare("SELECT reported_cooking_minutes FROM prepared_meals").get() as { reported_cooking_minutes: number | null }).reported_cooking_minutes,null);
     const q = db.prepare("SELECT * FROM cooking_queue_items").get() as Record<string, unknown>;

@@ -1,3 +1,6 @@
+import { lockMealPlanning } from "../mealPlans/postgresLock.js";
+import { PostgresMealAllocationsRepository } from "../mealAllocations/postgresRepository.js";
+import { chooseAllocation, restoredAllocation, allocationMealType } from "../mealAllocations/model.js";
 import { mealEventIdentity, replayMealEvent } from "./mealEventIdentity.js";
 import { coreLoopEnvironment } from "../../services/coreLoopEnvironment.js";
 import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
@@ -52,6 +55,7 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
   async remove(userId: number, id: number, mode?: "undo_eating" | "delete_intake") {
     return this.transaction(async client => {
       // Same account lock as production and consumption, before reading event state.
+      await lockMealPlanning(client, userId);
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`prepared-meals:${userId}`]);
       const householdCorrection = (await client.query("SELECT mode FROM household_meal_intake_corrections WHERE user_id=$1 AND original_diet_record_id=$2",[userId,id])).rows[0];
       if (householdCorrection) {
@@ -91,6 +95,9 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
         if (mode === "undo_eating") {
           const changed = await client.query("UPDATE prepared_meals SET remaining_servings=$1,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND user_id=$3 AND version=$4", [next.remaining_servings, meal.id, userId, meal.version]);
           if (changed.rowCount !== 1) throw new InventoryQuantityError("PREPARED_MEAL_CORRECTION_CONFLICT", "餐食已变化，请刷新后重试");
+          const allocationRepository = new PostgresMealAllocationsRepository(client);
+          const allocation = restoredAllocation(await allocationRepository.list(userId, meal.id), event.result_json, Number(event.servings));
+          if (allocation) await allocationRepository.update(userId, allocation);
         }
         await client.query("INSERT INTO prepared_meal_intake_corrections(id,user_id,event_id,original_diet_record_id,mode,result_json) VALUES($1,$2,$3,$4,$5,$6::jsonb)",
           [randomUUID(), userId, event.id, id, mode, JSON.stringify({ prepared_meal: next, original_event: event.id, original_diet_record_id: id, mode })]);
@@ -119,6 +126,7 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
   }
 
   async completeCookingWithClient(client: PoolClient, userId: number, input: PreparedCookingCompletion) {
+      await lockMealPlanning(client, userId);
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`diet:cooking:${userId}:${input.idempotency_key}`]);
       const existing = await client.query("SELECT result_json FROM cooking_completions WHERE user_id = $1 AND idempotency_key = $2",
         [userId, input.idempotency_key]);
@@ -163,7 +171,8 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
   }
 
   async listPreparedMeals(userId: number) {
-    return (await this.pool.query("SELECT * FROM prepared_meals WHERE user_id=$1 ORDER BY produced_at DESC,id DESC", [userId])).rows.map(formatPreparedMeal);
+    const allocations = await new PostgresMealAllocationsRepository(this.pool).list(userId);
+    return (await this.pool.query("SELECT * FROM prepared_meals WHERE user_id=$1 ORDER BY produced_at DESC,id DESC", [userId])).rows.map(row => ({ ...formatPreparedMeal(row), allocations: allocations.filter(item => item.preparedMealId === row.id) }));
   }
 
   async applyMealEvent(userId: number, mealId: string, input: PreparedMealEventInput) {
@@ -171,18 +180,24 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
   }
 
   async applyMealEventWithClient(client: PoolClient, userId: number, mealId: string, input: PreparedMealEventInput) {
+    await lockMealPlanning(client, userId);
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`prepared-meals:${userId}`]);
     const existing = (await client.query("SELECT prepared_meal_id,event_type,servings,result_json FROM prepared_meal_events WHERE user_id=$1 AND idempotency_key=$2", [userId, input.idempotency_key])).rows[0];
     if (existing) return replayMealEvent(existing, mealId, input);
     const row = (await client.query("SELECT * FROM prepared_meals WHERE id=$1 AND user_id=$2 FOR UPDATE", [mealId, userId])).rows[0];
     if (!row) throw new InventoryQuantityError("PREPARED_MEAL_NOT_FOUND", "待吃餐不存在或不属于当前账号");
     const meal = formatPreparedMeal(row);
-    const next = transitionMeal(meal, input);
-    const record = input.type === "eat" ? await insertRecord(client, userId, mealConsumptionRecord({ ...meal, meal_type: input.meal_type ?? meal.meal_type }, input.servings!, input.recorded_at!, input.recorded_time ?? null)) : null;
+    const allocationRepository = new PostgresMealAllocationsRepository(client);
+    const existingAllocations = await allocationRepository.list(userId, mealId);
+    const allocation = chooseAllocation(existingAllocations, input, meal.remaining_servings);
+    const next = transitionMeal(meal, allocation && input.type === "reschedule" ? { ...input, planned_date: undefined, meal_type: undefined } : input);
+    const record = input.type === "eat" ? await insertRecord(client, userId, mealConsumptionRecord({ ...meal, meal_type: input.meal_type ?? allocationMealType(allocation, meal.meal_type) }, input.servings!, input.recorded_at!, input.recorded_time ?? null)) : null;
     const changed = await client.query("UPDATE prepared_meals SET reported_cooking_minutes=$8,is_reserved=$7,remaining_servings=$1,planned_date=$2,meal_type=$3,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND user_id=$5 AND version=$6",
-      [next.remaining_servings, next.planned_date, next.meal_type, mealId, userId, input.version, next.is_reserved,next.reported_cooking_minutes ?? null]);
+    [next.remaining_servings, next.planned_date, next.meal_type, mealId, userId, input.version, next.is_reserved,next.reported_cooking_minutes ?? null]);
     if (changed.rowCount !== 1) throw new InventoryQuantityError("PREPARED_MEAL_VERSION_CONFLICT", "待吃餐已变化，请刷新后重试");
-    const result = { prepared_meal: next, diet_record: record, repeated: false, request_identity: mealEventIdentity(input) };
+    if (allocation) await allocationRepository.update(userId, allocation);
+    next.allocations = existingAllocations.map(row => row.id === allocation?.id ? allocation : row);
+    const result = { prepared_meal: next, allocation, diet_record: record, repeated: false, request_identity: mealEventIdentity(input) };
     await client.query("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
       [randomUUID(), userId, mealId, input.idempotency_key, input.type, input.servings ?? null, input.recorded_at!, record?.id ?? null, JSON.stringify(result)]);
     await appendPostgresMaintenanceEvent(client, { userId, kind: input.type, sourceId: input.idempotency_key,

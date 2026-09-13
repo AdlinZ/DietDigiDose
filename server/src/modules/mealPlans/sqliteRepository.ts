@@ -1,3 +1,4 @@
+import { SqliteMealAllocationsRepository } from "../mealAllocations/sqliteRepository.js";
 import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readSqliteDiningSupply } from "../households/sqliteDiningSupply.js";
 import { prepareNetDiningShopping } from "../households/diningNetShopping.js";
@@ -37,16 +38,16 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       const activation = prepareDraftActivation(current, version);
       if (!activation) return { kind: "version_conflict" as const };
       if (activation.repeated) return { kind: "updated" as const, value: { plan: this.formatPlan(current, userId), repeated: true } };
-      const activePlans = this.database.prepare("SELECT constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active'").all(userId) as Row[];
       const batches = activation.targets.some(target => target.allocations.length)
         ? new SqliteDietRecordsRepository(this.database).listPreparedMealsInTransaction(userId) : [];
-      if (!preparedAllocationsAvailable(activation.targets, batches, activePlans)) return { kind: "version_conflict" as const };
+      const allocations = new SqliteMealAllocationsRepository(this.database).list(userId);
+      if (!preparedAllocationsAvailable(activation.targets, batches, [{ prepared_allocations: allocations }])) return { kind: "version_conflict" as const };
       if (activation.weekly) {
         const occupied = this.database.prepare("SELECT i.planned_date,i.meal_type FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.status<>'skipped'").all(userId) as Row[];
-        for (const plan of activePlans) {
-          const saved = parseJson<Row>(plan.constraints_json,{});
-          const draft = (saved.currentCookingDraft ?? (saved.savedCookingDraft as { draft?: unknown } | undefined)?.draft) as { meals?: Array<{ date: string; mealType: string; cookServings: number }> } | undefined;
-          for (const meal of draft?.meals ?? []) if (meal.cookServings === 0) occupied.push({ planned_date: meal.date,meal_type: meal.mealType });
+        for (const allocation of allocations) {
+          if (allocation.status === "conflict" || (allocation.status === "active" && allocation.remainingServings > 0)) {
+            occupied.push({ planned_date: allocation.plannedDate, meal_type: allocation.mealType });
+          }
         }
         if (activation.targets.some(target => occupied.some(item => String(item.planned_date) === target.date && queueMealType(item.meal_type) === target.mealType))) return { kind: "version_conflict" as const };
       }
@@ -58,6 +59,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
         VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).run(item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),recipes[index]!.steps_json));
       this.database.prepare("UPDATE meal_plans SET status='active',constraints_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?")
         .run(JSON.stringify(activation.constraints),id,userId);
+      new SqliteMealAllocationsRepository(this.database).reserve(userId,id,activation.targets);
       return { kind: "updated" as const, value: { plan: this.formatPlan(this.getPlan(id,userId,false)!,userId), repeated: false } };
     })();
   }
@@ -118,10 +120,12 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
     const endDate = input.endDate ?? String(current.end_date);
     if (startDate > endDate) return { kind: "invalid_date_range" as const };
     this.assertPlanEditInTransaction(userId,id,input);
+    if (input.status && ["active", "draft"].includes(input.status) && current.status !== input.status && parseJson<Row>(current.constraints_json, {}).savedCookingDraft) return { kind: "version_conflict" as const };
     const changed = this.database.prepare(`UPDATE meal_plans SET title = ?, start_date = ?, end_date = ?, status = ?,
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL`)
       .run(input.title ?? current.title, startDate, endDate, input.status ?? current.status, id, userId, input.version);
     if (changed.changes !== 1) return { kind: "version_conflict" as const };
+    if (input.status && input.status !== "active") new SqliteMealAllocationsRepository(this.database).release(userId,id);
     return { kind: "updated" as const, value: this.formatPlan(this.getPlan(id, userId, false)!, userId) };
   })();
   }
@@ -132,7 +136,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
     const changed = this.database.prepare(`UPDATE meal_plans SET deleted_at = CURRENT_TIMESTAMP, status = 'cancelled',
       version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL`)
       .run(id, userId, version);
-    if (changed.changes === 1) return "removed" as const;
+    if (changed.changes === 1) { new SqliteMealAllocationsRepository(this.database).release(userId,id); return "removed" as const; }
     return this.getPlan(id, userId, false) ? "version_conflict" as const : "not_found" as const;
   })();
   }

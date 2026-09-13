@@ -26,6 +26,7 @@ test("queue migration separates legacy shared meal links without discarding cook
     for (let version = 1; version <= 61; version++) record.run(version);
     // This fixture isolates queue migrations and has no ingredient/catalog tables.
     record.run(81);
+    record.run(82); // Allocation migration has its own complete-schema fixture.
     runMigrations(db);
     assert.equal((db.prepare("SELECT reported_cooking_minutes FROM prepared_meals").get() as { reported_cooking_minutes: number | null }).reported_cooking_minutes,null);
     const q = db.prepare("SELECT * FROM cooking_queue_items").get() as Record<string, unknown>;

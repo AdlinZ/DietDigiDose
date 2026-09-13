@@ -316,12 +316,13 @@ async function main() {
     const legacyDatabase = new Database(legacyPath);
     const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
       .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 23 }, (_, index) => 59 + index).includes(migration.version));
+    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 24 }, (_, index) => 59 + index).includes(migration.version));
     if (unsupportedVersions.length) {
       legacyDatabase.close();
       throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
     }
     for (const migration of newerVersions) {
+      if (migration.version === 82) legacyDatabase.exec("DROP TABLE prepared_meal_allocations");
       if (migration.version === 81) {
         // Only this freshly bootstrapped drill fixture is downgraded. A real rc.7
         // database can contain NULL nutrition and must never use this reversal.

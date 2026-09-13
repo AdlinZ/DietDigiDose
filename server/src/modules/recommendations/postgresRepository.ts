@@ -1,3 +1,4 @@
+import { PostgresMealAllocationsRepository } from "../mealAllocations/postgresRepository.js";
 import { effectiveDislikeRecipeIds, learningOverrides } from "./preferenceEvidence.js";
 import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type { Pool } from "pg";
@@ -13,7 +14,8 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
       this.pool.query("SELECT id,constraints_json FROM meal_plans WHERE user_id=$1 AND deleted_at IS NULL AND status='active'",[userId]),
       this.pool.query("SELECT id,name,amount,checked FROM shopping_list_items WHERE user_id=$1 AND deleted_at IS NULL ORDER BY id",[userId]),
     ]);
-    return { items: items.rows,plans: plans.rows,shopping: shopping.rows };
+    const allocations = await new PostgresMealAllocationsRepository(this.pool).list(userId);
+    return { items: items.rows,plans: plans.rows.map(plan => ({ ...plan, prepared_allocations: allocations.filter(row => row.planId === plan.id) })),shopping: shopping.rows };
   }
   async preparedMeals(userId: number) { return (await this.pool.query("SELECT * FROM prepared_meals WHERE user_id=$1 AND remaining_servings>0 ORDER BY produced_at,id", [userId])).rows as Row[]; }
   async profile(userId: number) { return ((await this.pool.query(`SELECT allergies_json, dietary_restrictions_json, disliked_foods,

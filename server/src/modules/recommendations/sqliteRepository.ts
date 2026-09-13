@@ -1,3 +1,4 @@
+import { SqliteMealAllocationsRepository } from "../mealAllocations/sqliteRepository.js";
 import { effectiveDislikeRecipeIds, learningOverrides } from "./preferenceEvidence.js";
 import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type Database from "better-sqlite3";
@@ -8,9 +9,10 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
   async planningState(userId: number, startDate: string, _endDate: string) {
+    const allocations = new SqliteMealAllocationsRepository(this.database).list(userId);
     return {
       items: this.database.prepare("SELECT i.* FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.planned_date>=? ORDER BY i.planned_date,i.id").all(userId,startDate) as Row[],
-      plans: this.database.prepare("SELECT id,constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active'").all(userId) as Row[],
+      plans: (this.database.prepare("SELECT id,constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active'").all(userId) as Row[]).map(plan => ({ ...plan, prepared_allocations: allocations.filter(row => row.planId === plan.id) })),
       shopping: this.database.prepare("SELECT id,name,amount,checked FROM shopping_list_items WHERE user_id=? AND deleted_at IS NULL ORDER BY id").all(userId) as Row[],
     };
   }

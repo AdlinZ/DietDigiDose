@@ -75,3 +75,17 @@ test("finished production history permits clearing time without changing its dat
   expect(mockEvent).toHaveBeenCalledWith(mockAuthFetch,"meal",{ idempotency_key: "prepared-meal:stable-time-correction",version: 1,type: "reschedule",reported_cooking_minutes: null });
   act(() => tree.unmount());
 });
+
+test("multiple meal allocations require explicit selection and send its version", async () => {
+  const batch = { ...meal(1, 2), allocations: ["one", "two"].map((id, index) => ({ id, planId: "plan", targetMealId: id, preparedMealId: "meal", plannedDate: `2099-09-${10+index}`, mealType: "dinner", servings: 1, remainingServings: 1, status: "active" as const, version: 3 })) };
+  mockList.mockResolvedValue([batch]); mockEvent.mockResolvedValue({ prepared_meal: { ...batch, version: 2, remaining_servings: 1 } });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<PreparedMealsScreen />); });
+  await act(async () => { press(tree, "我吃了"); });
+  await act(async () => { press(tree, "确认保存"); });
+  expect(mockEvent).not.toHaveBeenCalled();
+  await act(async () => { tree.root.findAllByType(TouchableOpacity).find(node => node.props.accessibilityLabel === "选择餐次 2099-09-11 晚餐")!.props.onPress(); });
+  await act(async () => { press(tree, "确认保存"); });
+  expect(mockEvent.mock.calls[0][2]).toMatchObject({ allocation_id: "two", allocation_version: 3, version: 1, servings: 1 });
+  act(() => tree.unmount());
+});

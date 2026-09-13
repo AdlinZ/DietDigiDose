@@ -18,6 +18,7 @@ export function replayMealEvent(existing: { prepared_meal_id: string; event_type
   let matches = existing.prepared_meal_id === mealId;
   if (typeof result.request_identity === "string") matches &&= result.request_identity === mealEventIdentity(input);
   else {
+    matches &&= input.allocation_id === undefined && input.release_allocation === undefined;
     // Legacy records cannot prove omitted vs generated timestamps. Verify the
     // recorded action, original version, amount and explicitly supplied edits.
     matches &&= existing.event_type === input.type && Number(meal?.version) === input.version + 1

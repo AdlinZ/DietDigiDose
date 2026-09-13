@@ -1385,6 +1385,12 @@ try {
   assert.equal(completedQueue?.status, "completed");
   assert.equal(await cookingQueueRepository.cancel("66666666-6666-4666-8666-666666666666", user.id), true);
 
+  const { verifyCancelledProduction } = await import("./helpers/cancelledProduction.js");
+  await verifyCancelledProduction(dietService,user.id,async (sql,values=[]) => {
+    let parameter = 0;
+    return (await pool.query(sql.replace(/\?/g, () => `$${++parameter}`),values)).rows;
+  });
+
   const mealPlanRepository = new PostgresMealPlansRepository(pool);
   const { verifyPreparedAllocations, verifyAllocationLifecycle } = await import("./helpers/preparedAllocations.js");
   await verifyAllocationLifecycle(mealPlanRepository, dietService, user.id, async operation => {

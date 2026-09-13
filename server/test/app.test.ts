@@ -3742,7 +3742,16 @@ test("inventory intake resumes source items without duplicating previously saved
   const renamed = await api(`/api/v1/inventory/${itemId}`, { token: account.token, method: "PUT",
     body: JSON.stringify({ version: 2, food_name: "同名大米新版" }) });
   assert.equal(renamed.response.status, 200);
-  assert.equal(((await preview()).body as JsonObject).items[0].quantity_status, "unknown");
+  assert.equal(((await preview()).body as JsonObject).items[0].quantity_status, "sufficient");
+  const consumed = await api("/api/v1/inventory/consume", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "evidence-preserved-consumption", source: "manual",
+    items: [{ item_id: itemId, version: 3, mode: "amount", amount_value: 0.5, unit: "bag" }],
+  }) });
+  assert.equal(consumed.response.status, 201, JSON.stringify(consumed.body));
+  assert.equal(((await preview()).body as JsonObject).items[0].quantity_status, "sufficient");
+  const after = await api(`/api/v1/inventory/${itemId}/history`, { token: account.token });
+  assert.equal((after.body as JsonObject[])[0].metadata.field_evidence.quantity.status, "known");
+  assert.equal((after.body as JsonObject[])[0].metadata.inventory_version, 4);
 });
 
 test("meal preferences patch preserves existing kitchen and allergy data", async () => {

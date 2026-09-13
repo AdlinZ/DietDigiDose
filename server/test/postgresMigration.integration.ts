@@ -521,7 +521,7 @@ try {
   assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === correctMeal.id)?.remaining_servings, 1);
 
   const intakeItem = { field_evidence: { quantity: { status: "estimated" as const, source: "recognition" as const } }, source_item_id: "postgres-scan:0", food_name: "PG 恢复入库米", category: "粮油干货",
-    quantity: "1袋", expiration_date: "2026-10-01", storage_location: "常温" as const, source: "image" as const, confirmed: true };
+    quantity: "1袋", quantity_value: 1, quantity_unit: "bag" as const, expiration_date: "2026-10-01", storage_location: "常温" as const, source: "image" as const, confirmed: true };
   const concurrentSourceIntakes = await Promise.all(["a", "b"].map(key => inventoryRepository.bulkIntake(user.id, {
     idempotency_key: `postgres-source-intake-191-${key}`, source: "image", source_reference: "postgres-scan", items: [intakeItem],
   })));
@@ -538,6 +538,16 @@ try {
   assert.deepEqual(intakeEvidence.rows[0].metadata_json.field_evidence.quantity, { status: "estimated", source: "recognition" });
   assert.equal((await inventoryRepository.listPreviewCandidates(user.id)).find(item => item.id === partialIntake.items[0].id)?.quantity_evidence_status, "estimated");
   assert.equal((await new PostgresRecommendationsRepository(pool).inventory(user.id)).find(item => Number(item.id) === partialIntake.items[0].id)?.quantity_evidence_status, "estimated");
+  const evidenceItemId = partialIntake.items[0].id;
+  await inventoryService.update(user.id, evidenceItemId, { version: 1, storage_location: "冷冻" });
+  assert.equal((await inventoryRepository.listPreviewCandidates(user.id)).find(item => item.id === evidenceItemId)?.quantity_evidence_status, "estimated");
+  await inventoryService.consume(user.id, { idempotency_key: "evidence-consume-pg-001", source: "manual",
+    items: [{ item_id: evidenceItemId, version: 2, mode: "amount", amount_value: 0.25, unit: "bag" }] });
+  assert.equal((await inventoryRepository.listPreviewCandidates(user.id)).find(item => item.id === evidenceItemId)?.quantity_evidence_status, "estimated");
+  await inventoryService.update(user.id, evidenceItemId, { version: 3, quantity: "2袋", quantity_value: 2, quantity_unit: "bag" });
+  assert.equal((await inventoryRepository.listPreviewCandidates(user.id)).find(item => item.id === evidenceItemId)?.quantity_evidence_status, "known");
+  await inventoryService.update(user.id, evidenceItemId, { version: 4, storage_location: "常温" });
+  assert.equal((await inventoryRepository.listPreviewCandidates(user.id)).find(item => item.id === evidenceItemId)?.quantity_evidence_status, "known");
   await pool.query("UPDATE inventory_items SET version=version+1 WHERE id=$1", [partialIntake.items[0].id]);
   assert.equal((await inventoryRepository.listPreviewCandidates(user.id)).find(item => item.id === partialIntake.items[0].id)?.quantity_evidence_status, "unknown");
 

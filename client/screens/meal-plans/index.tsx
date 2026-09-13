@@ -11,6 +11,7 @@ import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { mealPlansApi, recipesApi, type MealPlan, type MealPlanItem, type Recipe } from "@/services/api";
 import { addLocalDays, parseDateKey, toLocalDateKey } from "@/utils/date";
+import { buildMealPlanProduction } from "@/screens/meal-plans/production";
 
 const MEAL_TYPES = ["早餐", "午餐", "晚餐", "加餐"];
 const STATUS_LABEL: Record<MealPlanItem["status"], string> = {
@@ -173,7 +174,7 @@ export default function MealPlansScreen() {
       await mealPlansApi.complete(authFetch, selectedPlan.id, item.id, {
         version: item.version,
         idempotencyKey: executionKey("complete", item),
-        production: (await import("@dietdigidose/contracts")).mealProductionSchema.parse({ food_name: item.title, produced_servings: Number(produced), eaten_servings: Number(eaten), meal_type: item.mealType, planned_date: item.plannedDate, nutrition_per_serving: {} }),
+        production: buildMealPlanProduction(item, produced, eaten),
       });
       await load();
       setDetailItem(null);

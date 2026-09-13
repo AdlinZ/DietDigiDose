@@ -24,6 +24,84 @@ describe("API client", () => {
     await AsyncStorage.clear();
   });
 
+  it.each([
+    ["shopping", ["/api/v1/shopping-list"]],
+    ["queue", ["/api/v1/cooking-queue"]],
+    ["complete", ["/api/v1/diet-records/prepared-meals", "/api/v1/diet-records", "/api/v1/health-data", "/api/v1/inventory", "/api/v1/insights", "/api/v1/cooking-queue"]],
+  ])("refreshes related data after meal-plan %s in memory and storage", async (action, relatedPaths) => {
+    let version = 1;
+    const fetchA: ApiFetch = jest.fn(async (_url, init) => {
+      if (init?.method === "POST") { version = 2; return jsonResponse({ success: true }); }
+      return jsonResponse({ version });
+    });
+    const fetchB: ApiFetch = jest.fn(async () => jsonResponse({ version: 1 }));
+    registerApiFetchScope(fetchA, 1001);
+    registerApiFetchScope(fetchB, 1002);
+    const affected = ["/api/v1/meal-plans", ...relatedPaths];
+    for (const path of [...affected, "/api/v1/recipes"]) {
+      await requestJson(fetchA, path);
+      await requestJson(fetchB, path);
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await requestJson(fetchA, `/api/v1/meal-plans/plan/items/item/${action}`, { method: "POST", body: "{}" });
+    const persisted = await AsyncStorage.multiGet(await AsyncStorage.getAllKeys());
+    for (const [, raw] of persisted) {
+      const entry = JSON.parse(raw!);
+      expect(entry.scope === "user:1001" && affected.includes(entry.path)).toBe(false);
+    }
+    for (const path of affected) await expect(requestJson(fetchA, path)).resolves.toEqual({ version: 2 });
+    await expect(requestJson(fetchA, "/api/v1/recipes")).resolves.toEqual({ version: 1 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    resetApiCacheForTests();
+    for (const path of affected) {
+      await expect(requestJson(fetchA, path)).resolves.toEqual({ version: 2 });
+      await expect(requestJson(fetchB, path)).resolves.toEqual({ version: 1 });
+    }
+    expect(fetchA).toHaveBeenCalledTimes(affected.length * 2 + 2);
+    expect(fetchB).toHaveBeenCalledTimes(affected.length + 1);
+  });
+
+  it.each([
+    ["/api/v1/diet-records/cooking-completions", "POST", ["/api/v1/inventory", "/api/v1/cooking-queue", "/api/v1/meal-plans", "/api/v1/diet-records/prepared-meals", "/api/v1/health-data", "/api/v1/insights"]],
+    ["/api/v1/cooking-queue/item", "DELETE", ["/api/v1/meal-plans"]],
+    ["/api/v1/cooking-queue", "DELETE", ["/api/v1/meal-plans"]],
+    ["/api/v1/cooking-queue/item", "PATCH", ["/api/v1/meal-plans"]],
+  ])("refreshes related resources after %s %s", async (path, method, affected) => {
+    let revision = 1;
+    const apiFetch: ApiFetch = jest.fn(async (_url, init) => {
+      if (init?.method === method) revision++;
+      return jsonResponse({ revision });
+    });
+    registerApiFetchScope(apiFetch, 1101);
+    for (const resource of affected) await requestJson(apiFetch, resource);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await requestJson(apiFetch, path, { method, body: "{}" });
+    for (const resource of affected) await expect(requestJson(apiFetch, resource)).resolves.toEqual({ revision: 2 });
+  });
+
+  it.each(["write", "logout"])("does not reuse an old GET after %s invalidates it", async action => {
+    let resolveOld!: (response: Response) => void;
+    let gets = 0;
+    const apiFetch: ApiFetch = jest.fn(async (_url, init) => {
+      if (init?.method === "POST") return jsonResponse({ success: true });
+      gets++;
+      return gets === 1 ? new Promise(resolve => { resolveOld = resolve; }) : jsonResponse({ revision: 2 });
+    });
+    registerApiFetchScope(apiFetch, 1201);
+    const old = requestJson(apiFetch, "/api/v1/inventory");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (action === "write") await requestJson(apiFetch, "/api/v1/inventory", { method: "POST", body: "{}" });
+    else await clearApiCacheScope();
+    const fresh = requestJson(apiFetch, "/api/v1/inventory");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const getsBeforeOldResponse = gets;
+    resolveOld(jsonResponse({ revision: 1 }));
+    await old;
+    await expect(fresh).resolves.toEqual({ revision: 2 });
+    expect(getsBeforeOldResponse).toBe(2);
+    await expect(requestJson(apiFetch, "/api/v1/inventory")).resolves.toEqual({ revision: 2 });
+  });
+
   it("coalesces concurrent identical mutations", async () => {
     let calls = 0;
     let resolveResponse: ((value: Response) => void) | undefined;

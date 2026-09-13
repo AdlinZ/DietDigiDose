@@ -130,8 +130,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // Verify token asynchronously with backend
           try {
             const freshUser = await authApi.me<User>(savedToken);
-            await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(freshUser));
-            setUser(freshUser);
+            await sessionCoordinator.current.updateIfCurrent(restoredGeneration, async () => {
+              await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(freshUser));
+              setUser(freshUser);
+            });
           } catch (error) {
             if (error instanceof ApiError && (error.status === 401 || error.code === 'ACCOUNT_DISABLED')) {
               await clearAuthState(
@@ -234,8 +236,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: '返回数据异常' };
       }
       const updatedUser = { ...user, ...data } as User;
-      await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(updatedUser));
-      setUser(updatedUser);
+      const applied = await sessionCoordinator.current.updateIfCurrent(sessionGeneration, async () => {
+        await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(updatedUser));
+        setUser(updatedUser);
+      });
+      if (!applied) return { success: false, error: '登录账号已变化，请重新打开资料页面' };
       return { success: true };
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.code === 'ACCOUNT_DISABLED')) {
@@ -244,21 +249,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       return { success: false, error: e instanceof Error ? e.message : '网络错误，请稍后重试' };
     }
-  }, [token, user, logout]);
+  }, [token, user, logout, sessionGeneration]);
 
   const refreshUser = useCallback(async () => {
     if (!token) return;
     try {
       const data = await authApi.me<User>(token);
-      await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data));
-      setUser(data);
+      await sessionCoordinator.current.updateIfCurrent(sessionGeneration, async () => {
+        await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data));
+        setUser(data);
+      });
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.code === 'ACCOUNT_DISABLED')) {
         await logout(e.code === 'ACCOUNT_DISABLED' ? '账号已停用，请联系管理员了解详情。' : '登录会话已失效，请重新登录。');
       }
       // Ignore
     }
-  }, [token, logout]);
+  }, [token, logout, sessionGeneration]);
 
   const deleteAccount = useCallback(async (password: string) => {
     if (!token || !user) return { success: false, error: '请先登录' };

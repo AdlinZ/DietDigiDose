@@ -1,9 +1,9 @@
 import React from "react";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import renderer, { act } from "react-test-renderer";
 import { Audio } from "expo-av";
 
-import { realtimeVoiceApi, type RealtimeVoiceSession } from "@/services/api";
+import { aiApi, realtimeVoiceApi, type RealtimeVoiceSession } from "@/services/api";
 import { useRealtimeCookingVoice } from "./useRealtimeCookingVoice";
 
 const mockStartNativeRecording = jest.fn();
@@ -60,7 +60,7 @@ const options = {
   timerRunning: false,
   recipeSteps: ["准备", "完成"],
   recipeIngredients: ["番茄 2个"],
-  onTranscript: jest.fn(), onBargeIn: jest.fn(), onControl: jest.fn(),
+  onTranscript: jest.fn(), onBargeIn: jest.fn(), onStopOutput: jest.fn(), onControl: jest.fn(),
   onAnswerDelta: jest.fn(), onAnswer: jest.fn(), onConfirmationRequired: jest.fn(), onError: jest.fn(),
 };
 
@@ -77,6 +77,7 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
   beforeEach(async () => {
     Object.defineProperty(Platform, "OS", { value: "android", configurable: true });
     jest.clearAllMocks();
+    jest.spyOn(AppState, "addEventListener").mockReturnValue({ remove: jest.fn() });
     mockPauseNativeRecording.mockResolvedValue(undefined);
     mockResumeNativeRecording.mockResolvedValue(undefined);
     mockStartNativeRecording.mockResolvedValue(undefined);
@@ -108,6 +109,114 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
     expect(voice.state).toBe("fallback");
   });
 
+  it("closes a late created session without starting recording after stop", async () => {
+    let resolve!: (value: Awaited<ReturnType<typeof realtimeVoiceApi.create>>) => void;
+    jest.mocked(realtimeVoiceApi.create).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = voice.start(); });
+    await act(async () => { expect(await voice.start()).toBe(false); await voice.stop(); });
+    await act(async () => { resolve({ session: createdSession, repeated: false }); expect(await pending).toBe(false); });
+    expect(mockStartNativeRecording).not.toHaveBeenCalled();
+    expect(realtimeVoiceApi.close).toHaveBeenCalledWith(mockAuthFetch, createdSession.id);
+    expect(voice.state).toBe("off");
+  });
+
+  it("does not start the microphone after delayed permission resolves on an exited page", async () => {
+    let resolve!: (value: never) => void;
+    jest.mocked(Audio.requestPermissionsAsync).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = voice.start(); });
+    await act(async () => { await voice.stop(); });
+    await act(async () => { resolve({ granted: true } as never); await pending; });
+    expect(mockStartNativeRecording).not.toHaveBeenCalled();
+    expect(voice.state).toBe("off");
+  });
+
+  it("stops a native recorder that finishes starting after the page exits", async () => {
+    let recording = false;
+    let release!: () => void;
+    mockStartNativeRecording.mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      recording = true;
+    });
+    mockStopNativeRecording.mockImplementation(async () => { recording = false; });
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = voice.start(); });
+    await act(async () => { await voice.stop(); });
+    await act(async () => { release(); expect(await pending).toBe(false); });
+    expect(recording).toBe(false);
+    expect(voice.state).toBe("off");
+  });
+
+  it("invalidates pending startup when the app backgrounds", async () => {
+    let onChange!: (state: "background") => void;
+    const spy = jest.spyOn(AppState, "addEventListener").mockImplementation((_event, listener) => {
+      onChange = listener;
+      return { remove: jest.fn() };
+    });
+    await act(async () => { tree.unmount(); tree = renderer.create(<Harness onUpdate={value => { voice = value; }} />); });
+    let resolve!: (value: Awaited<ReturnType<typeof realtimeVoiceApi.create>>) => void;
+    jest.mocked(realtimeVoiceApi.create).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = voice.start(); onChange("background"); });
+    await act(async () => { resolve({ session: createdSession, repeated: false }); await pending; });
+    expect(mockStartNativeRecording).not.toHaveBeenCalled();
+    expect(voice.state).toBe("off");
+    spy.mockReturnValue({ remove: jest.fn() });
+  });
+
+  it("does not upload fallback audio when a pending transcription fails after mute", async () => {
+    jest.useFakeTimers();
+    try {
+      let reject!: (error: Error) => void;
+      jest.mocked(realtimeVoiceApi.audioChunk).mockReturnValueOnce(new Promise((_done, fail) => { reject = fail; }));
+      await act(async () => { await voice.start(); });
+      const recorder = mockStartNativeRecording.mock.calls[0][0];
+      await act(async () => {
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.1 }] });
+        await recorder.onAudioStream({ data: "AAAA" });
+        await recorder.onAudioStream({ data: "AAAA" });
+        jest.advanceTimersByTime(300);
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: true, rms: 0 }] });
+        jest.advanceTimersByTime(650);
+      });
+      expect(realtimeVoiceApi.audioChunk).toHaveBeenCalled();
+      await act(async () => { await voice.toggleMute(); reject(new Error("offline")); });
+      expect(aiApi.transcribe).not.toHaveBeenCalled();
+      expect(realtimeVoiceApi.turn).not.toHaveBeenCalled();
+      expect(voice.state).toBe("muted");
+    } finally { await act(async () => { await voice.stop(); }); jest.useRealTimers(); }
+  });
+
+  it("ignores recorder interruption callbacks from a closed session", async () => {
+    await act(async () => { await voice.start(); });
+    const oldRecorder = mockStartNativeRecording.mock.calls[0][0];
+    await act(async () => { await voice.stop(); await voice.start(); });
+    const stops = mockStopNativeRecording.mock.calls.length;
+    await act(async () => { oldRecorder.onRecordingInterrupted(); });
+    expect(mockStopNativeRecording).toHaveBeenCalledTimes(stops);
+    expect(voice.state).toBe("listening");
+  });
+
+  it("stops capture when Web microphone permission is revoked", async () => {
+    Object.defineProperty(Platform, "OS", { value: "web", configurable: true });
+    const recognizers: Array<{ onerror?: (event: { error: string }) => void }> = [];
+    let recording = false;
+    Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: class {
+      constructor() { recognizers.push(this); }
+      onerror?: (event: { error: string }) => void;
+      start() { recording = true; }
+      abort() { recording = false; }
+    } });
+    try {
+      await act(async () => { await voice.start(); });
+      await act(async () => { recognizers[0].onerror!({ error: "not-allowed" }); });
+      expect(recording).toBe(false);
+      expect(voice.state).toBe("off");
+      expect(options.onStopOutput).toHaveBeenCalled();
+    } finally { Reflect.deleteProperty(window, "SpeechRecognition"); }
+  });
+
   it("closes the remote session and releases partial recording state when native startup fails", async () => {
     jest.mocked(Audio.requestPermissionsAsync).mockResolvedValue({ granted: true } as never);
     mockStartNativeRecording.mockRejectedValue(new Error("native recorder failed"));
@@ -134,6 +243,7 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
     await act(async () => { pending = voice.toggleMute(); });
     expect(recording).toBe(false);
     expect(voice.muted).toBe(true);
+    expect(options.onStopOutput).toHaveBeenCalled();
     await act(async () => { reject(new Error("offline")); await pending; });
     expect(recording).toBe(false);
     expect(voice.muted).toBe(true);

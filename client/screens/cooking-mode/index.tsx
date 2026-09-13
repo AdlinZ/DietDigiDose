@@ -443,6 +443,7 @@ export default function CookingModeScreen() {
     recipeSteps: cookingSteps.map((step) => step.text),
     recipeIngredients: ingredients.map((ingredient) => `${ingredient.name} ${ingredient.amount}`),
     onTranscript: (text) => setVoiceHudState({ visible: true, type: "listening", userText: text }),
+    onStopOutput: () => { void stopVoiceOutput(); },
     onBargeIn: () => {
       void stopVoiceOutput();
       setVoiceHudState((previous) => ({ ...previous, visible: true, type: "listening", aiText: undefined }));

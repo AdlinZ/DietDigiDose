@@ -1,3 +1,4 @@
+import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readPostgresDiningSupply } from "../households/postgresDiningSupply.js";
 import { prepareNetDiningShopping } from "../households/diningNetShopping.js";
 import { prepareDiningShopping } from "../households/diningShopping.js";
@@ -11,7 +12,7 @@ import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@di
 import { isDeepStrictEqual } from "node:util";
 import { PostgresDietRecordsRepository } from "../dietRecords/postgresRepository.js";
 import { consumeInventoryWithPostgresClient } from "../inventory/postgresRepository.js";
-import { prepareProduction } from "../dietRecords/preparedMeals.js";
+import { formatPreparedMeal, prepareProduction } from "../dietRecords/preparedMeals.js";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { currentDateKey, currentTimeKey } from "../../utils/date.js";
@@ -41,9 +42,13 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       const activation = prepareDraftActivation(current, version);
       if (!activation) return { kind: "version_conflict" as const };
       if (activation.repeated) return { kind: "updated" as const, value: { plan: await this.formatPlan(client,current,userId), repeated: true } };
+      const activePlans = (await client.query("SELECT constraints_json FROM meal_plans WHERE user_id=$1 AND deleted_at IS NULL AND status='active'",[userId])).rows as Row[];
+      const batchIds = [...new Set(activation.targets.flatMap(target => target.allocations.map(item => item.preparedMealId)))];
+      const batches = batchIds.length
+        ? (await client.query("SELECT * FROM prepared_meals WHERE user_id=$1 AND id=ANY($2::text[]) ORDER BY id FOR UPDATE", [userId, batchIds])).rows.map(formatPreparedMeal) : [];
+      if (!preparedAllocationsAvailable(activation.targets, batches, activePlans)) return { kind: "version_conflict" as const };
       if (activation.weekly) {
         const occupied = (await client.query("SELECT i.planned_date,i.meal_type FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=$1 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.status<>'skipped'",[userId])).rows as Row[];
-        const activePlans = (await client.query("SELECT constraints_json FROM meal_plans WHERE user_id=$1 AND deleted_at IS NULL AND status='active'",[userId])).rows as Row[];
         for (const plan of activePlans) {
           const saved = parseJson<Row>(plan.constraints_json,{});
           const draft = (saved.currentCookingDraft ?? (saved.savedCookingDraft as { draft?: unknown } | undefined)?.draft) as { meals?: Array<{ date: string; mealType: string; cookServings: number }> } | undefined;

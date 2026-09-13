@@ -1,3 +1,4 @@
+import { activePreparedAllocations, unallocatedPreparedMeals } from "../mealPlans/preparedAllocations.js";
 import { interventionDates, interventionRecommendations } from "../interventions/snapshot.js";
 import { weeklyHistoryStart } from "./shoppingWindow.js";
 import { formatOutcomeEvidence } from "./outcomeEvidence.js";
@@ -57,7 +58,7 @@ export class RecommendationsService {
     const end = new Date(`${request.startDate}T00:00:00Z`); end.setUTCDate(end.getUTCDate()+6);
     const endDate = end.toISOString().slice(0,10);
     const [computed,stock,batches,state] = await Promise.all([this.compute(userId,{ surface: "meal_plan" }),this.repository.inventory(userId),this.repository.preparedMeals(userId),this.repository.planningState(userId,request.startDate,endDate)]);
-    const reservations: Array<{ preparedMealId: string; servings: number }> = [];
+    const reservations = activePreparedAllocations(state.plans);
     const items = [...state.items];
     for (const plan of state.plans) {
       const constraints = parseJson<Row>(plan.constraints_json,{});
@@ -66,7 +67,6 @@ export class RecommendationsService {
       if (!draft.success) continue;
       for (const meal of draft.data.meals) {
         if (meal.date < request.startDate) continue;
-        reservations.push(...meal.allocations);
         if (meal.cookServings === 0) items.push({ id: `prepared-plan:${plan.id}:${meal.id}`,planned_date: meal.date,meal_type: meal.mealType,title: meal.allocations.map(item => item.foodName).join("、"),prepared_only: true,status: "planned" });
       }
     }
@@ -75,8 +75,11 @@ export class RecommendationsService {
 
   async planRequirements(userId: number, input: MealPlanRequirementsInput) {
     const request = mealPlanRequirementsSchema.parse(input);
-    const preferences = resolveKitchenPreferences(formatRecommendationProfile(await this.repository.profile(userId)).kitchen,request.preferences);
-    return allocatePreparedMeals({ ...request,preferences }, (await this.repository.preparedMeals(userId)).map(formatPreparedMeal));
+    const dates = request.meals.map(meal => meal.date).sort();
+    const [profile, prepared, state] = await Promise.all([this.repository.profile(userId), this.repository.preparedMeals(userId),
+      this.repository.planningState(userId, dates[0], dates[dates.length - 1])]);
+    const preferences = resolveKitchenPreferences(formatRecommendationProfile(profile).kitchen,request.preferences);
+    return allocatePreparedMeals({ ...request,preferences }, unallocatedPreparedMeals(prepared.map(formatPreparedMeal), state.plans));
   }
 
   async cookingPlan(userId: number, input: MealPlanRequirementsInput) {

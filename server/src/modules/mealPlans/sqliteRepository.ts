@@ -1,3 +1,4 @@
+import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readSqliteDiningSupply } from "../households/sqliteDiningSupply.js";
 import { prepareNetDiningShopping } from "../households/diningNetShopping.js";
 import { prepareDiningShopping } from "../households/diningShopping.js";
@@ -36,9 +37,12 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       const activation = prepareDraftActivation(current, version);
       if (!activation) return { kind: "version_conflict" as const };
       if (activation.repeated) return { kind: "updated" as const, value: { plan: this.formatPlan(current, userId), repeated: true } };
+      const activePlans = this.database.prepare("SELECT constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active'").all(userId) as Row[];
+      const batches = activation.targets.some(target => target.allocations.length)
+        ? new SqliteDietRecordsRepository(this.database).listPreparedMealsInTransaction(userId) : [];
+      if (!preparedAllocationsAvailable(activation.targets, batches, activePlans)) return { kind: "version_conflict" as const };
       if (activation.weekly) {
         const occupied = this.database.prepare("SELECT i.planned_date,i.meal_type FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status IN ('active','completed') AND i.status<>'skipped'").all(userId) as Row[];
-        const activePlans = this.database.prepare("SELECT constraints_json FROM meal_plans WHERE user_id=? AND deleted_at IS NULL AND status='active'").all(userId) as Row[];
         for (const plan of activePlans) {
           const saved = parseJson<Row>(plan.constraints_json,{});
           const draft = (saved.currentCookingDraft ?? (saved.savedCookingDraft as { draft?: unknown } | undefined)?.draft) as { meals?: Array<{ date: string; mealType: string; cookServings: number }> } | undefined;

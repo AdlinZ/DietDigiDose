@@ -4686,3 +4686,18 @@ test("intervention reservations atomically persist decisions, quota and a single
   assert.equal(feedbackReplay.response.status,200);
   assert.equal((feedbackReplay.body as JsonObject).repeated,true);
 });
+
+
+test("active drafts reserve prepared portions atomically and cancellation releases them", async () => {
+  const { verifyPreparedAllocations } = await import("./helpers/preparedAllocations.js");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  const account = await register("prepared-active-allocation@example.com");
+  const made = await api("/api/v1/diet-records/cooking-completions", { token: account.token, method: "POST", body: JSON.stringify({
+    idempotency_key: "prepared-active-allocation", production: { food_name: "份量安排", produced_servings: 1, eaten_servings: 0 },
+  }) });
+  const meal = (made.body as JsonObject).prepared_meal;
+  await verifyPreparedAllocations(new SqliteMealPlansRepository(db), account.user.id, meal.id, async () => {
+    assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 1);
+    db.prepare("UPDATE prepared_meals SET version=version+1 WHERE id=?").run(meal.id);
+  });
+});

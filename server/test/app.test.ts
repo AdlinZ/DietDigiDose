@@ -2147,10 +2147,23 @@ describe("user data isolation", () => {
     const sourceItem = (sourceQueue.body as JsonObject).item;
     const queuedEvidence = JSON.parse((db.prepare("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=?").get(sourceItem.id) as JsonObject).recipe_snapshot_json).selectionEvidence;
     assert.equal(queuedEvidence.requestId, firstBody.requestId);
-    const productionPayload = { idempotency_key: "selection-to-production-186", recipe_id: eventPayload.recipeId,
+    const guardedStock = await api("/api/v1/inventory", { method: "POST", token: account.token,
+      body: JSON.stringify({ food_name: "执行审核保护原料", quantity: "100g", quantity_value: 100, quantity_unit: "g", category: "其他", expiration_date: "2099-01-01", storage_location: "常温" }) });
+    assert.equal(guardedStock.response.status, 201);
+    const guardedStockId = (guardedStock.body as JsonObject).id;
+    const productionPayload = { idempotency_key: "selection-to-production-186",
+      inventory_consumptions: [{ item_id: guardedStockId, version: 1, mode: "amount", amount_value: 10, unit: "g" }],
       production: { food_name: "选择来源测试", produced_servings: 1, eaten_servings: 0, queue_item_id: sourceItem.id, queue_version: sourceItem.version } };
+    db.prepare("UPDATE recipes SET automatic_inventory_write_allowed=0 WHERE id=?").run(eventPayload.recipeId);
+    const blockedProduction = await api("/api/v1/diet-records/cooking-completions", { method: "POST", token: account.token, body: JSON.stringify(productionPayload) });
+    db.prepare("UPDATE recipes SET automatic_inventory_write_allowed=1 WHERE id=?").run(eventPayload.recipeId);
+    assert.equal(blockedProduction.response.status, 409);
+    assert.equal((blockedProduction.body as JsonObject).code, "RECIPE_EXECUTION_NOT_ALLOWED");
+    assert.deepEqual(db.prepare("SELECT quantity_value,version FROM inventory_items WHERE id=?").get(guardedStockId), { quantity_value: 100, version: 1 });
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM prepared_meals WHERE queue_item_id=?").get(sourceItem.id) as JsonObject).n, 0);
     const sourceProduction = await api("/api/v1/diet-records/cooking-completions", { method: "POST", token: account.token, body: JSON.stringify(productionPayload) });
     assert.equal(sourceProduction.response.status, 201);
+    assert.equal((sourceProduction.body as JsonObject).prepared_meal.recipe_id, eventPayload.recipeId);
     assert.deepEqual((sourceProduction.body as JsonObject).selection_evidence, queuedEvidence);
     assert.equal((sourceProduction.body as JsonObject).diet_record, null, "source evidence alone is not actual eating");
     db.prepare("DELETE FROM cooking_queue_items WHERE id=?").run(sourceItem.id);

@@ -1767,9 +1767,18 @@ try {
   assert.equal(selectedQueue.added, true);
   const queuedSelection = (await pool.query("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=$1",[selectedQueue.item.id])).rows[0].recipe_snapshot_json.selectionEvidence;
   assert.equal(queuedSelection.requestId, recommendationPage.requestId);
-  const selectedProductionInput = { idempotency_key: "pg-selection-production-186", recipe_id: recommendedRecipeId, inventory_item_ids: [], inventory_consumptions: [],
+  const guardedStock = await inventoryService.create(user.id, { food_name: "PG执行审核保护原料", quantity: "100g", quantity_value: 100, quantity_unit: "g", category: "其他", expiration_date: "2099-01-01", storage_location: "常温" });
+  const selectedProductionInput = { idempotency_key: "pg-selection-production-186", inventory_item_ids: [],
+    inventory_consumptions: [{ item_id: guardedStock.id, version: 1, mode: "amount" as const, amount_value: 10, unit: "g" as const }],
     production: { food_name: "PG 选择来源", produced_servings: 1, eaten_servings: 0, meal_type: "午餐", nutrition_per_serving: {}, queue_item_id: selectedQueue.item.id, queue_version: selectedQueue.item.version } };
+  await pool.query("UPDATE recipes SET automatic_inventory_write_allowed=false WHERE id=$1", [recommendedRecipeId]);
+  await assert.rejects(() => dietService.completeCooking(user.id, selectedProductionInput),
+    (error: unknown) => error instanceof Error && (error as { code?: string }).code === "RECIPE_EXECUTION_NOT_ALLOWED");
+  assert.equal(Number((await pool.query("SELECT COUNT(*) n FROM prepared_meals WHERE queue_item_id=$1", [selectedQueue.item.id])).rows[0].n), 0);
+  assert.deepEqual((await pool.query("SELECT quantity_value,version FROM inventory_items WHERE id=$1", [guardedStock.id])).rows[0], { quantity_value: 100, version: 1 });
+  await pool.query("UPDATE recipes SET automatic_inventory_write_allowed=true WHERE id=$1", [recommendedRecipeId]);
   const selectedProduction = await dietService.completeCooking(user.id, selectedProductionInput);
+  assert.equal((selectedProduction.prepared_meal as { recipe_id: number }).recipe_id, recommendedRecipeId);
   assert.deepEqual(selectedProduction.selection_evidence, queuedSelection);
   assert.equal(selectedProduction.diet_record, null);
   await pool.query("DELETE FROM cooking_queue_items WHERE id=$1",[selectedQueue.item.id]);

@@ -1,6 +1,6 @@
 import { appendSqliteMaintenanceEvent } from "../planMaintenance/sqliteEventWriter.js";
 import { InventoryDomainError } from "./errors.js";
-import { quantityEvidenceStatus } from "./evidence.js";
+import { quantityEvidenceStatus, nextQuantityEvidence } from "./evidence.js";
 import { savedIntakeItems } from "./intakeIdentity.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -271,8 +271,10 @@ export class SqliteInventoryRepository implements InventoryRepository {
   updateInTransaction(userId: number, itemId: number, expectedVersion: number, input: InventoryUpdatePersistence, source: "manual" | "ai" = "manual") {
     return this.database.transaction(() => {
       const current = this.database.prepare(`
-        SELECT * FROM inventory_items
-        WHERE id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL
+        SELECT inventory_items.*, (SELECT metadata_json FROM inventory_change_logs e
+          WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id
+          AND json_extract(e.metadata_json,'$.field_evidence.quantity.status') IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence
+        FROM inventory_items WHERE id = ? AND user_id = ? AND version = ? AND deleted_at IS NULL
       `).get(itemId, userId, expectedVersion) as Record<string, unknown> | undefined;
       if (!current) return { kind: "conflict" } as const;
 
@@ -312,7 +314,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
       const updatedRow = this.database.prepare("SELECT * FROM inventory_items WHERE id = ?").get(itemId) as Record<string, unknown>;
       const updated = formatInventoryItem(updatedRow);
       const currentAvailable = Boolean(current.is_available);
-      if (current.quantity_value !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit || currentAvailable !== updated.is_available) {
+      if (current.quantity_value !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit || currentAvailable !== updated.is_available || current.quantity_evidence != null) {
         this.database.prepare(`
           INSERT OR IGNORE INTO inventory_change_logs
             (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key, metadata_json)
@@ -323,8 +325,10 @@ export class SqliteInventoryRepository implements InventoryRepository {
             ? null
             : Number(updated.quantity_value) - Number(current.quantity_value),
           `manual-update:${itemId}:${expectedVersion}`,
-          JSON.stringify({ inventory_version: updated.version, field_evidence: source === "manual" && (current.quantity_value !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit)
-            ? { quantity: { status: "known", source: "user" } } : {} }),
+          JSON.stringify(nextQuantityEvidence(current.quantity_evidence, expectedVersion, updated.version,
+            current.quantity_value !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit
+              ? source === "manual" ? "manual" : "unverified" : "preserve",
+            updated.quantity_value != null && updated.quantity_unit != null)),
         );
       }
       appendSqliteMaintenanceEvent(this.database, { userId,kind: "inventory_changed",sourceId: `update:${itemId}:${updated.version}`,subjectId: String(itemId),

@@ -1,3 +1,4 @@
+import { nextQuantityEvidence } from "../modules/inventory/evidence.js";
 import { appendSqliteMaintenanceEvent } from "../modules/planMaintenance/sqliteEventWriter.js";
 import { currentDateKey } from "../utils/date.js";
 import type Database from "better-sqlite3";
@@ -109,7 +110,11 @@ export function applyInventoryConsumptions(
   consumptions: InventoryConsumption[],
   options: { idempotencyKey: string; source: string; metadata?: Record<string, unknown> },
 ) {
-  const select = database.prepare("SELECT * FROM inventory_items WHERE id = ? AND user_id = ? AND deleted_at IS NULL");
+  const select = database.prepare(`SELECT inventory_items.*,
+    (SELECT metadata_json FROM inventory_change_logs e WHERE e.inventory_item_id=inventory_items.id
+      AND e.user_id=inventory_items.user_id AND json_extract(e.metadata_json,'$.field_evidence.quantity.status') IS NOT NULL
+      ORDER BY e.id DESC LIMIT 1) AS quantity_evidence
+    FROM inventory_items WHERE id = ? AND user_id = ? AND deleted_at IS NULL`);
   const update = database.prepare(`
     UPDATE inventory_items SET quantity = ?, quantity_value = ?, is_available = ?,
       version = version + 1, updated_at = CURRENT_TIMESTAMP
@@ -180,7 +185,7 @@ export function applyInventoryConsumptions(
       storedUnit,
       amountUsed === null ? null : -roundQuantity(amountUsed),
       `${options.idempotencyKey}:${consumption.item_id}:${index}`,
-      JSON.stringify(options.metadata || {}),
+      JSON.stringify({ ...options.metadata, ...nextQuantityEvidence(item.quantity_evidence, consumption.version, consumption.version + 1, "preserve", storedValue !== null && storedUnit !== null) }),
     );
     appendSqliteMaintenanceEvent(database,{ userId,kind: "inventory_changed",sourceId: `consume:${options.idempotencyKey}:${consumption.item_id}:${index}`,
       subjectId: String(consumption.item_id),details: { version: consumption.version+1,mode: "consume" } });

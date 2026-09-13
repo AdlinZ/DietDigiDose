@@ -1,6 +1,6 @@
 import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
 import { InventoryDomainError } from "./errors.js";
-import { quantityEvidenceStatus } from "./evidence.js";
+import { quantityEvidenceStatus, nextQuantityEvidence } from "./evidence.js";
 import { savedIntakeItems } from "./intakeIdentity.js";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
@@ -60,7 +60,10 @@ export async function consumeInventoryWithPostgresClient(
   const items = [];
   for (const [index, consumption] of (input.items as InventoryConsumption[]).entries()) {
     const selected = await client.query(`
-      SELECT * FROM inventory_items WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE
+      SELECT inventory_items.*, (SELECT metadata_json FROM inventory_change_logs e
+        WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id
+          AND e.metadata_json->'field_evidence'->>'quantity' IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence
+      FROM inventory_items WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE
     `, [consumption.item_id, userId]);
     const row = selected.rows[0];
     if (!row) throw new InventoryQuantityError("INVENTORY_CONFLICT", "库存食材不存在、已用完或不属于当前账号");
@@ -81,7 +84,7 @@ export async function consumeInventoryWithPostgresClient(
       userId, consumption.item_id, consumption.mode === "all" ? "consume_all" : "consume_partial",
       input.source, transition.storedValue, transition.storedValue === null ? null : transition.remaining,
       transition.storedUnit, transition.amountUsed === null ? null : -Math.round((transition.amountUsed + Number.EPSILON) * 1000) / 1000,
-      `${input.idempotency_key}:${consumption.item_id}:${index}`, JSON.stringify(metadata),
+      `${input.idempotency_key}:${consumption.item_id}:${index}`, JSON.stringify({ ...metadata, ...nextQuantityEvidence(row.quantity_evidence, consumption.version, consumption.version + 1, "preserve", transition.storedValue !== null && transition.storedUnit !== null) }),
     ]);
     await appendPostgresMaintenanceEvent(client,{ userId,kind: "inventory_changed",sourceId: `consume:${input.idempotency_key}:${consumption.item_id}:${index}`,
       subjectId: String(consumption.item_id),details: { version: consumption.version+1,mode: "consume" } });
@@ -329,7 +332,10 @@ export class PostgresInventoryRepository implements InventoryRepository {
   /** Uses the caller's transaction; does not commit or release its connection. */
   async updateWithClient(client: PoolClient, userId: number, itemId: number, expectedVersion: number, input: InventoryUpdatePersistence, source: "manual" | "ai" = "manual") {
     const currentResult = await client.query(`
-      SELECT * FROM inventory_items WHERE id = $1 AND user_id = $2 AND version = $3 AND deleted_at IS NULL FOR UPDATE
+      SELECT inventory_items.*, (SELECT metadata_json FROM inventory_change_logs e
+        WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id
+          AND e.metadata_json->'field_evidence'->>'quantity' IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence
+      FROM inventory_items WHERE id = $1 AND user_id = $2 AND version = $3 AND deleted_at IS NULL FOR UPDATE
     `, [itemId, userId, expectedVersion]);
     const current = currentResult.rows[0];
     if (!current) return { kind: "conflict" } as const;
@@ -353,7 +359,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
     if (!updatedResult.rows[0]) return { kind: "conflict" } as const;
     const updated = formatInventoryItem(updatedResult.rows[0]);
     const currentQuantity = current.quantity_value == null ? null : Number(current.quantity_value);
-    if (currentQuantity !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit || Boolean(current.is_available) !== updated.is_available) {
+    if (currentQuantity !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit || Boolean(current.is_available) !== updated.is_available || current.quantity_evidence != null) {
       await client.query(`
         INSERT INTO inventory_change_logs
           (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key, metadata_json)
@@ -363,8 +369,10 @@ export class PostgresInventoryRepository implements InventoryRepository {
         userId, itemId, current.quantity_value, updated.quantity_value, updated.quantity_unit,
         current.quantity_value == null || updated.quantity_value == null ? null : Number(updated.quantity_value) - Number(current.quantity_value),
         `manual-update:${itemId}:${expectedVersion}`, source,
-        JSON.stringify({ inventory_version: updated.version, field_evidence: source === "manual" && (currentQuantity !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit)
-            ? { quantity: { status: "known", source: "user" } } : {} }),
+        JSON.stringify(nextQuantityEvidence(current.quantity_evidence, expectedVersion, updated.version,
+          currentQuantity !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit
+            ? source === "manual" ? "manual" : "unverified" : "preserve",
+          updated.quantity_value != null && updated.quantity_unit != null)),
       ]);
     }
     await appendPostgresMaintenanceEvent(client, { userId,kind: "inventory_changed",sourceId: `update:${itemId}:${updated.version}`,subjectId: String(itemId),

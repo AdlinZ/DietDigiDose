@@ -11,6 +11,11 @@ on:
         options:
           - preview
           - candidate
+      release_snapshot:
+        description: Optional exact next unused snapshot (for an explicitly requested week carryover)
+        required: false
+        default: ''
+        type: string
   push:
     tags:
       - 'preview-apk-*'
@@ -93,6 +98,8 @@ jobs:
           fi
 
       - name: Reserve the next weekly build number
+        env:
+          APK_RELEASE_SNAPSHOT: ${{ inputs.release_snapshot }}
         run: node scripts/prepare-build-release.mjs --publish
 
       - name: Load and validate release metadata

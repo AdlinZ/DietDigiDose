@@ -461,6 +461,12 @@ try {
   const halfRecord = halves[0].diet_record as { calories: number; protein: number | null };
   assert.equal(halfRecord.calories, 50);
   assert.equal(halfRecord.protein, null);
+  for (const changed of [{ type: "discard" as const }, { servings: 1 }, { version: 2 }, { recorded_at: "2026-09-10" }]) {
+    await assert.rejects(dietService.applyMealEvent(user.id, prepared.id, { ...halfMeal, ...changed }),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "PREPARED_MEAL_KEY_CONFLICT");
+  }
+  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === prepared.id)?.remaining_servings, 1.5);
+
   const discardedMeal = await dietService.applyMealEvent(user.id, prepared.id, {
     idempotency_key: "postgres-prepared-discard-190", version: 2, type: "discard", servings: 0.5,
   });

@@ -3563,6 +3563,13 @@ test("prepared meals separate production, later eating and discard atomically", 
   assert.equal((eaten.body as JsonObject).diet_record.recorded_at, "2026-09-09");
   assert.equal((eaten.body as JsonObject).diet_record.calories, 50);
   assert.equal((await event(eatenInput)).response.status, 200);
+  for (const changed of [{ type: "discard" }, { servings: 1 }, { version: 2 }, { recorded_at: "2026-09-10" }, { meal_type: "晚餐" }]) {
+    const rejected = await event({ ...eatenInput, ...changed });
+    assert.equal(rejected.response.status, 409);
+    assert.equal((rejected.body as JsonObject).code, "PREPARED_MEAL_KEY_CONFLICT");
+  }
+  assert.equal((db.prepare("SELECT remaining_servings FROM prepared_meals WHERE id=?").get(meal.id) as JsonObject).remaining_servings, 1.5);
+
   const discarded = await event({ idempotency_key: "prepared-discard-190-half", version: 2, type: "discard", servings: 0.5 });
   assert.equal(discarded.response.status, 201);
   assert.equal((discarded.body as JsonObject).diet_record, null);

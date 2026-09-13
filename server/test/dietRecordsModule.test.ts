@@ -89,3 +89,22 @@ describe("prepared meal quantity conservation", () => {
     assert.throws(() => transitionMeal(meal, { idempotency_key: "precision-empty-event", version: meal.version, type: "eat", servings: 0.000001 }), /不足/);
   });
 });
+
+
+test("meal event identity ignores generated retry times but detects explicit request changes", async () => {
+  const { prepareMealEvent } = await import("../src/modules/dietRecords/preparedMeals.js");
+  const { mealEventIdentity, replayMealEvent } = await import("../src/modules/dietRecords/mealEventIdentity.js");
+  const input = { idempotency_key: "meal-event-identity-test", type: "eat" as const, servings: 0.5, version: 1 };
+  const first = prepareMealEvent(input);
+  const retry = { ...prepareMealEvent(input), recorded_at: "2099-09-10", recorded_time: "23:59" };
+  assert.equal(mealEventIdentity(first), mealEventIdentity(retry));
+  const result = { prepared_meal: { version: 2 }, request_identity: mealEventIdentity(first) };
+  const stored = { prepared_meal_id: "meal", event_type: "eat", servings: 0.5, result_json: result };
+  assert.equal(replayMealEvent(stored, "meal", retry).repeated, true);
+  assert.throws(() => replayMealEvent(stored, "meal", prepareMealEvent({ ...input, recorded_at: "2099-09-10" })), /操作编号/);
+  const legacy = { ...stored, result_json: JSON.stringify({ prepared_meal: { version: 2 } }) };
+  assert.equal(replayMealEvent(legacy, "meal", retry).repeated, true);
+  assert.throws(() => replayMealEvent(legacy, "meal", { ...retry, type: "discard" }), /操作编号/);
+  assert.throws(() => replayMealEvent(legacy, "meal", { ...retry, servings: 1 }), /操作编号/);
+  assert.throws(() => replayMealEvent(stored, "other", retry), /操作编号/);
+});

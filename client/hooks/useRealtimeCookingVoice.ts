@@ -18,6 +18,7 @@ type Options = {
   recipeIngredients: string[];
   onTranscript: (text: string, final: boolean) => void;
   onBargeIn: () => void;
+  onStopOutput: () => void;
   onControl: (action: string, seconds: number) => void;
   onAnswerDelta: (text: string, delta: string, turnId: string) => void;
   onAnswer: (text: string, streamed: boolean, turnId: string) => void;
@@ -72,6 +73,9 @@ export function useRealtimeCookingVoice(options: Options) {
   const recognitionRef = useRef<Recognition | null>(null);
   const sessionRef = useRef<RealtimeVoiceSession | null>(null);
   const activeRef = useRef(false);
+  const lifecycleRef = useRef(0);
+  const startingRef = useRef(false);
+  const stoppingRef = useRef(0);
   const responseGeneration = useRef(0);
   const interruptedRef = useRef(false);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -157,6 +161,7 @@ export function useRealtimeCookingVoice(options: Options) {
         await pollAnswer(currentSession.id, result.turnId, generation);
       }
     } catch (error) {
+      if (!activeRef.current || mutedRef.current || responseGeneration.current !== generation) return;
       optionsRef.current.onError(error instanceof Error ? error.message : "实时语音处理失败");
       if (activeRef.current && !mutedRef.current) setState("listening");
     }
@@ -270,29 +275,34 @@ export function useRealtimeCookingVoice(options: Options) {
   ), [authFetch]);
 
   const stop = useCallback(async () => {
-    activeRef.current = false;
-    mutedRef.current = false;
-    responseGeneration.current += 1;
-    sessionUpdaterRef.current!.invalidate();
-    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-    heartbeatRef.current = null;
-    try { recognitionRef.current?.abort(); } catch {}
-    recognitionRef.current = null;
-    if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
-    nativeSilenceTimerRef.current = null;
-    nativeSpeakingRef.current = false;
-    nativeChunksRef.current = [];
-    nativePreRollRef.current = [];
-    nativeTurnIdRef.current = "";
-    nativeSequenceRef.current = 0;
-    nativePartialSentLengthRef.current = 0;
-    nativePartialInFlightRef.current = false;
-    if (Platform.OS !== "web") await stopNativeRecording().catch(() => undefined);
-    const current = sessionRef.current;
-    sessionRef.current = null;
-    setSession(null);
-    setState("off");
-    if (current) await realtimeVoiceApi.close(authFetch, current.id).catch(() => undefined);
+    stoppingRef.current += 1;
+    try {
+      lifecycleRef.current += 1;
+      const current = sessionRef.current;
+      sessionRef.current = null;
+      setSession(null);
+      setState("off");
+      activeRef.current = false;
+      mutedRef.current = false;
+      optionsRef.current.onStopOutput();
+      responseGeneration.current += 1;
+      sessionUpdaterRef.current!.invalidate();
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+      try { recognitionRef.current?.abort(); } catch {}
+      recognitionRef.current = null;
+      if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
+      nativeSilenceTimerRef.current = null;
+      nativeSpeakingRef.current = false;
+      nativeChunksRef.current = [];
+      nativePreRollRef.current = [];
+      nativeTurnIdRef.current = "";
+      nativeSequenceRef.current = 0;
+      nativePartialSentLengthRef.current = 0;
+      nativePartialInFlightRef.current = false;
+      if (Platform.OS !== "web") await stopNativeRecording().catch(() => undefined);
+      if (current) await realtimeVoiceApi.close(authFetch, current.id).catch(() => undefined);
+    } finally { stoppingRef.current -= 1; }
   }, [authFetch, stopNativeRecording]);
 
   const toggleMute = useCallback(async () => {
@@ -307,6 +317,7 @@ export function useRealtimeCookingVoice(options: Options) {
         mutedRef.current = true;
         responseGeneration.current += 1;
         setState("muted");
+        optionsRef.current.onStopOutput();
         if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
         nativeSilenceTimerRef.current = null;
         nativeSpeakingRef.current = false;
@@ -348,6 +359,7 @@ export function useRealtimeCookingVoice(options: Options) {
   }, [pauseNativeRecording, resumeNativeRecording, stopNativeRecording, stop, updateSession]);
 
   const start = useCallback(async () => {
+    if (startingRef.current || stoppingRef.current || activeRef.current) return false;
     const RecognitionConstructor = recognitionConstructor();
     const native = Platform.OS === "android" || Platform.OS === "ios";
     if ((!RecognitionConstructor && !native) || !Number.isInteger(optionsRef.current.recipeId) || optionsRef.current.recipeId <= 0) {
@@ -355,6 +367,9 @@ export function useRealtimeCookingVoice(options: Options) {
       return false;
     }
     setState("connecting");
+    startingRef.current = true;
+    const lifecycle = ++lifecycleRef.current;
+    const isCurrent = () => lifecycleRef.current === lifecycle;
     try {
       const created = await realtimeVoiceApi.create(authFetch, {
         recipeId: optionsRef.current.recipeId,
@@ -364,6 +379,10 @@ export function useRealtimeCookingVoice(options: Options) {
         recipeSteps: optionsRef.current.recipeSteps,
         recipeIngredients: optionsRef.current.recipeIngredients,
       });
+      if (!isCurrent()) {
+        await realtimeVoiceApi.close(authFetch, created.session.id).catch(() => undefined);
+        return false;
+      }
       sessionRef.current = created.session;
       setSession(created.session);
       activeRef.current = true;
@@ -372,8 +391,9 @@ export function useRealtimeCookingVoice(options: Options) {
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = "zh-CN";
-        recognition.onstart = () => { if (activeRef.current && !mutedRef.current) setState("listening"); };
+        recognition.onstart = () => { if (isCurrent() && activeRef.current && !mutedRef.current) setState("listening"); };
         recognition.onspeechstart = () => {
+          if (!isCurrent() || !activeRef.current || mutedRef.current) return;
           if (stateRef.current === "processing") {
             interruptedRef.current = true;
             responseGeneration.current += 1;
@@ -381,7 +401,7 @@ export function useRealtimeCookingVoice(options: Options) {
           }
         };
         recognition.onresult = (event: any) => {
-          if (!activeRef.current || mutedRef.current) return;
+          if (!isCurrent() || !activeRef.current || mutedRef.current) return;
           let interim = "";
           for (let index = event.resultIndex; index < event.results.length; index += 1) {
             const result = event.results[index];
@@ -393,56 +413,82 @@ export function useRealtimeCookingVoice(options: Options) {
           }
           if (interim) optionsRef.current.onTranscript(interim, false);
         };
-        recognition.onerror = () => { if (activeRef.current && !mutedRef.current) setState("reconnecting"); };
+        recognition.onerror = (event) => {
+          if (!isCurrent() || !activeRef.current || mutedRef.current) return;
+          if (["not-allowed", "service-not-allowed", "audio-capture"].includes(event?.error)) {
+            void stop();
+            optionsRef.current.onError("麦克风权限或设备不可用，已停止持续监听");
+          } else setState("reconnecting");
+        };
         recognition.onend = () => {
-          if (!activeRef.current || mutedRef.current) return;
+          if (!isCurrent() || !activeRef.current || mutedRef.current) return;
           setState("reconnecting");
           setTimeout(() => {
             if (!activeRef.current || mutedRef.current || recognitionRef.current !== recognition) return;
-            try { recognition.start(); } catch { setState("fallback"); }
+            try { recognition.start(); } catch { void stop(); }
           }, 300);
         };
         recognitionRef.current = recognition;
         recognition.start();
       } else {
         const permission = await Audio.requestPermissionsAsync();
+        if (!isCurrent()) return false;
         if (!permission.granted) throw new Error("未获得麦克风权限，已保留文字和按轮录音");
         await startNativeRecording({
           sampleRate: 16_000, channels: 1, encoding: "pcm_16bit", interval: 100,
           enableProcessing: true, keepFullAnalysis: false, intervalAnalysis: 100,
           segmentDurationMs: 100, features: { rms: true }, output: { primary: { enabled: false } },
           android: { audioFocusStrategy: "communication" }, autoResumeAfterInterruption: false,
-          onAudioStream: handleNativeAudio, onAudioAnalysis: handleNativeAnalysis,
+          onAudioStream: async event => { if (isCurrent()) await handleNativeAudio(event); },
+          onAudioAnalysis: async event => { if (isCurrent()) await handleNativeAnalysis(event); },
           onRecordingInterrupted: () => {
-            if (activeRef.current) {
+            if (isCurrent() && activeRef.current) {
               optionsRef.current.onError("录音被系统中断，已停止持续监听");
               void stop().then(() => setState("fallback"));
             }
           },
         });
+        if (!isCurrent()) {
+          await stopNativeRecording().catch(() => undefined);
+          return false;
+        }
         setState("listening");
       }
       heartbeatRef.current = setInterval(() => {
         if (!sessionRef.current) return;
         void updateSession({ muted: mutedRef.current, reconnect: false }).catch(() => {
-          if (activeRef.current && !mutedRef.current) setState("reconnecting");
+          if (isCurrent() && activeRef.current && !mutedRef.current) setState("reconnecting");
         });
       }, 20_000);
       return true;
     } catch (error) {
+      if (!isCurrent()) return false;
       await stop();
       setState("fallback");
       optionsRef.current.onError(error instanceof Error ? error.message : "实时通道不可用，已切换按轮录音");
       return false;
+    } finally {
+      startingRef.current = false;
     }
-  }, [authFetch, handleNativeAnalysis, handleNativeAudio, startNativeRecording, stop, submitTurn, updateSession]);
+  }, [authFetch, handleNativeAnalysis, handleNativeAudio, startNativeRecording, stopNativeRecording, stop, submitTurn, updateSession]);
 
   useEffect(() => () => { void stop(); }, [stop]);
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (next) => {
-      if (next !== "active" && activeRef.current) void stop();
+      if (next !== "active" && (activeRef.current || startingRef.current)) void stop();
     });
     return () => subscription.remove();
+  }, [stop]);
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const onHidden = () => { if (document.hidden) void stop(); };
+    const onPageHide = () => { void stop(); };
+    document.addEventListener("visibilitychange", onHidden);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHidden);
+      window.removeEventListener("pagehide", onPageHide);
+    };
   }, [stop]);
 
   return { supported, session, state, active: !["off", "fallback"].includes(state), muted: state === "muted", start, stop, toggleMute };

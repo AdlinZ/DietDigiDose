@@ -18,6 +18,9 @@ const generatedSchemaPath = path.join(serverRoot, "src", "storage", "database", 
 const manifestPath = path.join(serverRoot, "src", "storage", "database", "postgres", "baseline-manifest.json");
 
 const BOOLEAN_COLUMNS = new Set([
+  "recipes.automatic_inventory_write_allowed",
+  "users.is_demo", "community_posts.is_demo", "community_comments.is_demo",
+  "inventory_items.is_demo", "recipe_favorites.is_demo",
   "recommendation_learning_settings.enabled",
   "plan_maintenance_settings.enabled",
   "ai_usage_logs.success",
@@ -39,7 +42,8 @@ const BOOLEAN_COLUMNS = new Set([
   "users.is_verified_expert",
   "users.must_change_password",
 ]);
-const JSON_COLUMNS = new Set(["kitchenware_catalog.aliases", "kitchenware_catalog.cooking_methods", "recipes.tags"]);
+const JSON_COLUMNS = new Set(["kitchenware_catalog.aliases", "kitchenware_catalog.cooking_methods", "recipes.tags",
+  "recipes.base_data_payload", "ingredients_library.base_data_payload", "kitchenware_catalog.base_data_payload"]);
 const BIGINT_COLUMNS = new Set(["rate_limit_buckets.window_started_at", "rate_limit_buckets.blocked_until"]);
 const POSTGRES_ONLY_UNIQUE_COLUMNS = new Set(["agent_runs.checkpoint_thread_id"]);
 

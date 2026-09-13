@@ -13,7 +13,7 @@ export function validateDiningPlan(raw: HouseholdDiningPlan, userId: number, mem
     const preferences = (typeof member.dining_preferences_json === "string" ? JSON.parse(member.dining_preferences_json) : member.dining_preferences_json) as { allergies?: string[]; restrictions?: string[] };
     return { membershipId: selection.membershipId,allergies: preferences.allergies ?? [],restrictions: preferences.restrictions ?? [] };
   });
-  if (!recipe) throw new InventoryQuantityError("DINING_RECIPE_UNAVAILABLE","请先选择可用菜谱，再安排共餐");
+  if (!recipe || recipe.automatic_inventory_write_allowed === false || recipe.automatic_inventory_write_allowed === 0) throw new InventoryQuantityError("DINING_RECIPE_UNAVAILABLE","请先选择可用菜谱，再安排共餐");
   const checked = checkDiningRecipe(recipe,participants,input.participants.reduce((sum,item) => sum+Math.round(item.servings*1_000_000),0)/1_000_000);
   if (checked.status === "blocked") throw new InventoryQuantityError("DINING_CONSTRAINT_CONFLICT","菜谱与参与成员的明确忌口冲突，请先选择合适菜谱");
   return input;

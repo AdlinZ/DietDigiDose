@@ -198,6 +198,45 @@ try {
     legacyQueueClient.release();
   }
 
+  const legacyBaseData = await pool.connect();
+  try {
+    await legacyBaseData.query("BEGIN");
+    await legacyBaseData.query(`
+      CREATE SCHEMA base_data;
+      CREATE TABLE base_data.runtime_ids(collection text,logical_id text,target_table text,target_id text,
+        imported_version text,imported_at timestamptz);
+      INSERT INTO base_data.runtime_ids VALUES('recipes','stable-recipe','recipes','7','0.1.0-rc.7',now());
+      CREATE TABLE public.recipes(id integer PRIMARY KEY,title text,
+        automatic_inventory_write_allowed boolean NOT NULL DEFAULT true,base_data_payload jsonb);
+      INSERT INTO public.recipes VALUES(7,'管理员已修改',false,'{"admin_edit":true}');
+      CREATE TABLE public.ingredients_library(id integer PRIMARY KEY,calories_100g double precision,
+        nutrition_status text NOT NULL DEFAULT 'unspecified',base_data_payload jsonb);
+      INSERT INTO public.ingredients_library VALUES(1,NULL,'unknown','{"name":"未知营养"}');
+      CREATE TABLE public.kitchenware_catalog(id integer PRIMARY KEY,base_data_payload jsonb);
+      CREATE TABLE public.cooking_completions(id text PRIMARY KEY,recipe_id integer REFERENCES public.recipes(id));
+      CREATE TABLE public.prepared_meals(id text PRIMARY KEY,recipe_id integer REFERENCES public.recipes(id));
+      CREATE TABLE public.users(id integer PRIMARY KEY,is_demo boolean NOT NULL DEFAULT false);
+      CREATE TABLE public.community_posts(id integer PRIMARY KEY,is_demo boolean NOT NULL DEFAULT false);
+      CREATE TABLE public.community_comments(id integer PRIMARY KEY,is_demo boolean NOT NULL DEFAULT false);
+      CREATE TABLE public.inventory_items(id integer PRIMARY KEY,is_demo boolean NOT NULL DEFAULT false);
+      CREATE TABLE public.recipe_favorites(id integer PRIMARY KEY,is_demo boolean NOT NULL DEFAULT false);
+    `);
+    await legacyBaseData.query(fs.readFileSync(path.join(serverRoot, "drizzle/0023_good_wild_pack.sql"), "utf8"));
+    assert.deepEqual((await legacyBaseData.query("SELECT title,base_data_payload,automatic_inventory_write_allowed FROM public.recipes")).rows,
+      [{ title: "管理员已修改", base_data_payload: { admin_edit: true }, automatic_inventory_write_allowed: false }]);
+    assert.deepEqual((await legacyBaseData.query("SELECT logical_id,target_id FROM public.base_data_runtime_ids")).rows,
+      [{ logical_id: "stable-recipe", target_id: "7" }]);
+    assert.equal((await legacyBaseData.query("SELECT calories_100g FROM public.ingredients_library")).rows[0].calories_100g, null);
+    await legacyBaseData.query("SAVEPOINT reference_only");
+    await assert.rejects(() => legacyBaseData.query("INSERT INTO public.cooking_completions VALUES('blocked',7)"), /reference-only/);
+    await legacyBaseData.query("ROLLBACK TO SAVEPOINT reference_only");
+    await assert.rejects(() => legacyBaseData.query("INSERT INTO public.prepared_meals VALUES('blocked',7)"), /reference-only/);
+    await legacyBaseData.query("ROLLBACK TO SAVEPOINT reference_only");
+  } finally {
+    await legacyBaseData.query("ROLLBACK");
+    legacyBaseData.release();
+  }
+
   await migrate(drizzle(pool), { migrationsFolder: path.join(serverRoot, "drizzle") });
   const first = await pool.connect();
   try {

@@ -3,7 +3,7 @@ import { AppState, Platform } from "react-native";
 import renderer, { act } from "react-test-renderer";
 import { Audio } from "expo-av";
 
-import { realtimeVoiceApi, type RealtimeVoiceSession } from "@/services/api";
+import { aiApi, realtimeVoiceApi, type RealtimeVoiceSession } from "@/services/api";
 import { useRealtimeCookingVoice } from "./useRealtimeCookingVoice";
 
 const mockStartNativeRecording = jest.fn();
@@ -163,6 +163,29 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
     expect(mockStartNativeRecording).not.toHaveBeenCalled();
     expect(voice.state).toBe("off");
     spy.mockReturnValue({ remove: jest.fn() });
+  });
+
+  it("does not upload fallback audio when a pending transcription fails after mute", async () => {
+    jest.useFakeTimers();
+    try {
+      let reject!: (error: Error) => void;
+      jest.mocked(realtimeVoiceApi.audioChunk).mockReturnValueOnce(new Promise((_done, fail) => { reject = fail; }));
+      await act(async () => { await voice.start(); });
+      const recorder = mockStartNativeRecording.mock.calls[0][0];
+      await act(async () => {
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.1 }] });
+        await recorder.onAudioStream({ data: "AAAA" });
+        await recorder.onAudioStream({ data: "AAAA" });
+        jest.advanceTimersByTime(300);
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: true, rms: 0 }] });
+        jest.advanceTimersByTime(650);
+      });
+      expect(realtimeVoiceApi.audioChunk).toHaveBeenCalled();
+      await act(async () => { await voice.toggleMute(); reject(new Error("offline")); });
+      expect(aiApi.transcribe).not.toHaveBeenCalled();
+      expect(realtimeVoiceApi.turn).not.toHaveBeenCalled();
+      expect(voice.state).toBe("muted");
+    } finally { await act(async () => { await voice.stop(); }); jest.useRealTimers(); }
   });
 
   it("ignores recorder interruption callbacks from a closed session", async () => {

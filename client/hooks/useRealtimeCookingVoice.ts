@@ -84,7 +84,7 @@ export function useRealtimeCookingVoice(options: Options) {
   const nativeSpeakingRef = useRef(false);
   const nativeSpeechStartedAtRef = useRef(0);
   const nativeSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const nativeTranscribingRef = useRef(false);
+  const nativeTranscribingRef = useRef<symbol | null>(null);
   const nativeTurnIdRef = useRef("");
   const nativeSequenceRef = useRef(0);
   const nativePartialSentLengthRef = useRef(0);
@@ -177,7 +177,12 @@ export function useRealtimeCookingVoice(options: Options) {
     nativeSequenceRef.current = sequence;
     nativeSpeakingRef.current = false;
     if (!currentSession || !activeRef.current || mutedRef.current || Date.now() - nativeSpeechStartedAtRef.current < 250 || chunks.length < 2) return;
-    nativeTranscribingRef.current = true;
+    const transcription = Symbol("native-transcription");
+    const generation = responseGeneration.current;
+    const lifecycle = lifecycleRef.current;
+    const isCurrent = () => lifecycleRef.current === lifecycle && responseGeneration.current === generation
+      && activeRef.current && !mutedRef.current;
+    nativeTranscribingRef.current = transcription;
     setState("processing");
     try {
       let transcript = "";
@@ -187,23 +192,27 @@ export function useRealtimeCookingVoice(options: Options) {
         });
         transcript = partial.transcript.trim();
       } catch {
+        if (!isCurrent()) return;
         const result = await aiApi.transcribe<{
           transcript?: string;
           text?: string;
           run: { id: string; status: string; transcript?: string; error?: { message?: string } };
         }>(authFetch, pcm16WavBase64(chunks), "audio/wav");
+        if (!isCurrent()) return;
         const completed = await waitForAgentRun(authFetch, result.run);
         transcript = String(result.transcript || result.text || completed.transcript || "").trim();
       }
+      if (!isCurrent()) return;
       if (!transcript) throw new Error("没有识别到清晰语音");
       if (!activeRef.current || mutedRef.current || sessionRef.current?.id !== currentSession.id) return;
       optionsRef.current.onTranscript(transcript, true);
       await submitTurn(transcript);
     } catch (error) {
+      if (!isCurrent()) return;
       optionsRef.current.onError(error instanceof Error ? error.message : "连续语音转写失败");
       if (activeRef.current && !mutedRef.current) setState("listening");
     } finally {
-      nativeTranscribingRef.current = false;
+      if (nativeTranscribingRef.current === transcription) nativeTranscribingRef.current = null;
     }
   }, [authFetch, submitTurn]);
 
@@ -300,6 +309,7 @@ export function useRealtimeCookingVoice(options: Options) {
       nativeSequenceRef.current = 0;
       nativePartialSentLengthRef.current = 0;
       nativePartialInFlightRef.current = false;
+      nativeTranscribingRef.current = null;
       if (Platform.OS !== "web") await stopNativeRecording().catch(() => undefined);
       if (current) await realtimeVoiceApi.close(authFetch, current.id).catch(() => undefined);
     } finally { stoppingRef.current -= 1; }

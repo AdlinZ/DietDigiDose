@@ -316,12 +316,41 @@ async function main() {
     const legacyDatabase = new Database(legacyPath);
     const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
       .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 22 }, (_, index) => 59 + index).includes(migration.version));
+    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 23 }, (_, index) => 59 + index).includes(migration.version));
     if (unsupportedVersions.length) {
       legacyDatabase.close();
       throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
     }
     for (const migration of newerVersions) {
+      if (migration.version === 81) {
+        // Only this freshly bootstrapped drill fixture is downgraded. A real rc.7
+        // database can contain NULL nutrition and must never use this reversal.
+        const unknown = legacyDatabase.prepare("SELECT COUNT(*) n FROM ingredients_library WHERE calories_100g IS NULL").get() as { n: number };
+        if (unknown.n) throw new Error("Cannot downgrade fixture with unknown ingredient nutrition");
+        const { sql } = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ingredients_library'").get() as { sql: string };
+        const restored = sql.replace(/\bcalories_100g\s+REAL\b/i, "calories_100g REAL NOT NULL")
+          .replace(/^(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?)["`\[]?ingredients_library["`\]]?/i, "$1ingredients_library_rollback81");
+        if (restored === sql) throw new Error("Unexpected fixture ingredient schema");
+        const artifacts = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='ingredients_library' AND type IN ('index','trigger') AND sql IS NOT NULL").all() as Array<{ sql: string }>;
+        const sequence = legacyDatabase.prepare("SELECT seq FROM sqlite_sequence WHERE name='ingredients_library'").get() as { seq: number } | undefined;
+        legacyDatabase.transaction(() => {
+          legacyDatabase.exec(`DROP TRIGGER base_data_recipe_cooking_guard_insert;
+            DROP TRIGGER base_data_recipe_cooking_guard_update;
+            DROP TRIGGER base_data_prepared_guard_insert;
+            DROP TRIGGER base_data_prepared_guard_update;
+            DROP TABLE base_data_runtime_ids;`);
+          legacyDatabase.exec(restored);
+          legacyDatabase.exec(`INSERT INTO ingredients_library_rollback81 SELECT * FROM ingredients_library;
+            DROP TABLE ingredients_library;
+            ALTER TABLE ingredients_library_rollback81 RENAME TO ingredients_library;`);
+          for (const artifact of artifacts) legacyDatabase.exec(artifact.sql);
+          if (sequence) legacyDatabase.prepare("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='ingredients_library'").run(sequence.seq);
+          legacyDatabase.exec(`ALTER TABLE ingredients_library DROP COLUMN nutrition_status;
+            ALTER TABLE recipes DROP COLUMN automatic_inventory_write_allowed;`);
+          for (const table of ["recipes", "ingredients_library", "kitchenware_catalog"]) legacyDatabase.exec(`ALTER TABLE ${table} DROP COLUMN base_data_payload`);
+          for (const table of ["users", "community_posts", "community_comments", "inventory_items", "recipe_favorites"]) legacyDatabase.exec(`ALTER TABLE ${table} DROP COLUMN is_demo`);
+        })();
+      }
       if (migration.version === 80) legacyDatabase.exec("DROP TABLE proactive_intervention_scan_cursor;");
       if (migration.version === 79) legacyDatabase.exec("DROP TABLE proactive_intervention_outcomes; DROP TABLE proactive_intervention_actions; DROP TABLE proactive_interventions; DROP TABLE proactive_intervention_preferences;");
       if (migration.version === 78) legacyDatabase.exec("DROP TABLE core_loop_actor_classifications; DROP TABLE core_loop_metric_settings;");

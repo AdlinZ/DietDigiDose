@@ -1,3 +1,4 @@
+import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import type { PreparedMealEventInput } from "@dietdigidose/contracts";
 import { prepareProduction, prepareMealEvent } from "./preparedMeals.js";
 import { currentDateKey, currentTimeKey } from "../../utils/date.js";
@@ -41,6 +42,13 @@ export class DietRecordsService {
       inventory_item_ids: [...new Set(input.inventory_item_ids)],
       diet_record: input.diet_record ? this.prepareRecord(input.diet_record) : undefined,
       production: input.production ? prepareProduction(input.production) : undefined,
+    }).catch((error: unknown) => {
+      const code = (error as { code?: string })?.code;
+      if ((code === "23514" || code === "SQLITE_CONSTRAINT_TRIGGER") && error instanceof Error
+        && error.message === "Recipe is reference-only; automatic inventory writes are disabled") {
+        throw new InventoryQuantityError("RECIPE_EXECUTION_NOT_ALLOWED", "这道菜谱尚未通过执行审核，请先核对配方；原料和餐次未改变");
+      }
+      throw error;
     });
     if (!result.repeated) await recordFunnelEvent(userId, "cooking_completed",
       (eventName, actorHash) => this.repository.recordFunnelEvent(eventName, actorHash));

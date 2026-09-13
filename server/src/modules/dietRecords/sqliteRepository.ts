@@ -183,11 +183,13 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
     if (production.queue_item_id) {
       const row = this.database.prepare("SELECT version,status,recipe_id FROM cooking_queue_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(production.queue_item_id, userId) as Record<string, unknown> | undefined;
       if (!row || row.version !== production.queue_version || ["completed", "cancelled"].includes(String(row.status)) || (input.recipe_id && Number(row.recipe_id) !== input.recipe_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "制作队列已变化，请刷新后重试");
+      if (row.recipe_id != null) input.recipe_id ??= Number(row.recipe_id);
     }
     if (production.plan_item_id) {
       const row = this.database.prepare("SELECT i.version,i.status,i.recipe_id,i.dining_json FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=? AND i.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL").get(production.plan_item_id, userId) as Record<string, unknown> | undefined;
       if (row?.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED", "这是共餐安排，请从家庭制作入口记录产出");
       if (!row || row.version !== production.plan_version || ["completed", "skipped"].includes(String(row.status)) || (input.recipe_id && Number(row.recipe_id) !== input.recipe_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "餐次已变化，请刷新后重试");
+      if (row.recipe_id != null) input.recipe_id ??= Number(row.recipe_id);
     }
     return null;
   }

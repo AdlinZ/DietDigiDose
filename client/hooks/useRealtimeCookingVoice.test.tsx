@@ -188,6 +188,17 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
     } finally { await act(async () => { await voice.stop(); }); jest.useRealTimers(); }
   });
 
+  it("interrupts native answer playback while the session is already listening again", async () => {
+    await act(async () => { await voice.start(); });
+    expect(voice.state).toBe("listening");
+    const recorder = mockStartNativeRecording.mock.calls[0][0];
+    await act(async () => {
+      await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.1 }] });
+      await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.1 }] });
+    });
+    expect(options.onBargeIn).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores recorder interruption callbacks from a closed session", async () => {
     await act(async () => { await voice.start(); });
     const oldRecorder = mockStartNativeRecording.mock.calls[0][0];
@@ -200,16 +211,19 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
 
   it("stops capture when Web microphone permission is revoked", async () => {
     Object.defineProperty(Platform, "OS", { value: "web", configurable: true });
-    const recognizers: Array<{ onerror?: (event: { error: string }) => void }> = [];
+    const recognizers: Array<{ onerror?: (event: { error: string }) => void; onspeechstart?: () => void }> = [];
     let recording = false;
     Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: class {
       constructor() { recognizers.push(this); }
       onerror?: (event: { error: string }) => void;
+      onspeechstart?: () => void;
       start() { recording = true; }
       abort() { recording = false; }
     } });
     try {
       await act(async () => { await voice.start(); });
+      await act(async () => { recognizers[0].onspeechstart!(); });
+      expect(options.onBargeIn).toHaveBeenCalledTimes(1);
       await act(async () => { recognizers[0].onerror!({ error: "not-allowed" }); });
       expect(recording).toBe(false);
       expect(voice.state).toBe("off");

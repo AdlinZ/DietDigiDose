@@ -259,8 +259,8 @@ export function useRealtimeCookingVoice(options: Options) {
         if (stateRef.current === "processing") {
           interruptedRef.current = true;
           responseGeneration.current += 1;
-          optionsRef.current.onBargeIn();
         }
+        optionsRef.current.onBargeIn();
       }
       setState("listening");
       return;
@@ -407,8 +407,8 @@ export function useRealtimeCookingVoice(options: Options) {
           if (stateRef.current === "processing") {
             interruptedRef.current = true;
             responseGeneration.current += 1;
-            optionsRef.current.onBargeIn();
           }
+          optionsRef.current.onBargeIn();
         };
         recognition.onresult = (event: any) => {
           if (!isCurrent() || !activeRef.current || mutedRef.current) return;

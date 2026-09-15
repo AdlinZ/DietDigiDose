@@ -8,7 +8,9 @@ type FoodServiceDependencies = {
 };
 
 function publicFood<T extends object>(food: T): Omit<T, "micronutrients_json"> & { micronutrients: unknown } {
-  const { micronutrients_json: micronutrientsJson, ...result } = food as T & { micronutrients_json?: unknown };
+  const { micronutrients_json: micronutrientsJson, base_data_payload: payload, ...result } = food as T & { micronutrients_json?: unknown; base_data_payload?: unknown };
+  let concept: Record<string, unknown> | null = null;
+  try { concept = typeof payload === 'string' ? JSON.parse(payload) : payload as Record<string, unknown> || null; } catch { /* Missing legacy metadata. */ }
   let micronutrients: unknown = null;
   if (typeof micronutrientsJson === "string") {
     try {
@@ -19,7 +21,11 @@ function publicFood<T extends object>(food: T): Omit<T, "micronutrients_json"> &
   } else if (micronutrientsJson && typeof micronutrientsJson === "object") {
     micronutrients = micronutrientsJson;
   }
-  return { ...result, micronutrients } as Omit<T, "micronutrients_json"> & { micronutrients: unknown };
+  return { ...result, micronutrients,
+    ...(concept?.concept_id ? { concept_id: concept.concept_id, forms: concept.forms, aliases: concept.aliases,
+      nutrition_references: concept.nutrition_references || [], enrichment_version: concept.enrichment_version,
+      nutrition_status: 'unknown', automatic_calculation_allowed: false, edible_ratio: null } : {}),
+  } as Omit<T, "micronutrients_json"> & { micronutrients: unknown };
 }
 
 export class FoodService {
@@ -40,7 +46,7 @@ export class FoodService {
     if (!normalizedQuery) throw new FoodDomainError("搜索词不能为空");
 
     const localFoods = await this.repository.searchTrusted(normalizedQuery, 10);
-    if (localFoods.length >= 5) return localFoods.map(publicFood);
+    if (localFoods.length >= 5 || localFoods.some(food => food.source === 'concept_base')) return localFoods.map(publicFood);
 
     if (!localFoods.length) await this.repository.recordSearchGap(normalizedQuery, query);
     const externalFoods = await this.dependencies.searchExternal(query);

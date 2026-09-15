@@ -93,7 +93,7 @@ export class PostgresMaintenanceQueueRepository implements MaintenanceQueueRepos
   }
 
   async candidateRecipeIds() {
-    return (await this.pool.query("SELECT id FROM recipes WHERE status='approved' AND deleted_at IS NULL AND COALESCE(quality_status,'trusted')<>'needs_review' ORDER BY id")).rows.map(row => Number(row.id));
+    return (await this.pool.query("SELECT id FROM recipes WHERE status='approved' AND deleted_at IS NULL AND COALESCE(quality_status,'trusted') NOT IN ('needs_review','reference') ORDER BY id")).rows.map(row => Number(row.id));
   }
 
   async scope(job: MaintenanceJob, fromDate: string) {

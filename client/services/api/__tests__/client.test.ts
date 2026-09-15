@@ -9,6 +9,7 @@ import {
   getApiCacheDiagnostics,
   registerApiFetchScope,
   resetApiCacheForTests,
+  cachedApiGet,
 } from "../cache";
 
 const jsonResponse = (body: unknown, status = 200) => ({
@@ -22,6 +23,19 @@ describe("API client", () => {
   beforeEach(async () => {
     resetApiCacheForTests();
     await AsyncStorage.clear();
+  });
+
+  it('replaces a previously persisted empty community category with newly published posts', async () => {
+    const path = '/api/v1/community/posts?category=%E6%A6%9C%E5%8D%95&sort=recommended&pageSize=12';
+    const published = {items:[{id:317,category:'榜单',content:'原料项数榜'}],nextCursor:null};
+    const apiFetch: ApiFetch = jest.fn(async () => jsonResponse(published));
+    await cachedApiGet(apiFetch,path,{ttlMs:600000,maxStaleMs:86400000,persistent:true},async()=>({data:{items:[],nextCursor:null}}));
+    await new Promise(resolve=>setTimeout(resolve,0));
+    resetApiCacheForTests();
+    await expect(requestJson(apiFetch,path)).resolves.toEqual(published);
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    await expect(requestJson(apiFetch,path)).resolves.toEqual(published);
+    expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 
   it.each([

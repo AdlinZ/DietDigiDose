@@ -10,6 +10,7 @@ export class SqliteRecipesRepository implements RecipesRepository {
 
   async listPublic(input: PublicRecipeQuery) {
     const filters = [PUBLIC_BOUNDARY];
+    if (input.scope !== 'personal') filters.push("COALESCE(json_extract(r.base_data_payload,'$.is_primary'),1) <> 0");
     const values: Array<string | number> = [];
     if (input.scope === "official") filters.push("r.source <> 'user'");
     else if (input.scope === "community") filters.push("r.source = 'user'");
@@ -36,7 +37,8 @@ export class SqliteRecipesRepository implements RecipesRepository {
 
   async librarySummary(userId?: number) {
     const boundary = "deleted_at IS NULL AND status = 'approved' AND COALESCE(quality_status, 'trusted') <> 'needs_review'";
-    const official = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM recipes WHERE ${boundary} AND source <> 'user'`).get() as Row).count);
+    const official = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM recipes WHERE ${boundary} AND source <> 'user'
+      AND COALESCE(json_extract(base_data_payload,'$.is_primary'),1) <> 0`).get() as Row).count);
     const community = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM recipes WHERE ${boundary} AND source = 'user'`).get() as Row).count);
     const personal = userId ? Number((this.database.prepare(`SELECT COUNT(*) AS count FROM recipes r WHERE ${boundary}
       AND (r.author_user_id = ? OR EXISTS(SELECT 1 FROM recipe_favorites f WHERE f.recipe_id = r.id AND f.user_id = ?))`)

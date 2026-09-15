@@ -244,14 +244,20 @@ export class RecipesService {
     }
     return rows.map((rawRow) => {
       const recipe = normalizeRowDates(rawRow);
-      const { quality_issues_json: _qualityIssues, quality_reviewed_by: _qualityReviewer,
+      const { base_data_payload: basePayload, quality_issues_json: _qualityIssues, quality_reviewed_by: _qualityReviewer,
         quality_reviewed_at: _qualityReviewedAt, quality_review_reason: _qualityReviewReason, ...publicRecipe } = recipe;
+      let concept: Row = {};
+      try { concept = typeof basePayload === 'string' ? JSON.parse(basePayload) : (basePayload as Row) || {}; } catch { /* Legacy payload. */ }
+      const nutritionUnknown = recipe.nutrition_basis === 'unknown';
+      const enrichment = concept.nutrition_enrichment as Row | undefined;
       const imageUrl = typeof recipe.image_url === "string" && recipe.image_url.startsWith("/media/")
         ? `${origin.protocol}://${origin.host || "localhost:9090"}${recipe.image_url}` : recipe.image_url;
       const ingredients = parseArray(recipe.ingredients_json).map((item) => {
         if (typeof item === "string") return { name: item.trim(), amount: "", group: "" };
         const ingredient = item as Row;
         return { name: String(ingredient?.name || "").trim(), amount: String(ingredient?.amount || "").trim(),
+          ingredient_id: ingredient?.ingredient_id ?? null, ingredient_concept_id: ingredient?.ingredient_concept_id ?? null,
+          ingredient_form_id: ingredient?.ingredient_form_id ?? null, measurement: ingredient?.measurement ?? null,
           group: String(ingredient?.group || "") };
       }).filter((item) => item.name);
       const formattedRequirements = (requirements.get(Number(recipe.id)) || []).map((item) => ({
@@ -267,10 +273,25 @@ export class RecipesService {
       ];
       return { ...publicRecipe, quality_status: recipe.quality_status || "trusted",
         nutrition_basis: recipe.nutrition_basis || "source",
-        nutrition_is_estimated: (recipe.nutrition_basis || "source") !== "source", image_url: imageUrl,
+        nutrition_is_estimated: !nutritionUnknown && (recipe.nutrition_basis || "source") !== "source", image_url: imageUrl,
+        ...(concept.concept_id ? { concept_id: concept.concept_id, recipe_concept_id: concept.recipe_concept_id,
+          method_id: concept.method_id, primary_recipe_id: concept.primary_recipe_id, variants: concept.variants,
+          missing_fields: concept.missing_fields, equipment_references: concept.equipment_references,
+          nutrition_status: enrichment?.status || 'unknown', nutrition_calculation_basis: 'whole_recipe', source_version: concept.enrichment_version || concept.version,
+          ...(enrichment ? { nutrition_reference: {
+            version: enrichment.version, status: enrichment.status, disclosure: enrichment.disclosure,
+            whole_recipe: enrichment.whole_recipe, per_serving: enrichment.per_serving, servings: enrichment.servings,
+            gaps: enrichment.gaps, automatic_meal_planning_allowed: false,
+            ingredients: parseArray(enrichment.references).map(item => {
+              const reference = item as Row;
+              return { name: reference.display_name, grams: reference.grams, scope: reference.scope,
+                instruction: reference.instruction, source_name: reference.source_name, source_url: reference.source_url,
+                source_food_id: reference.source_food_id, source_license: reference.source_license };
+            }),
+          } } : {}) } : {}),
         tags: parseArray(recipe.tags), steps: parseArray(recipe.steps_json),
         ingredients: ensureIngredientGroups(ingredients, String(recipe.title || "")),
-        nutrition: [...legacyNutrition, ...parseNutrition(recipe.nutrition_json)],
+        nutrition: nutritionUnknown ? [] : [...legacyNutrition, ...parseNutrition(recipe.nutrition_json)],
         required_kitchenware: formattedRequirements.filter((item) => item.role === "required"),
         optional_kitchenware: formattedRequirements.filter((item) => item.role !== "required") };
     });

@@ -793,6 +793,10 @@ export default function CommunityScreen() {
             </View>
             <Text className="mt-3 text-sm font-black text-ink">暂时没有相关内容</Text>
             <Text className="mt-1 text-xs text-copy-muted">换个关键词，或者发布第一条动态</Text>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="重新加载社区内容"
+              onPress={() => void fetchPosts(true)} className="mt-4 rounded-xl bg-brand-soft px-5 py-3">
+              <Text className="text-sm font-bold text-brand">重新加载</Text>
+            </TouchableOpacity>
           </View>
         ) : activeTab === "榜单" ? (
           <View className="px-4 pb-2 pt-1">

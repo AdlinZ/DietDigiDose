@@ -12,6 +12,7 @@ export class PostgresRecipesRepository implements RecipesRepository {
     const values: unknown[] = [];
     const parameter = (value: unknown) => { values.push(value); return `$${values.length}`; };
     const filters = [PUBLIC_BOUNDARY];
+    if (input.scope !== 'personal') filters.push("COALESCE(r.base_data_payload->>'is_primary','true') <> 'false'");
     if (input.scope === "official") filters.push("r.source <> 'user'");
     else if (input.scope === "community") filters.push("r.source = 'user'");
     else if (input.scope === "personal") {
@@ -38,7 +39,8 @@ export class PostgresRecipesRepository implements RecipesRepository {
 
   async librarySummary(userId?: number) {
     const result = await this.pool.query(`SELECT
-      (SELECT COUNT(*)::integer FROM recipes r WHERE ${PUBLIC_BOUNDARY} AND r.source <> 'user') AS official,
+      (SELECT COUNT(*)::integer FROM recipes r WHERE ${PUBLIC_BOUNDARY} AND r.source <> 'user'
+        AND COALESCE(r.base_data_payload->>'is_primary','true') <> 'false') AS official,
       (SELECT COUNT(*)::integer FROM recipes r WHERE ${PUBLIC_BOUNDARY} AND r.source = 'user') AS community,
       (SELECT COUNT(*)::integer FROM recipes r WHERE $1::integer IS NOT NULL AND ${PUBLIC_BOUNDARY}
         AND (r.author_user_id = $1 OR EXISTS(SELECT 1 FROM recipe_favorites f WHERE f.recipe_id = r.id AND f.user_id = $1))) AS personal,

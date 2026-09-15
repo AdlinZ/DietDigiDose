@@ -2119,7 +2119,7 @@ export default function InventoryScreen() {
                             <View className="absolute top-2 right-2 flex-row items-center gap-1 rounded-full bg-black/60 px-2 py-0.5">
                               <FontAwesome6 name="fire" size={9} colorClassName="accent-highlight" />
                               <Text className="text-[10px] font-black text-white">
-                                {recipe.nutrition_is_estimated ? "约" : ""}{recipe.calories} kcal
+                                {recipe.calories == null ? '营养待补全' : `${recipe.nutrition_is_estimated ? '约' : ''}${recipe.calories} kcal`}
                               </Text>
                             </View>
 
@@ -2191,7 +2191,7 @@ export default function InventoryScreen() {
 
                             <View className="mt-2 flex-row items-center gap-1.5">
                               <FontAwesome6 name="clock" size={9} colorClassName="accent-copy-muted" />
-                              <Text className="text-[9px] font-bold text-copy-muted">{recipe.nutrition_is_estimated ? "约" : ""}{recipe.cook_time} 分钟</Text>
+                              <Text className="text-[9px] font-bold text-copy-muted">{recipe.cook_time == null ? '用时未标注' : `${recipe.cook_time} 分钟`}</Text>
                               <View className="h-1 w-1 rounded-full bg-background-secondary" />
                               <Text className="text-[9px] font-bold text-brand">蛋白 {recipe.protein}g</Text>
                             </View>

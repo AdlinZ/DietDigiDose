@@ -98,7 +98,7 @@ describe("foods module", () => {
           image_url TEXT, brands TEXT, barcode TEXT, original_name TEXT, micronutrients_json TEXT,
           source TEXT, quality_status TEXT, source_version TEXT, data_license TEXT,
           preparation_state TEXT, nutrition_basis TEXT, edible_ratio REAL,
-          normalized_name TEXT, search_keywords TEXT, deleted_at DATETIME
+          normalized_name TEXT, search_keywords TEXT, deleted_at DATETIME, nutrition_status TEXT, base_data_payload TEXT
         );
         CREATE TABLE ingredient_aliases (
           id INTEGER PRIMARY KEY AUTOINCREMENT, ingredient_id INTEGER NOT NULL, normalized_alias TEXT NOT NULL
@@ -125,6 +125,18 @@ describe("foods module", () => {
       const repository = new SqliteFoodRepository(database);
       assert.equal((await repository.findByBarcode("6900000000001"))?.name, "番茄");
       assert.equal((await repository.searchTrusted("西红柿", 10))[0]?.name, "番茄");
+      database.prepare(`INSERT INTO ingredients_library (name,normalized_name,source,quality_status,nutrition_basis,nutrition_status,base_data_payload)
+        VALUES ('马铃薯','土豆','concept_base','reference','unknown','unknown','{"concept_id":"potato","forms":[]}'),
+        ('花生','土豆','concept_base','reference','unknown','unknown','{"concept_id":"peanut","forms":[]}'),
+        ('待审商品','土豆','base_data','needs_review','unknown','unknown',NULL),
+        ('不明来源','土豆','other','reference','unknown','unknown',NULL)`).run();
+      let externalCalls = 0;
+      const search = new FoodService(repository, { searchExternal: async () => { externalCalls++; return []; } });
+      const ambiguous = await search.search('土豆');
+      assert.deepEqual(ambiguous.map(item=>item.name), ['马铃薯','花生']);
+      assert.equal(ambiguous[0]?.calories_100g, null);
+      assert.equal(externalCalls, 0);
+      assert.equal('base_data_payload' in ambiguous[0]!, false);
       await repository.recordSearchGap("紫胡萝卜", " 紫胡萝卜 ");
       await repository.recordSearchGap("紫胡萝卜", "紫色胡萝卜");
       assert.deepEqual(database.prepare(`

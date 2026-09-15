@@ -1,4 +1,5 @@
-export function getRecipeNutritionPresentation(isEstimated: boolean) {
+export function getRecipeNutritionPresentation(isEstimated: boolean, basis?: string) {
+  if (basis === 'unknown') return { prefix: '', title: '营养待补全', disclosure: '原料、用量和对应的营养记录尚未全部匹配，暂不计算；缺失不代表含量为零。' };
   return isEstimated
     ? {
         prefix: "约",

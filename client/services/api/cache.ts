@@ -83,6 +83,9 @@ function storageKey(key: string, scope: CacheScope) {
 }
 
 export function apiCachePolicy(path: string): ApiCachePolicy | null {
+  // A cached empty feed hides newly published posts; background revalidation
+  // cannot update a screen that has already consumed the returned array.
+  if (/^\/api\/v1\/community\/posts(?:\?|$)/.test(path)) return null;
   if (/^\/api\/v1\/households\/\d+\/(?:dining-(?:preferences|members)|meals|inventory)(?:\/|\?|$)/.test(path)) return null;
   if (/^\/api\/v1\/(?:auth|ai|notifications)(?:\/|\?|$)/.test(path)) return null;
   if (/^\/api\/v1\/recipes\/\d+(?:\?|$)/.test(path)) return { ttlMs: 30 * 60_000, maxStaleMs: 7 * 86_400_000, persistent: true };

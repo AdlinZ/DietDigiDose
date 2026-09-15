@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Linking,
 } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { inferCategoryByName } from "@/utils/ingredientRules";
@@ -42,9 +43,9 @@ interface Recipe {
   image_url: string | null;
   ingredients: RecipeIngredient[];
   steps: string[];
-  cook_time: number;
+  cook_time: number | null;
   difficulty: string;
-  calories: number;
+  calories: number | null;
   protein: number;
   carbs: number;
   fat: number;
@@ -54,9 +55,19 @@ interface Recipe {
   source?: string;
   author_username?: string;
   author_avatar_url?: string;
-  quality_status: "trusted" | "estimated" | "needs_review";
-  nutrition_basis: "source" | "ingredient_estimate" | "category_fallback";
+  quality_status: "trusted" | "estimated" | "needs_review" | "reference";
+  nutrition_basis: "source" | "ingredient_estimate" | "category_fallback" | "unknown";
+  variants?: { recipe_id: number; title: string; is_primary: boolean }[];
+  source_url?: string;
+  serving_size?: number | null;
+  equipment_references?: { role: string; items: { catalog_id: number; name: string }[] }[];
   nutrition_is_estimated: boolean;
+  nutrition_reference?: {
+    version: string; disclosure: string; servings: number | null;
+    whole_recipe: { calories: number | null; protein: number | null; fat: number | null; carbs: number | null };
+    gaps: { line_id: string; name: string; reason_text: string }[];
+    ingredients: { name: string; instruction: string; source_name: string; source_url: string; source_food_id: string }[];
+  };
 }
 
 export default function RecipeDetailScreen() {
@@ -67,6 +78,7 @@ export default function RecipeDetailScreen() {
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
   const [nutritionExpanded, setNutritionExpanded] = useState(false);
+  const [nutritionSourcesExpanded, setNutritionSourcesExpanded] = useState(false);
   const [preparedIngredients, setPreparedIngredients] = useState<Set<string>>(() => new Set());
   const [isFavorited, setIsFavorited] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
@@ -192,12 +204,12 @@ export default function RecipeDetailScreen() {
   }
 
   const tags = (recipe.tags || []).filter(Boolean).slice(0, 3);
-  const nutritionPresentation = getRecipeNutritionPresentation(recipe.nutrition_is_estimated);
-  const nutrition = (recipe.nutrition?.length ? recipe.nutrition : [
+  const nutritionPresentation = getRecipeNutritionPresentation(recipe.nutrition_is_estimated, recipe.nutrition_basis);
+  const nutrition = (recipe.nutrition_basis === 'unknown' ? [] : recipe.nutrition?.length ? recipe.nutrition : [
     { key: "protein", label: "蛋白质", value: recipe.protein, unit: "g" },
     { key: "carbs", label: "碳水", value: recipe.carbs, unit: "g" },
     { key: "fat", label: "脂肪", value: recipe.fat, unit: "g" },
-  ]).filter((item) => Number.isFinite(Number(item.value)));
+  ]).filter((item) => item.value != null && Number.isFinite(Number(item.value)));
   const visibleNutrition = nutritionExpanded ? nutrition : nutrition.slice(0, 6);
   const nutritionColumns = visibleNutrition.length === 4 ? 2 : Math.min(Math.max(visibleNutrition.length, 1), 3);
   const nutritionRows: NutritionItem[][] = [];
@@ -435,9 +447,9 @@ export default function RecipeDetailScreen() {
             ) : null}
 
             <View className="mt-5 flex-row rounded-2xl bg-background-secondary px-2 py-4">
-              <QuickInfo icon="clock" label="用时" value={`${nutritionPresentation.prefix}${recipe.cook_time}分钟`} colorClass="accent-brand" />
+              <QuickInfo icon="clock" label="用时" value={recipe.cook_time == null ? '未标注' : `${recipe.cook_time}分钟`} colorClass="accent-brand" />
               <View className="w-px bg-background-secondary" />
-              <QuickInfo icon="fire" label="热量" value={`${nutritionPresentation.prefix}${recipe.calories} kcal`} colorClass="accent-critical" />
+              <QuickInfo icon="fire" label="热量" value={recipe.calories == null ? '待补全' : `${nutritionPresentation.prefix}${recipe.calories} kcal`} colorClass="accent-critical" />
               <View className="w-px bg-background-secondary" />
               <QuickInfo icon="signal" label="难度" value={recipe.difficulty} colorClass="accent-warm" />
               <View className="w-px bg-background-secondary" />
@@ -471,11 +483,43 @@ export default function RecipeDetailScreen() {
 
           <View className="mx-4 mt-4 rounded-[24px] border border-line bg-surface p-5 md:mx-8 md:p-6">
             <TouchableOpacity accessibilityRole="button" onPress={() => router.push({ pathname: "/household-dining",params: { recipeId: recipe.id } })} className="mb-4 rounded-xl bg-brand-soft p-3"><Text className="font-bold text-brand">检查这道菜的共餐忌口</Text></TouchableOpacity>
-            <SectionTitle icon="chart-pie" eyebrow="每份参考" title={nutritionPresentation.title} />
-            {nutritionPresentation.disclosure ? (
+            <SectionTitle icon="chart-pie" eyebrow={recipe.nutrition_basis === 'unknown' ? '整份配方 · 等待计算' : '每份参考'} title={nutritionPresentation.title} />
+            {recipe.nutrition_reference?.disclosure || nutritionPresentation.disclosure ? (
               <Text testID="nutrition-estimate-label" className="mt-3 rounded-xl bg-warm-soft px-3 py-2 text-xs font-bold leading-5 text-warm">
-                {nutritionPresentation.disclosure}
+                {recipe.nutrition_reference?.disclosure || nutritionPresentation.disclosure}
               </Text>
+            ) : null}
+            {recipe.nutrition_reference ? (
+              <View className="mt-3 gap-2">
+                <Text className="text-sm font-bold text-ink">
+                  整份配方{recipe.nutrition_reference.servings ? `（${recipe.nutrition_reference.servings} 份）` : ''}
+                </Text>
+                <Text className="text-xs leading-5 text-copy-muted">
+                  热量 {recipe.nutrition_reference.whole_recipe.calories == null ? '待补全' : `${Math.round(recipe.nutrition_reference.whole_recipe.calories)} kcal`} · 蛋白质 {recipe.nutrition_reference.whole_recipe.protein == null ? '待补全' : `${recipe.nutrition_reference.whole_recipe.protein.toFixed(1)} g`} · 脂肪 {recipe.nutrition_reference.whole_recipe.fat == null ? '待补全' : `${recipe.nutrition_reference.whole_recipe.fat.toFixed(1)} g`} · 碳水 {recipe.nutrition_reference.whole_recipe.carbs == null ? '待补全' : `${recipe.nutrition_reference.whole_recipe.carbs.toFixed(1)} g`}
+                </Text>
+                {recipe.nutrition_reference.gaps.map(gap => (
+                  <Text key={gap.line_id} className="text-xs leading-5 text-warm">待补：{gap.name} · {gap.reason_text}</Text>
+                ))}
+                <TouchableOpacity accessibilityRole="button" accessibilityState={{ expanded: nutritionSourcesExpanded }}
+                  onPress={() => setNutritionSourcesExpanded(value => !value)} className="rounded-xl bg-brand-soft p-3">
+                  <Text className="text-sm font-bold text-brand">{nutritionSourcesExpanded ? '收起' : '查看'}称量条件与营养来源</Text>
+                </TouchableOpacity>
+                {nutritionSourcesExpanded ? (
+                  <View className="gap-3 rounded-xl bg-background-secondary p-3">
+                    <Text className="text-xs leading-5 text-copy-muted">下列样品与称量条件是本版本估算的前提。使用不同品种、加工状态或称量方式时，营养会有差异。</Text>
+                    {recipe.nutrition_reference.ingredients.map((ingredient, index) => (
+                      <View key={`${ingredient.source_food_id}-${index}`} className="gap-1">
+                        <Text className="text-xs leading-5 text-ink">{ingredient.instruction}</Text>
+                        <TouchableOpacity accessibilityRole="link" onPress={() => void Linking.openURL(ingredient.source_url)}>
+                          <Text className="text-xs text-brand">样品：{ingredient.source_name} · {ingredient.source_food_id}</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                    <Text className="text-xs text-copy-muted">数据版本：{recipe.nutrition_reference.version}</Text>
+                  </View>
+                ) : null}
+                {recipe.nutrition_basis !== 'unknown' ? <Text className="mt-2 text-sm font-bold text-ink">每份估算</Text> : null}
+              </View>
             ) : null}
             <View testID="nutrition-grid" className="mt-4 gap-2.5">
               {nutritionRows.map((row, rowIndex) => (
@@ -508,6 +552,25 @@ export default function RecipeDetailScreen() {
               </TouchableOpacity>
             ) : null}
           </View>
+
+          {recipe.variants?.length || recipe.equipment_references?.length ? (
+            <View className="mx-4 mt-4 gap-3 rounded-[24px] border border-line bg-surface p-5 md:mx-8">
+              <Text className="text-base font-black text-ink">做法与厨具</Text>
+              <Text className="text-xs text-copy-muted">{recipe.serving_size == null ? '原方未标注份数' : `原方 ${recipe.serving_size} 份`} · 用量按原方展示</Text>
+              {recipe.variants && recipe.variants.length > 1 ? recipe.variants.map(variant => (
+                <TouchableOpacity key={variant.recipe_id} disabled={variant.recipe_id === recipe.id}
+                  onPress={() => router.push('/recipe-detail', { id: variant.recipe_id })} className="rounded-xl bg-brand-soft p-3">
+                  <Text className="font-bold text-brand">{variant.title}{variant.is_primary ? ' · 主要做法' : ' · 其他做法'}{variant.recipe_id === recipe.id ? ' · 当前' : ''}</Text>
+                </TouchableOpacity>
+              )) : null}
+              {recipe.equipment_references?.map((entry, index) => (
+                <Text key={index} className="text-sm text-copy-muted">
+                  {entry.role === 'required' ? '必需' : entry.role === 'optional' ? '可选' : entry.role === 'alternative' ? '可替代' : '来源提及（用途待确认）'}：{entry.items.map(item => item.name).join('、')}
+                </Text>
+              ))}
+              {recipe.source_url ? <TouchableOpacity onPress={() => void Linking.openURL(recipe.source_url!)}><Text className="text-sm font-bold text-brand">查看原始做法来源</Text></TouchableOpacity> : null}
+            </View>
+          ) : null}
 
           <View className="mx-4 mt-4 gap-4 md:mx-8 md:flex-row md:items-start">
             <View className="rounded-[24px] border border-line bg-surface p-5 md:w-[38%] md:p-6">

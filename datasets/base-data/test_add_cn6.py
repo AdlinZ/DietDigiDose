@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import zipfile
@@ -9,6 +10,8 @@ import add_cn6 as c
 
 
 class CN6Tests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('DDD_TEST_HISTORICAL_DATA') == '1',
+                         'Historical rebuild: supply pinned inputs listed in TESTING.md and set DDD_TEST_HISTORICAL_DATA=1')
     def test_preservation_provenance_and_reproduction(self):
         with tempfile.TemporaryDirectory() as temp:
             a,b=Path(temp)/'a',Path(temp)/'b'

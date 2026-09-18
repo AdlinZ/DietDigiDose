@@ -100,6 +100,8 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(r.amount('2 斤')['unit'],'斤')
 
 
+@unittest.skipUnless(os.environ.get('DDD_TEST_HISTORICAL_DATA') == '1',
+                     'Historical rebuild: supply pinned inputs listed in TESTING.md and set DDD_TEST_HISTORICAL_DATA=1')
 class IntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

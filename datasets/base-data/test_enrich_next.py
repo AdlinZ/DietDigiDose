@@ -1,3 +1,4 @@
+import os
 import json
 from pathlib import Path
 import sys
@@ -10,6 +11,8 @@ from enrich_next import build, VERSION
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@unittest.skipUnless(os.environ.get('DDD_TEST_HISTORICAL_DATA') == '1',
+                     'Historical rebuild: supply pinned inputs listed in TESTING.md and set DDD_TEST_HISTORICAL_DATA=1')
 class NextEnrichmentTests(unittest.TestCase):
     def test_frozen_sources_reproduce_release_and_preserve_gaps(self):
         root = ROOT / 'artifacts/base-data'

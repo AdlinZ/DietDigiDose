@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import tempfile
@@ -20,6 +21,8 @@ class Batch2Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Identity'):
             b.validate([rule], {'i': {'name': '蒜'}}, {'TFDA:1': {}}, set())
 
+    @unittest.skipUnless(os.environ.get('DDD_TEST_HISTORICAL_DATA') == '1',
+                         'Historical rebuild: supply pinned inputs listed in TESTING.md and set DDD_TEST_HISTORICAL_DATA=1')
     def test_reproducibility_provenance_and_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             a, c = Path(tmp) / 'a', Path(tmp) / 'c'

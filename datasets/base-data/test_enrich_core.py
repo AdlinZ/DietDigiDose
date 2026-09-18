@@ -1,8 +1,10 @@
+import os
 import copy
 import json
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 
 from reclean.enrich_core import build, estimate, sha, VERSION
 
@@ -18,9 +20,13 @@ def read(path):
 
 class EnrichmentTests(unittest.TestCase):
     def setUp(self):
-        self.method = next(m for m in read(BASE / 'methods.json') if m['title'] == '番茄炒蛋' and m['source_method_id'].startswith('DDD-R-'))
-        self.result = next(m for m in read(PACKAGE / 'recipe-nutrition.json') if m['method_id'] == self.method['id'])
-        self.profiles = read(PACKAGE / 'nutrition-profiles.json')
+        with zipfile.ZipFile(ROOT / 'datasets/releases/system-data-2026-09-15.2.zip') as archive:
+            prefix = 'system-data-2026-09-15.2/data/nutrition/'
+            load = lambda name: json.loads(archive.read(prefix + name + '.json'))
+            self.method = next(m for m in load('recipe-inputs') if m['title'] == '番茄炒蛋' and m['source_method_id'].startswith('DDD-R-'))
+            self.results = load('recipe-nutrition')
+            self.result = next(m for m in self.results if m['method_id'] == self.method['id'])
+            self.profiles = load('nutrition-profiles')
         self.selections = copy.deepcopy(self.result['selections'])
 
     def test_recalculation_matches_package(self):
@@ -64,10 +70,12 @@ class EnrichmentTests(unittest.TestCase):
 
     def test_no_automatic_approval(self):
         self.assertTrue(all(not p['automatic_runtime_binding'] and p['requires_scope_confirmation'] for p in self.profiles))
-        results = read(PACKAGE / 'recipe-nutrition.json')
-        self.assertEqual(sum(r['per_serving'] is not None for r in results), 7)
+        results = self.results
+        self.assertEqual(sum(r['per_serving'] is not None for r in results), 8)
         self.assertTrue(all(not r['automatic_meal_planning_allowed'] for r in results))
 
+    @unittest.skipUnless(os.environ.get('DDD_TEST_HISTORICAL_DATA') == '1',
+                         'Historical rebuild: supply pinned inputs listed in TESTING.md and set DDD_TEST_HISTORICAL_DATA=1')
     def test_manifest_and_reproducible_build(self):
         for name, digest in read(PACKAGE / 'manifest.json').items():
             self.assertEqual(sha((PACKAGE / name).read_bytes()), digest, name)

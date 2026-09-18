@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import tempfile
@@ -11,6 +12,8 @@ from concept_runtime import search, estimate
 from concept_diff import compare
 
 
+@unittest.skipUnless(os.environ.get('DDD_TEST_HISTORICAL_DATA') == '1',
+                     'Historical rebuild: supply pinned inputs listed in TESTING.md and set DDD_TEST_HISTORICAL_DATA=1')
 class ConceptPackageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

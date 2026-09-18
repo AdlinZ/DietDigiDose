@@ -1,3 +1,4 @@
+import os
 import importlib.util
 import json
 import tempfile
@@ -41,6 +42,8 @@ class Round2Tests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(diffs, [])
 
+    @unittest.skipUnless(os.environ.get('DDD_TEST_HISTORICAL_DATA') == '1',
+                         'Historical rebuild: supply pinned inputs listed in TESTING.md and set DDD_TEST_HISTORICAL_DATA=1')
     def test_full_build_and_reproducibility(self):
         with tempfile.TemporaryDirectory() as temp:
             a, b = Path(temp) / 'a', Path(temp) / 'b'

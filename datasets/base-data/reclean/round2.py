@@ -1,6 +1,5 @@
 """Read-only Chinese source screening. No runtime data or nutrition promotion."""
 import argparse
-import ctypes
 import hashlib
 import json
 import re
@@ -8,6 +7,11 @@ import unicodedata
 import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
+
+try:
+    from reclean.chinese import simplify as simplify_characters
+except ModuleNotFoundError:
+    from chinese import simplify as simplify_characters
 
 VERSION = 'round2-assessment-1'
 BASELINE_SHA = '037cc5a46b64125bf613aaf720aa55d99df2614f864ed63e65087a0c5edaad7c'
@@ -24,15 +28,8 @@ def encode(value):
 
 
 def simplify(value):
-    """Windows NLS character conversion only; never removes preparation qualifiers."""
-    value = unicodedata.normalize('NFKC', value or '')
-    if not value:
-        return ''
-    out = ctypes.create_unicode_buffer(len(value) * 3 + 1)
-    n = ctypes.windll.kernel32.LCMapStringEx('zh-CN', 0x02000000, value, len(value), out, len(out), None, None, 0)
-    if not n:
-        raise RuntimeError('Windows simplified Chinese conversion failed')
-    return out.value
+    """Convert characters consistently without removing preparation qualifiers."""
+    return simplify_characters(unicodedata.normalize('NFKC', value or ''))
 
 
 def key(value):
@@ -258,23 +255,28 @@ Tr、缺失、未解析值不置零。保留台湾原始观测 ZIP 和大陆固�
 
 ## 复现
 
-Windows Python 标准库即可。源 ZIP 放在 .cache/base-data-sources/round2，并保留 sanotsu.commit。
+Python 标准库即可；随包附带固定版本的 OpenCC 字符字典。源 ZIP 放在 .cache/base-data-sources/round2，并保留 sanotsu.commit。
 运行 python datasets/base-data/reclean/round2.py --output artifacts/base-data/round2-reproduced。
 下载可变端点时须核对 sources.lock.json 的 SHA256；用其他版本得到的结果不视为同一评估。
 '''
     (output / 'REPORT.md').write_text(report, encoding='utf-8')
     (output / 'round2.py').write_bytes(Path(__file__).read_bytes())
+    (output / 'chinese.py').write_bytes(Path(__file__).with_name('chinese.py').read_bytes())
+    (output / 'opencc').mkdir()
+    for name in ['TSCharacters.txt', 'LICENSE', 'README.md']:
+        (output / 'opencc' / name).write_bytes((Path(__file__).parent / 'opencc' / name).read_bytes())
     test_path = Path(__file__).parent.parent / 'test_round2.py'
     if test_path.exists():
         (output / 'test_round2.py').write_bytes(test_path.read_bytes())
-    manifest = {p.name: sha(p.read_bytes()) for p in sorted(output.iterdir())}
+    manifest = {p.relative_to(output).as_posix(): sha(p.read_bytes())
+                for p in sorted(output.rglob('*')) if p.is_file()}
     (output / 'manifest.json').write_bytes(encode(manifest))
     target = output / (VERSION + '.zip')
     with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as z:
-        for p in sorted(output.iterdir()):
-            if p.suffix == '.zip':
+        for p in sorted(output.rglob('*')):
+            if not p.is_file() or p == target:
                 continue
-            info = zipfile.ZipInfo(p.name, (2026, 9, 15, 0, 0, 0)); info.compress_type = zipfile.ZIP_DEFLATED
+            info = zipfile.ZipInfo(p.relative_to(output).as_posix(), (2026, 9, 15, 0, 0, 0)); info.compress_type = zipfile.ZIP_DEFLATED
             z.writestr(info, p.read_bytes())
     with zipfile.ZipFile(target) as z:
         assert z.testzip() is None

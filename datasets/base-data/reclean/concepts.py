@@ -1,6 +1,5 @@
 """Concept-centric release from immutable cleaned sources, without runtime import."""
 import argparse
-import ctypes
 import json
 import re
 import zipfile
@@ -8,6 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from bindings_batch1 import sha, encoded
 from concept_runtime import key, search, estimate
+from chinese import simplify
 
 VERSION = 'concept-base-1.0.0-rc.1'
 SNAPSHOTS = {
@@ -41,15 +41,6 @@ DISH_ALIASES = {'西红柿炒鸡蛋': '番茄炒蛋'}
 
 def local(kind, name):
     return 'LOCAL:' + kind + ':' + sha(key(name).encode())[:16]
-
-
-def simplify(s):
-    if not s:
-        return s
-    out = ctypes.create_unicode_buffer(len(s) * 3 + 1)
-    if not ctypes.windll.kernel32.LCMapStringEx('zh-CN', 0x02000000, s, -1, out, len(out), None, None, 0):
-        raise RuntimeError('Windows name conversion failed')
-    return out.value
 
 
 def provenance(row, table, position):
@@ -321,8 +312,11 @@ def build(output):
     (output / 'inputs').mkdir()
     for name in ['batch1','batch2']:
         (output / 'inputs' / (name + '.zip')).write_bytes(resolved_inputs[name].read_bytes())
-    for name in ['concepts.py', 'concept_runtime.py', 'concept_diff.py', 'bindings_batch1.py']:
+    for name in ['concepts.py', 'concept_runtime.py', 'concept_diff.py', 'bindings_batch1.py', 'chinese.py']:
         (output / name).write_bytes((Path(__file__).parent / name).read_bytes())
+    (output / 'opencc').mkdir()
+    for name in ['TSCharacters.txt', 'LICENSE', 'README.md']:
+        (output / 'opencc' / name).write_bytes((Path(__file__).parent / 'opencc' / name).read_bytes())
     (output / 'CONCEPT-MODEL.md').write_bytes((Path(__file__).parent / 'CONCEPT-MODEL.md').read_bytes())
     report = f'''# 概念基础包 {VERSION}
 

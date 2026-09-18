@@ -1,3 +1,4 @@
+import os
 import importlib.util
 import json
 import tempfile
@@ -19,6 +20,8 @@ class BindingTests(unittest.TestCase):
         self.assertTrue({'鸡精', '孜然粉', '红枣', '小龙虾', '腰子', '青辣椒', '洋葱粉'} <= set(b.REJECT))
         self.assertFalse(set(b.REJECT) & set(b.APPROVED))
 
+    @unittest.skipUnless(os.environ.get('DDD_TEST_HISTORICAL_DATA') == '1',
+                         'Historical rebuild: supply pinned inputs listed in TESTING.md and set DDD_TEST_HISTORICAL_DATA=1')
     def test_full_build_provenance_and_determinism(self):
         with tempfile.TemporaryDirectory() as temp:
             a, c = Path(temp) / 'a', Path(temp) / 'c'

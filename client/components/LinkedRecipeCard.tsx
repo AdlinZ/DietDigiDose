@@ -44,7 +44,7 @@ export function LinkedRecipeCard({
         </View>
         <Text className="mt-1 text-xs font-black text-ink" numberOfLines={compact ? 1 : 2}>{recipe.title}</Text>
         <Text className="mt-1 text-[9px] font-bold text-copy-muted" numberOfLines={1}>
-          {recipe.cook_time} 分钟 · {recipe.difficulty} · {recipe.calories} kcal
+          {recipe.cook_time == null ? '用时未标注' : `${recipe.cook_time} 分钟`} · {recipe.difficulty} · {recipe.calories == null ? '营养待补全' : `${recipe.calories} kcal`}
         </Text>
       </View>
       <View className="items-center justify-center pr-3">

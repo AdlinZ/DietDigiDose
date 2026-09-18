@@ -1183,7 +1183,7 @@ export default function HomeScreen() {
                       )}
                       <View className="absolute bottom-2.5 right-2.5 bg-surface/90 px-2 py-0.5 rounded-full flex-row items-center gap-1">
                         <FontAwesome6 name="clock" size={10} colorClassName="accent-brand" />
-                        <Text className="text-[10px] font-bold text-brand">{recipe.nutrition_is_estimated ? "约" : ""}{recipe.cook_time}分钟</Text>
+                        <Text className="text-[10px] font-bold text-brand">{recipe.cook_time == null ? '用时未标注' : `${recipe.cook_time}分钟`}</Text>
                       </View>
                     </View>
 
@@ -1198,10 +1198,10 @@ export default function HomeScreen() {
                       <View className="flex-row items-center justify-between mt-2.5 pt-2.5 border-t border-background-secondary">
                         <View className="flex-row items-center gap-3">
                           <Text className="text-xs font-bold text-brand">
-                            <FontAwesome6 name="fire" size={11} colorClassName="accent-brand" /> {recipe.nutrition_is_estimated ? "约" : ""}{recipe.calories} kcal
+                            <FontAwesome6 name="fire" size={11} colorClassName="accent-brand" /> {recipe.calories == null ? '营养待补全' : `${recipe.nutrition_is_estimated ? '约' : ''}${recipe.calories} kcal`}
                           </Text>
                           <Text className="text-xs text-copy-muted">
-                            蛋白 {recipe.protein}g
+                            蛋白 {recipe.protein ?? '—'}g
                           </Text>
                         </View>
                         {recipe.nutrition_is_estimated ? <Text className="text-[10px] font-bold text-warm">营养估算</Text> : null}

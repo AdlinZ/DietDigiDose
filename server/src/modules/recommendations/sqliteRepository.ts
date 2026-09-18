@@ -24,7 +24,7 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
   async kitchenware(userId: number) { return this.database.prepare(`SELECT name, updated_at FROM kitchenware_items
     WHERE user_id = ? AND deleted_at IS NULL AND status <> '维修中' ORDER BY id`).all(userId) as Row[]; }
   async recipes(query: RecipeQuery) {
-    const filters = ["deleted_at IS NULL", "status = 'approved'", "COALESCE(quality_status, 'trusted') <> 'needs_review'"];
+    const filters = ["deleted_at IS NULL", "status = 'approved'", "COALESCE(quality_status, 'trusted') NOT IN ('needs_review','reference')"];
     const params: Array<string | number> = [];
     if (query.category && query.category !== "全部" && query.category !== "冰箱可做") { filters.push("category = ?"); params.push(query.category); }
     if (query.search) { filters.push("(title LIKE ? OR description LIKE ? OR tags LIKE ? OR ingredients_json LIKE ?)");

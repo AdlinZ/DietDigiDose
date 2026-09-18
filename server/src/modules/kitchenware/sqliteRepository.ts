@@ -8,7 +8,7 @@ export class SqliteKitchenwareRepository implements KitchenwareRepository {
 
   async listItems(userId: number) { return this.database.prepare(`SELECT * FROM kitchenware_items WHERE user_id = ? AND deleted_at IS NULL
     ORDER BY updated_at DESC, id DESC`).all(userId) as Row[]; }
-  async listCatalog() { return this.database.prepare(`SELECT * FROM kitchenware_catalog WHERE quality_status = 'trusted'
+  async listCatalog() { return this.database.prepare(`SELECT * FROM kitchenware_catalog WHERE quality_status = 'trusted' OR (source = 'concept_base' AND quality_status = 'reference')
     ORDER BY category, name`).all() as Row[]; }
   async listCapabilities() { return this.database.prepare("SELECT * FROM kitchenware_capabilities ORDER BY code").all() as Row[]; }
   async capabilitiesForCatalog(catalogId: number) { return this.database.prepare(`SELECT c.code, c.name, c.description, c.safety_level, cc.constraints_json

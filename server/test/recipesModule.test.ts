@@ -15,6 +15,46 @@ function repository(overrides: Partial<RecipesRepository> = {}): RecipesReposito
 }
 
 describe("recipes module", () => {
+  test('publishes scoped nutrition disclosure without exposing internal histories or raw observations', async () => {
+    const service = new RecipesService(repository({findPublic: async () => ({id: 8, title:'番茄炒蛋',
+      nutrition_basis:'ingredient_estimate', quality_status:'reference', calories:184, protein:11, carbs:8, fat:13,
+      base_data_payload:{concept_id:'tomato-eggs', enrichment_version:'v2', nutrition_enrichment_history:[{private:true}],
+        nutrition_enrichment:{version:'v2', status:'core_complete_under_declared_assumptions', disclosure:'按生可食部称量',
+          whole_recipe:{calories:368}, per_serving:{calories:184}, servings:2, gaps:[],
+          references:[{display_name:'鸡蛋', grams:150, instruction:'去壳称量', source_url:'https://data.gov.tw/dataset/8543',
+            source_food_id:'TFDA:egg', nutrients_per_100g:{private:true}}]}}})}), {resolveCatalog:async()=>null});
+    const row = await service.detail(8,{protocol:'https'});
+    assert.equal(row.nutrition_is_estimated,true);
+    assert.equal(row.nutrition_status,'core_complete_under_declared_assumptions');
+    const reference = row.nutrition_reference as Record<string,unknown>;
+    assert.equal(reference.disclosure,'按生可食部称量');
+    assert.equal(reference.automatic_meal_planning_allowed,false);
+    assert.equal('nutrition_enrichment_history' in row,false);
+    assert.equal(JSON.stringify(row).includes('private'),false);
+  });
+  test('incomplete enrichment retains null calories and empty per-serving nutrition', async () => {
+    const service = new RecipesService(repository({findPublic:async()=>({id:8,title:'醋溜土豆丝',nutrition_basis:'unknown',calories:null,
+      base_data_payload:{concept_id:'potato',nutrition_enrichment:{status:'incomplete',whole_recipe:{calories:360,protein:null},
+        per_serving:null,gaps:[{name:'米醋',reason_text:'来源缺少蛋白质'}],references:[]}}})}),{resolveCatalog:async()=>null});
+    const row = await service.detail(8,{protocol:'https'});
+    assert.deepEqual(row.nutrition,[]);
+    assert.equal((row as Record<string, unknown>).calories,null);
+    assert.equal(row.nutrition_status,'incomplete');
+  });
+  test('concept recipes retain unknown nutrition, stable ingredient links and alternative methods', async () => {
+    const service = new RecipesService(repository({
+      findPublic: async () => ({ id: 8, title: '番茄炒蛋', nutrition_basis: 'unknown', quality_status: 'reference',
+        calories: null, protein: null, carbs: null, fat: null, ingredients_json: [{ name:'番茄',amount:'200g',ingredient_id:3,ingredient_concept_id:'tomato',ingredient_form_id:'raw-tomato' }],
+        base_data_payload: { concept_id:'tomato-eggs', variants:[{ recipe_id:8,is_primary:true },{ recipe_id:9,is_primary:false }] } }),
+    }), { resolveCatalog: async () => null });
+    const row = await service.detail(8,{protocol:'https'});
+    assert.deepEqual(row.nutrition,[]);
+    assert.equal((row as Record<string,unknown>).calories,null);
+    assert.equal(row.nutrition_is_estimated,false);
+    assert.equal(row.ingredients[0]?.ingredient_concept_id,'tomato');
+    assert.equal((row.variants as unknown[]).length,2);
+    assert.equal('base_data_payload' in row,false);
+  });
   test("formats PostgreSQL JSONB rows and batches kitchenware requirements", async () => {
     const calls: number[][] = [];
     const service = new RecipesService(repository({

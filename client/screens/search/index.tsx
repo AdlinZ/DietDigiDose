@@ -30,10 +30,11 @@ type FoodSearchResult = {
   id?: number | string;
   name: string;
   category?: string | null;
-  calories_100g: number;
-  protein_100g: number;
-  carbs_100g: number;
-  fat_100g: number;
+  calories_100g: number | null;
+  protein_100g: number | null;
+  carbs_100g: number | null;
+  fat_100g: number | null;
+  aliases?: { text: string; language: string; regions: string[] }[];
   source?: string;
 };
 
@@ -216,10 +217,10 @@ export default function SearchScreen() {
     router.push("/diet-record", {
       prefill_food: food.name,
       prefill_amount: "100g",
-      prefill_calories: food.calories_100g,
-      prefill_protein: food.protein_100g,
-      prefill_carbs: food.carbs_100g,
-      prefill_fat: food.fat_100g,
+      prefill_calories: food.calories_100g ?? '',
+      prefill_protein: food.protein_100g ?? '',
+      prefill_carbs: food.carbs_100g ?? '',
+      prefill_fat: food.fat_100g ?? '',
     });
   };
 
@@ -249,8 +250,8 @@ export default function SearchScreen() {
         <Text className="text-sm font-black text-ink" numberOfLines={1}>{recipe.title}</Text>
         <Text className="mt-1 text-[11px] leading-4 text-copy-muted" numberOfLines={2}>{recipe.description}</Text>
         <View className="mt-2 flex-row items-center gap-3">
-          <Text className="text-[10px] font-black text-brand">{recipe.calories} kcal</Text>
-          <Text className="text-[10px] text-copy-muted">{recipe.cook_time} 分钟</Text>
+          <Text className="text-[10px] font-black text-brand">{recipe.calories == null ? '营养待补全' : `${recipe.calories} kcal`}</Text>
+          <Text className="text-[10px] text-copy-muted">{recipe.cook_time == null ? '用时未标注' : `${recipe.cook_time} 分钟`}</Text>
         </View>
       </View>
       <View className="justify-center pr-3">
@@ -277,11 +278,14 @@ export default function SearchScreen() {
           </Text>
         </View>
         <Text className="mt-1 text-[10px] text-copy-muted">
-          蛋白质 {food.protein_100g ?? 0}g · 碳水 {food.carbs_100g ?? 0}g · 脂肪 {food.fat_100g ?? 0}g
+          蛋白质 {food.protein_100g ?? '—'}g · 碳水 {food.carbs_100g ?? '—'}g · 脂肪 {food.fat_100g ?? '—'}g
         </Text>
+        {food.aliases?.filter(alias => alias.text === query.trim() && alias.regions.length).map(alias => (
+          <Text key={`${alias.text}-${alias.regions.join('-')}`} className="mt-1 text-[10px] text-copy-muted">{alias.text} · {alias.regions.join(' / ')}</Text>
+        ))}
       </View>
       <View className="items-end">
-        <Text className="text-xs font-black text-brand">{food.calories_100g ?? 0} kcal</Text>
+        <Text className="text-xs font-black text-brand">{food.calories_100g == null ? '营养待补全' : `${food.calories_100g} kcal`}</Text>
         <Text className="mt-1 text-[9px] text-copy-muted">按 100g 记餐</Text>
       </View>
     </TouchableOpacity>

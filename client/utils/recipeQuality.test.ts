@@ -1,5 +1,10 @@
 import { getRecipeNutritionPresentation } from "./recipeQuality";
 
+test('missing nutrition is disclosed without an estimate or zero', () => {
+  expect(getRecipeNutritionPresentation(false, 'unknown').title).toBe('营养待补全');
+  expect(getRecipeNutritionPresentation(false, 'unknown').prefix).toBe('');
+});
+
 test("uses approximate wording and an estimate disclosure for estimated recipes", () => {
   expect(getRecipeNutritionPresentation(true)).toEqual({
     prefix: "约",

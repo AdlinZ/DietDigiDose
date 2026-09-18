@@ -25,7 +25,7 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
   async kitchenware(userId: number) { return (await this.pool.query(`SELECT name, updated_at FROM kitchenware_items
     WHERE user_id = $1 AND deleted_at IS NULL AND status <> '维修中' ORDER BY id`, [userId])).rows as Row[]; }
   async recipes(query: RecipeQuery) {
-    const filters = ["deleted_at IS NULL", "status = 'approved'", "COALESCE(quality_status, 'trusted') <> 'needs_review'"];
+    const filters = ["deleted_at IS NULL", "status = 'approved'", "COALESCE(quality_status, 'trusted') NOT IN ('needs_review','reference')"];
     const params: Array<string | number> = [];
     const parameter = (value: string | number) => { params.push(value); return `$${params.length}`; };
     if (query.category && query.category !== "全部" && query.category !== "冰箱可做") filters.push(`category = ${parameter(query.category)}`);

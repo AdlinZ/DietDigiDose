@@ -159,5 +159,6 @@ module.exports = ({ config }) => ({
   ],
   experiments: {
     typedRoutes: true,
+    ...(process.env.EXPO_PUBLIC_WEB_BASE_PATH ? { baseUrl: process.env.EXPO_PUBLIC_WEB_BASE_PATH } : {}),
   },
 });

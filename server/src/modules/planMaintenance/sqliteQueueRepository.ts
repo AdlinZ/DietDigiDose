@@ -86,7 +86,7 @@ export class SqliteMaintenanceQueueRepository implements MaintenanceQueueReposit
   }
 
   async candidateRecipeIds() {
-    return (this.db.prepare("SELECT id FROM recipes WHERE status='approved' AND deleted_at IS NULL AND COALESCE(quality_status,'trusted')<>'needs_review' ORDER BY id").all() as { id: number }[]).map(row => row.id);
+    return (this.db.prepare("SELECT id FROM recipes WHERE status='approved' AND deleted_at IS NULL AND COALESCE(quality_status,'trusted') NOT IN ('needs_review','reference') ORDER BY id").all() as { id: number }[]).map(row => row.id);
   }
 
   async scope(job: MaintenanceJob, fromDate: string) {

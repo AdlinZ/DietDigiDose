@@ -44,12 +44,12 @@ export class PostgresFoodRepository implements FoodRepository {
           i.id, i.name, i.category, i.calories_100g, i.protein_100g, i.carbs_100g, i.fat_100g,
           i.image_url, i.brands, i.barcode, i.micronutrients_json, i.source,
           i.quality_status, i.source_version, i.data_license, i.preparation_state,
-          i.nutrition_basis, i.edible_ratio,
+          i.nutrition_basis, i.edible_ratio, i.nutrition_status, i.base_data_payload,
           CASE WHEN i.normalized_name = $2 THEN 0 WHEN a.normalized_alias = $2 THEN 1 ELSE 2 END AS search_rank
         FROM ingredients_library i
         LEFT JOIN ingredient_aliases a ON a.ingredient_id = i.id
         WHERE i.deleted_at IS NULL
-          AND i.quality_status = 'trusted'
+          AND (i.quality_status = 'trusted' OR (i.source = 'concept_base' AND i.quality_status = 'reference'))
           AND (i.normalized_name LIKE $1 OR a.normalized_alias LIKE $1 OR i.search_keywords LIKE $1)
         ORDER BY i.id, search_rank
       ) ranked_foods

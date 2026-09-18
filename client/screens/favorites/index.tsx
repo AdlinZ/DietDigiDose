@@ -126,8 +126,8 @@ export default function FavoritesScreen() {
                   <Text className="text-lg font-black text-ink">{recipe.title}</Text>
                   <Text className="mt-1.5 text-xs leading-5 text-copy-muted" numberOfLines={2}>{recipe.description}</Text>
                   <View className="mt-3 flex-row gap-4">
-                    <Text className="text-xs font-bold text-copy-muted">{recipe.nutrition_is_estimated ? "约" : ""}{recipe.cook_time} 分钟</Text>
-                    <Text className="text-xs font-bold text-critical">{recipe.nutrition_is_estimated ? "约" : ""}{recipe.calories} kcal</Text>
+                    <Text className="text-xs font-bold text-copy-muted">{recipe.cook_time == null ? '用时未标注' : `${recipe.cook_time} 分钟`}</Text>
+                    <Text className="text-xs font-bold text-critical">{recipe.calories == null ? '营养待补全' : `${recipe.nutrition_is_estimated ? '约' : ''}${recipe.calories} kcal`}</Text>
                     <Text className="text-xs font-bold text-warm">{recipe.difficulty}</Text>
                   </View>
                   {recipe.nutrition_is_estimated ? <Text className="mt-2 text-[10px] font-bold text-warm">营养估算</Text> : null}

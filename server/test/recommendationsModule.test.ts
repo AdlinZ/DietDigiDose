@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import Database from 'better-sqlite3';
+import { SqliteRecommendationsRepository } from '../src/modules/recommendations/sqliteRepository.js';
 import { RecommendationsError } from "../src/modules/recommendations/errors.js";
 import type { RecommendationsRepository } from "../src/modules/recommendations/repository.js";
 import { configureRecommendationsService, recommendationsService } from "../src/modules/recommendations/runtime.js";
@@ -24,6 +26,15 @@ const kitchenware = {
 };
 
 describe("recommendations module", () => {
+  test('reference catalogue recipes are not automatic nutrition recommendation candidates', async () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`CREATE TABLE recipes(id INTEGER,title TEXT,status TEXT,quality_status TEXT,deleted_at TEXT);
+        INSERT INTO recipes VALUES(1,'参考配方','approved','reference',NULL),(2,'已核验','approved','trusted',NULL),(3,'待审','approved','needs_review',NULL);`);
+      const rows = await new SqliteRecommendationsRepository(db).recipes({ timeBudget: null });
+      assert.deepEqual(rows.map(row=>row.id),[2]);
+    } finally { db.close(); }
+  });
   test("shares the composed service with AI and Agent consumers", () => {
     const service = new RecommendationsService(repository(), kitchenware);
     configureRecommendationsService(service);

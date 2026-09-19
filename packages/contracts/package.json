@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./openapi": "./src/openapi.ts",
-    "./inventory-scan": "./src/scanNormalization.ts"
+    "./inventory-scan": "./src/scanNormalization.ts",
+    "./kitchenware-options": "./src/kitchenwareOptions.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

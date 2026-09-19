@@ -1,3 +1,4 @@
+import { approvalFields, editApprovalField } from "./approvalFields";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Image, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
@@ -63,19 +64,20 @@ export function AssistantMessageItem({
 }: AssistantMessageItemProps) {
   const authFetch = useAuthFetch();
   const [approvalBusy, setApprovalBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [editorVisible, setEditorVisible] = useState(false);
-  const [editedActions, setEditedActions] = useState("");
+  const [editedActions, setEditedActions] = useState<AgentActionProposal[]>([]);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [attachmentUri, setAttachmentUri] = useState(msg.imageUri);
   const [attachmentLoading, setAttachmentLoading] = useState(!msg.imageUri && Boolean(msg.imageRunId));
   const [attachmentPreviewVisible, setAttachmentPreviewVisible] = useState(false);
   const [attachmentFetchAttempted, setAttachmentFetchAttempted] = useState(false);
   const agent = msg.agentRun;
-  const isAgentActive = agent?.run.status === "queued" || agent?.run.status === "running";
+  const isAgentActive = agent?.run.status === "queued" || agent?.run.status === "running" || agent?.run.status === "awaiting_input";
   const displayedDurationMs = agent ? agent.run.durationMs : msg.responseTimeMs;
-  const hasUndo = agent?.events.some((event) => event.eventType === "low_risk_executed")
-    && !agent.events.some((event) => event.eventType === "actions_undone")
+  const hasUndo = agent?.actions?.some((action) => action.undoAvailableUntil && Date.parse(action.undoAvailableUntil) > Date.now())
     && agent.undoState !== "completed";
+
 
   useEffect(() => {
     setAttachmentUri(msg.imageUri);
@@ -102,22 +104,28 @@ export function AssistantMessageItem({
   }, [attachmentUri, loadPersistedAttachment, msg.imageRunId]);
 
   const runAgentAction = async (action: () => void | Promise<void>) => {
+    if (approvalBusy) return false;
     setApprovalBusy(true);
-    try { await action(); } finally { setApprovalBusy(false); }
+    setActionError(null);
+    setEditorError(null);
+    try { await action(); return true; } catch (error) {
+      const message = error instanceof Error ? error.message : "请重试或刷新任务状态";
+      setActionError(message);
+      setEditorError(message);
+      return false;
+    } finally { setApprovalBusy(false); }
   };
 
   const openApprovalEditor = () => {
-    setEditedActions(JSON.stringify(agent?.run.pendingApproval?.actions || [], null, 2));
+    setEditedActions((agent?.run.pendingApproval?.actions || []).map((action) => ({ ...action, payload: { ...action.payload } })));
     setEditorError(null);
     setEditorVisible(true);
   };
 
   const submitEditedApproval = async () => {
     try {
-      const parsed = JSON.parse(editedActions) as AgentActionProposal[];
-      if (!Array.isArray(parsed) || !parsed.length) throw new Error("批准内容不能为空");
-      await runAgentAction(() => onAgentResume(msg.id, agent!.run.id, "edit", parsed));
-      setEditorVisible(false);
+      const success = await runAgentAction(() => onAgentResume(msg.id, agent!.run.id, editedActions.length ? "edit" : "reject", editedActions));
+      if (success) setEditorVisible(false);
     } catch (error) {
       setEditorError(error instanceof Error ? error.message : "批准内容格式无效");
     }
@@ -181,7 +189,7 @@ export function AssistantMessageItem({
                     )}
                     {msg.sender === "ai" && typeof displayedDurationMs === "number" ? (
                       <Text className="mt-1 text-[9px] font-medium text-copy-muted">
-                        {agent ? "任务总耗时" : "回复耗时"} {displayedDurationMs < 1000 ? `${Math.round(displayedDurationMs)} ms` : `${(displayedDurationMs / 1000).toFixed(2)} 秒`}
+                        {agent ? "任务历时（含等待）" : "回复耗时"} {displayedDurationMs < 1000 ? `${Math.round(displayedDurationMs)} ms` : `${(displayedDurationMs / 1000).toFixed(2)} 秒`}
                       </Text>
                     ) : null}
 
@@ -196,7 +204,7 @@ export function AssistantMessageItem({
                                 colorClassName={agent.run.status === "failed" ? "accent-critical" : "accent-brand"}
                               />
                             )}
-                            <Text className="text-xs font-black text-ink">Supervisor Agent</Text>
+                            <Text className="text-xs font-black text-ink">食语任务</Text>
                           </View>
                           <Text className="text-[9px] font-bold text-brand">
                             {agent.run.status === "queued" ? "排队中"
@@ -204,17 +212,17 @@ export function AssistantMessageItem({
                                 : agent.run.status === "awaiting_input" ? "等待补充"
                                 : agent.run.status === "awaiting_approval" ? "等待批准"
                                   : agent.run.status === "completed" ? "已完成"
-                                    : agent.run.status === "cancelled" ? "已取消" : "执行失败"}
+                                    : agent.run.status === "cancelled" ? "已取消" : agent.run.status === "expired" ? "已过期" : "执行失败"}
                           </Text>
                         </View>
 
                         {agent.events.length ? (
                           <View className="gap-2 px-3 py-2.5">
-                            {agent.events.slice(-6).map((event) => (
+                            {agent.events.filter((event) => event.eventType !== "reply_delta").slice(-6).map((event) => (
                               <View key={event.sequence} className="flex-row items-start gap-2">
                                 <View className="mt-1.5 h-1.5 w-1.5 rounded-full bg-brand-fill" />
                                 <View className="flex-1">
-                                  <Text className="text-[9px] font-black text-brand">{event.agentName}</Text>
+                                  <Text className="text-[9px] font-black text-brand">{({ Supervisor: "食语助手", PolicyGate: "安全检查", OperationsAgent: "业务操作", NutritionPlanningAgent: "营养规划", RecipeCookingAgent: "菜谱建议", VisionAgent: "图片识别", VoiceAgent: "语音转写" })[event.agentName]}</Text>
                                   <Text className="mt-0.5 text-[10px] leading-4 text-copy-muted">{event.summary}</Text>
                                 </View>
                               </View>
@@ -224,13 +232,18 @@ export function AssistantMessageItem({
                           <Text className="px-3 py-3 text-[10px] text-copy-muted">任务已经创建，正在等待公开步骤…</Text>
                         )}
 
+                        {actionError ? <Text accessibilityRole="alert" className="px-3 py-2 text-xs text-critical">{actionError}</Text> : null}
+                        {agent.connectionError ? <Text accessibilityRole="alert" className="px-3 py-2 text-xs text-copy-muted">连接暂时中断，正在重新查询原任务；不会重复提交。</Text> : null}
+                        {agent.actions?.length ? <View className="border-t border-line p-3 gap-1">
+                          {agent.actions.map((action) => <Text key={action.id} className="text-xs text-copy-muted">{action.name || "业务操作"} · {({ executed: "已执行", proposed: "待处理", awaiting_approval: "待批准", rejected: "已拒绝", failed: "执行失败", undone: "已撤销" } as Record<string, string>)[action.status] || "处理中"}</Text>)}
+                        </View> : null}
                         {agent.run.pendingApproval ? (
                           <View className="border-t border-line bg-surface px-3 py-3">
                             <Text className="text-xs font-black text-ink">需要你确认的操作</Text>
                             {agent.run.pendingApproval.actions.map((action, index) => (
                               <View key={action.id || `${action.actionType}-${index}`} className="mt-2 rounded-xl bg-canvas px-2.5 py-2">
                                 <Text className="text-[10px] font-bold text-ink">{action.summary}</Text>
-                                <Text className="mt-0.5 text-[9px] text-copy-muted">批准前不会修改你的数据</Text>
+                                <Text className="mt-0.5 text-[9px] text-copy-muted">此项待批准；已执行项见上方操作记录</Text>
                               </View>
                             ))}
                             <View className="mt-3 flex-row gap-2">
@@ -249,7 +262,7 @@ export function AssistantMessageItem({
 
                         {agent.run.status === "awaiting_input" && agent.run.pendingInput ? (
                           <View className="border-t border-line bg-surface px-3 py-3">
-                            <Text className="text-xs font-black text-ink">Supervisor 需要补充信息</Text>
+                            <Text className="text-xs font-black text-ink">需要补充信息</Text>
                             <Text className="mt-1 text-[10px] leading-4 text-copy-muted">{agent.run.pendingInput.question}</Text>
                             <View className="mt-3 flex-row items-center gap-2 rounded-xl bg-brand/10 px-3 py-2.5">
                               <FontAwesome6 name="arrow-down" size={10} colorClassName="accent-brand" />
@@ -269,10 +282,11 @@ export function AssistantMessageItem({
                               <Text className="text-xs font-bold text-white">重试任务</Text>
                             </TouchableOpacity>
                           </View>
-                        ) : hasUndo ? (
+                        ) : null}
+                        {hasUndo ? (
                           <TouchableOpacity disabled={approvalBusy} onPress={() => void runAgentAction(() => onAgentUndo(msg.id, agent.run.id))} className="flex-row items-center justify-center gap-1.5 border-t border-line bg-success-soft py-2.5 disabled:opacity-50">
                             <FontAwesome6 name="rotate-left" size={9} colorClassName="accent-brand" />
-                            <Text className="text-[10px] font-bold text-brand">已自动完成 · 10 分钟内可撤销</Text>
+                            <Text className="text-[10px] font-bold text-brand">撤销已执行操作（10 分钟内）</Text>
                           </TouchableOpacity>
                         ) : agent.undoState === "completed" ? (
                           <Text className="border-t border-line py-2.5 text-center text-[10px] font-bold text-copy-muted">操作已撤销</Text>
@@ -640,22 +654,33 @@ export function AssistantMessageItem({
                     <View className="flex-1 justify-center bg-black/45 px-5">
                       <View className="max-h-[80%] rounded-3xl bg-surface p-4">
                         <Text className="text-base font-black text-ink">编辑批准内容</Text>
-                        <Text className="mt-1 text-[11px] leading-4 text-copy-muted">修改后会重新经过格式与安全策略校验，再作为一个事务提交。</Text>
+                        <Text className="mt-1 text-[11px] leading-4 text-copy-muted">修改后会重新检查格式、权限、版本与安全限制。移除待批准项不会撤销已经执行的操作。</Text>
                         <ScrollView className="mt-3 max-h-96 rounded-2xl bg-canvas p-3">
-                          <TextInput
-                            value={editedActions}
-                            onChangeText={setEditedActions}
-                            multiline
-                            autoCapitalize="none"
-                            className="min-h-72 font-mono text-[10px] leading-4 text-ink"
-                          />
+                          {editedActions.map((action, index) => (
+                            <View key={action.id || index} className="mb-4 gap-2 border-b border-line pb-3">
+                              <Text className="text-sm font-bold text-ink">{action.summary}</Text>
+                              <Text className="text-xs text-copy-muted">{action.actionType.includes("preferences") || action.actionType.includes("preference") ? "影响长期偏好" : "仅本次业务操作"} · 待批准</Text>
+                              {approvalFields(action).length ? approvalFields(action).map((field) => (
+                                <View key={field.key}>
+                                  <Text className="text-xs text-copy-muted">{field.label}（原值：{String(agent?.run.pendingApproval?.actions.find((original) => original.id === action.id)?.payload[field.key] ?? "未填写")}）</Text>
+                                  <TextInput accessibilityLabel={field.label} value={String(action.payload[field.key] ?? "")} keyboardType={field.numeric ? "decimal-pad" : "default"}
+                                    onChangeText={(value) => setEditedActions((current) => current.map((item, position) => position === index ? editApprovalField(item, field, value) : item))}
+                                    className="rounded-lg border border-line p-2 text-ink" />
+                                </View>
+                              )) : <Text className="text-xs text-copy-muted">此类操作暂不支持编辑，可保留或移除后重新提出请求。</Text>}
+                              <TouchableOpacity accessibilityRole="button" onPress={() => setEditedActions((current) => current.filter((_, position) => position !== index))}>
+                                <Text className="text-xs text-critical">移除此项</Text>
+                              </TouchableOpacity>
+                            </View>
+                          ))}
+                          {!editedActions.length ? <Text className="text-xs text-copy-muted">全部待批准项已移除，提交将拒绝这些操作。</Text> : null}
                         </ScrollView>
                         {editorError ? <Text className="mt-2 text-[10px] text-critical">{editorError}</Text> : null}
                         <View className="mt-4 flex-row gap-2">
                           <TouchableOpacity onPress={() => setEditorVisible(false)} className="flex-1 items-center rounded-xl border border-line py-3">
                             <Text className="text-xs font-bold text-copy-muted">取消</Text>
                           </TouchableOpacity>
-                          <TouchableOpacity onPress={() => void submitEditedApproval()} className="flex-1 items-center rounded-xl bg-brand-fill py-3">
+                          <TouchableOpacity disabled={approvalBusy} onPress={() => void submitEditedApproval()} className="flex-1 items-center rounded-xl bg-brand-fill py-3">
                             <Text className="text-xs font-bold text-white">校验并批准</Text>
                           </TouchableOpacity>
                         </View>

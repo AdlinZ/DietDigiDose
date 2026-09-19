@@ -160,7 +160,7 @@ export function createNotificationsService(repository: NotificationsRepository,r
     async adminData() {
       const data = await repository.adminData(new Date(Date.now() - 30 * 86_400_000).toISOString());
       const counts = data.eventCounts;
-      return { ...data, eventCounts: undefined, metrics: {
+      return { ...data, interventionsEnabled: process.env.PROACTIVE_INTERVENTIONS_ENABLED === "1", eventCounts: undefined, metrics: {
         created: counts.created ?? 0, pushSubmitted: counts.push_submitted ?? 0, pushDelivered: counts.push_delivered ?? 0,
         opened: (counts.opened ?? 0) + (counts.action_open ?? 0),
         actionClicks: Object.entries(counts).filter(([key]) => key.startsWith("action_") && key !== "action_open")

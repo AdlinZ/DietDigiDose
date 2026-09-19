@@ -1,3 +1,5 @@
+import { interventionOutcomeRequest, validateInterventionOutcome } from "./intervention.js";
+import { appendSqliteMaintenanceEvent } from "../planMaintenance/sqliteEventWriter.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { formatChangeEvent, formatOutcomeEvent } from "./formatters.js";
@@ -26,11 +28,17 @@ export class SqliteInsightsRepository implements InsightsRepository {
       const existing = input.scope === "personal"
         ? this.database.prepare("SELECT * FROM inventory_outcome_events WHERE user_id = ? AND idempotency_key = ?").get(userId, input.idempotencyKey) as Row | undefined
         : this.database.prepare("SELECT * FROM inventory_outcome_events WHERE household_id = ? AND idempotency_key = ?").get(householdId, input.idempotencyKey) as Row | undefined;
+      const interventionRequest = interventionOutcomeRequest(input);
+      if (interventionRequest) {
+        const previous = this.database.prepare("SELECT request_json FROM proactive_intervention_actions WHERE user_id=? AND idempotency_key=?").get(userId,input.idempotencyKey) as Row | undefined;
+        const intervention = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND id=?").get(userId,input.interventionId) as Row | undefined;
+        validateInterventionOutcome(input,intervention ?? null,previous ?? null,Boolean(existing),Date.now());
+      }
       if (existing) return { kind: "repeated" as const, event: formatOutcomeEvent(existing) };
       const item = input.scope === "personal"
         ? this.database.prepare("SELECT * FROM inventory_items WHERE id = ? AND user_id = ?").get(input.itemId, userId) as Row | undefined
         : this.database.prepare("SELECT * FROM household_inventory_items WHERE id = ? AND household_id = ?").get(input.itemId, householdId) as Row | undefined;
-      if (!item) return { kind: "inventory_not_found" as const };
+      if (!item || (interventionRequest && (item.deleted_at || !item.is_available))) return { kind: "inventory_not_found" as const };
       if (input.itemVersion && Number(item.version || 1) !== input.itemVersion) return { kind: "conflict" as const };
       const id = randomUUID();
       this.database.prepare(`INSERT INTO inventory_outcome_events
@@ -53,6 +61,14 @@ export class SqliteInsightsRepository implements InsightsRepository {
             .run(input.itemId, householdId, Number(item.version || 1));
         if (closed.changes !== 1) throw new Error(VERSION_CONFLICT);
       }
+      if (interventionRequest) {
+        const at = new Date().toISOString();
+        this.database.prepare("INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at) VALUES(?,?,?,?,?,?,?)").run(randomUUID(),input.interventionId,userId,input.outcome === "used" ? "inventory_used" : "inventory_discarded","inventory_outcome",id,at);
+        this.database.prepare("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json,created_at) VALUES(?,?,?,?,?,?,?,?)").run(randomUUID(),input.interventionId,userId,input.idempotencyKey,interventionRequest.action,JSON.stringify(interventionRequest),JSON.stringify({ eventId: id }),at);
+        this.database.prepare("UPDATE proactive_interventions SET status='acted',delivery_state=CASE WHEN delivery_state='pending' THEN 'cancelled' ELSE delivery_state END,updated_at=? WHERE user_id=? AND id=?").run(at,userId,input.interventionId);
+        this.database.prepare("UPDATE user_notification_inbox SET action_status='completed',is_read=1,read_at=?,updated_at=? WHERE user_id=? AND id=(SELECT notification_id FROM proactive_interventions WHERE user_id=? AND id=?)").run(at,at,userId,userId,input.interventionId);
+        appendSqliteMaintenanceEvent(this.database, { userId, kind: "inventory_changed", sourceId: `outcome:${id}`, subjectId: String(input.itemId), details: { mode: input.outcome } });
+      }
       const event = this.database.prepare("SELECT * FROM inventory_outcome_events WHERE id = ?").get(id) as Row;
       return { kind: "created" as const, event: formatOutcomeEvent({ ...event, food_name: item.food_name, category: item.category, expiration_date: item.expiration_date }) };
       })();
@@ -74,6 +90,13 @@ export class SqliteInsightsRepository implements InsightsRepository {
         version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ?`)
         .run(input.outcome, userId, eventId, input.version);
       if (changed.changes !== 1) return { kind: "conflict" as const };
+      if (event.scope === "personal") {
+        const outcomeType = input.outcome === "discarded" ? "inventory_discarded" : ["used","cooked"].includes(input.outcome) ? "inventory_used" : null;
+        this.database.prepare("DELETE FROM proactive_intervention_outcomes WHERE user_id=? AND source_type='inventory_outcome' AND source_id=?").run(userId,eventId);
+        if (outcomeType) this.database.prepare(`INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at)
+          SELECT ?,intervention_id,user_id,?,'inventory_outcome',?,? FROM proactive_intervention_actions WHERE user_id=? AND json_extract(result_json,'$.eventId')=?`)
+          .run(randomUUID(),outcomeType,eventId,event.occurred_at,userId,eventId);
+      }
       const itemTable = event.scope === "personal" ? "inventory_items" : "household_inventory_items";
       const itemColumn = event.scope === "personal" ? "inventory_item_id" : "household_inventory_item_id";
       const row = this.database.prepare(`SELECT e.*, i.food_name, i.category, i.expiration_date FROM inventory_outcome_events e

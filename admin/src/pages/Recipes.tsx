@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { cn } from '../utils/cn';
+import { parseRecipeArray, qualityIssueText, recipeStatusText } from './recipeReviewModel';
 
 type Recipe = {
   id: number;
@@ -27,15 +28,15 @@ type Recipe = {
   image_url: string;
   description?: string;
   tags?: string;
-  steps_json?: string;
-  ingredients_json?: string;
+  steps_json?: string | string[];
+  ingredients_json?: string | Ingredient[];
   source?: string;
   status?: 'pending' | 'approved' | 'rejected';
   author_username?: string;
   reject_reason?: string;
   quality_status?: 'trusted' | 'estimated' | 'needs_review';
   nutrition_basis?: 'source' | 'ingredient_estimate' | 'category_fallback';
-  quality_issues_json?: string;
+  quality_issues_json?: string | string[];
   quality_review_reason?: string;
 };
 
@@ -61,23 +62,6 @@ type RecipeFormState = {
 
 const CATEGORIES = ['全部', '减脂', '增肌', '营养餐单', '快手菜'];
 const DIFFICULTIES = ['简单', '中等', '较难'];
-const QUALITY_ISSUE_LABELS: Record<string, string> = {
-  category_nutrition_fallback: '使用分类固定营养兜底',
-  implausible_cook_time: '烹饪时间明显不合理',
-  instruction_as_ingredient: '步骤被误识别为食材',
-  truncated_ingredient: '食材文本疑似截断',
-  insufficient_structure: '食材或步骤结构不完整',
-};
-
-function qualityIssueText(recipe: Recipe) {
-  try {
-    const issues = JSON.parse(recipe.quality_issues_json || '[]');
-    return Array.isArray(issues) ? issues.map((issue) => QUALITY_ISSUE_LABELS[String(issue)] || String(issue)).join('；') : '';
-  } catch {
-    return '质量问题记录无法解析';
-  }
-}
-
 const INITIAL_FORM_STATE: RecipeFormState = {
   title: '',
   category: '减脂餐',
@@ -203,7 +187,7 @@ export default function Recipes() {
     let parsedSteps = [''];
     try {
       if (recipe.steps_json) {
-        const parsed = JSON.parse(recipe.steps_json);
+        const parsed = parseRecipeArray(recipe.steps_json);
         if (Array.isArray(parsed) && parsed.length > 0) parsedSteps = parsed;
       }
     } catch {}
@@ -211,7 +195,7 @@ export default function Recipes() {
     let parsedIngredients = [{ name: '', amount: '' }];
     try {
       if (recipe.ingredients_json) {
-        const parsed = JSON.parse(recipe.ingredients_json);
+        const parsed = parseRecipeArray(recipe.ingredients_json);
         if (Array.isArray(parsed) && parsed.length > 0) parsedIngredients = parsed;
       }
     } catch {}
@@ -357,7 +341,7 @@ export default function Recipes() {
 
         <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
           <div>
-            <p className="text-xs font-medium text-text-muted">待审核投稿</p>
+            <p className="text-xs font-medium text-text-muted">待审核食谱</p>
             <p className="mt-1.5 text-2xl font-bold text-orange-600">{recipeStats.pending}</p>
           </div>
           <div className="rounded-2xl bg-orange-50 p-3 text-orange-600">
@@ -507,7 +491,7 @@ export default function Recipes() {
                   </td>
                   <td className="px-3 py-3">
                     <div className="flex flex-wrap gap-1.5">
-                      {recipe.source === 'user' ? <span className={cn('inline-flex rounded-full px-2 py-1 text-[10px] font-medium', recipe.status === 'pending' && 'bg-amber-50 text-amber-700', recipe.status === 'approved' && 'bg-emerald-50 text-emerald-700', recipe.status === 'rejected' && 'bg-red-50 text-red-700')}>{recipe.status === 'pending' ? '待审核' : recipe.status === 'approved' ? '已通过' : '已驳回'}</span> : <span className="inline-flex rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700">已发布</span>}
+                      <span className={cn('inline-flex rounded-full px-2 py-1 text-[10px] font-medium', recipe.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>{recipeStatusText(recipe.status)}</span>
                       <span className={cn('inline-flex rounded-full px-2 py-1 text-[10px] font-medium', recipe.quality_status === 'needs_review' ? 'bg-red-50 text-red-700' : recipe.quality_status === 'estimated' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700')}>{recipe.quality_status === 'needs_review' ? '待复核' : recipe.quality_status === 'estimated' ? '营养估算' : '可信'}</span>
                     </div>
                     {qualityIssueText(recipe) ? <div className="mt-1.5 truncate text-[10px] text-red-600" title={qualityIssueText(recipe)}>问题：{qualityIssueText(recipe)}</div> : null}

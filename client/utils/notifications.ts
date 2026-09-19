@@ -252,6 +252,9 @@ export async function cancelAllLocalNotificationsForUser(userId?: number | null)
     clearScheduledNotifications(notificationStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, userId)!),
     clearScheduledNotifications(notificationStorageKey(EXPIRING_STOCK_ALERT_IDS_KEY, userId)!),
     cancelCookingQueueRemindersForUser(userId),
+    Platform.OS === "web" ? Promise.resolve() : Notifications.getAllScheduledNotificationsAsync().then(items =>
+      Promise.all(items.filter(item => item.content.data?.type === "cooking_timer" && item.content.data?.userId === userId)
+        .map(item => Notifications.cancelScheduledNotificationAsync(item.identifier)))),
   ]);
 }
 

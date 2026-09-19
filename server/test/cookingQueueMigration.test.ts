@@ -27,6 +27,8 @@ test("queue migration separates legacy shared meal links without discarding cook
     // This fixture isolates queue migrations and has no ingredient/catalog tables.
     record.run(81);
     record.run(82); // Allocation migration has its own complete-schema fixture.
+    // Feedback migration is verified against complete schemas in feedbackFlow.test.ts.
+    db.prepare("INSERT INTO schema_migrations VALUES(83,'separate feedback fixture')").run();
     runMigrations(db);
     assert.equal((db.prepare("SELECT reported_cooking_minutes FROM prepared_meals").get() as { reported_cooking_minutes: number | null }).reported_cooking_minutes,null);
     const q = db.prepare("SELECT * FROM cooking_queue_items").get() as Record<string, unknown>;

@@ -21,6 +21,8 @@ test("allocation migration retains source records and marks overbooking and fore
       return value;
     };
     const original = add("p1",1,"b1"); add("p2",1,"b1"); add("p3",2,"b2"); add("p4",1,"b2"); add("p5",1,"b2","cancelled"); add("p6",1,"missing");
+    // Feedback migration is verified against complete schemas in feedbackFlow.test.ts.
+    db.prepare("INSERT INTO schema_migrations VALUES(83,'separate feedback fixture')").run();
     runMigrations(db); runMigrations(db);
     assert.deepEqual(db.prepare("SELECT plan_id,status FROM prepared_meal_allocations ORDER BY plan_id").all(), [
       { plan_id: "p1",status: "conflict" },{ plan_id: "p2",status: "conflict" },{ plan_id: "p3",status: "conflict" },

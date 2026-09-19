@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { queueInterventionRequest, validateQueueIntervention } from "./intervention.js";
+import { CookingQueueError } from "./errors.js";
 import type { Pool, PoolClient } from "pg";
 import type { CookingQueueRepository } from "./repository.js";
 import type { QueueEnqueueData, QueuePatch, QueueRecipe, QueueRow } from "./types.js";
@@ -46,18 +49,33 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      const request = queueInterventionRequest(input);
+      if (request) await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [input.userId]);
       await client.query("SELECT pg_advisory_xact_lock(9471, $1::integer)", [input.userId]);
+      if (request) {
+        const previous = (await client.query("SELECT request_json,result_json FROM proactive_intervention_actions WHERE user_id=$1 AND idempotency_key=$2",[input.userId,input.idempotencyKey])).rows[0];
+        const intervention = (await client.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND id=$2 FOR UPDATE",[input.userId,input.interventionId])).rows[0];
+        const replayId = validateQueueIntervention(input,intervention ?? null,previous ?? null);
+        if (replayId) {
+          const replay = await owned(client,replayId,input.userId);
+          if (!replay) throw new CookingQueueError(409,"原队列记录已移除","INTERVENTION_IDEMPOTENCY_CONFLICT");
+          await client.query("COMMIT");
+          return { kind: "existing" as const, row: replay };
+        }
+      }
       let foundId: string | undefined;
       if (input.idempotencyKey) {
         foundId = (await client.query("SELECT id FROM cooking_queue_items WHERE user_id = $1 AND idempotency_key = $2",
           [input.userId, input.idempotencyKey])).rows[0]?.id;
       }
+      if (request && foundId) throw new CookingQueueError(409,"幂等标识已用于其他操作","INTERVENTION_IDEMPOTENCY_CONFLICT");
       if (!foundId) {
         foundId = (await client.query(`SELECT id FROM cooking_queue_items WHERE user_id = $1 AND recipe_id = $2 AND source_plan_item_id IS NULL
           AND deleted_at IS NULL AND status IN (${active})`, [input.userId, input.recipeId])).rows[0]?.id;
       }
       if (foundId) {
         const row = await owned(client, foundId, input.userId);
+        if (request) await this.attachIntervention(client,input,row!);
         await client.query("COMMIT");
         return { kind: "existing" as const, row: row! };
       }
@@ -74,6 +92,7 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`, [input.id, input.userId, input.recipeId, position,
         input.mealType ?? null, input.plannedAt ?? null, JSON.stringify(input.snapshot), input.idempotencyKey ?? null]);
       const row = await owned(client, input.id, input.userId);
+      if (request) await this.attachIntervention(client,input,row!);
       await client.query("COMMIT");
       return { kind: "created" as const, row: row! };
     } catch (error) {
@@ -82,8 +101,20 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
     } finally { client.release(); }
   }
 
+  private async attachIntervention(client: PoolClient, input: QueueEnqueueData, row: QueueRow) {
+    const request = queueInterventionRequest(input)!;
+    const at = new Date().toISOString();
+    await client.query("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json,created_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)",[randomUUID(),input.interventionId,input.userId,input.idempotencyKey,"plan_recipe",JSON.stringify(request),JSON.stringify({ queueItemId: row.id, eligibleForStart: row.status !== "cooking" }),at]);
+    await client.query("UPDATE proactive_interventions SET status='acted',delivery_state=CASE WHEN delivery_state='pending' THEN 'cancelled' ELSE delivery_state END,updated_at=$1 WHERE user_id=$2 AND id=$3",[at,input.userId,input.interventionId]);
+    await client.query("UPDATE user_notification_inbox SET action_status='completed',is_read=TRUE,read_at=$1,updated_at=$1 WHERE user_id=$2 AND id=(SELECT notification_id FROM proactive_interventions WHERE user_id=$2 AND id=$3)",[at,input.userId,input.interventionId]);
+  }
+  private async recordInterventionStart(client: PoolClient, id: string, userId: number) {
+    const actions = (await client.query("SELECT intervention_id FROM proactive_intervention_actions WHERE user_id=$1 AND action='plan_recipe' AND result_json->>'queueItemId'=$2 AND result_json->>'eligibleForStart'='true'",[userId,id])).rows;
+    for (const action of actions) await client.query("INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at) VALUES($1,$2,$3,'cooking_started','cooking_queue',$4,$5) ON CONFLICT(intervention_id,outcome_type,source_type,source_id) DO NOTHING",[randomUUID(),action.intervention_id,userId,id,new Date().toISOString()]);
+  }
+
   async update(id: string, userId: number, version: number, patch: QueuePatch) {
-    const update = async (client: Pool | PoolClient) => {
+    const update = async (client: PoolClient) => {
       const result = await client.query(`UPDATE cooking_queue_items SET status = $1, meal_type = $2, planned_at = $3,
         prepared_ingredients_json = $4::jsonb, shopping_list_synced_at = $5, completed_at = $6,
         version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $7 AND user_id = $8 AND version = $9`,
@@ -91,9 +122,10 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
         patch.shoppingListSyncedAt ?? null, patch.completedAt ?? null, id, userId, version]);
       if (result.rowCount !== 1) return null;
       if (patch.status === "cancelled") await this.releasePlanItems(client, userId, [id]);
+      if (patch.status === "cooking") await this.recordInterventionStart(client,id,userId);
       return owned(client, id, userId);
     };
-    return patch.status === "cancelled" ? this.cancellationTransaction(userId, update) : update(this.pool);
+    return this.queueTransaction(userId, update);
   }
 
   async reorder(userId: number, items: Array<{ id: string; version: number }>) {
@@ -122,12 +154,16 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
   }
 
   async transition(id: string, userId: number, version: number, status: "cooking" | "completed") {
+    return this.queueTransaction(userId, async client => {
     const result = status === "cooking"
-      ? await this.pool.query(`UPDATE cooking_queue_items SET status = 'cooking', planned_at = NULL,
+      ? await client.query(`UPDATE cooking_queue_items SET status = 'cooking', planned_at = NULL,
           version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND version = $3`, [id, userId, version])
-      : await this.pool.query(`UPDATE cooking_queue_items SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
+      : await client.query(`UPDATE cooking_queue_items SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
           version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND version = $3`, [id, userId, version]);
-    return result.rowCount === 1 ? owned(this.pool, id, userId) : null;
+    if (result.rowCount !== 1) return null;
+    if (status === "cooking") await this.recordInterventionStart(client,id,userId);
+    return owned(client,id,userId);
+    });
   }
 
   async cancel(id: string, userId: number) {
@@ -139,7 +175,7 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
   }
 
   private cancelItems(userId: number, id?: string) {
-    return this.cancellationTransaction(userId, async client => {
+    return this.queueTransaction(userId, async client => {
       const cancelled = await client.query(`UPDATE cooking_queue_items SET status = 'cancelled', version = version + 1,
         updated_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND deleted_at IS NULL AND status IN (${active})
         ${id ? "AND id = $2" : ""} RETURNING id`, id ? [userId, id] : [userId]);
@@ -155,7 +191,7 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
       WHERE user_id = $1 AND queue_item_id = ANY($2::text[]) AND status IN ('queued', 'cooking') AND deleted_at IS NULL`, [userId, queueIds]);
   }
 
-  private async cancellationTransaction<T>(userId: number, operation: (client: PoolClient) => Promise<T>) {
+  private async queueTransaction<T>(userId: number, operation: (client: PoolClient) => Promise<T>) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");

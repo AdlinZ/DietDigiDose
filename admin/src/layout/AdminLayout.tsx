@@ -96,6 +96,7 @@ export default function AdminLayout() {
   const finalNavItems = [
     { to: '/admin/site-settings', icon: Settings, label: '网站设置' },
     { to: '/admin/notifications', icon: Bell, label: '通知中心' },
+    { to: '/admin/feedback', icon: MessageSquare, label: '用户反馈' },
     { to: '/admin/media-cleanup', icon: DatabaseZap, label: '媒体清理' },
     { to: '/admin/security', icon: ShieldCheck, label: '安全审计' },
   ];

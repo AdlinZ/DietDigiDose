@@ -84,6 +84,7 @@ export interface AgentActionProposal {
 }
 
 export interface AgentRunEvent {
+  payload?: { delta?: string; [key: string]: unknown };
   sequence: number;
   agentName: "Supervisor" | "NutritionPlanningAgent" | "RecipeCookingAgent" | "VisionAgent" | "VoiceAgent" | "OperationsAgent" | "PolicyGate";
   eventType: string;
@@ -110,13 +111,18 @@ export interface AgentRunSummary {
   durationMs?: number;
 }
 
+export type AgentActionState = { id: string; actionType: string; status: string; name: string; undoAvailableUntil?: string };
+
 export interface AgentRunView {
+  connectionError?: boolean;
+  actions?: AgentActionState[];
   run: AgentRunSummary;
   events: AgentRunEvent[];
   undoState?: "available" | "completed";
 }
 
 export interface AgentResponse {
+  actions?: AgentActionState[];
   mode: "agent";
   run: AgentRunSummary;
   reply?: string;

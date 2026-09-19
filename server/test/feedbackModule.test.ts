@@ -9,6 +9,7 @@ describe("feedback module", () => {
   test("keeps the service independent of the database driver", async () => {
     const writes: Array<{ userId: number; content: string }> = [];
     const repository: FeedbackRepository = {
+      list: async () => [], detail: async () => null, reply: async () => {},
       create: async (userId, input) => {
         writes.push({ userId, content: input.content });
         return 91;
@@ -33,7 +34,7 @@ describe("feedback module", () => {
           user_id INTEGER NOT NULL,
           category TEXT NOT NULL,
           content TEXT NOT NULL,
-          context_json TEXT
+          context_json TEXT, status TEXT DEFAULT 'received', request_key TEXT, version INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT
         )
       `);
       const repository = new SqliteFeedbackRepository(database);

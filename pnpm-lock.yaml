@@ -52,6 +52,9 @@ importers:
 
   admin:
     dependencies:
+      '@dietdigidose/contracts':
+        specifier: workspace:*
+        version: link:../packages/contracts
       axios:
         specifier: ^1.19.0
         version: 1.19.0

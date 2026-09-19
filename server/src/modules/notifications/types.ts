@@ -72,6 +72,7 @@ export interface PreparedExpiryNotification {
 }
 
 export interface AdminNotificationData {
+  interventionMetrics?: Record<string, number>;
   activeDevices: number;
   enabledUsers: number;
   campaigns: Array<Record<string, unknown>>;

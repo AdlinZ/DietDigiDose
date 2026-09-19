@@ -8,6 +8,8 @@ import type { Server } from "node:http";
 
 const testDirectory = mkdtempSync(path.join(tmpdir(), "dietdigidose-26w35-"));
 process.env.NODE_ENV = "test";
+process.env.DATABASE_DRIVER = "sqlite";
+process.env.DATABASE_URL = "";
 process.env.DATABASE_PATH = path.join(testDirectory, "milestone35.db");
 process.env.JWT_SECRET = "milestone-35-test-secret-at-least-32-characters";
 process.env.ADMIN_INITIAL_PASSWORD = "AdminPassword1234";

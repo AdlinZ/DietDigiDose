@@ -1,3 +1,5 @@
+import { KitchenwareSafetyHints } from "@/screens/cooking-mode/KitchenwareSafetyHints";
+import { useCookingTimer } from "@/hooks/useCookingTimer";
 import type { CookingQueueItem } from "@/services/api/cookingQueue";
 
 import * as Crypto from "expo-crypto";
@@ -87,11 +89,9 @@ export default function CookingModeScreen() {
   >([]);
 
   // Timer State
-  const [timerSeconds, setTimerSeconds] = useState(0);
-  const [timerMode, setTimerMode] = useState<"countdown" | "stopwatch">("countdown");
-  const [isTimerRunning, setIsTimerRunning] = useState(false);
+  const timer = useCookingTimer(user?.id, queueItemId ? `queue:${queueItemId}` : `recipe:${recipeId}`, recipeLoading ? undefined : cookingSteps[0]?.duration || 180);
+  const { timerSeconds, timerMode, isTimerRunning, setTimerSeconds, setTimerMode, setIsTimerRunning } = timer;
   const [showTimerModal, setShowTimerModal] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // View Controls
   const [viewMode, setViewMode] = useState<"hero" | "timeline">("hero");
@@ -263,7 +263,7 @@ export default function CookingModeScreen() {
           checked: false,
         }))
       );
-      setTimerSeconds(parsedSteps[0].duration || 180);
+
     }).catch((error) => {
       if (!active) return;
       setRecipe(null);
@@ -274,52 +274,10 @@ export default function CookingModeScreen() {
     return () => { active = false; };
   }, [recipeId, queueItemId, authFetch]);
 
-  // Step change reaction: TTS + reset timer
+  // Speech preferences never mutate the task timer.
   useEffect(() => {
-    if (cookingSteps.length > 0 && cookingSteps[currentStep]) {
-      if (autoSpeechEnabled) {
-        speakStep(cookingSteps[currentStep].text, currentStep);
-      }
-
-      // Reset timer based on current mode
-      const stepDuration = cookingSteps[currentStep].duration || 180;
-      setIsTimerRunning(false);
-      if (timerMode === "countdown") {
-        setTimerSeconds(stepDuration);
-      } else {
-        setTimerSeconds(0);
-      }
-    }
-  }, [currentStep, autoSpeechEnabled, cookingSteps, speakStep, timerMode]);
-
-  // Timer interval engine
-  useEffect(() => {
-    if (isTimerRunning) {
-      timerRef.current = setInterval(() => {
-        setTimerSeconds((prev) => {
-          if (timerMode === "countdown") {
-            if (prev <= 1) {
-              // Countdown finished!
-              setIsTimerRunning(false);
-              try {
-                void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                speak("当前步骤倒计时结束！");
-              } catch {}
-              return 0;
-            }
-            return prev - 1;
-          } else {
-            return prev + 1;
-          }
-        });
-      }, 1000);
-    } else if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isTimerRunning, speak, timerMode]);
+    if (autoSpeechEnabled && cookingSteps[currentStep]) speakStep(cookingSteps[currentStep].text, currentStep);
+  }, [currentStep, autoSpeechEnabled, cookingSteps, speakStep]);
 
   // 🎙️ Execute Direct Voice Command from HUD
   const executeDirectVoiceCommand = async (commandText: string) => {
@@ -540,6 +498,7 @@ export default function CookingModeScreen() {
   };
 
   const handleStartPauseTimer = () => {
+    if (!timer.ready) return;
     try {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
@@ -756,6 +715,7 @@ export default function CookingModeScreen() {
       };
       });
       if (!result) return;
+      timer.finish();
 
       setShowFinishModal(false);
       Alert.alert(
@@ -976,6 +936,7 @@ export default function CookingModeScreen() {
 
       {/* Main Mode Content */}
       <ScrollView className="flex-1 px-5 pt-2" showsVerticalScrollIndicator={false}>
+        <KitchenwareSafetyHints recipeId={Number(recipeId)} />
         {viewMode === "hero" ? (
           /* 📱 HERO BIG STEP CARD DECK (食光大卡片沉浸视图) */
           <View className="pb-44">
@@ -1360,12 +1321,13 @@ export default function CookingModeScreen() {
               {formatTime(timerSeconds)}
             </Text>
 
+            <Text className="text-sm text-copy-muted mb-3">{timerMode === "countdown" && timerSeconds === 0 ? "计时已结束。" : ""}{timer.notice || "切换步骤保留当前计时；重置后使用当前步骤时长。系统强制停止应用可能阻止提醒。"}</Text>
             {/* Mode Switcher */}
             <TouchableOpacity
               onPress={toggleTimerMode}
               className="bg-background-secondary px-4 py-2 rounded-full border border-line mb-5"
             >
-              <Text className="text-xs font-bold text-brand">
+            <Text className="text-xs font-bold text-brand">
                 当前为{timerMode === "countdown" ? "【倒计时模式】点击切为正计时" : "【正计时模式】点击切为倒计时"}
               </Text>
             </TouchableOpacity>

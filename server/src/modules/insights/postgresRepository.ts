@@ -1,3 +1,5 @@
+import { interventionOutcomeRequest, validateInterventionOutcome } from "./intervention.js";
+import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import { formatChangeEvent, formatOutcomeEvent } from "./formatters.js";
@@ -22,6 +24,8 @@ export class PostgresInsightsRepository implements InsightsRepository {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      const interventionRequest = interventionOutcomeRequest(input);
+      if (interventionRequest) await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [userId]);
       const ownerId = input.scope === "personal" ? userId : Number(input.householdId);
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`insights:outcome:${input.scope}:${ownerId}:${input.idempotencyKey}`]);
       if (input.scope === "household" && !(await client.query(
@@ -34,6 +38,11 @@ export class PostgresInsightsRepository implements InsightsRepository {
       const existing = input.scope === "personal"
         ? await client.query("SELECT * FROM inventory_outcome_events WHERE user_id = $1 AND idempotency_key = $2", [userId, input.idempotencyKey])
         : await client.query("SELECT * FROM inventory_outcome_events WHERE household_id = $1 AND idempotency_key = $2", [ownerId, input.idempotencyKey]);
+      if (interventionRequest) {
+        const previous = (await client.query("SELECT request_json FROM proactive_intervention_actions WHERE user_id=$1 AND idempotency_key=$2",[userId,input.idempotencyKey])).rows[0];
+        const intervention = (await client.query("SELECT * FROM proactive_interventions WHERE user_id=$1 AND id=$2 FOR UPDATE",[userId,input.interventionId])).rows[0];
+        validateInterventionOutcome(input,intervention ?? null,previous ?? null,Boolean(existing.rows[0]),Date.now());
+      }
       if (existing.rows[0]) {
         await client.query("COMMIT");
         return { kind: "repeated" as const, event: formatOutcomeEvent(existing.rows[0]) };
@@ -42,7 +51,7 @@ export class PostgresInsightsRepository implements InsightsRepository {
         ? await client.query("SELECT * FROM inventory_items WHERE id = $1 AND user_id = $2 FOR UPDATE", [input.itemId, userId])
         : await client.query("SELECT * FROM household_inventory_items WHERE id = $1 AND household_id = $2 FOR UPDATE", [input.itemId, ownerId]);
       const item = selected.rows[0];
-      if (!item) {
+      if (!item || (interventionRequest && (item.deleted_at || !item.is_available))) {
         await client.query("COMMIT");
         return { kind: "inventory_not_found" as const };
       }
@@ -71,6 +80,14 @@ export class PostgresInsightsRepository implements InsightsRepository {
               updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND household_id = $2 AND version = $3`,
             [input.itemId, ownerId, Number(item.version || 1)]);
         if (closed.rowCount !== 1) throw new Error(VERSION_CONFLICT);
+      }
+      if (interventionRequest) {
+        const at = new Date().toISOString();
+        await client.query("INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7)",[randomUUID(),input.interventionId,userId,input.outcome === "used" ? "inventory_used" : "inventory_discarded","inventory_outcome",id,at]);
+        await client.query("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json,created_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8)",[randomUUID(),input.interventionId,userId,input.idempotencyKey,interventionRequest.action,JSON.stringify(interventionRequest),JSON.stringify({ eventId: id }),at]);
+        await client.query("UPDATE proactive_interventions SET status='acted',delivery_state=CASE WHEN delivery_state='pending' THEN 'cancelled' ELSE delivery_state END,updated_at=$1 WHERE user_id=$2 AND id=$3",[at,userId,input.interventionId]);
+        await client.query("UPDATE user_notification_inbox SET action_status='completed',is_read=TRUE,read_at=$1,updated_at=$1 WHERE user_id=$2 AND id=(SELECT notification_id FROM proactive_interventions WHERE user_id=$2 AND id=$3)",[at,userId,input.interventionId]);
+        await appendPostgresMaintenanceEvent(client, { userId, kind: "inventory_changed", sourceId: `outcome:${id}`, subjectId: String(input.itemId), details: { mode: input.outcome } });
       }
       const event = formatOutcomeEvent({
         ...inserted.rows[0],
@@ -111,6 +128,12 @@ export class PostgresInsightsRepository implements InsightsRepository {
       if (!changed.rows[0]) {
         await client.query("COMMIT");
         return { kind: "conflict" as const };
+      }
+      if (event.scope === "personal") {
+        const outcomeType = input.outcome === "discarded" ? "inventory_discarded" : ["used","cooked"].includes(input.outcome) ? "inventory_used" : null;
+        await client.query("DELETE FROM proactive_intervention_outcomes WHERE user_id=$1 AND source_type='inventory_outcome' AND source_id=$2",[userId,eventId]);
+        if (outcomeType) await client.query(`INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at)
+          SELECT $1,intervention_id,user_id,$2,'inventory_outcome',$3,$4 FROM proactive_intervention_actions WHERE user_id=$5 AND result_json->>'eventId'=$3`,[randomUUID(),outcomeType,eventId,event.occurred_at,userId]);
       }
       const row = await this.joinedEvent(client, changed.rows[0]);
       await client.query("COMMIT");

@@ -1,3 +1,5 @@
+import { sanitizeAIErrorMessage } from "../../services/aiErrors.js";
+import { runtimePolicySchema } from "./policy.js";
 import type { AIRuntimeRepository } from "./repository.js";
 import type { AIConfig, AIUsageInput } from "./types.js";
 
@@ -7,7 +9,7 @@ export const AI_SETTING_KEYS = [
   "AI_VISION_API_KEY", "AI_VISION_BASE_URL", "AI_VISION_MODEL",
   "AI_ASR_API_KEY", "AI_ASR_BASE_URL", "AI_ASR_MODEL",
   "AI_SUPERVISOR_MODEL", "AI_NUTRITION_MODEL", "AI_RECIPE_MODEL", "AI_OPERATIONS_MODEL",
-  "AI_SYSTEM_PROMPT",
+  "AI_SYSTEM_PROMPT", "AI_RUNTIME_POLICY",
 ] as const;
 
 export type AIAgentRole = "SUPERVISOR" | "NUTRITION" | "RECIPE" | "OPERATIONS";
@@ -30,6 +32,11 @@ export class AIRuntimeService {
   async config(settings?: Record<string, string>): Promise<AIConfig> {
     const values = settings || await this.settings();
     return this.resolveConfig(values);
+  }
+
+  async runtimePolicy() {
+    const values = await this.settings();
+    return runtimePolicySchema.parse(values.AI_RUNTIME_POLICY ? JSON.parse(values.AI_RUNTIME_POLICY) : {});
   }
 
   async agentConfig(agent: AIAgentRole) {
@@ -70,7 +77,7 @@ export class AIRuntimeService {
     try {
       await this.repository.recordUsage({ ...input, promptTokens, completionTokens, totalTokens,
         latencyMs: input.latencyMs || 0, success: input.success !== false,
-        estimatedCostUsd: Math.max(0, estimatedCostUsd), failureReason: input.failureReason?.slice(0, 500) });
+        estimatedCostUsd: Math.max(0, estimatedCostUsd), failureReason: input.failureReason ? sanitizeAIErrorMessage(input.failureReason) : undefined });
     } catch (error) {
       console.error("[AI usage persistence error]", error instanceof Error ? error.message : error);
     }

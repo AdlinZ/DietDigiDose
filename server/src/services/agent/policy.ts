@@ -159,7 +159,7 @@ export type AllergySafetyBlock = {
 };
 
 const allergyAliases: Record<string, string[]> = {
-  "花生": ["花生", "花生酱", "花生醬", "花生碎", "花身", "花牲", "花生将", "花生醬料"],
+  "花生": ["peanut", "groundnut", "落花生", "花生", "花生酱", "花生醬", "花生碎", "花身", "花牲", "花生将", "花生醬料"],
   "坚果": ["坚果", "堅果", "花生", "花生酱", "花生醬", "花生碎", "花身", "花牲", "花生将", "腰果", "核桃", "杏仁", "榛子", "开心果", "開心果", "碧根果"],
   "海鲜": ["海鲜", "海鮮", "虾", "蝦", "蟹", "贝", "貝", "牡蛎", "生蚝"],
   "乳制品": ["乳制品", "乳製品", "牛奶", "奶酪", "芝士", "酸奶"],
@@ -176,7 +176,7 @@ function isSevere(value: string) {
 
 function allergyTerms(name: string) {
   const normalizedName = normalizedSafetyText(name);
-  const aliases = Object.entries(allergyAliases).find(([key]) => normalizedName.includes(normalizedSafetyText(key)))?.[1] || [];
+  const aliases = Object.entries(allergyAliases).find(([key, values]) => [key, ...values].some((alias) => normalizedName === normalizedSafetyText(alias) || normalizedName.includes(normalizedSafetyText(key))))?.[1] || [];
   return [...new Set([name, ...aliases].map(normalizedSafetyText).filter(Boolean))];
 }
 
@@ -192,6 +192,20 @@ export function findAllergyConflict(text: string, ctx: UserContext): AllergySafe
     if (!name || !allergyTerms(name).some((term) => normalizedText.includes(term))) continue;
     const severe = isSevere(allergy.severity);
     return { allergyName: name, severe, reply: allergySafetyReply(name, severe) };
+  }
+  return null;
+}
+
+// This guard is only for proposed food candidates / write payloads, never the
+// user's consultation text. Unknown compound ingredients require clarification.
+export function findCandidateSafetyConflict(candidate: unknown, ctx: UserContext): AllergySafetyBlock | null {
+  const text = JSON.stringify(candidate) || "";
+  const conflict = findAllergyConflict(text, ctx);
+  if (conflict) return conflict;
+  const allergy = ctx.healthProfile?.allergies?.find((item) => item.name.trim());
+  if (allergy && /(复合调味|混合酱|沙茶酱|沙嗲酱|satay|成分不明|配料不详|未知配料)/i.test(text)) {
+    return { allergyName: allergy.name, severe: isSevere(allergy.severity),
+      reply: "这份候选包含成分尚未确认的复合食材，暂不推荐或保存。请补充完整配料标签及过敏原声明，确认符合你的过敏限制后再继续。" };
   }
   return null;
 }
@@ -219,8 +233,8 @@ export function validateAgentActions(actions: unknown[], ctx: UserContext): Agen
   const normalized = actions.slice(0, 150).map(normalizeActionProposal);
   for (const action of normalized) {
     if (action.riskLevel === "forbidden") throw new Error(`禁止的 Agent 操作：${action.actionType}`);
-    if (!["create_meal_plan", "update_meal_plan", "add_shopping_items", "submit_recipe"].includes(action.actionType)) continue;
-    const conflict = findAllergyConflict(JSON.stringify(action.payload), ctx);
+    if (!["create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item", "submit_recipe"].includes(action.actionType)) continue;
+    const conflict = findCandidateSafetyConflict(action.payload, ctx);
     if (conflict) throw new AgentSafetyConflictError(conflict);
   }
   return normalized;

@@ -1,3 +1,4 @@
+import { verifyFeedbackPostgres } from "./feedbackPostgresAssertions.js";
 import { verifyDiningPlanChanges, verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
@@ -647,7 +648,7 @@ try {
     category: "suggestion",
     content: "希望增加批量录入功能",
     context_json: { page: "inventory", recipeId: 12 },
-    status: "open",
+    status: "received",
   });
 
   const postgresFood = await pool.query(`
@@ -2062,6 +2063,25 @@ try {
     await verifyInterventionScanCursor(notificationsRepository,new PostgresWorkerRepository(pool));
     const { verifyInterventionFeedback } = await import("./interventionReservationAssertions.js");
     await verifyInterventionFeedback(notificationsRepository,notificationUserId);
+    const { verifyInterventionOutcomes } = await import("./interventionOutcomeAssertions.js");
+    const outcomeUser = (await pool.query("INSERT INTO users(username,email,password_hash) VALUES('干预归因测试','intervention-outcome@example.invalid','isolated-test-hash') RETURNING id")).rows[0];
+    await verifyInterventionOutcomes(notificationsRepository,new PostgresInsightsRepository(pool),Number(outcomeUser.id),async (sql,values) => {
+      let index = 0; const rows = (await pool.query(sql.replace(/\?/g,() => `$${++index}`),values)).rows;
+      return rows.map(row => ({ ...row, ...(row.n !== undefined ? { n: Number(row.n) } : {}) }));
+    }, async enabled => {
+      if (enabled) await pool.query(`CREATE FUNCTION fail_intervention_outcome() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'attribution failure'; END; $$ LANGUAGE plpgsql;
+        CREATE TRIGGER fail_intervention_outcome BEFORE INSERT ON proactive_intervention_outcomes FOR EACH ROW EXECUTE FUNCTION fail_intervention_outcome()`);
+      else await pool.query("DROP TRIGGER fail_intervention_outcome ON proactive_intervention_outcomes; DROP FUNCTION fail_intervention_outcome()");
+    });
+
+    const { verifyInterventionQueue } = await import("./interventionQueueAssertions.js");
+    await verifyInterventionQueue(notificationsRepository,new PostgresCookingQueueRepository(pool),async (sql,values) => {
+      let index = 0; return (await pool.query(sql.replace(/\?/g,() => `$${++index}`),values)).rows.map(row => ({ ...row, ...(row.n !== undefined ? { n: Number(row.n) } : {}) }));
+    },async enabled => {
+      if (enabled) await pool.query(`CREATE FUNCTION fail_intervention_start() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'attribution failure'; END; $$ LANGUAGE plpgsql;
+        CREATE TRIGGER fail_intervention_start BEFORE INSERT ON proactive_intervention_outcomes FOR EACH ROW EXECUTE FUNCTION fail_intervention_start()`);
+      else await pool.query("DROP TRIGGER fail_intervention_start ON proactive_intervention_outcomes; DROP FUNCTION fail_intervention_start()");
+    });
 
     const { defaultInterventionPreferences } = await import("@dietdigidose/contracts");
     const currentInterventionPreferences = await notificationsRepository.interventionPreferences(user.id);
@@ -2760,6 +2780,7 @@ try {
   }
 
   const { verifyPostgresBackup } = await import("./postgresBackupAssertions.js");
+  await verifyFeedbackPostgres(pool, user.id);
   await verifyPostgresBackup(connectionString);
   const { verifyPostgresRecoveryApi } = await import("./postgresRecoveryApiAssertions.js");
   await verifyPostgresRecoveryApi(connectionString);

@@ -17,6 +17,8 @@ import type { Express } from "express";
 
 const testDirectory = mkdtempSync(path.join(tmpdir(), "dietdigidose-api-"));
 process.env.NODE_ENV = "test";
+process.env.DATABASE_DRIVER = "sqlite";
+process.env.DATABASE_URL = "";
 process.env.DATABASE_PATH = path.join(testDirectory, "integration.db");
 process.env.JWT_SECRET = "integration-test-jwt-secret-at-least-32-characters-long";
 process.env.ADMIN_INITIAL_PASSWORD = "AdminPassword1234";
@@ -1100,7 +1102,7 @@ describe("API security baseline", () => {
       recipeId: 23,
       recipeTitle: "番茄炒蛋",
     });
-    assert.equal(row.status, "open");
+    assert.equal(row.status, "received");
     assert.equal("user_id" in (submitted.body as JsonObject), false);
   });
 
@@ -4736,4 +4738,27 @@ test("inactive meal plans reject fresh production from plan and queue while pres
     if (statement.reader) return statement.all(...values) as Record<string,unknown>[];
     statement.run(...values); return [];
   });
+});
+
+
+test("confirmed intervention inventory outcomes are atomic, replayable and correctable", async () => {
+  const account = await register('intervention-outcomes@example.invalid');
+  const { SqliteNotificationsRepository } = await import('../src/modules/notifications/sqliteRepository.js');
+  const { SqliteInsightsRepository } = await import('../src/modules/insights/sqliteRepository.js');
+  const { verifyInterventionOutcomes } = await import('./interventionOutcomeAssertions.js');
+  await verifyInterventionOutcomes(new SqliteNotificationsRepository(db),new SqliteInsightsRepository(db),account.user.id,
+    async (sql, values) => db.prepare(sql).all(...values as any[]) as JsonObject[], async enabled => {
+      db.exec(enabled ? "CREATE TRIGGER fail_intervention_outcome BEFORE INSERT ON proactive_intervention_outcomes BEGIN SELECT RAISE(ABORT,'attribution failure'); END" : "DROP TRIGGER fail_intervention_outcome");
+    });
+});
+
+
+test("intervention queue scheduling attributes only actual starts and rolls back failed attribution", async () => {
+  const { SqliteNotificationsRepository } = await import('../src/modules/notifications/sqliteRepository.js');
+  const { SqliteCookingQueueRepository } = await import('../src/modules/cookingQueue/sqliteRepository.js');
+  const { verifyInterventionQueue } = await import('./interventionQueueAssertions.js');
+  await verifyInterventionQueue(new SqliteNotificationsRepository(db),new SqliteCookingQueueRepository(db),
+    async (sql,values) => db.prepare(sql).all(...values as any[]) as JsonObject[],async enabled => {
+      db.exec(enabled ? "CREATE TRIGGER fail_intervention_start BEFORE INSERT ON proactive_intervention_outcomes BEGIN SELECT RAISE(ABORT,'attribution failure'); END" : "DROP TRIGGER fail_intervention_start");
+    });
 });

@@ -20,6 +20,7 @@ const AgentRuns = lazy(() => import('./pages/AgentRuns'));
 const ChangePassword = lazy(() => import('./pages/ChangePassword'));
 const SecurityAudit = lazy(() => import('./pages/SecurityAudit'));
 const Kitchenware = lazy(() => import('./pages/Kitchenware'));
+const Feedback = lazy(() => import('./pages/Feedback'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const AuthServiceSms = lazy(() => import('./pages/AuthServiceSms'));
 const AuthServicePlaceholder = lazy(() => import('./pages/AuthServicePlaceholder'));
@@ -115,6 +116,7 @@ function App() {
         <Route path="ai-conversations" element={<AIConversations />} />
         <Route path="agent-runs" element={<AgentRuns />} />
         <Route path="security" element={<SecurityAudit />} />
+        <Route path="feedback" element={<Feedback />} />
         <Route path="notifications" element={<Notifications />} />
         <Route path="media-cleanup" element={<MediaCleanup />} />
         <Route path="voice-packs" element={<VoicePacks />} />

@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { queueInterventionRequest, validateQueueIntervention } from "./intervention.js";
+import { CookingQueueError } from "./errors.js";
 import type Database from "better-sqlite3";
 import type { CookingQueueRepository } from "./repository.js";
 import type { QueueEnqueueData, QueuePatch, QueueRecipe, QueueRow } from "./types.js";
@@ -48,6 +51,17 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
 
   async enqueue(input: QueueEnqueueData, maximumActive: number) {
     return this.database.transaction(() => {
+      const request = queueInterventionRequest(input);
+      if (request) {
+        const previous = this.database.prepare("SELECT request_json,result_json FROM proactive_intervention_actions WHERE user_id=? AND idempotency_key=?").get(input.userId,input.idempotencyKey) as QueueRow | undefined;
+        const intervention = this.database.prepare("SELECT * FROM proactive_interventions WHERE user_id=? AND id=?").get(input.userId,input.interventionId) as QueueRow | undefined;
+        const replayId = validateQueueIntervention(input,intervention ?? null,previous ?? null);
+        if (replayId) {
+          const replay = this.findOwnedRow(replayId,input.userId);
+          if (!replay) throw new CookingQueueError(409,"原队列记录已移除","INTERVENTION_IDEMPOTENCY_CONFLICT");
+          return { kind: "existing" as const, row: replay };
+        }
+      }
       const existingId = input.idempotencyKey
         ? (this.database.prepare("SELECT id FROM cooking_queue_items WHERE user_id = ? AND idempotency_key = ?")
           .get(input.userId, input.idempotencyKey) as { id: string } | undefined)?.id
@@ -56,9 +70,12 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
         SELECT id FROM cooking_queue_items
         WHERE user_id = ? AND recipe_id = ? AND source_plan_item_id IS NULL AND deleted_at IS NULL AND status IN (${activeStatuses})
       `).get(input.userId, input.recipeId) as { id: string } | undefined)?.id;
+      if (request && existingId) throw new CookingQueueError(409,"幂等标识已用于其他操作","INTERVENTION_IDEMPOTENCY_CONFLICT");
       const foundId = existingId || activeId;
       if (foundId) {
-        return { kind: "existing" as const, row: this.findOwnedRow(foundId, input.userId)! };
+        const row = this.findOwnedRow(foundId,input.userId)!;
+        if (request) this.attachIntervention(input,row);
+        return { kind: "existing" as const, row };
       }
       const count = Number((this.database.prepare(`
         SELECT COUNT(*) AS count FROM cooking_queue_items
@@ -75,8 +92,24 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(input.id, input.userId, input.recipeId, position, input.mealType ?? null, input.plannedAt ?? null,
         JSON.stringify(input.snapshot), input.idempotencyKey ?? null);
-      return { kind: "created" as const, row: this.findOwnedRow(input.id, input.userId)! };
+      const row = this.findOwnedRow(input.id,input.userId)!;
+      if (request) this.attachIntervention(input,row);
+      return { kind: "created" as const, row };
     })();
+  }
+
+  private attachIntervention(input: QueueEnqueueData, row: QueueRow) {
+    const request = queueInterventionRequest(input)!;
+    const at = new Date().toISOString();
+    this.database.prepare("INSERT INTO proactive_intervention_actions(id,intervention_id,user_id,idempotency_key,action,request_json,result_json,created_at) VALUES(?,?,?,?,?,?,?,?)").run(randomUUID(),input.interventionId,input.userId,input.idempotencyKey,"plan_recipe",JSON.stringify(request),JSON.stringify({ queueItemId: row.id, eligibleForStart: row.status !== "cooking" }),at);
+    this.database.prepare("UPDATE proactive_interventions SET status='acted',delivery_state=CASE WHEN delivery_state='pending' THEN 'cancelled' ELSE delivery_state END,updated_at=? WHERE user_id=? AND id=?").run(at,input.userId,input.interventionId);
+    this.database.prepare("UPDATE user_notification_inbox SET action_status='completed',is_read=1,read_at=?,updated_at=? WHERE user_id=? AND id=(SELECT notification_id FROM proactive_interventions WHERE user_id=? AND id=?)").run(at,at,input.userId,input.userId,input.interventionId);
+  }
+
+  private recordInterventionStart(id: string, userId: number) {
+    const actions = this.database.prepare("SELECT intervention_id FROM proactive_intervention_actions WHERE user_id=? AND action='plan_recipe' AND json_extract(result_json,'$.queueItemId')=? AND json_extract(result_json,'$.eligibleForStart')=1").all(userId,id) as QueueRow[];
+    const insert = this.database.prepare("INSERT INTO proactive_intervention_outcomes(id,intervention_id,user_id,outcome_type,source_type,source_id,occurred_at) VALUES(?,?,?,'cooking_started','cooking_queue',?,?) ON CONFLICT(intervention_id,outcome_type,source_type,source_id) DO NOTHING");
+    for (const action of actions) insert.run(randomUUID(),action.intervention_id,userId,id,new Date().toISOString());
   }
 
   async update(id: string, userId: number, version: number, patch: QueuePatch) {
@@ -89,6 +122,7 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
         patch.shoppingListSyncedAt ?? null, patch.completedAt ?? null, id, userId, version);
       if (result.changes !== 1) return null;
       if (patch.status === "cancelled") this.releasePlanItems(userId, [id]);
+      if (patch.status === "cooking") this.recordInterventionStart(id,userId);
       return this.findOwnedRow(id, userId)!;
     })();
   }
@@ -117,13 +151,16 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
   }
 
   async transition(id: string, userId: number, version: number, status: "cooking" | "completed") {
+    return this.database.transaction(() => {
     const result = status === "cooking"
       ? this.database.prepare(`UPDATE cooking_queue_items SET status = 'cooking', planned_at = NULL,
           version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ?`).run(id, userId, version)
       : this.database.prepare(`UPDATE cooking_queue_items SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
           version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ?`).run(id, userId, version);
     if (result.changes !== 1) return null;
+    if (status === "cooking") this.recordInterventionStart(id,userId);
     return this.findOwnedRow(id, userId)!;
+    })();
   }
 
   async cancel(id: string, userId: number) {

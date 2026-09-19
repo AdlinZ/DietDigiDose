@@ -1,9 +1,10 @@
+import { timestampMs, reversibleAgentActions } from "../modules/agentOperations/helpers.js";
 import { Router } from "express";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import { validateBody } from "../middleware/validate.js";
 import { uuidParam } from "../middleware/validateParam.js";
 import { agentRunResumeSchema } from "../validation/schemas.js";
-import { getAgentRunMedia, getAgentRunRow, listAgentEvents, toAgentRunSummary } from "../services/agent/repository.js";
+import { getAgentRunMedia, getRunActions, getAgentRunRow, listAgentEvents, toAgentRunSummary } from "../services/agent/repository.js";
 import { cancelSupervisorRun, resumeSupervisorRun, retrySupervisorRun, undoSupervisorRun } from "../services/agent/runtime.js";
 import { buildAgentSolutionCards } from "../services/agent/cards.js";
 
@@ -16,7 +17,13 @@ router.get("/agent-runs/:runId", async (req: AuthRequest, res) => {
   if (!row) return res.status(404).json({ error: "Agent Run 不存在或无权访问", code: "AGENT_RUN_NOT_FOUND" });
   const afterSequence = Math.max(0, Number(req.query.afterSequence) || 0);
   const run = toAgentRunSummary(row);
-  return res.json({ run, events: await listAgentEvents(row.id, req.userId!, afterSequence), solutionCards: buildAgentSolutionCards(run.id, run.artifacts) });
+  const actions = (await getRunActions(row.id, req.userId!)).map((action) => ({
+    id: action.id, actionType: action.actionType, status: action.status,
+    name: String(action.payload.name || action.payload.foodName || action.payload.title || ""),
+    undoAvailableUntil: reversibleAgentActions.has(action.actionType) && action.status === "executed" && action.executedAt
+      ? new Date(timestampMs(action.executedAt) + 10 * 60_000).toISOString() : undefined,
+  }));
+  return res.json({ run, actions, events: await listAgentEvents(row.id, req.userId!, afterSequence), solutionCards: buildAgentSolutionCards(run.id, run.artifacts) });
 });
 
 router.get("/agent-runs/:runId/media", async (req: AuthRequest, res) => {

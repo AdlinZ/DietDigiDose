@@ -168,7 +168,7 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
     else if (filter === "system") conditions.push("category='system'");
     if (cursor) { conditions.push("id<?"); params.push(cursor); }
     params.push(limit);
-    const rows = this.database.prepare(`SELECT (SELECT p.id FROM proactive_interventions p WHERE p.notification_id=user_notification_inbox.id AND p.user_id=user_notification_inbox.user_id ORDER BY p.id LIMIT 1) AS interventionId,id,type,title,body,is_read AS isRead,created_at AS createdAt, inventory_item_id AS inventoryItemId,category,priority,action_status AS actionStatus,snoozed_until AS snoozedUntil, (SELECT COUNT(*) FROM notification_inventory_items n WHERE n.notification_id=user_notification_inbox.id) AS itemCount FROM user_notification_inbox WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params) as Array<Record<string, unknown>>;
+    const rows = this.database.prepare(`SELECT (SELECT p.id FROM proactive_interventions p WHERE p.notification_id=user_notification_inbox.id AND p.user_id=user_notification_inbox.user_id ORDER BY p.id LIMIT 1) AS interventionId,id,feedback_id AS feedbackId,type,title,body,is_read AS isRead,strftime('%Y-%m-%dT%H:%M:%fZ',created_at) AS createdAt, inventory_item_id AS inventoryItemId,category,priority,action_status AS actionStatus,snoozed_until AS snoozedUntil, (SELECT COUNT(*) FROM notification_inventory_items n WHERE n.notification_id=user_notification_inbox.id) AS itemCount FROM user_notification_inbox WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT ?`).all(...params) as Array<Record<string, unknown>>;
     return rows.map((row) => ({ ...row, isRead: row.isRead !== 0 }));
   }
 
@@ -227,7 +227,22 @@ export class SqliteNotificationsRepository implements NotificationsRepository {
     const campaigns = this.database.prepare(`SELECT c.id,c.title,c.body,c.status,c.recipient_count AS recipientCount,c.success_count AS successCount, c.failure_count AS failureCount,c.created_at AS createdAt,c.sent_at AS sentAt,u.username AS adminName FROM notification_campaigns c JOIN users u ON u.id=c.admin_user_id ORDER BY c.id DESC LIMIT 30`).all() as Array<Record<string, unknown>>;
     const automatic = this.database.prepare(`SELECT delivery_date AS deliveryDate,status,COUNT(*) AS count FROM notification_deliveries WHERE notification_type='expiring_inventory' GROUP BY delivery_date,status ORDER BY delivery_date DESC LIMIT 30`).all() as Array<Record<string, unknown>>;
     const eventRows = this.database.prepare(`SELECT event_type AS eventType,COUNT(*) AS count FROM notification_events WHERE created_at>=? GROUP BY event_type`).all(since) as Array<{ eventType: string; count: number }>;
+    const decisions = this.database.prepare(`SELECT COUNT(*) AS candidates,
+      COALESCE(SUM(CASE WHEN channel='suppressed' THEN 1 ELSE 0 END),0) AS suppressed,
+      COALESCE(SUM(CASE WHEN channel='inbox_only' THEN 1 ELSE 0 END),0) AS inbox_only,
+      COALESCE(SUM(CASE WHEN delivery_state='accepted' THEN 1 ELSE 0 END),0) AS accepted,
+      COALESCE(SUM(CASE WHEN delivery_state='uncertain' THEN 1 ELSE 0 END),0) AS uncertain,
+      COALESCE(SUM(CASE WHEN delivery_state='failed' THEN 1 ELSE 0 END),0) AS failed,
+      COALESCE(SUM(CASE WHEN status='acted' THEN 1 ELSE 0 END),0) AS acted,
+      COALESCE(SUM(CASE WHEN notification_id IS NOT NULL THEN 1 ELSE 0 END),0) AS visible,
+      COALESCE(SUM(CASE WHEN notification_id IS NOT NULL AND kind='expiry_rescue' THEN 1 ELSE 0 END),0) AS expiry_visible,
+      COALESCE(SUM(CASE WHEN notification_id IS NOT NULL AND status<>'acted' AND datetime(expires_at)<=CURRENT_TIMESTAMP THEN 1 ELSE 0 END),0) AS expired_unhandled
+      FROM proactive_interventions WHERE datetime(decided_at)>=datetime(?)`).get(since) as Record<string,number>;
+    const outcomes = this.database.prepare("SELECT o.outcome_type AS kind,COUNT(*) AS n FROM proactive_intervention_outcomes o JOIN proactive_interventions i ON i.id=o.intervention_id AND i.user_id=o.user_id WHERE datetime(i.decided_at)>=datetime(?) GROUP BY o.outcome_type").all(since) as Array<{kind:string;n:number}>;
+    const timely = this.database.prepare("SELECT COUNT(DISTINCT i.id) AS timely_used FROM proactive_interventions i JOIN proactive_intervention_outcomes o ON o.intervention_id=i.id AND o.user_id=i.user_id WHERE i.kind='expiry_rescue' AND o.outcome_type='inventory_used' AND datetime(i.decided_at)>=datetime(?) AND datetime(o.occurred_at)>=datetime(i.decided_at) AND datetime(o.occurred_at)<=datetime(i.expires_at)").get(since) as { timely_used: number };
+    const actions = this.database.prepare("SELECT a.action AS kind,COUNT(*) AS n FROM proactive_intervention_actions a JOIN proactive_interventions i ON i.id=a.intervention_id AND i.user_id=a.user_id WHERE datetime(i.decided_at)>=datetime(?) GROUP BY a.action").all(since) as Array<{kind:string;n:number}>;
     return { activeDevices, enabledUsers, campaigns, automatic,
+      interventionMetrics: { ...decisions, ...timely, ...Object.fromEntries(outcomes.map(row => [row.kind,Number(row.n)])), ...Object.fromEntries(actions.map(row => [`action_${row.kind}`,Number(row.n)])) },
       eventCounts: Object.fromEntries(eventRows.map((row) => [row.eventType, Number(row.count)])) };
   }
 

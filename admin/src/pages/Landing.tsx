@@ -1,77 +1,39 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
+import { ArrowDown, ArrowRight, Menu, X } from 'lucide-react';
 import logoUrl from '../../../client/assets/logo.png';
 import api from '../services/api';
-import {
-  ArrowRight,
-  Bot,
-  Boxes,
-  Camera,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CirclePlay,
-  CookingPot,
-  Menu,
-  ScanLine,
-  ShieldCheck,
-  Sparkles,
-  Utensils,
-  X,
-} from 'lucide-react';
+import './Landing.css';
 
-const Github = ({ size = 15 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
-    <path d="M9 18c-4.51 2-5-2-7-2" />
-  </svg>
-);
-
-const features = [
-  { icon: ScanLine, title: '看见一餐的营养', description: '拍下餐盘，识别食物并整理热量与三大营养素。' },
-  { icon: Bot, title: '让 AI 知道你的厨房', description: '结合库存、目标与可用厨具，给出真正做得出来的建议。' },
-  { icon: Boxes, title: '让食材不再被遗忘', description: '把食材、保质期与日常饮食放进一个清晰的工作流。' },
+const appUrl = 'https://dietdigidose.top/app/';
+const betaUrl = 'mailto:adlinzhang@gmail.com?subject=%E9%A3%9F%E5%85%89%E7%83%99%E8%AE%B0%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7';
+const navigation = [
+  ['#daily', '一餐的日常'],
+  ['#inside', '看看食光'],
+  ['#start', '开始使用'],
+];
+const dailySteps = [
+  { time: '买菜回来', title: '先记下，家里有什么。', description: '把买来的食材放进保鲜库，记好数量和存放方式。下次买菜前，先看看家里还剩什么。', note: '食材库存 · 采购清单' },
+  { time: '准备晚饭', title: '用手边的食材，找一道想吃的菜。', description: '翻翻菜谱，看看原料和做法。缺的食材加入采购单，想做的菜留进烹饪队列。', note: '食谱查找 · 备料清单 · 烹饪队列' },
+  { time: '吃过以后', title: '今天这一餐，也留个记录。', description: '做了什么、吃了多少，分别记清楚。以后回头看，知道自己这些天是怎样吃饭的。', note: '饮食记录 · 营养参考' },
+];
+const productViews = [
+  { label: '备料清单', src: '/landing/recipe-preparation.png', alt: '真实备料清单：番茄、鸡蛋、小葱和调味料，包含用量与准备勾选项' },
+  { label: '食谱详情', src: '/landing/recipe-detail.png', alt: '真实食谱详情：番茄炒蛋、所需时间、营养估算与加入队列入口' },
 ];
 
-const steps = [
-  ['01', '记录你的食材与习惯', '快速录入库存、健康目标与常用厨具。'],
-  ['02', '获取可执行的建议', 'AI 优先匹配现有食材和设备，不止给一张漂亮食谱。'],
-  ['03', '把每一天变成反馈', '从一餐到一周，看见自己的营养节奏与变化。'],
-];
-
-const moments = [
-  {
-    label: '晚餐没想法',
-    title: '把现有食材，变成今晚能做的一餐。',
-    description: '告诉食光你有什么、想吃得怎样，它会先考虑库存和可用厨具，再给出可执行的建议。',
-    icon: Bot,
-    detail: ['基于库存优先匹配', '结合饮食目标调整', '标注所需时间与营养'],
-    accent: 'bg-[#E8F4EA] text-[#2B7A58]',
-  },
-  {
-    label: '记录太麻烦',
-    title: '一顿饭，留下真正有用的记录。',
-    description: '拍照、手动添加或从食材库选择。记录被整理成能回看的营养节奏，而不是待填的表格。',
-    icon: Camera,
-    detail: ['拍照辅助识别食物', '同步热量与营养信息', '保留每天真实饮食轨迹'],
-    accent: 'bg-[#FFF2DE] text-[#B98031]',
-  },
-  {
-    label: '食材总被忘记',
-    title: '让冰箱里的每一样东西被看见。',
-    description: '把库存、保质期和常用厨具放在一起。下一次打开 App，不必从“今天吃什么”重新开始。',
-    icon: Boxes,
-    detail: ['清晰管理现有食材', '减少重复购买与浪费', '建议优先消耗的组合'],
-    accent: 'bg-[#E9F0FB] text-[#5277B8]',
-  },
+const questions = [
+  ['现在可以在哪里使用？', '可以先打开网页版，在手机或电脑浏览器里查看公开食谱。保存库存、饮食记录等个人内容需要登录。移动端安装包仍在内测中，暂未在这里提供公开下载。'],
+  ['食语助手能帮我做什么？', '食语是食光里的 AI 辅助入口，可以尝试询问烹饪问题。自动配餐、工具执行等能力仍在验证中，回答需要结合实际情况核对；重要操作以页面确认结果为准。'],
+  ['食谱里的营养数字准确吗？', '营养信息是基于原料与用量的估算。资料不完整的食谱会标明待补全，不应当作精确测量或医疗建议。'],
+  ['怎么参加内测或反馈问题？', '可以通过下方邮件入口申请内测，告诉我们你的设备和最想试用的功能。使用中遇到的问题，也可以在 App 的反馈入口提交并查看回复。'],
 ];
 
 export default function Landing() {
-  const [activeMoment, setActiveMoment] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [activeProductView, setActiveProductView] = useState(0);
+  const productView = productViews[activeProductView];
   const [filing, setFiling] = useState({ enabled: false, text: '', url: '' });
-  const selectedMoment = moments[activeMoment];
-  const SelectedMomentIcon = selectedMoment.icon;
 
   useEffect(() => {
     let active = true;
@@ -82,174 +44,119 @@ export default function Landing() {
   }, []);
 
   useEffect(() => {
-    document.title = '食光烙记｜AI 饮食与厨房管理';
+    document.title = '食光烙记｜把日常，做成好好的一餐';
   }, []);
 
-  const closeMobileMenu = () => setMobileMenuOpen(false);
-
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#FCFBF7] text-[#21332A] selection:bg-[#2D6A4F] selection:text-white">
-      <header className="sticky top-0 z-40 border-b border-[#DDE8DF]/80 bg-[#FCFBF7]/85 backdrop-blur-xl">
-        <div className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-5 lg:px-8">
-          <Link to="/" className="flex items-center gap-3">
-            <img src={logoUrl} alt="食光烙记" className="h-10 w-10 object-contain" />
-            <div className="hidden sm:block">
-              <p className="text-base font-extrabold tracking-tight text-[#215E43]">食光烙记</p>
-              <p className="text-[10px] font-semibold tracking-[0.12em] text-[#7D8D82]">DIETDIGIDOSE</p>
-            </div>
+    <div className="landing min-h-screen">
+      <a className="landing-skip" href="#main-content">跳到正文</a>
+      <header className="landing-header">
+        <div className="landing-container flex items-center justify-between gap-4 py-5">
+          <Link to="/" className="flex items-center gap-2.5" aria-label="食光烙记首页">
+            <img src={logoUrl} alt="" width="38" height="38" />
+            <span className="landing-brand">食光烙记<small>把日子过进一餐一饭</small></span>
           </Link>
-
-          <nav className="hidden items-center gap-7 text-sm font-medium text-[#617267] md:flex">
-            <a href="#product" className="transition-colors hover:text-[#215E43]">产品能力</a>
-            <a href="#moments" className="transition-colors hover:text-[#215E43]">使用场景</a>
-            <a href="#how-it-works" className="transition-colors hover:text-[#215E43]">使用方式</a>
-            <a href="#beta" className="transition-colors hover:text-[#215E43]">内测计划</a>
+          <nav aria-label="主导航" className="hidden items-center gap-9 text-sm md:flex">
+            {navigation.map(([href, label]) => <a href={href} key={href}>{label}</a>)}
           </nav>
-
-          <div className="flex items-center gap-2">
-            <Link to="/login" className="hidden rounded-xl px-4 py-2 text-sm font-semibold text-[#446154] transition-colors hover:bg-[#EEF4EE] sm:block">管理后台</Link>
-            <a href="#beta" className="inline-flex items-center gap-2 rounded-xl bg-[#215E43] px-4 py-2.5 text-sm font-bold text-white shadow-[0_8px_20px_rgba(33,94,67,0.18)] transition hover:-translate-y-0.5 hover:bg-[#184D36]">申请内测 <ArrowRight size={15} /></a>
-            <button type="button" onClick={() => setMobileMenuOpen((open) => !open)} aria-expanded={mobileMenuOpen} aria-label={mobileMenuOpen ? '关闭导航菜单' : '打开导航菜单'} className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#D7E4D9] text-[#365344] md:hidden">
-              {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
+          <div className="flex items-center gap-4">
+            <a href={appUrl} className="landing-header-entry">打开食光 <ArrowRight size={16} aria-hidden="true" /></a>
+            <button type="button" className="landing-menu-button md:hidden" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} aria-expanded={mobileMenuOpen} aria-controls="mobile-navigation" aria-label={mobileMenuOpen ? '关闭导航菜单' : '打开导航菜单'}>
+              {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
           </div>
         </div>
-        {mobileMenuOpen ? (
-          <nav className="border-t border-[#E5ECE5] bg-[#FCFBF7] px-5 py-4 md:hidden">
-            <div className="mx-auto grid max-w-7xl gap-1 text-sm font-semibold text-[#4F6759]">
-              <a href="#product" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 hover:bg-[#EEF4EE]">产品能力</a>
-              <a href="#moments" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 hover:bg-[#EEF4EE]">使用场景</a>
-              <a href="#how-it-works" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 hover:bg-[#EEF4EE]">使用方式</a>
-              <a href="#beta" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 hover:bg-[#EEF4EE]">内测计划</a>
-              <Link to="/login" onClick={closeMobileMenu} className="rounded-xl px-3 py-2.5 text-[#215E43] hover:bg-[#EEF4EE]">管理后台</Link>
-            </div>
-          </nav>
-        ) : null}
+        {mobileMenuOpen && <nav id="mobile-navigation" aria-label="手机导航" className="landing-container flex flex-col gap-1 pb-4 md:hidden">
+          {navigation.map(([href, label]) => <a className="py-3" href={href} key={href} onClick={() => setMobileMenuOpen(false)}>{label}</a>)}
+        </nav>}
       </header>
 
-      <section className="relative">
-        <div className="pointer-events-none absolute left-1/2 top-0 h-[560px] w-[900px] -translate-x-1/2 rounded-full bg-[radial-gradient(ellipse_at_center,rgba(190,220,196,0.54),rgba(252,251,247,0)_68%)]" />
-        <div className="relative mx-auto grid max-w-7xl items-center gap-14 px-5 pb-20 pt-20 lg:grid-cols-[1.02fr_.98fr] lg:px-8 lg:pb-28 lg:pt-28">
-          <div className="max-w-2xl">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#BED8C4] bg-[#F1F8F1] px-3 py-1.5 text-xs font-bold text-[#215E43]">
-              <Sparkles size={13} /> 现已开放小范围内测
+      <main id="main-content">
+        <section className="landing-container landing-hero" aria-labelledby="hero-title">
+          <div className="landing-hero-copy">
+            <p className="landing-eyebrow"><span />给认真吃饭的每一天</p>
+            <h1 id="hero-title">把手边的食材，<br />做成<span>今天的一餐。</span></h1>
+            <p className="landing-intro">记下买来的食材，找到能做的菜，<br className="hidden sm:block" />也留住每天吃过的饭。</p>
+            <div className="mt-8 flex flex-wrap items-center gap-x-7 gap-y-5">
+              <a href={appUrl} className="landing-button">打开网页版 <ArrowRight size={18} aria-hidden="true" /></a>
+              <a href="#daily" className="landing-text-link">看看怎么用 <ArrowDown size={16} aria-hidden="true" /></a>
             </div>
-            <h1 className="mt-7 text-[42px] font-extrabold leading-[1.11] tracking-[-0.055em] text-[#1F3127] sm:text-6xl lg:text-[66px]">
-              好好吃饭，<br />
-              <span className="text-[#2B7A58]">不必靠意志力。</span>
-            </h1>
-            <p className="mt-7 max-w-xl text-base leading-8 text-[#65766A] sm:text-lg">
-              食光烙记将食材库存、厨具、饮食记录和 AI 建议连接成一个轻量的日常系统，帮你在每一餐做出更适合自己的选择。
-            </p>
-            <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-              <a href="#beta" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#215E43] px-6 py-3.5 text-sm font-bold text-white shadow-[0_12px_28px_rgba(33,94,67,0.22)] transition hover:-translate-y-0.5 hover:bg-[#184D36]">申请加入内测 <ArrowRight size={17} /></a>
-              <a href="#product" className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#D7E4D9] bg-white px-6 py-3.5 text-sm font-bold text-[#365344] transition hover:border-[#97BCA1] hover:bg-[#F8FBF8]"><CirclePlay size={17} className="text-[#2B7A58]" /> 先看看如何工作</a>
-            </div>
-            <p className="mt-4 text-xs font-medium text-[#7A897E]">还没有内测资格？<a href="#beta" className="ml-1 text-[#215E43] underline decoration-[#9FC5A7] underline-offset-4 transition-colors hover:text-[#184D36]">申请加入内测</a></p>
-            <div className="mt-9 flex flex-wrap gap-x-5 gap-y-2 text-xs font-medium text-[#738177]">
-              {['饮食记录', '食材管理', 'AI 烹饪助手'].map((item) => <span key={item} className="flex items-center gap-1.5"><Check size={14} className="text-[#2B7A58]" />{item}</span>)}
+            <p className="landing-access-note">内测进行中 · 可先浏览食谱，登录后保存个人记录</p>
+          </div>
+          <figure className="landing-dinner">
+            <div className="landing-photo-wrap"><img src="/landing/meal-bowl.png" alt="自然光下的洋葱肥牛饭，盛在陶碗里，旁边放着筷子" width="600" height="365" fetchPriority="high" /></div>
+            <figcaption><div><span className="landing-photo-label">餐桌一角</span><strong>洋葱肥牛饭</strong></div><p>一碗热饭，<br />把今天安顿好。</p></figcaption>
+          </figure>
+        </section>
+
+        <div className="landing-container landing-section-rule"><span>从厨房，到餐桌</span><span>食材 / 菜谱 / 饮食记录</span></div>
+
+        <section id="daily" className="landing-container landing-daily" aria-labelledby="daily-title">
+          <div className="landing-section-heading">
+            <p className="landing-eyebrow">01 / 一餐的日常</p>
+            <h2 id="daily-title">晚饭这件小事，<br />从打开冰箱开始。</h2>
+            <p>不一定要做一桌大菜。<br />把手边的食材用好，一顿家常饭就很好。</p>
+          </div>
+          <ol className="landing-steps">
+            {dailySteps.map((step, index) => <li key={step.time}>
+              <span className="landing-step-number">0{index + 1}</span>
+              <div><p className="landing-step-time">{step.time}</p><h3>{step.title}</h3><p className="landing-step-description">{step.description}</p><p className="landing-step-note">{step.note}</p></div>
+            </li>)}
+          </ol>
+        </section>
+
+        <section id="inside" className="landing-inside" aria-labelledby="inside-title">
+          <div className="landing-container landing-product-grid">
+            <figure className="landing-product-figure">
+              <div className="landing-product-switch" role="group" aria-label="选择产品截图">
+                {productViews.map((view, index) => <button key={view.src} type="button" aria-pressed={activeProductView === index} onClick={() => setActiveProductView(index)}>{view.label}</button>)}
+              </div>
+              <a className="landing-screenshot-link" href={productView.src} target="_blank" rel="noreferrer" aria-label={`查看${productView.label}大图（在新标签页打开）`}>
+                <img src={productView.src} alt={productView.alt} width="390" height="844" loading="lazy" />
+              </a>
+              <figcaption>网页版实截 · {productView.label}<br /><span>点击图片，查看大图 ↗</span></figcaption>
+            </figure>
+            <div className="landing-product-copy">
+              <p className="landing-eyebrow">02 / 看看食光</p>
+              <h2 id="inside-title">先看看做法，<br />再决定今晚吃什么。</h2>
+              <p className="landing-product-intro">从一道熟悉的番茄炒蛋开始。原料、步骤和饮食记录，都有可以慢慢翻看的地方。</p>
+              <dl className="landing-product-notes">
+                <div><dt>备料时，有清单</dt><dd>查看原料与用量，逐项标记已经备好的食材。</dd></div>
+                <div><dt>想做的，先留着</dt><dd>加入烹饪队列，等准备好再开始。</dd></div>
+                <div><dt>营养数字，有说明</dt><dd>区分估算与待补全信息，查看称量条件和来源。</dd></div>
+              </dl>
+              <a href={appUrl} className="landing-text-link">去食光里翻翻菜谱 <ArrowRight size={18} aria-hidden="true" /></a>
             </div>
           </div>
+        </section>
 
-          <div className="relative mx-auto w-full max-w-[590px]">
-            <div className="absolute -inset-6 rounded-[42px] bg-[#D8EBDD]/55 blur-2xl" />
-            <div className="relative overflow-hidden rounded-[28px] border border-[#D6E4D8] bg-[#FEFEFC] p-3 shadow-[0_30px_80px_rgba(43,79,57,0.16)] sm:p-4">
-              <div className="flex items-center gap-1.5 border-b border-[#E7EEE8] px-2 pb-3">
-                <span className="h-2 w-2 rounded-full bg-[#ED9E90]" /><span className="h-2 w-2 rounded-full bg-[#EBCB83]" /><span className="h-2 w-2 rounded-full bg-[#8CC6A0]" />
-                <div className="ml-3 rounded-md bg-[#F1F5F1] px-2.5 py-1 text-[9px] font-semibold text-[#809086]">今天的食光</div>
-              </div>
-              <div className="grid gap-3 p-2 pt-4 sm:grid-cols-[.82fr_1.18fr]">
-                <div className="rounded-2xl bg-[#F0F7F1] p-4">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#6B9177]">今日目标</p>
-                  <p className="mt-3 text-2xl font-extrabold tracking-tight text-[#214635]">1,280 <span className="text-xs font-semibold text-[#688174]">/ 1,800 kcal</span></p>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#D9E9DB]"><div className="h-full w-[71%] rounded-full bg-[#2B7A58]" /></div>
-                  <div className="mt-5 space-y-2.5">
-                    {[['蛋白质', '68g', 'bg-[#6CA6DC]'], ['碳水', '134g', 'bg-[#E6B76A]'], ['脂肪', '42g', 'bg-[#D98978]']].map(([label, value, color]) => <div className="flex items-center justify-between text-[10px]" key={label}><span className="flex items-center gap-1.5 text-[#6E7E73]"><i className={`h-1.5 w-1.5 rounded-full ${color}`} />{label}</span><b className="text-[#395342]">{value}</b></div>)}
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-[#E6EDE7] bg-white p-4">
-                  <div className="flex items-center justify-between"><div className="flex items-center gap-2"><div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#E9F4EC]"><Bot size={14} className="text-[#2B7A58]" /></div><div><p className="text-[11px] font-extrabold text-[#294535]">今日晚餐建议</p><p className="text-[9px] text-[#809086]">基于你的库存与装备</p></div></div><span className="rounded-full bg-[#FFF3D9] px-2 py-1 text-[9px] font-bold text-[#B68230]">18 min</span></div>
-                  <div className="mt-4 rounded-xl bg-[#FAF7EF] p-3"><div className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#DFEFE3]"><Utensils size={17} className="text-[#2B7A58]" /></div><div><p className="text-xs font-extrabold text-[#334C3B]">菌菇鸡胸暖沙拉</p><p className="mt-1 text-[9px] text-[#77877C]">462 kcal · 蛋白质 38g</p></div></div></div>
-                  <div className="mt-3 flex flex-wrap gap-1.5">{['鸡胸肉', '口蘑', '平底锅'].map((item) => <span key={item} className="flex items-center gap-1 rounded-md bg-[#F2F7F3] px-2 py-1 text-[9px] font-semibold text-[#4B7657]"><Check size={11} aria-hidden="true" />{item}</span>)}</div>
-                  <button className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#215E43] py-2.5 text-[10px] font-bold text-white">查看做法 <ChevronRight size={13} /></button>
-                </div>
-              </div>
-              <div className="mx-2 mt-1 flex items-center justify-between rounded-xl border border-[#E8EFE9] px-3 py-2.5 text-[10px] text-[#67786C]"><span className="flex items-center gap-1.5"><Camera size={12} className="text-[#2B7A58]" />拍照记录这顿饭</span><span className="font-bold text-[#2B7A58]">开始识别</span></div>
-            </div>
-            <div className="absolute -bottom-5 -left-5 hidden rounded-2xl border border-[#E1ECE3] bg-white p-3.5 shadow-lg sm:block"><div className="flex items-center gap-2.5"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#FFF3DD]"><CookingPot size={16} className="text-[#B98031]" /></div><div><p className="text-[10px] font-bold text-[#334C3B]">装备匹配完成</p><p className="mt-0.5 text-[9px] text-[#7D8C82]">已有 3 件可用厨具</p></div></div></div>
+        <section id="start" className="landing-container landing-start" aria-labelledby="start-title">
+          <div className="landing-section-heading">
+            <p className="landing-eyebrow">03 / 开始使用</p>
+            <h2 id="start-title">从下一顿饭，<br />试着用起来。</h2>
+            <p>食光烙记正在内测。<br />欢迎来用，也欢迎告诉我们哪里还不顺手。</p>
+            <div className="mt-7"><a href={appUrl} className="landing-button">打开网页版 <ArrowRight size={18} aria-hidden="true" /></a></div>
+            <a href={betaUrl} className="landing-email-link">想试用移动端？邮件申请内测 ↗</a>
+          </div>
+          <div className="landing-faq">
+            {questions.map(([question, answer]) => <details key={question}><summary>{question}<span aria-hidden="true">+</span></summary><p>{answer}</p></details>)}
+          </div>
+        </section>
+        <div className="landing-container landing-endnote"><span>食光烙记</span><p>好好吃饭，慢慢记录。</p><a href="#hero-title" aria-label="回到首页顶部">回到顶部 ↑</a></div>
+      </main>
+
+      <footer className="landing-footer">
+        <div className="landing-container">
+          <div className="flex flex-col justify-between gap-5 sm:flex-row">
+            <p>© {new Date().getFullYear()} 食光烙记 · DietDigiDose</p>
+            <nav aria-label="页脚导航" className="flex flex-wrap gap-x-6 gap-y-3"><Link to="/privacy">隐私政策</Link><Link to="/terms">用户协议</Link><a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noreferrer">开源仓库 ↗</a><Link to="/login">管理后台</Link></nav>
+          </div>
+          <div className="mt-5 flex flex-wrap justify-between gap-3">
+            {filing.enabled && filing.text ? (filing.url ? <a href={filing.url} target="_blank" rel="noreferrer">{filing.text}</a> : <span>{filing.text}</span>) : <span />}
+            <p>餐食摄影：<a href="https://github.com/Anduin2017/HowToCook" target="_blank" rel="noreferrer">HowToCook 社区</a> · The Unlicense</p>
           </div>
         </div>
-        <a href="#product" aria-label="继续向下了解产品" className="absolute bottom-4 left-1/2 hidden -translate-x-1/2 flex-col items-center gap-1 text-[11px] font-semibold tracking-wide text-[#668073] transition hover:text-[#215E43] lg:flex">
-          继续了解<ChevronDown size={17} className="animate-bounce" />
-        </a>
-      </section>
-
-      <section id="product" className="scroll-mt-20 border-y border-[#E5ECE5] bg-white py-20 sm:py-28">
-        <div className="mx-auto max-w-7xl px-5 lg:px-8">
-          <div className="max-w-2xl"><p className="text-xs font-bold tracking-[0.16em] text-[#2B7A58]">更从容的健康日常</p><h2 className="mt-4 text-3xl font-extrabold tracking-[-0.035em] text-[#21332A] sm:text-4xl">不是另一个打卡工具，<br />而是你的饮食操作系统。</h2></div>
-          <div className="mt-12 grid gap-4 md:grid-cols-3">
-            {features.map(({ icon: Icon, title, description }, index) => <article key={title} className={`group rounded-[24px] border p-6 transition duration-300 hover:-translate-y-1 hover:shadow-xl ${index === 1 ? 'border-[#2B7A58] bg-[#215E43] text-white shadow-[0_16px_35px_rgba(33,94,67,0.18)]' : 'border-[#E2EBE3] bg-[#FCFDFB] text-[#21332A]'}`}><div className={`flex h-11 w-11 items-center justify-center rounded-xl ${index === 1 ? 'bg-white/15 text-white' : 'bg-[#EAF4EC] text-[#2B7A58]'}`}><Icon size={20} /></div><h3 className="mt-8 text-lg font-extrabold">{title}</h3><p className={`mt-3 text-sm leading-6 ${index === 1 ? 'text-[#D3E6D7]' : 'text-[#6E7E73]'}`}>{description}</p><div className={`mt-8 flex items-center gap-1 text-xs font-bold ${index === 1 ? 'text-white' : 'text-[#2B7A58]'}`}>了解更多 <ArrowRight size={14} className="transition-transform group-hover:translate-x-1" /></div></article>)}
-          </div>
-        </div>
-      </section>
-
-      <section id="moments" className="scroll-mt-20 bg-[#183F2D] px-5 py-20 text-white sm:py-28">
-        <div className="mx-auto max-w-7xl">
-          <div className="max-w-2xl">
-            <p className="text-xs font-bold tracking-[0.16em] text-[#A8D4B0]">为真实的每一天设计</p>
-            <h2 className="mt-4 text-3xl font-extrabold tracking-[-0.04em] sm:text-4xl">不是要求你更自律，<br />而是让选择更轻松。</h2>
-            <p className="mt-5 max-w-xl text-sm leading-7 text-[#BFD3C4]">从冰箱里剩下什么，到今天到底吃了什么，食光把琐碎信息放回它该在的位置。</p>
-          </div>
-
-          <div className="mt-12 grid gap-7 lg:grid-cols-[.85fr_1.15fr] lg:items-stretch">
-            <div className="space-y-2">
-              {moments.map((moment, index) => {
-                const MomentIcon = moment.icon;
-                const isActive = index === activeMoment;
-                return (
-                  <button
-                    key={moment.label}
-                    type="button"
-                    aria-pressed={isActive}
-                    onClick={() => setActiveMoment(index)}
-                    className={`group flex w-full items-center gap-4 rounded-2xl border p-4 text-left transition-all ${isActive ? 'border-white/20 bg-white text-[#21332A] shadow-[0_16px_32px_rgba(0,0,0,0.16)]' : 'border-transparent text-[#C3D5C7] hover:border-white/10 hover:bg-white/5'}`}
-                  >
-                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${isActive ? moment.accent : 'bg-white/10 text-white'}`}><MomentIcon size={18} aria-hidden="true" /></span>
-                    <span className="flex-1"><span className="block text-sm font-bold">{moment.label}</span><span className={`mt-1 block text-xs ${isActive ? 'text-[#728277]' : 'text-[#9EB5A4]'}`}>{moment.title}</span></span>
-                    <ChevronRight size={17} className={`transition-transform ${isActive ? 'text-[#2B7A58] translate-x-0.5' : 'text-[#8AA891]'}`} aria-hidden="true" />
-                  </button>
-                );
-              })}
-            </div>
-
-            <article className="relative overflow-hidden rounded-[28px] border border-white/10 bg-[#24573F] p-6 sm:p-8">
-              <div className="absolute -right-10 -top-12 h-44 w-44 rounded-full border border-[#8CC6A0]/20" />
-              <div className="absolute right-12 top-14 h-24 w-24 rounded-full bg-[#8CC6A0]/10 blur-2xl" />
-              <div className="relative flex h-full flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.18em] text-[#B7D4BE]"><span>食光 App / 场景 {String(activeMoment + 1).padStart(2, '0')}</span><span className="h-px w-12 bg-white/20" /></div>
-                  <span className={`mt-10 flex h-12 w-12 items-center justify-center rounded-2xl bg-white ${selectedMoment.accent}`}><SelectedMomentIcon size={22} aria-hidden="true" /></span>
-                  <h3 className="mt-6 max-w-lg text-2xl font-extrabold leading-tight tracking-[-0.03em] sm:text-3xl">{selectedMoment.title}</h3>
-                  <p className="mt-4 max-w-lg text-sm leading-7 text-[#D0E0D3]">{selectedMoment.description}</p>
-                </div>
-                <div className="mt-9 grid gap-2 sm:grid-cols-3">
-                  {selectedMoment.detail.map((detail, index) => <div key={detail} className="rounded-xl border border-white/10 bg-black/10 p-3"><span className="text-[10px] font-bold tracking-[0.14em] text-[#A7C8AE]">0{index + 1}</span><p className="mt-2 text-xs font-semibold leading-5 text-white">{detail}</p></div>)}
-                </div>
-              </div>
-            </article>
-          </div>
-        </div>
-      </section>
-
-      <section id="how-it-works" className="scroll-mt-20 bg-[#F4F8F3] py-20 sm:py-28">
-        <div className="mx-auto grid max-w-7xl gap-12 px-5 lg:grid-cols-[.82fr_1.18fr] lg:px-8"><div><p className="text-xs font-bold tracking-[0.16em] text-[#2B7A58]">使用方式</p><h2 className="mt-4 text-3xl font-extrabold tracking-[-0.035em] text-[#21332A] sm:text-4xl">从“今天吃什么”，到可持续的日常。</h2><p className="mt-5 max-w-md text-sm leading-7 text-[#68796D]">少一些记录压力，多一点可用的反馈。每个模块都服务于下一顿更轻松的选择。</p></div><div className="divide-y divide-[#DCE7DE] border-y border-[#DCE7DE]">{steps.map(([number, title, description]) => <div key={number} className="grid grid-cols-[56px_1fr_auto] gap-3 py-6 sm:grid-cols-[72px_1fr_auto] sm:py-7"><span className="text-sm font-extrabold text-[#78A587]">{number}</span><div><h3 className="font-extrabold text-[#294535]">{title}</h3><p className="mt-2 text-sm leading-6 text-[#718175]">{description}</p></div><ChevronRight className="mt-1 h-5 w-5 text-[#97AA9B]" /></div>)}</div></div>
-      </section>
-
-      <section id="beta" className="scroll-mt-20 px-5 py-20 sm:py-28">
-        <div className="mx-auto max-w-7xl overflow-hidden rounded-[32px] bg-[#215E43] px-6 py-12 text-center text-white shadow-[0_25px_60px_rgba(33,94,67,0.2)] sm:px-12 sm:py-16"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/12"><Sparkles size={21} /></div><h2 className="mt-6 text-3xl font-extrabold tracking-[-0.04em] sm:text-4xl">从今天这一餐开始</h2><p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-[#D5E7D8]">欢迎加入内测，和我们一起把食光烙记打磨得更贴近日常；管理人员可从独立入口进入控制台。</p><div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row"><a href="mailto:adlinzhang@gmail.com?subject=%E9%A3%9F%E5%85%89%E7%83%99%E8%AE%B0%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7" className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-extrabold text-[#215E43] transition hover:bg-[#EFF7F0]"><Sparkles size={15} /> 申请内测名额</a><Link to="/login" className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/25 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/10">进入管理后台 <ArrowRight size={16} /></Link></div></div>
-      </section>
-
-      <footer className="border-t border-[#E2EAE3] px-5 py-7"><div className="mx-auto flex max-w-7xl flex-col gap-3 text-xs text-[#7A897E] sm:flex-row sm:items-center sm:justify-between"><div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4"><span>© 2026 食光烙记 · DietDigiDose</span>{filing.enabled && filing.text ? (filing.url ? <a href={filing.url} target="_blank" rel="noreferrer" className="font-semibold text-[#4F6D59] transition hover:text-[#215E43]">{filing.text}</a> : <span>{filing.text}</span>) : null}</div><div className="flex flex-wrap items-center gap-x-5 gap-y-2"><Link to="/privacy" className="font-semibold text-[#4F6D59] transition hover:text-[#215E43]">隐私政策</Link><Link to="/terms" className="font-semibold text-[#4F6D59] transition hover:text-[#215E43]">用户协议</Link><a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 font-semibold text-[#4F6D59] transition hover:text-[#215E43]"><Github size={13} /> GitHub 开源仓库</a><span className="flex items-center gap-1.5"><ShieldCheck size={13} className="text-[#2B7A58]" /> 内测环境 · 数据安全优先</span></div></div></footer>
-    </main>
+      </footer>
+    </div>
   );
 }

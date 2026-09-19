@@ -1,5 +1,9 @@
+import { ConfirmDialog } from '../components/admin/ConfirmDialog';
+import { PageHeader } from '../components/admin/PageHeader';
+import { DialogFrame } from '../components/admin/DialogFrame';
+import { useQueryState } from '../hooks/useQueryState';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { Search, User, ShieldAlert, X, AlertCircle, BadgeCheck, Users as UsersIcon, Mail, Phone, Lock, Sparkles, UserX, UserCheck, HeartPulse, ShieldCheck, Pill, CookingPot, Target, Activity, RefreshCw } from 'lucide-react';
+import { Search, User, ShieldAlert, X, BadgeCheck, Users as UsersIcon, Mail, Phone, Lock, Sparkles, UserX, UserCheck, HeartPulse, ShieldCheck, Pill, CookingPot, Target, Activity, RefreshCw } from 'lucide-react';
 import api from '../services/api';
 import { cn } from '../utils/cn';
 import { getAvatarUrl } from '../utils/avatar';
@@ -69,11 +73,15 @@ interface AdminHealthProfileResponse {
 }
 
 export default function Users() {
+  const [accountSaving,setAccountSaving] = useState(false);
+  const accountBusy = useRef(false);
   const [users, setUsers] = useState<UserData[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'user' | 'expert' | 'disabled'>('all');
-  
+  const [searchQuery, setSearchQuery] = useQueryState<string>('q', '');
+  const [roleFilter, setRoleFilter] = useQueryState<'all' | 'admin' | 'user' | 'expert' | 'disabled'>('role', 'all', ["all", "admin", "user", "expert", "disabled"]);
+
+  const [detailTab, setDetailTab] = useState<'basic' | 'level' | 'health' | 'account'>('basic');
+  const [loadError, setLoadError] = useState('');
   const [selectedUser, setSelectedUser] = useState<UserData | null>(null);
   const [credentialIdentifier, setCredentialIdentifier] = useState('');
   const [resetPassword, setResetPassword] = useState('');
@@ -87,7 +95,7 @@ export default function Users() {
   const [healthProfileLoading, setHealthProfileLoading] = useState(false);
   const [healthProfileError, setHealthProfileError] = useState('');
   const healthProfileRequestSequence = useRef(0);
-  
+
   const [confirmRoleModal, setConfirmRoleModal] = useState<{
     isOpen: boolean;
     userId: number;
@@ -108,12 +116,12 @@ export default function Users() {
 
   const fetchUsers = async (cursor?: string) => {
     try {
-      setLoading(true);
+      setLoading(true); setLoadError('');
       const res = await api.get('/admin/users', { params: { pageSize: 50, cursor } });
       setUsers(current => cursor ? [...current, ...res.data.items.filter((item: UserData) => !current.some(existing => existing.id === item.id))] : res.data.items);
       setNextCursor(res.data.nextCursor);
-    } catch (err) {
-      console.error('Error fetching users:', err);
+    } catch {
+      setLoadError('读取用户失败，请重试。');
     } finally {
       setLoading(false);
     }
@@ -121,6 +129,8 @@ export default function Users() {
 
   const handleToggleRole = async (id: number, currentRole: string) => {
     const newRole = currentRole === 'admin' ? 'user' : 'admin';
+    if (accountBusy.current) return;
+    accountBusy.current = true; setAccountSaving(true);
     try {
       await api.put(`/admin/users/${id}/role`, { role: newRole });
       setUsers(users.map(u => u.id === id ? { ...u, role: newRole } : u));
@@ -131,7 +141,7 @@ export default function Users() {
     } catch (err: any) {
       const msg = err.response?.data?.error || '操作失败';
       alert(msg);
-    }
+    } finally { accountBusy.current = false; setAccountSaving(false); }
   };
 
   const handleToggleExpert = async (id: number, currentValue: boolean) => {
@@ -146,6 +156,8 @@ export default function Users() {
   };
 
   const handleToggleDisabled = async (id: number, currentDisabled: boolean) => {
+    if (accountBusy.current) return;
+    accountBusy.current = true; setAccountSaving(true);
     try {
       const nextDisabled = !currentDisabled;
       await api.put(`/admin/users/${id}/status`, { is_disabled: nextDisabled });
@@ -157,7 +169,7 @@ export default function Users() {
     } catch (err: any) {
       const msg = err.response?.data?.error || '更新账号状态失败';
       alert(msg);
-    }
+    } finally { accountBusy.current = false; setAccountSaving(false); }
   };
 
   const fetchHealthProfileDetail = async (userId: number) => {
@@ -184,7 +196,8 @@ export default function Users() {
     setSelectedUser(user);
     setHealthProfileDetail(null);
     setHealthProfileError('');
-    void fetchHealthProfileDetail(user.id);
+    setDetailTab('basic');
+    healthProfileRequestSequence.current++;
     setCredentialIdentifier(user.email || user.phone || user.username);
     setResetPassword('');
     setCredentialsMessage('');
@@ -275,32 +288,14 @@ export default function Users() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-text-main">用户管理</h1>
-          <p className="text-xs text-text-muted mt-1">管理系统注册用户、停用/启用账号、专业认证及登录凭证</p>
-        </div>
-
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          <div className="relative flex-1 sm:w-72">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted w-4 h-4" />
-            <input 
-              type="text" 
-              placeholder="搜索用户名、邮箱或手机号..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-white border border-gray-100 shadow-sm rounded-xl text-sm focus:ring-2 focus:ring-primary/20 outline-none"
-            />
-          </div>
-        </div>
-      </div>
-
+      {loadError && <div className="admin-error" role="alert">{loadError}<button className="admin-button ml-3" onClick={()=>void fetchUsers()}>重试</button></div>}
+      <PageHeader title="用户管理" description="管理用户身份、账号状态与成长等级。健康档案仅在详情中按需读取。"/>
+      <div className="admin-filter-bar"><Search size={17}/><input aria-label="搜索已加载用户" placeholder="搜索已加载记录：用户名、邮箱或手机号" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} className="flex-1 min-w-0 border px-3"/><button className="admin-button" disabled={loading} onClick={()=>void fetchUsers()}>刷新</button></div>
       {/* Metric Cards Row */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
           <div>
-            <p className="text-xs font-medium text-text-muted">总注册用户</p>
+            <p className="text-xs font-medium text-text-muted">已加载用户</p>
             <p className="mt-1.5 text-2xl font-bold text-text-main">{loading ? '—' : userStats.total}</p>
           </div>
           <div className="rounded-2xl bg-primary/10 p-3 text-primary">
@@ -309,7 +304,7 @@ export default function Users() {
         </div>
         <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
           <div>
-            <p className="text-xs font-medium text-text-muted">专业认证用户</p>
+            <p className="text-xs font-medium text-text-muted">已加载专业用户</p>
             <p className="mt-1.5 text-2xl font-bold text-green-700">{loading ? '—' : userStats.experts}</p>
           </div>
           <div className="rounded-2xl bg-green-50 p-3 text-green-700">
@@ -327,7 +322,7 @@ export default function Users() {
         </div>
         <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
           <div>
-            <p className="text-xs font-medium text-text-muted">已停用账号</p>
+            <p className="text-xs font-medium text-text-muted">已加载停用账号</p>
             <p className="mt-1.5 text-2xl font-bold text-red-600">{loading ? '—' : userStats.disabled}</p>
           </div>
           <div className="rounded-2xl bg-red-50 p-3 text-red-600">
@@ -351,8 +346,8 @@ export default function Users() {
               onClick={() => setRoleFilter(tab.id as any)}
               className={cn(
                 "px-4 py-2 rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 whitespace-nowrap",
-                roleFilter === tab.id 
-                  ? "bg-primary text-white shadow-sm" 
+                roleFilter === tab.id
+                  ? "bg-primary text-white shadow-sm"
                   : "bg-white text-text-muted hover:text-text-main hover:bg-gray-50 border border-gray-100"
               )}
             >
@@ -385,7 +380,7 @@ export default function Users() {
         ) : (
           <>
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[920px]">
+            <table className="w-full text-left border-collapse min-w-[760px]">
               <thead>
                 <tr className="text-text-muted text-xs border-b border-background-alt">
                   <th className="pb-4 font-medium w-16 text-center">ID</th>
@@ -393,9 +388,9 @@ export default function Users() {
                   <th className="pb-4 font-medium px-4">联系方式</th>
                   <th className="pb-4 font-medium px-4">角色</th>
                   <th className="pb-4 font-medium px-4">状态</th>
-                  <th className="pb-4 font-medium px-4">健康档案</th>
-                  <th className="pb-4 font-medium px-4">专业认证</th>
-                  <th className="pb-4 font-medium px-4">成长等级</th>
+
+
+
                   <th className="pb-4 font-medium px-4">注册时间</th>
                   <th className="pb-4 font-medium text-right pl-4">操作</th>
                 </tr>
@@ -404,8 +399,8 @@ export default function Users() {
                 {filteredUsers.map(user => {
                   const isDisabled = Boolean(user.is_disabled);
                   return (
-                    <tr 
-                      key={user.id} 
+                    <tr
+                      key={user.id}
                       className={`border-b border-background-alt/50 last:border-0 hover:bg-background-alt/30 transition-colors cursor-pointer text-sm ${
                         isDisabled ? 'opacity-70 bg-red-50/20' : ''
                       }`}
@@ -420,7 +415,7 @@ export default function Users() {
                             className="w-10 h-10 rounded-full object-cover shrink-0"
                           />
                           <div className="min-w-0">
-                            <div className="font-semibold text-text-main truncate">{user.username}</div>
+                            <button type="button" className="font-semibold text-primary truncate" onClick={event=>{event.stopPropagation();openUserDetail(user);}}>{user.username}</button>
                             <div className="text-xs text-text-muted truncate">@{user.username}</div>
                           </div>
                         </div>
@@ -443,8 +438,8 @@ export default function Users() {
                       <td className="py-4 px-4">
                         <span className={cn(
                           "inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium",
-                          user.role === 'admin' 
-                            ? "bg-secondary/10 text-secondary" 
+                          user.role === 'admin'
+                            ? "bg-secondary/10 text-secondary"
                             : "bg-background-alt text-text-muted"
                         )}>
                           {user.role === 'admin' ? <ShieldAlert className="w-3 h-3" /> : <User className="w-3 h-3" />}
@@ -462,32 +457,9 @@ export default function Users() {
                           </span>
                         )}
                       </td>
-                      <td className="py-4 px-4">
-                        {user.has_health_profile ? (
-                          <span className="inline-flex items-center gap-1 rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700"><ShieldCheck className="h-3 w-3" />已填写</span>
-                        ) : (
-                          <span className="inline-flex rounded-lg bg-background-alt px-2.5 py-1 text-xs text-text-muted">未填写</span>
-                        )}
-                      </td>
-                      <td className="py-4 px-4">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleToggleExpert(user.id, Boolean(user.is_verified_expert));
-                          }}
-                          className={cn(
-                            "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
-                            user.is_verified_expert
-                              ? "bg-green-50 text-green-700 hover:bg-green-100"
-                              : "bg-background-alt text-text-muted hover:text-primary"
-                          )}
-                        >
-                          <BadgeCheck className="h-3.5 w-3.5" />
-                          {user.is_verified_expert ? '已认证' : '未认证'}
-                        </button>
-                      </td>
-                      <td className="py-4 px-4"><span className="inline-flex rounded-lg bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">V{user.level?.level ?? 1} · {user.level?.xp ?? 0} XP</span></td>
+
+
+
                       <td className="py-4 px-4 text-xs text-text-muted">
                         {new Date(user.created_at).toLocaleDateString()}
                       </td>
@@ -526,19 +498,19 @@ export default function Users() {
 
       {/* User Detail Side Panel */}
       {selectedUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center sm:justify-end bg-black/40 backdrop-blur-sm p-4 sm:p-0">
-          <div 
+        <DialogFrame onClose={()=>setSelectedUser(null)} dirty={Boolean(xpDelta || xpReason || resetPassword || credentialIdentifier !== (selectedUser.email || selectedUser.phone || selectedUser.username))} busy={credentialsSaving || xpSaving} className="fixed inset-0 z-50 flex items-center justify-center sm:justify-end bg-black/40 backdrop-blur-sm p-4 sm:p-0">
+          <div
             className="bg-white w-full sm:w-[480px] sm:h-screen sm:rounded-none rounded-3xl p-5 sm:p-6 shadow-xl overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <button 
+            <button aria-label="关闭"
               type="button"
               onClick={() => setSelectedUser(null)}
               className="absolute right-5 top-5 p-2 rounded-full hover:bg-background-alt text-text-muted transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
-            
+
             <div className="mt-2 flex items-center gap-4 pr-10 text-left">
               <img
                 src={getAvatarUrl(selectedUser.avatar_url, selectedUser.id)}
@@ -569,8 +541,9 @@ export default function Users() {
               </div>
             </div>
 
-            <div className="mt-6 space-y-4">
-              <div className="rounded-2xl border border-background-alt bg-background/60 p-3.5 flex items-center justify-between">
+            <div className="admin-tabs mt-6" role="tablist" aria-label="用户详情分区">{([{id:'basic',label:'基本信息'},{id:'level',label:'成长等级'},{id:'health',label:'健康与饮食档案'},{id:'account',label:'账号操作'}] as const).map(tab=><button key={tab.id} role="tab" aria-selected={detailTab===tab.id} onClick={()=>{setDetailTab(tab.id);if(tab.id==='health' && !healthProfileDetail && !healthProfileLoading) void fetchHealthProfileDetail(selectedUser.id);}}>{tab.label}</button>)}</div>
+            <div className="space-y-4">
+              {detailTab === 'basic' && <div className="rounded-2xl border border-background-alt bg-background/60 p-3.5 flex items-center justify-between">
                 <div>
                   <h3 className="text-xs font-medium text-text-muted">注册时间</h3>
                   <p className="mt-0.5 text-sm font-medium text-text-main">
@@ -578,23 +551,24 @@ export default function Users() {
                   </p>
                 </div>
                 <Sparkles className="w-5 h-5 text-primary/40" />
-              </div>
+              </div>}
+              {detailTab === 'basic' && <dl className="grid gap-3 text-sm"><div><dt className="admin-muted">邮箱</dt><dd>{selectedUser.email || '未绑定'}</dd></div><div><dt className="admin-muted">手机号</dt><dd>{selectedUser.phone || '未绑定'}</dd></div></dl>}
 
-              <AdminHealthProfileCard
+              {detailTab === 'health' && <AdminHealthProfileCard
                 data={healthProfileDetail}
                 loading={healthProfileLoading}
                 error={healthProfileError}
                 onRetry={() => void fetchHealthProfileDetail(selectedUser.id)}
-              />
+              />}
 
-              <div className="rounded-2xl border border-amber-100 bg-amber-50/50 p-4">
+              {detailTab === 'level' && <div className="rounded-2xl border border-amber-100 bg-amber-50/50 p-4">
                 <h3 className="text-sm font-semibold text-text-main">成长等级</h3>
                 <div className="mt-3 flex items-end justify-between"><div><p className="text-lg font-bold text-amber-700">V{selectedUser.level?.level ?? 1} · {selectedUser.level?.title ?? '健康新芽'}</p><p className="mt-1 text-xs text-text-muted">{selectedUser.level?.xp ?? 0} XP（行为 {selectedUser.level?.baseXp ?? 0} / 修正 {selectedUser.level?.adjustmentXp ?? 0}）</p></div><span className="text-xs font-medium text-amber-700">{selectedUser.level?.progress ?? 0}%</span></div>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-amber-100"><div className="h-full rounded-full bg-amber-500" style={{ width: `${selectedUser.level?.progress ?? 0}%` }} /></div>
                 <div className="mt-4 border-t border-amber-100 pt-4"><p className="text-xs font-medium text-text-muted">经验修正（活动奖励、申诉补偿或违规扣减）</p><div className="mt-2 grid grid-cols-3 gap-2"><input value={xpDelta} onChange={(event) => setXpDelta(event.target.value)} placeholder="+100 / -50" className="rounded-xl border border-amber-100 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200" /><input value={xpReason} onChange={(event) => setXpReason(event.target.value)} placeholder="必须填写原因" className="col-span-2 rounded-xl border border-amber-100 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200" /></div>{xpMessage ? <p className="mt-2 text-xs text-text-muted">{xpMessage}</p> : null}<button type="button" onClick={() => void handleAdjustXp()} disabled={xpSaving} className="mt-3 w-full rounded-xl bg-amber-500 py-2.5 text-sm font-medium text-white disabled:opacity-60">{xpSaving ? '保存中…' : '提交经验修正'}</button></div>
-              </div>
+              </div>}
 
-              {selectedUser.role !== 'admin' ? (
+              {detailTab === 'account' && selectedUser.role !== 'admin' ? (
                 <div className="rounded-2xl border border-background-alt p-4">
                   <h3 className="text-sm font-semibold text-text-main flex items-center gap-2">
                     <Lock className="w-4 h-4 text-primary" /> 登录凭证管理
@@ -633,8 +607,8 @@ export default function Users() {
                 </div>
               ) : null}
             </div>
-            
-            <div className="mt-6 pt-4 border-t border-background-alt space-y-3">
+
+            <div hidden={detailTab !== 'account'} className="mt-6 pt-4 border-t border-background-alt space-y-3">
               <button
                 type="button"
                 onClick={() => {
@@ -687,82 +661,17 @@ export default function Users() {
               </button>
             </div>
           </div>
-        </div>
+        </DialogFrame>
       )}
 
       {/* Confirm Disable/Enable Modal */}
       {confirmStatusModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-xl">
-            <div className="flex items-center gap-3 text-red-600 mb-4">
-              <AlertCircle className="w-6 h-6" />
-              <h3 className="text-lg font-bold text-text-main">
-                {confirmStatusModal.currentDisabled ? '确认恢复账号' : '确认停用账号'}
-              </h3>
-            </div>
-            <p className="text-text-muted text-sm mb-6">
-              确定要{confirmStatusModal.currentDisabled ? '恢复账号' : '停用账号'} 
-              <span className="font-bold text-text-main mx-1">
-                {confirmStatusModal.username}
-              </span>
-              吗？{confirmStatusModal.currentDisabled ? '启用后该用户可正常登录使用。' : '停用后该用户将无法登录。'}
-            </p>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setConfirmStatusModal(null)}
-                className="flex-1 py-2.5 rounded-xl bg-background-alt text-text-main font-medium text-sm hover:bg-background-alt/80 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => handleToggleDisabled(confirmStatusModal.userId, confirmStatusModal.currentDisabled)}
-                className={cn(
-                  "flex-1 py-2.5 rounded-xl text-white font-medium text-sm transition-colors",
-                  confirmStatusModal.currentDisabled ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"
-                )}
-              >
-                确定
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog title={confirmStatusModal.currentDisabled ? '恢复账号使用' : '停用账号'} description={confirmStatusModal.currentDisabled ? '确认恢复该账号的正常使用？' : '停用后该用户将无法正常登录和使用服务，确认继续？'} onCancel={()=>setConfirmStatusModal(null)} onConfirm={()=>void handleToggleDisabled(confirmStatusModal.userId,confirmStatusModal.currentDisabled)} busy={accountSaving}/>
       )}
 
       {/* Confirm Role Modal */}
       {confirmRoleModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-xl">
-            <div className="flex items-center gap-3 text-secondary mb-4">
-              <AlertCircle className="w-6 h-6" />
-              <h3 className="text-lg font-bold text-text-main">确认修改角色</h3>
-            </div>
-            <p className="text-text-muted text-sm mb-6">
-              确定要将该用户的角色修改为 
-              <span className="font-bold text-text-main mx-1">
-                {confirmRoleModal.currentRole === 'admin' ? '普通用户' : '管理员'}
-              </span>
-              吗？
-            </p>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setConfirmRoleModal(null)}
-                className="flex-1 py-2.5 rounded-xl bg-background-alt text-text-main font-medium text-sm hover:bg-background-alt/80 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={() => handleToggleRole(confirmRoleModal.userId, confirmRoleModal.currentRole)}
-                className="flex-1 py-2.5 rounded-xl bg-primary text-white font-medium text-sm hover:bg-primary/90 transition-colors"
-              >
-                确定
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog title="确认修改角色" description={confirmRoleModal.currentRole === 'admin' ? '确认取消该用户的管理员权限？' : '该用户将获得管理后台权限，确认设为管理员？'} onCancel={()=>setConfirmRoleModal(null)} onConfirm={()=>void handleToggleRole(confirmRoleModal.userId,confirmRoleModal.currentRole)} busy={accountSaving}/>
       )}
     </div>
   );

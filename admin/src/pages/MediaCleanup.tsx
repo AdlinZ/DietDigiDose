@@ -1,3 +1,4 @@
+import { useQueryState, useQueryNumber } from '../hooks/useQueryState';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
@@ -37,8 +38,8 @@ const emptySummary = { pending: 0, processing: 0, completed: 0, failing: 0, stal
 
 export default function MediaCleanup() {
   const [data, setData] = useState<Overview | null>(null);
-  const [status, setStatus] = useState<CleanupFilter>('attention');
-  const [olderThanHours, setOlderThanHours] = useState(0);
+  const [status, setStatus] = useQueryState<CleanupFilter>('status', 'attention', ["all", "attention", "pending", "processing", "completed", "failing", "stale"]);
+  const [olderThanHours, setOlderThanHours] = useQueryNumber('olderThanHours', 0, [0,1,6,24,168]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

@@ -1,3 +1,4 @@
+import { DialogFrame } from '../components/admin/DialogFrame';
 import type { KitchenwareCapabilityConstraints } from "@dietdigidose/contracts";
 import { kitchenwareFunctionLabels } from "@dietdigidose/contracts/kitchenware-options";
 import { useEffect, useState } from 'react';
@@ -52,7 +53,7 @@ export default function KitchenwareCapabilities({ item, onClose }: { item: { id:
     } catch (error: any) { setMessage(error.response?.data?.error || '保存失败'); setConfirmed(false); }
     finally { setSaving(false); }
   };
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+  return <DialogFrame onClose={onClose} busy={saving} className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
     <form onSubmit={save} role="dialog" aria-modal="true" aria-label={`${item.name}的能力条件`} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
       <h2 className="text-lg font-semibold">{item.name} · 能力条件</h2>
       <p className="my-3 text-sm text-text-muted">仅登记核实过的能力。条件用于所有用户的推荐判断，须由同一件设备满足；留空表示该项没有额外限制。受限能力不会自动放行。</p>
@@ -73,5 +74,5 @@ export default function KitchenwareCapabilities({ item, onClose }: { item: { id:
       {confirmed && <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm">将保存当前 {rows.length} 项能力及条件，并影响使用此目录的推荐判断。确认所有修改后提交。</p>}
       <div className="mt-5 flex justify-end gap-3"><button type="button" disabled={saving} onClick={onClose}>取消</button><button disabled={!configuration || saving || rows.some(row => row.invalid !== undefined)} className="rounded-xl bg-primary px-4 py-2 text-white disabled:opacity-50">{saving ? '保存中…' : confirmed ? '确认保存条件' : '核对修改'}</button></div>
     </form>
-  </div>;
+  </DialogFrame>;
 }

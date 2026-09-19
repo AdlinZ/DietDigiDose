@@ -6,6 +6,8 @@ import { adminLoginPath, classifyAdminSession } from './services/adminSession';
 const AdminLayout = lazy(() => import('./layout/AdminLayout'));
 const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
+const Analytics = lazy(() => import('./pages/Analytics'));
+const AdminNotFound = lazy(() => import('./pages/AdminNotFound'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const KitchenwareMappingReviews = lazy(() => import('./pages/KitchenwareMappingReviews'));
 const CoreLoops = lazy(() => import('./pages/CoreLoops'));
@@ -103,6 +105,9 @@ function App() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="analytics" element={<Analytics />} />
+        <Route path="security-audit" element={<Navigate to="/admin/security" replace />} />
+        <Route path="*" element={<AdminNotFound />} />
         <Route path="kitchenware-mapping-reviews" element={<KitchenwareMappingReviews />} />
         <Route path="core-loops" element={<CoreLoops />} />
         <Route path="users" element={<Users />} />

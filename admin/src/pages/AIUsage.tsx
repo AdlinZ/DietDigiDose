@@ -1,3 +1,5 @@
+import { PageHeader } from '../components/admin/PageHeader';
+import { useQueryState } from '../hooks/useQueryState';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
@@ -109,9 +111,9 @@ function formatCompactNumber(value: number) {
 }
 
 export default function AIUsage() {
-  const [range, setRange] = useState<RangeKey>('30d');
-  const [selectedUserId, setSelectedUserId] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [range, setRange] = useQueryState<RangeKey>('range', '30d', ["7d", "30d", "90d", "all"]);
+  const [selectedUserId, setSelectedUserId] = useQueryState<string>('userId', '', value => !value || /^[1-9]\d*$/.test(value));
+  const [searchQuery, setSearchQuery] = useQueryState<string>('q', '');
   const [hoveredTrendDate, setHoveredTrendDate] = useState<string | null>(null);
   const [pinnedTrendDate, setPinnedTrendDate] = useState<string | null>(null);
   const [data, setData] = useState<UsageResponse | null>(null);
@@ -232,6 +234,7 @@ export default function AIUsage() {
 
   return (
     <div className="space-y-8">
+      <PageHeader title="模型用量" description="查看模型调用、Token 消耗与费用估算。"/>
       {error ? (
         <div className="flex items-center justify-between rounded-2xl border border-red-100 bg-red-50 p-4 text-red-700">
           <div className="flex items-center gap-3">

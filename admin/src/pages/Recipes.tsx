@@ -1,15 +1,17 @@
-import React, { useCallback, useEffect, useState, useMemo } from 'react';
+import { PageHeader } from '../components/admin/PageHeader';
+import { FilterBar } from '../components/admin/ListPrimitives';
+import { DetailPanel } from '../components/admin/DetailPanel';
+import { StatusBadge } from '../components/admin/StatusBadge';
+import { DialogFrame } from '../components/admin/DialogFrame';
+import { useQueryState } from '../hooks/useQueryState';
+import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import {
   Minus,
   Pencil,
   Plus,
-  Search,
   Trash2,
   UtensilsCrossed,
   X,
-  FileText,
-  Sparkles,
-  Clock,
 } from 'lucide-react';
 import api from '../services/api';
 import { cn } from '../utils/cn';
@@ -77,14 +79,19 @@ const INITIAL_FORM_STATE: RecipeFormState = {
   ingredients: [{ name: '', amount: '' }],
 };
 
+function recipeDetailArray<T>(value: string | T[] | undefined): T[] { try { return parseRecipeArray<T>(value); } catch { return []; } }
+
 export default function Recipes() {
+  const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const requestId = useRef(0);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeCategory, setActiveCategory] = useState('全部');
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'official' | 'user'>('all');
-  const [reviewStatus, setReviewStatus] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
-  const [qualityStatus, setQualityStatus] = useState<'all' | 'trusted' | 'estimated' | 'needs_review'>('all');
+  const [searchQuery, setSearchQuery] = useQueryState<string>('q', '');
+  const [activeCategory, setActiveCategory] = useQueryState<string>('category', '全部', CATEGORIES);
+  const [sourceFilter, setSourceFilter] = useQueryState<'all' | 'official' | 'user'>('source', 'all', ["all", "official", "user"]);
+  const [reviewStatus, setReviewStatus] = useQueryState<'all' | 'pending' | 'approved' | 'rejected'>('reviewStatus', 'all', ["all", "pending", "approved", "rejected"]);
+  const [qualityStatus, setQualityStatus] = useQueryState<'all' | 'trusted' | 'estimated' | 'needs_review'>('qualityStatus', 'all', ["all", "trusted", "estimated", "needs_review"]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [totalRecipes, setTotalRecipes] = useState(0);
   const [summary, setSummary] = useState({ platform: 0, user: 0, pending: 0, needsReview: 0 });
@@ -96,8 +103,9 @@ export default function Recipes() {
   const [formData, setFormData] = useState<RecipeFormState>(INITIAL_FORM_STATE);
 
   const fetchRecipes = useCallback(async (cursor?: string) => {
+    const sequence = ++requestId.current;
     try {
-      setLoading(true);
+      setLoading(true); setLoadError('');
       const { data } = await api.get('/admin/recipes', {
         params: {
           source: sourceFilter === 'all' ? undefined : sourceFilter,
@@ -109,6 +117,7 @@ export default function Recipes() {
           cursor,
         },
       });
+      if (sequence !== requestId.current) return;
       setRecipes(current => cursor ? [...current, ...data.items.filter((item: Recipe) => !current.some(existing => existing.id === item.id))] : data.items);
       setNextCursor(data.nextCursor);
       setTotalRecipes(Number(data.total || data.items.length));
@@ -118,15 +127,17 @@ export default function Recipes() {
         pending: Number(data.summary?.pending || 0),
         needsReview: Number(data.summary?.needs_review || 0),
       });
-    } catch (error) {
-      console.error('Error fetching recipes:', error);
+    } catch {
+      if (sequence === requestId.current) setLoadError('读取食谱失败，请重试。');
     } finally {
-      setLoading(false);
+      if (sequence === requestId.current) setLoading(false);
     }
   }, [activeCategory, qualityStatus, reviewStatus, searchQuery, sourceFilter]);
 
   useEffect(() => {
-    fetchRecipes();
+    const requestCounter = requestId;
+    void fetchRecipes();
+    return () => { requestCounter.current++; };
   }, [fetchRecipes]);
 
   const handleDelete = async (id: number) => {
@@ -285,166 +296,23 @@ export default function Recipes() {
     return { total: totalRecipes, platform: summary.platform, userContributed: summary.user, pending: summary.pending, needsReview: summary.needsReview };
   }, [summary, totalRecipes]);
 
-  if (loading) return <div className="text-center py-20 text-text-muted">加载中...</div>;
+
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-text-main flex items-center gap-2">
-            <UtensilsCrossed className="w-7 h-7 text-secondary" />
-            食谱库管理
-          </h2>
-          <p className="text-xs text-text-muted mt-1">发布与维护官方精品减脂/健康食谱，并审核社区用户投稿</p>
-        </div>
-        <button
-          type="button"
-          onClick={handleOpenAdd}
-          className="bg-primary text-white px-4 py-2.5 rounded-2xl flex items-center space-x-2 hover:bg-primary/90 transition-colors shadow-sm text-xs font-medium self-start sm:self-auto"
-        >
-          <Plus size={16} />
-          <span>发布官方食谱</span>
-        </button>
-      </div>
-
-      {/* Top Metric Summary Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
-          <div>
-            <p className="text-xs font-medium text-text-muted">当前筛选食谱</p>
-            <p className="mt-1.5 text-2xl font-bold text-text-main">{recipeStats.total}</p>
-          </div>
-          <div className="rounded-2xl bg-secondary/10 p-3 text-secondary">
-            <UtensilsCrossed className="h-6 w-6" />
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
-          <div>
-            <p className="text-xs font-medium text-text-muted">平台食谱（含导入）</p>
-            <p className="mt-1.5 text-2xl font-bold text-primary">{recipeStats.platform}</p>
-          </div>
-          <div className="rounded-2xl bg-primary/10 p-3 text-primary">
-            <Sparkles className="h-6 w-6" />
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
-          <div>
-            <p className="text-xs font-medium text-text-muted">社区用户投稿</p>
-            <p className="mt-1.5 text-2xl font-bold text-blue-600">{recipeStats.userContributed}</p>
-          </div>
-          <div className="rounded-2xl bg-blue-50 p-3 text-blue-600">
-            <FileText className="h-6 w-6" />
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between rounded-[24px] bg-white p-5 shadow-sm">
-          <div>
-            <p className="text-xs font-medium text-text-muted">待审核食谱</p>
-            <p className="mt-1.5 text-2xl font-bold text-orange-600">{recipeStats.pending}</p>
-          </div>
-          <div className="rounded-2xl bg-orange-50 p-3 text-orange-600">
-            <Clock className="h-6 w-6" />
-          </div>
-        </div>
-      </div>
-
-      {/* Category Tabs & Search */}
-      <div className="bg-white p-4 rounded-3xl shadow-sm space-y-4 border border-gray-100">
-        <div className="flex flex-wrap items-center gap-2 border-b border-background-alt pb-4">
-          {[
-            { value: 'all', label: '全部来源' },
-            { value: 'official', label: '平台食谱（含导入）' },
-            { value: 'user', label: '用户投稿' },
-          ].map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              onClick={() => setSourceFilter(item.value as typeof sourceFilter)}
-              className={cn(
-                'rounded-xl px-4 py-2 text-sm font-medium',
-                sourceFilter === item.value ? 'bg-primary text-white' : 'bg-background-alt text-text-muted',
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-          <span className="mx-1 h-6 w-px bg-background-alt" />
-          {[
-            { value: 'all', label: '全部质量' },
-            { value: 'trusted', label: '可信' },
-            { value: 'estimated', label: '营养估算' },
-            { value: 'needs_review', label: `待复核${recipeStats.needsReview ? ` ${recipeStats.needsReview}` : ''}` },
-          ].map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              onClick={() => setQualityStatus(item.value as typeof qualityStatus)}
-              className={cn(
-                'rounded-xl px-3 py-2 text-xs font-medium',
-                qualityStatus === item.value
-                  ? 'bg-amber-100 text-amber-800'
-                  : 'text-text-muted hover:bg-background-alt',
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-          <span className="mx-1 h-6 w-px bg-background-alt" />
-          {[
-            { value: 'all', label: '全部状态' },
-            { value: 'pending', label: '待审核' },
-            { value: 'approved', label: '已通过' },
-            { value: 'rejected', label: '已驳回' },
-          ].map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              onClick={() => setReviewStatus(item.value as typeof reviewStatus)}
-              className={cn(
-                'rounded-xl px-3 py-2 text-xs font-medium',
-                reviewStatus === item.value
-                  ? 'bg-secondary/15 text-secondary'
-                  : 'text-text-muted hover:bg-background-alt',
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={cn(
-                "px-4 py-2 rounded-xl text-sm font-medium transition-colors",
-                activeCategory === cat
-                  ? "bg-primary text-white"
-                  : "bg-background-alt text-text-muted hover:bg-gray-200"
-              )}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center space-x-4">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="搜索食谱名称..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-gray-50 border-none rounded-xl focus:ring-2 focus:ring-primary/20 text-sm"
-            />
-          </div>
-          <div className="text-xs text-text-muted">共 {filteredRecipes.length} 款食谱</div>
-        </div>
-      </div>
-
-      {filteredRecipes.length === 0 ? (
+      <PageHeader title="食谱库" description="维护平台食谱，审核用户投稿，并核对营养质量。" actions={<button type="button" onClick={handleOpenAdd} className="admin-button admin-button-primary"><Plus size={16}/>发布官方食谱</button>}/>
+      <div className="admin-summary-row"><span>当前筛选<strong>{loadError ? '—' : recipeStats.total}</strong></span><span>平台食谱<strong>{loadError ? '—' : recipeStats.platform}</strong></span><span>用户投稿<strong>{loadError ? '—' : recipeStats.userContributed}</strong></span><span>待发布审核<strong>{loadError ? '—' : recipeStats.pending}</strong></span></div>
+      <FilterBar>
+        <label className="flex-1 min-w-48">搜索<input aria-label="搜索食谱" placeholder="名称或关键词" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} className="ml-2 border px-3"/></label>
+        <label>来源 <select value={sourceFilter} onChange={e=>setSourceFilter(e.target.value as typeof sourceFilter)} className="border px-3"><option value="all">全部来源</option><option value="official">平台食谱</option><option value="user">用户投稿</option></select></label>
+        <label>分类 <select value={activeCategory} onChange={e=>setActiveCategory(e.target.value)} className="border px-3">{CATEGORIES.map(value=><option key={value}>{value}</option>)}</select></label>
+        <label>发布审核 <select value={reviewStatus} onChange={e=>setReviewStatus(e.target.value as typeof reviewStatus)} className="border px-3"><option value="all">全部状态</option><option value="pending">待审核</option><option value="approved">已通过</option><option value="rejected">已驳回</option></select></label>
+        <label>营养质量 <select value={qualityStatus} onChange={e=>setQualityStatus(e.target.value as typeof qualityStatus)} className="border px-3"><option value="all">全部质量</option><option value="trusted">可信</option><option value="estimated">营养估算</option><option value="needs_review">待复核</option></select></label>
+        <button className="admin-button" disabled={loading} onClick={()=>void fetchRecipes()}>刷新</button>
+      </FilterBar>
+      {loadError && <p role="alert" className="admin-error">{loadError}</p>}
+      {loading && <p role="status" className="admin-muted">正在加载…</p>}
+      {filteredRecipes.length === 0 && !loading && !loadError ? (
         <div className="bg-white rounded-[24px] p-12 text-center text-text-muted border border-gray-100">
           未搜索到相关食谱
         </div>
@@ -460,15 +328,15 @@ export default function Recipes() {
                 <col className="w-[22%]" />
               </colgroup>
               <thead className="border-b border-background-alt bg-[#FAFBFA] text-xs text-text-muted">
-                <tr><th className="px-5 py-4 font-medium">食谱 / 来源</th><th className="px-3 py-4 font-medium">分类 / 制作</th><th className="px-3 py-4 font-medium">营养</th><th className="px-3 py-4 font-medium">审核 / 质量</th><th className="px-5 py-4 text-right font-medium">操作</th></tr>
+                <tr><th className="px-5 py-4 font-medium">食谱 / 来源</th><th className="px-3 py-4 font-medium">分类 / 制作</th><th className="px-3 py-4 font-medium">营养</th><th className="px-3 py-4 font-medium">发布审核 / 营养质量</th><th className="px-5 py-4 text-right font-medium">操作</th></tr>
               </thead>
               <tbody className="divide-y divide-background-alt">
                 {filteredRecipes.map((recipe) => <tr key={recipe.id} className="hover:bg-[#FCFDFB]">
                   <td className="px-5 py-3">
                     <div className="flex min-w-0 items-start gap-3">
-                      <img src={recipe.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c'} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+                      {recipe.image_url ? <img src={recipe.image_url} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" /> : <span className="h-12 w-12 shrink-0 rounded bg-gray-100 flex items-center justify-center text-gray-400"><UtensilsCrossed size={20}/></span>}
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold text-text-main" title={recipe.title}>{recipe.title}</div>
+                        <button type="button" className="truncate text-sm font-semibold text-primary text-left max-w-full" title={recipe.title} onClick={()=>setSelectedRecipe(recipe)}>{recipe.title}</button>
                         <div className="mt-1 truncate text-xs text-text-muted" title={recipe.description || ''}>{recipe.description || '暂无简介'}</div>
                         <div className="mt-2 flex min-w-0 items-center gap-2">
                           <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium', recipe.source === 'user' ? 'bg-blue-50 text-blue-600' : 'bg-background-alt text-text-muted')}>{recipe.source === 'user' ? '用户投稿' : recipe.source === 'official' ? '官方自建' : '平台导入'}</span>
@@ -513,14 +381,25 @@ export default function Recipes() {
       )}
 
       {/* Add/Edit Recipe Modal */}
+      {selectedRecipe && <DetailPanel title={selectedRecipe.title} onClose={()=>setSelectedRecipe(null)}>
+        <div className="admin-stack">
+          {selectedRecipe.image_url && <img src={selectedRecipe.image_url} alt={selectedRecipe.title} className="w-full max-h-64 object-contain"/>}
+          <p>{selectedRecipe.description || '暂无简介'}</p>
+          <div><h3 className="font-semibold mb-2">发布审核</h3><StatusBadge tone={selectedRecipe.status==='pending'?'warning':'neutral'}>{recipeStatusText(selectedRecipe.status)}</StatusBadge>{selectedRecipe.reject_reason && <p className="mt-2">驳回原因：{selectedRecipe.reject_reason}</p>}</div>
+          <div><h3 className="font-semibold mb-2">营养质量</h3><StatusBadge tone={selectedRecipe.quality_status==='needs_review'?'warning':'neutral'}>{selectedRecipe.quality_status==='trusted'?'可信':selectedRecipe.quality_status==='estimated'?'营养估算':'待复核'}</StatusBadge><p className="mt-2">{selectedRecipe.quality_review_reason || '暂无质量审核说明'}</p><p className="admin-muted mt-2">热量 {selectedRecipe.calories} kcal · 蛋白质 {selectedRecipe.protein ?? '—'} g · 碳水 {selectedRecipe.carbs ?? '—'} g · 脂肪 {selectedRecipe.fat ?? '—'} g</p></div>
+          <section><h3 className="font-semibold mb-2">原料</h3><ul className="space-y-2">{(recipeDetailArray(selectedRecipe.ingredients_json) as Ingredient[]).map((item,index)=><li key={index}>{item.name} · {item.amount}</li>)}</ul></section>
+          <section><h3 className="font-semibold mb-2">做法</h3><ol className="list-decimal pl-5 space-y-3">{(recipeDetailArray(selectedRecipe.steps_json) as string[]).map((item,index)=><li key={index}>{item}</li>)}</ol></section>
+          <button className="admin-button" onClick={()=>{handleOpenEdit(selectedRecipe);setSelectedRecipe(null);}}>编辑食谱</button>
+        </div>
+      </DetailPanel>}
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <DialogFrame onClose={()=>setShowModal(false)} busy={submitting} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-3xl shadow-xl max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between mb-4 border-b border-gray-100 pb-3">
               <h3 className="text-lg font-bold text-text-main">
                 {editingId ? '编辑食谱' : '发布新食谱'}
               </h3>
-              <button
+              <button aria-label="关闭"
                 onClick={() => setShowModal(false)}
                 className="text-gray-400 hover:text-text-main p-1"
               >
@@ -754,7 +633,7 @@ export default function Recipes() {
               </div>
             </form>
           </div>
-        </div>
+        </DialogFrame>
       )}
     </div>
   );

@@ -1,3 +1,5 @@
+import { DialogFrame } from '../components/admin/DialogFrame';
+import { useQueryState } from '../hooks/useQueryState';
 import { useState, useEffect, useMemo } from 'react';
 import { Search, Heart, Trash2, AlertCircle, X, Eye, MessageCircle, Settings2, CalendarDays, Users, CircleCheck, BadgeCheck, Save, RotateCcw, HelpCircle, Sparkles } from 'lucide-react';
 import api from '../services/api';
@@ -38,17 +40,17 @@ interface CommentItem {
 export default function Community() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('全部');
+  const [searchQuery, setSearchQuery] = useQueryState<string>('q', '');
+  const [categoryFilter, setCategoryFilter] = useQueryState<string>('category', '全部');
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [eventStartAt, setEventStartAt] = useState('');
   const [eventEndAt, setEventEndAt] = useState('');
   const [savingBusinessState, setSavingBusinessState] = useState(false);
-  
+
   const [previewImage, setPreviewImage] = useState<string | null>(null);
-  
+
   const [deleteModal, setDeleteModal] = useState<{
     isOpen: boolean;
     postId: number;
@@ -182,11 +184,11 @@ export default function Community() {
   const categories = ['全部', ...Array.from(new Set(posts.map(p => p.category).filter(Boolean)))];
 
   const filteredPosts = posts.filter(post => {
-    const matchesSearch = 
-      post.content?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    const matchesSearch =
+      post.content?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       post.username?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       post.username.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = 
+    const matchesCategory =
       categoryFilter === '全部' ? true : post.category === categoryFilter;
     return matchesSearch && matchesCategory;
   });
@@ -203,9 +205,9 @@ export default function Community() {
         </div>
         <div className="relative w-full sm:w-72">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted w-4 h-4" />
-          <input 
-            type="text" 
-            placeholder="搜索帖子内容或用户名..."
+          <input
+            type="text"
+            placeholder="搜索已加载记录：帖子内容或用户名..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 bg-white rounded-xl text-sm border border-gray-100 focus:ring-2 focus:ring-primary/20 outline-none shadow-sm"
@@ -267,8 +269,8 @@ export default function Community() {
                 onClick={() => setCategoryFilter(cat)}
                 className={cn(
                   "px-4 py-2 rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 shadow-sm",
-                  categoryFilter === cat 
-                    ? "bg-primary text-white" 
+                  categoryFilter === cat
+                    ? "bg-primary text-white"
                     : "bg-white text-text-muted hover:text-text-main border border-gray-100"
                 )}
               >
@@ -315,20 +317,20 @@ export default function Community() {
                   </span>
                 )}
               </div>
-              
+
               <div className="p-5 flex-1">
                 <p className="text-sm text-text-main mb-4 line-clamp-3 leading-relaxed">
                   {post.content}
                 </p>
                 {post.image_url && (
-                  <div 
+                  <div
                     className="relative rounded-2xl overflow-hidden aspect-video cursor-pointer group bg-background-alt"
                     onClick={() => setPreviewImage(post.image_url)}
                   >
-                    <img 
-                      src={post.image_url} 
-                      alt="Post content" 
-                      className="w-full h-full object-cover transition-transform group-hover:scale-105" 
+                    <img
+                      src={post.image_url}
+                      alt="Post content"
+                      className="w-full h-full object-cover transition-transform group-hover:scale-105"
                     />
                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
                       <Search className="text-white opacity-0 group-hover:opacity-100 w-6 h-6" />
@@ -336,7 +338,7 @@ export default function Community() {
                   </div>
                 )}
               </div>
-              
+
               <div className="p-4 bg-background-alt/30 flex items-center justify-between">
                 <div className="flex gap-4 text-text-muted">
                   <div className="flex items-center gap-1.5 text-sm font-medium" title="浏览次数">
@@ -440,11 +442,11 @@ export default function Community() {
       )}
 
       {selectedPost && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/35 backdrop-blur-sm" onClick={() => setSelectedPost(null)}>
+        <DialogFrame onClose={()=>setSelectedPost(null)} busy={savingBusinessState} className="fixed inset-0 z-50 flex justify-end bg-black/35 backdrop-blur-sm" >
           <aside className="h-full w-full max-w-2xl overflow-y-auto bg-white p-7 shadow-2xl" onClick={event => event.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-background-alt pb-5">
               <div><h2 className="text-xl font-bold text-text-main">帖子管理</h2><p className="mt-1 text-sm text-text-muted">#{selectedPost.id} · {selectedPost.username}</p></div>
-              <button onClick={() => setSelectedPost(null)} className="rounded-xl p-2 text-text-muted hover:bg-background-alt"><X className="h-5 w-5" /></button>
+              <button aria-label="关闭" onClick={() => setSelectedPost(null)} className="rounded-xl p-2 text-text-muted hover:bg-background-alt"><X className="h-5 w-5" /></button>
             </div>
             <div className="mt-5 grid grid-cols-3 gap-3">
               <div className="rounded-2xl bg-background p-4"><Eye className="h-4 w-4 text-primary" /><div className="mt-2 text-xl font-bold text-text-main">{selectedPost.views_count || 0}</div><div className="text-xs text-text-muted">浏览</div></div>
@@ -470,35 +472,35 @@ export default function Community() {
             <div className="mt-7 flex items-center justify-between"><h3 className="text-base font-bold text-text-main">{selectedPost.category === '问答' ? '回答管理' : '评论管理'}</h3><span className="text-sm text-text-muted">{comments.length} 条</span></div>
             {commentsLoading ? <div className="py-10 text-center text-sm text-text-muted">加载评论中...</div> : comments.length === 0 ? <div className="py-10 text-center text-sm text-text-muted">暂无评论</div> : <div className="mt-3 divide-y divide-background-alt">{comments.map(comment => <div key={comment.id} className={cn('flex gap-3 py-4', comment.is_accepted && 'rounded-xl bg-green-50 px-3')}><img src={getAvatarUrl(comment.avatar_url, comment.username)} alt={comment.username} className="h-8 w-8 shrink-0 rounded-full object-cover" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><span className="text-sm font-medium text-text-main">{comment.username}</span>{comment.is_expert_answer ? <span className="inline-flex items-center gap-1 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700"><BadgeCheck className="h-3 w-3" />专业回答</span> : null}{comment.is_accepted ? <span className="rounded bg-primary px-1.5 py-0.5 text-[10px] font-medium text-white">已采纳</span> : null}</div><p className="mt-1 break-words text-sm leading-6 text-text-muted">{comment.content}</p><div className="mt-1 text-xs text-text-muted">{comment.likes_count || 0} 赞 · {new Date(comment.created_at).toLocaleString()}</div>{selectedPost.category === '问答' ? <button onClick={() => void updateQuestionState(comment.id)} disabled={savingBusinessState} className={cn('mt-2 rounded-lg px-2.5 py-1.5 text-xs font-medium disabled:opacity-50', comment.is_accepted ? 'bg-green-100 text-green-700' : 'bg-background-alt text-primary')}>{comment.is_accepted ? '取消采纳' : '设为采纳回答'}</button> : null}</div><button onClick={() => deleteComment(comment.id)} className="h-8 w-8 shrink-0 rounded-lg text-text-muted hover:bg-red-50 hover:text-red-500" title="删除评论"><Trash2 className="mx-auto h-4 w-4" /></button></div>)}</div>}
           </aside>
-        </div>
+        </DialogFrame>
       )}
 
       {/* Image Preview Modal */}
       {previewImage && (
-        <div 
+        <DialogFrame onClose={()=>setPreviewImage(null)} busy={false}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
-          onClick={() => setPreviewImage(null)}
+
         >
           <div className="relative max-w-5xl max-h-screen w-full flex items-center justify-center">
-            <button 
+            <button aria-label="关闭"
               onClick={() => setPreviewImage(null)}
               className="absolute top-4 right-4 p-2 bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors z-10"
             >
               <X className="w-6 h-6" />
             </button>
-            <img 
-              src={previewImage} 
-              alt="Preview" 
+            <img
+              src={previewImage}
+              alt="Preview"
               className="max-w-full max-h-[90vh] object-contain rounded-lg"
               onClick={e => e.stopPropagation()}
             />
           </div>
-        </div>
+        </DialogFrame>
       )}
 
       {/* Delete Confirm Modal */}
       {deleteModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+        <DialogFrame onClose={()=>setDeleteModal(null)} busy={false} className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-xl">
             <div className="flex items-center gap-3 text-red-500 mb-4">
               <AlertCircle className="w-6 h-6" />
@@ -522,7 +524,7 @@ export default function Community() {
               </button>
             </div>
           </div>
-        </div>
+        </DialogFrame>
       )}
     </div>
   );

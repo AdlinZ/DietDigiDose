@@ -47,6 +47,12 @@ import { conversationContext } from "./conversation.js";
 import { StructuredReplyStreamHandler } from "./replyStream.js";
 
 const executionBudget = new AsyncLocalStorage<{ modelCalls: number; toolCalls: number; maxModelCalls: number; maxToolCalls: number; signal: AbortSignal }>();
+// LangGraph counts middleware and routing steps too, not only model/tool calls.
+// Leave room for those steps; claimBudget and the deadline enforce actual work.
+function agentRecursionLimit() {
+  const budget = executionBudget.getStore();
+  return 8 * ((budget?.maxModelCalls ?? 12) + (budget?.maxToolCalls ?? 6)) + 20;
+}
 function claimBudget(kind: "modelCalls" | "toolCalls") {
   const budget = executionBudget.getStore();
   if (!budget) return;
@@ -247,7 +253,7 @@ async function modelFor(agent: ModelRole) {
     maxTokens: policy.maxTokens,
     maxRetries: 0,
     timeout: policy.timeoutMs,
-    modelKwargs: thinkingParameters(config.baseUrl, config.model, policy),
+    modelKwargs: { ...thinkingParameters(config.baseUrl, config.model, policy), response_format: { type: "json_object" } },
     configuration: { baseURL: config.baseUrl },
     useResponsesApi: false,
   });
@@ -326,7 +332,7 @@ kitchenOverride 只提取当前用户明确说出的本次人数、时长、常�
 只有缺少的信息会实质改变安全性或无法继续完成任务时才填写 needsInput，并提出一个简短问题；普通偏好缺失应采用保守默认值。`, supervisorSchema),
   });
   const decision = await invokeStructured(
-    () => routingAgent.invoke({ messages: [{ role: "user", content: `${inputText}\n已有备餐偏好（不必重复询问已知字段）：${routingContext}` }] }, { recursionLimit: 6 }),
+    () => routingAgent.invoke({ messages: [{ role: "user", content: `${inputText}\n已有备餐偏好（不必重复询问已知字段）：${routingContext}` }] }, { recursionLimit: agentRecursionLimit() }),
     supervisorSchema,
     { runId: state.runId, userId: state.userId, agentName: "Supervisor", phase: "routing", model: await modelNameFor("SUPERVISOR") },
   );
@@ -429,7 +435,7 @@ async function runNutritionAgent(state: SupervisorGraphState): Promise<Specialis
   });
   const context = await publicContext(state.userId, state.kitchenOverride);
   const result = await invokeStructured(
-    () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${context}` }] }, { recursionLimit: 12 }),
+    () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${context}` }] }, { recursionLimit: agentRecursionLimit() }),
     specialistOutputSchema,
     { runId: state.runId, userId: state.userId, agentName: "NutritionPlanningAgent", phase: "specialist", model: await modelNameFor("NUTRITION") },
   );
@@ -449,7 +455,7 @@ async function runRecipeAgent(state: SupervisorGraphState): Promise<SpecialistOu
   });
   const context = await publicContext(state.userId, state.kitchenOverride);
   const result = await invokeStructured(
-    () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${context}` }] }, { recursionLimit: 12 }),
+    () => agent.invoke({ messages: [{ role: "user", content: `目标：${state.goal}\n${requestText(state)}\n上游识别结果：${JSON.stringify(state.outputs)}\n运行时上下文：${context}` }] }, { recursionLimit: agentRecursionLimit() }),
     specialistOutputSchema,
     { runId: state.runId, userId: state.userId, agentName: "RecipeCookingAgent", phase: "specialist", model: await modelNameFor("RECIPE") },
   );
@@ -537,7 +543,7 @@ kitchenOverride 只提取用户语音明确指定的本次备餐条件，缺少�
     });
     const recognized = Object.fromEntries(mediaEntries);
     const routed = await invokeStructured(
-      () => routingAgent.invoke({ messages: [{ role: "user", content: `原始目标：${state.goal}\n完整请求：${requestText(state)}\n识别结果：${JSON.stringify(recognized)}` }] }, { recursionLimit: 6 }),
+      () => routingAgent.invoke({ messages: [{ role: "user", content: `原始目标：${state.goal}\n完整请求：${requestText(state)}\n识别结果：${JSON.stringify(recognized)}` }] }, { recursionLimit: agentRecursionLimit() }),
       supervisorSchema,
       { runId: state.runId, userId: state.userId, agentName: "Supervisor", phase: "media_routing", model: await modelNameFor("SUPERVISOR") },
     );
@@ -642,7 +648,7 @@ async function operationsNode(state: SupervisorGraphState) {
 字段使用 camelCase。餐单 create_meal_plan payload 为 {title,startDate,endDate,constraints,items:[{date,mealType,title,ingredients,steps,calories,protein,carbs,fat}]}；采购 add_shopping_items payload 为 {items:[{name,amount,category}]}；饮食打卡 record_diet_meal payload 必须为 {foodName,mealType,amount,recordedAt?,recordedTime?,calories?,protein?,carbs?,fat?}，禁止使用 dishName、portion 或 date 代替这些字段。`, operationSchema),
   });
   const result = await invokeStructured(
-    () => agent.invoke({ messages: [{ role: "user", content: `用户完整请求：${requestText(state)}\n目标：${state.goal}\n专业 Agent 结果：${JSON.stringify(state.outputs)}\n本次有效备餐条件：${JSON.stringify(resolveKitchenPreferences(mealContext.healthProfile?.kitchen_constraints, state.kitchenOverride))}\n偏好设置版本：${preferenceVersion}\n当前库存批次：${JSON.stringify(inventoryContext)}\n待吃餐：${JSON.stringify(mealContext.preparedMeals || [])}` }] }, { recursionLimit: 6 }),
+    () => agent.invoke({ messages: [{ role: "user", content: `用户完整请求：${requestText(state)}\n目标：${state.goal}\n专业 Agent 结果：${JSON.stringify(state.outputs)}\n本次有效备餐条件：${JSON.stringify(resolveKitchenPreferences(mealContext.healthProfile?.kitchen_constraints, state.kitchenOverride))}\n偏好设置版本：${preferenceVersion}\n当前库存批次：${JSON.stringify(inventoryContext)}\n待吃餐：${JSON.stringify(mealContext.preparedMeals || [])}` }] }, { recursionLimit: agentRecursionLimit() }),
     operationSchema,
     { runId: state.runId, userId: state.userId, agentName: "OperationsAgent", phase: "operations", model: await modelNameFor("OPERATIONS") },
   );
@@ -782,7 +788,7 @@ async function finalNode(state: SupervisorGraphState) {
   const result = await invokeStructured(
     () => agent.invoke(
       { messages: [{ role: "user", content: `完整请求：${requestText(state)}\n专业结果：${JSON.stringify(state.outputs)}\n业务动作：${JSON.stringify(actions)}\n批准结果：${state.approvalDecision || "无需批准"}` }] },
-      { recursionLimit: 6, callbacks: streamHandler ? [streamHandler] : undefined },
+      { recursionLimit: agentRecursionLimit(), callbacks: streamHandler ? [streamHandler] : undefined },
     ),
     finalSchema,
     { runId: state.runId, userId: state.userId, agentName: "Supervisor", phase: "synthesis", model: await modelNameFor("SUPERVISOR") },

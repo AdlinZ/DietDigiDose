@@ -41,7 +41,11 @@ before(async () => {
       res.end("data: [DONE]\n\n");
       return;
     }
-    res.end(JSON.stringify({ id: `mock-${calls.length}`, object: "chat.completion", created: 1, model: "fixture", choices: [{ index: 0, message: { role: "assistant", content: JSON.stringify(answer || { goal: "问答", specialists: [], reply: "你好", candidates: [] }) }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } }));
+    const toolCall = answer?.toolCall as { name: string; args: unknown } | undefined;
+    const message = toolCall
+      ? { role: "assistant", content: null, tool_calls: [{ id: `tool-${calls.length}`, type: "function", function: { name: toolCall.name, arguments: JSON.stringify(toolCall.args) } }] }
+      : { role: "assistant", content: typeof answer === "string" ? answer : JSON.stringify(answer || { goal: "问答", specialists: [], reply: "你好", candidates: [] }) };
+    res.end(JSON.stringify({ id: `mock-${calls.length}`, object: "chat.completion", created: 1, model: "fixture", choices: [{ index: 0, message, finish_reason: toolCall ? "tool_calls" : "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } }));
   });
   await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
   process.env.AI_API_KEY = "fixture-key";
@@ -70,8 +74,33 @@ test("ordinary chat consumes history and completes with one provider call", asyn
   const response = await runtime.startSupervisorRun(userId, { modality: "text", prompt: "第二份不要辣", messages: [{ role: "assistant", content: "方案 plan-123：第一份番茄面，第二份辣椒炒蛋" }, { role: "user", content: "第二份不要辣" }] }, 10000);
   assert.equal(response.run.status, "completed", JSON.stringify(response.run.error));
   assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].response_format, { type: "json_object" });
   assert.match(JSON.stringify(calls[0].messages), /plan-123/);
   assert.match(response.run.reply!, /第二份/);
+});
+
+test("read-only tool round trip reaches its final answer within the shared budget", async () => {
+  calls = [];
+  answers = [
+    { toolCall: { name: "get_user_nutrition_context", args: {} } },
+    { goal: "查询库存", specialists: [], reply: "你的库存目前为空。", candidates: [] },
+  ];
+  const response = await runtime.startSupervisorRun(userId, { modality: "text", prompt: "查询我的库存，只读取，不修改。" }, 10000);
+  assert.equal(response.run.status, "completed", JSON.stringify(db.prepare("SELECT error_message FROM agent_runs WHERE id=?").get(response.run.id)));
+  assert.equal(calls.length, 2);
+  assert.ok(calls[1].messages.some(message => (message as { role?: string }).role === "tool"));
+  assert.match(response.run.reply!, /库存目前为空/);
+  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM agent_actions WHERE run_id=?").get(response.run.id) as { count: number }).count, 0);
+});
+
+test("provider ignoring JSON mode still fails closed without accepting plain text", async () => {
+  calls = [];
+  answers = ["你好，我已经为你保存了记录。"];
+  const response = await runtime.startSupervisorRun(userId, { modality: "text", prompt: "你好，不要保存记录。" }, 10000);
+  assert.equal(response.run.status, "failed");
+  assert.equal(calls.length, 1);
+  assert.equal(response.run.reply, undefined);
+  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM agent_actions WHERE run_id=?").get(response.run.id) as { count: number }).count, 0);
 });
 
 test("clarification resumes the original run", async () => {

@@ -381,3 +381,25 @@ test("unmounting while a retry is running leaves the original pending request re
   expect(mockStore.has(storageKey)).toBe(false);
   act(() => restored.unmount());
 });
+
+test.each([
+  ["我吃了", "eat", 0.0005], ["丢弃", "discard", 0.0005],
+  ["我吃了", "eat", 0.000001], ["丢弃", "discard", 0.000001],
+] as const)("%s (%s) submits exactly %s servings and removes the emptied meal", async (label, type, remaining) => {
+  const tinyMeal = { ...meal(1, remaining), produced_servings: 1 };
+  const emptied = { ...tinyMeal, version: 2, remaining_servings: 0 };
+  mockList.mockResolvedValueOnce([tinyMeal]).mockResolvedValue([emptied]);
+  mockEvent.mockResolvedValue({ prepared_meal: emptied, repeated: false });
+  const tree = await renderScreen();
+  await act(async () => { press(tree, label); });
+  expect(tree.root.findAllByType(TextInput).find(node => node.props.accessibilityLabel === "食用或丢弃份量")!.props.value).toBe(String(remaining));
+  await act(async () => { press(tree, "确认保存"); });
+  expect(mockEvent).toHaveBeenCalledTimes(1);
+  expect(mockEvent.mock.calls[0]).toEqual([mockAuthFetch, tinyMeal.id, expect.objectContaining({
+    idempotency_key: "prepared-meal:stable-time-correction", version: 1, type, servings: remaining,
+  })]);
+  expect(output(tree)).not.toContain("剩余 ");
+  expect(output(tree)).not.toContain("重试原提交");
+  expect(mockStore.has(storageKey)).toBe(false);
+  act(() => tree.unmount());
+});

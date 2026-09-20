@@ -1,5 +1,6 @@
 import { createRequestGate } from "./requestGate";
 import { agentMessageText, mergeTaskResponse } from "./taskState";
+import { useChatSessions } from "./useChatSessions";
 import * as Crypto from "expo-crypto";
 import { parseStructuredQuantity } from "@/utils/structuredQuantity";
 import { useState, useCallback, useEffect, useRef } from "react";
@@ -31,7 +32,6 @@ import {
   INVENTORY_SCAN_JOB_STORAGE_KEY,
   SHOPPING_LIST_STORAGE_KEY,
   getUserStorageKey,
-  storageBelongsToCurrentUser,
 } from "@/utils/userStorage";
 import { aiApi, ApiError, dietApi, healthApi, inventoryApi, recipesApi, waitForAgentRun } from "@/services/api";
 import { dateKeyAfterDays, toLocalDateKey, toLocalTimeKey } from "@/utils/date";
@@ -140,13 +140,12 @@ export default function AIAssistantScreen() {
     inventory_scan_image_uri?: string | string[];
     open_shopping_list?: string | string[];
   }>();
-  const { user } = useAuth();
+  const { user, sessionGeneration, isSessionCurrent } = useAuth();
   const authFetch = useAuthFetch();
   const [healthProfile, setHealthProfile] = useState<HealthProfile | null>(null);
   const chatStorageKey = getUserStorageKey(CHAT_SESSIONS_STORAGE_KEY, user?.id);
   const shoppingListStorageKey = getUserStorageKey(SHOPPING_LIST_STORAGE_KEY, user?.id);
   const aiConsentStorageKey = getUserStorageKey("@ai_data_consent_v1", user?.id);
-  const [loadedChatStorageKey, setLoadedChatStorageKey] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
   const [pendingConsentText, setPendingConsentText] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -158,7 +157,6 @@ export default function AIAssistantScreen() {
   const [isDeepThink, setIsDeepThink] = useState(false);
   const [isWebSearch, setIsWebSearch] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [storedMessages, setMessages] = useState<Message[]>([]);
   const messagesRef = useRef<Message[]>([]);
   const [selectedImage, setSelectedImage] = useState<{ uri: string; base64: string; mimeType: string } | null>(null);
   const autoSentPromptKey = useRef<string | null>(null);
@@ -172,21 +170,17 @@ export default function AIAssistantScreen() {
     storageLocation: "冷藏" | "冷冻" | "常温" | "";
     expireDays: string;
   } | null>(null);
-  const [storedSessions, setSessions] = useState<ChatSession[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string>(() => String(Date.now()));
+  const { ready: chatReady, error: chatStorageError, messages, sessions, currentSessionId, setMessages,
+    updateSessionMessages, selectSession, startSession, removeSession } = useChatSessions(user?.id, sessionGeneration, isSessionCurrent);
+  messagesRef.current = messages;
+  const loadedChatStorageKey = chatReady ? chatStorageKey : null;
   const [historyDrawerVisible, setHistoryDrawerVisible] = useState(false);
   const [headerMoreVisible, setHeaderMoreVisible] = useState(false);
-  const historyBelongsToCurrentUser = storageBelongsToCurrentUser(
-    chatStorageKey,
-    loadedChatStorageKey,
-  );
-  const messages = historyBelongsToCurrentUser ? storedMessages : [];
-  const sessions = historyBelongsToCurrentUser ? storedSessions : [];
   const [requestGate] = useState(createRequestGate);
   const [sendError, setSendError] = useState<string | null>(null);
   const scopeRef = useRef("");
   const scopeGeneration = useRef({ key: "", revision: 0 });
-  const scopeKey = `${chatStorageKey}:${currentSessionId}`;
+  const scopeKey = `${chatStorageKey}:${sessionGeneration}:${currentSessionId}`;
   if (scopeGeneration.current.key !== scopeKey) {
     scopeGeneration.current = { key: scopeKey, revision: scopeGeneration.current.revision + 1 };
   }
@@ -226,11 +220,7 @@ export default function AIAssistantScreen() {
     };
     void poll();
     return () => { active = false; clearTimeout(timer); };
-  }, [authFetch, scope, runKeys]);
-
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
+  }, [authFetch, scope, runKeys, setMessages]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -256,7 +246,7 @@ export default function AIAssistantScreen() {
 
   // --- 语音管线：ASR → LLM → TTS ---
   const handleVoiceQuery = useCallback(async (userText: string) => {
-    if (!userText.trim()) return;
+    if (!userText.trim() || !chatReady) return;
     const voiceScope = scopeRef.current;
     const waitingTasks = messagesRef.current.filter((message) => message.agentRun?.run.status === "awaiting_input");
     if (waitingTasks.length > 1) { setSendError("当前有多个待补充任务，请取消多余任务后再回复。"); return; }
@@ -289,8 +279,8 @@ export default function AIAssistantScreen() {
           messages: buildChatHistory(messagesRef.current, userText), source: "voice", idempotencyKey: userMsg.id,
           ...(sessionId ? { sessionId } : {}),
         });
-      if (scopeRef.current !== voiceScope) return;
       setMessages((prev) => prev.map((message) => message.id === messageId ? mergeTaskResponse(message, res) : message));
+      if (scopeRef.current !== voiceScope) return;
       releaseRequest();
       // The task card is already live; this wait only controls when TTS starts.
       const completedRun = await waitForAgentRun(authFetch, res.run);
@@ -306,18 +296,18 @@ export default function AIAssistantScreen() {
         speak(replyText);
       }
     } catch (err) {
-      if (scopeRef.current !== voiceScope) return;
-      console.error("Voice pipeline error:", err);
       const message =
         err instanceof Error && err.message
           ? err.message
           : "AI 对话请求失败，请稍后重试";
       setMessages((prev) => prev.map((item) => item.id === messageId && !item.agentRun
         ? { ...item, text: message, status: "failed" } : item));
+      if (scopeRef.current !== voiceScope) return;
+      console.error("Voice pipeline error:", err);
       setVoiceState("completed");
     }
     finally { releaseRequest(); }
-  }, [requestGate, authFetch, currentSessionId, speak, stopTTS, voiceTTSEnabled]);
+  }, [chatReady, setMessages, requestGate, authFetch, currentSessionId, speak, stopTTS, voiceTTSEnabled]);
 
   const { isRecording, toggleRecording, stopRecording } = useVoiceRecorder({
     onSpeechResult: (recognizedText) => {
@@ -393,70 +383,6 @@ export default function AIAssistantScreen() {
     }
   };
 
-  // 📚 自动加载与保存多会话历史记录
-  useEffect(() => {
-    setLoadedChatStorageKey(null);
-    setSessions([]);
-    setMessages([]);
-    setCurrentSessionId(String(Date.now()));
-    if (!chatStorageKey) return;
-
-    let active = true;
-    AsyncStorage.getItem(chatStorageKey)
-      .then((saved) => {
-        if (!active || !saved) return;
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setSessions(parsed);
-            setCurrentSessionId(parsed[0].id);
-            setMessages(parsed[0].messages || []);
-          }
-        } catch {
-          // Ignore malformed data belonging to the current user only.
-        }
-      })
-      .finally(() => {
-        if (active) setLoadedChatStorageKey(chatStorageKey);
-      });
-    return () => {
-      active = false;
-    };
-  }, [chatStorageKey]);
-
-  useEffect(() => {
-    if (
-      !chatStorageKey
-      || loadedChatStorageKey !== chatStorageKey
-      || messages.length === 0
-    ) return;
-
-    setSessions((prev) => {
-      const existingIndex = prev.findIndex((s) => s.id === currentSessionId);
-      const userFirstMsg = messages.find((m) => m.sender === "user")?.text || "与食语的对话";
-      const title = userFirstMsg.length > 14 ? userFirstMsg.slice(0, 14) + "..." : userFirstMsg;
-      const updatedAt = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-      let updatedSessions: ChatSession[];
-      if (existingIndex >= 0) {
-        updatedSessions = [...prev];
-        updatedSessions[existingIndex] = {
-          ...updatedSessions[existingIndex],
-          title,
-          updatedAt,
-          messages,
-        };
-      } else {
-        updatedSessions = [
-          { id: currentSessionId, title, updatedAt, messages },
-          ...prev,
-        ];
-      }
-      void AsyncStorage.setItem(chatStorageKey, JSON.stringify(updatedSessions));
-      return updatedSessions;
-    });
-  }, [messages, currentSessionId, chatStorageKey, loadedChatStorageKey]);
-
   useEffect(() => {
     if (openShoppingList === "true" || (Array.isArray(openShoppingList) && openShoppingList[0] === "true")) {
       handleOpenShoppingList();
@@ -466,41 +392,26 @@ export default function AIAssistantScreen() {
   // 新建新对话
   const handleStartNewChat = () => {
     historyLimitNoticeShown.current = false;
-    const newId = String(Date.now());
-    setCurrentSessionId(newId);
-    setMessages([]);
+    startSession();
     setHistoryDrawerVisible(false);
   };
 
   // 切换已有历史会话
   const handleSelectSession = (session: ChatSession) => {
-    setCurrentSessionId(session.id);
-    setMessages(session.messages || []);
+    selectSession(session.id);
     setHistoryDrawerVisible(false);
   };
 
   // 删除单条会话
   const handleDeleteSession = async (sessionId: string) => {
+    const deleteScope = scopeRef.current;
     try {
       await aiApi.deleteConversation(authFetch, sessionId);
     } catch (error) {
-      Alert.alert("删除失败", error instanceof Error ? error.message : "无法同步删除服务端会话，请稍后重试。");
+      if (scopeRef.current === deleteScope) Alert.alert("删除失败", error instanceof Error ? error.message : "无法同步删除服务端会话，请稍后重试。");
       return;
     }
-    const updated = sessions.filter((s) => s.id !== sessionId);
-    setSessions(updated);
-    if (chatStorageKey) {
-      void AsyncStorage.setItem(chatStorageKey, JSON.stringify(updated));
-    }
-
-    if (sessionId === currentSessionId) {
-      if (updated.length > 0) {
-        setCurrentSessionId(updated[0].id);
-        setMessages(updated[0].messages);
-      } else {
-        handleStartNewChat();
-      }
-    }
+    removeSession(sessionId);
   };
 
   // 📝 对话框内置即时修改打卡 Modal State
@@ -544,7 +455,7 @@ export default function AIAssistantScreen() {
 
   const handleSendMessage = useCallback(async (textToSend?: string) => {
     const text = textToSend || inputText;
-    if ((!text.trim() && !selectedImage) || loading) return;
+    if ((!text.trim() && !selectedImage) || loading || !chatReady) return;
     const requestScope = scopeRef.current;
     const releaseRequest = requestGate.acquire(requestScope);
     if (!releaseRequest) return;
@@ -597,8 +508,7 @@ export default function AIAssistantScreen() {
         let data: Record<string, any>;
         if (target?.agentRun) {
           const response = await aiApi.resumeAgentRun<AgentResponse>(authFetch, target.agentRun.run.id, { input: userPromptText });
-          if (scopeRef.current !== requestScope) return;
-          setMessages((prev) => prev.map((message) => message.id === responseMessageId ? { ...message, text: agentMessageText(response.run), agentRun: { run: response.run, events: message.agentRun?.events || [] } } : message));
+          setMessages((prev) => prev.map((message) => message.id === responseMessageId ? mergeTaskResponse(message, response) : message));
           return;
         }
         try {
@@ -620,6 +530,7 @@ export default function AIAssistantScreen() {
               && error !== null
               && (error as { code?: unknown }).code === "VALIDATION_ERROR";
           if (!isValidationError) throw error;
+          if (!user?.id || !isSessionCurrent(user.id, sessionGeneration)) return;
           data = await aiApi.chat<Record<string, any>>(authFetch, {
             prompt: userPromptText,
             source: "assistant",
@@ -628,7 +539,6 @@ export default function AIAssistantScreen() {
             ...(attachment ? { image: attachment.base64, imageMimeType: attachment.mimeType } : {}),
           });
         }
-        if (scopeRef.current !== requestScope) return;
         const agentResponse = data as AgentResponse & Record<string, any>;
         if (attachment && agentResponse.run?.id) {
           setMessages((prev) => prev.map((message) => message.id === userMessageId
@@ -655,25 +565,23 @@ export default function AIAssistantScreen() {
         };
 
         setMessages((prev) => prev.map((message) => message.id === responseMessageId ? aiMsg : message));
-        setLastAIReplyText(responseText);
+        if (scopeRef.current === requestScope) setLastAIReplyText(responseText);
       } catch (err: any) {
+        const errorText = err instanceof Error ? err.message : "AI 对话请求失败，请稍后重试";
+        // The captured updater still belongs to the originating chat after navigation.
+        // A known run remains recoverable by polling, even if a resume request fails.
+        setMessages((prev) => prev.map((message) => message.id === responseMessageId && !message.agentRun
+          ? { ...message, text: errorText, status: "failed" } : message));
         if (scopeRef.current !== requestScope) return;
         console.error("[AIAssistant Error]", err);
-        const fallbackMsg: Message = {
-          id: (Date.now() + 1).toString(),
-          sender: "ai",
-          text: err instanceof Error ? err.message : "AI 对话请求失败，请稍后重试",
-          status: "failed",
-          time: "刚刚",
-        };
-        setMessages((prev) => prev.map((message) => message.id === responseMessageId ? { ...message, text: fallbackMsg.text } : message));
+        if (target?.agentRun) setSendError(errorText);
       } finally {
         if (scopeRef.current === requestScope) setLoading(false);
       }
     } catch (error) {
       if (scopeRef.current === requestScope) setSendError(error instanceof Error ? error.message : "无法读取发送设置，请重试。");
     } finally { releaseRequest(); }
-  }, [requestGate, aiConsentStorageKey, authFetch, inputText, selectedImage, loading, currentSessionId, router]);
+  }, [chatReady, setMessages, requestGate, aiConsentStorageKey, authFetch, inputText, selectedImage, loading, currentSessionId, router, user?.id, sessionGeneration, isSessionCurrent]);
 
   // 其他页面携带 prompt 跳转时，进入对话页后自动发给 AI，而不是只填入输入框。
   useEffect(() => {
@@ -698,8 +606,7 @@ export default function AIAssistantScreen() {
     const messageId = `inventory-scan-${jobId}`;
     const sessionId = `inventory-session-${Date.now()}`;
 
-    setCurrentSessionId(sessionId);
-    setMessages([
+    startSession(sessionId, [
       {
         id: `${messageId}-user`,
         sender: "user",
@@ -732,7 +639,7 @@ export default function AIAssistantScreen() {
             const savedIds = new Set(accepted.savedSourceItemIds);
             const remaining = items.filter(item => !savedIds.has(item.id));
             const savedText = accepted.items.length ? `已保存 ${accepted.items.length} 项：${accepted.items.map(item => item.food_name).join("、")}。` : "";
-            setMessages((current) => current.map((message) =>
+            updateSessionMessages(sessionId, (current) => current.map((message) =>
               message.id === messageId
                 ? {
                     ...message,
@@ -754,7 +661,7 @@ export default function AIAssistantScreen() {
         throw new Error("识别仍在后台进行。稍后重新进入食语，我会继续展示这次任务。");
       } catch (error) {
         if (!active) return;
-        setMessages((current) => current.map((message) =>
+        updateSessionMessages(sessionId, (current) => current.map((message) =>
           message.id === messageId && message.inventoryScanCard
             ? {
                 ...message,
@@ -772,7 +679,7 @@ export default function AIAssistantScreen() {
 
     void pollScanJob();
     return () => { active = false; };
-  }, [authFetch, chatStorageKey, inventoryScanImageUri, inventoryScanJobId, loadedChatStorageKey]);
+  }, [authFetch, chatStorageKey, inventoryScanImageUri, inventoryScanJobId, loadedChatStorageKey, startSession, updateSessionMessages]);
 
   const toggleInventoryScanItem = (msgId: string, itemId: string) => {
     setMessages((current) => current.map((message) =>
@@ -1249,7 +1156,7 @@ export default function AIAssistantScreen() {
 
   const updateAgentMessage = useCallback((messageId: string, response: AgentResponse) => {
     setMessages((current) => current.map((message) => message.id === messageId ? mergeTaskResponse(message, response) : message));
-  }, []);
+  }, [setMessages]);
 
   const handleAgentResume = useCallback(async (
     messageId: string,
@@ -1286,7 +1193,7 @@ export default function AIAssistantScreen() {
     setMessages((current) => current.map((message) => message.id === messageId && message.agentRun
       ? { ...message, agentRun: { ...message.agentRun, undoState: "completed" } }
       : message));
-  }, [authFetch]);
+  }, [authFetch, setMessages]);
 
   const handleSafeGoBack = () => {
     if (router.canGoBack()) {
@@ -1355,7 +1262,7 @@ export default function AIAssistantScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         className="flex-1 flex-col justify-between"
       >
-        {sendError ? <Text accessibilityRole="alert" className="px-4 py-2 text-xs text-critical">{sendError}</Text> : null}
+        {sendError || chatStorageError ? <Text accessibilityRole="alert" className="px-4 py-2 text-xs text-critical">{sendError || chatStorageError}</Text> : null}
         {/* Full Screen Header */}
         <View className="relative flex-row items-center justify-between border-b border-line/70 bg-surface/45 px-4 py-2.5">
           <TouchableOpacity

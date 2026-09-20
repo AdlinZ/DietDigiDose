@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, ActivityIndicator, Alert, Image } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, ActivityIndicator, Image } from 'react-native';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
@@ -7,19 +7,45 @@ import FontAwesome6 from '@/components/ThemedFontAwesome6';
 import * as ImagePicker from 'expo-image-picker';
 import { DEFAULT_AVATARS, getAvatarSource, getPresetAvatarValue } from '@/utils/defaultAvatar';
 import { useAppThemeColors } from '@/hooks/useAppThemeColors';
+import { authApi } from '@/services/api/auth';
+
+type PublicProfile = NonNullable<ReturnType<typeof useAuth>['user']>;
 
 export default function ProfileEditScreen() {
+  const { user, token } = useAuth();
+  return user && token ? <ProfileEditLoader key={`${user.id}:${token}`} token={token} /> : null;
+}
+
+function ProfileEditLoader({ token }: { token: string }) {
+  const [profile, setProfile] = useState<PublicProfile | null>(null);
+  const [error, setError] = useState('');
+  const [attempt, retry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    void authApi.me<PublicProfile>(token).then(value => {
+      if (active) { setProfile(value); setError(''); }
+    }).catch(() => { if (active) setError('公开资料读取失败，请重试后再编辑'); });
+    return () => { active = false; };
+  }, [token, attempt]);
+  if (!profile) return <Screen><View className="flex-1 items-center justify-center gap-4 p-6">{error ? <><Text accessibilityRole="alert" className="text-critical">{error}</Text><TouchableOpacity onPress={() => { setError(''); retry(value => value + 1); }}><Text className="text-brand">重试</Text></TouchableOpacity></> : <ActivityIndicator />}</View></Screen>;
+  return <ProfileEditForm initialProfile={profile} />;
+}
+
+function ProfileEditForm({ initialProfile }: { initialProfile: PublicProfile }) {
   const { user, updateProfile } = useAuth();
   const router = useSafeRouter();
   const colors = useAppThemeColors();
   const styles = createStyles(colors);
-  const [username, setUsername] = useState(user?.username || '');
-  const [bio, setBio] = useState(user?.bio || '');
+  const [username, setUsername] = useState(initialProfile.username);
+  const [bio, setBio] = useState(initialProfile.bio || '');
   const [avatarUrl, setAvatarUrl] = useState(
-    user?.avatar_url || getPresetAvatarValue((user?.id || 0) % DEFAULT_AVATARS.length),
+    initialProfile.avatar_url || getPresetAvatarValue(initialProfile.id % DEFAULT_AVATARS.length),
   );
-  const [dailyCaloriesTarget, setDailyCaloriesTarget] = useState(user?.daily_calories_target?.toString() || '2000');
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const sending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -30,7 +56,7 @@ export default function ProfileEditScreen() {
       base64: true,
     });
 
-    if (!result.canceled && result.assets && result.assets.length > 0) {
+    if (mounted.current && !result.canceled && result.assets && result.assets.length > 0) {
       const asset = result.assets[0];
       if (asset.base64) {
         setAvatarUrl(`data:image/jpeg;base64,${asset.base64}`);
@@ -41,19 +67,23 @@ export default function ProfileEditScreen() {
   };
 
   const handleSave = async () => {
+    if (sending.current) return;
+    if (username.trim().length < 2) { setMessage('昵称请填写 2–30 个字符'); return; }
+    sending.current = true;
     setLoading(true);
-    const target = parseInt(dailyCaloriesTarget, 10);
+    setMessage('');
     const result = await updateProfile({ 
       username: username.trim(),
       bio: bio.trim(),
       avatar_url: avatarUrl,
-      daily_calories_target: isNaN(target) ? 2000 : target,
     });
+    sending.current = false;
+    if (!mounted.current) return;
     setLoading(false);
     if (result.success) {
-      router.back();
+      setMessage('已保存公开资料');
     } else {
-      Alert.alert('错误', result.error || '保存失败');
+      setMessage(result.error || '保存失败，请重试');
     }
   };
 
@@ -118,18 +148,20 @@ export default function ProfileEditScreen() {
 
             {/* Form */}
             <View style={styles.form}>
+              {message ? <Text accessibilityLiveRegion="polite" className="text-brand">{message}</Text> : null}
               <View style={styles.field}>
                 <Text style={styles.label}>用户名</Text>
                 <View style={styles.inputGroup}>
                   <TextInput
                     style={styles.input}
                     value={username}
-                    onChangeText={setUsername}
+                    onChangeText={value => { setUsername(value); setMessage(''); }}
                     placeholder="社区和菜谱中公开显示的名称"
                     placeholderTextColor={colors['copy-muted']}
                     maxLength={30}
                   />
                 </View>
+                <Text className="mt-1 text-xs text-copy-muted">2–30 个字符，公开显示，可随时修改</Text>
               </View>
               <View style={styles.field}>
                 <Text style={styles.label}>个人简介</Text>
@@ -147,19 +179,9 @@ export default function ProfileEditScreen() {
                 </View>
               </View>
 
-              <View style={styles.field}>
-                <Text style={styles.label}>每日目标卡路里 (kcal)</Text>
-                <View style={styles.inputGroup}>
-                  <TextInput
-                    style={styles.input}
-                    value={dailyCaloriesTarget}
-                    onChangeText={setDailyCaloriesTarget}
-                    placeholder="例如: 2000"
-                    placeholderTextColor={colors['copy-muted']}
-                    keyboardType="numeric"
-                  />
-                </View>
-              </View>
+              <TouchableOpacity onPress={() => router.push('/health-profile', { section: 'nutrition' })}>
+                <Text style={styles.saveText}>管理营养目标与饮食偏好 ›</Text>
+              </TouchableOpacity>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>

@@ -4,6 +4,7 @@ import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type { Pool } from "pg";
 import type { RecommendationRequestWrite, RecipeQuery, RecommendationsRepository } from "./repository.js";
 import type { RecommendationEventInput, Row } from "./types.js";
+import { calorieTarget } from "../health/projections.js";
 
 export class PostgresRecommendationsRepository implements RecommendationsRepository {
   private readonly pool: Pool;
@@ -82,8 +83,8 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
   async dietTotals(userId: number, date: string) { const row = (await this.pool.query(`SELECT COALESCE(SUM(calories), 0) AS calories,
     COALESCE(SUM(protein), 0) AS protein FROM diet_records WHERE user_id = $1 AND recorded_at = $2`, [userId, date])).rows[0];
     return { calories: Number(row.calories), protein: Number(row.protein) }; }
-  async dailyCaloriesTarget(userId: number) { const row = (await this.pool.query("SELECT daily_calories_target FROM users WHERE id = $1", [userId])).rows[0];
-    return Number(row?.daily_calories_target || 2000); }
+  async dailyCaloriesTarget(userId: number) { const row = (await this.pool.query("SELECT nutrition_targets_json,nutrition_target_source FROM user_health_profiles WHERE user_id = $1", [userId])).rows[0];
+    const target = calorieTarget(row); return target.value ?? target.referenceValue; }
   async findRequest(userId: number, requestId: string) { return ((await this.pool.query(`SELECT * FROM recipe_recommendation_requests
     WHERE id = $1 AND user_id = $2 AND expires_at > CURRENT_TIMESTAMP`, [requestId, userId])).rows[0] as Row | undefined) || null; }
   async createRequest(input: RecommendationRequestWrite) { await this.pool.query(`INSERT INTO recipe_recommendation_requests

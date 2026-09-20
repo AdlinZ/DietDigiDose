@@ -3,6 +3,7 @@ import type { AuthVerificationRepository } from "./repository.js";
 import type {
   ChallengeCreate, DeliveryReport, EventFilters, RegistrationResult, UsageCounter,
   VerificationChallenge, VerificationEventInput, VerificationSubject,
+  ReauthUser, ReauthGrantInput,
 } from "./types.js";
 
 export class PostgresAuthVerificationRepository implements AuthVerificationRepository {
@@ -45,15 +46,15 @@ export class PostgresAuthVerificationRepository implements AuthVerificationRepos
       WHERE usage_date=$1 AND channel='sms' AND provider=$2`, [usageDate, provider])).rows[0]?.count || 0);
   }
   async createChallenge(input: ChallengeCreate) {
-    await this.pool.query(`INSERT INTO auth_verification_challenges(id,subject_id,purpose,out_id,status,expires_at,source_ip,user_agent)
-      VALUES($1,$2,$3,$4,'pending',$5,$6,$7)`, [input.id, input.subjectId, input.purpose, input.outId,
-      input.expiresAt, input.sourceIp, input.userAgent]);
+    await this.pool.query(`INSERT INTO auth_verification_challenges(id,subject_id,purpose,out_id,status,expires_at,source_ip,user_agent,reauth_user_id,reauth_session_version)
+      VALUES($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9)`, [input.id, input.subjectId, input.purpose, input.outId,
+      input.expiresAt, input.sourceIp, input.userAgent,input.reauthUserId ?? null,input.reauthSessionVersion ?? null]);
   }
   async failChallenge(challengeId: string) { await this.status(challengeId, "failed"); }
   async acceptChallenge(challengeId: string, subjectId: number, bizId: string | null, requestId: string | null) {
     await this.tx(async (client) => {
       await client.query(`UPDATE auth_verification_challenges SET status='superseded',updated_at=CURRENT_TIMESTAMP
-        WHERE subject_id=$1 AND id<>$2 AND status IN('pending','accepted')`, [subjectId, challengeId]);
+        WHERE subject_id=$1 AND id<>$2 AND purpose=(SELECT purpose FROM auth_verification_challenges WHERE id=$2) AND status IN('pending','accepted')`, [subjectId, challengeId]);
       await client.query(`UPDATE auth_verification_challenges SET status='accepted',biz_id=$1,provider_request_id=$2,updated_at=CURRENT_TIMESTAMP
         WHERE id=$3`, [bizId, requestId, challengeId]);
     });
@@ -93,7 +94,7 @@ export class PostgresAuthVerificationRepository implements AuthVerificationRepos
     return this.challengeBy(`c.registration_token_hash=$1 AND c.status='verified' AND c.consumed_at IS NULL
       AND c.registration_expires_at>CURRENT_TIMESTAMP`, tokenHash);
   }
-  async register(input: { tokenHash: string; phone: string; username: string; passwordHash: string; at: string }): Promise<RegistrationResult> {
+  async register(input: { tokenHash: string; phone: string; username: string; passwordHash: string | null; at: string }): Promise<RegistrationResult> {
     return this.tx(async (client) => {
       const challenge = (await client.query(`SELECT c.id,c.subject_id FROM auth_verification_challenges c
         WHERE c.registration_token_hash=$1 AND c.status='verified' AND c.consumed_at IS NULL
@@ -103,8 +104,8 @@ export class PostgresAuthVerificationRepository implements AuthVerificationRepos
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`auth:username:${input.username.toLowerCase()}`]);
       if ((await client.query("SELECT 1 FROM users WHERE phone=$1", [input.phone])).rowCount) return { status: "phone_exists" } as const;
       if ((await client.query("SELECT 1 FROM users WHERE LOWER(username)=LOWER($1)", [input.username])).rowCount) return { status: "username_exists" } as const;
-      const inserted = await client.query(`INSERT INTO users(username,email,phone,password_hash,avatar_url,phone_verified_at)
-        VALUES($1,NULL,$2,$3,NULL,$4) ON CONFLICT DO NOTHING RETURNING id`,
+      const inserted = await client.query(`INSERT INTO users(username,email,phone,password_hash,avatar_url,phone_verified_at,daily_calories_target)
+        VALUES($1,NULL,$2,$3,NULL,$4,NULL) ON CONFLICT DO NOTHING RETURNING id`,
       [input.username, input.phone, input.passwordHash, input.at]);
       if (!inserted.rowCount) {
         if ((await client.query("SELECT 1 FROM users WHERE phone=$1", [input.phone])).rowCount) return { status: "phone_exists" } as const;
@@ -120,8 +121,21 @@ export class PostgresAuthVerificationRepository implements AuthVerificationRepos
   }
   async userResponse(userId: number) {
     return (await this.pool.query(`SELECT id,username,email,phone,avatar_url,bio,role,daily_calories_target,created_at,
-      phone_verified_at,last_login_at,last_login_ip FROM users WHERE id=$1`, [userId])).rows[0] || null;
+      phone_verified_at,last_login_at,last_login_ip,password_hash IS NOT NULL AS "hasPassword" FROM users WHERE id=$1`, [userId])).rows[0] || null;
   }
+
+  async reauthUser(userId: number) { return ((await this.pool.query("SELECT id,phone,phone_verified_at,session_version,is_disabled,role FROM users WHERE id=$1",[userId])).rows[0] as ReauthUser | undefined) || null; }
+  async issueReauthGrant(input: ReauthGrantInput) { return this.tx(async (client) => {
+    const valid = await client.query(`SELECT u.id FROM users u JOIN auth_verification_challenges c ON c.reauth_user_id=u.id
+      WHERE u.id=$1 AND u.phone=$2 AND u.phone_verified_at IS NOT NULL AND u.session_version=$3 AND NOT COALESCE(u.is_disabled,FALSE)
+      AND c.id=$4 AND c.purpose=$5 AND c.reauth_session_version=u.session_version AND c.status='verifying' AND c.expires_at>CURRENT_TIMESTAMP FOR UPDATE OF u,c`,
+      [input.userId,input.phone,input.sessionVersion,input.challengeId,input.purpose]);
+    if (!valid.rowCount) return false;
+    await client.query(`INSERT INTO account_reauth_grants(token_hash,user_id,purpose,phone,session_version,expires_at) VALUES($1,$2,$3,$4,$5,$6)`,
+      [input.tokenHash,input.userId,input.purpose,input.phone,input.sessionVersion,input.expiresAt]);
+    await client.query("UPDATE auth_verification_challenges SET status='consumed',consumed_at=CURRENT_TIMESTAMP,verified_at=CURRENT_TIMESTAMP WHERE id=$1",[input.challengeId]);
+    return true;
+  }); }
   async recentSendEvent() {
     return (await this.pool.query(`SELECT event_type AS "eventType",outcome,provider_code AS "providerCode",created_at AS "createdAt"
       FROM auth_verification_events WHERE channel='sms' AND event_type IN('send_accepted','send_rejected','send_failed')

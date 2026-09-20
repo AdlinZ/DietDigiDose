@@ -15,7 +15,7 @@ export type RegistrationResult =
 export type LoginUser = Row & {
   id: number;
   username: string;
-  password_hash: string;
+  password_hash: string | null;
   role: string;
   session_version: number;
   is_disabled: number | boolean;
@@ -24,7 +24,7 @@ export type LoginUser = Row & {
 export type AccountCredentials = {
   username?: string;
   role: string;
-  password_hash: string;
+  password_hash: string | null;
 };
 
 export type ProfileInput = {

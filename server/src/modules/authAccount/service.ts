@@ -6,6 +6,9 @@ import { describeStoredMediaUrls } from "../../services/mediaStorage.js";
 import { AuthAccountError } from "./errors.js";
 import type { AuthAccountRepository } from "./repository.js";
 import type { ProfileInput, Row } from "./types.js";
+import { accountPasswordSchema, type AccountDeletionProof } from "@dietdigidose/contracts";
+import { hashRegistrationToken } from "../../services/authVerificationCrypto.js";
+import type { AccountMutationProof } from "./reauthProof.js";
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phonePattern = /^1[3-9]\d{9}$/;
@@ -28,6 +31,8 @@ function actorHash(userId: number) {
 function booleanNumber(value: unknown) { return value === true ? 1 : value === false ? 0 : value; }
 function legacyUser(row: Row) {
   const copy = { ...row };
+  if ("password_hash" in copy) { copy.hasPassword = !!copy.password_hash; delete copy.password_hash; }
+  if ("hasPassword" in copy) copy.hasPassword = Boolean(copy.hasPassword);
   for (const key of ["must_change_password", "is_disabled", "is_verified_expert"]) {
     if (key in copy) copy[key] = booleanNumber(copy[key]);
   }
@@ -60,7 +65,7 @@ export class AuthAccountService {
       throw new AuthAccountError(400, "请输入管理员账号，或注册时的邮箱/手机号", "INVALID_IDENTIFIER", true);
     }
     const user = await this.repository.findLoginUser(parsed.value, adminUsername);
-    if (!user || !bcrypt.compareSync(String(password), user.password_hash)) {
+    if (!user?.password_hash || !bcrypt.compareSync(String(password), user.password_hash)) {
       throw new AuthAccountError(401, "账号、邮箱、手机号或密码错误", "INVALID_CREDENTIALS", true);
     }
     if (user.is_disabled === 1 || user.is_disabled === true) {
@@ -73,7 +78,7 @@ export class AuthAccountService {
       resourceType: "session", resourceId: user.id, summary: "管理员登录成功", ipAddress: clientIp, userAgent });
     const { password_hash: _passwordHash, session_version: _sessionVersion, ...userInfo } = user;
     return { rawIdentifier: parsed.raw, token: token(user.id, sessionVersion),
-      user: legacyUser({ ...userInfo, last_login_at: nowIso, last_login_ip: clientIp }) };
+      user: legacyUser({ ...userInfo, hasPassword: true, last_login_at: nowIso, last_login_ip: clientIp }) };
   }
 
   async me(userId: number) {
@@ -87,13 +92,20 @@ export class AuthAccountService {
     if (typeof newPassword !== "string" || newPassword.length < 6) throw new AuthAccountError(400, "新密码长度不能少于 6 位");
     if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) throw new AuthAccountError(400, "新密码必须同时包含字母和数字");
     const user = await this.repository.getCredentials(userId);
-    if (!user || !bcrypt.compareSync(String(currentPassword), user.password_hash)) throw new AuthAccountError(400, "当前密码不正确");
+    if (!user?.password_hash || !bcrypt.compareSync(String(currentPassword), user.password_hash)) throw new AuthAccountError(400, "当前密码不正确");
     if (bcrypt.compareSync(newPassword, user.password_hash)) throw new AuthAccountError(400, "新密码不能与当前密码相同");
-    const changed = await this.repository.changePassword(userId, bcrypt.hashSync(newPassword, bcrypt.genSaltSync(12)));
+    const changed = await this.repository.changePassword(userId, bcrypt.hashSync(newPassword, bcrypt.genSaltSync(12)), { passwordHash: user.password_hash });
     if (!changed) throw new AuthAccountError(400, "当前密码不正确");
     if (user.role === "admin") await this.repository.recordAdminAudit({ adminUserId: userId, action: "auth.password.change",
       resourceType: "user", resourceId: userId, summary: `管理员 ${user.username || "admin"} 修改密码`, ipAddress, userAgent });
     return { success: true, message: "密码修改成功" };
+  }
+
+  async setPassword(userId: number, newPassword: string, reauthToken: string) {
+    if (!accountPasswordSchema.safeParse(newPassword).success) throw new AuthAccountError(400, "密码需为6–128位，包含字母和数字", "INVALID_PASSWORD");
+    const changed = await this.repository.changePassword(userId, await bcrypt.hash(newPassword, 12), { tokenHash: hashRegistrationToken(reauthToken) });
+    if (!changed) throw new AuthAccountError(404, "用户不存在", "USER_NOT_FOUND");
+    return { success: true, message: "密码已设置，请重新登录" };
   }
 
   async updateProfile(userId: number, input: ProfileInput) {
@@ -108,14 +120,19 @@ export class AuthAccountService {
 
   async deleteAiData(userId: number) { return { success: true, deleted: await this.repository.deleteAiData(userId) }; }
 
-  async deleteAccount(userId: number, password: string) {
+  async deleteAccount(userId: number, input: string | AccountDeletionProof) {
     const user = await this.repository.getCredentials(userId);
     if (!user) throw new AuthAccountError(404, "用户不存在", "USER_NOT_FOUND");
     if (user.role === "admin") throw new AuthAccountError(403, "管理员账号不能通过客户端注销", "ADMIN_ACCOUNT_DELETE_FORBIDDEN");
-    if (!bcrypt.compareSync(password, user.password_hash)) throw new AuthAccountError(400, "当前密码不正确", "INVALID_PASSWORD");
+    const proof = typeof input === "string" ? { password: input } : input;
+    let mutationProof: AccountMutationProof;
+    if ("password" in proof) {
+      if (!user.password_hash || !bcrypt.compareSync(proof.password, user.password_hash)) throw new AuthAccountError(400, "当前密码不正确", "INVALID_PASSWORD");
+      mutationProof = { passwordHash: user.password_hash };
+    } else mutationProof = { tokenHash: hashRegistrationToken(proof.reauthToken) };
     const urls = await this.repository.accountMediaUrls(userId);
     const uniqueUrls = [...new Set(urls.filter(Boolean))];
-    const result = await this.repository.deleteAccount(userId, actorHash(userId), uniqueUrls, describeStoredMediaUrls(userId, uniqueUrls));
+    const result = await this.repository.deleteAccount(userId, actorHash(userId), uniqueUrls, describeStoredMediaUrls(userId, uniqueUrls), mutationProof);
     if (!result.deleted) throw new AuthAccountError(404, "用户不存在", "USER_NOT_FOUND");
     if (result.cleanupJobId) {
       try { await this.processCleanup(result.cleanupJobId); }

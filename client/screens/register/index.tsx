@@ -61,7 +61,7 @@ export default function RegisterScreen() {
       : await register(identifier.trim(), username.trim(), password);
     setLoading(false);
     if (result.success) {
-      router.replace('/onboarding', returnTo ? { returnTo } : {});
+      router.replace(returnTo || '/onboarding');
     } else {
       setError(result.error || '注册失败');
     }

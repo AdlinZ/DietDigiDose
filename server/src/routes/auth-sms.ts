@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
+import { ACCOUNT_SECURITY_CAPABILITY, reauthSendSchema, reauthVerifySchema, type ReauthPurpose } from "@dietdigidose/contracts";
+import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
+import type { ReauthUser } from "../modules/authVerification/types.js";
 import bcrypt from "bcryptjs";
 import { sendError } from "../utils/http.js";
 import { ensureUserInitialState, recordFunnelEvent, signUserToken } from "../modules/accessControl/index.js";
@@ -22,6 +25,7 @@ import { hashRegistrationToken } from "../services/authVerificationCrypto.js";
 import { getSmsProvider, smsCredentialsStatus } from "../services/smsVerificationProvider.js";
 
 const router = Router();
+export const reauthRouter = Router();
 
 type ChallengeRow = {
   id: string;
@@ -38,6 +42,8 @@ type ChallengeRow = {
   subject_ciphertext: string;
   subject_iv: string;
   subject_auth_tag: string;
+  reauth_user_id?: number | null;
+  reauth_session_version?: number | null;
 };
 
 function challengeSubject(row: ChallengeRow): VerificationSubjectRow {
@@ -51,8 +57,8 @@ function challengeSubject(row: ChallengeRow): VerificationSubjectRow {
   };
 }
 
-router.post("/send", async (req, res) => {
-  const phone = normalizeMainlandPhone(req.body?.phone);
+async function sendSms(req: Request, res: Response, purpose: "login" | ReauthPurpose = "login", boundUser?: ReauthUser) {
+  const phone = normalizeMainlandPhone(boundUser?.phone ?? req.body?.phone);
   if (!phone) return sendError(res, 400, "请输入有效的中国大陆手机号", "INVALID_PHONE");
 
   const config = await getSmsServiceConfig();
@@ -95,8 +101,8 @@ router.post("/send", async (req, res) => {
   const challengeId = crypto.randomUUID();
   const outId = `sms_${crypto.randomUUID().replace(/-/g, "")}`;
   const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
-  await authVerificationService().createChallenge({ id: challengeId, subjectId: subject.id, purpose: "login",
-    outId, expiresAt, sourceIp, userAgent });
+  await authVerificationService().createChallenge({ id: challengeId, subjectId: subject.id, purpose,
+    outId, expiresAt, sourceIp, userAgent, reauthUserId: boundUser?.id, reauthSessionVersion: boundUser?.session_version });
   await incrementDailyUsage("send_api_calls");
   await recordVerificationEvent({
     subjectId: subject.id,
@@ -166,9 +172,10 @@ router.post("/send", async (req, res) => {
     console.error("[SMS Provider Error]", error instanceof Error ? error.name : "UnknownError");
     return sendError(res, 502, "短信发送失败，请稍后重试", "SMS_PROVIDER_UNAVAILABLE");
   }
-});
+}
+router.post("/send", (req,res,next) => { void sendSms(req,res).catch(next); });
 
-router.post("/verify", async (req, res) => {
+async function verifySms(req: Request, res: Response, purpose: "login" | ReauthPurpose = "login", boundUser?: ReauthUser) {
   const challengeId = typeof req.body?.challengeId === "string" ? req.body.challengeId.trim() : "";
   const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
   if (!challengeId || !/^\d{6}$/.test(code)) {
@@ -177,7 +184,9 @@ router.post("/verify", async (req, res) => {
 
   const challenge = await authVerificationService().challenge(challengeId) as ChallengeRow | null;
   if (!challenge) return sendError(res, 404, "验证码请求不存在", "SMS_CHALLENGE_NOT_FOUND");
-  if (challenge.purpose !== "login") return sendError(res, 403, "该验证码仅用于管理员测试", "SMS_CHALLENGE_PURPOSE_MISMATCH");
+  if (challenge.purpose !== purpose) return sendError(res, 403, "验证码用途不匹配，请重新获取", "SMS_CHALLENGE_PURPOSE_MISMATCH");
+  if (purpose !== "login" && (!boundUser || challenge.reauth_user_id !== boundUser.id || challenge.reauth_session_version !== boundUser.session_version
+    || decryptSubjectPhone(challengeSubject(challenge)) !== boundUser.phone)) return sendError(res,403,"身份验证已失效，请重新获取","REAUTH_REQUIRED");
 
   const sourceIp = getClientIp(req);
   const userAgent = req.get("user-agent") || null;
@@ -235,13 +244,26 @@ router.post("/verify", async (req, res) => {
         outId: challenge.out_id,
         bizId: challenge.biz_id,
       });
-      return sendError(res, 401, "验证码错误或已失效", "SMS_CODE_INVALID");
+      return sendError(res, purpose === "login" ? 401 : 400, "验证码错误或已失效", "SMS_CODE_INVALID");
     }
 
     await incrementDailyUsage("verify_passed");
+    if (purpose !== "login" && boundUser) {
+      const reauthToken = crypto.randomBytes(32).toString("base64url");
+      const issued = await authVerificationService().issueReauthGrant({ challengeId,userId:boundUser.id,purpose,phone,
+        sessionVersion:boundUser.session_version,tokenHash:hashRegistrationToken(reauthToken),expiresAt:new Date(Date.now()+5*60_000).toISOString() });
+      if (!issued) return sendError(res,403,"身份验证已失效，请重新获取","REAUTH_REQUIRED");
+      await recordVerificationEvent({ subjectId:subject.id,challengeId,eventType:"reauth",outcome:"succeeded",sourceIp,userAgent,details:{purpose} });
+      return res.json({reauthToken,expiresIn:300});
+    }
     const user = await authVerificationService().userByPhone(phone);
     const nowIso = new Date().toISOString();
     if (user) {
+      const userResponse = await authVerificationService().userResponse(user.id);
+      if (userResponse?.hasPassword === false && req.get("X-Account-Security") !== ACCOUNT_SECURITY_CAPABILITY) {
+        await authVerificationService().rejectVerification(challengeId);
+        return sendError(res,426,"请更新应用后登录此账号","CLIENT_UPDATE_REQUIRED");
+      }
       await authVerificationService().completeLogin({ userId: user.id, subjectId: subject.id, challengeId, at: nowIso, sourceIp });
       await recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "verify_passed", outcome: "passed", sourceIp, userAgent, outId: challenge.out_id, bizId: challenge.biz_id });
       await recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "login", outcome: user.is_disabled ? "account_disabled" : "succeeded", sourceIp, userAgent });
@@ -252,6 +274,7 @@ router.post("/verify", async (req, res) => {
         status: "authenticated",
         token: await signUserToken(user.id),
         user: await authVerificationService().userResponse(user.id),
+        isNewUser: false,
       });
     }
 
@@ -259,6 +282,21 @@ router.post("/verify", async (req, res) => {
     const registrationExpiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
     await authVerificationService().markRegistrationRequired({ challengeId, at: nowIso,
       tokenHash: hashRegistrationToken(registrationToken), expiresAt: registrationExpiresAt });
+    // Roll back only automatic creation; existing passwordless accounts retain SMS login and account management.
+    if (process.env.SMS_PASSWORDLESS_REGISTRATION_ENABLED !== "0"
+      && req.body?.passwordlessRegistration === true && req.get("X-Account-Security") === ACCOUNT_SECURITY_CAPABILITY) {
+      for (let attempt=0;attempt<5;attempt++) {
+        const registered = await authVerificationService().register({ tokenHash:hashRegistrationToken(registrationToken),phone,
+          username:`食光用户${crypto.randomBytes(5).toString("hex")}`,passwordHash:null,at:nowIso });
+        if (registered.status === "username_exists") continue;
+        if (registered.status !== "created") return sendError(res,409,"手机号状态已更新，请重新登录","REGISTRATION_RETRY_REQUIRED");
+        await recordVerificationEvent({subjectId:subject.id,challengeId,eventType:"registration",outcome:"succeeded",sourceIp,userAgent});
+        await recordFunnelEvent(registered.userId,"account_registered");
+        return res.status(201).json({status:"authenticated",token:await signUserToken(registered.userId),
+          user:await authVerificationService().userResponse(registered.userId),isNewUser:true});
+      }
+      return sendError(res,503,"账号创建繁忙，请稍后重试","REGISTER_RETRY_REQUIRED");
+    }
     await recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "verify_passed", outcome: "registration_required", sourceIp, userAgent, outId: challenge.out_id, bizId: challenge.biz_id });
     return res.json({
       status: "registration_required",
@@ -273,6 +311,28 @@ router.post("/verify", async (req, res) => {
     console.error("[SMS Verify Provider Error]", error instanceof Error ? error.name : "UnknownError");
     return sendError(res, 502, "验证码核验服务暂时不可用", "SMS_VERIFY_UNAVAILABLE");
   }
+}
+router.post("/verify", (req,res,next) => { void verifySms(req,res).catch(next); });
+
+reauthRouter.use(authMiddleware);
+reauthRouter.post("/send",async (req: AuthRequest,res,next) => {
+  try {
+    const parsed = reauthSendSchema.safeParse(req.body);
+    if (!parsed.success) return sendError(res,400,"请选择有效的验证用途","INVALID_REAUTH_PURPOSE");
+    const user = await authVerificationService().reauthUser(req.userId!);
+    if (!user?.phone || !user.phone_verified_at || user.is_disabled) return sendError(res,403,"此账号没有可用的已验证手机号","VERIFIED_PHONE_REQUIRED");
+    if (parsed.data.purpose === "account_delete" && user.role === "admin") return sendError(res,403,"管理员账号不能通过客户端注销","ADMIN_ACCOUNT_DELETE_FORBIDDEN");
+    return await sendSms(req,res,parsed.data.purpose,user);
+  } catch(error) { return next(error); }
+});
+reauthRouter.post("/verify",async (req: AuthRequest,res,next) => {
+  try {
+    const parsed = reauthVerifySchema.safeParse(req.body);
+    if (!parsed.success) return sendError(res,400,"请输入有效的验证码","INVALID_VERIFICATION_INPUT");
+    const user = await authVerificationService().reauthUser(req.userId!);
+    if (!user?.phone || !user.phone_verified_at || user.is_disabled) return sendError(res,403,"此账号没有可用的已验证手机号","VERIFIED_PHONE_REQUIRED");
+    return await verifySms(req,res,parsed.data.purpose,user);
+  } catch(error) { return next(error); }
 });
 
 router.post("/register", async (req, res) => {

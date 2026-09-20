@@ -7,8 +7,8 @@
   },
   "server": {
     "directory": "server/dist",
-    "maxTotalBytes": 2200000,
-    "maxJavaScriptBytes": 2200000,
+    "maxTotalBytes": 2300000,
+    "maxJavaScriptBytes": 2300000,
     "maxLargestJavaScriptBytes": 1100000
   },
   "admin-web": {

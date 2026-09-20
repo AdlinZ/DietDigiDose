@@ -169,7 +169,7 @@ export function initDatabase() {
       role TEXT DEFAULT 'user',
       must_change_password INTEGER DEFAULT 0,
       session_version INTEGER NOT NULL DEFAULT 1,
-      daily_calories_target INTEGER DEFAULT 2000,
+      daily_calories_target INTEGER DEFAULT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
@@ -532,14 +532,14 @@ export function initDatabase() {
     CREATE TABLE IF NOT EXISTS user_health_profiles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER UNIQUE NOT NULL,
-      gender TEXT DEFAULT '保密',
+      gender TEXT DEFAULT NULL,
       age INTEGER,
       height REAL,
       weight REAL,
       target_weight REAL,
-      health_goal TEXT DEFAULT 'healthy',
-      activity_level TEXT DEFAULT 'moderate',
-      dietary_preference TEXT DEFAULT '无特别偏好',
+      health_goal TEXT DEFAULT NULL,
+      activity_level TEXT DEFAULT NULL,
+      dietary_preference TEXT DEFAULT NULL,
       allergies_json TEXT DEFAULT '[]',
       medications TEXT DEFAULT '',
       medical_conditions_json TEXT DEFAULT '[]',

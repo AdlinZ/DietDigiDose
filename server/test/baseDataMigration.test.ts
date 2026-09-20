@@ -46,6 +46,8 @@ test("base data migration preserves referenced rows, indexes, IDs and admin edit
     db.prepare("INSERT INTO schema_migrations VALUES(82,'separate allocation fixture')").run();
     // Feedback migration is verified against complete schemas in feedbackFlow.test.ts.
     db.prepare("INSERT INTO schema_migrations VALUES(83,'separate feedback fixture')").run();
+    // Intake migrations are covered by their own complete-schema fixtures.
+    for (const version of [84, 85, 86]) db.prepare("INSERT INTO schema_migrations VALUES(?,'separate intake fixture')").run(version);
     runMigrations(db);
     runMigrations(db);
     assert.equal(db.pragma("foreign_keys", { simple: true }), 1);

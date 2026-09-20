@@ -1,6 +1,8 @@
 import { publicFetch, requestJson } from "./client";
+import { ACCOUNT_SECURITY_CAPABILITY, type AccountDeletionProof } from "@dietdigidose/contracts";
 
-const authHeaders = (token: string) => ({ Authorization: `Bearer ${token}` });
+const securityHeaders = { "X-Account-Security": ACCOUNT_SECURITY_CAPABILITY };
+const authHeaders = (token: string) => ({ Authorization: `Bearer ${token}`, ...securityHeaders });
 
 export const authApi = {
   login: <T>(identifier: string, password: string) => requestJson<T>(publicFetch, "/api/v1/auth/login", {
@@ -13,7 +15,7 @@ export const authApi = {
     method: "POST", body: JSON.stringify({ phone }),
   }),
   verifySmsCode: <T>(challengeId: string, code: string) => requestJson<T>(publicFetch, "/api/v1/auth/sms/verify", {
-    method: "POST", body: JSON.stringify({ challengeId, code }),
+    method: "POST", headers:securityHeaders, body: JSON.stringify({ challengeId, code, passwordlessRegistration:true }),
   }),
   registerWithSms: <T>(registrationToken: string, username: string, password: string) => requestJson<T>(publicFetch, "/api/v1/auth/sms/register", {
     method: "POST", body: JSON.stringify({ registrationToken, username, password }),
@@ -52,8 +54,8 @@ export const authApi = {
   registerPushDevice: (token: string, input: { expo_push_token: string; platform: "ios" | "android" }) => requestJson<void>(publicFetch, "/api/v1/notifications/device", {
     method: "PUT", headers: authHeaders(token), body: JSON.stringify(input),
   }),
-  deleteAccount: (token: string, password: string) => requestJson<{ success: boolean; message: string }>(publicFetch, "/api/v1/auth/account", {
-    method: "DELETE", headers: authHeaders(token), body: JSON.stringify({ password, confirmation: "DELETE" }),
+  deleteAccount: (token: string, proof: string | AccountDeletionProof) => requestJson<{ success: boolean; message: string }>(publicFetch, "/api/v1/auth/account", {
+    method: "DELETE", headers: authHeaders(token), body: JSON.stringify({ ...(typeof proof === "string" ? {password:proof} : proof), confirmation: "DELETE" }),
   }),
   exportAIData: <T>(token: string) => requestJson<T>(publicFetch, "/api/v1/auth/ai-data", { headers: authHeaders(token) }),
   deleteAIData: (token: string) => requestJson<{ success: boolean; deleted: Record<string, number> }>(publicFetch, "/api/v1/auth/ai-data", {

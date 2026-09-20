@@ -1,10 +1,10 @@
 export type AuthReturnTo = {
-  pathname: "/" | "/recipe-detail" | "/post-detail" | "/user-profile" | "/cooking-mode" | "/cooking-queue" | "/inventory" | "/favorites" | "/shopping-list" | "/recipe-submit" | "/post-create" | "/feedback";
+  pathname: "/" | "/recipe-detail" | "/post-detail" | "/user-profile" | "/cooking-mode" | "/cooking-queue" | "/inventory" | "/favorites" | "/shopping-list" | "/recipe-submit" | "/post-create" | "/feedback" | "/diet-record" | "/cooking-plan" | "/health-profile" | "/profile-settings";
   params?: Record<string, string | number>;
 };
 
 const POSITIVE_ID_PATHS = new Set(["/recipe-detail", "/post-detail", "/user-profile", "/cooking-mode"]);
-const PARAMETERLESS_PATHS = new Set(["/", "/favorites", "/shopping-list", "/recipe-submit", "/cooking-queue"]);
+const PARAMETERLESS_PATHS = new Set(["/", "/favorites", "/shopping-list", "/recipe-submit", "/cooking-queue", "/profile-settings"]);
 const POST_DETAIL_ACTIONS = new Set(["like", "follow", "join", "comment", "comment-like", "collect"]);
 
 function positiveInteger(value: unknown) {
@@ -47,10 +47,19 @@ export function validateAuthReturnTo(value: unknown): AuthReturnTo | null {
     }
     return { pathname: candidate.pathname as AuthReturnTo["pathname"], params: safeParams };
   }
-  if (candidate.pathname === "/inventory") {
+  if (candidate.pathname === "/health-profile") {
+    return ["body", "nutrition", "safety", "kitchen"].includes(String(params.section))
+      ? { pathname: "/health-profile", params: { section: String(params.section) } }
+      : { pathname: "/health-profile" };
+  }
+  if (candidate.pathname === "/cooking-plan") {
+    const planId = typeof params.planId === "string" && /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(params.planId) ? params.planId : null;
+    return planId ? { pathname: "/cooking-plan", params: { planId } } : { pathname: "/cooking-plan" };
+  }
+  if (candidate.pathname === "/inventory" || candidate.pathname === "/diet-record") {
     return params.action === "add"
-      ? { pathname: "/inventory", params: { action: "add" } }
-      : { pathname: "/inventory" };
+      ? { pathname: candidate.pathname, params: { action: "add" } }
+      : { pathname: candidate.pathname };
   }
   if (candidate.pathname === "/post-create") {
     return ["寻味", "榜单", "活动", "问答"].includes(String(params.category))

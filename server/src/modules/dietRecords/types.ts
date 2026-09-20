@@ -2,6 +2,7 @@ import type { MealProduction } from "@dietdigidose/contracts";
 import type { InventoryConsumption } from "../../services/inventoryQuantity.js";
 
 export type DietRecordInput = {
+  idempotency_key?: string;
   meal_type: string;
   food_name: string;
   amount: string;
@@ -15,6 +16,7 @@ export type DietRecordInput = {
 };
 
 export type PreparedDietRecord = DietRecordInput & {
+  request_identity?: string;
   recorded_at: string;
   recorded_time: string | null;
 };

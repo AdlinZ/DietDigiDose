@@ -11,6 +11,8 @@ import {
   Alert,
 } from "react-native";
 import { Screen } from "@/components/Screen";
+import { useHealthSummary } from "@/hooks/useHealthSummary";
+import { usePendingDietSave } from "@/hooks/usePendingDietSave";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
@@ -61,6 +63,8 @@ export default function DietRecordScreen() {
   const params = useSafeSearchParams<any>();
   const { isAuthenticated, user, sessionGeneration } = useAuth();
   const authFetch = useAuthFetch();
+  const pendingSave = usePendingDietSave(user?.id, authFetch);
+  const { targetCalories: targetCal, targetLabel } = useHealthSummary();
 
   const todayStr = toLocalDateKey();
   const [selectedDate, setSelectedDate] = useState(todayStr);
@@ -130,6 +134,12 @@ export default function DietRecordScreen() {
 
   // 监听路由预填参数
   useEffect(() => {
+    if (params.action === "add" && isAuthenticated) {
+      setFormAccountScope(accountScope);
+      setModalVisible(true);
+      router.setParams({});
+      return;
+    }
     if (params.prefill_food) {
       setFormAccountScope(accountScope);
       setFoodName(String(params.prefill_food));
@@ -144,7 +154,7 @@ export default function DietRecordScreen() {
       // 预填数据已经进入本地表单状态，立即消费掉一次性路由参数。
       router.setParams({});
     }
-  }, [accountScope, params, router]);
+  }, [accountScope, isAuthenticated, params, router]);
 
   // 生成当前浏览周期的 7 天日期数组；weekOffset 为负数时查看更早周期。
   const pastSevenDays = Array.from({ length: 7 }).map((_, i) => {
@@ -388,7 +398,7 @@ export default function DietRecordScreen() {
         image_url: imageUrl.trim() || null,
       };
 
-      await dietApi.create(authFetch, payload);
+      await pendingSave.save(payload);
       if (isCurrentForm()) setModalVisible(false);
       refreshAfterMutation();
     } catch (e) {
@@ -435,7 +445,6 @@ export default function DietRecordScreen() {
     return Math.min(DAY_TIMELINE_HEIGHT - 12, Math.max(0, ((hours * 60 + minutes) / (24 * 60)) * DAY_TIMELINE_HEIGHT));
   };
 
-  const targetCal = user?.daily_calories_target || 2000;
   const progressPercent = Math.min(Math.round((dayTotalCal / targetCal) * 100), 100);
   const remainingCal = Math.max(0, targetCal - dayTotalCal);
   const isSelectedToday = selectedDate === todayStr;
@@ -489,6 +498,11 @@ export default function DietRecordScreen() {
     <Screen>
       <View className="flex-1">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+          {pendingSave.pending ? <View className="mx-5 mb-4 gap-3 rounded-2xl bg-warm-soft p-4"><Text className="font-bold text-ink">上次记录尚未确认保存</Text><Text className="text-copy-muted">{pendingSave.pending.recorded_at} · {pendingSave.pending.food_name} · {pendingSave.pending.amount}</Text><TouchableOpacity accessibilityRole="button" disabled={saving} onPress={() => {
+            const scope = accountScope; setSaving(true);
+            void pendingSave.save().then(record => { if (mounted.current && currentAccountScope.current === scope) { setSelectedDate(record.recorded_at); refreshAfterMutation(); } }).catch(reason => { if (mounted.current && currentAccountScope.current === scope) Alert.alert("保存失败", reason instanceof Error ? reason.message : "请重试"); }).finally(() => { if (mounted.current && currentAccountScope.current === scope) setSaving(false); });
+          }}><Text className="font-bold text-brand">重试保存上次记录</Text></TouchableOpacity></View> : null}
+          {pendingSave.error ? <Text accessibilityRole="alert" className="mx-5 mb-3 text-critical">{pendingSave.error}</Text> : null}
           {/* 顶部 Header */}
           <View className="flex-row items-center px-5 pb-2 pt-3">
             <TouchableOpacity
@@ -780,7 +794,7 @@ export default function DietRecordScreen() {
                   <Text className="text-[11px] font-bold text-brand">{isSelectedToday ? "今日营养汇总" : "当日营养汇总"}</Text>
                   <View className="mt-1 flex-row items-baseline gap-1.5">
                     <Text className="text-[30px] font-black text-ink">{dayTotalCal}</Text>
-                    <Text className="text-xs font-medium text-copy-muted">/ {targetCal} kcal</Text>
+                    <Text className="text-xs font-medium text-copy-muted">/ {targetCal} kcal · {targetLabel}</Text>
                   </View>
                 </View>
                 <View className="rounded-full bg-surface px-3 py-2">

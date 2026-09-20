@@ -26,6 +26,8 @@ jest.mock("@/contexts/AuthContext", () => ({
   useAuthFetch: () => mockAuthFetch,
 }));
 jest.mock("@/hooks/useSafeRouter", () => ({ useSafeRouter: () => mockRouter, useSafeSearchParams: () => mockParams }));
+jest.mock("@/hooks/useHealthSummary", () => ({ useHealthSummary: () => ({ profile: null, targetCalories: 2000, targetLabel: "系统参考，尚未设置目标", error: "" }) }));
+jest.mock("@/hooks/usePendingDietSave", () => ({ usePendingDietSave: () => ({ save: (input: unknown) => mockCreate(mockAuthFetch, input), pending: null, error: "", ready: true }) }));
 jest.mock("expo-router", () => ({ useFocusEffect: (callback: () => void) => require("react").useEffect(callback, [callback]) }));
 jest.mock("@/components/Screen", () => ({ Screen: ({ children }: { children: React.ReactNode }) => children }));
 jest.mock("@/components/ThemedFontAwesome6", () => "Icon");

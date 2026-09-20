@@ -13,6 +13,7 @@ import {
   Share,
 } from "react-native";
 import { Screen } from "@/components/Screen";
+import { AccountSmsVerification } from "@/components/AccountSmsVerification";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
@@ -113,6 +114,10 @@ export default function SettingsScreen() {
   const [cacheDiagnostics, setCacheDiagnostics] = useState(() => getApiCacheDiagnostics());
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletePassword, setDeletePassword] = useState("");
+  const [deleteReauthToken, setDeleteReauthToken] = useState<string | null>(null);
+  const [deleteWithSms, setDeleteWithSms] = useState(false);
+  const needsDeleteSms = user?.hasPassword === false || deleteWithSms;
+  useEffect(() => { setDeletePassword("");setDeleteReauthToken(null);setDeleteWithSms(false);setDeleteModalOpen(false); },[user?.id]);
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [aiDataBusy, setAIDataBusy] = useState(false);
   const [voiceState, setVoiceState] = useState<VoicePackState | null>(null);
@@ -319,12 +324,12 @@ export default function SettingsScreen() {
   };
 
   const confirmDeleteAccount = async () => {
-    if (!deletePassword) {
-      Alert.alert("请输入密码", "需要验证当前密码后才能永久删除账号。");
+    if (needsDeleteSms ? !deleteReauthToken : !deletePassword) {
+      Alert.alert("请验证身份", needsDeleteSms ? "请通过绑定手机验证后再永久删除账号。" : "需要验证当前密码后才能永久删除账号。");
       return;
     }
     setDeletingAccount(true);
-    const result = await deleteAccount(deletePassword);
+    const result = await deleteAccount(needsDeleteSms ? {reauthToken:deleteReauthToken!} : deletePassword);
     setDeletingAccount(false);
     if (!result.success) {
       Alert.alert("删除失败", result.error || "请稍后重试");
@@ -566,7 +571,7 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/password")} className="mb-4 rounded-2xl border border-line bg-surface p-4"><Text className="font-bold text-ink">修改密码</Text><Text className="text-sm text-copy-muted">验证当前密码，修改后重新登录</Text></TouchableOpacity>
+        <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/password")} className="mb-4 rounded-2xl border border-line bg-surface p-4"><Text className="font-bold text-ink">{user?.hasPassword === false ? "设置登录密码" : "修改密码"}</Text><Text className="text-sm text-copy-muted">{user?.hasPassword === false ? "可选：通过手机验证设置备用登录方式" : "验证身份后修改，完成后重新登录"}</Text></TouchableOpacity>
         {/* Section 1: 账号与目标 */}
         <View className="mb-6">
           <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">
@@ -1031,20 +1036,21 @@ export default function SettingsScreen() {
             </View>
             <Text className="text-lg font-black text-critical text-center">永久删除账号</Text>
             <Text className="text-xs text-copy-muted mt-2 mb-4 leading-5 text-center">
-              库存、饮食打卡、健康档案、社区内容及本机数据均会被永久注销且无法恢复。请输入密码确认。
+              库存、饮食打卡、健康档案、社区内容及本机数据均会被永久注销且无法恢复。请验证身份后确认。
             </Text>
-            <TextInput
+            {deleteModalOpen && needsDeleteSms ? <AccountSmsVerification key={user?.id} purpose="account_delete" onVerified={setDeleteReauthToken} disabled={deletingAccount} /> : <TextInput
               value={deletePassword}
               onChangeText={setDeletePassword}
               secureTextEntry
               autoCapitalize="none"
               placeholder="请输入当前登录密码"
               className="bg-canvas border border-line rounded-2xl px-4 py-3.5 text-sm text-ink mb-4"
-            />
+            />}
+            {user?.hasPassword !== false && !!user?.phone_verified_at && <TouchableOpacity accessibilityRole="button" disabled={deletingAccount} onPress={() => {setDeleteWithSms((value) => !value);setDeletePassword("");setDeleteReauthToken(null);}} className="py-3"><Text className="text-brand">{needsDeleteSms ? "改用当前密码验证" : "通过绑定手机验证"}</Text></TouchableOpacity>}
             <View className="flex-row gap-3">
               <TouchableOpacity
                 disabled={deletingAccount}
-                onPress={() => { setDeleteModalOpen(false); setDeletePassword(""); }}
+                onPress={() => { setDeleteModalOpen(false); setDeletePassword(""); setDeleteReauthToken(null);setDeleteWithSms(false); }}
                 className="flex-1 bg-background-secondary py-3.5 rounded-2xl items-center border border-line"
               >
                 <Text className="text-xs font-bold text-copy-muted">取消</Text>

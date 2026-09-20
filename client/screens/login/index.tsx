@@ -87,7 +87,7 @@ export default function LoginScreen() {
     setLoading(false);
     if (!result.success) return setError(result.error || '验证码核验失败');
     if (result.registrationRequired) router.push('/register', { mode: 'sms', ...(returnTo ? { returnTo } : {}) });
-    else router.replace(returnTo || '/');
+    else router.replace(returnTo || (result.isNewUser ? '/onboarding' : '/'));
   };
 
   const switchPhone = () => {
@@ -262,7 +262,7 @@ export default function LoginScreen() {
                   className={`flex-1 items-center justify-center rounded-full ${selected ? 'bg-surface shadow-2xs' : ''}`}
                 >
                   <Text className={`text-[11px] ${selected ? 'font-black text-brand-strong' : 'font-bold text-copy-muted'}`}>
-                    {item === 'sms' ? '验证码登录' : '密码登录'}
+                    {item === 'sms' ? '手机登录 / 注册' : '密码登录'}
                   </Text>
                 </TouchableOpacity>
               );
@@ -282,7 +282,7 @@ export default function LoginScreen() {
         </View>
 
         <View className="mt-3 flex-row flex-wrap items-center justify-center">
-          <Text className="text-[9px] text-copy-muted">继续即表示你已阅读并同意</Text>
+          <Text className="text-[9px] text-copy-muted">未注册手机号验证后将创建账号。继续即表示同意</Text>
           <TouchableOpacity onPress={() => router.push('/legal', { type: 'terms' })} accessibilityRole="link">
             <Text className="text-[9px] font-medium text-brand">服务协议</Text>
           </TouchableOpacity>

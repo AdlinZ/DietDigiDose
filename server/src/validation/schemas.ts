@@ -122,6 +122,7 @@ export const feedbackCreateSchema = z.object({
 }).strict();
 
 export const dietRecordCreateSchema = z.object({
+  idempotency_key: z.string().trim().min(16,"保存编号格式无效").max(200,"保存编号过长").optional(),
   meal_type: z.string().trim().max(30, "餐别标签不能超过 30 个字符").default(""),
   food_name: trimmedString(1, 120, "食物名称"),
   amount: trimmedString(1, 40, "分量").default("1份"),

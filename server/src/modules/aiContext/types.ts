@@ -8,6 +8,7 @@ export interface AiContextRows {
   kitchenware: Row[];
   todayDiet: Row[];
   latestHealth: Row | null;
+  measurementLogs?: Row[];
   healthProfile: Row | null;
   personaPrompt: string;
 }
@@ -16,6 +17,8 @@ export interface AiContextSnapshot {
   preparedMeals?: PreparedMeal[];
   username: string;
   dailyCaloriesTarget: number;
+  calorieTarget?: import("@dietdigidose/contracts").CalorieTarget;
+  currentMeasurements?: import("@dietdigidose/contracts").CurrentMeasurements;
   inventory: Array<{ id?: number; version?: number; quantity_value?: number | null; quantity_unit?: string | null; batch_code?: string | null; food_name: string; quantity: string; expiration_date: string; storage_location: string }>;
   kitchenware: Array<{ name: string; category: string; status: string }>;
   todayDiet: Array<{ meal_type: string; food_name: string; calories: number; protein: number; carbs: number; fat: number }>;

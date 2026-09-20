@@ -13,6 +13,10 @@ const update = process.argv.includes("--update");
 const schemaMigrationFiles = new Set([
   "server/src/storage/migrations.ts",
   "server/src/storage/baseDataMigration.ts",
+  "server/src/storage/healthProfileMigration.ts",
+  "server/src/storage/manualDietRequestMigration.ts",
+  "server/src/storage/onboardingMigration.ts",
+  "server/src/storage/passwordlessMigration.ts",
 ]);
 const patterns = [
   /\bdb\.(?:prepare|exec|transaction|pragma)\s*\(/g,

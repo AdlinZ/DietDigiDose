@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { ArrowLeft, ShieldCheck } from 'lucide-react';
 import { Link } from 'react-router';
-import logoUrl from '../../../client/assets/logo.png';
+import { logoUrl } from '../assets';
 
 type LegalKind = 'privacy' | 'terms';
 

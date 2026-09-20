@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowDown, ArrowRight, Menu, X } from 'lucide-react';
-import logoUrl from '../../../client/assets/logo.png';
+import { logoUrl } from '../assets';
 import api from '../services/api';
 import './Landing.css';
 

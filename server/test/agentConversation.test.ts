@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, before, test } from "node:test";
+import { after, before, beforeEach, test } from "node:test";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -23,6 +23,8 @@ let runtime: typeof import("../src/services/agent/runtime.js");
 let userId: number;
 let calls: Array<{ messages: Array<{ content: string }>; [key: string]: unknown }> = [];
 let answers: unknown[] = [];
+// Direct-assistant scenarios explicitly opt in; production defaults to compatibility.
+beforeEach(() => { process.env.AI_MAIN_ASSISTANT_ENABLED = "true"; });
 before(async () => {
   provider = createServer(async (req, res) => {
     let body = "";
@@ -68,6 +70,27 @@ after(async () => {
   rmSync(directory, { recursive: true, force: true });
 });
 
+test("unset or disabled main assistant uses the compatibility route without direct tools", async () => {
+  for (const flag of [undefined, "false"]) {
+    if (flag === undefined) delete process.env.AI_MAIN_ASSISTANT_ENABLED;
+    else process.env.AI_MAIN_ASSISTANT_ENABLED = flag;
+    calls = [];
+    answers = [
+      { goal: "烹饪咨询", specialists: ["RecipeCookingAgent"] },
+      { summary: "番茄先炒出汁，再加入炒好的鸡蛋。", artifacts: [] },
+      { reply: "番茄先炒出汁，再加入炒好的鸡蛋。" },
+    ];
+    const response = await runtime.startSupervisorRun(userId, { modality: "text", prompt: "番茄炒蛋怎么做？" }, 10000);
+    assert.equal(response.run.status, "completed", JSON.stringify(response.run.error));
+    assert.equal(calls.length, 3);
+    assert.equal((calls[0].tools as unknown[] | undefined)?.length || 0, 0);
+    assert.match(JSON.stringify(calls[0].messages), /兼容模式/);
+    assert.match(response.run.reply!, /番茄先炒出汁/);
+    const { getAgentRunInput } = await import("../src/services/agent/repository.js");
+    assert.equal((await getAgentRunInput(response.run.id))?.input.metadata?.mainAssistantEnabled, false);
+  }
+});
+
 test("ordinary chat consumes history and completes with one provider call", async () => {
   calls = [];
   answers = [{ goal: "替换第二份", specialists: [], reply: "第二份改成不辣的版本，第一份保持不变。", candidates: [] }];
@@ -75,6 +98,7 @@ test("ordinary chat consumes history and completes with one provider call", asyn
   assert.equal(response.run.status, "completed", JSON.stringify(response.run.error));
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].response_format, { type: "json_object" });
+  assert.ok((calls[0].tools as unknown[]).length > 0);
   assert.match(JSON.stringify(calls[0].messages), /plan-123/);
   assert.match(response.run.reply!, /第二份/);
 });
@@ -103,16 +127,18 @@ test("provider ignoring JSON mode still fails closed without accepting plain tex
   assert.equal((db.prepare("SELECT COUNT(*) AS count FROM agent_actions WHERE run_id=?").get(response.run.id) as { count: number }).count, 0);
 });
 
-test("clarification resumes the original run", async () => {
+test("clarification retains the original opt-in policy after the rollout flag is disabled", async () => {
   calls = [];
   answers = [{ goal: "人数", specialists: [], needsInput: "为几个人？" }];
   const created = await runtime.startSupervisorRun(userId, { modality: "text", prompt: "安排备餐" }, 10000);
   assert.equal(created.run.status, "awaiting_input", JSON.stringify(created.run.error));
+  process.env.AI_MAIN_ASSISTANT_ENABLED = "false";
   answers = [{ goal: "两人备餐", specialists: [], reply: "按两个人安排。" }];
   const resumed = await runtime.resumeSupervisorRun(userId, created.run.id, { input: "两个人" }, 10000);
   assert.equal(resumed.id, created.run.id);
   assert.equal(resumed.status, "completed", JSON.stringify(db.prepare("SELECT error_message FROM agent_runs WHERE id = ?").get(resumed.id)));
   assert.match(JSON.stringify(calls.at(-1)?.messages), /两个人/);
+  assert.ok((calls.at(-1)?.tools as unknown[]).length > 0);
 });
 
 test("allergy consultation proceeds but actual unsafe candidates are blocked", async () => {

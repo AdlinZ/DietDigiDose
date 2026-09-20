@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import api from '../services/api';
-import logoUrl from '../../../client/assets/logo.png';
+import { logoUrl } from '../assets';
 
 export default function Login() {
   const navigate = useNavigate();

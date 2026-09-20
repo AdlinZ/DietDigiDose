@@ -938,7 +938,7 @@ export async function startSupervisorRun(
   onReplyDelta?: ReplyDeltaListener,
 ): Promise<AgentResponse> {
   const reusable = input.idempotencyKey ? await findReusableAgentRun(userId, input.idempotencyKey) : undefined;
-  const created = reusable || await createAgentRun(userId, { ...input, metadata: { ...input.metadata, runtimeVersion: 2, mainAssistantEnabled: process.env.AI_MAIN_ASSISTANT_ENABLED !== "false", replyStreamEnabled: process.env.AI_REPLY_STREAM_ENABLED === "true" } });
+  const created = reusable || await createAgentRun(userId, { ...input, metadata: { ...input.metadata, runtimeVersion: 2, mainAssistantEnabled: process.env.AI_MAIN_ASSISTANT_ENABLED === "true", replyStreamEnabled: process.env.AI_REPLY_STREAM_ENABLED === "true" } });
   if (onReplyDelta && !/(不要保存|不要写入|不保存|只给建议|仅给建议)/.test(input.prompt || "")) {
     replyDeltaListeners.set(created.id, onReplyDelta);
   }

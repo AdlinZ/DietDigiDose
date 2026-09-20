@@ -2,7 +2,7 @@ import { Outlet, NavLink, useLocation, useNavigate, Link } from 'react-router';
 import { ChevronDown, Globe, Menu, X, User, LayoutDashboard } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import api from '../services/api';
-import logoUrl from '../../../client/assets/logo.png';
+import { logoUrl } from '../assets';
 import { adminGroups, adminLocation, workbench } from '../navigation/adminNavigation';
 import { DialogFrame } from '../components/admin/DialogFrame';
 import './admin.css';

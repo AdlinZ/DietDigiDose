@@ -60,6 +60,14 @@ async function renderScreen() {
   return tree;
 }
 
+// React Native transforms some native components lazily on the first render.
+// Keep that cold-start work in bounded setup, outside the behavioral test timeout.
+beforeAll(async () => {
+  mockList.mockResolvedValue([]);
+  const tree = await renderScreen();
+  act(() => tree.unmount());
+}, 30_000);
+
 beforeEach(() => {
   jest.clearAllMocks();
   jest.useFakeTimers().setSystemTime(new Date(2026, 8, 20, 12));

@@ -164,3 +164,109 @@ test("cooking preview excludes expired stock but keeps today and unknown dates d
   const unknown = buildFefoConsumptionPreviewFromCandidates([{ ...base, expiration_date: "" }], items, "2026-09-09")[0];
   assert.equal(unknown.deductions[0].expiration_date, "");
 });
+
+test("decimal consumption preserves small amounts and rejects actual shortages", async () => {
+  const { calculateInventoryConsumption: consume, InventoryQuantityError } = await import("../src/services/inventoryQuantity.js");
+  const state = { ...item, quantity: "1kg", quantity_value: 1, quantity_unit: "kg" };
+  for (const [amount, remaining] of [[0.2, 0.9998], [0.5, 0.9995], [1.5, 0.9985]]) {
+    const result = consume(state, { item_id: 1, version: 1, mode: "amount", amount_value: amount, unit: "g" });
+    assert.equal(result.remaining, remaining);
+    assert.equal(result.nextQuantity, remaining + "kg");
+    assert.equal(result.amountUsed, amount / 1000);
+  }
+  let current = { ...state, quantity_value: 0.3 };
+  for (const amount of [0.1, 0.2]) current = { ...current, quantity_value: consume(current,
+    { item_id: 1, version: 1, mode: "amount", amount_value: amount, unit: "kg" }).remaining };
+  assert.equal(current.quantity_value, 0);
+  assert.throws(() => consume(state, { item_id: 1, version: 1, mode: "amount", amount_value: 1e-20, unit: "kg" }),
+    (error: unknown) => error instanceof InventoryQuantityError && error.code === "QUANTITY_PRECISION_REQUIRED");
+  assert.throws(() => consume(state, { item_id: 1, version: 1, mode: "amount", amount_value: 1.0000000000000002, unit: "kg" }), /不足/);
+  assert.throws(() => consume(state, { item_id: 1, version: 2, mode: "amount", amount_value: 0.2, unit: "g" }), /刷新/);
+});
+
+test("decimal FEFO has no tolerance that certifies empty stock and conserves multi-request batches", async () => {
+  const { buildFefoConsumptionPreviewFromCandidates: preview } = await import("../src/services/inventoryQuantity.js");
+  const state = { ...item, batch_code: null, quantity_value: 0.0005, quantity_unit: "kg" };
+  const demands = [0.2, 0.2, 0.2].map(amount_value => ({ food_name: item.food_name, amount_value, unit: "g" as const }));
+  const rows = preview([state], demands);
+  assert.deepEqual(rows.map(row => row.covered_value), [0.2, 0.2, 0.1]);
+  assert.deepEqual(rows.map(row => row.deductions[0]?.amount_value), [0.0002, 0.0002, 0.0001]);
+  assert.deepEqual(rows.map(row => row.fully_covered), [true, true, false]);
+  assert.equal(preview([], [{ food_name: item.food_name, amount_value: 0.0001, unit: "kg" }])[0].quantity_status, "unavailable");
+  const tiny = { food_name: item.food_name, amount_value: 1e-20, unit: "kg" as const };
+  const result = preview([{ ...state, quantity_value: 1 }], [tiny])[0];
+  assert.equal(result.quantity_status, "unknown");
+  assert.equal(result.covered_value, 0);
+  assert.equal(result.missing_value, tiny.amount_value);
+  assert.deepEqual(result.deductions, []);
+  // A later, small batch can satisfy a request that cannot be deducted from a large batch.
+  assert.equal(preview([{ ...state, quantity_value: 1 }, { ...state, id: 2, quantity_value: 1e-20 }], [tiny])[0].fully_covered, true);
+  // An unrepresentable partial response rolls back its temporary allocations.
+  const uncertain = preview([{ ...state, quantity_value: 1e-20 }], [
+    { food_name: item.food_name, amount_value: 1, unit: "kg" }, tiny,
+  ]);
+  assert.equal(uncertain[0].quantity_status, "unknown");
+  assert.equal(uncertain[1].fully_covered, true);
+});
+
+test("planning ledger retains micro amounts across separate meals", async () => {
+  const { createPlanningBudget } = await import("../src/modules/recommendations/planningBudget.js");
+  const budget = createPlanningBudget([{ ...item, quantity_value: 0.0000005, quantity_unit: "kg" }]);
+  const demand = [{ food_name: item.food_name, amount_value: 0.0002, unit: "g" as const }];
+  assert.equal(budget.consume(demand, "2030-09-01", "first")[0].fully_covered, true);
+  assert.equal(budget.stock[0].quantity_value, 0.0000003);
+  assert.equal(budget.consume(demand, "2030-09-01", "second")[0].fully_covered, true);
+  assert.equal(budget.consume(demand, "2030-09-01", "third")[0].covered_value, 0.0001);
+  assert.equal(budget.stock[0].quantity_value, 0);
+});
+
+test("household production uses the same exact transition and precision failure", async () => {
+  const { consumeProductionItem } = await import("../src/modules/households/production.js");
+  const stock = { ...item, quantity: "1kg" };
+  assert.equal(consumeProductionItem(stock, { itemId: 1, version: 1, amount: 0.2, unit: "g" }).remaining, 0.9998);
+  assert.throws(() => consumeProductionItem(stock, { itemId: 1, version: 1, amount: 1e-20, unit: "kg" }),
+    (error: unknown) => (error as { code: string }).code === "QUANTITY_PRECISION_REQUIRED");
+});
+
+test("SQLite persists exact inventory deltas and rolls back precision failures atomically", async (t) => {
+  const { default: Database } = await import("better-sqlite3");
+  const { SqliteInventoryRepository } = await import("../src/modules/inventory/sqliteRepository.js");
+  const { verifyInventoryPrecision } = await import("./helpers/inventoryPrecision.js");
+  const db = new Database(":memory:");
+  t.after(() => db.close());
+  db.exec(`
+    CREATE TABLE plan_maintenance_events(id TEXT PRIMARY KEY,user_id INTEGER,event_type TEXT,source_id TEXT,subject_id TEXT,
+      details_json TEXT,UNIQUE(user_id,event_type,source_id));
+    CREATE TABLE inventory_items(id INTEGER PRIMARY KEY,user_id INTEGER,food_name TEXT,category TEXT,quantity TEXT,
+      expiration_date TEXT,storage_location TEXT,image_url TEXT,is_available INTEGER DEFAULT 1,
+      quantity_value REAL,quantity_unit TEXT,package_size_value REAL,package_size_unit TEXT,batch_code TEXT,
+      version INTEGER DEFAULT 1,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,deleted_at TEXT);
+    CREATE TABLE inventory_change_logs(id INTEGER PRIMARY KEY,user_id INTEGER,inventory_item_id INTEGER,
+      action TEXT,source TEXT,quantity_before REAL,quantity_after REAL,quantity_unit TEXT,delta_value REAL,
+      idempotency_key TEXT,metadata_json TEXT DEFAULT '{}',created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(user_id,idempotency_key));
+    CREATE TABLE inventory_consumption_requests(user_id INTEGER,idempotency_key TEXT,result_json TEXT,UNIQUE(user_id,idempotency_key));
+  `);
+  await verifyInventoryPrecision(new SqliteInventoryRepository(db), 42,
+    async (sql, args = []) => db.prepare(sql).all(...args) as Record<string, unknown>[]);
+});
+
+test("recipe portions reach the inventory ledger without binary scaling noise", async () => {
+  const { recipeDemands } = await import("../src/modules/recommendations/quantities.js");
+  const { createPlanningBudget } = await import("../src/modules/recommendations/planningBudget.js");
+  for (const [amount, yieldSize, portions, expected] of [
+    ["0.1g", 1, 3, 0.3], ["0.6g", 3, 1, 0.2], ["0.1g", 2, 1.5, 0.075],
+  ] as const) {
+    const demands = recipeDemands([{ name: item.food_name, amount }], yieldSize, portions);
+    assert.equal(demands?.[0].amount_value, expected);
+    const budget = createPlanningBudget([{ ...item, quantity_value: expected, quantity_unit: "g" }]);
+    const preview = budget.consume(demands!, "2030-09-01", "scaled-meal")[0];
+    assert.equal(preview.fully_covered, true);
+    assert.equal(preview.missing_value, 0);
+    assert.equal(budget.stock[0].quantity_value, 0);
+  }
+  assert.equal(recipeDemands([{ name: item.food_name, amount: "1g" }], 3, 1), null);
+  const unknown = createPlanningBudget([{ ...item, quantity_value: 1, quantity_unit: "g" }]);
+  // The callers already treat an unrepresentable demand as a review requirement.
+  unknown.markUnknownCommitment();
+  assert.equal(unknown.consume([{ food_name: item.food_name, amount_value: 0.1, unit: "g" }], "2030-09-01", "review")[0].quantity_status, "unknown");
+});

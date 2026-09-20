@@ -57,8 +57,9 @@ const response = (sessionId = "A"): AgentResponse & { events: [] } => ({
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 function history(tree: renderer.ReactTestRenderer) { return tree.root.findByType("History" as never); }
 function visibleMessages(tree: renderer.ReactTestRenderer): Message[] { return tree.root.findAllByType("AssistantMessage" as never).map(item => item.props.message); }
@@ -176,5 +177,38 @@ test("a background voice creation is restored without starting foreground TTS", 
   expect(mockSpeak).not.toHaveBeenCalled();
   await act(async () => { select(tree, "A"); });
   expect(visibleMessages(tree).some(item => item.agentRun?.run.id === "run-A")).toBe(true);
+  expect(mockSpeak).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["text", "background"], ["text", "returned"], ["text", "unmounted"],
+  ["voice", "background"], ["voice", "returned"], ["voice", "unmounted"],
+])("late %s creation failure is saved to its origin while %s", async (modality, navigation) => {
+  const pending = deferred<AgentResponse>(); mockChat.mockReturnValue(pending.promise);
+  await mount();
+  if (modality === "voice") await act(async () => { mockVoice.onSpeechFinal("创建A的任务"); });
+  else await send(tree);
+  if (navigation === "unmounted") act(() => tree.unmount());
+  else {
+    await act(async () => { select(tree, "B"); });
+    if (navigation === "returned") await act(async () => { select(tree, "A"); });
+  }
+
+  const errorText = navigation === "unmounted" ? "网络连接中断，无法确认创建结果" : "任务服务暂不可用";
+  await act(async () => { pending.reject(new Error(errorText)); });
+  await flush();
+  const saved: ChatSession[] = JSON.parse(mockStorage.get(key())!);
+  const failed = saved.find(item => item.id === "A")!.messages.at(-1);
+  expect(failed).toMatchObject({ sender: "ai", text: errorText, status: "failed" });
+  expect(failed?.agentRun).toBeUndefined();
+  expect(saved.find(item => item.id === "B")!.messages).toEqual([message("B")]);
+  if (navigation === "background") {
+    expect(visibleMessages(tree).map(item => item.text)).toEqual(["对话B"]);
+    await act(async () => { select(tree, "A"); });
+  } else if (navigation === "unmounted") await mount();
+  expect(visibleMessages(tree).at(-1)).toMatchObject({ text: errorText, status: "failed" });
+  expect(mockChat).toHaveBeenCalledTimes(1);
+  expect(mockRun).not.toHaveBeenCalled();
+  expect(mockWait).not.toHaveBeenCalled();
   expect(mockSpeak).not.toHaveBeenCalled();
 });

@@ -296,14 +296,14 @@ export default function AIAssistantScreen() {
         speak(replyText);
       }
     } catch (err) {
-      if (scopeRef.current !== voiceScope) return;
-      console.error("Voice pipeline error:", err);
       const message =
         err instanceof Error && err.message
           ? err.message
           : "AI 对话请求失败，请稍后重试";
       setMessages((prev) => prev.map((item) => item.id === messageId && !item.agentRun
         ? { ...item, text: message, status: "failed" } : item));
+      if (scopeRef.current !== voiceScope) return;
+      console.error("Voice pipeline error:", err);
       setVoiceState("completed");
     }
     finally { releaseRequest(); }
@@ -567,16 +567,14 @@ export default function AIAssistantScreen() {
         setMessages((prev) => prev.map((message) => message.id === responseMessageId ? aiMsg : message));
         if (scopeRef.current === requestScope) setLastAIReplyText(responseText);
       } catch (err: any) {
+        const errorText = err instanceof Error ? err.message : "AI 对话请求失败，请稍后重试";
+        // The captured updater still belongs to the originating chat after navigation.
+        // A known run remains recoverable by polling, even if a resume request fails.
+        setMessages((prev) => prev.map((message) => message.id === responseMessageId && !message.agentRun
+          ? { ...message, text: errorText, status: "failed" } : message));
         if (scopeRef.current !== requestScope) return;
         console.error("[AIAssistant Error]", err);
-        const fallbackMsg: Message = {
-          id: (Date.now() + 1).toString(),
-          sender: "ai",
-          text: err instanceof Error ? err.message : "AI 对话请求失败，请稍后重试",
-          status: "failed",
-          time: "刚刚",
-        };
-        setMessages((prev) => prev.map((message) => message.id === responseMessageId ? { ...message, text: fallbackMsg.text } : message));
+        if (target?.agentRun) setSendError(errorText);
       } finally {
         if (scopeRef.current === requestScope) setLoading(false);
       }

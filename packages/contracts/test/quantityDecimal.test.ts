@@ -23,3 +23,16 @@ test("unrepresentable results fail rather than round away an amount or remainder
   assert.throws(() => QuantityDecimal.from(Infinity), QuantityPrecisionError);
   assert.equal(QuantityDecimal.from(0.30000000000000004).compare(QuantityDecimal.from(0.3)), 1);
 });
+
+test("portion scaling multiplies and divides decimals before returning a number", () => {
+  const scale = (amount: number, portions: number, yieldSize: number) =>
+    QuantityDecimal.from(amount).multiply(QuantityDecimal.from(portions)).divide(QuantityDecimal.from(yieldSize)).toNumber();
+  assert.equal(scale(0.1, 3, 1), 0.3);
+  assert.equal(scale(0.1, 1.5, 2), 0.075);
+  assert.equal(scale(0.6, 1, 3), 0.2);
+  assert.equal(scale(0.3, 2, 3), 0.2);
+  assert.equal(scale(0, 2, 3), 0);
+  assert.equal(scale(-0.3, 2, -3), 0.2);
+  assert.throws(() => scale(1, 1, 3), QuantityPrecisionError);
+  assert.throws(() => scale(1, 1, 0), QuantityPrecisionError);
+});

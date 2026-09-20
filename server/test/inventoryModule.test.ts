@@ -249,3 +249,24 @@ test("SQLite persists exact inventory deltas and rolls back precision failures a
   await verifyInventoryPrecision(new SqliteInventoryRepository(db), 42,
     async (sql, args = []) => db.prepare(sql).all(...args) as Record<string, unknown>[]);
 });
+
+test("recipe portions reach the inventory ledger without binary scaling noise", async () => {
+  const { recipeDemands } = await import("../src/modules/recommendations/quantities.js");
+  const { createPlanningBudget } = await import("../src/modules/recommendations/planningBudget.js");
+  for (const [amount, yieldSize, portions, expected] of [
+    ["0.1g", 1, 3, 0.3], ["0.6g", 3, 1, 0.2], ["0.1g", 2, 1.5, 0.075],
+  ] as const) {
+    const demands = recipeDemands([{ name: item.food_name, amount }], yieldSize, portions);
+    assert.equal(demands?.[0].amount_value, expected);
+    const budget = createPlanningBudget([{ ...item, quantity_value: expected, quantity_unit: "g" }]);
+    const preview = budget.consume(demands!, "2030-09-01", "scaled-meal")[0];
+    assert.equal(preview.fully_covered, true);
+    assert.equal(preview.missing_value, 0);
+    assert.equal(budget.stock[0].quantity_value, 0);
+  }
+  assert.equal(recipeDemands([{ name: item.food_name, amount: "1g" }], 3, 1), null);
+  const unknown = createPlanningBudget([{ ...item, quantity_value: 1, quantity_unit: "g" }]);
+  // The callers already treat an unrepresentable demand as a review requirement.
+  unknown.markUnknownCommitment();
+  assert.equal(unknown.consume([{ food_name: item.food_name, amount_value: 0.1, unit: "g" }], "2030-09-01", "review")[0].quantity_status, "unknown");
+});

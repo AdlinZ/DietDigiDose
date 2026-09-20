@@ -44,6 +44,33 @@ export class QuantityDecimal {
     return this.add(new QuantityDecimal(-other.coefficient, other.exponent));
   }
 
+  multiply(other: QuantityDecimal): QuantityDecimal {
+    return QuantityDecimal.normalized(this.coefficient * other.coefficient, this.exponent + other.exponent);
+  }
+
+  /** Only terminating decimal quotients can become an exact ingredient demand. */
+  divide(other: QuantityDecimal): QuantityDecimal {
+    if (other.coefficient === 0n) throw new QuantityPrecisionError();
+    let numerator = this.coefficient;
+    let denominator = other.coefficient;
+    if (denominator < 0n) { numerator = -numerator; denominator = -denominator; }
+    let left = numerator < 0n ? -numerator : numerator;
+    let right = denominator;
+    while (right !== 0n) { const remainder = left % right; left = right; right = remainder; }
+    numerator /= left;
+    denominator /= left;
+    let twos = 0;
+    let fives = 0;
+    while (denominator % 2n === 0n) { denominator /= 2n; twos++; }
+    while (denominator % 5n === 0n) { denominator /= 5n; fives++; }
+    if (denominator !== 1n) throw new QuantityPrecisionError();
+    const scale = Math.max(twos, fives);
+    return QuantityDecimal.normalized(
+      numerator * 2n ** BigInt(scale - twos) * 5n ** BigInt(scale - fives),
+      this.exponent - other.exponent - scale,
+    );
+  }
+
   compare(other: QuantityDecimal): number {
     const difference = this.subtract(other).coefficient;
     return difference < 0n ? -1 : difference > 0n ? 1 : 0;

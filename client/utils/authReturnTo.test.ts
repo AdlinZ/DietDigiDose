@@ -1,6 +1,14 @@
 import { createAuthReturnTo, validateAuthReturnTo } from "./authReturnTo";
 
 describe("login returnTo allowlist", () => {
+  it("returns new users to the original task with only supported conditions", () => {
+    expect(createAuthReturnTo("/diet-record", { action: "add", calories: 900 }))
+      .toEqual({ pathname: "/diet-record", params: { action: "add" } });
+    expect(createAuthReturnTo("/health-profile", { section: "nutrition", weight: 60 }))
+      .toEqual({ pathname: "/health-profile", params: { section: "nutrition" } });
+    expect(createAuthReturnTo("/cooking-plan", { planId: "00000000-0000-4000-8000-000000000001" }))
+      .toEqual({ pathname: "/cooking-plan", params: { planId: "00000000-0000-4000-8000-000000000001" } });
+  });
   it("accepts the core internal continuation routes", () => {
     expect(createAuthReturnTo("/cooking-mode", { recipeId: 12 })).toEqual({
       pathname: "/cooking-mode",

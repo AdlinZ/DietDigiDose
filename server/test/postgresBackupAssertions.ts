@@ -23,8 +23,11 @@ export async function verifyPostgresBackup(connectionString: string) {
     const report = await createPostgresBackup(sourceUrl.toString(),backup,{ owner: "integration-test",candidateSha: "a".repeat(40) });
     assert.equal(report.migrationVersion,77);
     assert.equal(report.tables.find(row => row.name==='inventory_items')?.rows,'2');
-    assert.equal((await fs.stat(backup)).mode & 0o777,0o700);
-    assert.equal((await fs.stat(path.join(backup,'database.dump'))).mode & 0o777,0o600);
+    // Windows reports synthetic POSIX mode bits; ACL permissions are not represented here.
+    if (process.platform !== 'win32') {
+      assert.equal((await fs.stat(backup)).mode & 0o777,0o700);
+      assert.equal((await fs.stat(path.join(backup,'database.dump'))).mode & 0o777,0o600);
+    }
     await assert.rejects(() => createPostgresBackup(sourceUrl.toString(),backup,{ owner: "test",candidateSha: "a".repeat(40) }),/exist/);
     await source.query("UPDATE inventory_items SET quantity=99 WHERE id=1");
     await assert.rejects(() => restorePostgresBackup(sourceUrl.toString(),backup),/not empty/);

@@ -10,6 +10,7 @@ import type Database from "better-sqlite3";
 import { applyInventoryConsumptions, InventoryQuantityError, type InventoryConsumption } from "../../services/inventoryQuantity.js";
 import type { DietRecordsRepository } from "./repository.js";
 import type { PreparedCookingCompletion, PreparedDietRecord } from "./types.js";
+import { manualDietRequestIdentity, replayManualDietRequest, type ManualDietReceipt } from "./manualRequest.js";
 
 export class SqliteDietRecordsRepository implements DietRecordsRepository {
   private readonly database: Database.Database;
@@ -30,12 +31,26 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
   }
 
   async create(userId: number, record: PreparedDietRecord) {
+    return this.database.transaction(() => {
+    const requestHash=record.request_identity ?? manualDietRequestIdentity(record);
+    if(record.idempotency_key) {
+      const existing=this.database.prepare("SELECT request_hash,diet_record_id,result_json FROM diet_record_create_requests WHERE user_id=? AND request_key=?")
+        .get(userId,record.idempotency_key) as ManualDietReceipt | undefined;
+      if(existing) return replayManualDietRequest(existing,requestHash);
+    }
     const result = this.database.prepare(`INSERT INTO diet_records
       (user_id, meal_type, food_name, amount, calories, protein, carbs, fat, recorded_at, recorded_time, image_url)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(userId, record.meal_type, record.food_name, record.amount,
       record.calories ?? null, record.protein ?? null, record.carbs ?? null, record.fat ?? null,
       record.recorded_at, record.recorded_time, record.image_url || null);
-    return this.database.prepare("SELECT * FROM diet_records WHERE id = ?").get(result.lastInsertRowid) as Record<string, unknown>;
+    const created=this.database.prepare("SELECT * FROM diet_records WHERE id = ?").get(result.lastInsertRowid) as Record<string, unknown>;
+    if(record.idempotency_key) {
+      this.database.prepare("INSERT INTO diet_record_create_requests(user_id,request_key,request_hash,diet_record_id,result_json) VALUES(?,?,?,?,?)")
+        .run(userId,record.idempotency_key,requestHash,created.id,JSON.stringify(created));
+      return {...created,repeated:false};
+    }
+    return created;
+    })();
   }
 
   async remove(userId: number, id: number, mode?: "undo_eating" | "delete_intake") {

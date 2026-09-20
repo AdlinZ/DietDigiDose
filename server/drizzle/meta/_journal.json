@@ -183,6 +183,20 @@
       "when": 1789744036749,
       "tag": "0025_nice_franklin_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789897645995,
+      "tag": "0026_optimal_khan",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1789899921782,
+      "tag": "0027_flawless_leech",
+      "breakpoints": true
     }
   ]
 }

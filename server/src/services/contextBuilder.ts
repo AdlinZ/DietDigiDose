@@ -9,6 +9,8 @@ export interface UserContext {
   preparedMeals?: PreparedMeal[];
   username?: string;
   dailyCaloriesTarget: number;
+  calorieTarget?: import("@dietdigidose/contracts").CalorieTarget;
+  currentMeasurements?: import("@dietdigidose/contracts").CurrentMeasurements;
   inventory: Array<{ id?: number; version?: number; quantity_value?: number | null; quantity_unit?: string | null; batch_code?: string | null; food_name: string; quantity: string; expiration_date: string; storage_location: string }>;
   kitchenware: Array<{ name: string; category: string; status: string }>;
   todayDiet: Array<{ meal_type: string; food_name: string; calories: number; protein: number; carbs: number; fat: number }>;
@@ -110,6 +112,7 @@ export function buildAIPromptMessages(ctx: UserContext, requestPreferences: Kitc
       user_id: ctx.userId,
       username: ctx.username || null,
       weight_kg: ctx.latestHealth?.weight ?? null,
+      measurements: ctx.currentMeasurements ?? {},
       body_fat_percent: ctx.latestHealth?.body_fat ?? null,
       age: ctx.healthProfile?.age ?? null,
       dietary_preferences: [ctx.healthProfile?.dietary_preference].filter(Boolean),
@@ -122,7 +125,9 @@ export function buildAIPromptMessages(ctx: UserContext, requestPreferences: Kitc
       pregnancy_status: ctx.healthProfile?.medical_conditions?.find((item) => item === "孕期" || item === "哺乳期") || null,
     },
     daily_targets: {
-      energy_kcal: nutritionTargets.calories_kcal ?? ctx.dailyCaloriesTarget,
+      energy_kcal: ctx.calorieTarget ? ctx.calorieTarget.value : nutritionTargets.calories_kcal ?? ctx.dailyCaloriesTarget,
+      energy_source: ctx.calorieTarget?.source ?? "legacy_unconfirmed",
+      energy_reference_kcal: ctx.calorieTarget?.value == null ? ctx.calorieTarget?.referenceValue ?? null : null,
       protein_g: nutritionTargets.protein_g ?? null,
       salt_g: nutritionTargets.salt_g ?? null,
       sugar_g: nutritionTargets.sugar_g ?? null,

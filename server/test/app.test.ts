@@ -6,6 +6,7 @@ import { SqlitePlanMaintenanceRepository } from "../src/modules/planMaintenance/
 import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
 import { SqliteMaintenanceQueueRepository } from "../src/modules/planMaintenance/sqliteQueueRepository.js";
 import assert from "node:assert/strict";
+import { verifyAccountSecurityHttp } from "./accountSecurityHttpAssertions.js";
 import { after, before, describe, test } from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -94,6 +95,21 @@ after(async () => {
 });
 
 describe("API security baseline", () => {
+  test("passwordless SMS account security works through HTTP with scoped phone proof",async () => {await verifyAccountSecurityHttp(api,db);});
+  test("manual diet create requests replay once and cannot resurrect a deleted record",async () => {
+    const account=await register("manual-diet-retry@example.com");
+    const input={idempotency_key:"manual-http-retry-0001",food_name:"测试早餐",meal_type:"早餐",calories:0};
+    const create=(value:unknown) => api("/api/v1/diet-records",{method:"POST",token:account.token,body:JSON.stringify(value)});
+    const results=await Promise.all([create(input),create(input)]);
+    assert.deepEqual(results.map((item) => item.response.status).sort(),[200,201]);
+    const first=results[0].body as JsonObject;assert.equal(first.id,(results[1].body as JsonObject).id);
+    assert.equal((await create({...input,amount:"1份"})).response.status,200);
+    const conflict=await create({...input,calories:10});assert.equal(conflict.response.status,409);assert.equal((conflict.body as JsonObject).code,"DIET_RECORD_KEY_CONFLICT");
+    assert.equal((await api(`/api/v1/diet-records/${first.id}`,{method:"DELETE",token:account.token})).response.status,200);
+    const deleted=await create(input);assert.equal(deleted.response.status,410);assert.equal((deleted.body as JsonObject).code,"DIET_RECORD_REQUEST_DELETED");
+    assert.equal((await api("/api/v1/diet-records",{token:account.token})).body?.length,0);
+    assert.equal((await api("/api/v1/auth/account",{method:"DELETE",token:account.token,body:JSON.stringify({password:"Password1234",confirmation:"DELETE"})})).response.status,200);
+  });
   test("health check returns a request id", async () => {
     const { response, body } = await api("/api/v1/health");
     assert.equal(response.status, 200);
@@ -987,7 +1003,7 @@ describe("API security baseline", () => {
     const profile = await api("/api/v1/health-data/profile", { token: account.token });
     assert.equal(profile.response.status, 200);
     assert.equal((profile.body as JsonObject).user_id, account.user.id);
-    assert.equal((profile.body as JsonObject).health_goal, "healthy");
+    assert.equal((profile.body as JsonObject).health_goal, null);
     assert.deepEqual((profile.body as JsonObject).allergies, []);
   });
 
@@ -2534,11 +2550,13 @@ describe("user data isolation", () => {
     assert.equal((mergedLog.body as JsonObject).water_ml, 1800);
     assert.equal((mergedLog.body as JsonObject).cycle_status, null);
     const latestLog = await api("/api/v1/health-data/latest", { token: first.token });
-    assert.equal((latestLog.body as JsonObject).id, (log.body as JsonObject).id);
+    // Writing current weight through the legacy profile also records today's measurement.
+    assert.equal((latestLog.body as JsonObject).weight, 65);
+    assert.notEqual((latestLog.body as JsonObject).id, (log.body as JsonObject).id);
 
     const secondProfile = await api("/api/v1/health-data/profile", { token: second.token });
     assert.equal((secondProfile.body as JsonObject).user_id, second.user.id);
-    assert.equal((secondProfile.body as JsonObject).health_goal, "healthy");
+    assert.equal((secondProfile.body as JsonObject).health_goal, null);
     assert.deepEqual((secondProfile.body as JsonObject).allergies, []);
     assert.equal((secondProfile.body as JsonObject).medications, "");
     const secondLogs = await api("/api/v1/health-data", { token: second.token });
@@ -2556,7 +2574,19 @@ describe("user data isolation", () => {
     });
     assert.equal(deleted.response.status, 204);
     const firstLogsAfterDelete = await api("/api/v1/health-data", { token: first.token });
-    assert.deepEqual(firstLogsAfterDelete.body, []);
+    assert.equal((firstLogsAfterDelete.body as JsonObject[]).length, 1);
+    assert.equal((firstLogsAfterDelete.body as JsonObject[])[0]?.id, (latestLog.body as JsonObject).id);
+    const initialVersion = Number((profile.body as JsonObject).version);
+    const patch = await api("/api/v1/health-data/profile", { method: "PATCH", token: first.token, body: JSON.stringify({ version: initialVersion, height: null, nutrition_targets: { calories_kcal: 1850 } }) });
+    assert.equal(patch.response.status, 200);
+    assert.equal((patch.body as JsonObject).height, null);
+    assert.equal((patch.body as JsonObject).calorieTarget.source, "user");
+    const stale = await api("/api/v1/health-data/profile", { method: "PATCH", token: first.token, body: JSON.stringify({ version: initialVersion, age: 40 }) });
+    assert.equal(stale.response.status, 409);
+    assert.equal((stale.body as JsonObject).code, "HEALTH_PROFILE_VERSION_CONFLICT");
+    assert.equal((stale.body as JsonObject).details.currentProfile.version, initialVersion + 1);
+    const projected = await api("/api/v1/health-data/current-measurements", { token: first.token });
+    assert.equal((projected.body as JsonObject).weight.value, 65);
   });
 
   test("ordinary users cannot access admin routes", async () => {

@@ -9,7 +9,7 @@ jest.mock("@react-native-async-storage/async-storage", () =>
   require("@react-native-async-storage/async-storage/jest/async-storage-mock"));
 jest.mock("@/services/api", () => ({
   ApiError: class extends Error {},
-  authApi: { login: jest.fn(), me: jest.fn(), updateProfile: jest.fn() },
+  authApi: { login: jest.fn(), me: jest.fn(), updateProfile: jest.fn(),verifySmsCode:jest.fn() },
 }));
 jest.mock("@/services/api/cache", () => ({
   clearApiCacheScope: jest.fn().mockResolvedValue(undefined), registerApiFetchScope: jest.fn(),
@@ -55,6 +55,16 @@ beforeEach(async () => {
   jest.mocked(getStoredToken).mockResolvedValue(null);
 });
 afterEach(() => { act(() => tree?.unmount()); });
+
+it("keeps the new-user signal after passwordless SMS authentication",async () => {
+  await mount();
+  jest.mocked(authApi.verifySmsCode).mockResolvedValue({status:"authenticated",token:"new-token",user:{...userA,hasPassword:false},isNewUser:true});
+  let result:Awaited<ReturnType<typeof auth.verifySmsCode>> | undefined;
+  await act(async () => {result=await auth.verifySmsCode("challenge","123456");});
+  expect(result).toEqual({success:true,registrationRequired:false,isNewUser:true});
+  expect(auth.user?.hasPassword).toBe(false);
+  expect(auth.pendingSmsRegistration).toBeNull();
+});
 
 it.each(["profile", "refresh"])("ignores a delayed %s response from the previous account", async kind => {
   await mount();

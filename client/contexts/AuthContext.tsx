@@ -6,6 +6,7 @@ import { clearApiCacheScope, registerApiFetchScope } from '@/services/api/cache'
 import { AUTH_USER_KEY, getStoredToken, removeStoredToken, setStoredToken } from '@/utils/authStorage';
 import { AuthSessionCoordinator } from '@/utils/authSessionCoordinator';
 import { cancelAllLocalNotificationsForUser, cancelLegacyUnscopedLocalNotifications } from '@/utils/notifications';
+import { ACCOUNT_SECURITY_CAPABILITY, type AccountDeletionProof } from '@dietdigidose/contracts';
 import { purgeVoiceAudioCacheForUser, stopVoiceOutput } from '@/services/voicePackManager';
 
 interface User {
@@ -15,8 +16,9 @@ interface User {
   phone?: string | null;
   avatar_url: string | null;
   bio: string | null;
-  daily_calories_target?: number;
+  daily_calories_target?: number | null;
   phone_verified_at?: string | null;
+  hasPassword?: boolean;
 }
 
 type PendingSmsRegistration = {
@@ -35,13 +37,13 @@ interface AuthContextType {
   sessionMessage: string | null;
   clearSessionMessage: () => void;
   sendSmsCode: (phone: string) => Promise<{ success: boolean; challengeId?: string; phoneMasked?: string; resendAfter?: number; error?: string }>;
-  verifySmsCode: (challengeId: string, code: string) => Promise<{ success: boolean; registrationRequired?: boolean; error?: string }>;
+  verifySmsCode: (challengeId: string, code: string) => Promise<{ success: boolean; registrationRequired?: boolean; isNewUser?: boolean; error?: string }>;
   completeSmsRegistration: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   clearPendingSmsRegistration: () => void;
   logout: (message?: string, expectedGeneration?: number) => Promise<void>;
   sessionGeneration: number;
   updateProfile: (data: Partial<User>) => Promise<{ success: boolean; error?: string }>;
-  deleteAccount: (password: string) => Promise<{ success: boolean; error?: string }>;
+  deleteAccount: (proof: string | AccountDeletionProof) => Promise<{ success: boolean; error?: string }>;
   refreshUser: () => Promise<void>;
 }
 
@@ -194,12 +196,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const verifySmsCode = useCallback(async (challengeId: string, code: string) => {
     try {
       const data = await authApi.verifySmsCode<
-        | { status: 'authenticated'; token: string; user: User }
+        | { status: 'authenticated'; token: string; user: User; isNewUser?: boolean }
         | { status: 'registration_required'; registrationToken: string; phoneMasked: string }
       >(challengeId, code);
       if (data.status === 'authenticated') {
         if (!await applyAuthenticatedResult(data)) return { success: false, error: '登录返回数据不完整' };
-        return { success: true, registrationRequired: false };
+        return { success: true, registrationRequired: false, isNewUser: data.isNewUser === true };
       }
       if (data.status === 'registration_required' && data.registrationToken) {
         setPendingSmsRegistration({ registrationToken: data.registrationToken, phoneMasked: data.phoneMasked });
@@ -267,10 +269,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token, logout, sessionGeneration]);
 
-  const deleteAccount = useCallback(async (password: string) => {
+  const deleteAccount = useCallback(async (proof: string | AccountDeletionProof) => {
     if (!token || !user) return { success: false, error: '请先登录' };
     try {
-      await authApi.deleteAccount(token, password);
+      await authApi.deleteAccount(token, proof);
       await clearAuthState(sessionGeneration, user.id);
       return { success: true };
     } catch (error) {
@@ -329,6 +331,7 @@ export function useAuthFetch() {
     // requestJson 传入的是 Headers 实例。对象展开会丢失其中的
     // Content-Type，导致 Express 不解析 POST 的 JSON 正文。
     const headers = new Headers(options.headers);
+    headers.set('X-Account-Security', ACCOUNT_SECURITY_CAPABILITY);
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
     }

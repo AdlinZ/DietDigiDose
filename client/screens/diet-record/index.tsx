@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   Alert,
 } from "react-native";
 import { Screen } from "@/components/Screen";
+import { useHealthSummary } from "@/hooks/useHealthSummary";
+import { usePendingDietSave } from "@/hooks/usePendingDietSave";
 import { useFocusEffect } from "expo-router";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
@@ -59,16 +61,35 @@ function normalizeRecordedTime(value: string) {
 export default function DietRecordScreen() {
   const router = useSafeRouter();
   const params = useSafeSearchParams<any>();
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, sessionGeneration } = useAuth();
   const authFetch = useAuthFetch();
+  const pendingSave = usePendingDietSave(user?.id, authFetch);
+  const { targetCalories: targetCal, targetLabel } = useHealthSummary();
 
   const todayStr = toLocalDateKey();
   const [selectedDate, setSelectedDate] = useState(todayStr);
   const [weekOffset, setWeekOffset] = useState(0);
-  const [records, setRecords] = useState<DietRecord[]>([]);
-  const [weeklyRecordCounts, setWeeklyRecordCounts] = useState<Record<string, number>>({});
-  const [loading, setLoading] = useState(true);
+  const accountScope = useMemo(() => ({ userId: user?.id, isAuthenticated, authFetch, sessionGeneration }), [user?.id, isAuthenticated, authFetch, sessionGeneration]);
+  const recordScope = useMemo(() => ({ accountScope, selectedDate }), [accountScope, selectedDate]);
+  const weekScope = useMemo(() => ({ accountScope, weekOffset, todayStr }), [accountScope, weekOffset, todayStr]);
+  const currentAccountScope = useRef(accountScope);
+  const currentRecordScope = useRef(recordScope);
+  const currentWeekScope = useRef(weekScope);
+  currentAccountScope.current = accountScope;
+  currentRecordScope.current = recordScope;
+  currentWeekScope.current = weekScope;
+  const recordRequest = useRef(0);
+  const weekRequest = useRef(0);
+  const mounted = useRef(true);
+  const formRevision = useRef(0);
+  const [recordState, setRecordState] = useState({ scope: recordScope, records: [] as DietRecord[], loading: true });
+  const [weekState, setWeekState] = useState({ scope: weekScope, counts: {} as Record<string, number> });
+  // Scope the rendered data too: a date/account change must hide old rows before effects run.
+  const records = recordState.scope === recordScope ? recordState.records : [];
+  const weeklyRecordCounts = weekState.scope === weekScope ? weekState.counts : {};
+  const loading = recordState.scope !== recordScope || recordState.loading;
   const [modalVisible, setModalVisible] = useState(false);
+  const [formAccountScope, setFormAccountScope] = useState(accountScope);
   const [calendarVisible, setCalendarVisible] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
@@ -88,9 +109,39 @@ export default function DietRecordScreen() {
   const [saving, setSaving] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
 
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  useEffect(() => {
+    formRevision.current += 1;
+    setSaving(false);
+    setAiAnalyzing(false);
+  }, [recordScope]);
+
+  useEffect(() => {
+    setModalVisible(false);
+    setMealType("");
+    setFoodName("");
+    setAmount("1份");
+    setCalories("");
+    setProtein("");
+    setCarbs("");
+    setFat("");
+    setImageUrl("");
+  }, [accountScope]);
+
   // 监听路由预填参数
   useEffect(() => {
+    if (params.action === "add" && isAuthenticated) {
+      setFormAccountScope(accountScope);
+      setModalVisible(true);
+      router.setParams({});
+      return;
+    }
     if (params.prefill_food) {
+      setFormAccountScope(accountScope);
       setFoodName(String(params.prefill_food));
       if (params.prefill_calories !== undefined) setCalories(String(params.prefill_calories));
       if (params.prefill_protein !== undefined) setProtein(String(params.prefill_protein));
@@ -103,7 +154,7 @@ export default function DietRecordScreen() {
       // 预填数据已经进入本地表单状态，立即消费掉一次性路由参数。
       router.setParams({});
     }
-  }, [params, router]);
+  }, [accountScope, isAuthenticated, params, router]);
 
   // 生成当前浏览周期的 7 天日期数组；weekOffset 为负数时查看更早周期。
   const pastSevenDays = Array.from({ length: 7 }).map((_, i) => {
@@ -169,24 +220,29 @@ export default function DietRecordScreen() {
   };
 
   const fetchRecords = useCallback(async () => {
-    if (!isAuthenticated) {
-      setLoading(false);
+    if (!mounted.current || currentRecordScope.current !== recordScope) return;
+    const request = ++recordRequest.current;
+    const isCurrent = () => mounted.current && currentRecordScope.current === recordScope && recordRequest.current === request;
+    if (!accountScope.isAuthenticated || !accountScope.userId) {
+      setRecordState({ scope: recordScope, records: [], loading: false });
       return;
     }
     try {
-      setLoading(true);
+      setRecordState(current => ({ scope: recordScope, records: current.scope === recordScope ? current.records : [], loading: true }));
       const data = await dietApi.list(authFetch, selectedDate);
-      setRecords(Array.isArray(data) ? data : []);
+      if (isCurrent()) setRecordState({ scope: recordScope, records: Array.isArray(data) ? data : [], loading: false });
     } catch (e) {
-      console.error(e);
+      if (isCurrent()) console.error(e);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setRecordState(current => ({ ...current, loading: false }));
     }
-  }, [isAuthenticated, authFetch, selectedDate]);
+  }, [accountScope, authFetch, recordScope, selectedDate]);
 
   const fetchWeeklyRecordCounts = useCallback(async () => {
-    if (!isAuthenticated) {
-      setWeeklyRecordCounts({});
+    if (!mounted.current || currentWeekScope.current !== weekScope) return;
+    const request = ++weekRequest.current;
+    if (!accountScope.isAuthenticated || !accountScope.userId) {
+      setWeekState({ scope: weekScope, counts: {} });
       return;
     }
 
@@ -195,27 +251,44 @@ export default function DietRecordScreen() {
       (_, index) => toLocalDateKey(addLocalDays(weekOffset * 7 + index - 6))
     );
     const results = await Promise.allSettled(days.map((date) => dietApi.list(authFetch, date)));
-    setWeeklyRecordCounts(Object.fromEntries(results.map((result, index) => [
+    if (!mounted.current || currentWeekScope.current !== weekScope || weekRequest.current !== request) return;
+    setWeekState({ scope: weekScope, counts: Object.fromEntries(results.map((result, index) => [
       days[index],
       result.status === "fulfilled" && Array.isArray(result.value)
         ? result.value.length
         : 0,
-    ])));
-  }, [authFetch, isAuthenticated, weekOffset]);
+    ])) });
+  }, [accountScope, authFetch, weekOffset, weekScope]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchRecords();
+      void fetchRecords();
+      return () => { recordRequest.current += 1; };
     }, [fetchRecords])
   );
 
   useFocusEffect(
     useCallback(() => {
       void fetchWeeklyRecordCounts();
+      return () => { weekRequest.current += 1; };
     }, [fetchWeeklyRecordCounts])
   );
 
+  const currentRefresh = useRef({ selectedDate, fetchRecords, fetchWeeklyRecordCounts });
+  currentRefresh.current = { selectedDate, fetchRecords, fetchWeeklyRecordCounts };
+  const refreshAfterMutation = () => {
+    if (!mounted.current || currentAccountScope.current !== accountScope) return;
+    // A mutation can finish after leaving and returning to its date. Refresh the
+    // current queries without letting its old callback alter a newer meal form.
+    if (currentRefresh.current.selectedDate === selectedDate) void currentRefresh.current.fetchRecords();
+    void currentRefresh.current.fetchWeeklyRecordCounts();
+  };
+
   const openAddModal = (meal = "", time = currentTimeValue()) => {
+    formRevision.current += 1;
+    setFormAccountScope(accountScope);
+    setSaving(false);
+    setAiAnalyzing(false);
     setMealType(meal);
     setRecordedTime(time);
     setFoodName("");
@@ -243,6 +316,8 @@ export default function DietRecordScreen() {
   };
 
   const handlePickImageAndRecognize = async () => {
+    const revision = formRevision.current;
+    const isCurrent = () => mounted.current && currentRecordScope.current === recordScope && formRevision.current === revision;
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -250,7 +325,7 @@ export default function DietRecordScreen() {
         base64: true,
       });
 
-      if (result.canceled || !result.assets?.[0]) return;
+      if (!isCurrent() || result.canceled || !result.assets?.[0]) return;
 
       const asset = result.assets[0];
       if (asset.uri) setImageUrl(asset.uri);
@@ -262,7 +337,9 @@ export default function DietRecordScreen() {
 
       setAiAnalyzing(true);
       const json = await aiApi.visionFood<{ data?: Record<string, number | string>; rawText?: string; run: { id: string; status: string; artifacts?: Array<{ type: string; data: unknown }>; reply?: string; error?: { message?: string } } }>(authFetch, asset.base64);
+      if (!isCurrent()) return;
       const run = await waitForAgentRun(authFetch, json.run);
+      if (!isCurrent()) return;
       const data = json.data || run.artifacts?.find((artifact) => artifact.type === "vision")?.data as Record<string, number | string> | undefined;
       if (data) {
           if (data.foodName) setFoodName(String(data.foodName));
@@ -276,9 +353,9 @@ export default function DietRecordScreen() {
         Alert.alert("AI 识别提示", json.rawText || run.reply);
       }
     } catch (e: any) {
-      Alert.alert("错误", e.message || "识图出现异常");
+      if (isCurrent()) Alert.alert("错误", e.message || "识图出现异常");
     } finally {
-      setAiAnalyzing(false);
+      if (isCurrent()) setAiAnalyzing(false);
     }
   };
 
@@ -288,6 +365,10 @@ export default function DietRecordScreen() {
   };
 
   const handleSave = async () => {
+    const revision = formRevision.current;
+    const isCurrent = () => mounted.current && currentRecordScope.current === recordScope;
+    const isCurrentForm = () => isCurrent() && formRevision.current === revision;
+    if (!isCurrent() || !accountScope.isAuthenticated || !accountScope.userId || saving) return;
     if (!foodName.trim()) {
       Alert.alert("提示", "请输入食物名称");
       return;
@@ -317,26 +398,26 @@ export default function DietRecordScreen() {
         image_url: imageUrl.trim() || null,
       };
 
-      await dietApi.create(authFetch, payload);
-      setModalVisible(false);
-      fetchRecords();
-      void fetchWeeklyRecordCounts();
+      await pendingSave.save(payload);
+      if (isCurrentForm()) setModalVisible(false);
+      refreshAfterMutation();
     } catch (e) {
-      Alert.alert("错误", e instanceof ApiError ? e.message : "网络异常");
+      if (isCurrentForm()) Alert.alert("错误", e instanceof ApiError ? e.message : "网络异常");
     } finally {
-      setSaving(false);
+      if (isCurrentForm()) setSaving(false);
     }
   };
 
   const handleDelete = (id: number) => {
     const record = records.find(item => item.id === id);
+    const isCurrent = () => mounted.current && currentRecordScope.current === recordScope;
     const remove = async (mode?: "undo_eating" | "delete_intake") => {
+      if (!isCurrent()) return;
       try {
         await dietApi.remove(authFetch, id, mode);
-        fetchRecords();
-        void fetchWeeklyRecordCounts();
+        refreshAfterMutation();
       } catch (error) {
-        Alert.alert("未能处理记录", error instanceof Error ? error.message : "请稍后重试");
+        if (isCurrent()) Alert.alert("未能处理记录", error instanceof Error ? error.message : "请稍后重试");
       }
     };
     if (record?.prepared_meal_id || record?.household_meal_id) {
@@ -364,18 +445,18 @@ export default function DietRecordScreen() {
     return Math.min(DAY_TIMELINE_HEIGHT - 12, Math.max(0, ((hours * 60 + minutes) / (24 * 60)) * DAY_TIMELINE_HEIGHT));
   };
 
-  const targetCal = user?.daily_calories_target || 2000;
   const progressPercent = Math.min(Math.round((dayTotalCal / targetCal) * 100), 100);
   const remainingCal = Math.max(0, targetCal - dayTotalCal);
   const isSelectedToday = selectedDate === todayStr;
 
   const handleCloseModal = () => {
+    formRevision.current += 1;
     setModalVisible(false);
     router.setParams({});
   };
 
   const formattedSelectedDateText = () => {
-    const d = new Date(selectedDate);
+    const d = parseDateKey(selectedDate) || new Date();
     const m = d.getMonth() + 1;
     const dateNum = d.getDate();
     const dayName = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][d.getDay()];
@@ -417,6 +498,11 @@ export default function DietRecordScreen() {
     <Screen>
       <View className="flex-1">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+          {pendingSave.pending ? <View className="mx-5 mb-4 gap-3 rounded-2xl bg-warm-soft p-4"><Text className="font-bold text-ink">上次记录尚未确认保存</Text><Text className="text-copy-muted">{pendingSave.pending.recorded_at} · {pendingSave.pending.food_name} · {pendingSave.pending.amount}</Text><TouchableOpacity accessibilityRole="button" disabled={saving} onPress={() => {
+            const scope = accountScope; setSaving(true);
+            void pendingSave.save().then(record => { if (mounted.current && currentAccountScope.current === scope) { setSelectedDate(record.recorded_at); refreshAfterMutation(); } }).catch(reason => { if (mounted.current && currentAccountScope.current === scope) Alert.alert("保存失败", reason instanceof Error ? reason.message : "请重试"); }).finally(() => { if (mounted.current && currentAccountScope.current === scope) setSaving(false); });
+          }}><Text className="font-bold text-brand">重试保存上次记录</Text></TouchableOpacity></View> : null}
+          {pendingSave.error ? <Text accessibilityRole="alert" className="mx-5 mb-3 text-critical">{pendingSave.error}</Text> : null}
           {/* 顶部 Header */}
           <View className="flex-row items-center px-5 pb-2 pt-3">
             <TouchableOpacity
@@ -708,7 +794,7 @@ export default function DietRecordScreen() {
                   <Text className="text-[11px] font-bold text-brand">{isSelectedToday ? "今日营养汇总" : "当日营养汇总"}</Text>
                   <View className="mt-1 flex-row items-baseline gap-1.5">
                     <Text className="text-[30px] font-black text-ink">{dayTotalCal}</Text>
-                    <Text className="text-xs font-medium text-copy-muted">/ {targetCal} kcal</Text>
+                    <Text className="text-xs font-medium text-copy-muted">/ {targetCal} kcal · {targetLabel}</Text>
                   </View>
                 </View>
                 <View className="rounded-full bg-surface px-3 py-2">
@@ -851,7 +937,7 @@ export default function DietRecordScreen() {
         </Modal>
 
         {/* 打卡 Bottom Sheet Modal */}
-        <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={handleCloseModal}>
+        <Modal visible={modalVisible && formAccountScope === accountScope} animationType="slide" transparent onRequestClose={handleCloseModal}>
           <View className="flex-1 bg-black/40 justify-end">
             <View className="max-h-[90%] rounded-t-[32px] bg-surface px-5 pb-6 pt-5 shadow-xl">
               {/* Modal Header */}

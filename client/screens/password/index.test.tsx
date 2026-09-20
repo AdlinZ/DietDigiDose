@@ -4,11 +4,14 @@ import { TextInput, TouchableOpacity, Text } from "react-native";
 const mockRequest = jest.fn();
 const mockLogout = jest.fn(async () => undefined);
 const mockReplace = jest.fn();
+let mockUser: {id:number;hasPassword?:boolean;phone_verified_at?:string} = {id:1};
 jest.mock("@/components/Screen", () => ({ Screen: ({ children }: { children: React.ReactNode }) => children }));
-jest.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: { id: 1 }, logout: mockLogout, sessionGeneration: 4 }), useAuthFetch: () => jest.fn() }));
+jest.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: mockUser, logout: mockLogout, sessionGeneration: 4 }), useAuthFetch: () => jest.fn() }));
+jest.mock("@/components/AccountSmsVerification",() => ({AccountSmsVerification:() => null}));
 jest.mock("@/hooks/useSafeRouter", () => ({ useSafeRouter: () => ({ replace: mockReplace, back: jest.fn() }), useSafeSearchParams: () => ({}) }));
 jest.mock("@/services/api/client", () => ({ requestJson: (...args: unknown[]) => mockRequest(...args) }));
 import PasswordScreen from "./index";
+beforeEach(() => {jest.clearAllMocks();mockUser={id:1};});
 test("mismatch never sends credentials; successful change revokes the captured session", async () => {
   let tree!: renderer.ReactTestRenderer;
   await act(async () => { tree = renderer.create(<PasswordScreen />); });
@@ -27,5 +30,23 @@ test("mismatch never sends credentials; successful change revokes the captured s
   await act(async () => { submit(); });
   expect(mockLogout).toHaveBeenCalledWith("密码已修改，请使用新密码重新登录。", 4);
   expect(mockReplace).toHaveBeenCalledWith("/login");
+  act(() => tree.unmount());
+});
+
+test("a passwordless account verifies its bound phone and sets its first password without an old password",async () => {
+  mockUser={id:2,hasPassword:false,phone_verified_at:"2026-09-20"};
+  let tree!:renderer.ReactTestRenderer;
+  await act(async () => {tree=renderer.create(<PasswordScreen />);});
+  const inputs=tree.root.findAllByType(TextInput);
+  expect(inputs).toHaveLength(2);
+  act(() => {inputs[0].props.onChangeText("FirstPassword1");inputs[1].props.onChangeText("FirstPassword1");});
+  const submit=() => tree.root.findAllByType(TouchableOpacity).find(item => item.findAllByType(Text).some(text => text.props.children==="修改密码并重新登录"))!.props.onPress();
+  await act(async () => {submit();});
+  expect(mockRequest).not.toHaveBeenCalled();
+  act(() => tree.root.findByProps({purpose:"password_update"}).props.onVerified("verified-phone-token"));
+  mockRequest.mockResolvedValueOnce({success:true});
+  await act(async () => {submit();});
+  expect(mockRequest).toHaveBeenCalledWith(expect.anything(),"/api/v1/auth/password",{method:"POST",body:JSON.stringify({reauthToken:"verified-phone-token",newPassword:"FirstPassword1"})});
+  expect(mockLogout).toHaveBeenCalledWith("密码已修改，请使用新密码重新登录。",4);
   act(() => tree.unmount());
 });

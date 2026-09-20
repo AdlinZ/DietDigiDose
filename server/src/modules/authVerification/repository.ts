@@ -8,6 +8,8 @@ import type {
   VerificationChallenge,
   VerificationEventInput,
   VerificationSubject,
+  ReauthUser,
+  ReauthGrantInput,
 } from "./types.js";
 
 export interface AuthVerificationRepository {
@@ -31,7 +33,9 @@ export interface AuthVerificationRepository {
   completeLogin(input: { userId: number; subjectId: number; challengeId: string; at: string; sourceIp: string }): Promise<void>;
   markRegistrationRequired(input: { challengeId: string; at: string; tokenHash: string; expiresAt: string }): Promise<void>;
   registrationChallenge(tokenHash: string): Promise<VerificationChallenge | null>;
-  register(input: { tokenHash: string; phone: string; username: string; passwordHash: string; at: string }): Promise<RegistrationResult>;
+  register(input: { tokenHash: string; phone: string; username: string; passwordHash: string | null; at: string }): Promise<RegistrationResult>;
+  reauthUser(userId: number): Promise<ReauthUser | null>;
+  issueReauthGrant(input: ReauthGrantInput): Promise<boolean>;
   userResponse(userId: number): Promise<Record<string, unknown> | null>;
   recentSendEvent(): Promise<Record<string, unknown> | null>;
   usageOverview(provider: string, firstUsageDate: string): Promise<{ totals: Record<string, number>; daily: Array<Record<string, unknown>> }>;

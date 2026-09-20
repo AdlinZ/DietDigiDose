@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import { JWT_SECRET } from "../../config/security.js";
+import { consumeAccountProofPostgres, type AccountMutationProof } from "./reauthProof.js";
+import { syncLegacyCaloriesPostgres } from "../health/calorieCompatibility.js";
 import type { AuthAccountRepository } from "./repository.js";
 import type {
   AccountDeletionResult, AdminAudit, AiDataDeletion, AiDataExport, LoginIdentifier, LoginUser, ProfileInput,
@@ -27,8 +29,8 @@ export class PostgresAuthAccountRepository implements AuthAccountRepository {
       if ((await client.query("SELECT 1 FROM users WHERE email=$1 OR phone=$2",[input.email,input.phone])).rowCount) return { status: "identifier_exists" };
       if ((await client.query("SELECT 1 FROM users WHERE LOWER(username)=LOWER($1)",[input.username])).rowCount) return { status: "username_exists" };
       try {
-        const inserted = (await client.query(`INSERT INTO users (username,email,phone,password_hash,avatar_url) VALUES ($1,$2,$3,$4,NULL)
-          RETURNING id,username,email,phone,avatar_url,bio,daily_calories_target,session_version`,
+        const inserted = (await client.query(`INSERT INTO users (username,email,phone,password_hash,avatar_url,daily_calories_target) VALUES ($1,$2,$3,$4,NULL,NULL)
+          RETURNING id,username,email,phone,avatar_url,bio,daily_calories_target,session_version,password_hash IS NOT NULL AS "hasPassword"`,
         [input.username,input.email,input.phone,input.passwordHash])).rows[0] as Row;
         await this.ensureInitialState(client,Number(inserted.id));
         const { session_version: sessionVersion, ...user } = inserted;
@@ -69,21 +71,29 @@ export class PostgresAuthAccountRepository implements AuthAccountRepository {
   }
 
   async getMe(userId: number) { return ((await this.pool.query(`SELECT id,username,email,phone,phone_verified_at,avatar_url,bio,
-    daily_calories_target,created_at,role,must_change_password,last_login_at,last_login_ip FROM users WHERE id=$1`,[userId])).rows[0] as Row | undefined) || null; }
+    daily_calories_target,created_at,role,must_change_password,last_login_at,last_login_ip,password_hash IS NOT NULL AS "hasPassword" FROM users WHERE id=$1`,[userId])).rows[0] as Row | undefined) || null; }
   async getCredentials(userId: number) {
     const result = await this.pool.query("SELECT username,role,password_hash FROM users WHERE id=$1",[userId]);
-    return (result.rows[0] as { username: string; role: string; password_hash: string } | undefined) || null;
+    return (result.rows[0] as { username: string; role: string; password_hash: string | null } | undefined) || null;
   }
-  async changePassword(userId: number,passwordHash: string) { return (await this.pool.query(`UPDATE users SET password_hash=$1,
-    must_change_password=FALSE,session_version=session_version+1 WHERE id=$2`,[passwordHash,userId])).rowCount === 1; }
+  async changePassword(userId: number,passwordHash: string,proof?: AccountMutationProof) { return this.tx(async (client) => {
+    if (proof) await consumeAccountProofPostgres(client,userId,"password_update",proof);
+    return (await client.query(`UPDATE users SET password_hash=$1,
+      must_change_password=FALSE,session_version=session_version+1 WHERE id=$2`,[passwordHash,userId])).rowCount === 1;
+  }); }
 
   async updateProfile(userId: number,input: ProfileInput): Promise<ProfileResult> { return this.tx(async (client) => {
     if (input.username) { await this.lock(client,`auth:username:${input.username.toLowerCase()}`);
       if ((await client.query("SELECT 1 FROM users WHERE LOWER(username)=LOWER($1) AND id<>$2",[input.username,userId])).rowCount) return { status: "username_exists" }; }
     try { const result = await client.query(`UPDATE users SET username=COALESCE($1,username),avatar_url=COALESCE($2,avatar_url),
       bio=COALESCE($3,bio),daily_calories_target=COALESCE($4,daily_calories_target) WHERE id=$5
-      RETURNING id,username,email,phone,avatar_url,bio,daily_calories_target,role`,
-    [input.username,input.avatar_url,input.bio,input.daily_calories_target,userId]); return { status: "updated",user: result.rows[0] as Row }; }
+      RETURNING id,username,email,phone,phone_verified_at,avatar_url,bio,daily_calories_target,role,password_hash IS NOT NULL AS "hasPassword"`,
+    [input.username,input.avatar_url,input.bio,input.daily_calories_target,userId]);
+      if (typeof input.daily_calories_target === "number") {
+        await syncLegacyCaloriesPostgres(client,userId,input.daily_calories_target);
+        result.rows[0].daily_calories_target=(await client.query("SELECT daily_calories_target FROM users WHERE id=$1",[userId])).rows[0].daily_calories_target;
+      }
+      return { status: "updated",user: result.rows[0] as Row }; }
     catch (error) { if (pgConstraint(error).includes("username")) return { status: "username_exists" }; throw error; }
   }); }
 
@@ -131,8 +141,9 @@ export class PostgresAuthAccountRepository implements AuthAccountRepository {
       .filter((url): url is string => typeof url === "string");
   }
 
-  async deleteAccount(userId: number,actorHash: string,urls: string[],objects: unknown[]): Promise<AccountDeletionResult> { return this.tx(async (client) => {
+  async deleteAccount(userId: number,actorHash: string,urls: string[],objects: unknown[],proof?: AccountMutationProof): Promise<AccountDeletionResult> { return this.tx(async (client) => {
     if (!(await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[userId])).rowCount) return { deleted:false,cleanupJobId:null };
+    if (proof) await consumeAccountProofPostgres(client,userId,"account_delete",proof);
     await this.prepareHouseholds(client,userId);
     await client.query("DELETE FROM funnel_events WHERE actor_hash=$1",[actorHash]); let cleanupJobId: number | null = null;
     if (objects.length) cleanupJobId = Number((await client.query(`INSERT INTO media_cleanup_jobs (owner_user_id,urls_json,objects_json)

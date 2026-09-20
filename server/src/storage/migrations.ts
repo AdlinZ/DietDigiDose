@@ -2,6 +2,10 @@ import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { assessRecipeQuality } from "../services/recipeQuality.js";
 import { migrateBaseData } from "./baseDataMigration.js";
+import { healthProfileMigration } from "./healthProfileMigration.js";
+import { passwordlessMigration } from "./passwordlessMigration.js";
+import { onboardingMigration } from "./onboardingMigration.js";
+import { manualDietRequestMigration } from "./manualDietRequestMigration.js";
 
 type Migration = {
   version: number;
@@ -2421,6 +2425,9 @@ UPDATE prepared_meal_allocations AS target SET status='conflict' WHERE EXISTS (
   } },
 
 ];
+
+// Keep independently developed feature migrations ordered with the historical chain.
+migrations.push(healthProfileMigration, passwordlessMigration, onboardingMigration, manualDietRequestMigration);
 
 export function runMigrations(database: Database.Database) {
   database.exec(`

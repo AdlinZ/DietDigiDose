@@ -26,12 +26,13 @@ describe("AI context module", () => {
         age: 31, dietary_preference: "清淡", allergies_json: [{ name: "花生", type: "过敏", severity: "重度" }],
         medications: "", medical_conditions_json: '["孕期"]', medical_notes: "",
         dietary_restrictions_json: ["低盐"], disliked_foods: "香菜",
-        kitchen_constraints_json: '{"meal_time_minutes":20}', nutrition_targets_json: { protein_g: 90 },
+        kitchen_constraints_json: '{"meal_time_minutes":20}', nutrition_targets_json: { calories_kcal: 1750, protein_g: 90 }, nutrition_target_source: "user",
       },
       personaPrompt: "  自定义人设  ",
     }) }));
     const result = await service.load(3, "2026-09-01");
-    assert.equal(result.dailyCaloriesTarget, 1800);
+    assert.equal(result.dailyCaloriesTarget, 1750);
+    assert.equal(result.calorieTarget?.source, "user");
     assert.equal(result.latestHealth?.weight, 62.5);
     assert.equal(result.latestHealth?.body_fat, undefined);
     assert.deepEqual(result.healthProfile?.medical_conditions, ["孕期"]);
@@ -68,7 +69,9 @@ describe("AI context module", () => {
         deleted_at TEXT, updated_at TEXT);
       CREATE TABLE diet_records (id INTEGER PRIMARY KEY, user_id INTEGER, meal_type TEXT, food_name TEXT,
         calories REAL, protein REAL, carbs REAL, fat REAL, recorded_at TEXT);
-      CREATE TABLE health_logs (id INTEGER PRIMARY KEY, user_id INTEGER, weight REAL, body_fat REAL, water_ml INTEGER);
+      CREATE TABLE health_logs (id INTEGER PRIMARY KEY, user_id INTEGER, weight REAL, body_fat REAL, water_ml INTEGER,
+        height_cm REAL,waist_cm REAL,hip_cm REAL,resting_heart_rate REAL,blood_pressure_systolic REAL,
+        blood_pressure_diastolic REAL,blood_glucose_mmol REAL,sleep_hours REAL,recorded_date TEXT);
       CREATE TABLE user_health_profiles (user_id INTEGER PRIMARY KEY, age INTEGER, dietary_preference TEXT,
         allergies_json TEXT, medications TEXT, medical_conditions_json TEXT, medical_notes TEXT,
         dietary_restrictions_json TEXT, disliked_foods TEXT, kitchen_constraints_json TEXT, nutrition_targets_json TEXT);
@@ -79,7 +82,7 @@ describe("AI context module", () => {
       INSERT INTO kitchenware_items VALUES (1, 1, '炒锅', '锅具', '正常', NULL, '2026-09-01');
       INSERT INTO kitchenware_items VALUES (2, 1, '坏锅', '锅具', '维修中', NULL, '2026-09-01');
       INSERT INTO diet_records VALUES (1, 1, '午餐', '番茄蛋', 320, 18, 20, 11, '2026-09-01 12:00');
-      INSERT INTO health_logs VALUES (1, 1, 62.5, 21.2, 1600);
+      INSERT INTO health_logs(id,user_id,weight,body_fat,water_ml,recorded_date) VALUES (1, 1, 62.5, 21.2, 1600,'2026-09-01');
       INSERT INTO user_health_profiles VALUES (1, 31, '清淡', '[]', '', '[]', '', '["低盐"]', '', '{}', '{}');
       INSERT INTO system_settings VALUES ('AI_SYSTEM_PROMPT', 'SQLite 人设');
     `);

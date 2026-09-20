@@ -3,6 +3,10 @@ import { describe, test } from "node:test";
 import Database from "better-sqlite3";
 import { AuthVerificationService } from "../src/modules/authVerification/service.js";
 import { SqliteAuthVerificationRepository } from "../src/modules/authVerification/sqliteRepository.js";
+import { passwordlessMigration } from "../src/storage/passwordlessMigration.js";
+import { consumeAccountProofSqlite } from "../src/modules/authAccount/reauthProof.js";
+import { SqliteAuthAccountRepository } from "../src/modules/authAccount/sqliteRepository.js";
+import bcrypt from "bcryptjs";
 
 function database() {
   const db = new Database(":memory:");
@@ -11,7 +15,8 @@ function database() {
     CREATE TABLE system_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT);
     CREATE TABLE users(id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT NOT NULL UNIQUE COLLATE NOCASE,email TEXT,phone TEXT UNIQUE,
       password_hash TEXT NOT NULL,avatar_url TEXT,bio TEXT,role TEXT NOT NULL DEFAULT 'user',daily_calories_target INTEGER DEFAULT 2000,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,phone_verified_at TEXT,last_login_at TEXT,last_login_ip TEXT,is_disabled INTEGER NOT NULL DEFAULT 0);
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,phone_verified_at TEXT,last_login_at TEXT,last_login_ip TEXT,is_disabled INTEGER NOT NULL DEFAULT 0,
+      session_version INTEGER NOT NULL DEFAULT 1,must_change_password INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE user_health_profiles(user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE);
     CREATE TABLE auth_verification_subjects(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,channel TEXT NOT NULL,provider TEXT NOT NULL,
       subject_hmac TEXT NOT NULL,subject_ciphertext TEXT NOT NULL,subject_iv TEXT NOT NULL,subject_auth_tag TEXT NOT NULL,
@@ -31,10 +36,77 @@ function database() {
       provider_errors INTEGER NOT NULL DEFAULT 0,delivery_units INTEGER NOT NULL DEFAULT 0,updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY(usage_date,channel,provider));
   `);
+  db.pragma("foreign_keys=OFF");passwordlessMigration.up(db);db.pragma("foreign_keys=ON");
   return db;
 }
 
 describe("auth verification module", () => {
+  test("nullable-password migration preserves existing hashes, foreign keys, indexes, triggers and ID sequence",() => {
+    const db=new Database(":memory:");
+    db.exec(`PRAGMA foreign_keys=ON;
+      CREATE TABLE users(id INTEGER PRIMARY KEY AUTOINCREMENT,username TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL);
+      CREATE UNIQUE INDEX users_casefold ON users(lower(username));
+      CREATE TABLE linked(user_id INTEGER REFERENCES users(id) ON DELETE CASCADE);
+      CREATE TABLE audit(value TEXT);
+      CREATE TRIGGER user_audit AFTER INSERT ON users BEGIN INSERT INTO audit(value) VALUES(NEW.username); END;
+      CREATE TABLE auth_verification_challenges(id TEXT PRIMARY KEY);
+      INSERT INTO users(id,username,password_hash) VALUES(200,'deleted','old-hash');DELETE FROM users WHERE id=200;
+      INSERT INTO users(id,username,password_hash) VALUES(7,'Existing','kept-hash');INSERT INTO linked VALUES(7);`);
+    db.pragma("foreign_keys=OFF");db.transaction(() => passwordlessMigration.up(db))();db.pragma("foreign_keys=ON");
+    assert.equal((db.prepare("SELECT password_hash FROM users WHERE id=7").get() as {password_hash:string}).password_hash,"kept-hash");
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM linked").get() as {n:number}).n,1);
+    assert.deepEqual(db.pragma("foreign_key_check"),[]);
+    const inserted=db.prepare("INSERT INTO users(username,password_hash) VALUES('New',NULL)").run();
+    assert.equal(Number(inserted.lastInsertRowid),201);
+    assert.throws(() => db.prepare("INSERT INTO users(username,password_hash) VALUES('EXISTING',NULL)").run(),/UNIQUE/);
+    assert.equal((db.prepare("SELECT value FROM audit ORDER BY rowid DESC LIMIT 1").get() as {value:string}).value,"New");
+    db.close();
+  });
+  test("creates a passwordless account and consumes scoped identity proof with the credential mutation",async () => {
+    const db=database();const service=new AuthVerificationService(new SqliteAuthVerificationRepository(db));
+    const subject=await service.findOrCreateSubject("13800138001");const expiresAt=new Date(Date.now()+60_000).toISOString();
+    await service.createChallenge({id:"register-new",subjectId:subject.id,purpose:"login",outId:"register-new",expiresAt,sourceIp:null,userAgent:null});
+    await service.markRegistrationRequired({challengeId:"register-new",at:new Date().toISOString(),tokenHash:"register-proof",expiresAt});
+    const registration=await service.register({tokenHash:"register-proof",phone:"13800138001",username:"随机昵称",passwordHash:null,at:new Date().toISOString()});
+    assert.equal(registration.status,"created");if(registration.status!=="created") return;
+    const userId=registration.userId;
+    assert.equal((await service.userResponse(userId))?.hasPassword,false);
+    assert.equal((await service.userResponse(userId))?.daily_calories_target,null);
+    await service.createChallenge({id:"password-proof",subjectId:subject.id,purpose:"password_update",outId:"password-proof",expiresAt,sourceIp:null,userAgent:null,reauthUserId:userId,reauthSessionVersion:1});
+    await service.beginVerification("password-proof");
+    assert.equal(await service.issueReauthGrant({challengeId:"password-proof",userId,purpose:"password_update",phone:"13800138001",sessionVersion:1,tokenHash:"grant",expiresAt}),true);
+    assert.throws(() => consumeAccountProofSqlite(db,userId,"account_delete",{tokenHash:"grant"}),/重新验证/);
+    assert.throws(() => consumeAccountProofSqlite(db,userId+1,"password_update",{tokenHash:"grant"}),/重新验证/);
+    assert.throws(() => db.transaction(() => {consumeAccountProofSqlite(db,userId,"password_update",{tokenHash:"grant"});throw new Error("rollback");})(),/rollback/);
+    const account=new SqliteAuthAccountRepository(db);
+    assert.equal(await account.changePassword(userId,bcrypt.hashSync("FirstPass1",4),{tokenHash:"grant"}),true);
+    assert.equal((await service.reauthUser(userId))?.session_version,2);
+    assert.equal((await service.userResponse(userId))?.hasPassword,true);
+    await assert.rejects(() => account.changePassword(userId,"other",{tokenHash:"grant"}),/重新验证/);
+    assert.equal(await service.issueReauthGrant({challengeId:"password-proof",userId,purpose:"password_update",phone:"13800138001",sessionVersion:1,tokenHash:"second",expiresAt}),false);
+    db.close();
+  });
+
+  test("separates login and account operation codes and rejects stale phone/session grants",async () => {
+    const db=database();const service=new AuthVerificationService(new SqliteAuthVerificationRepository(db));
+    db.prepare("INSERT INTO users(username,phone,password_hash,phone_verified_at) VALUES('no-password','13800138002',NULL,CURRENT_TIMESTAMP)").run();
+    const userId=1;const subject=await service.findOrCreateSubject("13800138002");const expiresAt=new Date(Date.now()+60_000).toISOString();
+    for(const purpose of ["login","account_delete"] as const) {
+      await service.createChallenge({id:purpose,subjectId:subject.id,purpose,outId:purpose,expiresAt,sourceIp:null,userAgent:null,reauthUserId:purpose==="login"?undefined:userId,reauthSessionVersion:purpose==="login"?undefined:1});
+      await service.acceptChallenge(purpose,subject.id,null,null);
+    }
+    assert.equal((await service.challenge("login"))?.status,"accepted");
+    await service.beginVerification("account_delete");
+    assert.equal(await service.issueReauthGrant({challengeId:"account_delete",userId,purpose:"account_delete",phone:"13800138002",sessionVersion:1,tokenHash:"delete",expiresAt}),true);
+    db.prepare("UPDATE users SET phone='13800138003' WHERE id=?").run(userId);
+    assert.throws(() => consumeAccountProofSqlite(db,userId,"account_delete",{tokenHash:"delete"}),/重新验证/);
+    db.prepare("UPDATE users SET phone='13800138002',session_version=2 WHERE id=?").run(userId);
+    assert.throws(() => consumeAccountProofSqlite(db,userId,"account_delete",{tokenHash:"delete"}),/重新验证/);
+    db.prepare("UPDATE users SET session_version=1 WHERE id=?").run(userId);
+    db.transaction(() => consumeAccountProofSqlite(db,userId,"account_delete",{tokenHash:"delete"}))();
+    assert.throws(() => consumeAccountProofSqlite(db,userId,"account_delete",{tokenHash:"delete"}),/重新验证/);
+    db.close();
+  });
   test("stores settings and encrypts a stable, reusable subject", async () => {
     const db = database();
     const repository = new SqliteAuthVerificationRepository(db);

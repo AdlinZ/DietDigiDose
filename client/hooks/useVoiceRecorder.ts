@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Alert, Linking, Platform } from "react-native";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
@@ -27,17 +27,34 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
   const emptyNotifiedRef = useRef(false);
   const cleanupAudioRef = useRef<(() => void) | null>(null);
   const nativeRecordingRef = useRef<Audio.Recording | null>(null);
+  const disposed = useRef(false);
+  useEffect(() => {
+    disposed.current = false;
+    return () => {
+      disposed.current = true;
+      const recorder = mediaRecorderRef.current;
+      if (recorder) {
+        recorder.onstop = null;
+        if (recorder.state !== "inactive") recorder.stop();
+        mediaRecorderRef.current = null;
+      }
+      cleanupAudioRef.current?.(); cleanupAudioRef.current = null;
+      const native = nativeRecordingRef.current; nativeRecordingRef.current = null;
+      if (native) void native.stopAndUnloadAsync().catch(() => undefined);
+      webRecognitionRef.current?.abort?.();
+    };
+  }, []);
 
   const emitFinalTranscript = useCallback((text?: string) => {
     const transcript = (text ?? transcriptRef.current).trim();
-    if (!transcript || submittedRef.current) return false;
+    if (disposed.current || !transcript || submittedRef.current) return false;
     submittedRef.current = true;
     onSpeechFinal?.(transcript);
     return true;
   }, [onSpeechFinal]);
 
   const emitEmptySpeech = useCallback(() => {
-    if (submittedRef.current || emptyNotifiedRef.current) return;
+    if (disposed.current || submittedRef.current || emptyNotifiedRef.current) return;
     emptyNotifiedRef.current = true;
     onSpeechEmpty?.();
   }, [onSpeechEmpty]);
@@ -50,11 +67,13 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
       const uri = recording.getURI();
       if (!uri) throw new Error("录音文件不可用");
       const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
+      if (disposed.current) return;
       const response = await aiApi.transcribe<{
         text?: string;
         run: { id: string; status: string; transcript?: string; error?: { message?: string } };
       }>(authFetch, base64, "audio/m4a");
       const run = await waitForAgentRun(authFetch, response.run);
+      if (disposed.current) return;
       const transcript = (response.text || run.transcript || "").trim();
       if (transcript) {
         transcriptRef.current = transcript;
@@ -128,6 +147,7 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
           shouldDuckAndroid: true,
         });
         const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+        if (disposed.current) { await recording.stopAndUnloadAsync(); return; }
         nativeRecordingRef.current = recording;
         return;
       } catch (error) {
@@ -150,6 +170,7 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
     ) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (disposed.current) { stream.getTracks().forEach(track => track.stop()); return; }
         const mediaRecorder = new MediaRecorder(stream);
         audioChunksRef.current = [];
 
@@ -167,10 +188,12 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
           const reader = new FileReader();
           reader.readAsDataURL(audioBlob);
           reader.onloadend = async () => {
+            if (disposed.current) return;
             const base64data = (reader.result as string) || "";
             try {
               const res = await aiApi.transcribe<{ text?: string; run: { id: string; status: string; transcript?: string; error?: { message?: string } } }>(authFetch, base64data, "audio/webm");
               const run = await waitForAgentRun(authFetch, res.run);
+              if (disposed.current) return;
               const transcript = res.text || run.transcript || "";
               if (transcript && onSpeechResult) {
                 transcriptRef.current = transcript;

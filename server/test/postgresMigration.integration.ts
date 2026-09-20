@@ -1,4 +1,8 @@
 import { verifyFeedbackPostgres } from "./feedbackPostgresAssertions.js";
+import { verifyAccountSecurityPostgres } from "./accountSecurityPostgresAssertions.js";
+import { verifyOnboardingPostgres } from "./onboardingPostgresAssertions.js";
+import { verifyHealthProfilePostgres } from "./healthProfilePostgresAssertions.js";
+import { verifyManualDietPostgres } from "./manualDietPostgresAssertions.js";
 import { verifyDiningPlanChanges, verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
@@ -2781,6 +2785,10 @@ try {
 
   const { verifyPostgresBackup } = await import("./postgresBackupAssertions.js");
   await verifyFeedbackPostgres(pool, user.id);
+  await verifyAccountSecurityPostgres(pool);
+  await verifyOnboardingPostgres(pool);
+  await verifyHealthProfilePostgres(pool);
+  await verifyManualDietPostgres(pool);
   await verifyPostgresBackup(connectionString);
   const { verifyPostgresRecoveryApi } = await import("./postgresRecoveryApiAssertions.js");
   await verifyPostgresRecoveryApi(connectionString);

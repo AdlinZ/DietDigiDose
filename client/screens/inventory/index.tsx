@@ -45,6 +45,9 @@ import { useInventoryMutations } from "./useInventoryMutations";
 import { InventorySegmentTabs, type InventorySegment } from "./InventorySegmentTabs";
 import { KitchenwareSection, type KitchenwareStarterKit } from "./KitchenwareSection";
 import { InventoryEntryForm } from "./InventoryEntryForm";
+import { ManualInventoryEntry } from "./ManualInventoryEntry";
+import { InventoryTextIntake } from "./InventoryTextIntake";
+import { quantityFields } from "./intakeEntry";
 import { normalizeShoppingItems } from "@/utils/shoppingList";
 import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
 import {
@@ -70,7 +73,6 @@ import {
   searchCommonIngredients,
   type CommonIngredient,
 } from "@/utils/ingredientRules";
-import { parseStructuredQuantity } from "@/utils/structuredQuantity";
 import type { HealthProfile } from "@/utils/healthProfile";
 import { appendUniqueItemsByKey } from "@/utils/pagination";
 
@@ -252,7 +254,7 @@ export default function InventoryScreen() {
   const [foodName, setFoodName] = useState("");
   const [category, setCategory] = useState("蔬菜");
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
-  const [quantity, setQuantity] = useState("1份");
+  const [quantity, setQuantity] = useState("");
   const [expirationDate, setExpirationDate] = useState(
     dateKeyAfterDays(7)
   );
@@ -583,7 +585,6 @@ export default function InventoryScreen() {
     setCategory(defaults.category);
     setStorageLocation(defaults.storageLocation);
     setExpirationDate(defaults.expirationDate);
-    setQuantity(defaults.defaultQuantity);
     setSuggestions([]);
   };
 
@@ -636,7 +637,7 @@ export default function InventoryScreen() {
     const newItem: DetectedFood = {
       id: `batch-${Date.now()}-${Math.random()}`,
       foodName: preset.name,
-      quantity: preset.defaultQuantity,
+      quantity: "",
       suggestedStorageLocation: defaults.storageLocation,
       estimatedExpireDays: defaults.shelfLifeDays,
       selected: true,
@@ -786,7 +787,7 @@ export default function InventoryScreen() {
       setDetectedFoods((current) => [...current, {
         id: `barcode-${barcode}`,
         foodName: food.name,
-        quantity: defaults.defaultQuantity,
+        quantity: "",
         suggestedStorageLocation: defaults.storageLocation,
         estimatedExpireDays: defaults.shelfLifeDays,
         expirationDate: "",
@@ -853,8 +854,8 @@ export default function InventoryScreen() {
       Alert.alert("请至少选择一项", "勾选需要加入食材库的食材后再保存。");
       return;
     }
-    if (selectedFoods.some((item) => !item.foodName.trim() || !item.quantity.trim() || !["冷藏", "冷冻", "常温"].includes(item.suggestedStorageLocation))) {
-      Alert.alert("请补全待确认字段", "请补全名称、数量，并选择存放位置；到期日期可以留空。");
+    if (selectedFoods.some((item) => !item.foodName.trim() || !["冷藏", "冷冻", "常温"].includes(item.suggestedStorageLocation))) {
+      Alert.alert("请补全待确认字段", "请补全名称并选择存放位置；数量和到期日期可以留空。");
       return;
     }
 
@@ -862,16 +863,13 @@ export default function InventoryScreen() {
     try {
       const itemsToImport = selectedFoods.map((item) => {
         const defaults = inferIngredientDefaults(item.foodName, item.suggestedStorageLocation as StorageLocation);
-        const quantity = item.quantity;
-        const parsedQuantity = parseStructuredQuantity(quantity);
         return {
           food_name: item.foodName,
           category: defaults.category,
-          quantity,
+          ...quantityFields(item.quantity),
           expiration_date: item.expirationDate || "",
           storage_location: item.suggestedStorageLocation as StorageLocation,
           image_url: null,
-          ...(parsedQuantity ? { quantity_value: parsedQuantity.amount, quantity_unit: parsedQuantity.unit } : {}),
           ...(pendingScanJobId ? { source_item_id: item.id } : {}),
           field_evidence: item.fieldEvidence,
           confidence: item.confidence ?? null,
@@ -1072,7 +1070,7 @@ export default function InventoryScreen() {
     setFoodName("");
     setCategory("蔬菜");
     setCategoryMenuOpen(false);
-    setQuantity("100g");
+    setQuantity("");
     setExpirationDate(dateKeyAfterDays(5));
     setStorageLocation("冷藏");
     setImageUrl("");
@@ -1131,18 +1129,14 @@ export default function InventoryScreen() {
     }
     try {
       setSaving(true);
-      const parsedQuantity = parseStructuredQuantity(quantity);
       const payload = {
         food_name: foodName,
         category,
-        quantity,
+        quantity: quantity.trim() || "数量未知",
         expiration_date: expirationDate,
         storage_location: storageLocation as StorageLocation,
         image_url: imageUrl.trim() || null,
-        ...(!activeHousehold && parsedQuantity ? {
-          quantity_value: parsedQuantity.amount,
-          quantity_unit: parsedQuantity.unit,
-        } : {}),
+        ...(!activeHousehold ? quantityFields(quantity) : {}),
         ...(editingItem?.version ? { version: editingItem.version } : {}),
       };
 
@@ -2399,6 +2393,8 @@ export default function InventoryScreen() {
                     <FontAwesome6 name="chevron-right" size={12} colorClassName="accent-copy-muted" />
                   </TouchableOpacity>
 
+                  {!activeHousehold ? <InventoryTextIntake saveIntake={input => inventoryMutations.bulkIntake.mutateAsync(input)} onSaved={() => setModalVisible(false)} /> : null}
+
                   <TouchableOpacity
                     onPress={() => { setModalVisible(false); handleScanReceiptAndBatchAdd(); }}
                     className="mt-5 flex-row items-center justify-center gap-2 py-3"
@@ -2408,6 +2404,8 @@ export default function InventoryScreen() {
                   </TouchableOpacity>
                 </View>
               </ScrollView>
+            ) : !editingItem && !activeHousehold ? (
+              <ManualInventoryEntry saveIntake={input => inventoryMutations.bulkIntake.mutateAsync(input)} onSaved={() => setModalVisible(false)} onPhoto={source => void selectFoodPhoto(source)} photoUrl={imageUrl} bottomInset={insets.bottom} />
             ) : (
               <InventoryEntryForm
                 editingItem={editingItem}

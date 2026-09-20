@@ -13,3 +13,6 @@ export * from "./householdDining.ts";
 
 export * from "./kitchenware.ts";
 export * from "./interventions.ts";
+export * from "./healthProfile.ts";
+export * from "./account.ts";
+export * from "./onboarding.ts";

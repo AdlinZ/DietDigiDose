@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
 import type Database from "better-sqlite3";
 import { JWT_SECRET } from "../../config/security.js";
+import { consumeAccountProofSqlite, type AccountMutationProof } from "./reauthProof.js";
+import { syncLegacyCaloriesSqlite } from "../health/calorieCompatibility.js";
 import type { AuthAccountRepository } from "./repository.js";
 import type {
   AccountDeletionResult, AdminAudit, AiDataDeletion, AiDataExport, LoginIdentifier, LoginUser, ProfileInput,
@@ -22,10 +24,10 @@ export class SqliteAuthAccountRepository implements AuthAccountRepository {
       if (this.database.prepare("SELECT 1 FROM users WHERE email=? OR phone=?").get(input.email, input.phone)) return { status: "identifier_exists" as const };
       if (this.database.prepare("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)").get(input.username)) return { status: "username_exists" as const };
       try {
-        const inserted = this.database.prepare(`INSERT INTO users (username,email,phone,password_hash,avatar_url) VALUES (?,?,?,?,NULL)`)
+        const inserted = this.database.prepare(`INSERT INTO users (username,email,phone,password_hash,avatar_url,daily_calories_target) VALUES (?,?,?,?,NULL,NULL)`)
           .run(input.username, input.email, input.phone, input.passwordHash);
         const userId = Number(inserted.lastInsertRowid); this.ensureInitialState(userId);
-        const created = this.database.prepare(`SELECT id,username,email,phone,avatar_url,bio,daily_calories_target,session_version FROM users WHERE id=?`).get(userId) as Row;
+        const created = this.database.prepare(`SELECT id,username,email,phone,avatar_url,bio,daily_calories_target,session_version,password_hash IS NOT NULL AS hasPassword FROM users WHERE id=?`).get(userId) as Row;
         const { session_version: storedSessionVersion, ...user } = created;
         const sessionVersion = Number(storedSessionVersion || 1);
         return { status: "created" as const, user, sessionVersion };
@@ -70,13 +72,16 @@ export class SqliteAuthAccountRepository implements AuthAccountRepository {
   }
 
   async getMe(userId: number) { return (this.database.prepare(`SELECT id,username,email,phone,phone_verified_at,avatar_url,bio,
-    daily_calories_target,created_at,role,must_change_password,last_login_at,last_login_ip FROM users WHERE id=?`).get(userId) as Row | undefined) || null; }
+    daily_calories_target,created_at,role,must_change_password,last_login_at,last_login_ip,password_hash IS NOT NULL AS hasPassword FROM users WHERE id=?`).get(userId) as Row | undefined) || null; }
 
   async getCredentials(userId: number) { return (this.database.prepare("SELECT username,role,password_hash FROM users WHERE id=?")
-    .get(userId) as { username: string; role: string; password_hash: string } | undefined) || null; }
+    .get(userId) as { username: string; role: string; password_hash: string | null } | undefined) || null; }
 
-  async changePassword(userId: number, passwordHash: string) { return this.database.prepare(`UPDATE users SET password_hash=?,
-    must_change_password=0,session_version=session_version+1 WHERE id=?`).run(passwordHash,userId).changes === 1; }
+  async changePassword(userId: number, passwordHash: string, proof?: AccountMutationProof) { return this.database.transaction(() => {
+    if (proof) consumeAccountProofSqlite(this.database,userId,"password_update",proof);
+    return this.database.prepare(`UPDATE users SET password_hash=?,
+      must_change_password=0,session_version=session_version+1 WHERE id=?`).run(passwordHash,userId).changes === 1;
+  })(); }
 
   async updateProfile(userId: number, input: ProfileInput): Promise<ProfileResult> {
     return this.database.transaction(() => {
@@ -87,7 +92,8 @@ export class SqliteAuthAccountRepository implements AuthAccountRepository {
         bio=COALESCE(?,bio),daily_calories_target=COALESCE(?,daily_calories_target) WHERE id=?`)
         .run(input.username,input.avatar_url,input.bio,input.daily_calories_target,userId); }
       catch (error) { if (String(error).includes("users.username")) return { status: "username_exists" as const }; throw error; }
-      const user = this.database.prepare("SELECT id,username,email,phone,avatar_url,bio,daily_calories_target,role FROM users WHERE id=?").get(userId) as Row;
+      if (typeof input.daily_calories_target === "number") syncLegacyCaloriesSqlite(this.database,userId,input.daily_calories_target);
+      const user = this.database.prepare("SELECT id,username,email,phone,phone_verified_at,avatar_url,bio,daily_calories_target,role,password_hash IS NOT NULL AS hasPassword FROM users WHERE id=?").get(userId) as Row;
       return { status: "updated" as const, user };
     })();
   }
@@ -134,9 +140,10 @@ export class SqliteAuthAccountRepository implements AuthAccountRepository {
       .filter((url): url is string => typeof url === "string");
   }
 
-  async deleteAccount(userId: number, actorHash: string, urls: string[], objects: unknown[]): Promise<AccountDeletionResult> {
+  async deleteAccount(userId: number, actorHash: string, urls: string[], objects: unknown[], proof?: AccountMutationProof): Promise<AccountDeletionResult> {
     return this.database.transaction(() => {
       if (!this.database.prepare("SELECT 1 FROM users WHERE id=?").get(userId)) return { deleted: false, cleanupJobId: null };
+      if (proof) consumeAccountProofSqlite(this.database,userId,"account_delete",proof);
       this.prepareHouseholds(userId);
       this.database.prepare("DELETE FROM funnel_events WHERE actor_hash=?").run(actorHash);
       let cleanupJobId: number | null = null;

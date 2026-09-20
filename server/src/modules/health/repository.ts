@@ -1,4 +1,5 @@
 import type { HealthLogInput, HealthLogUpsertResult, HealthProfilePatch } from "./types.js";
+import type { HealthProfileUpdate } from "@dietdigidose/contracts";
 
 /** Driver-neutral persistence port for health logs and health profiles. */
 export interface HealthRepository {
@@ -8,4 +9,6 @@ export interface HealthRepository {
   removeLog(userId: number, id: number): Promise<boolean>;
   getOrCreateProfile(userId: number): Promise<Record<string, unknown>>;
   upsertProfile(userId: number, input: HealthProfilePatch): Promise<Record<string, unknown>>;
+  patchProfile(userId: number, input: HealthProfileUpdate): Promise<Record<string, unknown> | null>;
+  measurementLogs(userId: number): Promise<Array<Record<string, unknown>>>;
 }

@@ -1,9 +1,12 @@
 import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { useSafeRouter } from "@/hooks/useSafeRouter";
+import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
+import { useHealthSummary } from "@/hooks/useHealthSummary";
+import { healthApi } from "@/services/api/health";
+import { OnboardingProgressCard } from "@/components/OnboardingProgressCard";
 import { recommendationsApi } from "@/services/api/recommendations";
 import { toLocalDateKey, addLocalDays } from "@/utils/date";
 import type { CookingPlanDraft } from "@dietdigidose/contracts";
@@ -11,8 +14,13 @@ import * as Crypto from "expo-crypto";
 import { mealPlansApi } from "@/services/api/mealPlans";
 
 export default function CookingPlanScreen() {
+  const { user } = useAuth();
+  return <CookingPlanForm key={user?.id ?? "guest"} />;
+}
+
+function CookingPlanForm() {
   const router = useSafeRouter();
-  const { planId } = useLocalSearchParams<{ planId?: string }>();
+  const { planId, onboarding, initialServings, initialMinutes, initialAvoidSpicy, sourceMode } = useSafeSearchParams<{ planId?: string; onboarding?: boolean; initialServings?: number; initialMinutes?: number; initialAvoidSpicy?: boolean; sourceMode?: string }>();
   const saveId = useRef(Crypto.randomUUID());
   const persistedPlan = useRef<{ id: string; version: number } | null>(null);
   const [saved, setSaved] = useState(false);
@@ -21,11 +29,14 @@ export default function CookingPlanScreen() {
   const [replacement, setReplacement] = useState<{ draft: CookingPlanDraft; conflicts: string[] } | null>(null);
   const { user } = useAuth();
   const authFetch = useAuthFetch();
+  const { profile: healthProfile } = useHealthSummary();
+  const [safetyReviewed, setSafetyReviewed] = useState(Boolean(onboarding));
+  const [allowShopping, setAllowShopping] = useState(sourceMode !== "inventory");
   const [date, setDate] = useState(toLocalDateKey());
-  const [servings, setServings] = useState("1");
-  const [minutes, setMinutes] = useState("");
-  const [temporaryAvoidSpicy,setTemporaryAvoidSpicy] = useState<boolean | undefined>();
-  const [includeLunch, setIncludeLunch] = useState(true);
+  const [servings, setServings] = useState(String(initialServings ?? 1));
+  const [minutes, setMinutes] = useState(initialMinutes == null ? "" : String(initialMinutes));
+  const [temporaryAvoidSpicy,setTemporaryAvoidSpicy] = useState<boolean | undefined>(initialAvoidSpicy ?? undefined);
+  const [includeLunch, setIncludeLunch] = useState(!onboarding);
   const [result, setResult] = useState<CookingPlanDraft | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -39,7 +50,7 @@ export default function CookingPlanScreen() {
       setLoading(false); setSaving(false);
       return () => { requestSequence.current += 1; };
     }
-    setTemporaryAvoidSpicy(undefined);
+    setTemporaryAvoidSpicy(initialAvoidSpicy ?? undefined);
     setResult(null); setError(""); setLoading(false); setSaved(false); setSaving(false); setReplacement(null); setActivated(false);
     persistedPlan.current = null;
     const owner = user?.id;
@@ -64,7 +75,7 @@ export default function CookingPlanScreen() {
       }).finally(() => { if (account.current === owner && requestSequence.current === sequence) setLoading(false); });
     } else { loadedContext.current = context; }
     return () => { requestSequence.current += 1; };
-  }, [user?.id, planId, authFetch]));
+  }, [user?.id, planId, authFetch, initialAvoidSpicy]));
   const invalidateDraft = () => {
     setReplacement(null);
     setSaved(false); setSaving(false);
@@ -75,6 +86,9 @@ export default function CookingPlanScreen() {
   };
   const calculate = async () => {
     if (!user || loading || saving) return;
+    if (!safetyReviewed && (!healthProfile?.safety_status || healthProfile.safety_status === "unknown")) {
+      setError("请先选择饮食限制状态，也可以选择稍后填写"); return;
+    }
     if (activated) { persistedPlan.current = null; setActivated(false); }
     const owner = user.id;
     const sequence = ++requestSequence.current;
@@ -124,6 +138,9 @@ export default function CookingPlanScreen() {
   };
   const save = async () => {
     if (!user || !result || saving || saved || loading || replacement) return;
+    if (!allowShopping && result.ingredientBudget.some(item => !item.fully_covered)) {
+      setError("现有食材尚未确认足量，请补充库存，或选择接受补买清单"); return;
+    }
     const owner = user.id;
     const sequence = requestSequence.current;
     setSaving(true); setError("");
@@ -146,6 +163,18 @@ export default function CookingPlanScreen() {
   return <Screen className="flex-1 bg-canvas">
     <View className="flex-row items-center gap-4 px-5 py-4"><TouchableOpacity onPress={() => router.back()}><Text className="font-bold text-brand">返回</Text></TouchableOpacity><Text className="text-xl font-black text-ink">这次怎么备餐</Text></View>
     <ScrollView contentContainerClassName="p-5 gap-4 pb-12" keyboardShouldPersistTaps="handled">
+      <OnboardingProgressCard />
+      {(!healthProfile?.safety_status || healthProfile.safety_status === "unknown") && !safetyReviewed ? <View className="gap-3 rounded-2xl bg-surface p-4">
+        <Text className="font-bold text-ink">开始前，核对饮食限制</Text>
+        <TouchableOpacity onPress={() => router.push("/health-profile", { section: "safety" })}><Text className="text-brand">有过敏或限制，去填写</Text></TouchableOpacity>
+        <TouchableOpacity disabled={!healthProfile?.version || loading} onPress={() => {
+          if (!healthProfile?.version) return;
+          const owner = user?.id; setLoading(true); setError("");
+          void healthApi.patchProfile(authFetch, { version: healthProfile.version, safety_status: "none" }).then(() => { if (account.current === owner) setSafetyReviewed(true); }).catch(reason => { if (account.current === owner) setError(reason instanceof Error ? reason.message : "保存失败"); }).finally(() => { if (account.current === owner) setLoading(false); });
+        }}><Text className="text-brand">确认没有</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => setSafetyReviewed(true)}><Text className="text-copy-muted">稍后填写，先查看方案</Text></TouchableOpacity>
+      </View> : null}
+      {healthProfile?.safety_status !== "provided" && healthProfile?.safety_status !== "none" ? <Text className="text-xs text-copy-muted">饮食限制尚未确认，方案不代表已排除你的过敏风险。</Text> : null}
       <Text className="text-copy-muted">先用未保留的待吃餐，再计算需要补做的份量。可到待吃餐页标记“这份留着”。</Text>
       <TouchableOpacity onPress={() => router.push("/prepared-meals")}><Text className="font-bold text-brand">查看待吃餐与保留项</Text></TouchableOpacity>
       {result?.planningMode === "weekly" ? <TouchableOpacity onPress={() => router.push("/weekly-plan")}><Text className="font-bold text-brand">重新核对七日安排与采购缺口</Text></TouchableOpacity> : <View className="rounded-2xl bg-surface p-4 gap-3">
@@ -166,6 +195,7 @@ export default function CookingPlanScreen() {
         <TouchableOpacity onPress={() => setReplacement(null)}><Text className="text-copy-muted">保留原方案</Text></TouchableOpacity>
       </View> : null}
       {result ? <>
+        {!allowShopping && result.ingredientBudget.some(item => !item.fully_covered) ? <View className="gap-3 rounded-xl bg-warm-soft p-4"><Text className="text-ink">现有食材尚未确认足量，下面列出了缺口。可以补充库存后重新计算，或接受补买清单。</Text><TouchableOpacity onPress={() => setAllowShopping(true)}><Text className="font-bold text-brand">接受补买清单</Text></TouchableOpacity><TouchableOpacity onPress={() => router.push("/inventory", { action: "add" })}><Text className="text-brand">补充库存</Text></TouchableOpacity></View> : null}
         <TouchableOpacity disabled={saved || saving || loading || !!replacement} onPress={() => void save()} className="rounded-xl bg-brand-fill p-3 items-center"><Text className="font-bold text-white">{saving ? "正在保存" : saved ? "已保存 · 可从餐单恢复" : "保存此方案草案"}</Text></TouchableOpacity>
         <Text className="text-copy-muted">保存的是计算时的方案；库存变化后请重新核对。</Text>
         {saved ? <TouchableOpacity disabled={saving || loading || activated || !!replacement || !!result.unresolved.length} onPress={() => void activate()} className="rounded-xl bg-brand-soft p-3"><Text className="font-bold text-brand">{activated ? "已转为餐单 · 从餐单开始制作" : "转为餐单，选择要制作的菜"}</Text></TouchableOpacity> : null}

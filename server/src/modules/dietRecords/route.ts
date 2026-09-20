@@ -7,6 +7,7 @@ import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { sendError } from "../../utils/http.js";
 import { cookingCompletionSchema, dietRecordCreateSchema } from "../../validation/schemas.js";
 import type { DietRecordsService } from "./service.js";
+import { DietRecordRequestError } from "./manualRequest.js";
 
 function handleInventoryError(error: unknown, res: Response, next: NextFunction) {
   if (!(error instanceof InventoryQuantityError)) return next(error);
@@ -37,7 +38,10 @@ export function createDietRecordsRouter(service: DietRecordsService) {
     void service.list(req.userId!, date).then((records) => res.json(records)).catch(next);
   });
   router.post("/", validateBody(dietRecordCreateSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
-    void service.create(req.userId!, req.body).then((record) => res.status(201).json(record)).catch(next);
+    void service.create(req.userId!, req.body).then((record) => res.status(record.repeated ? 200 : 201).json(record)).catch((error:unknown) => {
+      if(error instanceof DietRecordRequestError) return sendError(res,error.status,error.message,error.code);
+      return next(error);
+    });
   });
   router.delete("/:id", (req: AuthRequest, res: Response, next: NextFunction) => {
     const mode = req.query.mode;

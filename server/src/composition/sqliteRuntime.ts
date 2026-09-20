@@ -52,6 +52,7 @@ import webhookRoutes from "../routes/webhooks.js";
 import inventoryRoutes from "../modules/inventory/index.js";
 import dietRecordsRoutes from "../modules/dietRecords/index.js";
 import healthDataRoutes from "../modules/health/index.js";
+import onboardingRoutes, { onboardingService } from "../modules/onboarding/index.js";
 import foodsRoutes from "../modules/foods/index.js";
 import communityRoutes, { communityService } from "../modules/community/index.js";
 import adminRoutes from "../routes/admin.js";
@@ -99,12 +100,14 @@ export function initializeSqliteApplication(): ApplicationRuntime {
   return {
     driver: "sqlite",
     communityService,
+    onboardingService,
     routes: {
       auth: authRoutes,
       webhooks: webhookRoutes,
       inventory: inventoryRoutes,
       dietRecords: dietRecordsRoutes,
       healthData: healthDataRoutes,
+      onboarding: onboardingRoutes,
       recipes: createRecipesModule(db),
       foods: foodsRoutes,
       community: communityRoutes,

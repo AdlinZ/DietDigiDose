@@ -344,7 +344,7 @@ try {
         return path.join(temporaryDirectory, "schema.db");
       })();
   if (!providedPath) {
-    const result = spawnSync("pnpm", ["exec", "tsx", "scripts/materialize-sqlite-schema.ts"], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/materialize-sqlite-schema.ts"], {
       cwd: serverRoot,
       env: {
         ...process.env,

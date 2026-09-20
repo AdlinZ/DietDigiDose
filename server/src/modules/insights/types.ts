@@ -19,6 +19,8 @@ export type InventoryOutcomeEvent = {
 };
 
 export type InventoryOutcomeCreateInput = {
+  interventionId?: string;
+  confirmed?: true;
   scope: InventoryScope;
   itemId: number;
   householdId?: number;

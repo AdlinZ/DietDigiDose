@@ -19,9 +19,9 @@ export const inventoryApi = {
     return requestJson(apiFetch, `/api/v1/inventory/scan-jobs/${encodeURIComponent(jobId)}/accept`, { method: "POST" },
       inventoryBulkIntakeResponseSchema.extend({ jobId: (await import("zod")).z.string(), savedSourceItemIds: (await import("zod")).z.array((await import("zod")).z.string()), undoneSourceItemIds: (await import("zod")).z.array((await import("zod")).z.string()) }));
   },
-  list: async (apiFetch: ApiFetch) => {
+  list: async (apiFetch: ApiFetch, fresh = false) => {
     const { inventoryListResponseSchema } = await loadInventoryContracts();
-    return requestJson(apiFetch, "/api/v1/inventory", {}, inventoryListResponseSchema);
+    return requestJson(apiFetch, "/api/v1/inventory", fresh ? { cache: "no-store" } : {}, inventoryListResponseSchema);
   },
   create: async (apiFetch: ApiFetch, input: InventoryInput) => {
     const { inventoryCreateSchema, inventoryItemSchema } = await loadInventoryContracts();

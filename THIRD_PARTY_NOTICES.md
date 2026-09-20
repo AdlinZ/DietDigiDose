@@ -22,7 +22,7 @@ The vendored component source is integrated locally. A copy of the Apache Licens
 ## HowToCook
 
 - Upstream: <https://github.com/Anduin2017/HowToCook>
-- Locations: `server/public/recipes/howtocook/` and records imported with `source = howtocook`
+- Locations: `server/public/recipes/howtocook/`, `admin/public/landing/meal-bowl.png`, and records imported with `source = howtocook`
 - License: The Unlicense
 - Copyright: HowToCook contributors
 

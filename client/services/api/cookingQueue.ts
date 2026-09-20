@@ -34,6 +34,8 @@ export const cookingQueueApi = {
     `/api/v1/cooking-queue${includeHistory ? "?includeHistory=true" : ""}`,
   ),
   add: (apiFetch: ApiFetch, input: {
+    interventionId?: string;
+    confirmed?: true;
     recommendationRequestId?: string;
     recipeId: number;
     idempotencyKey?: string;

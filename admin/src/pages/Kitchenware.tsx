@@ -1,3 +1,5 @@
+import { DialogFrame } from '../components/admin/DialogFrame';
+import { useQueryState } from '../hooks/useQueryState';
 import KitchenwareCapabilities from "./KitchenwareCapabilities";
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CookingPot, Pencil, PlusCircle, RefreshCw, Search, Trash2, UserRound, Wrench, X } from 'lucide-react';
@@ -36,13 +38,13 @@ function formatDate(value: string | null) {
 
 export default function Kitchenware() {
   const [capabilityItem, setCapabilityItem] = useState<KitchenwareCatalogItem | null>(null);
-  const [activeTab, setActiveTab] = useState<'catalog' | 'assets'>('catalog');
+  const [activeTab, setActiveTab] = useQueryState<'catalog' | 'assets'>('tab', 'catalog', ["catalog", "assets"]);
   const [items, setItems] = useState<KitchenwareItem[]>([]);
   const [catalog, setCatalog] = useState<KitchenwareCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('全部');
-  const [status, setStatus] = useState('全部');
+  const [search, setSearch] = useQueryState<string>('q', '');
+  const [category, setCategory] = useQueryState<string>('category', '全部', ["全部", "小家电", "烹饪锅具", "刀具餐具", "烘焙工具", "其他"]);
+  const [status, setStatus] = useQueryState<string>('status', '全部', statuses);
   const [message, setMessage] = useState('');
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const [editingCatalogItem, setEditingCatalogItem] = useState<KitchenwareCatalogItem | null>(null);
@@ -163,7 +165,7 @@ export default function Kitchenware() {
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold text-text-main">
             <CookingPot className="h-7 w-7 text-primary" />
-            厨具资产管理
+            厨具库
           </h1>
           <p className="mt-1 text-sm text-text-muted">维护官方标准目录，并查看用户录入的厨具资产</p>
         </div>
@@ -401,7 +403,7 @@ export default function Kitchenware() {
       )}
 
       {capabilityItem && <KitchenwareCapabilities key={capabilityItem.id} item={capabilityItem} onClose={() => setCapabilityItem(null)} />}
-      {catalogModalOpen ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"><form onSubmit={saveCatalogItem} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-lg font-semibold text-text-main">{editingCatalogItem ? '编辑官方厨具' : '新增官方厨具'}</h2><button type="button" onClick={() => setCatalogModalOpen(false)} className="text-text-muted"><X /></button></div><div className="space-y-4"><label className="block text-sm text-text-main">名称<input required value={catalogForm.name} onChange={(event) => setCatalogForm({ ...catalogForm, name: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">分类<select value={catalogForm.category} onChange={(event) => setCatalogForm({ ...catalogForm, category: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 outline-none focus:border-primary">{categories.slice(1).map((item) => <option key={item}>{item}</option>)}</select></label><label className="block text-sm text-text-main">别名（用顿号或逗号分隔）<input value={catalogForm.aliases} onChange={(event) => setCatalogForm({ ...catalogForm, aliases: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">烹饪方式（用顿号或逗号分隔）<input value={catalogForm.cookingMethods} onChange={(event) => setCatalogForm({ ...catalogForm, cookingMethods: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">保养提示<textarea value={catalogForm.careNote} onChange={(event) => setCatalogForm({ ...catalogForm, careNote: event.target.value })} className="mt-1.5 min-h-20 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label></div><div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setCatalogModalOpen(false)} className="rounded-xl px-4 py-2.5 text-sm text-text-muted">取消</button><button type="submit" className="rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-white">保存</button></div></form></div> : null}
+      {catalogModalOpen ? <DialogFrame onClose={()=>setCatalogModalOpen(false)} busy={false} className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"><form onSubmit={saveCatalogItem} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-lg font-semibold text-text-main">{editingCatalogItem ? '编辑官方厨具' : '新增官方厨具'}</h2><button aria-label="关闭" type="button" onClick={() => setCatalogModalOpen(false)} className="text-text-muted"><X /></button></div><div className="space-y-4"><label className="block text-sm text-text-main">名称<input required value={catalogForm.name} onChange={(event) => setCatalogForm({ ...catalogForm, name: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">分类<select value={catalogForm.category} onChange={(event) => setCatalogForm({ ...catalogForm, category: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 outline-none focus:border-primary">{categories.slice(1).map((item) => <option key={item}>{item}</option>)}</select></label><label className="block text-sm text-text-main">别名（用顿号或逗号分隔）<input value={catalogForm.aliases} onChange={(event) => setCatalogForm({ ...catalogForm, aliases: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">烹饪方式（用顿号或逗号分隔）<input value={catalogForm.cookingMethods} onChange={(event) => setCatalogForm({ ...catalogForm, cookingMethods: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">保养提示<textarea value={catalogForm.careNote} onChange={(event) => setCatalogForm({ ...catalogForm, careNote: event.target.value })} className="mt-1.5 min-h-20 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label></div><div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setCatalogModalOpen(false)} className="rounded-xl px-4 py-2.5 text-sm text-text-muted">取消</button><button type="submit" className="rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-white">保存</button></div></form></DialogFrame> : null}
     </div>
   );
 }

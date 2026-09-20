@@ -40,11 +40,13 @@ export default function RootLayout() {
               }}
             />
             <Stack.Screen name="settings" />
+            <Stack.Screen name="password" />
             <Stack.Screen name="notifications" />
             <Stack.Screen name="shopping-list" />
             <Stack.Screen name="legal" />
             <Stack.Screen name="about" />
             <Stack.Screen name="feedback" />
+            <Stack.Screen name="feedback-history" />
           </Stack>
         </Provider>
       </ThemeProvider>

@@ -118,6 +118,13 @@ test("capability conditions require one verified device and reject malformed or 
     constraints = invalid;
     assert.equal(await blocked(),1);
   }
+  constraints = { requiredFunctions: ["temperature_control", "convection"] };
+  attributes = [{ functions: ["temperature_control"] }, { functions: ["convection"] }];
+  assert.equal(await blocked(),1,"functions cannot be pooled across devices");
+  attributes = [{ functions: ["temperature_control", "convection"] }];
+  assert.equal(await blocked(),0);
+  attributes = [{ capacityMl: 3000 }];
+  assert.equal(await blocked(),1,"unknown appliance functions are not assumed");
   constraints = JSON.stringify({ minCapacityMl: 3000 });
   assert.equal(await blocked(),0,"SQLite JSON text is supported");
   safety = "restricted";

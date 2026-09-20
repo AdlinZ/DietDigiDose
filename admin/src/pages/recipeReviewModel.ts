@@ -1,0 +1,31 @@
+// SQLite returns JSON text; PostgreSQL jsonb arrives as an already decoded array.
+export function parseRecipeArray<T>(value: string | T[] | null | undefined): T[] {
+  const parsed: unknown = typeof value === 'string' ? JSON.parse(value || '[]') : value ?? [];
+  if (!Array.isArray(parsed)) throw new Error('Expected a recipe array');
+  return parsed as T[];
+}
+
+const QUALITY_ISSUE_LABELS: Record<string, string> = {
+  category_nutrition_fallback: '使用分类固定营养兜底',
+  implausible_cook_time: '烹饪时间明显不合理',
+  instruction_as_ingredient: '步骤被误识别为食材',
+  truncated_ingredient: '食材文本疑似截断',
+  insufficient_structure: '食材或步骤结构不完整',
+  nutrition_unknown: '营养数据尚未核验',
+  cooking_not_reviewed: '烹饪内容尚未审核',
+};
+
+export function qualityIssueText(recipe: { quality_issues_json?: string | string[] | null }) {
+  try {
+    return parseRecipeArray(recipe.quality_issues_json).map((issue) => {
+      if (typeof issue !== 'string') throw new Error('Expected an issue code');
+      return QUALITY_ISSUE_LABELS[issue] || issue;
+    }).join('；');
+  } catch {
+    return '质量问题记录无法解析';
+  }
+}
+
+export function recipeStatusText(status?: string) {
+  return status === 'pending' ? '待审核' : status === 'approved' ? '已通过' : status === 'rejected' ? '已驳回' : '状态未知';
+}

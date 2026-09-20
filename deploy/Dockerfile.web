@@ -18,6 +18,7 @@ RUN pnpm config set allowUnusedPatches true \
   && pnpm install --frozen-lockfile --filter admin...
 
 COPY admin ./admin
+COPY packages/contracts ./packages/contracts
 COPY client/assets/logo.png ./client/assets/logo.png
 
 ARG VITE_APP_ENTRY_URL=/login

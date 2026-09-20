@@ -215,6 +215,8 @@ export default function LoginScreen() {
           )}
         </View>
 
+        {mode === 'password' && <TouchableOpacity accessibilityRole="button" onPress={() => router.push('/password', { recovery: true })} className="mt-2 min-h-touch justify-center self-end px-2"><Text className="text-sm text-brand">忘记密码？</Text></TouchableOpacity>}
+
         {mode === 'sms' && challengeId ? (
           <Text className="mt-2 px-1 text-caption text-copy-muted">验证码已发送至 {phoneMasked}，5 分钟内有效</Text>
         ) : null}

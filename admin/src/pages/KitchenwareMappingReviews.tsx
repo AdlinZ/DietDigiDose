@@ -1,3 +1,4 @@
+import { useQueryState } from '../hooks/useQueryState';
 import { useEffect, useState } from 'react';
 import api from '../services/api';
 type Review = { id: number;raw_name: string;source_type: string;source_id: string | null;confidence: number;status: string;token: string };
@@ -5,7 +6,7 @@ type Catalog = { id: number;name: string;quality_status: string };
 export default function KitchenwareMappingReviews() {
   const [rows,setRows] = useState<Review[]>([]),[catalog,setCatalog] = useState<Catalog[]>([]);
   const [confirming,setConfirming] = useState<number | null>(null);
-  const [status,setStatus] = useState('pending'),[reload,setReload] = useState(0),[message,setMessage] = useState('');
+  const [status,setStatus] = useQueryState<string>('status', 'pending', ["pending", "approved", "rejected"]),[reload,setReload] = useState(0),[message,setMessage] = useState('');
   const [selected,setSelected] = useState<Record<number,string>>({}),[busy,setBusy] = useState(false),[loading,setLoading] = useState(true),[more,setMore] = useState(false);
   useEffect(() => {
     let active = true; setLoading(true); setRows([]); setSelected({}); setConfirming(null); setMessage('');

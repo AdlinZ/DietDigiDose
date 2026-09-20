@@ -1,3 +1,4 @@
+import { thinkingParameters } from "../../modules/aiRuntime/policy.js";
 import { Router } from "express";
 import { aiRuntimeService } from "../../modules/aiRuntime/runtime.js";
 import { testAIConnection } from "../../services/aiService.js";
@@ -24,6 +25,13 @@ export function createAdminAIConfigRouter() {
         model: config.model,
         visionModel: config.visionModel,
         asrModel: config.asrModel,
+        runtimePolicy: await aiRuntimeService().runtimePolicy(),
+        effectiveModels: [
+          { role: "主助手", model: settings.AI_SUPERVISOR_MODEL?.trim() || config.chat.model, source: settings.AI_SUPERVISOR_MODEL?.trim() ? "角色设置" : "继承文本模型", baseUrl: config.chat.baseUrl },
+          { role: "规划", model: settings.AI_NUTRITION_MODEL?.trim() || config.chat.model, source: settings.AI_NUTRITION_MODEL?.trim() ? "角色设置" : "继承文本模型", baseUrl: config.chat.baseUrl },
+          { role: "图片", model: config.vision.model, source: settings.AI_VISION_MODEL ? "图片设置" : "环境变量或内置默认", baseUrl: config.vision.baseUrl },
+          { role: "转写", model: config.asr.model, source: settings.AI_ASR_MODEL ? "转写设置" : "环境变量或内置默认", baseUrl: config.asr.baseUrl },
+        ],
         agents: {
           supervisorModel: settings.AI_SUPERVISOR_MODEL?.trim() || config.chat.model,
           nutritionModel: settings.AI_NUTRITION_MODEL?.trim() || config.chat.model,
@@ -91,6 +99,17 @@ export function createAdminAIConfigRouter() {
       }
       add("AI_VISION_API_KEY", visionApiKey); add("AI_VISION_BASE_URL", visionBaseUrl);
       add("AI_ASR_API_KEY", asrApiKey); add("AI_ASR_BASE_URL", asrBaseUrl); add("AI_SYSTEM_PROMPT", systemPrompt);
+      {
+        const current = await aiRuntimeService().settings();
+        const merged = { ...current, ...Object.fromEntries(entries.map((entry) => [entry.key, entry.value])) };
+        const effective = await aiRuntimeService().config(merged);
+        const policy = req.body.runtimePolicy || await aiRuntimeService().runtimePolicy();
+        for (const role of ["SUPERVISOR", "RECIPE", "OPERATIONS"]) thinkingParameters(effective.chat.baseUrl, merged[`AI_${role}_MODEL`] || effective.chat.model, policy.main);
+        thinkingParameters(effective.chat.baseUrl, merged.AI_NUTRITION_MODEL || effective.chat.model, policy.planner);
+        thinkingParameters(effective.vision.baseUrl, effective.vision.model, policy.vision);
+        if (policy.asr.thinking !== "default") throw new Error("语音转写不支持思考策略，请选择提供商默认");
+        entries.push({ key: "AI_RUNTIME_POLICY", value: JSON.stringify(policy) });
+      }
       await aiRuntimeService().saveSettings(entries);
 
       if (req.userId) {
@@ -114,8 +133,8 @@ export function createAdminAIConfigRouter() {
         });
       }
       res.json({ success: true, message: "AI 配置更新成功" });
-    } catch {
-      res.status(500).json({ error: "更新 AI 配置失败" });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error && /思考|参数/.test(error.message) ? error.message : "更新 AI 配置失败，请检查模型与策略配置" });
     }
   });
 

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { KeyRound } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import api from '../services/api';
-import logoUrl from '../../../client/assets/logo.png';
+import { logoUrl } from '../assets';
 
 export default function ChangePassword() {
   const navigate = useNavigate();

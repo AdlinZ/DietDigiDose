@@ -51,7 +51,7 @@ export function requestJson<T>(
   responseSchema?: RuntimeSchema<T>,
 ): Promise<T> {
   const method = (options.method || "GET").toUpperCase();
-  const cachePolicy = method === "GET" ? apiCachePolicy(path) : null;
+  const cachePolicy = method === "GET" && options.cache !== "no-store" && options.cache !== "reload" ? apiCachePolicy(path) : null;
   if (cachePolicy) {
     return cachedApiGet<T>(apiFetch, path, cachePolicy, async (etag) => {
       const result = await executeJsonRequestWithMetadata<unknown>(apiFetch, path, options, etag);

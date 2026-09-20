@@ -1,3 +1,4 @@
+import { useQueryState } from '../hooks/useQueryState';
 import { useEffect, useRef, useState } from 'react';
 import api from '../services/api';
 
@@ -12,7 +13,7 @@ const inputStyle = 'rounded-lg border border-slate-300 bg-white px-3 py-2 text-s
 const buttonStyle = 'rounded-lg bg-slate-900 px-4 py-2 text-sm text-white disabled:opacity-50';
 
 export default function CoreLoops() {
-  const [date,setDate] = useState(() => new Intl.DateTimeFormat('en-CA',{ timeZone: 'Asia/Shanghai',year: 'numeric',month: '2-digit',day: '2-digit' }).format(new Date()));
+  const [date,setDate] = useQueryState<string>('date', new Intl.DateTimeFormat('en-CA',{ timeZone: 'Asia/Shanghai',year: 'numeric',month: '2-digit',day: '2-digit' }).format(new Date()), value => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value);
   const [report,setReport] = useState<Report | null>(null), [settings,setSettings] = useState<Settings | null>(null);
   const [message,setMessage] = useState(''), [refresh,setRefresh] = useState(0), [saving,setSaving] = useState(false);
   const [userId,setUserId] = useState(''), [actor,setActor] = useState<Actor | null>(null), [kind,setKind] = useState('unknown');

@@ -2393,6 +2393,33 @@ UPDATE prepared_meal_allocations AS target SET status='conflict' WHERE EXISTS (
 );
 `);
   } },
+  { version: 83, name: "feedback_conversations", up(database) {
+    addColumn(database, "user_feedback", "request_key", "TEXT");
+    addColumn(database, "user_feedback", "version", "INTEGER NOT NULL DEFAULT 1");
+    addColumn(database, "user_feedback", "updated_at", "DATETIME");
+    addColumn(database, "user_notification_inbox", "feedback_id", "INTEGER REFERENCES user_feedback(id) ON DELETE CASCADE");
+    database.exec(`
+      UPDATE user_feedback SET status='received' WHERE status='open';
+      UPDATE user_feedback SET updated_at=created_at WHERE updated_at IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_request ON user_feedback(user_id,request_key);
+      CREATE INDEX IF NOT EXISTS idx_feedback_status ON user_feedback(status,id);
+      CREATE TABLE feedback_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        feedback_id INTEGER NOT NULL REFERENCES user_feedback(id) ON DELETE CASCADE,
+        author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        author_role TEXT NOT NULL CHECK(author_role IN ('user','admin')),
+        visibility TEXT NOT NULL CHECK(visibility IN ('public','internal')),
+        content TEXT NOT NULL,
+        status TEXT NOT NULL,
+        request_key TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX idx_feedback_message_request ON feedback_messages(feedback_id,author_id,request_key);
+      CREATE INDEX idx_feedback_message_thread ON feedback_messages(feedback_id,id);
+    `);
+  } },
+
 ];
 
 export function runMigrations(database: Database.Database) {

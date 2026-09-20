@@ -151,7 +151,7 @@ export class KitchenwareService {
 
   private normalizeInput(body: Row): KitchenwareInput {
     const attributes = body.attributes === undefined ? undefined : kitchenwareAttributesSchema.safeParse(body.attributes);
-    if (attributes && !attributes.success) throw new KitchenwareError(400,"厨具规格无效，请核对容量、尺寸和热源");
+    if (attributes && !attributes.success) throw new KitchenwareError(400,"厨具规格无效，请核对容量、尺寸、热源和电器功能");
     const category = String(body.category || "其他").trim();
     const status = String(body.status || "良好").trim();
     return {

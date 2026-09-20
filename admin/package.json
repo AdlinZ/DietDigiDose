@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dietdigidose/contracts": "workspace:*",
     "axios": "^1.19.0",
     "clsx": "^2.1.1",
     "lucide-react": "^1.26.0",

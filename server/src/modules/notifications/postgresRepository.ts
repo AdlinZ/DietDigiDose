@@ -182,7 +182,7 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
     else if (filter === "system") conditions.push("category='system'");
     if (cursor) { params.push(cursor); conditions.push(`id<$${params.length}`); }
     params.push(limit);
-    const rows = (await this.pool.query(`SELECT (SELECT p.id FROM proactive_interventions p WHERE p.notification_id=user_notification_inbox.id AND p.user_id=user_notification_inbox.user_id ORDER BY p.id LIMIT 1) AS "interventionId",id,type,title,body,is_read AS "isRead",created_at AS "createdAt",
+    const rows = (await this.pool.query(`SELECT (SELECT p.id FROM proactive_interventions p WHERE p.notification_id=user_notification_inbox.id AND p.user_id=user_notification_inbox.user_id ORDER BY p.id LIMIT 1) AS "interventionId",id,feedback_id AS "feedbackId",type,title,body,is_read AS "isRead",created_at AS "createdAt",
       inventory_item_id AS "inventoryItemId",category,priority,action_status AS "actionStatus",snoozed_until AS "snoozedUntil",
       (SELECT COUNT(*)::integer FROM notification_inventory_items n WHERE n.notification_id=user_notification_inbox.id) AS "itemCount"
       FROM user_notification_inbox WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT $${params.length}`, params)).rows;
@@ -260,7 +260,23 @@ export class PostgresNotificationsRepository implements NotificationsRepository 
         WHERE notification_type='expiring_inventory' GROUP BY delivery_date,status ORDER BY delivery_date DESC LIMIT 30`),
       this.pool.query(`SELECT event_type AS "eventType",COUNT(*)::integer AS count FROM notification_events WHERE created_at>=$1 GROUP BY event_type`, [since]),
     ]);
-    return { activeDevices: Number(active.rows[0].count), enabledUsers: Number(enabled.rows[0].count),
+    const [decisions,outcomes,actions,timely] = await Promise.all([
+      this.pool.query(`SELECT COUNT(*) AS candidates,
+        COUNT(*) FILTER(WHERE channel='suppressed') AS suppressed,
+        COUNT(*) FILTER(WHERE channel='inbox_only') AS inbox_only,
+        COUNT(*) FILTER(WHERE delivery_state='accepted') AS accepted,
+        COUNT(*) FILTER(WHERE delivery_state='uncertain') AS uncertain,
+        COUNT(*) FILTER(WHERE delivery_state='failed') AS failed,
+        COUNT(*) FILTER(WHERE status='acted') AS acted,
+        COUNT(*) FILTER(WHERE notification_id IS NOT NULL) AS visible,
+        COUNT(*) FILTER(WHERE notification_id IS NOT NULL AND kind='expiry_rescue') AS expiry_visible,
+        COUNT(*) FILTER(WHERE notification_id IS NOT NULL AND status<>'acted' AND expires_at<=CURRENT_TIMESTAMP) AS expired_unhandled FROM proactive_interventions WHERE decided_at>=$1`,[since]),
+      this.pool.query("SELECT o.outcome_type AS kind,COUNT(*) AS n FROM proactive_intervention_outcomes o JOIN proactive_interventions i ON i.id=o.intervention_id AND i.user_id=o.user_id WHERE i.decided_at>=$1 GROUP BY o.outcome_type",[since]),
+      this.pool.query("SELECT a.action AS kind,COUNT(*) AS n FROM proactive_intervention_actions a JOIN proactive_interventions i ON i.id=a.intervention_id AND i.user_id=a.user_id WHERE i.decided_at>=$1 GROUP BY a.action",[since]),
+      this.pool.query("SELECT COUNT(DISTINCT i.id) AS timely_used FROM proactive_interventions i JOIN proactive_intervention_outcomes o ON o.intervention_id=i.id AND o.user_id=i.user_id WHERE i.kind='expiry_rescue' AND o.outcome_type='inventory_used' AND i.decided_at>=$1 AND o.occurred_at>=i.decided_at AND o.occurred_at<=i.expires_at",[since]),
+    ]);
+    return { interventionMetrics: { timely_used: Number(timely.rows[0].timely_used), ...Object.fromEntries(Object.entries(decisions.rows[0]).map(([key,value]) => [key,Number(value)])), ...Object.fromEntries(outcomes.rows.map(row => [row.kind,Number(row.n)])), ...Object.fromEntries(actions.rows.map(row => [`action_${row.kind}`,Number(row.n)])) },
+      activeDevices: Number(active.rows[0].count), enabledUsers: Number(enabled.rows[0].count),
       campaigns: campaigns.rows.map((row) => ({ ...row, id: Number(row.id) })), automatic: automatic.rows,
       eventCounts: Object.fromEntries(events.rows.map((row) => [String(row.eventType), Number(row.count)])) };
   }

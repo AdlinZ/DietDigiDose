@@ -1,3 +1,5 @@
+import { createRequestGate } from "./requestGate";
+import { agentMessageText, mergeTaskResponse } from "./taskState";
 import * as Crypto from "expo-crypto";
 import { parseStructuredQuantity } from "@/utils/structuredQuantity";
 import { useState, useCallback, useEffect, useRef } from "react";
@@ -37,7 +39,7 @@ import { hasSafetyProfile, safetySummary, type HealthProfile } from "@/utils/hea
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useTTS } from "@/hooks/useTTS";
 import { VoiceWaveform, type VoiceState } from "@/components/VoiceWaveform";
-import type { AgentActionProposal, AgentResponse, AgentRunSummary, AIWriteConfirmation, ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message, SolutionCard } from "./types";
+import type { AgentActionProposal, AgentRunEvent, AgentResponse, AgentRunSummary, AIWriteConfirmation, ChatSession, DietRecordActionCard, DietRecordMissingCard, InventoryScanCard, InventoryScanFood, Message, SolutionCard } from "./types";
 import { inferInventoryCategory, normalizeInventoryScanFoods } from "./inventoryScan";
 import { AssistantMessageItem } from "./AssistantMessageItem";
 import { normalizeShoppingItems, type ShoppingItem } from "@/utils/shoppingList";
@@ -93,6 +95,7 @@ function serializeMessageForAI(message: Message) {
   if (message.sender === "user") return message.text.trim();
 
   const cards: string[] = [];
+  if (message.agentRun) cards.push(`任务引用：${message.agentRun.run.id}；状态：${message.agentRun.run.status}。仅用于查找上下文，实际记录与版本必须重新查询。`);
   if (message.actionCard) {
     const { mealType, foodName, amount, calories, protein, carbs, fat } = message.actionCard;
     cards.push(`饮食打卡卡片：${mealType} ${foodName}（${amount}，${calories ?? "未知"} kcal，蛋白质 ${protein ?? "未知"}g，碳水 ${carbs ?? "未知"}g，脂肪 ${fat ?? "未知"}g）`);
@@ -104,7 +107,7 @@ function serializeMessageForAI(message: Message) {
     cards.push(`选项卡片：${message.optionsCard.title}；${message.optionsCard.options.map((item) => `${item.label}=${item.actionText}`).join("；")}`);
   }
   if (message.solutionCards?.length) {
-    cards.push(`方案卡片：${message.solutionCards.map((card) => `${card.schemeTag}：${card.title}；食材：${card.ingredients}；做法提示：${card.cookingTip}；营养：${card.macros}`).join("\n")}`);
+    cards.push(`方案卡片：${message.solutionCards.map((card) => `${card.schemeTag}：${card.title}（方案ID：${card.id}${card.recipeId ? `，菜谱ID：${card.recipeId}` : ""}）；食材：${card.ingredients}；做法提示：${card.cookingTip}；营养：${card.macros}`).join("\n")}`);
   }
 
   return [message.text.trim(), ...cards].filter(Boolean).join("\n\n【界面卡片上下文】\n");
@@ -119,15 +122,6 @@ function buildChatHistory(messages: Message[], userText: string): ChatHistoryMes
       content: serializeMessageForAI(message).slice(0, 12_000),
     }))
     .concat({ role: "user", content: userText.trim().slice(0, 12_000) });
-}
-
-function agentMessageText(run: AgentRunSummary, reply?: string) {
-  if (reply || run.reply) return reply || run.reply || "";
-  if (run.status === "failed") return run.error?.message || "Agent 执行失败，请重试。";
-  if (run.status === "awaiting_input") return run.pendingInput?.question || "Supervisor 需要你补充一些信息。";
-  if (run.status === "awaiting_approval") return "方案已经准备好，请检查并确认下方操作。";
-  if (run.status === "queued") return "任务正在排队，我会在这里持续更新进度。";
-  return "Supervisor 正在协调专业 Agent 处理这项任务…";
 }
 
 export default function AIAssistantScreen() {
@@ -154,6 +148,7 @@ export default function AIAssistantScreen() {
   const aiConsentStorageKey = getUserStorageKey("@ai_data_consent_v1", user?.id);
   const [loadedChatStorageKey, setLoadedChatStorageKey] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
+  const [pendingConsentText, setPendingConsentText] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showToolsGrid, setShowToolsGrid] = useState(false);
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
@@ -187,6 +182,51 @@ export default function AIAssistantScreen() {
   );
   const messages = historyBelongsToCurrentUser ? storedMessages : [];
   const sessions = historyBelongsToCurrentUser ? storedSessions : [];
+  const [requestGate] = useState(createRequestGate);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const scopeRef = useRef("");
+  const scopeGeneration = useRef({ key: "", revision: 0 });
+  const scopeKey = `${chatStorageKey}:${currentSessionId}`;
+  if (scopeGeneration.current.key !== scopeKey) {
+    scopeGeneration.current = { key: scopeKey, revision: scopeGeneration.current.revision + 1 };
+  }
+  scopeRef.current = `${scopeKey}:${scopeGeneration.current.revision}`;
+  const scope = scopeRef.current;
+  useEffect(() => { setLoading(false); setPendingConsentText(null); setSendError(null); }, [scope]);
+  useEffect(() => () => { scopeRef.current = ""; }, []);
+
+  // One serial poller owns updates for the visible account/session. A disconnected
+  // client retains the durable run and retries reads; it never resubmits writes.
+  const runKeys = messages.flatMap((message) => message.agentRun ? [`${message.agentRun.run.id}:${message.agentRun.run.status}`] : []).join(",");
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const settled = new Set<string>();
+    const poll = async () => {
+      for (const message of messagesRef.current) {
+        const view = message.agentRun;
+        if (!view || settled.has(view.run.id)) continue;
+        try {
+          const cursor = Math.max(0, ...view.events.map((event) => event.sequence));
+          const response = await aiApi.agentRun<AgentResponse & { events: AgentRunEvent[] }>(authFetch, view.run.id, cursor);
+          if (!active || scopeRef.current !== scope) return;
+          if (["completed", "failed", "cancelled", "expired"].includes(response.run.status) && response.events.length < 200) settled.add(view.run.id);
+          setMessages((current) => current.map((item) => {
+            if (item.id !== message.id || !item.agentRun) return item;
+            return mergeTaskResponse(item, response);
+          }));
+        } catch {
+          // Connectivity failure is not a server failure or cancellation.
+          if (!active || scopeRef.current !== scope) return;
+          setMessages((current) => current.map((item) => item.id === message.id && item.agentRun
+            ? { ...item, agentRun: { ...item.agentRun, connectionError: true } } : item));
+        }
+      }
+      if (active) timer = setTimeout(() => void poll(), 1500);
+    };
+    void poll();
+    return () => { active = false; clearTimeout(timer); };
+  }, [authFetch, scope, runKeys]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -217,41 +257,46 @@ export default function AIAssistantScreen() {
   // --- 语音管线：ASR → LLM → TTS ---
   const handleVoiceQuery = useCallback(async (userText: string) => {
     if (!userText.trim()) return;
+    const voiceScope = scopeRef.current;
+    const waitingTasks = messagesRef.current.filter((message) => message.agentRun?.run.status === "awaiting_input");
+    if (waitingTasks.length > 1) { setSendError("当前有多个待补充任务，请取消多余任务后再回复。"); return; }
+    const releaseRequest = requestGate.acquire(voiceScope);
+    if (!releaseRequest) return;
+    setSendError(null);
+    const responseId = Crypto.randomUUID();
 
     setVoiceState("thinking");
     stopTTS();
 
     const userMsg: Message = {
-      id: String(Date.now()),
+      id: Crypto.randomUUID(),
       sender: "user",
       text: userText,
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    const waiting = waitingTasks[0];
+    const messageId = waiting?.id || responseId;
+    setMessages((prev) => [...prev, userMsg, ...(waiting ? [] : [{ id: messageId, sender: "ai" as const, text: "正在创建任务…", time: "刚刚" }])]);
     setCurrentRecognizedText("");
 
     try {
       const sessionId = typeof currentSessionId === "string" && currentSessionId.trim().length <= 120
         ? currentSessionId.trim()
         : undefined;
-      const res = (await aiApi.chat(authFetch, {
-        messages: buildChatHistory(messagesRef.current, userText),
-        source: "voice",
-        ...(sessionId ? { sessionId } : {}),
-      })) as AgentResponse;
+      const res = waiting?.agentRun
+        ? await aiApi.resumeAgentRun<AgentResponse>(authFetch, waiting.agentRun.run.id, { input: userText })
+        : await aiApi.chat<AgentResponse>(authFetch, {
+          messages: buildChatHistory(messagesRef.current, userText), source: "voice", idempotencyKey: userMsg.id,
+          ...(sessionId ? { sessionId } : {}),
+        });
+      if (scopeRef.current !== voiceScope) return;
+      setMessages((prev) => prev.map((message) => message.id === messageId ? mergeTaskResponse(message, res) : message));
+      releaseRequest();
+      // The task card is already live; this wait only controls when TTS starts.
       const completedRun = await waitForAgentRun(authFetch, res.run);
+      if (scopeRef.current !== voiceScope) return;
       const replyText = agentMessageText(completedRun, completedRun.reply || res.reply);
 
-      const aiMsg: Message = {
-        id: String(Date.now() + 1),
-        sender: "ai",
-        text: replyText,
-        solutionCards: res.solutionCards,
-        agentRun: { run: completedRun, events: [] },
-        responseTimeMs: completedRun.durationMs ?? res.responseTimeMs,
-        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      };
-      setMessages((prev) => [...prev, aiMsg]);
       setLastAIReplyText(replyText);
       // 聊天回复已经落入消息列表，不能让浏览器的 TTS 初始化或回调异常
       // 继续占用“思考中”状态。
@@ -261,24 +306,18 @@ export default function AIAssistantScreen() {
         speak(replyText);
       }
     } catch (err) {
+      if (scopeRef.current !== voiceScope) return;
       console.error("Voice pipeline error:", err);
       const message =
         err instanceof Error && err.message
           ? err.message
           : "AI 对话请求失败，请稍后重试";
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: String(Date.now() + 1),
-          sender: "ai",
-          text: message,
-          status: "failed",
-          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        },
-      ]);
+      setMessages((prev) => prev.map((item) => item.id === messageId && !item.agentRun
+        ? { ...item, text: message, status: "failed" } : item));
       setVoiceState("completed");
     }
-  }, [authFetch, currentSessionId, messages, speak, stopTTS, voiceTTSEnabled]);
+    finally { releaseRequest(); }
+  }, [requestGate, authFetch, currentSessionId, speak, stopTTS, voiceTTSEnabled]);
 
   const { isRecording, toggleRecording, stopRecording } = useVoiceRecorder({
     onSpeechResult: (recognizedText) => {
@@ -506,125 +545,135 @@ export default function AIAssistantScreen() {
   const handleSendMessage = useCallback(async (textToSend?: string) => {
     const text = textToSend || inputText;
     if ((!text.trim() && !selectedImage) || loading) return;
-    if (!aiConsentStorageKey || await AsyncStorage.getItem(aiConsentStorageKey) !== "accepted") {
-      Alert.alert(
-        "发送给 AI 前请确认",
-        "当前问题、最近对话、图片附件及你填写的健康档案可能发送给部署环境配置的 AI 服务商。服务端会保存完整对话及本轮附件，直到账户删除、会话删除或运营方按请求删除；授权管理员可为排障查看元数据，但不会在管理页面直接展示原始媒体。请勿发送无关敏感信息。",
-        [
-          { text: "查看隐私说明", onPress: () => router.push("/legal") },
-          { text: "取消", style: "cancel" },
-          {
-            text: "同意并发送",
-            onPress: () => {
-              if (!aiConsentStorageKey) return;
-              void AsyncStorage.setItem(aiConsentStorageKey, "accepted")
-                .then(() => handleSendMessage(textToSend));
-            },
-          },
-        ],
-      );
-      return;
-    }
-
-    const attachment = selectedImage;
-    const userPromptText = text.trim() || "请描述并分析这张图片，明确说明你能确认和不能确认的内容";
-    const userMessageId = String(Date.now());
-    const userMsg: Message = {
-      id: userMessageId,
-      sender: "user",
-      text: userPromptText,
-      imageUri: attachment?.uri,
-      time: "刚刚",
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    if (attachment) setSelectedImage(null);
-    if (!textToSend) setInputText("");
-    setLoading(true);
-
+    const requestScope = scopeRef.current;
+    const releaseRequest = requestGate.acquire(requestScope);
+    if (!releaseRequest) return;
+    setSendError(null);
     try {
-      // 服务端最多接收 50 条消息；预留本次提问，并忽略旧缓存中的无效消息。
-      const latestMessages = messagesRef.current;
-      const validHistory = latestMessages.filter((m) => typeof m.text === "string" && m.text.trim().length > 0);
-      if (validHistory.length > 49 && !historyLimitNoticeShown.current) {
-        Alert.alert("对话提示", "为保证回复速度，本次 AI 将参考最近 50 条对话。更早内容仍保留在本机历史中。");
-        historyLimitNoticeShown.current = true;
+      const consent = aiConsentStorageKey ? await AsyncStorage.getItem(aiConsentStorageKey) : null;
+      if (scopeRef.current !== requestScope) return;
+      if (consent !== "accepted") {
+        setPendingConsentText(text);
+        return;
       }
-      const historyPayload = buildChatHistory(latestMessages, userPromptText);
-      // AsyncStorage 中的会话来自旧版本或异常缓存时，不能让它破坏本次请求。
-      const sessionId = typeof currentSessionId === "string" && currentSessionId.trim().length <= 120
-        ? currentSessionId.trim()
-        : undefined;
 
-      let data: Record<string, any>;
+      const attachment = selectedImage;
+      const userPromptText = text.trim() || "请描述并分析这张图片，明确说明你能确认和不能确认的内容";
+      const waiting = messagesRef.current.filter((message) => message.agentRun?.run.status === "awaiting_input");
+      if (waiting.length > 1 || (waiting.length && attachment)) {
+        setSendError("当前有待补充任务。请取消多余任务，或新建对话发送附件。");
+        return;
+      }
+      const target = waiting[0];
+      const userMessageId = Crypto.randomUUID();
+      const responseMessageId = target?.id || Crypto.randomUUID();
+      const userMsg: Message = {
+        id: userMessageId,
+        sender: "user",
+        text: userPromptText,
+        imageUri: attachment?.uri,
+        time: "刚刚",
+      };
+
+      setMessages((prev) => [...prev, userMsg, ...(target ? [] : [{ id: responseMessageId, sender: "ai" as const, text: "正在创建任务…", time: "刚刚" }])]);
+      if (attachment) setSelectedImage(null);
+      if (!textToSend) setInputText("");
+      setLoading(true);
+
       try {
-        data = await aiApi.chat<Record<string, any>>(authFetch, {
-          messages: historyPayload,
-          source: "assistant",
-          ...(sessionId ? { sessionId } : {}),
-          ...(attachment ? { image: attachment.base64, imageMimeType: attachment.mimeType } : {}),
-        });
-      } catch (error) {
-        // 历史消息只用于补充上下文；缓存损坏或旧版本格式不兼容时，
-        // 退化为当前问题继续完成对话，而不是把校验错误展示给用户。
-        // Expo Web 在热更新后可能存在重复模块实例，不能只依赖 instanceof。
-        // 只丢弃损坏的历史消息；稳定会话 ID 必须保留，避免管理端被拆成新会话。
-        const isValidationError = error instanceof ApiError
-          ? error.code === "VALIDATION_ERROR"
-          : typeof error === "object"
-            && error !== null
-            && (error as { code?: unknown }).code === "VALIDATION_ERROR";
-        if (!isValidationError) throw error;
-        data = await aiApi.chat<Record<string, any>>(authFetch, {
-          prompt: userPromptText,
-          source: "assistant",
-          ...(sessionId ? { sessionId } : {}),
-          ...(attachment ? { image: attachment.base64, imageMimeType: attachment.mimeType } : {}),
-        });
-      }
-      const agentResponse = data as AgentResponse & Record<string, any>;
-      if (attachment && agentResponse.run?.id) {
-        setMessages((prev) => prev.map((message) => message.id === userMessageId
-          ? { ...message, imageRunId: agentResponse.run.id }
-          : message));
-      }
-      const completedRun = agentResponse.run
-        ? await waitForAgentRun(authFetch, agentResponse.run)
-        : undefined;
-      const responseText = completedRun
-        ? agentMessageText(completedRun, completedRun.reply || data.reply)
-        : (data.reply || "智能大厨正在整理您的食谱建议...");
+        // 服务端最多接收 50 条消息；预留本次提问，并忽略旧缓存中的无效消息。
+        const latestMessages = messagesRef.current;
+        const validHistory = latestMessages.filter((m) => typeof m.text === "string" && m.text.trim().length > 0);
+        if (validHistory.length > 49 && !historyLimitNoticeShown.current) {
+          Alert.alert("对话提示", "为保证回复速度，本次 AI 将参考最近 50 条对话。更早内容仍保留在本机历史中。");
+          historyLimitNoticeShown.current = true;
+        }
+        const historyPayload = buildChatHistory(latestMessages, userPromptText);
+        // AsyncStorage 中的会话来自旧版本或异常缓存时，不能让它破坏本次请求。
+        const sessionId = typeof currentSessionId === "string" && currentSessionId.trim().length <= 120
+          ? currentSessionId.trim()
+          : undefined;
 
-      const aiMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        sender: "ai",
-        text: responseText,
-        actionCard: data.actionCard,
-        writeConfirmation: data.writeConfirmation,
-        missingCard: data.missingCard,
-        optionsCard: data.optionsCard,
-        solutionCards: data.solutionCards,
-        agentRun: completedRun ? { run: completedRun, events: [] } : undefined,
-        responseTimeMs: completedRun?.durationMs ?? data.responseTimeMs,
-        time: "刚刚",
-      };
+        let data: Record<string, any>;
+        if (target?.agentRun) {
+          const response = await aiApi.resumeAgentRun<AgentResponse>(authFetch, target.agentRun.run.id, { input: userPromptText });
+          if (scopeRef.current !== requestScope) return;
+          setMessages((prev) => prev.map((message) => message.id === responseMessageId ? { ...message, text: agentMessageText(response.run), agentRun: { run: response.run, events: message.agentRun?.events || [] } } : message));
+          return;
+        }
+        try {
+          data = await aiApi.chat<Record<string, any>>(authFetch, {
+            messages: historyPayload,
+            source: "assistant",
+            idempotencyKey: userMessageId,
+            ...(sessionId ? { sessionId } : {}),
+            ...(attachment ? { image: attachment.base64, imageMimeType: attachment.mimeType } : {}),
+          });
+        } catch (error) {
+          // 历史消息只用于补充上下文；缓存损坏或旧版本格式不兼容时，
+          // 退化为当前问题继续完成对话，而不是把校验错误展示给用户。
+          // Expo Web 在热更新后可能存在重复模块实例，不能只依赖 instanceof。
+          // 只丢弃损坏的历史消息；稳定会话 ID 必须保留，避免管理端被拆成新会话。
+          const isValidationError = error instanceof ApiError
+            ? error.code === "VALIDATION_ERROR"
+            : typeof error === "object"
+              && error !== null
+              && (error as { code?: unknown }).code === "VALIDATION_ERROR";
+          if (!isValidationError) throw error;
+          data = await aiApi.chat<Record<string, any>>(authFetch, {
+            prompt: userPromptText,
+            source: "assistant",
+            idempotencyKey: userMessageId,
+            ...(sessionId ? { sessionId } : {}),
+            ...(attachment ? { image: attachment.base64, imageMimeType: attachment.mimeType } : {}),
+          });
+        }
+        if (scopeRef.current !== requestScope) return;
+        const agentResponse = data as AgentResponse & Record<string, any>;
+        if (attachment && agentResponse.run?.id) {
+          setMessages((prev) => prev.map((message) => message.id === userMessageId
+            ? { ...message, imageRunId: agentResponse.run.id }
+            : message));
+        }
+        const completedRun = agentResponse.run;
+        const responseText = completedRun
+          ? agentMessageText(completedRun, completedRun.reply || data.reply)
+          : (data.reply || "智能大厨正在整理您的食谱建议...");
 
-      setMessages((prev) => [...prev, aiMsg]);
-      setLastAIReplyText(responseText);
-    } catch (err: any) {
-      console.error("[AIAssistant Error]", err);
-      const fallbackMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        sender: "ai",
-        text: err instanceof Error ? err.message : "AI 对话请求失败，请稍后重试",
-        status: "failed",
-        time: "刚刚",
-      };
-      setMessages((prev) => [...prev, fallbackMsg]);
-    } finally {
-      setLoading(false);
-    }
-  }, [aiConsentStorageKey, authFetch, inputText, selectedImage, loading, currentSessionId, router]);
+        const aiMsg: Message = {
+          id: responseMessageId,
+          sender: "ai",
+          text: responseText,
+          actionCard: data.actionCard,
+          writeConfirmation: data.writeConfirmation,
+          missingCard: data.missingCard,
+          optionsCard: data.optionsCard,
+          solutionCards: data.solutionCards,
+          agentRun: completedRun ? { run: completedRun, events: [] } : undefined,
+          responseTimeMs: completedRun?.durationMs ?? data.responseTimeMs,
+          time: "刚刚",
+        };
+
+        setMessages((prev) => prev.map((message) => message.id === responseMessageId ? aiMsg : message));
+        setLastAIReplyText(responseText);
+      } catch (err: any) {
+        if (scopeRef.current !== requestScope) return;
+        console.error("[AIAssistant Error]", err);
+        const fallbackMsg: Message = {
+          id: (Date.now() + 1).toString(),
+          sender: "ai",
+          text: err instanceof Error ? err.message : "AI 对话请求失败，请稍后重试",
+          status: "failed",
+          time: "刚刚",
+        };
+        setMessages((prev) => prev.map((message) => message.id === responseMessageId ? { ...message, text: fallbackMsg.text } : message));
+      } finally {
+        if (scopeRef.current === requestScope) setLoading(false);
+      }
+    } catch (error) {
+      if (scopeRef.current === requestScope) setSendError(error instanceof Error ? error.message : "无法读取发送设置，请重试。");
+    } finally { releaseRequest(); }
+  }, [requestGate, aiConsentStorageKey, authFetch, inputText, selectedImage, loading, currentSessionId, router]);
 
   // 其他页面携带 prompt 跳转时，进入对话页后自动发给 AI，而不是只填入输入框。
   useEffect(() => {
@@ -1199,16 +1248,7 @@ export default function AIAssistantScreen() {
   };
 
   const updateAgentMessage = useCallback((messageId: string, response: AgentResponse) => {
-    setMessages((current) => current.map((message) => message.id === messageId ? {
-      ...message,
-      text: response.reply || response.run.reply || message.text,
-      status: response.run.status === "failed" ? "failed" : response.run.status === "completed" ? "completed" : message.status,
-      responseTimeMs: response.run.durationMs ?? message.responseTimeMs,
-      solutionCards: response.solutionCards ?? message.solutionCards,
-      agentRun: message.agentRun
-        ? { ...message.agentRun, run: response.run }
-        : { run: response.run, events: [] },
-    } : message));
+    setMessages((current) => current.map((message) => message.id === messageId ? mergeTaskResponse(message, response) : message));
   }, []);
 
   const handleAgentResume = useCallback(async (
@@ -1217,29 +1257,32 @@ export default function AIAssistantScreen() {
     decision: "approve" | "reject" | "edit",
     actions?: AgentActionProposal[],
   ) => {
+    const actionScope = scopeRef.current;
     const response = await aiApi.resumeAgentRun<AgentResponse>(authFetch, runId, {
       decision,
       ...(actions ? { actions } : {}),
     });
-    updateAgentMessage(messageId, response);
+    if (scopeRef.current === actionScope) updateAgentMessage(messageId, response);
   }, [authFetch, updateAgentMessage]);
 
   const handleAgentCancel = useCallback(async (messageId: string, runId: string) => {
+    const actionScope = scopeRef.current;
     await aiApi.cancelAgentRun(authFetch, runId);
-    setMessages((current) => current.map((message) => message.id === messageId && message.agentRun ? {
-      ...message,
-      text: "任务已取消，没有执行后续操作。",
-      agentRun: { ...message.agentRun, run: { ...message.agentRun.run, status: "cancelled" } },
-    } : message));
-  }, [authFetch]);
-
-  const handleAgentRetry = useCallback(async (messageId: string, runId: string) => {
-    const response = await aiApi.retryAgentRun<AgentResponse>(authFetch, runId);
+    const response = await aiApi.agentRun<AgentResponse>(authFetch, runId);
+    if (scopeRef.current !== actionScope) return;
     updateAgentMessage(messageId, response);
   }, [authFetch, updateAgentMessage]);
 
+  const handleAgentRetry = useCallback(async (messageId: string, runId: string) => {
+    const actionScope = scopeRef.current;
+    const response = await aiApi.retryAgentRun<AgentResponse>(authFetch, runId);
+    if (scopeRef.current === actionScope) updateAgentMessage(messageId, response);
+  }, [authFetch, updateAgentMessage]);
+
   const handleAgentUndo = useCallback(async (messageId: string, runId: string) => {
+    const actionScope = scopeRef.current;
     await aiApi.undoAgentRun(authFetch, runId);
+    if (scopeRef.current !== actionScope) return;
     setMessages((current) => current.map((message) => message.id === messageId && message.agentRun
       ? { ...message, agentRun: { ...message.agentRun, undoState: "completed" } }
       : message));
@@ -1286,10 +1329,33 @@ export default function AIAssistantScreen() {
 
   return (
     <Screen safeAreaEdges={["top", "bottom", "left", "right"]}>
+      <Modal visible={pendingConsentText !== null} transparent animationType="fade" onRequestClose={() => setPendingConsentText(null)}>
+        <View className="flex-1 justify-center bg-black/45 px-6">
+          <View className="rounded-3xl bg-surface p-5 gap-4">
+            <Text className="text-lg font-bold text-ink">发送给 AI 前请确认</Text>
+            <Text className="text-sm leading-6 text-copy-muted">当前问题、最近对话、图片附件及健康档案可能发送给部署环境配置的 AI 服务商。服务端会按隐私说明保存对话和附件。请勿发送无关敏感信息。</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={() => { setPendingConsentText(null); router.push("/legal"); }}><Text className="text-brand">查看隐私说明</Text></TouchableOpacity>
+            <View className="flex-row gap-3">
+              <TouchableOpacity accessibilityRole="button" className="flex-1 rounded-xl border border-line p-3" onPress={() => setPendingConsentText(null)}><Text className="text-center text-ink">取消</Text></TouchableOpacity>
+              <TouchableOpacity accessibilityRole="button" className="flex-1 rounded-xl bg-brand-fill p-3" onPress={async () => {
+                if (!aiConsentStorageKey) return;
+                const consentScope = scopeRef.current;
+                const text = pendingConsentText;
+                await AsyncStorage.setItem(aiConsentStorageKey, "accepted");
+                if (scopeRef.current !== consentScope) return;
+                setPendingConsentText(null);
+                setInputText("");
+                void handleSendMessage(text || undefined);
+              }}><Text className="text-center font-bold text-white">同意并发送</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         className="flex-1 flex-col justify-between"
       >
+        {sendError ? <Text accessibilityRole="alert" className="px-4 py-2 text-xs text-critical">{sendError}</Text> : null}
         {/* Full Screen Header */}
         <View className="relative flex-row items-center justify-between border-b border-line/70 bg-surface/45 px-4 py-2.5">
           <TouchableOpacity

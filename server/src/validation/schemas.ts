@@ -1,3 +1,4 @@
+import { runtimePolicySchema } from "../modules/aiRuntime/policy.js";
 import { kitchenwareAttributesSchema } from "@dietdigidose/contracts";
 import { householdDiningPlanSchema, mealProductionSchema, kitchenPreferencesSchema } from "@dietdigidose/contracts";
 import { z } from "zod";
@@ -107,12 +108,16 @@ export const notificationCampaignSchema = z.object({
 }).strict();
 
 export const feedbackCreateSchema = z.object({
+  requestKey: z.string().uuid().optional(),
   category: z.enum(["issue", "suggestion", "support"]),
   content: trimmedString(5, 2000, "反馈内容"),
   context: z.object({
     page: z.string().trim().max(120).optional(),
     recipeId: z.number().int().positive().optional(),
     recipeTitle: z.string().trim().max(160).optional(),
+    appVersion: z.string().trim().max(40).optional(),
+    snapshot: z.string().trim().max(40).optional(),
+    platform: z.enum(["ios", "android", "web"]).optional(),
   }).strict().optional(),
 }).strict();
 
@@ -149,6 +154,8 @@ const cookingQueueMealType = z.enum(["breakfast", "lunch", "dinner", "snack"]);
 const nullableDateTime = z.string().datetime({ offset: true, message: "计划时间必须是包含时区的 ISO 时间" }).nullable();
 
 export const cookingQueueCreateSchema = z.object({
+  interventionId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  confirmed: z.literal(true).optional(),
   recommendationRequestId: z.string().uuid().optional(),
   recipeId: z.number().int().positive(),
   idempotencyKey: z.string().trim().min(8).max(200).optional(),
@@ -338,6 +345,7 @@ const normalizeAIChatPayload = (input: unknown) => {
     ...(messages.length ? { messages } : {}),
     ...(prompt ? { prompt } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(raw.idempotencyKey !== undefined ? { idempotencyKey: raw.idempotencyKey } : {}),
     ...(image ? { image } : {}),
     ...(imageMimeType ? { imageMimeType } : {}),
     source,
@@ -345,6 +353,7 @@ const normalizeAIChatPayload = (input: unknown) => {
 };
 
 export const aiChatSchema = z.preprocess(normalizeAIChatPayload, z.object({
+  idempotencyKey: z.string().trim().min(16).max(200).optional(),
   messages: z.array(aiChatMessageSchema).max(50).optional(),
   prompt: z.string().min(1).max(12_000).optional(),
   sessionId: z.string().max(120).optional(),
@@ -541,6 +550,8 @@ const inventoryOutcome = z.enum(["cooked", "used", "discarded", "expired", "gift
 const inventoryOutcomeSource = z.enum(["manual", "cooking", "reminder", "recommendation", "cleanup"]);
 
 export const inventoryOutcomeCreateSchema = z.object({
+  interventionId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  confirmed: z.literal(true).optional(),
   scope: z.enum(["personal", "household"]),
   itemId: z.number().int().positive(),
   householdId: z.number().int().positive().optional(),
@@ -677,6 +688,7 @@ const optionalUrlSchema = z.string().trim().max(2000).optional().refine(
 );
 
 export const adminAIConfigSchema = z.object({
+  runtimePolicy: runtimePolicySchema.optional(),
   apiKey: z.string().trim().max(1000).optional(),
   baseUrl: optionalUrlSchema,
   model: z.string().trim().min(1).max(200).optional(),

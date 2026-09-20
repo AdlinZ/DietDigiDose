@@ -16,5 +16,6 @@ export function satisfiesCapabilityConstraints(conditions: unknown, attributes: 
   const actual = specification.data;
   return (required.minCapacityMl === undefined || (actual.capacityMl != null && actual.capacityMl >= required.minCapacityMl))
     && (required.minDiameterCm === undefined || (actual.diameterCm != null && actual.diameterCm >= required.minDiameterCm))
+    && (required.requiredFunctions === undefined || required.requiredFunctions.every(value => actual.functions?.includes(value) === true))
     && (required.heatSource === undefined || actual.heatSources?.includes(required.heatSource) === true);
 }

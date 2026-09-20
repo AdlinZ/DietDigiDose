@@ -77,6 +77,7 @@ export class CookingQueueService {
     }
     const result = await this.repository.enqueue({
       id: randomUUID(), userId, recipeId: input.recipeId, idempotencyKey: input.idempotencyKey,
+      interventionId: input.interventionId, confirmed: input.confirmed,
       plannedAt: input.plannedAt, mealType: input.mealType,
       snapshot: {
         selectionEvidence,

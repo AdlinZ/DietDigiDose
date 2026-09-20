@@ -566,6 +566,7 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/password")} className="mb-4 rounded-2xl border border-line bg-surface p-4"><Text className="font-bold text-ink">修改密码</Text><Text className="text-sm text-copy-muted">验证当前密码，修改后重新登录</Text></TouchableOpacity>
         {/* Section 1: 账号与目标 */}
         <View className="mb-6">
           <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">

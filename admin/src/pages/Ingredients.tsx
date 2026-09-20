@@ -1,3 +1,5 @@
+import { DialogFrame } from '../components/admin/DialogFrame';
+import { useQueryState } from '../hooks/useQueryState';
 import { useCallback, useState, useEffect } from 'react';
 import api from '../services/api';
 import { Apple, PlusCircle, Check, X, Search, Trash2, Pencil, Filter, ChevronLeft, ChevronRight, Database, Eye, Barcode } from 'lucide-react';
@@ -53,15 +55,15 @@ function parseMicronutrients(value?: string | null) {
 }
 
 export default function Ingredients() {
-  const [activeTab, setActiveTab] = useState<'library' | 'ugc'>('library');
+  const [activeTab, setActiveTab] = useQueryState<'library' | 'ugc'>('tab', 'library', ["library", "ugc"]);
   const [library, setLibrary] = useState<any[]>([]);
   const [pendingUgc, setPendingUgc] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useQueryState<string>('q', '');
   const [serverSearch, setServerSearch] = useState('');
   const [isComposing, setIsComposing] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState('全部');
-  const [selectedSource, setSelectedSource] = useState('全部');
+  const [selectedCategory, setSelectedCategory] = useQueryState<string>('category', '全部', ["全部", "肉类", "蔬菜", "水果", "谷物", "乳制品", "海鲜", "豆制品", "其他"]);
+  const [selectedSource, setSelectedSource] = useQueryState<string>('source', '全部', ["全部", "taiwan_fda", "open_food_facts", "usda_fdc_foundation", "system"]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const pageSize = 50;
@@ -268,7 +270,7 @@ export default function Ingredients() {
         <div>
           <h1 className="text-2xl font-bold text-text-main flex items-center gap-2">
             <Apple className="w-7 h-7 text-primary" />
-            食材库管理
+            食材库
           </h1>
           <p className="text-xs text-text-muted mt-1">管理官方标准食物营养成分库及用户自定义提交的待审核食材</p>
         </div>
@@ -367,7 +369,7 @@ export default function Ingredients() {
                   className="w-full pl-10 pr-4 py-2 bg-gray-50 border-none rounded-xl focus:ring-2 focus:ring-primary/20 text-sm"
                 />
               </div>
-              
+
               <div className="flex items-center space-x-2 bg-gray-50 rounded-xl px-3 py-1 w-full sm:w-auto">
                 <Filter className="w-4 h-4 text-gray-400" />
                 <select
@@ -492,7 +494,7 @@ export default function Ingredients() {
                     >
                       <Check className="w-5 h-5" />
                     </button>
-                    <button
+                    <button aria-label="关闭"
                       onClick={() => handleReject(item.id)}
                       className="w-10 h-10 rounded-full bg-red-50 text-red-600 hover:bg-red-100 flex items-center justify-center transition-colors"
                       title="拒绝"
@@ -509,9 +511,9 @@ export default function Ingredients() {
 
       {/* Ingredient Detail Modal */}
       {selectedIngredient && (
-        <div
+        <DialogFrame onClose={()=>setSelectedIngredient(null)} busy={false}
           className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={() => setSelectedIngredient(null)}
+
         >
           <div
             role="dialog"
@@ -658,18 +660,18 @@ export default function Ingredients() {
               </button>
             </div>
           </div>
-        </div>
+        </DialogFrame>
       )}
 
       {/* Add / Edit Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <DialogFrame onClose={()=>setShowModal(false)} busy={submitting} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-lg shadow-xl animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between mb-4 border-b border-gray-100 pb-3">
               <h3 className="text-lg font-bold text-gray-900">
                 {modalMode === 'add' ? '新增官方标准食材' : '编辑食材'}
               </h3>
-              <button
+              <button aria-label="关闭"
                 onClick={() => setShowModal(false)}
                 className="text-gray-400 hover:text-gray-600 p-1"
               >
@@ -789,7 +791,7 @@ export default function Ingredients() {
               </div>
             </form>
           </div>
-        </div>
+        </DialogFrame>
       )}
     </div>
   );

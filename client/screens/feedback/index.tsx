@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
-import { Alert, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useMemo, useState, useRef, useEffect } from "react";
+import { Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import * as Crypto from "expo-crypto";
+import { APP_VERSION, APP_RELEASE_SNAPSHOT } from "@/utils/appVersion";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
@@ -13,8 +15,12 @@ const categories: { key: FeedbackCategory; title: string; description: string; i
 ];
 
 export default function FeedbackScreen() {
+  const { user } = useAuth();
+  return <FeedbackForm key={user?.id || "guest"} />;
+}
+function FeedbackForm() {
   const router = useSafeRouter();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const authFetch = useAuthFetch();
   const { category: initialCategory, page, recipeId, recipeTitle } = useSafeSearchParams<{
     category?: FeedbackCategory;
@@ -26,36 +32,54 @@ export default function FeedbackScreen() {
     initialCategory && categories.some((item) => item.key === initialCategory) ? initialCategory : "issue",
   );
   const [content, setContent] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const request = useRef<{ fingerprint: string; key: string } | null>(null);
+  const busy = useRef(false);
+  const account = useRef(user?.id);
+  account.current = user?.id;
+  useEffect(() => () => { account.current = undefined; }, []);
   const [submitting, setSubmitting] = useState(false);
   const contextLabel = useMemo(() => recipeTitle ? `已附带：食谱「${recipeTitle}」` : page ? `已附带：${page}` : null, [page, recipeTitle]);
 
   const submit = async () => {
+    if (busy.current) return;
     if (!isAuthenticated) {
       router.push("/login");
       return;
     }
     if (content.trim().length < 5) {
-      Alert.alert("再补充一点", "请至少填写 5 个字，方便我们准确处理。");
+      setError("请至少填写 5 个字，方便我们准确处理。");
       return;
     }
+    const owner = account.current;
+    busy.current = true;
+    setError(null);
     setSubmitting(true);
     try {
-      await feedbackApi.create(authFetch, {
+      const fingerprint = JSON.stringify([owner, category, content.trim(), page, recipeId, recipeTitle]);
+      if (request.current?.fingerprint !== fingerprint) request.current = { fingerprint, key: Crypto.randomUUID() };
+      const result = await feedbackApi.create(authFetch, {
+        requestKey: request.current.key,
         category,
         content: content.trim(),
         context: {
+          appVersion: APP_VERSION,
+          snapshot: APP_RELEASE_SNAPSHOT,
+          platform: Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : "web",
           page: page || "帮助与反馈",
           recipeId: recipeId ? Number(recipeId) : undefined,
           recipeTitle,
         },
       });
-      Alert.alert("已收到", category === "support" ? "客服会根据你提交的信息跟进处理。" : "感谢你的反馈，我们会认真核查和改进。", [
-        { text: "完成", onPress: () => router.back() },
-      ]);
-    } catch {
-      Alert.alert("提交失败", "暂时无法发送反馈，请稍后重试。");
+      if (account.current !== owner) return;
+      request.current = null;
+      setContent("");
+      router.replace("/feedback-history", { id: result.id });
+    } catch (err) {
+      if (account.current === owner) setError(err instanceof Error ? err.message : "暂时无法发送反馈，请稍后重试。");
     } finally {
-      setSubmitting(false);
+      busy.current = false;
+      if (account.current === owner) setSubmitting(false);
     }
   };
 
@@ -66,12 +90,12 @@ export default function FeedbackScreen() {
           <FontAwesome6 name="chevron-left" size={14} colorClassName="accent-ink" />
         </TouchableOpacity>
         <Text className="text-lg font-black text-ink">帮助与反馈</Text>
-        <View className="h-10 w-10" />
+        <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/feedback-history")}><Text className="text-brand">我的反馈</Text></TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 44 }} keyboardShouldPersistTaps="handled">
         <View className="mb-5 rounded-3xl bg-brand-fill p-5">
           <Text className="text-base font-black text-white">你的每一次反馈都很重要</Text>
-          <Text className="mt-1 text-xs leading-5 text-white/80">问题会附带当前页面信息，方便我们更快定位；客服请求也会进入同一处理队列。</Text>
+          <Text className="mt-1 text-xs leading-5 text-white/80">提交时附带应用版本、平台和当前页面；不自动附带健康资料或聊天记录。你可以在“我的反馈”查看进度和回复。</Text>
         </View>
         <Text className="mb-2 px-1 text-xs font-bold text-copy-muted">选择类型</Text>
         <View className="gap-2">
@@ -90,6 +114,7 @@ export default function FeedbackScreen() {
         <Text className="mb-2 mt-5 px-1 text-xs font-bold text-copy-muted">详细描述</Text>
         <TextInput value={content} onChangeText={setContent} multiline textAlignVertical="top" maxLength={2000} placeholder="请描述你遇到的问题、期待的改进，或需要客服协助的事项…" placeholderTextColorClassName="accent-copy-muted" className="min-h-40 rounded-2xl border border-line bg-surface p-4 text-sm leading-6 text-ink" />
         <Text className="mt-1.5 text-right text-[10px] text-copy-muted">{content.length}/2000</Text>
+        {error ? <Text accessibilityRole="alert" className="mt-3 text-critical">{error}</Text> : null}
         <TouchableOpacity disabled={submitting} onPress={() => void submit()} accessibilityLabel="提交反馈" className={`mt-4 items-center rounded-2xl py-3.5 ${submitting ? "bg-brand/50" : "bg-brand-fill active:opacity-85"}`}>
           <Text className="text-sm font-black text-white">{submitting ? "提交中…" : "提交反馈"}</Text>
         </TouchableOpacity>

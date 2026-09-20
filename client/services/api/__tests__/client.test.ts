@@ -77,6 +77,7 @@ describe("API client", () => {
 
   it.each([
     ["/api/v1/diet-records/cooking-completions", "POST", ["/api/v1/inventory", "/api/v1/cooking-queue", "/api/v1/meal-plans", "/api/v1/diet-records/prepared-meals", "/api/v1/health-data", "/api/v1/insights"]],
+    ["/api/v1/insights/inventory-outcomes", "POST", ["/api/v1/inventory", "/api/v1/insights"]],
     ["/api/v1/cooking-queue/item", "DELETE", ["/api/v1/meal-plans"]],
     ["/api/v1/cooking-queue", "DELETE", ["/api/v1/meal-plans"]],
     ["/api/v1/cooking-queue/item", "PATCH", ["/api/v1/meal-plans"]],
@@ -114,6 +115,16 @@ describe("API client", () => {
     await expect(fresh).resolves.toEqual({ revision: 2 });
     expect(getsBeforeOldResponse).toBe(2);
     await expect(requestJson(apiFetch, "/api/v1/inventory")).resolves.toEqual({ revision: 2 });
+  });
+
+  it.each(["no-store", "reload"] as const)("honors %s for confirmation reads even when inventory is cached", async cache => {
+    let version = 1;
+    const apiFetch: ApiFetch = jest.fn(async () => jsonResponse({ version }));
+    registerApiFetchScope(apiFetch, 1301);
+    await expect(requestJson(apiFetch, "/api/v1/inventory")).resolves.toEqual({ version: 1 });
+    version = 2;
+    await expect(requestJson(apiFetch, "/api/v1/inventory", { cache })).resolves.toEqual({ version: 2 });
+    expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 
   it("coalesces concurrent identical mutations", async () => {

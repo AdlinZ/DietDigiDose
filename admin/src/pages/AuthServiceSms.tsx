@@ -1,3 +1,4 @@
+import { useQueryRecord } from '../hooks/useQueryRecord';
 import { useCallback, useEffect, useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle2, Eye, KeyRound, MessageSquareText, RefreshCw, Save, Send, ShieldCheck } from 'lucide-react';
 import api from '../services/api';
@@ -42,6 +43,7 @@ type EventItem = {
   createdAt: string;
 };
 
+const defaultEventFilters = { userId: '', username: '', phone: '', ip: '', outcome: '', providerId: '' };
 const initialOverview: Overview = { totals: {}, package: { total: 0, estimatedRemaining: 0, usedSinceBaseline: 0, baselineAt: null }, attacks: [] };
 
 export default function AuthServiceSms() {
@@ -50,7 +52,7 @@ export default function AuthServiceSms() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState({ userId: '', username: '', phone: '', ip: '', outcome: '', providerId: '' });
+  const [filters, setFilters] = useQueryRecord(defaultEventFilters);
   const [testPhone, setTestPhone] = useState('');
   const [reconcileRemaining, setReconcileRemaining] = useState('');
   const [revealed, setRevealed] = useState<Record<number, string>>({});
@@ -81,17 +83,10 @@ export default function AuthServiceSms() {
   }, [filters, page]);
 
   useEffect(() => {
-    void Promise.all([
-      loadCore(),
-      api.get('/admin/auth-services/sms/events?page=1&pageSize=20').then(({ data }) => {
-        setEvents(data.items || []);
-        setTotal(data.total || 0);
-        setPage(1);
-      }),
-    ]).catch((error: any) => {
-      setLoadError(error.response?.data?.error || '认证服务数据加载失败，请确认服务端已完成数据库迁移');
-    }).finally(() => setLoading(false));
+    void loadCore().catch(error => setLoadError(error instanceof Error ? error.message : '读取认证配置失败')).finally(()=>setLoading(false));
   }, [loadCore]);
+  useEffect(() => { setPage(1); }, [filters]);
+  useEffect(() => { void loadEvents().catch(error=>setLoadError(error instanceof Error ? error.message : '读取认证事件失败')); }, [loadEvents]);
 
   if (loading) return <div className="py-24 text-center text-text-muted">认证服务数据加载中…</div>;
   if (!config) return (

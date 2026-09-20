@@ -73,6 +73,8 @@ async function startServer(databasePath: string, mediaRoot: string, adminPasswor
       HOST: "127.0.0.1",
       PORT: "0",
       DATABASE_PATH: databasePath,
+      DATABASE_DRIVER: "sqlite",
+      DATABASE_URL: "",
       MEDIA_LOCAL_ROOT: mediaRoot,
       JWT_SECRET: "database-rehearsal-jwt-secret-at-least-32-characters",
       ADMIN_INITIAL_PASSWORD: adminPassword,
@@ -316,12 +318,22 @@ async function main() {
     const legacyDatabase = new Database(legacyPath);
     const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
       .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 24 }, (_, index) => 59 + index).includes(migration.version));
+    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 25 }, (_, index) => 59 + index).includes(migration.version));
     if (unsupportedVersions.length) {
       legacyDatabase.close();
       throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
     }
     for (const migration of newerVersions) {
+      if (migration.version === 83) legacyDatabase.exec(`
+        DROP TABLE feedback_messages;
+        DROP INDEX idx_feedback_request;
+        DROP INDEX idx_feedback_status;
+        ALTER TABLE user_notification_inbox DROP COLUMN feedback_id;
+        ALTER TABLE user_feedback DROP COLUMN request_key;
+        ALTER TABLE user_feedback DROP COLUMN version;
+        ALTER TABLE user_feedback DROP COLUMN updated_at;
+        UPDATE user_feedback SET status = 'open' WHERE status = 'received';
+      `);
       if (migration.version === 82) legacyDatabase.exec("DROP TABLE prepared_meal_allocations");
       if (migration.version === 81) {
         // Only this freshly bootstrapped drill fixture is downgraded. A real rc.7

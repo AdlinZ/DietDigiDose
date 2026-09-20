@@ -1,3 +1,5 @@
+import { DialogFrame } from '../components/admin/DialogFrame';
+import { useQueryState } from '../hooks/useQueryState';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
@@ -118,8 +120,8 @@ const statusOptions: Array<{ value: '' | RunStatus; label: string }> = [
   { value: '', label: '全部状态' },
   { value: 'running', label: '运行中' },
   { value: 'queued', label: '排队中' },
-  { value: 'awaiting_input', label: '等待补充' },
-  { value: 'awaiting_approval', label: '等待批准' },
+  { value: 'awaiting_input', label: '等待用户输入' },
+  { value: 'awaiting_approval', label: '等待用户确认' },
   { value: 'completed', label: '已完成' },
   { value: 'failed', label: '失败' },
   { value: 'cancelled', label: '已取消' },
@@ -151,7 +153,7 @@ const statusStyles: Record<RunStatus, string> = {
 };
 
 const statusLabels: Record<RunStatus, string> = {
-  queued: '排队中', running: '运行中', awaiting_input: '等待补充', awaiting_approval: '等待批准',
+  queued: '排队中', running: '运行中', awaiting_input: '等待用户输入', awaiting_approval: '等待用户确认',
   completed: '已完成', failed: '失败', cancelled: '已取消', expired: '已过期',
 };
 
@@ -245,11 +247,11 @@ export default function AgentRuns() {
   const [total, setTotal] = useState(0);
   const [statusCounts, setStatusCounts] = useState<Array<{ status: RunStatus; count: number }>>([]);
   const [usageSummary, setUsageSummary] = useState<AgentUsageSummary>({ modelCalls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 });
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('');
-  const [modality, setModality] = useState('');
-  const [agent, setAgent] = useState('');
-  const [range, setRange] = useState('30d');
+  const [query, setQuery] = useQueryState<string>('q', '');
+  const [status, setStatus] = useQueryState<string>('status', '', ["", "queued", "running", "awaiting_input", "awaiting_approval", "completed", "failed", "cancelled", "expired"]);
+  const [modality, setModality] = useQueryState<string>('modality', '', ["", "text", "home", "cooking", "image", "audio", "inventory_scan", "receipt"]);
+  const [agent, setAgent] = useQueryState<string>('agent', '', agentOptions);
+  const [range, setRange] = useQueryState<string>('range', '30d', ["7d", "30d", "90d", "all"]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -266,7 +268,7 @@ export default function AgentRuns() {
       setStatusCounts(response.data.statusCounts);
       setUsageSummary(response.data.usageSummary);
     } catch {
-      setError('Agent Run 加载失败，请检查服务器连接后重试');
+      setError('任务记录加载失败，请检查服务器连接后重试');
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -299,7 +301,7 @@ export default function AgentRuns() {
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3 min-w-0">
           <div className="rounded-2xl bg-primary/10 p-2.5 text-primary shrink-0"><Workflow className="h-6 w-6" /></div>
-          <div className="min-w-0"><h1 className="text-2xl font-bold text-text-main truncate">Agent 运行中心</h1><p className="mt-1 text-sm text-text-muted">查看 Supervisor 分派、公开事件、结构化产物与业务动作；不展示模型思维链或原始媒体。</p></div>
+          <div className="min-w-0"><h1 className="text-2xl font-bold text-text-main truncate">任务运行</h1><p className="mt-1 text-sm text-text-muted">查看 Supervisor 分派、公开事件、结构化产物与业务动作；不展示模型思维链或原始媒体。</p></div>
         </div>
         <button type="button" onClick={() => loadRuns()} className="inline-flex items-center justify-center rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-hover transition-colors shrink-0 self-start sm:self-auto"><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />刷新</button>
       </header>
@@ -403,7 +405,7 @@ function RunDetailModal({ detail, loading, onClose }: { detail: AgentRunDetail |
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-3 sm:p-4" onClick={() => !loading && onClose()}>
+    <DialogFrame onClose={onClose} busy={loading} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-3 sm:p-4" >
       <section className="flex max-h-[92vh] max-h-[92dvh] min-h-0 w-full max-w-6xl flex-col overflow-hidden rounded-[24px] bg-white shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
         <header className="flex shrink-0 items-start justify-between border-b border-background-alt px-5 py-4 sm:px-6 sm:py-5">
           <div className="min-w-0">
@@ -598,7 +600,7 @@ function RunDetailModal({ detail, loading, onClose }: { detail: AgentRunDetail |
           </div>
         )}
       </section>
-    </div>
+    </DialogFrame>
   );
 }
 

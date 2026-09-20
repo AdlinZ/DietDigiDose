@@ -53,6 +53,14 @@ export default function AIConfig() {
   const [hasChatApiKey, setHasChatApiKey] = useState(false);
   const [chatBaseUrl, setChatBaseUrl] = useState("");
   const [model, setModel] = useState("deepseek-ai/DeepSeek-V3");
+  const [effectiveModels, setEffectiveModels] = useState<Array<{ role: string; model: string; source: string; baseUrl: string }>>([]);
+  const [runtimePolicy, setRuntimePolicy] = useState({
+    main: { thinking: "default", maxTokens: 3000, timeoutMs: 60000, retries: 0 },
+    planner: { thinking: "default", maxTokens: 3000, timeoutMs: 60000, retries: 0 },
+    vision: { thinking: "default", maxTokens: 3000, timeoutMs: 60000, retries: 0 },
+    asr: { thinking: "default", maxTokens: 3000, timeoutMs: 60000, retries: 0 },
+    deadlineMs: 180000, maxModelCalls: 12, maxToolCalls: 6,
+  });
   const [supervisorModel, setSupervisorModel] = useState("deepseek-ai/DeepSeek-V3");
   const [nutritionModel, setNutritionModel] = useState("deepseek-ai/DeepSeek-V3");
   const [recipeModel, setRecipeModel] = useState("deepseek-ai/DeepSeek-V3");
@@ -89,6 +97,7 @@ export default function AIConfig() {
       setLoading(true);
       const { data } = await api.get("/admin/ai-config");
 
+      setEffectiveModels(data.effectiveModels || []);
       // 全局默认
       setApiKey("");
       setMaskedKey(data.maskedKey || "");
@@ -99,6 +108,7 @@ export default function AIConfig() {
       if (data.asrModel) setAsrModel(data.asrModel);
       if (data.agents) {
         setSupervisorModel(data.agents.supervisorModel || data.model);
+        if (data.runtimePolicy) setRuntimePolicy(data.runtimePolicy);
         setNutritionModel(data.agents.nutritionModel || data.model);
         setRecipeModel(data.agents.recipeModel || data.model);
         setOperationsModel(data.agents.operationsModel || data.model);
@@ -169,6 +179,7 @@ export default function AIConfig() {
         visionModel,
         asrModel,
         supervisorModel,
+        runtimePolicy,
         nutritionModel,
         recipeModel,
         operationsModel,
@@ -208,7 +219,8 @@ export default function AIConfig() {
         setAsrMaskedKey(`${asrApiKey.slice(0, 4)}****${asrApiKey.slice(-4)}`);
       }
 
-      setStatusMsg("AI 多服务商接入配置保存成功！后续系统各模块将自动智能路由");
+      await fetchConfig();
+      setStatusMsg("模型与调用策略已保存。");
       setIsSystemPromptCustomized(true);
       setTimeout(() => setStatusMsg(""), 4000);
     } catch (err: any) {
@@ -365,20 +377,44 @@ export default function AIConfig() {
           </div>
         </div>
 
+        <section className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
+          <h2 className="font-semibold">调用策略与预算</h2>
+          <div className="grid gap-2 text-xs text-gray-600">{effectiveModels.map((entry) => <div key={entry.role}><strong>{entry.role}当前生效：</strong>{entry.model}（{entry.source}）<div className="break-all">接入点：{entry.baseUrl}</div></div>)}</div>
+          <p className="text-xs text-amber-700">真实模型的工具、结构化输出、流式和媒体能力尚未验证；连接测试成功不能代表这些能力全部可用。</p>
+          <p className="text-xs text-text-muted">显示已保存的生效策略；模型能力仍需真实连接验证。未确认支持的思考参数会拒绝保存。输出长度不等于思考预算。</p>
+          {(["main", "planner", "vision", "asr"] as const).map((role) => (
+            <div key={role} className="grid grid-cols-4 gap-2">
+              <label>{ { main: "主助手", planner: "复杂规划", vision: "图片识别", asr: "语音转写" }[role] }
+                <select aria-label={`${role} 思考模式`} value={runtimePolicy[role].thinking} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [role]: { ...value[role], thinking: event.target.value } }))} className="w-full border rounded p-2">
+                  <option value="default">提供商默认</option>
+                  {role !== "asr" && (() => {
+                    const url = role === "vision" ? visionBaseUrl || baseUrl : chatBaseUrl || baseUrl;
+                    const models = role === "vision" ? [visionModel] : role === "planner" ? [nutritionModel] : [supervisorModel, recipeModel, operationsModel];
+                    const supported = /^https:\/\/api\.siliconflow\.(cn|com)(\/|$)/.test(url) && models.every((name) => ["Pro/deepseek-ai/DeepSeek-V4", "deepseek-ai/DeepSeek-V4-Flash", "Pro/zai-org/GLM-5.2"].includes(name));
+                    return supported ? <><option value="off">关闭</option><option value="high">高强度</option><option value="max">最大强度</option></> : null;
+                  })()}
+                </select>
+              </label>
+              {((role === "asr" ? ["timeoutMs", "retries"] : ["maxTokens", "timeoutMs", "retries"]) as Array<"maxTokens" | "timeoutMs" | "retries">).map((field) => <label key={field} className="text-xs">{{ maxTokens: "输出 token 上限", timeoutMs: "单次超时（毫秒）", retries: "瞬时错误重试次数" }[field]}<input type="number" value={runtimePolicy[role][field]} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [role]: { ...value[role], [field]: Number(event.target.value) } }))} className="w-full border rounded p-2" /></label>)}
+            </div>
+          ))}
+          <div className="grid grid-cols-3 gap-2">{(["deadlineMs", "maxModelCalls", "maxToolCalls"] as const).map((field) => <label key={field} className="text-xs">{{ deadlineMs: "整轮截止时间（毫秒）", maxModelCalls: "总模型调用上限", maxToolCalls: "工具调用上限" }[field]}<input type="number" value={runtimePolicy[field]} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [field]: Number(event.target.value) }))} className="w-full border rounded p-2" /></label>)}</div>
+        </section>
+
         {/* 2. Supervisor Runtime 模型 */}
         <div className="space-y-4 pt-2">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
             <h3 className="text-base font-bold text-text-main flex items-center gap-2">
-              <Bot className="text-primary" size={18} /> 2. Supervisor 多 Agent Runtime
+              <Bot className="text-primary" size={18} /> 2. 主助手与按需规划
             </h3>
             <span className="text-xs text-text-muted bg-background-alt px-2.5 py-1 rounded-lg">留空策略由服务端继承 Chat Model</span>
           </div>
-          <p className="text-xs text-text-muted">所有文本、首页、烹饪、视觉与语音任务均先进入 Supervisor；Vision 与 Voice 继续使用下方专用模型。</p>
+          <p className="text-xs text-text-muted">主助手直接处理普通问答，复杂规划按需调用规划能力；首页规则推荐保持独立。旧角色配置保留，未单独配置的文本角色继承聊天接入点。Vision 与 Voice 使用各自接入点。</p>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            <label className="text-[11px] font-semibold text-text-main">Supervisor
+            <label className="text-[11px] font-semibold text-text-main">主助手（兼容 Supervisor 配置）
               <input value={supervisorModel} onChange={(event) => setSupervisorModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
             </label>
-            <label className="text-[11px] font-semibold text-text-main">Nutrition Planning
+            <label className="text-[11px] font-semibold text-text-main">复杂规划（Nutrition）
               <input value={nutritionModel} onChange={(event) => setNutritionModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
             </label>
             <label className="text-[11px] font-semibold text-text-main">Recipe Cooking

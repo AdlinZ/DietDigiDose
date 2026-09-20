@@ -94,7 +94,7 @@ export const recordChatTurn = async (turn: ChatTurnAudit) => {
  */
 router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) => {
   const requestStartedAt = Date.now();
-  const { messages = [], prompt, sessionId: requestedSessionId, source = "assistant", image, imageMimeType } = req.body;
+  const { messages = [], prompt, idempotencyKey, sessionId: requestedSessionId, source = "assistant", image, imageMimeType } = req.body;
   const userId = req.userId!;
   await ensureUserInitialState(userId);
   const sessionId = typeof requestedSessionId === "string" && requestedSessionId.trim()
@@ -109,6 +109,7 @@ router.post("/chat", validateBody(aiChatSchema), async (req: AuthRequest, res) =
       modality: image ? "image" : source === "cooking" ? "cooking" : "text",
       source,
       prompt: requestedText,
+      idempotencyKey,
       messages: clientMessages,
       sessionId,
       ...(image ? {

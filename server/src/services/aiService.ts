@@ -1,3 +1,4 @@
+import { thinkingParameters } from "../modules/aiRuntime/policy.js";
 import dotenv from "dotenv";
 import { aiRuntimeService } from "../modules/aiRuntime/runtime.js";
 import { aiWriteConfirmationsService } from "../modules/aiWriteConfirmations/runtime.js";
@@ -36,6 +37,8 @@ export interface ChatCompletionOptions {
   toolRounds?: number;
   seenToolCalls?: string[];
   originalUserText?: string;
+  policyRole?: "main" | "vision";
+  signal?: AbortSignal;
 }
 
 export interface SolutionCard {
@@ -310,6 +313,8 @@ export async function chatCompletion(
   const apiKey = (options.apiKey || chatConfig.apiKey).trim();
   const baseUrl = (options.baseUrl || chatConfig.baseUrl).replace(/\/$/, "").trim();
   const model = options.model || chatConfig.model;
+  const policy = (await aiRuntimeService().runtimePolicy())[options.policyRole || "main"];
+  const thinking = thinkingParameters(baseUrl, model, policy);
   const startedAt = Date.now();
   let usageLogged = false;
   const lastMsg = messages[messages.length - 1];
@@ -341,7 +346,8 @@ export async function chatCompletion(
       model,
       messages: providerMessages,
       temperature: options.temperature ?? 0.7,
-      max_tokens: options.max_tokens ?? 1000,
+      max_tokens: options.max_tokens ?? policy.maxTokens,
+      ...thinking,
       response_format: options.jsonMode ? { type: "json_object" } : undefined,
     };
 
@@ -357,12 +363,13 @@ export async function chatCompletion(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(payload),
-    });
+      signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(policy.timeoutMs)]) : undefined,
+    }, policy.timeoutMs);
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error("[AI Service Error]", response.status, errorText);
-      throw new Error(`AI API 响应错误: ${response.status}`);
+      throw Object.assign(new Error(`AI API 响应错误: ${response.status}`), { status: response.status });
     }
 
     const data = (await response.json()) as any;
@@ -513,6 +520,7 @@ export async function chatCompletion(
         failureReason: err instanceof Error ? err.message : String(err),
       });
     }
+    if (options.runId || options.policyRole === "vision") throw err;
     const replyText = getFallbackResponse(messages);
     const actionCard = parseDietActionCard(userText, replyText);
     const missingCard = parseMissingIngredientsCard(userText, replyText);
@@ -615,7 +623,7 @@ export async function analyzeImage(
     },
   ];
 
-  const res = await chatCompletion(messages, { apiKey, baseUrl, model, ...options });
+  const res = await chatCompletion(messages, { apiKey, baseUrl, model, ...options, policyRole: "vision" });
   if (res.fallback) {
     throw new Error(res.fallbackReason === "AI_NOT_CONFIGURED" ? "视觉模型尚未配置" : "视觉模型调用失败");
   }
@@ -675,9 +683,10 @@ function getFallbackResponse(messages: ChatMessage[]): string {
  */
 export async function transcribeAudio(
   audioBase64: string,
-  options: { userId?: number; mimeType?: string; runId?: string; agentName?: string; phase?: string } = {}
+  options: { userId?: number; mimeType?: string; runId?: string; agentName?: string; phase?: string; signal?: AbortSignal } = {}
 ): Promise<{ text: string }> {
   const { apiKey, baseUrl, model: asrModel } = await getAsrConfig();
+  const policy = (await aiRuntimeService().runtimePolicy()).asr;
   const startedAt = Date.now();
   if (!audioBase64 || audioBase64.length === 0) {
     return { text: "" };
@@ -701,7 +710,8 @@ export async function transcribeAudio(
           Authorization: `Bearer ${apiKey}`,
         },
         body: formData,
-      });
+        signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(policy.timeoutMs)]) : undefined,
+      }, policy.timeoutMs);
 
       if (response.ok) {
         const data = (await response.json()) as { text?: string };
@@ -722,7 +732,7 @@ export async function transcribeAudio(
           return { text: data.text.trim() };
         }
       }
-      throw new Error(`语音服务响应异常: ${response.status}`);
+      throw Object.assign(new Error(`语音服务响应异常: ${response.status}`), { status: response.status });
     } catch (err) {
       console.warn("[transcribeAudio API Error]", err);
       if (options.userId) {

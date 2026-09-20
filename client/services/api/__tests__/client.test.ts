@@ -25,6 +25,22 @@ describe("API client", () => {
     await AsyncStorage.clear();
   });
 
+  it("invalidates shopping and inventory caches together after atomic intake", async () => {
+    let version = 1;
+    const apiFetch: ApiFetch = jest.fn(async (_path, init) => {
+      if (init?.method === "POST") version = 2;
+      return jsonResponse({ version });
+    });
+    registerApiFetchScope(apiFetch, 42);
+    for (const path of ["/api/v1/shopping-list", "/api/v1/inventory"]) {
+      expect(await requestJson(apiFetch, path)).toEqual({ version: 1 });
+    }
+    await requestJson(apiFetch, "/api/v1/inventory/import-shopping-list", { method: "POST", body: "{}" });
+    for (const path of ["/api/v1/shopping-list", "/api/v1/inventory"]) {
+      expect(await requestJson(apiFetch, path)).toEqual({ version: 2 });
+    }
+  });
+
   it('replaces a previously persisted empty community category with newly published posts', async () => {
     const path = '/api/v1/community/posts?category=%E6%A6%9C%E5%8D%95&sort=recommended&pageSize=12';
     const published = {items:[{id:317,category:'榜单',content:'原料项数榜'}],nextCursor:null};

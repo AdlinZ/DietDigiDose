@@ -4,6 +4,7 @@ import type {
   InventoryConsumptionInput,
   InventoryConsumptionPreviewInput,
   InventoryCreateInput,
+  InventoryImportData,
   InventoryUpdateInput,
 } from "@dietdigidose/contracts";
 
@@ -29,11 +30,11 @@ export const inventoryApi = {
       method: "POST", body: JSON.stringify(inventoryCreateSchema.parse(input)),
     }, inventoryItemSchema);
   },
-  importShoppingList: async (apiFetch: ApiFetch, idempotencyKey: string, items: InventoryInput[]) => {
+  importShoppingList: async (apiFetch: ApiFetch, idempotencyKey: string, items: InventoryInput[], shoppingItems?: InventoryImportData["shopping_items"]) => {
     const { inventoryImportResponseSchema, shoppingInventoryImportSchema } = await loadInventoryContracts();
     return requestJson(apiFetch, "/api/v1/inventory/import-shopping-list", {
       method: "POST",
-      body: JSON.stringify(shoppingInventoryImportSchema.parse({ idempotency_key: idempotencyKey, items })),
+      body: JSON.stringify(shoppingInventoryImportSchema.parse({ idempotency_key: idempotencyKey, items, shopping_items: shoppingItems })),
     }, inventoryImportResponseSchema);
   },
   bulkIntake: async (apiFetch: ApiFetch, input: InventoryBulkIntakeInput) => {

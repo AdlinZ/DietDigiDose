@@ -13,9 +13,10 @@ import { useRouter } from "expo-router";
 import { Screen } from "@/components/Screen";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
-import { getUserStorageKey, SHOPPING_LIST_STORAGE_KEY } from "@/utils/userStorage";
+import { getPrivateStorageGeneration, getUserStorageKey, SHOPPING_LIST_STORAGE_KEY, writeUserPrivateStorage } from "@/utils/userStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { householdApi, inventoryApi, shoppingListApi, type Household, type HouseholdShoppingItem } from "@/services/api";
+import { ApiError } from "@/services/api/client";
 import { dateKeyAfterDays, parseDateKey, toLocalDateKey } from "@/utils/date";
 import { normalizeShoppingItems, type ShoppingItem } from "@/utils/shoppingList";
 import { inferCategoryByName, inferIngredientDefaults, inferShelfLifeDays } from "@/utils/ingredientRules";
@@ -62,14 +63,37 @@ function fromHouseholdItem(item: HouseholdShoppingItem): CollaborativeShoppingIt
 }
 
 export default function ShoppingListScreen() {
+  const { user, sessionGeneration } = useAuth();
+  return <ShoppingListSession key={`${user?.id ?? "guest"}:${sessionGeneration}`} />;
+}
+
+function ShoppingListSession() {
+  const [activeHousehold, setActiveHousehold] = useState<Household | null>(null);
+  // Each selection owns its rows, forms and in-flight operations, including A → B → A.
+  return <ShoppingListContent key={activeHousehold?.id ?? "personal"}
+    activeHousehold={activeHousehold} setActiveHousehold={setActiveHousehold} />;
+}
+
+function ShoppingListContent({ activeHousehold, setActiveHousehold }: {
+  activeHousehold: Household | null;
+  setActiveHousehold: React.Dispatch<React.SetStateAction<Household | null>>;
+}) {
   const router = useRouter();
   const { user } = useAuth();
   const authFetch = useAuthFetch();
   const storageKey = getUserStorageKey(SHOPPING_LIST_STORAGE_KEY, user?.id);
+  const generation = user?.id ? getPrivateStorageGeneration(user.id) : 0;
+  const mounted = useRef(true);
+  const latestLoad = useRef(0);
+  const isCurrent = useCallback(() => mounted.current
+    && (!user?.id || getPrivateStorageGeneration(user.id) === generation), [user?.id, generation]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; latestLoad.current += 1; };
+  }, []);
 
   const [items, setItems] = useState<CollaborativeShoppingItem[]>([]);
   const [households, setHouseholds] = useState<Household[]>([]);
-  const [activeHousehold, setActiveHousehold] = useState<Household | null>(null);
   const [loading, setLoading] = useState(true);
   const [serverReady, setServerReady] = useState(false);
   const [nameInput, setNameInput] = useState("");
@@ -81,6 +105,7 @@ export default function ShoppingListScreen() {
   const [viewMode, setViewMode] = useState<"grouped" | "flat">("grouped");
   const [movingToInventory, setMovingToInventory] = useState(false);
   const importKeys = useRef(new Map<string, string>());
+  const personalImportInFlight = useRef(false);
 
   // Edit Modal State
   const [editingItem, setEditingItem] = useState<CollaborativeShoppingItem | null>(null);
@@ -91,25 +116,34 @@ export default function ShoppingListScreen() {
 
   // 加载数据
   const loadShoppingList = useCallback(async () => {
+    if (!isCurrent()) return;
+    const request = ++latestLoad.current;
+    const currentLoad = () => isCurrent() && request === latestLoad.current;
+    setServerReady(false);
     if (!storageKey) {
       setLoading(false);
       return;
     }
     try {
       const householdList = await householdApi.mine(authFetch);
+      if (!currentLoad()) return;
       setHouseholds(householdList);
       if (activeHousehold) {
         const currentHousehold = householdList.find((household) => household.id === activeHousehold.id);
         if (!currentHousehold) {
           setActiveHousehold(null);
+          return;
         } else {
           setActiveHousehold(currentHousehold);
-          setItems((await householdApi.shoppingList(authFetch, currentHousehold.id)).map(fromHouseholdItem));
+          const familyItems = await householdApi.shoppingList(authFetch, currentHousehold.id);
+          if (!currentLoad()) return;
+          setItems(familyItems.map(fromHouseholdItem));
           setServerReady(true);
           return;
         }
       }
       const saved = await AsyncStorage.getItem(storageKey);
+      if (!currentLoad()) return;
       const cachedItems = saved ? normalizeShoppingItems(JSON.parse(saved)) : [];
       setItems(cachedItems);
       const imported = await shoppingListApi.import<{ items: unknown[] }>(
@@ -125,17 +159,19 @@ export default function ShoppingListScreen() {
           storageLocation: item.storageLocation,
         })),
       );
+      if (!currentLoad()) return;
       const authoritative = normalizeShoppingItems(imported.items);
       setItems(authoritative);
-      await AsyncStorage.setItem(storageKey, JSON.stringify(authoritative));
-      setServerReady(true);
+      await writeUserPrivateStorage(SHOPPING_LIST_STORAGE_KEY, user!.id, generation, JSON.stringify(authoritative));
+      if (currentLoad()) setServerReady(true);
     } catch (err) {
+      if (!currentLoad()) return;
       console.error("Failed to load shopping list:", err);
       setServerReady(false);
     } finally {
-      setLoading(false);
+      if (currentLoad()) setLoading(false);
     }
-  }, [activeHousehold?.id, authFetch, storageKey, user?.id]);
+  }, [activeHousehold?.id, authFetch, generation, isCurrent, setActiveHousehold, storageKey, user?.id]);
 
   useEffect(() => {
     loadShoppingList();
@@ -143,10 +179,12 @@ export default function ShoppingListScreen() {
 
   // 保存数据
   const cacheItems = async (newItems: CollaborativeShoppingItem[]) => {
+    if (!isCurrent()) return false;
     setItems(newItems);
-    if (storageKey && !activeHousehold) {
-      await AsyncStorage.setItem(storageKey, JSON.stringify(newItems));
+    if (user?.id && !activeHousehold) {
+      await writeUserPrivateStorage(SHOPPING_LIST_STORAGE_KEY, user.id, generation, JSON.stringify(newItems));
     }
+    return isCurrent();
   };
 
   // 输入食材名称时智能反应
@@ -200,7 +238,7 @@ export default function ShoppingListScreen() {
         ? fromHouseholdItem(created as HouseholdShoppingItem)
         : normalizeShoppingItems([created])[0];
       if (!newItem) throw new Error("服务端返回了无效采购项");
-      await cacheItems([newItem, ...items]);
+      if (!await cacheItems([newItem, ...items])) return;
       setNameInput("");
       setAmountInput("");
       setSmartHint(null);
@@ -208,6 +246,7 @@ export default function ShoppingListScreen() {
         Alert.alert("发现同名项目", `清单中已有 ${familyResult.mergeCandidates.map((item) => `${item.name} ${item.amount}`).join("、")}。已保留为独立规格，请核对后手动合并。`);
       }
     } catch (error) {
+      if (!isCurrent()) return;
       Alert.alert("添加失败", error instanceof Error ? error.message : "请稍后重试");
     }
   };
@@ -252,9 +291,10 @@ export default function ShoppingListScreen() {
         ? fromHouseholdItem(saved as HouseholdShoppingItem)
         : normalizeShoppingItems([saved])[0];
       if (!updatedItem) throw new Error("服务端返回了无效采购项");
-      await cacheItems(items.map((item) => item.id === editingItem.id ? updatedItem : item));
+      if (!await cacheItems(items.map((item) => item.id === editingItem.id ? updatedItem : item))) return;
       setEditingItem(null);
     } catch (error) {
+      if (!isCurrent()) return;
       Alert.alert("保存失败", error instanceof Error ? error.message : "请刷新后重试");
     }
   };
@@ -273,6 +313,7 @@ export default function ShoppingListScreen() {
       if (!updatedItem) throw new Error("服务端返回了无效采购项");
       await cacheItems(items.map((candidate) => candidate.id === id ? updatedItem : candidate));
     } catch (error) {
+      if (!isCurrent()) return;
       Alert.alert("更新失败", error instanceof Error ? error.message : "请刷新后重试");
     }
   };
@@ -290,12 +331,14 @@ export default function ShoppingListScreen() {
       }
       await cacheItems(items.filter((item) => item.id !== id));
     } catch (error) {
+      if (!isCurrent()) return;
       Alert.alert("删除失败", error instanceof Error ? error.message : "请稍后重试");
     }
   };
 
   // 清空已买项目
   const handleClearChecked = () => {
+    if (!isCurrent() || !serverReady) return;
     const checkedCount = items.filter((i) => i.checked).length;
     if (checkedCount === 0) return;
     Alert.alert("确认清空", `确定要清除 ${checkedCount} 项已采购的项目吗？`, [
@@ -305,12 +348,14 @@ export default function ShoppingListScreen() {
         style: "destructive",
         onPress: () => {
           void (async () => {
+            if (!isCurrent()) return;
             try {
               await Promise.all(items.filter((item) => item.checked).map((item) => activeHousehold
                 ? householdApi.shoppingRemove(authFetch, activeHousehold.id, item.id, item.version || 0)
                 : shoppingListApi.remove(authFetch, item.id)));
               await cacheItems(items.filter((item) => !item.checked));
             } catch (error) {
+              if (!isCurrent()) return;
               Alert.alert("清除失败", error instanceof Error ? error.message : "请稍后重试");
             }
           })();
@@ -321,6 +366,11 @@ export default function ShoppingListScreen() {
 
   // 将已买食材一键存入冰箱库 (智能应用保质期与存储位置规则)
   const handleMoveCheckedToInventory = async () => {
+    if (!isCurrent() || personalImportInFlight.current) return;
+    if (!serverReady) {
+      Alert.alert("当前为离线缓存", "请联网刷新采购清单后再入库。");
+      return;
+    }
     const checkedItems = items.filter((i) => i.checked);
     if (checkedItems.length === 0) {
       Alert.alert("提示", "请先勾选打钩已买到的食材。");
@@ -345,23 +395,27 @@ export default function ShoppingListScreen() {
           text: "确认入库",
           onPress: () => {
             void (async () => {
+              if (!isCurrent()) return;
               setMovingToInventory(true);
               try {
                 const signature = confirmed.map((item) => `${item.id}:${item.version}`).sort().join("|");
                 const idempotencyKey = importKeys.current.get(signature) || `household-shopping-${activeHousehold.id}-${Date.now()}`;
                 importKeys.current.set(signature, idempotencyKey);
                 const result = await householdApi.shoppingIntake(authFetch, activeHousehold.id, { idempotencyKey, items: confirmed });
+                if (!isCurrent()) return;
                 importKeys.current.delete(signature);
                 await loadShoppingList();
+                if (!isCurrent()) return;
                 Alert.alert("家庭入库成功", `已将 ${result.count} 项转入【${activeHousehold.name}】共享库存。`, [
                   { text: "继续采购" },
                   { text: "查看家庭库存", onPress: () => router.push("/inventory") },
                 ]);
               } catch (error) {
+                if (!isCurrent()) return;
                 Alert.alert("入库未完成", error instanceof Error ? error.message : "请刷新家庭清单后重试");
                 await loadShoppingList();
               } finally {
-                setMovingToInventory(false);
+                if (isCurrent()) setMovingToInventory(false);
               }
             })();
           },
@@ -370,9 +424,14 @@ export default function ShoppingListScreen() {
       return;
     }
 
+    if (checkedItems.some((item) => !item.version)) {
+      Alert.alert("无法入库", "请联网刷新采购清单后重试。");
+      return;
+    }
+    personalImportInFlight.current = true;
     setMovingToInventory(true);
     try {
-      const signature = checkedItems.map((item) => item.id).sort().join("|");
+      const signature = checkedItems.map((item) => `${item.id}:${item.version}`).sort().join("|");
       const idempotencyKey =
         importKeys.current.get(signature) ||
         `shopping-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -395,11 +454,14 @@ export default function ShoppingListScreen() {
         };
       });
 
-      await inventoryApi.importShoppingList(authFetch, idempotencyKey, itemsToImport);
+      const result = await inventoryApi.importShoppingList(authFetch, idempotencyKey, itemsToImport,
+        checkedItems.map((item) => ({ id: item.id, version: item.version! })));
+      if (!isCurrent()) return;
       importKeys.current.delete(signature);
 
       // 记录到库存操作历史
-      for (const item of itemsToImport) {
+      for (const item of result.repeated ? [] : itemsToImport) {
+        if (!isCurrent()) return;
         await addInventoryLog(
           {
             foodName: item.food_name,
@@ -411,23 +473,35 @@ export default function ShoppingListScreen() {
         );
       }
 
-      await Promise.all(checkedItems.map((item) => shoppingListApi.remove(authFetch, item.id)));
-      const remainingItems = items.filter((i) => !i.checked);
-      await cacheItems(remainingItems);
+      if (!isCurrent()) return;
+      const importedIds = new Set(checkedItems.map((item) => item.id));
+      setItems((current) => current.filter((item) => !importedIds.has(item.id)));
+      // The server has already committed both changes. A cache failure must not
+      // turn a successful intake into an invitation to submit it again.
+      if (user?.id) {
+        await writeUserPrivateStorage(SHOPPING_LIST_STORAGE_KEY, user.id, generation, JSON.stringify(items.filter((item) => !importedIds.has(item.id))))
+          .catch((error) => console.error("Failed to cache shopping list after intake:", error));
+      }
 
+      if (!isCurrent()) return;
       Alert.alert(
         "入库成功！",
-        `已将 ${checkedItems.length} 件食材智能算期录入【冰箱食材库】，已同步写入操作历史！`,
+        `已将 ${checkedItems.length} 件食材智能算期录入【冰箱食材库】，采购清单已同步更新。`,
         [
           { text: "继续买菜", style: "cancel" },
           { text: "查看冰箱库", onPress: () => router.push("/inventory") },
         ]
       );
     } catch (err) {
+      if (!isCurrent()) return;
       console.error("Failed to move items to inventory:", err);
       Alert.alert("入库未完成", err instanceof Error ? err.message : "存入冰箱库失败，请重试。");
+      if (err instanceof ApiError && err.code === "SHOPPING_ITEM_CONFLICT") {
+        await loadShoppingList();
+      }
     } finally {
-      setMovingToInventory(false);
+      personalImportInFlight.current = false;
+      if (isCurrent()) setMovingToInventory(false);
     }
   };
 
@@ -468,12 +542,12 @@ export default function ShoppingListScreen() {
           <Text className="mb-2 text-[10px] font-black text-copy-muted">清单归属</Text>
           <View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-              <TouchableOpacity onPress={() => { setLoading(true); setActiveHousehold(null); }} className={`flex-row items-center rounded-full border px-3.5 py-2 ${!activeHousehold ? "border-brand bg-brand-fill" : "border-line bg-surface"}`}>
+              <TouchableOpacity onPress={() => setActiveHousehold(null)} className={`flex-row items-center rounded-full border px-3.5 py-2 ${!activeHousehold ? "border-brand bg-brand-fill" : "border-line bg-surface"}`}>
                 <FontAwesome6 name="user" size={10} colorClassName={!activeHousehold ? "accent-on-brand" : "accent-copy-muted"} />
                 <Text className={`ml-1.5 text-[11px] font-black ${!activeHousehold ? "text-white" : "text-copy-muted"}`}>个人清单</Text>
               </TouchableOpacity>
               {households.map((household) => (
-                <TouchableOpacity key={household.id} onPress={() => { setLoading(true); setActiveHousehold(household); }} className={`flex-row items-center rounded-full border px-3.5 py-2 ${activeHousehold?.id === household.id ? "border-brand bg-brand-fill" : "border-line bg-surface"}`}>
+                <TouchableOpacity key={household.id} onPress={() => setActiveHousehold(household)} className={`flex-row items-center rounded-full border px-3.5 py-2 ${activeHousehold?.id === household.id ? "border-brand bg-brand-fill" : "border-line bg-surface"}`}>
                   <FontAwesome6 name="house-user" size={10} colorClassName={activeHousehold?.id === household.id ? "accent-on-brand" : "accent-copy-muted"} />
                   <Text className={`ml-1.5 text-[11px] font-black ${activeHousehold?.id === household.id ? "text-white" : "text-copy-muted"}`}>{household.name}</Text>
                 </TouchableOpacity>

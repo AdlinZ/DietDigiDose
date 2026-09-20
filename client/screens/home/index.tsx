@@ -37,8 +37,8 @@ const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const RECIPE_BATCH_SIZE = 3;
 
 export default function HomeScreen() {
-  const { user } = useAuth();
-  return <HomeContent key={user?.id ?? "guest"} />;
+  const { user, sessionGeneration } = useAuth();
+  return <HomeContent key={`${user?.id ?? "guest"}:${sessionGeneration}`} />;
 }
 
 function HomeContent() {
@@ -88,22 +88,25 @@ function HomeContent() {
       setVisibleRecipeCount(RECIPE_BATCH_SIZE);
       lastRecipeBatchLoadAt.current = 0;
       void refresh();
+      let active = true;
 
       if (shoppingStorageKey) {
         AsyncStorage.getItem(shoppingStorageKey).then((saved) => {
+          if (!active) return;
           if (saved) {
             try {
               setShoppingItems(JSON.parse(saved));
             } catch {}
           } else setShoppingItems([]);
-        });
+        }).catch(() => { if (active) setShoppingItems([]); });
       } else setShoppingItems([]);
 
       if (userId) {
         void cookingQueueApi.list(authFetch)
-          .then((items) => setCookingQueueCount(items.length))
-          .catch(() => setCookingQueueCount(0));
+          .then((items) => { if (active) setCookingQueueCount(items.length); })
+          .catch(() => { if (active) setCookingQueueCount(0); });
       } else setCookingQueueCount(0);
+      return () => { active = false; };
     }, [authFetch, refresh, shoppingStorageKey, userId])
   );
 

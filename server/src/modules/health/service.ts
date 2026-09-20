@@ -1,6 +1,8 @@
 import { currentDateKey } from "../../utils/date.js";
 import type { HealthRepository } from "./repository.js";
 import type { HealthLogInput, HealthProfileInput, HealthProfilePatch } from "./types.js";
+import { healthProfilePatchSchema, type HealthProfileUpdate } from "@dietdigidose/contracts";
+import { calorieTarget, currentMeasurements } from "./projections.js";
 
 function parseJson(value: unknown, fallback: unknown) {
   if (value !== null && typeof value === "object") return value;
@@ -24,6 +26,9 @@ function serializeProfile(profile: Record<string, unknown>) {
     dietary_restrictions: parseJson(restrictionsJson, []),
     kitchen_constraints: parseJson(kitchenJson, {}),
     nutrition_targets: parseJson(targetsJson, {}),
+    version: Number(profile.profile_version || 1),
+    calorieTarget: calorieTarget(profile),
+    safety_status: profile.safety_status || "unknown",
     tracking_enabled: Boolean(profile.tracking_enabled),
   };
 }
@@ -52,7 +57,21 @@ export class HealthService {
   }
 
   async getProfile(userId: number) {
-    return serializeProfile(await this.repository.getOrCreateProfile(userId));
+    return this.projectProfile(userId, await this.repository.getOrCreateProfile(userId));
+  }
+
+  private async projectProfile(userId: number, profile: Record<string, unknown>) {
+    return { ...serializeProfile(profile), currentMeasurements: currentMeasurements(await this.repository.measurementLogs(userId), profile) };
+  }
+
+  async currentMeasurements(userId: number) {
+    const [profile, logs] = await Promise.all([this.repository.getOrCreateProfile(userId), this.repository.measurementLogs(userId)]);
+    return currentMeasurements(logs, profile);
+  }
+
+  async patchProfile(userId: number, input: HealthProfileUpdate) {
+    const profile = await this.repository.patchProfile(userId, healthProfilePatchSchema.parse(input));
+    return profile ? { updated: true as const, profile: await this.projectProfile(userId, profile) } : { updated: false as const, profile: await this.getProfile(userId) };
   }
 
   async upsertProfile(userId: number, input: HealthProfileInput) {
@@ -75,6 +94,6 @@ export class HealthService {
       nutrition_targets_json: input.nutrition_targets,
       tracking_enabled: input.tracking_enabled,
     };
-    return serializeProfile(await this.repository.upsertProfile(userId, patch));
+    return this.projectProfile(userId, await this.repository.upsertProfile(userId, patch));
   }
 }

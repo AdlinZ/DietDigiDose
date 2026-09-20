@@ -1,11 +1,85 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "8f3413b90c203f3c47d78eaf140da226c4a2696bb968346ee8f8cd4c3ccbd881",
-  "tableCount": 115,
-  "indexCount": 170,
-  "foreignKeyCount": 184,
+  "sourceSchemaSha256": "051153b19b82ebe7c1d68189866e175e6fb9310447f0b5d3413a7944204e0efc",
+  "tableCount": 119,
+  "indexCount": 172,
+  "foreignKeyCount": 190,
   "tables": [
+    {
+      "name": "account_reauth_grants",
+      "autoIncrement": false,
+      "primaryKey": [
+        "token_hash"
+      ],
+      "foreignKeys": [
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "token_hash",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "purpose",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "phone",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "session_version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "consumed_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
     {
       "name": "admin_audit_logs",
       "autoIncrement": true,
@@ -1005,6 +1079,13 @@
           "referencedColumn": "id",
           "onUpdate": "no action",
           "onDelete": "cascade"
+        },
+        {
+          "column": "reauth_user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       ],
       "columns": [
@@ -1126,6 +1207,20 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": false
+        },
+        {
+          "name": "reauth_user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "reauth_session_version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": true
         }
       ]
     },
@@ -2343,6 +2438,74 @@
         },
         {
           "name": "updated_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "diet_record_create_requests",
+      "autoIncrement": false,
+      "primaryKey": [
+        "user_id",
+        "request_key"
+      ],
+      "foreignKeys": [
+        {
+          "column": "diet_record_id",
+          "referencedTable": "diet_records",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "set null"
+        },
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "request_key",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "request_hash",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "diet_record_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "result_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
           "sqliteType": "DATETIME",
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
@@ -6367,6 +6530,39 @@
       ]
     },
     {
+      "name": "onboarding_event_receipts",
+      "autoIncrement": false,
+      "primaryKey": [
+        "user_id",
+        "request_key"
+      ],
+      "foreignKeys": [
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "request_key",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        }
+      ]
+    },
+    {
       "name": "plan_maintenance_events",
       "autoIncrement": false,
       "primaryKey": [
@@ -9926,6 +10122,41 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": true
+        },
+        {
+          "name": "profile_version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "nutrition_target_source",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "nutrition_target_legacy_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "nutrition_target_version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "safety_status",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
         }
       ]
     },
@@ -10278,6 +10509,115 @@
       ]
     },
     {
+      "name": "user_onboarding",
+      "autoIncrement": false,
+      "primaryKey": [
+        "user_id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "selected_task",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "step",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "dismissed",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "started_at",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "completed_at",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "completion_resource_id",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "baseline_json",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "last_request_key",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        },
+        {
+          "name": "last_request_fingerprint",
+          "sqliteType": "TEXT",
+          "postgresType": "text",
+          "transform": "identity",
+          "nullable": true
+        }
+      ]
+    },
+    {
       "name": "user_voice_preferences",
       "autoIncrement": false,
       "primaryKey": [
@@ -10385,7 +10725,7 @@
           "sqliteType": "TEXT",
           "postgresType": "text",
           "transform": "identity",
-          "nullable": false
+          "nullable": true
         },
         {
           "name": "nickname",

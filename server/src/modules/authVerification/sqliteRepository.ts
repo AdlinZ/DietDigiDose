@@ -3,6 +3,7 @@ import type { AuthVerificationRepository } from "./repository.js";
 import type {
   ChallengeCreate, DeliveryReport, EventFilters, RegistrationResult, UsageCounter,
   VerificationChallenge, VerificationEventInput, VerificationSubject,
+  ReauthUser, ReauthGrantInput,
 } from "./types.js";
 
 const totalsSql = `SELECT COALESCE(SUM(send_requests),0) AS sendRequests, COALESCE(SUM(send_api_calls),0) AS sendApiCalls,
@@ -60,15 +61,15 @@ export class SqliteAuthVerificationRepository implements AuthVerificationReposit
   }
 
   async createChallenge(input: ChallengeCreate) {
-    this.database.prepare(`INSERT INTO auth_verification_challenges(id,subject_id,purpose,out_id,status,expires_at,source_ip,user_agent)
-      VALUES(?,?,?,?,'pending',?,?,?)`).run(input.id, input.subjectId, input.purpose, input.outId,
-      input.expiresAt, input.sourceIp, input.userAgent);
+    this.database.prepare(`INSERT INTO auth_verification_challenges(id,subject_id,purpose,out_id,status,expires_at,source_ip,user_agent,reauth_user_id,reauth_session_version)
+      VALUES(?,?,?,?,'pending',?,?,?,?,?)`).run(input.id, input.subjectId, input.purpose, input.outId,
+      input.expiresAt, input.sourceIp, input.userAgent,input.reauthUserId ?? null,input.reauthSessionVersion ?? null);
   }
   async failChallenge(challengeId: string) { this.status(challengeId, "failed"); }
   async acceptChallenge(challengeId: string, subjectId: number, bizId: string | null, requestId: string | null) {
     this.database.transaction(() => {
       this.database.prepare(`UPDATE auth_verification_challenges SET status='superseded',updated_at=CURRENT_TIMESTAMP
-        WHERE subject_id=? AND id!=? AND status IN('pending','accepted')`).run(subjectId, challengeId);
+        WHERE subject_id=? AND id!=? AND purpose=(SELECT purpose FROM auth_verification_challenges WHERE id=?) AND status IN('pending','accepted')`).run(subjectId, challengeId, challengeId);
       this.database.prepare(`UPDATE auth_verification_challenges SET status='accepted',biz_id=?,provider_request_id=?,updated_at=CURRENT_TIMESTAMP
         WHERE id=?`).run(bizId, requestId, challengeId);
     })();
@@ -108,7 +109,7 @@ export class SqliteAuthVerificationRepository implements AuthVerificationReposit
     return this.challengeBy(`c.registration_token_hash=? AND c.status='verified' AND c.consumed_at IS NULL
       AND datetime(c.registration_expires_at)>datetime('now')`, tokenHash);
   }
-  async register(input: { tokenHash: string; phone: string; username: string; passwordHash: string; at: string }): Promise<RegistrationResult> {
+  async register(input: { tokenHash: string; phone: string; username: string; passwordHash: string | null; at: string }): Promise<RegistrationResult> {
     return this.database.transaction(() => {
       const challenge = this.database.prepare(`SELECT c.id,c.subject_id FROM auth_verification_challenges c
         WHERE c.registration_token_hash=? AND c.status='verified' AND c.consumed_at IS NULL
@@ -117,8 +118,8 @@ export class SqliteAuthVerificationRepository implements AuthVerificationReposit
       if (this.database.prepare("SELECT 1 FROM users WHERE phone=?").get(input.phone)) return { status: "phone_exists" } as const;
       if (this.database.prepare("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)").get(input.username)) return { status: "username_exists" } as const;
       try {
-        const result = this.database.prepare(`INSERT INTO users(username,email,phone,password_hash,avatar_url,phone_verified_at)
-          VALUES(?,NULL,?,?,NULL,?)`).run(input.username, input.phone, input.passwordHash, input.at);
+        const result = this.database.prepare(`INSERT INTO users(username,email,phone,password_hash,avatar_url,phone_verified_at,daily_calories_target)
+          VALUES(?,NULL,?,?,NULL,?,NULL)`).run(input.username, input.phone, input.passwordHash, input.at);
         const userId = Number(result.lastInsertRowid);
         this.database.prepare("INSERT OR IGNORE INTO user_health_profiles(user_id) VALUES(?)").run(userId);
         this.database.prepare("UPDATE auth_verification_subjects SET user_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(userId, challenge.subject_id);
@@ -135,8 +136,21 @@ export class SqliteAuthVerificationRepository implements AuthVerificationReposit
   }
   async userResponse(userId: number) {
     return (this.database.prepare(`SELECT id,username,email,phone,avatar_url,bio,role,daily_calories_target,created_at,
-      phone_verified_at,last_login_at,last_login_ip FROM users WHERE id=?`).get(userId) as Record<string, unknown> | undefined) || null;
+      phone_verified_at,last_login_at,last_login_ip,password_hash IS NOT NULL AS hasPassword FROM users WHERE id=?`).get(userId) as Record<string, unknown> | undefined) || null;
   }
+
+  async reauthUser(userId: number) { return (this.database.prepare("SELECT id,phone,phone_verified_at,session_version,is_disabled,role FROM users WHERE id=?").get(userId) as ReauthUser | undefined) || null; }
+  async issueReauthGrant(input: ReauthGrantInput) { return this.database.transaction(() => {
+    const valid = this.database.prepare(`SELECT 1 FROM users u JOIN auth_verification_challenges c ON c.reauth_user_id=u.id
+      WHERE u.id=? AND u.phone=? AND u.phone_verified_at IS NOT NULL AND u.session_version=? AND COALESCE(u.is_disabled,0)=0
+      AND c.id=? AND c.purpose=? AND c.reauth_session_version=u.session_version AND c.status='verifying' AND datetime(c.expires_at)>datetime('now')`)
+      .get(input.userId,input.phone,input.sessionVersion,input.challengeId,input.purpose);
+    if (!valid) return false;
+    this.database.prepare(`INSERT INTO account_reauth_grants(token_hash,user_id,purpose,phone,session_version,expires_at) VALUES(?,?,?,?,?,?)`)
+      .run(input.tokenHash,input.userId,input.purpose,input.phone,input.sessionVersion,input.expiresAt);
+    this.database.prepare("UPDATE auth_verification_challenges SET status='consumed',consumed_at=CURRENT_TIMESTAMP,verified_at=CURRENT_TIMESTAMP WHERE id=?").run(input.challengeId);
+    return true;
+  })(); }
 
   async recentSendEvent() {
     return (this.database.prepare(`SELECT event_type AS eventType,outcome,provider_code AS providerCode,created_at AS createdAt

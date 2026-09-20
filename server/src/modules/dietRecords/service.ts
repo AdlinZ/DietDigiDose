@@ -5,6 +5,7 @@ import { currentDateKey, currentTimeKey } from "../../utils/date.js";
 import { recordFunnelEvent } from "../../services/funnelEvents.js";
 import type { DietRecordsRepository } from "./repository.js";
 import type { CookingCompletionInput, DietRecordInput, PreparedDietRecord } from "./types.js";
+import { manualDietRequestIdentity } from "./manualRequest.js";
 
 export class DietRecordsService {
   private readonly repository: DietRecordsRepository;
@@ -25,7 +26,9 @@ export class DietRecordsService {
   }
 
   create(userId: number, record: DietRecordInput) {
-    return this.repository.create(userId, this.prepareRecord(record));
+    return this.repository.create(userId, { ...this.prepareRecord(record),
+      ...(record.idempotency_key ? {request_identity:manualDietRequestIdentity(record)} : {}),
+    });
   }
 
   remove(userId: number, id: number, mode?: "undo_eating" | "delete_intake") { return this.repository.remove(userId, id, mode); }

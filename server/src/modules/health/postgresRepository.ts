@@ -1,6 +1,10 @@
 import type { Pool, PoolClient } from "pg";
 import type { HealthRepository } from "./repository.js";
 import type { HealthLogInput, HealthProfilePatch } from "./types.js";
+import type { HealthProfileUpdate } from "@dietdigidose/contracts";
+import { calorieTarget, measurementKeys } from "./projections.js";
+import { legacySafetyStatus, prepareProfilePatch } from "./profilePatch.js";
+import { currentDateKey } from "../../utils/date.js";
 
 const optional = (value: unknown) => value === undefined ? null : value;
 const json = (value: unknown) => value === undefined ? null : JSON.stringify(value);
@@ -19,9 +23,43 @@ export class PostgresHealthRepository implements HealthRepository {
 
   async latestLog(userId: number) {
     const result = await this.pool.query(`
-      SELECT * FROM health_logs WHERE user_id = $1 ORDER BY recorded_date DESC LIMIT 1
+      SELECT * FROM health_logs WHERE user_id = $1 ORDER BY recorded_date DESC, id DESC LIMIT 1
     `, [userId]);
     return (result.rows[0] as Record<string, unknown> | undefined) ?? null;
+  }
+
+  async measurementLogs(userId: number) {
+    return (await this.pool.query(`SELECT * FROM health_logs WHERE ${measurementKeys.map(key => `id=(SELECT id FROM health_logs WHERE user_id=$1 AND ${key} IS NOT NULL ORDER BY recorded_date DESC,id DESC LIMIT 1)`).join(" OR ")}`, [userId])).rows as Record<string, unknown>[];
+  }
+
+  private async writeCurrentWeight(client: PoolClient, userId: number, value: unknown) {
+    if (typeof value !== "number") return;
+    const date = currentDateKey();
+    await client.query("SELECT pg_advisory_xact_lock($1::integer,hashtext($2))", [userId, date]);
+    const existing = (await client.query("SELECT id FROM health_logs WHERE user_id=$1 AND recorded_date=$2 ORDER BY id DESC LIMIT 1", [userId, date])).rows[0];
+    if (existing) await client.query("UPDATE health_logs SET weight=$1 WHERE id=$2", [value, existing.id]);
+    else await client.query("INSERT INTO health_logs (user_id,weight,recorded_date) VALUES ($1,$2,$3)", [userId, value, date]);
+  }
+
+  async patchProfile(userId: number, input: HealthProfileUpdate) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [userId]);
+      await client.query("INSERT INTO user_health_profiles (user_id,gender,health_goal,activity_level,dietary_preference) VALUES ($1,NULL,NULL,NULL,NULL) ON CONFLICT (user_id) DO NOTHING", [userId]);
+      const existing = (await client.query("SELECT * FROM user_health_profiles WHERE user_id=$1 FOR UPDATE", [userId])).rows[0];
+      if (Number(existing.profile_version) !== input.version) { await client.query("COMMIT"); return null; }
+      const values = prepareProfilePatch(existing, input);
+      const entries = Object.entries(values);
+      const result = await client.query(`UPDATE user_health_profiles SET ${entries.map(([key], index) => `${key}=$${index + 1}${key.endsWith("_json") ? "::jsonb" : ""}`).join(",")},profile_version=profile_version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=$${entries.length + 1} AND profile_version=$${entries.length + 2} RETURNING *`,
+        [...entries.map(([key, value]) => key.endsWith("_json") ? JSON.stringify(value) : value), userId, input.version]);
+      const profile = result.rows[0] as Record<string, unknown>;
+      if (Object.prototype.hasOwnProperty.call(input.nutrition_targets || {}, "calories_kcal")) await client.query("UPDATE users SET daily_calories_target=$1 WHERE id=$2", [calorieTarget(profile).value, userId]);
+      await this.writeCurrentWeight(client, userId, input.weight);
+      await client.query("COMMIT");
+      return profile;
+    } catch (error) { await client.query("ROLLBACK"); throw error; }
+    finally { client.release(); }
   }
 
   async listLogs(userId: number, limit: number) {
@@ -103,7 +141,7 @@ export class PostgresHealthRepository implements HealthRepository {
 
   async getOrCreateProfile(userId: number) {
     await this.pool.query(`
-      INSERT INTO user_health_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING
+      INSERT INTO user_health_profiles (user_id,gender,health_goal,activity_level,dietary_preference) VALUES ($1,NULL,NULL,NULL,NULL) ON CONFLICT (user_id) DO NOTHING
     `, [userId]);
     return selectProfile(this.pool, userId);
   }
@@ -112,9 +150,11 @@ export class PostgresHealthRepository implements HealthRepository {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [userId]);
       await client.query(`
         INSERT INTO user_health_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING
       `, [userId]);
+      const previous = await selectProfile(client, userId);
       const result = await client.query(`
         UPDATE user_health_profiles SET
           gender = COALESCE($1, gender), age = COALESCE($2, age), height = COALESCE($3, height),
@@ -137,8 +177,15 @@ export class PostgresHealthRepository implements HealthRepository {
         json(input.dietary_restrictions_json), optional(input.disliked_foods), json(input.kitchen_constraints_json),
         json(input.nutrition_targets_json), optional(input.tracking_enabled), userId,
       ]);
+      const profile = result.rows[0] as Record<string, unknown>;
+      const target = calorieTarget(profile);
+      await client.query("UPDATE user_health_profiles SET profile_version=profile_version+1,safety_status=$1,nutrition_target_source=$2 WHERE user_id=$3", [legacySafetyStatus(profile), input.nutrition_targets_json === undefined || target.value === calorieTarget(previous).value ? profile.nutrition_target_source : target.value == null ? "unset" : "legacy_unconfirmed", userId]);
+      if (input.nutrition_targets_json !== undefined) await client.query("UPDATE users SET daily_calories_target=$1 WHERE id=$2", [target.value, userId]);
+      if (input.nutrition_targets_json !== undefined && target.value !== calorieTarget(previous).value) await client.query("UPDATE user_health_profiles SET nutrition_target_version=NULL WHERE user_id=$1", [userId]);
+      await this.writeCurrentWeight(client, userId, input.weight);
+      const updated = await selectProfile(client, userId);
       await client.query("COMMIT");
-      return result.rows[0] as Record<string, unknown>;
+      return updated;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

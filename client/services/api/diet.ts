@@ -2,11 +2,11 @@ import type { MealProduction, PreparedMeal, PreparedMealEventInput } from "@diet
 import { requestJson, type ApiFetch } from "./client";
 import type { DietRecord } from "./types";
 
-export type DietRecordInput = Omit<DietRecord, "id" | "prepared_meal_id" | "household_meal_id">;
+export type DietRecordInput = Omit<DietRecord, "id" | "prepared_meal_id" | "household_meal_id"> & { idempotency_key?: string };
 
 export const dietApi = {
   list: (apiFetch: ApiFetch, date?: string) => requestJson<DietRecord[]>(apiFetch, `/api/v1/diet-records${date ? `?date=${encodeURIComponent(date)}` : ""}`),
-  create: (apiFetch: ApiFetch, input: DietRecordInput) => requestJson<DietRecord>(apiFetch, "/api/v1/diet-records", {
+  create: (apiFetch: ApiFetch, input: DietRecordInput) => requestJson<DietRecord & {repeated?:boolean}>(apiFetch, "/api/v1/diet-records", {
     method: "POST", body: JSON.stringify(input),
   }),
   completeCooking: (apiFetch: ApiFetch, input: {

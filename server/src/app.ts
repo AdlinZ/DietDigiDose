@@ -12,6 +12,7 @@ import { SERVER_BUILD_TIME, SERVER_VERSION } from "./version.js";
 import { recoverAgentRuntime } from "./services/agent/runtime.js";
 import { assertNoPublicServerSecrets, getProviderProfile } from "./providers/profiles.js";
 import { createSiteSettingsRouter } from "./routes/site-settings.js";
+import { observeOnboardingSaves } from "./modules/onboarding/observeSaves.js";
 
 const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -50,6 +51,7 @@ export async function createApp() {
   }));
   app.use(express.json({ limit: "8mb" }));
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
+  app.use(observeOnboardingSaves(runtime.onboardingService));
   app.use("/media/uploads", express.static(uploadedMediaDir, { maxAge: "1y", immutable: true }));
   app.use("/media", express.static(staticAssetsDir, { maxAge: "7d" }));
   app.get("/share/posts/:code", (req, res, next) => {
@@ -88,6 +90,7 @@ export async function createApp() {
   app.use("/api/v1/inventory", routes.inventory);
   app.use("/api/v1/diet-records", routes.dietRecords);
   app.use("/api/v1/health-data", routes.healthData);
+  app.use("/api/v1/onboarding", routes.onboarding);
   app.use("/api/v1/recipes", routes.recipes);
   app.use("/api/v1/foods", routes.foods);
   app.use("/api/v1/community", routes.community);

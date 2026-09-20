@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { DietRecordsRepository } from "../src/modules/dietRecords/repository.js";
 import { DietRecordsService } from "../src/modules/dietRecords/service.js";
+import Database from "better-sqlite3";
+import { SqliteDietRecordsRepository } from "../src/modules/dietRecords/sqliteRepository.js";
+import { manualDietRequestMigration } from "../src/storage/manualDietRequestMigration.js";
 
 function fakeRepository(overrides: Partial<DietRecordsRepository> = {}): DietRecordsRepository {
   return {
@@ -22,6 +25,33 @@ function fakeRepository(overrides: Partial<DietRecordsRepository> = {}): DietRec
 }
 
 describe("diet records module", () => {
+  test("manual create replays across retries and generated times, isolates accounts and never recreates deleted records",async () => {
+    const db=new Database(":memory:");
+    db.exec(`PRAGMA foreign_keys=ON;CREATE TABLE users(id INTEGER PRIMARY KEY);INSERT INTO users VALUES(1),(2);
+      CREATE TABLE diet_records(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        meal_type TEXT,food_name TEXT,amount TEXT,calories REAL,protein REAL,carbs REAL,fat REAL,recorded_at TEXT,recorded_time TEXT,image_url TEXT);`);
+    manualDietRequestMigration.up(db);
+    const service=new DietRecordsService(new SqliteDietRecordsRepository(db));
+    const input={idempotency_key:"manual-save-request-001",meal_type:"午餐",food_name:"番茄饭",amount:"1份",calories:0};
+    const concurrent=await Promise.all([service.create(1,input),service.create(1,input)]);
+    assert.equal(concurrent[0].id,concurrent[1].id);
+    assert.deepEqual(concurrent.map((item) => item.repeated),[false,true]);
+    const prepare=service.prepareRecord.bind(service);
+    service.prepareRecord=(record) => ({...prepare(record),recorded_at:"2099-01-01",recorded_time:"23:59"});
+    const replay=await service.create(1,input);
+    assert.equal(replay.recorded_at,concurrent[0].recorded_at);assert.equal(replay.recorded_time,concurrent[0].recorded_time);
+    await assert.rejects(service.create(1,{...input,calories:123}),(error:any) => error.status===409 && error.code==="DIET_RECORD_KEY_CONFLICT");
+    const other=await service.create(2,input);assert.notEqual(other.id,replay.id);
+    db.prepare("DELETE FROM diet_records WHERE id=?").run(replay.id);
+    await assert.rejects(service.create(1,input),(error:any) => error.status===410 && error.code==="DIET_RECORD_REQUEST_DELETED");
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=1").get() as {n:number}).n,0);
+    db.exec("CREATE TRIGGER fail_manual_receipt BEFORE INSERT ON diet_record_create_requests WHEN NEW.request_key='manual-failing-request' BEGIN SELECT RAISE(ABORT,'fixture failure'); END");
+    await assert.rejects(service.create(1,{...input,idempotency_key:"manual-failing-request"}),/fixture failure/);
+    assert.equal((db.prepare("SELECT COUNT(*) n FROM diet_records WHERE user_id=1").get() as {n:number}).n,0);
+    const legacy={meal_type:"午餐",food_name:"饭",amount:"1份"};
+    assert.notEqual((await service.create(1,legacy)).id,(await service.create(1,legacy)).id);
+    db.close();
+  });
   test("prepares driver-neutral dates and delegates CRUD through the repository", async () => {
     let capturedRecord: Record<string, unknown> = {};
     const service = new DietRecordsService(fakeRepository({

@@ -28,6 +28,8 @@ import { aiApi, cookingQueueApi, recommendationsApi, recipesApi, type RecipeReco
 import type { InventoryHighlight, RankedRecipe, RecommendationCard, Recipe } from "./types";
 import { getRecommendationPeriod } from "./recommendations";
 import { useHomeData } from "./useHomeData";
+import { useHealthSummary } from "@/hooks/useHealthSummary";
+import { OnboardingProgressCard } from "@/components/OnboardingProgressCard";
 import { TodayRecordsModal } from "./TodayRecordsModal";
 import { getHorizontalSwipeDirection } from "./carousel";
 
@@ -35,10 +37,16 @@ const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const RECIPE_BATCH_SIZE = 3;
 
 export default function HomeScreen() {
+  const { user } = useAuth();
+  return <HomeContent key={user?.id ?? "guest"} />;
+}
+
+function HomeContent() {
   const router = useSafeRouter();
   const { isAuthenticated, user } = useAuth();
   const userId = user?.id;
   const authFetch = useAuthFetch();
+  const { profile: healthProfile, targetCalories, targetLabel } = useHealthSummary();
 
   const [activeCategory, setActiveCategory] = useState("全部");
   const [visibleRecipeCount, setVisibleRecipeCount] = useState(RECIPE_BATCH_SIZE);
@@ -105,7 +113,6 @@ export default function HomeScreen() {
   const totalCarbs = todayRecords.reduce((sum, r) => sum + (r.carbs || 0), 0);
   const totalFat = todayRecords.reduce((sum, r) => sum + (r.fat || 0), 0);
 
-  const targetCalories = user?.daily_calories_target || 2000;
   const calPercent = Math.min(Math.round((totalCalories / targetCalories) * 100), 100);
   const todayWaterMl = healthLogs.find((log) => log.recorded_date === today)?.water_ml || 0;
   const priorityInventoryItem = expiringItems[0];
@@ -496,6 +503,7 @@ export default function HomeScreen() {
         className="bg-canvas"
       >
         {/* 首页工具栏：搜索、烹饪队列与 AI 配餐。 */}
+        <View className="px-5 pt-3"><OnboardingProgressCard /></View>
         <View className="bg-canvas px-5 pt-3 pb-1">
           <View className="flex-row items-center gap-2">
             <TouchableOpacity
@@ -655,9 +663,9 @@ export default function HomeScreen() {
               tag: "热量进度",
               desc: totalCalories >= targetCalories
                 ? "已接近今日目标，接下来优先选择清淡低热量食物"
-                : `距离目标还差 ${targetCalories - totalCalories} kcal，可合理安排下一餐`,
+                : `${targetLabel} ${targetCalories} kcal，已记录 ${totalCalories} kcal`,
               calories: `${calPercent}%`,
-              prompt: `我今天已摄入${totalCalories} kcal，目标是${targetCalories} kcal。请根据我现有库存规划今天接下来的饮食。`,
+              prompt: `我今天已记录${totalCalories} kcal。${targetLabel}为${targetCalories} kcal。请根据我现有库存规划今天接下来的饮食，不要把系统参考值当成我确认的目标。`,
               headerTitle: "今日饮食进度",
               actionLabel: "规划下一餐",
             },
@@ -805,7 +813,7 @@ export default function HomeScreen() {
                   <Text className="text-[10px] font-bold text-copy-muted">今日热量</Text>
                   <View className="flex-row items-baseline gap-1 mt-0.5">
                     <Text className="text-xl font-black text-brand">{totalCalories}</Text>
-                    <Text className="text-[10px] text-copy-muted">/ {targetCalories} kcal</Text>
+                    <Text className="text-[10px] text-copy-muted">/ {targetCalories} kcal · {targetLabel}</Text>
                   </View>
                 </View>
               </View>
@@ -853,8 +861,8 @@ export default function HomeScreen() {
                 ) : activeCaloriePanel === 1 ? (
                   <View className="flex-row items-center">
                     {[
-                      { label: "体重", value: healthLogs[0]?.weight == null ? "—" : `${healthLogs[0].weight} kg` },
-                      { label: "体脂率", value: healthLogs[0]?.body_fat == null ? "—" : `${healthLogs[0].body_fat}%` },
+                      { label: "体重", value: healthProfile?.currentMeasurements?.weight == null ? "—" : `${healthProfile.currentMeasurements.weight.value} kg` },
+                      { label: "体脂率", value: healthProfile?.currentMeasurements?.body_fat == null ? "—" : `${healthProfile.currentMeasurements.body_fat.value}%` },
                       { label: "饮水", value: `${todayWaterMl} ml` },
                     ].map((metric, index) => (
                       <View key={metric.label} className={`flex-1 items-center ${index < 2 ? "border-r border-line" : ""}`}>

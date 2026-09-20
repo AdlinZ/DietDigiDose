@@ -4,6 +4,7 @@ import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import type Database from "better-sqlite3";
 import type { RecommendationRequestWrite, RecipeQuery, RecommendationsRepository } from "./repository.js";
 import type { RecommendationEventInput, Row } from "./types.js";
+import { calorieTarget } from "../health/projections.js";
 
 export class SqliteRecommendationsRepository implements RecommendationsRepository {
   private readonly database: Database.Database;
@@ -75,8 +76,8 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
   async dietTotals(userId: number, date: string) { const row = this.database.prepare(`SELECT COALESCE(SUM(calories), 0) AS calories,
     COALESCE(SUM(protein), 0) AS protein FROM diet_records WHERE user_id = ? AND recorded_at = ?`).get(userId, date) as { calories: number; protein: number };
     return { calories: Number(row.calories), protein: Number(row.protein) }; }
-  async dailyCaloriesTarget(userId: number) { const row = this.database.prepare("SELECT daily_calories_target FROM users WHERE id = ?").get(userId) as { daily_calories_target: number } | undefined;
-    return Number(row?.daily_calories_target || 2000); }
+  async dailyCaloriesTarget(userId: number) { const row = this.database.prepare("SELECT nutrition_targets_json,nutrition_target_source FROM user_health_profiles WHERE user_id = ?").get(userId) as Row | undefined;
+    const target = calorieTarget(row); return target.value ?? target.referenceValue; }
   async findRequest(userId: number, requestId: string) { return (this.database.prepare(`SELECT * FROM recipe_recommendation_requests
     WHERE id = ? AND user_id = ? AND expires_at > CURRENT_TIMESTAMP`).get(requestId, userId) as Row | undefined) || null; }
   async createRequest(input: RecommendationRequestWrite) { this.database.prepare(`INSERT INTO recipe_recommendation_requests

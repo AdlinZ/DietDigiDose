@@ -21,6 +21,12 @@ export type NutritionTargets = {
 export type HealthProfile = {
   id?: number;
   updated_at?: string;
+  version?: number;
+  nutrition_target_source?: import("@dietdigidose/contracts").CalorieTargetSource;
+  nutrition_target_version?: number | null;
+  calorieTarget?: import("@dietdigidose/contracts").CalorieTarget;
+  currentMeasurements?: import("@dietdigidose/contracts").CurrentMeasurements;
+  safety_status?: "unknown" | "none" | "provided";
   gender?: string | null;
   age?: number | null;
   height?: number | null;

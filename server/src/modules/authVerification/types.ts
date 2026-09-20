@@ -17,6 +17,8 @@ export type VerificationChallenge = Omit<VerificationSubject, "id"> & {
   attempt_count: number;
   expires_at: string;
   registration_expires_at: string | null;
+  reauth_user_id?: number | null;
+  reauth_session_version?: number | null;
 };
 
 export type VerificationEventInput = {
@@ -42,12 +44,17 @@ export type UsageCounter =
 export type ChallengeCreate = {
   id: string;
   subjectId: number;
-  purpose: "login" | "admin_test";
+  purpose: "login" | "admin_test" | "password_update" | "account_delete";
+  reauthUserId?: number;
+  reauthSessionVersion?: number;
   outId: string;
   expiresAt: string;
   sourceIp: string | null;
   userAgent: string | null;
 };
+
+export type ReauthUser = { id: number; phone: string; phone_verified_at: string | null; session_version: number; is_disabled: boolean | number; role: string };
+export type ReauthGrantInput = { challengeId: string; userId: number; purpose: "password_update" | "account_delete"; phone: string; sessionVersion: number; tokenHash: string; expiresAt: string };
 
 export type EventFilters = {
   userId?: number;

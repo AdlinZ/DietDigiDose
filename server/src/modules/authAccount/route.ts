@@ -4,7 +4,8 @@ import { clearLoginFailures, loginRateLimit, recordLoginFailure } from "../../mi
 import { getRateLimitClientIp, sharedRateLimit } from "../../middleware/sharedRateLimit.js";
 import { validateBody } from "../../middleware/validate.js";
 import { sendError } from "../../utils/http.js";
-import { changePasswordSchema, deleteAccountSchema, loginSchema, profileSchema, registerSchema } from "../../validation/schemas.js";
+import { changePasswordSchema, loginSchema, profileSchema, registerSchema } from "../../validation/schemas.js";
+import { ACCOUNT_SECURITY_CAPABILITY, accountDeletionSchema, setAccountPasswordSchema } from "@dietdigidose/contracts";
 import { AuthAccountError } from "./errors.js";
 import type { AuthAccountService } from "./service.js";
 
@@ -42,7 +43,14 @@ export function createAuthAccountRouter(service: AuthAccountService) {
     }
   });
   router.get("/me", authMiddleware, (req: AuthRequest, res, next) => {
-    void service.me(req.userId!).then((value) => res.json(value)).catch((error) => handle(error,res,next));
+    void service.me(req.userId!).then((value) => {
+      if (value.hasPassword === false && req.get("X-Account-Security") !== ACCOUNT_SECURITY_CAPABILITY) return sendError(res,426,"请更新应用后管理此账号","CLIENT_UPDATE_REQUIRED");
+      return res.json(value);
+    }).catch((error) => handle(error,res,next));
+  });
+  router.post("/password",authMiddleware,validateBody(setAccountPasswordSchema),async (req: AuthRequest,res) => {
+    try { return res.json(await service.setPassword(req.userId!,req.body.newPassword,req.body.reauthToken)); }
+    catch (error) { if (known(error,res)) return; console.error("Set password error:",error); return sendError(res,500,"设置密码失败","PASSWORD_SET_FAILED"); }
   });
   router.post("/change-password", authMiddleware, validateBody(changePasswordSchema), async (req: AuthRequest, res) => {
     try { return res.json(await service.changePassword(req.userId!, req.body.currentPassword, req.body.newPassword, req.ip, req.get("user-agent"))); }
@@ -58,8 +66,8 @@ export function createAuthAccountRouter(service: AuthAccountService) {
   router.delete("/ai-data", authMiddleware, (req: AuthRequest, res, next) => {
     void service.deleteAiData(req.userId!).then((value) => res.json(value)).catch(next);
   });
-  router.delete("/account", authMiddleware, validateBody(deleteAccountSchema), async (req: AuthRequest, res) => {
-    try { return res.json(await service.deleteAccount(req.userId!, req.body.password)); }
+  router.delete("/account", authMiddleware, validateBody(accountDeletionSchema), async (req: AuthRequest, res) => {
+    try { return res.json(await service.deleteAccount(req.userId!, req.body)); }
     catch (error) { if (known(error, res)) return; console.error("Delete account error:", error); return sendError(res, 500, "账号删除失败", "ACCOUNT_DELETE_FAILED"); }
   });
   return router;

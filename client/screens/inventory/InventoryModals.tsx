@@ -205,8 +205,8 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
                         <Text className="pt-2 text-[9px] font-bold text-copy-muted">{item.fieldEvidence?.quantity?.status === "estimated" ? "数量与单位（识别估计）" : "数量与单位"}</Text>
                         <TextInput
                           value={item.quantity}
-                          onChangeText={(quantity) => onChange(foods.map((food) => food.id === item.id ? { ...food, quantity, fieldEvidence: { ...food.fieldEvidence, quantity: { status: "known", source: "user" } }, missingFields: quantity.trim() ? food.missingFields?.filter(field => field !== "数量") : food.missingFields } : food))}
-                          placeholder="如 500g"
+                          onChangeText={(quantity) => onChange(foods.map((food) => food.id === item.id ? { ...food, quantity, fieldEvidence: { ...food.fieldEvidence, quantity: { status: quantity.trim() ? "known" : "unknown", source: "user" } }, missingFields: quantity.trim() ? food.missingFields?.filter(field => field !== "数量") : food.missingFields } : food))}
+                          placeholder="数量未知可留空"
                           placeholderTextColorClassName="accent-copy-muted"
                           className="h-9 text-xs font-black text-ink"
                         />

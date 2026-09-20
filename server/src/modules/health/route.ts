@@ -3,6 +3,8 @@ import { authMiddleware, type AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
 import { healthLogSchema, healthProfileSchema } from "../../validation/schemas.js";
 import type { HealthService } from "./service.js";
+import { healthProfilePatchSchema } from "@dietdigidose/contracts";
+import { HealthProfileError } from "./profilePatch.js";
 
 export function createHealthRouter(service: HealthService) {
   const router = Router();
@@ -32,6 +34,17 @@ export function createHealthRouter(service: HealthService) {
 
   router.get("/profile", (req: AuthRequest, res: Response, next: NextFunction) => {
     void service.getProfile(req.userId!).then((profile) => res.json(profile)).catch(next);
+  });
+
+  router.get("/current-measurements", (req: AuthRequest, res: Response, next: NextFunction) => {
+    void service.currentMeasurements(req.userId!).then(data => res.json(data)).catch(next);
+  });
+
+  router.patch("/profile", validateBody(healthProfilePatchSchema), (req: AuthRequest, res: Response, next: NextFunction) => {
+    void service.patchProfile(req.userId!, req.body).then(result => result.updated
+      ? res.json(result.profile)
+      : res.status(409).json({ error: "资料已在其他页面更新，请核对后重试", code: "HEALTH_PROFILE_VERSION_CONFLICT", currentProfile: result.profile, details: { currentProfile: result.profile } }))
+      .catch(error => error instanceof HealthProfileError ? res.status(error.statusCode).json({ error: error.message, code: error.code }) : next(error));
   });
 
   router.put("/profile", validateBody(healthProfileSchema), (req: AuthRequest, res: Response, next: NextFunction) => {

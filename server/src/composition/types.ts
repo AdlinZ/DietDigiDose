@@ -2,6 +2,7 @@ import type { Router } from "express";
 import type { CommunityService } from "../modules/community/service.js";
 import type { MediaCleanupService } from "../modules/mediaCleanup/service.js";
 import type { WorkerRuntime } from "../modules/worker/service.js";
+import type { OnboardingService } from "../modules/onboarding/service.js";
 
 export type DatabaseDriver = "sqlite" | "postgresql";
 
@@ -11,6 +12,7 @@ export type ApplicationRoutes = {
   inventory: Router;
   dietRecords: Router;
   healthData: Router;
+  onboarding: Router;
   recipes: Router;
   foods: Router;
   community: Router;
@@ -36,6 +38,7 @@ export type ApplicationRuntime = {
   driver: DatabaseDriver;
   routes: ApplicationRoutes;
   communityService: Pick<CommunityService, "resolveShare">;
+  onboardingService: Pick<OnboardingService, "get" | "saveFailed">;
   close(): Promise<void>;
 };
 

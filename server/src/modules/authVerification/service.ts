@@ -84,7 +84,9 @@ export class AuthVerificationService {
   markRegistrationRequired: AuthVerificationRepository["markRegistrationRequired"] = (input) => this.repository.markRegistrationRequired(input);
   registrationChallenge = (tokenHash: string) => this.repository.registrationChallenge(tokenHash);
   register: AuthVerificationRepository["register"] = (input) => this.repository.register(input);
-  userResponse = (id: number) => this.repository.userResponse(id);
+  reauthUser: AuthVerificationRepository["reauthUser"] = (userId) => this.repository.reauthUser(userId);
+  issueReauthGrant: AuthVerificationRepository["issueReauthGrant"] = (input) => this.repository.issueReauthGrant(input);
+  userResponse = async (id: number): Promise<Record<string,unknown> | null> => { const user = await this.repository.userResponse(id); return user ? {...user,hasPassword:Boolean(user.hasPassword)} : null; };
   recentSendEvent = () => this.repository.recentSendEvent();
   usageOverview = (firstDate: string) => this.repository.usageOverview(SMS_PROVIDER, firstDate);
   usedSince = (baselineAt: string | null) => this.repository.usedSince(SMS_PROVIDER, baselineAt);

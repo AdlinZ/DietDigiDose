@@ -65,6 +65,9 @@ import { createCookingQueueRouter } from "../modules/cookingQueue/route.js";
 import { FeedbackService } from "../modules/feedback/service.js";
 import { PostgresFeedbackRepository } from "../modules/feedback/postgresRepository.js";
 import { createFeedbackRouter } from "../modules/feedback/route.js";
+import { createOnboardingRouter } from "../modules/onboarding/route.js";
+import { OnboardingService } from "../modules/onboarding/service.js";
+import { PostgresOnboardingRepository } from "../modules/onboarding/postgresRepository.js";
 import { InsightsService } from "../modules/insights/service.js";
 import { PostgresInsightsRepository } from "../modules/insights/postgresRepository.js";
 import { createInsightsRouter } from "../modules/insights/route.js";
@@ -212,6 +215,7 @@ export async function initializePostgresApplication(): Promise<ApplicationRuntim
     return {
       driver: "postgresql",
       communityService: community,
+      onboardingService: new OnboardingService(new PostgresOnboardingRepository(pool)),
       routes: {
         auth: createAuthRouter(createAuthAccountRouter(new AuthAccountService(new PostgresAuthAccountRepository(pool), (jobId) => mediaCleanup.process(jobId)))),
         webhooks: webhookRoutes,
@@ -237,6 +241,7 @@ export async function initializePostgresApplication(): Promise<ApplicationRuntim
         media: mediaRoutes,
         households: createHouseholdsRouter(new HouseholdsService(new PostgresHouseholdsRepository(pool))),
         feedback: createFeedbackRouter(new FeedbackService(new PostgresFeedbackRepository(pool))),
+        onboarding: createOnboardingRouter(new OnboardingService(new PostgresOnboardingRepository(pool))),
       },
       close: () => pool.end(),
     };

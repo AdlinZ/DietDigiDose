@@ -14,6 +14,7 @@ export default function RootLayout() {
             <Stack.Screen name="register" />
             <Stack.Screen name="onboarding" />
             <Stack.Screen name="profile-edit" />
+            <Stack.Screen name="profile-settings" />
             <Stack.Screen name="search" options={{ animation: "fade" }} />
             <Stack.Screen name="recipe-detail" />
             <Stack.Screen name="recipe-submit" />

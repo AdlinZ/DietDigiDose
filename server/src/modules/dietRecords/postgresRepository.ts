@@ -12,6 +12,7 @@ import type { InventoryConsumptionData, InventoryConsumptionResponse } from "@di
 import { InventoryQuantityError, type InventoryConsumption } from "../../services/inventoryQuantity.js";
 import type { DietRecordsRepository } from "./repository.js";
 import type { PreparedCookingCompletion, PreparedDietRecord } from "./types.js";
+import { manualDietRequestIdentity, replayManualDietRequest, type ManualDietReceipt } from "./manualRequest.js";
 
 async function insertRecord(client: Pool | PoolClient, userId: number, record: PreparedDietRecord) {
   const result = await client.query(`INSERT INTO diet_records
@@ -50,7 +51,20 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
     return result.rows as Array<Record<string, unknown>>;
   }
 
-  create(userId: number, record: PreparedDietRecord) { return insertRecord(this.pool, userId, record); }
+  create(userId: number, record: PreparedDietRecord) {
+    if(!record.idempotency_key) return insertRecord(this.pool,userId,record);
+    return this.transaction(async (client) => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`diet:create:${userId}:${record.idempotency_key}`]);
+      const requestHash=record.request_identity ?? manualDietRequestIdentity(record);
+      const existing=(await client.query("SELECT request_hash,diet_record_id,result_json FROM diet_record_create_requests WHERE user_id=$1 AND request_key=$2",
+        [userId,record.idempotency_key])).rows[0] as ManualDietReceipt | undefined;
+      if(existing) return replayManualDietRequest(existing,requestHash);
+      const created=await insertRecord(client,userId,record);
+      await client.query("INSERT INTO diet_record_create_requests(user_id,request_key,request_hash,diet_record_id,result_json) VALUES($1,$2,$3,$4,$5::jsonb)",
+        [userId,record.idempotency_key,requestHash,created.id,JSON.stringify(created)]);
+      return {...created,repeated:false};
+    });
+  }
 
   async remove(userId: number, id: number, mode?: "undo_eating" | "delete_intake") {
     return this.transaction(async client => {

@@ -318,12 +318,42 @@ async function main() {
     const legacyDatabase = new Database(legacyPath);
     const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
       .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 25 }, (_, index) => 59 + index).includes(migration.version));
+    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 29 }, (_, index) => 59 + index).includes(migration.version));
     if (unsupportedVersions.length) {
       legacyDatabase.close();
       throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
     }
     for (const migration of newerVersions) {
+      if (migration.version === 87) legacyDatabase.exec("DROP TABLE diet_record_create_requests");
+      if (migration.version === 86) legacyDatabase.exec("DROP TABLE onboarding_event_receipts; DROP TABLE user_onboarding;");
+      if (migration.version === 85) {
+        // Only reconstruct the empty drill fixture. Never downgrade real accounts:
+        // passwordless users must retain login and account management support.
+        const passwordless = legacyDatabase.prepare("SELECT COUNT(*) n FROM users WHERE password_hash IS NULL").get() as { n: number };
+        if (passwordless.n) throw new Error("Cannot downgrade fixture containing passwordless accounts");
+        legacyDatabase.exec(`DROP TABLE account_reauth_grants;
+          ALTER TABLE auth_verification_challenges DROP COLUMN reauth_user_id;
+          ALTER TABLE auth_verification_challenges DROP COLUMN reauth_session_version;`);
+        const { sql } = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").get() as { sql: string };
+        const restored = sql.replace(/\bpassword_hash\s+TEXT\b/i, "password_hash TEXT NOT NULL")
+          .replace(/^(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?)["`\[]?users["`\]]?/i, "$1users_rollback85");
+        const artifacts = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='users' AND type IN ('index','trigger') AND sql IS NOT NULL").all() as Array<{ sql: string }>;
+        const sequence = legacyDatabase.prepare("SELECT seq FROM sqlite_sequence WHERE name='users'").get() as { seq: number } | undefined;
+        legacyDatabase.transaction(() => {
+          legacyDatabase.exec(restored);
+          legacyDatabase.exec(`INSERT INTO users_rollback85 SELECT * FROM users;
+            DROP TABLE users; ALTER TABLE users_rollback85 RENAME TO users;`);
+          for (const artifact of artifacts) legacyDatabase.exec(artifact.sql);
+          if (sequence) legacyDatabase.prepare("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='users'").run(sequence.seq);
+        })();
+      }
+      if (migration.version === 84) legacyDatabase.exec(`
+        ALTER TABLE user_health_profiles DROP COLUMN profile_version;
+        ALTER TABLE user_health_profiles DROP COLUMN nutrition_target_source;
+        ALTER TABLE user_health_profiles DROP COLUMN nutrition_target_legacy_json;
+        ALTER TABLE user_health_profiles DROP COLUMN nutrition_target_version;
+        ALTER TABLE user_health_profiles DROP COLUMN safety_status;
+      `);
       if (migration.version === 83) legacyDatabase.exec(`
         DROP TABLE feedback_messages;
         DROP INDEX idx_feedback_request;

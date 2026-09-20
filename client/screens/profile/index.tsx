@@ -48,6 +48,11 @@ interface DietRecord {
 interface UserLevel { level: number; title: string; xp: number; nextXp: number | null; progress: number; }
 
 export default function ProfileScreen() {
+  const { user } = useAuth();
+  return <ProfileContent key={user?.id ?? "guest"} />;
+}
+
+function ProfileContent() {
   const router = useSafeRouter();
   const insets = useSafeAreaInsets();
   const { user, isAuthenticated, isLoading: authLoading, logout } = useAuth();
@@ -206,13 +211,13 @@ export default function ProfileScreen() {
     );
   }
 
-  const heightVal = healthProfile?.height ?? healthData?.height ?? null;
-  const weightVal = healthProfile?.weight ?? healthData?.weight ?? null;
-  const bodyFatVal = healthData?.body_fat ?? null;
+  const heightVal = healthProfile?.currentMeasurements?.height_cm?.value ?? null;
+  const weightVal = healthProfile?.currentMeasurements?.weight?.value ?? null;
+  const bodyFatVal = healthProfile?.currentMeasurements?.body_fat?.value ?? null;
   const calculatedBmi = weightVal != null && heightVal != null
     ? weightVal / Math.pow(heightVal / 100, 2)
     : null;
-  const bmi = healthData?.bmi ?? calculatedBmi;
+  const bmi = calculatedBmi;
 
   const bmiStatus =
     bmi === null
@@ -436,18 +441,18 @@ export default function ProfileScreen() {
               </View>
             </View>
             <TouchableOpacity
-              onPress={() => router.push("/health-profile")}
+              onPress={() => router.push("/profile-settings")}
               className="flex-row items-center gap-1 rounded-full bg-brand/10 px-3 py-1.5 active:opacity-80"
               accessibilityRole="button"
-              accessibilityLabel="管理健康档案"
+              accessibilityLabel="我的资料与偏好"
             >
-              <Text className="text-[11px] font-bold text-brand">管理档案</Text>
+              <Text className="text-[11px] font-bold text-brand">资料与偏好</Text>
               <FontAwesome6 name="chevron-right" size={8} colorClassName="accent-brand" />
             </TouchableOpacity>
           </View>
 
           <TouchableOpacity
-            onPress={() => router.push("/health-profile")}
+            onPress={() => router.push("/health-profile", { section: "safety" })}
             className="mt-4 border-y border-line py-3 active:opacity-85"
             accessibilityRole="button"
             accessibilityLabel={safetyProfileSaved ? "查看饮食安全信息" : "完善饮食安全信息"}

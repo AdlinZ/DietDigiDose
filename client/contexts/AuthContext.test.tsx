@@ -9,7 +9,7 @@ jest.mock("@react-native-async-storage/async-storage", () =>
   require("@react-native-async-storage/async-storage/jest/async-storage-mock"));
 jest.mock("@/services/api", () => ({
   ApiError: class extends Error {},
-  authApi: { login: jest.fn(), me: jest.fn(), updateProfile: jest.fn() },
+  authApi: { login: jest.fn(), me: jest.fn(), updateProfile: jest.fn(),verifySmsCode:jest.fn() },
 }));
 jest.mock("@/services/api/cache", () => ({
   clearApiCacheScope: jest.fn().mockResolvedValue(undefined), registerApiFetchScope: jest.fn(),
@@ -56,6 +56,16 @@ beforeEach(async () => {
 });
 afterEach(() => { act(() => tree?.unmount()); });
 
+it("keeps the new-user signal after passwordless SMS authentication",async () => {
+  await mount();
+  jest.mocked(authApi.verifySmsCode).mockResolvedValue({status:"authenticated",token:"new-token",user:{...userA,hasPassword:false},isNewUser:true});
+  let result:Awaited<ReturnType<typeof auth.verifySmsCode>> | undefined;
+  await act(async () => {result=await auth.verifySmsCode("challenge","123456");});
+  expect(result).toEqual({success:true,registrationRequired:false,isNewUser:true});
+  expect(auth.user?.hasPassword).toBe(false);
+  expect(auth.pendingSmsRegistration).toBeNull();
+});
+
 it.each(["profile", "refresh"])("ignores a delayed %s response from the previous account", async kind => {
   await mount();
   jest.mocked(authApi.login).mockResolvedValue({ token: "token-A", user: userA });
@@ -87,4 +97,23 @@ it("ignores delayed startup verification after the session changes", async () =>
   expect(auth.token).toBe("token-B");
   expect(auth.user).toEqual(userB);
   expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual(userB);
+});
+
+it("checks the live login generation after screen teardown, account changes and provider teardown", async () => {
+  await mount();
+  jest.mocked(authApi.login).mockResolvedValue({ token: "token-A", user: userA });
+  await act(async () => { await auth.login("A", "password"); });
+  const check = auth.isSessionCurrent;
+  const firstGeneration = auth.sessionGeneration;
+  expect(check(userA.id, firstGeneration)).toBe(true);
+  jest.mocked(authApi.login).mockResolvedValue({ token: "token-A-replaced", user: userA });
+  await act(async () => { await auth.login("A", "password"); });
+  expect(check(userA.id, firstGeneration)).toBe(false);
+  expect(check(userA.id, auth.sessionGeneration)).toBe(true);
+  await loginAsB();
+  const secondGeneration = auth.sessionGeneration;
+  expect(check(userA.id, secondGeneration)).toBe(false);
+  expect(check(userB.id, secondGeneration)).toBe(true);
+  act(() => tree.unmount());
+  expect(check(userB.id, secondGeneration)).toBe(false);
 });

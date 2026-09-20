@@ -1,6 +1,7 @@
 import { formatPreparedMeal } from "../dietRecords/preparedMeals.js";
 import type { AiContextRepository } from "./repository.js";
 import type { AiContextSnapshot, Row } from "./types.js";
+import { calorieTarget, currentMeasurements } from "../health/projections.js";
 
 function jsonValue<T>(value: unknown, fallback: T): T {
   if (value === null || value === undefined || value === "") return fallback;
@@ -22,9 +23,13 @@ export class AiContextService {
   async load(userId: number, date: string): Promise<AiContextSnapshot> {
     const rows = await this.repository.load(userId, date);
     const profile = rows.healthProfile;
+    const target = calorieTarget(profile);
+    const measurements = currentMeasurements(rows.measurementLogs ?? (rows.latestHealth ? [rows.latestHealth] : []), profile);
     return {
       username: String(rows.user?.username || "用户"),
-      dailyCaloriesTarget: Number(rows.user?.daily_calories_target || 2000),
+      dailyCaloriesTarget: target.value ?? target.referenceValue,
+      calorieTarget: target,
+      currentMeasurements: measurements,
       preparedMeals: (rows.preparedMeals || []).map(formatPreparedMeal),
       inventory: rows.inventory.map((row) => ({
         id: optionalNumber(row.id), version: optionalNumber(row.version),
@@ -41,9 +46,9 @@ export class AiContextService {
         calories: Number(row.calories || 0), protein: Number(row.protein || 0),
         carbs: Number(row.carbs || 0), fat: Number(row.fat || 0),
       })),
-      latestHealth: rows.latestHealth ? {
-        weight: optionalNumber(rows.latestHealth.weight), body_fat: optionalNumber(rows.latestHealth.body_fat),
-        water_ml: optionalNumber(rows.latestHealth.water_ml),
+      latestHealth: Object.keys(measurements).length ? {
+        weight: measurements.weight?.value, body_fat: measurements.body_fat?.value,
+        water_ml: measurements.water_ml?.value,
       } : undefined,
       healthProfile: profile ? {
         age: optionalNumber(profile.age) ?? null,

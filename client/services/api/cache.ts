@@ -223,7 +223,7 @@ function invalidationPrefixes(path: string) {
     return ["/api/v1/diet-records", "/api/v1/health-data", "/api/v1/inventory", "/api/v1/cooking-queue", "/api/v1/meal-plans", "/api/v1/insights"];
   }
   if (path.startsWith("/api/v1/diet-records")) return ["/api/v1/diet-records", "/api/v1/health-data"];
-  if (path.startsWith("/api/v1/health-data")) return ["/api/v1/health-data"];
+  if (path.startsWith("/api/v1/health-data") || path.startsWith("/api/v1/auth/profile")) return ["/api/v1/health-data", "/api/v1/auth/me", "/api/v1/recommendations", "/api/v1/insights", "/api/v1/onboarding"];
   if (path.startsWith("/api/v1/recipes")) return ["/api/v1/recipes"];
   if (path.startsWith("/api/v1/community")) return ["/api/v1/community"];
   if (path.startsWith("/api/v1/shopping-list")) return ["/api/v1/shopping-list"];

@@ -19,6 +19,19 @@ function repository(overrides: Partial<AuthAccountRepository> = {}): AuthAccount
 }
 
 describe("auth account module", () => {
+  test("passwordless accounts fail password authentication normally and can authorize deletion with a reauth token",async () => {
+    let proof: unknown;
+    const service=new AuthAccountService(repository({
+      findLoginUser:async () => ({id:9,username:"手机用户",password_hash:null,role:"user",session_version:1,is_disabled:false}),
+      getCredentials:async () => ({role:"user",password_hash:null}),
+      deleteAccount:async (_id,_actor,_urls,_objects,input) => {proof=input;return {deleted:true,cleanupJobId:null};},
+    }));
+    await assert.rejects(() => service.login("13800138000","anything","127.0.0.1"),/密码错误/);
+    await assert.rejects(() => service.changePassword(9,"anything","NewPass1"),/当前密码不正确/);
+    await assert.rejects(() => service.deleteAccount(9,"anything"),/当前密码不正确/);
+    assert.equal((await service.deleteAccount(9,{reauthToken:"token-from-bound-phone"})).success,true);
+    assert.ok(proof && typeof proof==="object" && "tokenHash" in proof);
+  });
   test("preserves registration identifiers, conflicts and versioned session claims", async () => {
     let passwordHash = ""; let funnel = "";
     const service = new AuthAccountService(repository({

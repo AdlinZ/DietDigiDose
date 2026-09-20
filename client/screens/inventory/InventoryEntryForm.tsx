@@ -18,6 +18,7 @@ export function InventoryEntryForm({
   imageUrl,
   suggestions,
   saving,
+  locked = false,
   bottomInset,
   onFoodNameChange,
   onApplySuggestion,
@@ -42,6 +43,7 @@ export function InventoryEntryForm({
   imageUrl: string;
   suggestions: Array<{ name: string; category?: string }>;
   saving: boolean;
+  locked?: boolean;
   bottomInset: number;
   onFoodNameChange: (value: string) => void;
   onApplySuggestion: (value: string) => void;
@@ -58,7 +60,7 @@ export function InventoryEntryForm({
 }) {
   return (
     <>
-      <ScrollView className="flex-1" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 16 }}>
+      <ScrollView pointerEvents={locked || saving ? "none" : "auto"} className="flex-1" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 16 }}>
         <View className="w-full max-w-[720px] self-center px-5 pb-4 pt-4">
           <View className="rounded-[24px] border border-line bg-surface p-4 shadow-xs">
             <View className="mb-2 flex-row items-center justify-between">
@@ -70,6 +72,7 @@ export function InventoryEntryForm({
               <TextInput
                 nativeID="inventory-food-name"
                 value={foodName}
+                editable={!locked && !saving}
                 onChangeText={onFoodNameChange}
                 placeholder="输入食材名称"
                 autoFocus={!editingItem}
@@ -128,8 +131,8 @@ export function InventoryEntryForm({
               </View>
               <View className="flex-row items-end gap-3">
                 <View className="w-[42%]">
-                  <Text className="mb-1.5 text-xs font-bold text-copy-muted">数量 <Text className="text-critical">*</Text></Text>
-                  <TextInput nativeID="inventory-quantity" value={quantity} onChangeText={onQuantityChange} placeholder="500g、2盒" className="rounded-2xl border border-line bg-canvas px-4 py-3 text-sm font-semibold text-ink outline-none" />
+                  <Text className="mb-1.5 text-xs font-bold text-copy-muted">数量（可不填）</Text>
+                  <TextInput nativeID="inventory-quantity" editable={!locked && !saving} value={quantity} onChangeText={onQuantityChange} placeholder="不确定可留空" className="rounded-2xl border border-line bg-canvas px-4 py-3 text-sm font-semibold text-ink outline-none" />
                 </View>
                 <View className="flex-1">
                   <Text className="mb-1.5 text-xs font-bold text-copy-muted">存放位置</Text>

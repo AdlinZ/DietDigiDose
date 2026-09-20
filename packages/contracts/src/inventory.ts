@@ -112,7 +112,19 @@ export const inventoryConsumptionPreviewSchema = z.object({
 export const shoppingInventoryImportSchema = z.object({
   idempotency_key: z.string().trim().min(16, "幂等键格式无效").max(200, "幂等键过长"),
   items: z.array(inventoryCreateSchema).min(1, "至少选择一项食材").max(100),
-}).strict();
+  shopping_items: z.array(z.object({
+    id: z.string().uuid(),
+    version: z.number().int().positive(),
+  }).strict()).min(1).max(100).optional(),
+}).strict().superRefine((value, context) => {
+  if (!value.shopping_items) return;
+  if (value.shopping_items.length !== value.items.length) {
+    context.addIssue({ code: "custom", path: ["shopping_items"], message: "采购项与入库食材数量必须一致" });
+  }
+  if (new Set(value.shopping_items.map((item) => item.id)).size !== value.shopping_items.length) {
+    context.addIssue({ code: "custom", path: ["shopping_items"], message: "同一采购项不能重复入库" });
+  }
+});
 
 const inventoryIntakeItemSchema = inventoryCreateObject.extend({
   field_evidence: inventoryFieldEvidenceSchema.optional(),

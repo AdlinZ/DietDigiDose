@@ -51,15 +51,15 @@ export class SqliteInventoryRepository implements InventoryRepository {
       INSERT INTO inventory_items (
         user_id, food_name, category, quantity, expiration_date, storage_location, image_url,
         is_available, quantity_value, quantity_unit, package_size_value, package_size_unit, batch_code
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-    `).run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?) RETURNING *
+    `).get(
       userId, item.food_name, item.category, item.quantity || "1份", item.expiration_date,
       item.storage_location || "冷藏", item.image_url || null,
       item.quantity_value ?? null, item.quantity_unit ?? null,
       item.package_size_value ?? null, item.package_size_unit ?? null, item.batch_code ?? null,
-    );
-    appendSqliteMaintenanceEvent(this.database, { userId, kind: "inventory_created", sourceId: String(row.lastInsertRowid), subjectId: String(row.lastInsertRowid) });
-    return this.database.prepare("SELECT * FROM inventory_items WHERE id = ?").get(row.lastInsertRowid) as Record<string, unknown>;
+    ) as Record<string, unknown>;
+    appendSqliteMaintenanceEvent(this.database, { userId, kind: "inventory_created", sourceId: String(row.id), subjectId: String(row.id) });
+    return row;
   }
 
   async list(userId: number) {
@@ -108,6 +108,18 @@ export class SqliteInventoryRepository implements InventoryRepository {
         return inventoryImportResponseSchema.parse({ items: JSON.parse(existing.result_json), repeated: true });
       }
 
+      // Claim the purchased rows inside the inventory transaction. A new request
+      // key after an app restart must not import the same shopping rows again.
+      for (const item of input.shopping_items || []) {
+        const result = this.database.prepare(`
+          UPDATE shopping_list_items SET deleted_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP, version = version + 1
+          WHERE id = ? AND user_id = ? AND version = ? AND checked = 1 AND deleted_at IS NULL
+        `).run(item.id, userId, item.version);
+        if (result.changes !== 1) {
+          throw new InventoryDomainError("SHOPPING_ITEM_CONFLICT", "采购项已变更或已入库，请刷新清单后重试。");
+        }
+      }
       const items = input.items.map((item) => this.createInTransaction(userId, item));
       this.database.prepare(`
         INSERT INTO shopping_inventory_imports (user_id, idempotency_key, result_json) VALUES (?, ?, ?)

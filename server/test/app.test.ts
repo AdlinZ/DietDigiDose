@@ -1,6 +1,7 @@
 import { verifyDiningPlanChanges, verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyPreparedMealPrecision } from "./helpers/preparedMealPrecision.js";
+import { verifyShoppingIntake } from "./helpers/shoppingIntake.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
 import { SqlitePlanMaintenanceRepository } from "../src/modules/planMaintenance/sqliteRepository.js";
@@ -1550,6 +1551,20 @@ describe("user data isolation", () => {
     const secondCount = db.prepare("SELECT COUNT(*) AS count FROM inventory_items WHERE user_id = ? AND food_name LIKE '采购%'").get(second.user.id) as { count: number };
     assert.equal(firstCount.count, 2);
     assert.equal(secondCount.count, 0);
+  });
+
+  test("personal shopping intake atomically removes purchased sources and rejects stale or duplicate transfers", async () => {
+    const { SqliteInventoryRepository } = await import("../src/modules/inventory/sqliteRepository.js");
+    const { SqliteShoppingRepository } = await import("../src/modules/shopping/sqliteRepository.js");
+    const owner = await register("shopping-intake-owner@example.com");
+    await verifyShoppingIntake(new SqliteInventoryRepository(db), new SqliteShoppingRepository(db), owner.user.id, second.user.id);
+    const response = await api("/api/v1/inventory/import-shopping-list", {
+      method: "POST", token: owner.token,
+      body: JSON.stringify({ idempotency_key: "shopping-missing-source-001", items: [{ food_name: "番茄", category: "蔬菜", expiration_date: "2099-12-31" }],
+        shopping_items: [{ id: "00000000-0000-4000-8000-000000000001", version: 1 }] }),
+    });
+    assert.equal(response.response.status, 409);
+    assert.equal((response.body as JsonObject).code, "SHOPPING_ITEM_CONFLICT");
   });
 
   test("structured inventory supports FEFO partial consumption, audit history and safe retries", async () => {

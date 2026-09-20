@@ -197,6 +197,17 @@ export class PostgresInventoryRepository implements InventoryRepository {
         SELECT result_json FROM shopping_inventory_imports WHERE user_id = $1 AND idempotency_key = $2
       `, [userId, input.idempotency_key]);
       if (existing.rows[0]) return inventoryImportResponseSchema.parse({ items: existing.rows[0].result_json, repeated: true });
+      // Consistent row order also protects overlapping batches using different keys.
+      for (const item of [...(input.shopping_items || [])].sort((a, b) => a.id.localeCompare(b.id))) {
+        const result = await client.query(`
+          UPDATE shopping_list_items SET deleted_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP, version = version + 1
+          WHERE id = $1 AND user_id = $2 AND version = $3 AND checked = TRUE AND deleted_at IS NULL
+        `, [item.id, userId, item.version]);
+        if (result.rowCount !== 1) {
+          throw new InventoryDomainError("SHOPPING_ITEM_CONFLICT", "采购项已变更或已入库，请刷新清单后重试。");
+        }
+      }
       const items = [];
       for (const item of input.items) items.push(await this.createWithClient(client, userId, item));
       await client.query(`

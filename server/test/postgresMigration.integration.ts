@@ -1,4 +1,5 @@
 import { verifyInventoryPrecision } from "./helpers/inventoryPrecision.js";
+import { verifyShoppingIntake } from "./helpers/shoppingIntake.js";
 import { verifyFeedbackPostgres } from "./feedbackPostgresAssertions.js";
 import { verifyAccountSecurityPostgres } from "./accountSecurityPostgresAssertions.js";
 import { verifyOnboardingPostgres } from "./onboardingPostgresAssertions.js";
@@ -2806,6 +2807,9 @@ try {
     let parameter = 0;
     return (await pool.query(sql.replace(/\?/g, () => "$" + (++parameter)), values)).rows;
   });
+  const shoppingOtherOwner = (await pool.query("SELECT id FROM users WHERE id <> $1 LIMIT 1", [user.id])).rows[0];
+  assert.ok(shoppingOtherOwner);
+  await verifyShoppingIntake(inventoryRepository, new PostgresShoppingRepository(pool), user.id, Number(shoppingOtherOwner.id));
   const { verifyPostgresBackup } = await import("./postgresBackupAssertions.js");
   await verifyFeedbackPostgres(pool, user.id);
   await verifyAccountSecurityPostgres(pool);

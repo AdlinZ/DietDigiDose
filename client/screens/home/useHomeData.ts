@@ -1,10 +1,21 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { communityApi, dietApi, healthApi, inventoryApi, recipesApi, type ApiFetch } from "@/services/api";
 import { getInventoryStatus } from "@/utils/inventory";
 import type { DietRecord, HealthLog, InventoryItem, Post, Recipe } from "./types";
 import { recordCacheRender } from "@/services/api/cache";
 
 export function useHomeData(authFetch: ApiFetch, isAuthenticated: boolean, today: string) {
+  const scope = useMemo(() => ({ authFetch, isAuthenticated, today }), [authFetch, isAuthenticated, today]);
+  const currentScope = useRef(scope);
+  useLayoutEffect(() => { currentScope.current = scope; }, [scope]);
+  const mounted = useRef(true);
+  const latestRequest = useRef(0);
+  const [dataScope, setDataScope] = useState(scope);
+  const renderedScope = useRef(scope);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; latestRequest.current += 1; };
+  }, []);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [expiringItems, setExpiringItems] = useState<InventoryItem[]>([]);
@@ -16,6 +27,8 @@ export function useHomeData(authFetch: ApiFetch, isAuthenticated: boolean, today
   const hasRenderedData = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (!mounted.current || currentScope.current !== scope) return;
+    const request = ++latestRequest.current;
     const renderStartedAt = Date.now();
     setLoading(true);
     setError(null);
@@ -26,6 +39,13 @@ export function useHomeData(authFetch: ApiFetch, isAuthenticated: boolean, today
       isAuthenticated ? dietApi.list(authFetch, today) : Promise.resolve([]),
       isAuthenticated ? healthApi.list(authFetch) : Promise.resolve([]),
     ]);
+    if (!mounted.current || currentScope.current !== scope || request !== latestRequest.current) return;
+    // Failed sections may retain data only from this account/session and date.
+    if (renderedScope.current !== scope) {
+      setInventoryItems([]); setExpiringItems([]); setTodayRecords([]); setHealthLogs([]);
+    }
+    renderedScope.current = scope;
+    setDataScope(scope);
     const [recipesResult, postsResult, inventoryResult, dietResult, healthResult] = results;
     const failedSections: string[] = [];
 
@@ -68,7 +88,10 @@ export function useHomeData(authFetch: ApiFetch, isAuthenticated: boolean, today
     setLoading(false);
     recordCacheRender(Date.now() - renderStartedAt, hasRenderedData.current);
     hasRenderedData.current = true;
-  }, [authFetch, isAuthenticated, today]);
+  }, [authFetch, isAuthenticated, today, scope]);
 
-  return { recipes, inventoryItems, expiringItems, todayRecords, posts, healthLogs, loading, error, refresh };
+  const visible = dataScope === scope;
+  return { recipes, posts, inventoryItems: visible ? inventoryItems : [], expiringItems: visible ? expiringItems : [],
+    todayRecords: visible ? todayRecords : [], healthLogs: visible ? healthLogs : [],
+    loading: !visible || loading, error: visible ? error : null, refresh };
 }

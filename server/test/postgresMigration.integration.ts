@@ -11,6 +11,7 @@ import { PostgresPlanMaintenanceRepository } from "../src/modules/planMaintenanc
 import { PlanMaintenanceService } from "../src/modules/planMaintenance/service.js";
 import type { SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
 import assert from "node:assert/strict";
+import { verifyPreparedMealPrecision } from "./helpers/preparedMealPrecision.js";
 import { currentDateKey } from "../src/utils/date.js";
 import fs from "node:fs";
 import os from "node:os";
@@ -515,16 +516,7 @@ try {
     assert.equal((await pool.query("SELECT COUNT(*)::int n FROM prepared_meals WHERE id=$1",[uncommittedMeal.id])).rows[0].n,0);
   } finally { await outboxClient.query("ROLLBACK"); outboxClient.release(); }
 
-  const tinyProduction = await dietService.completeCooking(user.id, {
-    idempotency_key: "postgres-precision-produce-205", inventory_item_ids: [], inventory_consumptions: [],
-    production: { food_name: "Postgres 小余量", produced_servings: 1, eaten_servings: 0.9995, meal_type: "午餐", nutrition_per_serving: {} },
-  });
-  const tinyMeal = tinyProduction.prepared_meal as { id: string; remaining_servings: number };
-  assert.equal(tinyMeal.remaining_servings, 0.0005);
-  const tinyEvent = { idempotency_key: "postgres-precision-discard-205", version: 1, type: "discard" as const, servings: 0.0005 };
-  const tinyResults = await Promise.all([dietService.applyMealEvent(user.id, tinyMeal.id, tinyEvent), dietService.applyMealEvent(user.id, tinyMeal.id, tinyEvent)]);
-  assert.deepEqual(tinyResults.map(result => result.repeated).sort(), [false, true]);
-  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === tinyMeal.id)?.remaining_servings, 0);
+  await verifyPreparedMealPrecision(dietService, user.id);
 
   const correctProduction = await dietService.completeCooking(user.id, {
     idempotency_key: "postgres-correction-produce-203", inventory_item_ids: [], inventory_consumptions: [],

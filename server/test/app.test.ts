@@ -1,5 +1,6 @@
 import { verifyDiningPlanChanges, verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
+import { verifyPreparedMealPrecision } from "./helpers/preparedMealPrecision.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
 import { SqlitePlanMaintenanceRepository } from "../src/modules/planMaintenance/sqliteRepository.js";
@@ -4141,6 +4142,13 @@ test("prepared meals clear sub-millith remainders with idempotent concurrent eve
   assert.equal((await event({ ...input, idempotency_key: "precision-too-small-205", servings: 0.0000001 })).response.status, 400);
   const list = await api("/api/v1/diet-records/prepared-meals", { token: account.token });
   assert.equal((list.body as JsonObject[]).find(row => row.id === meal.id)?.remaining_servings, 0);
+});
+
+test("prepared meal precision conserves tiny portions with concurrent SQLite events", async () => {
+  const account = await register("precision-sqlite-205@example.com");
+  const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
+  const { DietRecordsService } = await import("../src/modules/dietRecords/service.js");
+  await verifyPreparedMealPrecision(new DietRecordsService(new SqliteDietRecordsRepository(db)), account.user.id);
 });
 
 test("prepared meal intake correction is explicit, atomic, idempotent and does not restore ingredients", async () => {

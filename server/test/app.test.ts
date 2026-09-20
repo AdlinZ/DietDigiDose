@@ -4762,3 +4762,25 @@ test("intervention queue scheduling attributes only actual starts and rolls back
       db.exec(enabled ? "CREATE TRIGGER fail_intervention_start BEFORE INSERT ON proactive_intervention_outcomes BEGIN SELECT RAISE(ABORT,'attribution failure'); END" : "DROP TRIGGER fail_intervention_start");
     });
 });
+
+test("inventory decimal precision failures return 409 and leave cooking and stock unchanged", async () => {
+  const account = await register("inv-decimal@example.com");
+  const stock = await api("/api/v1/inventory", { token: account.token, method: "POST", body: JSON.stringify({
+    food_name: "精度保护盐", category: "其他", quantity: "1kg", quantity_value: 1, quantity_unit: "kg",
+    expiration_date: "2099-12-31", storage_location: "常温",
+  }) });
+  assert.equal(stock.response.status, 201);
+  const id = (stock.body as JsonObject).id;
+  const consume = { item_id: id, version: 1, mode: "amount", amount_value: 1e-20, unit: "kg" };
+  const direct = await api("/api/v1/inventory/consume", { token: account.token, method: "POST",
+    body: JSON.stringify({ idempotency_key: "precision-http-consumption", source: "manual", items: [consume] }) });
+  assert.equal(direct.response.status, 409);
+  assert.equal((direct.body as JsonObject).code, "QUANTITY_PRECISION_REQUIRED");
+  const cooking = await api("/api/v1/diet-records/cooking-completions", { token: account.token, method: "POST",
+    body: JSON.stringify({ idempotency_key: "precision-http-production", inventory_consumptions: [consume],
+      production: { food_name: "精度保护制作", produced_servings: 1, eaten_servings: 0 } }) });
+  assert.equal(cooking.response.status, 409);
+  assert.equal((cooking.body as JsonObject).code, "QUANTITY_PRECISION_REQUIRED");
+  assert.deepEqual(db.prepare("SELECT quantity_value,version FROM inventory_items WHERE id=?").get(id), { quantity_value: 1, version: 1 });
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM prepared_meals WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
+});

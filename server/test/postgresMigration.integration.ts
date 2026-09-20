@@ -1,3 +1,4 @@
+import { verifyInventoryPrecision } from "./helpers/inventoryPrecision.js";
 import { verifyFeedbackPostgres } from "./feedbackPostgresAssertions.js";
 import { verifyDiningPlanChanges, verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
@@ -2779,6 +2780,10 @@ try {
     await app.locals.closeRuntime();
   }
 
+  await verifyInventoryPrecision(inventoryRepository, user.id, async (sql, values = []) => {
+    let parameter = 0;
+    return (await pool.query(sql.replace(/\?/g, () => "$" + (++parameter)), values)).rows;
+  });
   const { verifyPostgresBackup } = await import("./postgresBackupAssertions.js");
   await verifyFeedbackPostgres(pool, user.id);
   await verifyPostgresBackup(connectionString);

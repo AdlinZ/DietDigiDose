@@ -83,7 +83,7 @@ export async function consumeInventoryWithPostgresClient(
     `, [
       userId, consumption.item_id, consumption.mode === "all" ? "consume_all" : "consume_partial",
       input.source, transition.storedValue, transition.storedValue === null ? null : transition.remaining,
-      transition.storedUnit, transition.amountUsed === null ? null : -Math.round((transition.amountUsed + Number.EPSILON) * 1000) / 1000,
+      transition.storedUnit, transition.amountUsed === null ? null : -transition.amountUsed,
       `${input.idempotency_key}:${consumption.item_id}:${index}`, JSON.stringify({ ...metadata, ...nextQuantityEvidence(row.quantity_evidence, consumption.version, consumption.version + 1, "preserve", transition.storedValue !== null && transition.storedUnit !== null) }),
     ]);
     await appendPostgresMaintenanceEvent(client,{ userId,kind: "inventory_changed",sourceId: `consume:${input.idempotency_key}:${consumption.item_id}:${index}`,

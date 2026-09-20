@@ -1,13 +1,25 @@
 import { Link } from 'react-router';
+import { Apple, BookOpen, CookingPot, MessageSquare, Users, Bell, Sparkles, CalendarDays, ChevronRight, ClipboardList, Activity, ShieldCheck } from 'lucide-react';
 import api from '../services/api';
 import { useRemoteSection } from '../hooks/useRemoteSection';
-import { PageHeader } from '../components/admin/PageHeader';
 import { Section } from '../components/admin/Section';
 import { EmptyState } from '../components/admin/ListPrimitives';
 import { StatusBadge } from '../components/admin/StatusBadge';
 import { adminLink } from '../navigation/adminNavigation';
 interface Task { id: number | string; title: string; note: string }
 interface Queue { items: Task[]; total?: number }
+const queueIcons: Record<string, typeof Apple> = {
+  '/admin/ingredients': Apple,
+  '/admin/recipes': BookOpen,
+  '/admin/kitchenware-mapping-reviews': CookingPot,
+  '/admin/feedback': MessageSquare,
+};
+const quickActions = [
+  { path: '/admin/recipes', icon: BookOpen },
+  { path: '/admin/users', icon: Users },
+  { path: '/admin/feedback', icon: MessageSquare },
+  { path: '/admin/notifications', icon: Bell },
+];
 const queues: {title:string;path:string;query:Record<string,string>;load:()=>Promise<Queue>}[] = [
   { title: '待审食材', path: '/admin/ingredients', query: { tab: 'ugc' }, load: async (): Promise<Queue> => {
     const {data} = await api.get('/admin/stats/recent');
@@ -28,7 +40,8 @@ const queues: {title:string;path:string;query:Record<string,string>;load:()=>Pro
 ];
 function QueueSection({ queue }: { queue: typeof queues[number] }) {
   const state = useRemoteSection(queue.load); const link = adminLink(queue.path,queue.query);
-  return <Section title={queue.title} state={state} action={<Link to={link.to}>查看全部 →</Link>}>
+  const Icon = queueIcons[queue.path];
+  return <Section title={queue.title} icon={<Icon size={19} />} state={state} action={<Link to={link.to}>查看全部 →</Link>}>
     <p className="admin-muted">{state.data?.total !== undefined ? `共 ${state.data.total} 条待处理` : '近期待处理 · 最多展示 5 条'}</p>
     {state.data?.items.length ? <ul className="admin-task-list">{state.data.items.slice(0,5).map(item=><li key={item.id}><Link to={link.to}><span className="admin-task-text"><strong className="line-clamp-2">{item.title}</strong><small>{item.note}</small></span><span aria-hidden="true">→</span></Link></li>)}</ul> : <EmptyState>当前没有该类待处理事项。</EmptyState>}
   </Section>;
@@ -38,10 +51,27 @@ const loadAudit = async () => (await api.get<{items:{id:number;adminName:string;
 export default function Dashboard() {
   const runs = useRemoteSection(loadRuns); const audit = useRemoteSection(loadAudit);
   const counts = Object.fromEntries((runs.data?.statusCounts || []).map(item=>[item.status,item.count]));
-  return <div className="admin-stack"><PageHeader title="工作台" description="先处理待办，再查看运行情况。各模块可单独刷新。"/>
-    <div><h2 className="mb-3 text-base font-semibold">待处理事项</h2><div className="admin-section-grid">{queues.map(queue=><QueueSection key={queue.title} queue={queue}/>)}</div></div>
-    <Section title="运行异常 · 近 7 天" state={runs}><div className="admin-metrics">{[{status:'failed',label:'失败任务'},{status:'expired',label:'已过期任务'},{status:'awaiting_input',label:'等待用户输入'},{status:'awaiting_approval',label:'等待用户确认'}].map(item=><Link key={item.status} to={adminLink('/admin/agent-runs',{range:'7d',status:item.status}).to} className="admin-metric"><span>{item.label}</span><strong>{counts[item.status] ?? 0}</strong><small>查看记录 →</small></Link>)}</div><p className="admin-muted mt-4">等待用户输入与确认的任务，需要由用户在应用中继续处理。</p></Section>
-    <Section title="常用入口"><div className="admin-actions">{['/admin/recipes','/admin/users','/admin/feedback','/admin/notifications'].map(path=>{const item=adminLink(path);return <Link key={path} to={item.to} className="admin-button">{item.label} →</Link>;})}</div></Section>
-    <Section title="最近管理操作" state={audit} action={<Link to={adminLink('/admin/security').to}>查看全部 →</Link>}>{audit.data?.items.length ? <ul className="admin-task-list">{audit.data.items.slice(0,5).map(item=><li key={item.id}><div className="admin-task-row"><span className="admin-task-text"><strong>{item.summary}</strong><small>{item.adminName} · {new Date(item.createdAt).toLocaleString('zh-CN')}</small></span><StatusBadge>已记录</StatusBadge></div></li>)}</ul>:<EmptyState>暂无管理操作记录。</EmptyState>}</Section>
+  return <div className="admin-stack">
+    <section className="admin-overview" aria-label="工作台概览">
+      <div className="admin-overview-label">Control center · 01 / Overview</div>
+      <h1>今日运营概览 <Sparkles size={24} aria-hidden="true" /></h1>
+      <p>关注用户、内容资产与 AI 服务状态，优先处理需要人工介入的事项。</p>
+      <div className="admin-overview-meta">
+        <CalendarDays size={15} aria-hidden="true" />
+        <span>{new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}</span>
+        <Link to={adminLink('/admin/analytics').to} className="admin-link ml-2">查看数据概览 →</Link>
+      </div>
+      <nav className="admin-quick-routes" aria-label="常用入口">
+        {quickActions.map(({ path, icon: Icon }) => {
+          const item = adminLink(path);
+          return <Link key={path} to={item.to} className="admin-quick-route">
+            <Icon size={20} aria-hidden="true" /><span>{item.label}</span><ChevronRight size={16} aria-hidden="true" />
+          </Link>;
+        })}
+      </nav>
+    </section>
+    <div><h2 className="admin-section-title"><ClipboardList size={21} aria-hidden="true" />待处理事项</h2><div className="admin-section-grid">{queues.map(queue=><QueueSection key={queue.title} queue={queue}/>)}</div></div>
+    <Section title="运行异常 · 近 7 天" icon={<Activity size={19} />} state={runs}><div className="admin-metrics">{[{status:'failed',label:'失败任务'},{status:'expired',label:'已过期任务'},{status:'awaiting_input',label:'等待用户输入'},{status:'awaiting_approval',label:'等待用户确认'}].map(item=><Link key={item.status} to={adminLink('/admin/agent-runs',{range:'7d',status:item.status}).to} className="admin-metric"><span>{item.label}</span><strong>{counts[item.status] ?? 0}</strong><small>查看记录 →</small></Link>)}</div><p className="admin-muted mt-4">等待用户输入与确认的任务，需要由用户在应用中继续处理。</p></Section>
+    <Section title="最近管理操作" icon={<ShieldCheck size={19} />} state={audit} action={<Link to={adminLink('/admin/security').to}>查看全部 →</Link>}>{audit.data?.items.length ? <ul className="admin-task-list">{audit.data.items.slice(0,5).map(item=><li key={item.id}><div className="admin-task-row"><span className="admin-task-text"><strong>{item.summary}</strong><small>{item.adminName} · {new Date(item.createdAt).toLocaleString('zh-CN')}</small></span><StatusBadge>已记录</StatusBadge></div></li>)}</ul>:<EmptyState>暂无管理操作记录。</EmptyState>}</Section>
   </div>;
 }

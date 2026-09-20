@@ -98,3 +98,22 @@ it("ignores delayed startup verification after the session changes", async () =>
   expect(auth.user).toEqual(userB);
   expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual(userB);
 });
+
+it("checks the live login generation after screen teardown, account changes and provider teardown", async () => {
+  await mount();
+  jest.mocked(authApi.login).mockResolvedValue({ token: "token-A", user: userA });
+  await act(async () => { await auth.login("A", "password"); });
+  const check = auth.isSessionCurrent;
+  const firstGeneration = auth.sessionGeneration;
+  expect(check(userA.id, firstGeneration)).toBe(true);
+  jest.mocked(authApi.login).mockResolvedValue({ token: "token-A-replaced", user: userA });
+  await act(async () => { await auth.login("A", "password"); });
+  expect(check(userA.id, firstGeneration)).toBe(false);
+  expect(check(userA.id, auth.sessionGeneration)).toBe(true);
+  await loginAsB();
+  const secondGeneration = auth.sessionGeneration;
+  expect(check(userA.id, secondGeneration)).toBe(false);
+  expect(check(userB.id, secondGeneration)).toBe(true);
+  act(() => tree.unmount());
+  expect(check(userB.id, secondGeneration)).toBe(false);
+});

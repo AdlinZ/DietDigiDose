@@ -42,6 +42,7 @@ interface AuthContextType {
   clearPendingSmsRegistration: () => void;
   logout: (message?: string, expectedGeneration?: number) => Promise<void>;
   sessionGeneration: number;
+  isSessionCurrent: (userId: number, generation: number) => boolean;
   updateProfile: (data: Partial<User>) => Promise<{ success: boolean; error?: string }>;
   deleteAccount: (proof: string | AccountDeletionProof) => Promise<{ success: boolean; error?: string }>;
   refreshUser: () => Promise<void>;
@@ -57,6 +58,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [sessionMessage, setSessionMessage] = useState<string | null>(null);
   const [sessionGeneration, setSessionGeneration] = useState(0);
   const sessionCoordinator = useRef(new AuthSessionCoordinator());
+  const currentUserId = useRef(user?.id);
+  currentUserId.current = user?.id;
+  const providerMounted = useRef(true);
+  useEffect(() => {
+    providerMounted.current = true;
+    return () => { providerMounted.current = false; };
+  }, []);
+  // Async work may outlive its screen, but never its authenticated session/provider.
+  const isSessionCurrent = useCallback((userId: number, generation: number) =>
+    providerMounted.current && currentUserId.current === userId
+      && sessionCoordinator.current.currentGeneration() === generation, []);
 
   const applyAuthenticatedResult = useCallback(async (data: { token: string; user: User }) => {
     if (!data?.token || !data?.user) return false;
@@ -299,11 +311,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearPendingSmsRegistration,
       logout,
       sessionGeneration,
+      isSessionCurrent,
       updateProfile,
       deleteAccount,
       refreshUser,
     }),
-    [user, token, isLoading, login, register, pendingSmsRegistration, sessionMessage, clearSessionMessage, sendSmsCode, verifySmsCode, completeSmsRegistration, clearPendingSmsRegistration, logout, sessionGeneration, updateProfile, deleteAccount, refreshUser]
+    [user, token, isLoading, login, register, pendingSmsRegistration, sessionMessage, clearSessionMessage, sendSmsCode, verifySmsCode, completeSmsRegistration, clearPendingSmsRegistration, logout, sessionGeneration, isSessionCurrent, updateProfile, deleteAccount, refreshUser]
   );
 
   return (

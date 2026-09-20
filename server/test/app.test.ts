@@ -1,5 +1,6 @@
 import { verifyDiningPlanChanges, verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
+import { verifyPreparedMealPrecision } from "./helpers/preparedMealPrecision.js";
 import { verifyMaintenanceFlow } from "./maintenanceFlowAssertions.js";
 import { verifyPortionReplacement } from "./replacementAllocationAssertions.js";
 import { SqlitePlanMaintenanceRepository } from "../src/modules/planMaintenance/sqliteRepository.js";
@@ -4173,6 +4174,13 @@ test("prepared meals clear sub-millith remainders with idempotent concurrent eve
   assert.equal((list.body as JsonObject[]).find(row => row.id === meal.id)?.remaining_servings, 0);
 });
 
+test("prepared meal precision conserves tiny portions with concurrent SQLite events", async () => {
+  const account = await register("precision-sqlite-205@example.com");
+  const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
+  const { DietRecordsService } = await import("../src/modules/dietRecords/service.js");
+  await verifyPreparedMealPrecision(new DietRecordsService(new SqliteDietRecordsRepository(db)), account.user.id);
+});
+
 test("prepared meal intake correction is explicit, atomic, idempotent and does not restore ingredients", async () => {
   const account = await register("prepared-correction-203@example.com");
   const stock = await api("/api/v1/inventory", { token: account.token, method: "POST", body: JSON.stringify({ food_name: "纠错米", category: "粮油干货", quantity: "5g", quantity_value: 5, quantity_unit: "g", expiration_date: "2026-10-01", storage_location: "常温" }) });
@@ -4791,4 +4799,26 @@ test("intervention queue scheduling attributes only actual starts and rolls back
     async (sql,values) => db.prepare(sql).all(...values as any[]) as JsonObject[],async enabled => {
       db.exec(enabled ? "CREATE TRIGGER fail_intervention_start BEFORE INSERT ON proactive_intervention_outcomes BEGIN SELECT RAISE(ABORT,'attribution failure'); END" : "DROP TRIGGER fail_intervention_start");
     });
+});
+
+test("inventory decimal precision failures return 409 and leave cooking and stock unchanged", async () => {
+  const account = await register("inv-decimal@example.com");
+  const stock = await api("/api/v1/inventory", { token: account.token, method: "POST", body: JSON.stringify({
+    food_name: "精度保护盐", category: "其他", quantity: "1kg", quantity_value: 1, quantity_unit: "kg",
+    expiration_date: "2099-12-31", storage_location: "常温",
+  }) });
+  assert.equal(stock.response.status, 201);
+  const id = (stock.body as JsonObject).id;
+  const consume = { item_id: id, version: 1, mode: "amount", amount_value: 1e-20, unit: "kg" };
+  const direct = await api("/api/v1/inventory/consume", { token: account.token, method: "POST",
+    body: JSON.stringify({ idempotency_key: "precision-http-consumption", source: "manual", items: [consume] }) });
+  assert.equal(direct.response.status, 409);
+  assert.equal((direct.body as JsonObject).code, "QUANTITY_PRECISION_REQUIRED");
+  const cooking = await api("/api/v1/diet-records/cooking-completions", { token: account.token, method: "POST",
+    body: JSON.stringify({ idempotency_key: "precision-http-production", inventory_consumptions: [consume],
+      production: { food_name: "精度保护制作", produced_servings: 1, eaten_servings: 0 } }) });
+  assert.equal(cooking.response.status, 409);
+  assert.equal((cooking.body as JsonObject).code, "QUANTITY_PRECISION_REQUIRED");
+  assert.deepEqual(db.prepare("SELECT quantity_value,version FROM inventory_items WHERE id=?").get(id), { quantity_value: 1, version: 1 });
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM prepared_meals WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
 });

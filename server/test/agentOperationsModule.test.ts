@@ -156,4 +156,18 @@ test("Agent inventory uses quantity transactions, versions, history and rollback
   await assert.rejects(() => run([proposal("consume_inventory_items", { items: [{ itemId: 1, version: 5, mode: "amount", amountValue: 1, unit: "piece" }] })]), /结构化数量/);
   await run([proposal("consume_inventory_items", { items: [{ itemId: 1, version: 5, mode: "all" }] })]);
   assert.deepEqual(row(), { quantity: "数量未知", quantity_value: null, quantity_unit: null, is_available: 0, version: 6 });
+  await run([proposal("add_inventory_item", { name: "精确盐", quantity: "1kg", expirationDate: "2099-12-31" })]);
+  const salt = db.prepare("SELECT id FROM inventory_items WHERE food_name='精确盐'").get() as { id: number };
+  const decimalAction = proposal("consume_inventory_items", { items: [{ itemId: salt.id, version: 1, mode: "amount", amountValue: 0.2, unit: "g" }] });
+  await run([decimalAction]);
+  await run([decimalAction]);
+  assert.deepEqual(db.prepare("SELECT quantity,quantity_value,version FROM inventory_items WHERE id=?").get(salt.id),
+    { quantity: "0.9998kg", quantity_value: 0.9998, version: 2 });
+  const beforePrecisionFailure = eventCount();
+  await assert.rejects(() => run([proposal("consume_inventory_items", {
+    items: [{ itemId: salt.id, version: 2, mode: "amount", amountValue: 1e-20, unit: "kg" }],
+  })]), /计量精度/);
+  assert.equal(eventCount(), beforePrecisionFailure);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM inventory_change_logs WHERE inventory_item_id=? AND action='consume_partial'").get(salt.id) as { n: number }).n, 1);
+
 });

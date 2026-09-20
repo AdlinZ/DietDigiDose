@@ -6,7 +6,8 @@ export type InventoryDomainErrorCode =
   | "STRUCTURED_QUANTITY_REQUIRED"
   | "INVALID_CONSUMPTION_AMOUNT"
   | "INVENTORY_CONFLICT"
-  | "INVENTORY_INSUFFICIENT";
+  | "INVENTORY_INSUFFICIENT"
+  | "QUANTITY_PRECISION_REQUIRED";
 
 export class InventoryDomainError extends Error {
   public readonly code: InventoryDomainErrorCode;

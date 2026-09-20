@@ -23,8 +23,6 @@ export function consumeProductionItem(row: Row, input: HouseholdMealProductionIn
     const next = calculateInventoryConsumption({ ...row,id: row.id,food_name: row.food_name,quantity: row.quantity,is_available: row.is_available,version: row.version,
       quantity_value: measured?.amount_value ?? null,quantity_unit: measured?.unit ?? null },
     { item_id: input.itemId,version: input.version,mode: "amount",amount_value: input.amount,unit: input.unit });
-    if (Number(next.amountUsed) > Number(next.storedValue) || Math.abs(Number(next.storedValue) - Number(next.amountUsed) - next.remaining) > 1e-9) throw new HouseholdsError(409,"库存数量不足或扣减超出计量精度，请核对后重试","QUANTITY_PRECISION_REQUIRED");
-    if (!Number.isFinite(next.remaining) || next.remaining >= Number(next.storedValue)) throw new HouseholdsError(409,"扣减量小于当前库存计量精度，请调整数量单位后重试","QUANTITY_PRECISION_REQUIRED");
     return next;
   } catch (error) {
     if (error instanceof InventoryQuantityError) throw new HouseholdsError(409,error.message,error.code);

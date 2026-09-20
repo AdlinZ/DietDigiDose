@@ -1,3 +1,4 @@
+import { combineInventoryDeductions } from "@/utils/inventoryConsumptions";
 import { KitchenwareSafetyHints } from "@/screens/cooking-mode/KitchenwareSafetyHints";
 import { useCookingTimer } from "@/hooks/useCookingTimer";
 import type { CookingQueueItem } from "@/services/api/cookingQueue";
@@ -27,7 +28,7 @@ import { toLocalDateKey, toLocalTimeKey } from "@/utils/date";
 import { aiApi, cookingQueueApi, inventoryApi, recipesApi, waitForAgentRun, type Recipe } from "@/services/api";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useRealtimeCookingVoice } from "@/hooks/useRealtimeCookingVoice";
-import { parseStructuredQuantity, structuredUnitLabel, type StructuredUnit } from "@/utils/structuredQuantity";
+import { parseStructuredQuantity, structuredUnitLabel } from "@/utils/structuredQuantity";
 import { enqueueVoiceOutput, prefetchVoiceText, prewarmVoicePack, speakWithVoiceFallback, stopVoiceOutput, type VoiceSource } from "@/services/voicePackManager";
 
 interface CookingStep {
@@ -605,23 +606,6 @@ export default function CookingModeScreen() {
     return matches.map((item: { id: number }) => item.id);
   };
 
-  type ConsumptionPreview = {
-    items: Array<{
-      food_name: string;
-      fully_covered: boolean;
-      quantity_status?: "sufficient" | "insufficient" | "unknown" | "unavailable";
-      missing_value: number;
-      unit: StructuredUnit;
-      deductions: Array<{
-        item_id: number;
-        version: number;
-        mode: "amount" | "all";
-        amount_value: number;
-        unit: StructuredUnit;
-      }>;
-    }>;
-  };
-
   const buildInventoryConsumptions = async () => {
     const inventory = await inventoryApi.list(authFetch);
     if (inventoryConsumptionMode === "all") {
@@ -640,7 +624,7 @@ export default function CookingModeScreen() {
       return parsed ? [{ food_name: ingredient.name, amount_value: parsed.amount, unit: parsed.unit }] : [];
     });
     if (!requests.length) throw new Error("菜谱用量缺少可换算的数值和单位，请选择“整项用完”或先修改实际用量。");
-    const preview: ConsumptionPreview = await inventoryApi.consumptionPreview(authFetch, requests);
+    const preview = await inventoryApi.consumptionPreview(authFetch, requests);
     const uncovered = preview.items.filter((item) => !item.fully_covered);
     if (uncovered.length) {
       const description = uncovered.slice(0, 3).map((item) => (
@@ -649,24 +633,7 @@ export default function CookingModeScreen() {
       )).join("、");
       throw new Error(`库存不足或单位不可换算：${description}`);
     }
-    const combined = new Map<number, {
-      item_id: number;
-      version: number;
-      mode: "amount" | "all";
-      amount_value?: number;
-      unit?: StructuredUnit;
-    }>();
-    for (const deduction of preview.items.flatMap((item) => item.deductions)) {
-      const existing = combined.get(deduction.item_id);
-      if (!existing || deduction.mode === "all") {
-        combined.set(deduction.item_id, deduction.mode === "all"
-          ? { item_id: deduction.item_id, version: deduction.version, mode: "all" }
-          : { ...deduction });
-      } else if (existing.mode === "amount" && existing.unit === deduction.unit) {
-        existing.amount_value = (existing.amount_value || 0) + deduction.amount_value;
-      }
-    }
-    return [...combined.values()];
+    return combineInventoryDeductions(preview.items.flatMap((item) => item.deductions));
   };
 
   const finishCooking = async (consumeInventory: boolean) => {

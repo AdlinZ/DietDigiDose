@@ -1,3 +1,4 @@
+import { QuantityDecimal, QuantityPrecisionError } from "@dietdigidose/contracts/quantity-decimal";
 import { nextQuantityEvidence } from "../modules/inventory/evidence.js";
 import { appendSqliteMaintenanceEvent } from "../modules/planMaintenance/sqliteEventWriter.js";
 import { currentDateKey } from "../utils/date.js";
@@ -48,21 +49,24 @@ export type InventoryConsumptionState = {
   version: unknown;
 };
 
-function roundQuantity(value: number) {
-  return Math.round((value + Number.EPSILON) * 1000) / 1000;
-}
-
 function displayQuantity(value: number, unit: InventoryUnit) {
-  return `${roundQuantity(value)}${UNIT_DEFINITIONS[unit].label}`;
+  return QuantityDecimal.from(value).toString() + UNIT_DEFINITIONS[unit].label;
 }
 
-function convert(value: number, from: InventoryUnit, to: InventoryUnit) {
+function convertDecimal(value: QuantityDecimal, from: InventoryUnit, to: InventoryUnit) {
   const source = UNIT_DEFINITIONS[from];
   const target = UNIT_DEFINITIONS[to];
   if (source.family !== target.family) {
-    throw new InventoryQuantityError("INVENTORY_UNIT_MISMATCH", `${source.label} 与 ${target.label} 不能安全换算`);
+    throw new InventoryQuantityError("INVENTORY_UNIT_MISMATCH", source.label + " 与 " + target.label + " 不能安全换算");
   }
-  return value * source.factor / target.factor;
+  return value.shift(source.factor === target.factor ? 0 : source.factor > target.factor ? 3 : -3);
+}
+
+function quantityPrecisionError(error: unknown): never {
+  if (error instanceof QuantityPrecisionError) {
+    throw new InventoryQuantityError("QUANTITY_PRECISION_REQUIRED", error.message);
+  }
+  throw error;
 }
 
 /** Driver-neutral quantity transition used by SQLite and PostgreSQL adapters. */
@@ -81,17 +85,21 @@ export function calculateInventoryConsumption(item: InventoryConsumptionState, c
   let remaining = 0;
   let available = false;
   if (consumption.mode === "amount") {
-    if (storedValue === null || !storedUnit) {
+    if (storedValue === null || !storedUnit || !Number.isFinite(storedValue) || storedValue <= 0) {
       throw new InventoryQuantityError("STRUCTURED_QUANTITY_REQUIRED", `“${String(item.food_name)}”没有可安全部分扣减的结构化数量`);
     }
     if (!consumption.unit || !Number.isFinite(consumption.amount_value) || Number(consumption.amount_value) <= 0) {
       throw new InventoryQuantityError("INVALID_CONSUMPTION_AMOUNT", "扣减数量必须大于 0");
     }
-    amountUsed = convert(Number(consumption.amount_value), consumption.unit, storedUnit);
-    if (amountUsed > storedValue + 0.0001) {
-      throw new InventoryQuantityError("INVENTORY_INSUFFICIENT", `“${String(item.food_name)}”的剩余数量不足`);
-    }
-    remaining = Math.max(0, roundQuantity(storedValue - amountUsed));
+    try {
+      const used = convertDecimal(QuantityDecimal.from(Number(consumption.amount_value)), consumption.unit, storedUnit);
+      const stored = QuantityDecimal.from(storedValue);
+      if (used.compare(stored) > 0) {
+        throw new InventoryQuantityError("INVENTORY_INSUFFICIENT", "“" + String(item.food_name) + "”的剩余数量不足");
+      }
+      amountUsed = used.toNumber();
+      remaining = stored.subtract(used).toNumber();
+    } catch (error) { quantityPrecisionError(error); }
     available = remaining > 0;
   }
   return {
@@ -132,38 +140,8 @@ export function applyInventoryConsumptions(
     if (!item || !item.is_available) {
       throw new InventoryQuantityError("INVENTORY_CONFLICT", "库存食材不存在、已用完或不属于当前账号");
     }
-    if (Number(item.version) !== consumption.version) {
-      throw new InventoryQuantityError("INVENTORY_VERSION_CONFLICT", "库存已在其他设备更新，请刷新后重试");
-    }
-
-    const storedValue = item.quantity_value === null || item.quantity_value === undefined
-      ? null
-      : Number(item.quantity_value);
-    const storedUnit = typeof item.quantity_unit === "string" && INVENTORY_UNITS.includes(item.quantity_unit as InventoryUnit)
-      ? item.quantity_unit as InventoryUnit
-      : null;
-    let amountUsed = storedValue;
-    let remaining = 0;
-    let available = false;
-
-    if (consumption.mode === "amount") {
-      if (storedValue === null || !storedUnit) {
-        throw new InventoryQuantityError("STRUCTURED_QUANTITY_REQUIRED", `“${item.food_name}”没有可安全部分扣减的结构化数量`);
-      }
-      if (!consumption.unit || !Number.isFinite(consumption.amount_value) || Number(consumption.amount_value) <= 0) {
-        throw new InventoryQuantityError("INVALID_CONSUMPTION_AMOUNT", "扣减数量必须大于 0");
-      }
-      amountUsed = convert(Number(consumption.amount_value), consumption.unit, storedUnit);
-      if (amountUsed > storedValue + 0.0001) {
-        throw new InventoryQuantityError("INVENTORY_INSUFFICIENT", `“${item.food_name}”的剩余数量不足`);
-      }
-      remaining = Math.max(0, roundQuantity(storedValue - amountUsed));
-      available = remaining > 0;
-    }
-
-    const nextQuantity = storedUnit && storedValue !== null
-      ? displayQuantity(remaining, storedUnit)
-      : String(item.quantity);
+    const { storedValue, storedUnit, amountUsed, remaining, available, nextQuantity } =
+      calculateInventoryConsumption(item as InventoryConsumptionState, consumption);
     const result = update.run(
       nextQuantity,
       storedValue === null ? null : remaining,
@@ -183,7 +161,7 @@ export function applyInventoryConsumptions(
       storedValue,
       storedValue === null ? null : remaining,
       storedUnit,
-      amountUsed === null ? null : -roundQuantity(amountUsed),
+      amountUsed === null ? null : -amountUsed,
       `${options.idempotencyKey}:${consumption.item_id}:${index}`,
       JSON.stringify({ ...options.metadata, ...nextQuantityEvidence(item.quantity_evidence, consumption.version, consumption.version + 1, "preserve", storedValue !== null && storedUnit !== null) }),
     );
@@ -250,55 +228,69 @@ export function buildFefoConsumptionPreviewFromCandidates(
   asOfDate?: string,
 ) {
   const available = new Map(inventory.map(item => [Number(item.id), Number(item.quantity_value)]));
+  const zero = QuantityDecimal.from(0);
   return requests.map((request) => {
-    let remaining = request.amount_value;
+    const requested = QuantityDecimal.from(request.amount_value);
+    let remaining = requested;
     let nameAvailable = false;
     let uncertainQuantity = false;
+    // A request commits its temporary ledger only when its response is representable.
+    const nextAvailable = new Map(available);
     const deductions: Array<Record<string, unknown>> = [];
     for (const item of inventory) {
-      if (remaining <= 0.0001) break;
+      if (remaining.compare(zero) === 0) break;
       if (asOfDate && typeof item.expiration_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.expiration_date) && item.expiration_date < asOfDate) continue;
-      if (!inventoryFoodNamesMatch(String(item.food_name),request.food_name)) continue;
+      if (!inventoryFoodNamesMatch(String(item.food_name), request.food_name)) continue;
       nameAvailable = true;
       if (item.quantity_evidence_status && item.quantity_evidence_status !== "known") { uncertainQuantity = true; continue; }
       const unit = item.quantity_unit as InventoryUnit | null;
-      const value = available.get(Number(item.id)) ?? 0;
+      const value = nextAvailable.get(Number(item.id)) ?? 0;
       if (item.quantity_value == null || !unit || !INVENTORY_UNITS.includes(unit) || !Number.isFinite(value)) {
         uncertainQuantity = true;
         continue;
       }
       if (value <= 0) continue;
-      let availableInRequestUnit: number;
       try {
-        availableInRequestUnit = convert(value, unit, request.unit);
-      } catch {
+        const stored = QuantityDecimal.from(value);
+        const availableInRequestUnit = convertDecimal(stored, unit, request.unit);
+        const amount = remaining.compare(availableInRequestUnit) < 0 ? remaining : availableInRequestUnit;
+        const allocated = convertDecimal(amount, request.unit, unit).toNumber();
+        const rest = stored.subtract(QuantityDecimal.from(allocated)).toNumber();
+        // Cooking clients combine all deductions for one batch into one write.
+        QuantityDecimal.from(Number(item.quantity_value)).subtract(QuantityDecimal.from(rest)).toNumber();
+        // Every emitted deduction can execute and conserves this batch's quantity.
+        deductions.push({
+          item_id: Number(item.id), version: Number(item.version), food_name: String(item.food_name),
+          expiration_date: String(item.expiration_date), batch_code: item.batch_code ? String(item.batch_code) : null,
+          mode: rest === 0 ? "all" : "amount", amount_value: allocated, unit,
+        });
+        nextAvailable.set(Number(item.id), rest);
+        remaining = remaining.subtract(amount);
+      } catch (error) {
+        if (!(error instanceof QuantityPrecisionError) && !(error instanceof InventoryQuantityError)) throw error;
         uncertainQuantity = true;
-        continue;
       }
-      const amount = Math.min(remaining, availableInRequestUnit);
-      const allocated = roundQuantity(convert(amount, request.unit, unit));
-      available.set(Number(item.id), roundQuantity(value - allocated));
-      deductions.push({
-        item_id: Number(item.id),
-        version: Number(item.version),
-        food_name: String(item.food_name),
-        expiration_date: String(item.expiration_date),
-        batch_code: item.batch_code ? String(item.batch_code) : null,
-        mode: amount >= availableInRequestUnit - 0.0001 ? "all" : "amount",
-        amount_value: allocated,
-        unit,
-      });
-      remaining = roundQuantity(remaining - amount);
     }
+    let missing: number;
+    let covered: number;
+    try {
+      missing = remaining.toNumber();
+      covered = requested.subtract(remaining).toNumber();
+      for (const [id, value] of nextAvailable) available.set(id, value);
+    } catch (error) {
+      if (!(error instanceof QuantityPrecisionError)) throw error;
+      // Do not claim a rounded partial allocation or reserve its stock for later requests.
+      missing = request.amount_value;
+      covered = 0;
+      deductions.length = 0;
+      uncertainQuantity = true;
+    }
+    const fullyCovered = missing === 0;
     return {
-      food_name: request.food_name,
-      requested_value: request.amount_value,
-      unit: request.unit,
-      covered_value: roundQuantity(request.amount_value - remaining),
-      missing_value: Math.max(0, remaining),
-      fully_covered: remaining <= 0.0001,
+      food_name: request.food_name, requested_value: request.amount_value, unit: request.unit,
+      covered_value: covered, missing_value: missing, fully_covered: fullyCovered,
       name_available: nameAvailable,
-      quantity_status: remaining <= 0.0001 ? "sufficient" as const : uncertainQuantity ? "unknown" as const
+      quantity_status: fullyCovered ? "sufficient" as const : uncertainQuantity ? "unknown" as const
         : nameAvailable ? "insufficient" as const : "unavailable" as const,
       deductions,
     };

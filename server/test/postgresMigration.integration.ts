@@ -1,3 +1,4 @@
+import { verifyInventoryPrecision } from "./helpers/inventoryPrecision.js";
 import { verifyFeedbackPostgres } from "./feedbackPostgresAssertions.js";
 import { verifyAccountSecurityPostgres } from "./accountSecurityPostgresAssertions.js";
 import { verifyOnboardingPostgres } from "./onboardingPostgresAssertions.js";
@@ -14,6 +15,7 @@ import { PostgresPlanMaintenanceRepository } from "../src/modules/planMaintenanc
 import { PlanMaintenanceService } from "../src/modules/planMaintenance/service.js";
 import type { SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
 import assert from "node:assert/strict";
+import { verifyPreparedMealPrecision } from "./helpers/preparedMealPrecision.js";
 import { currentDateKey } from "../src/utils/date.js";
 import fs from "node:fs";
 import os from "node:os";
@@ -518,16 +520,7 @@ try {
     assert.equal((await pool.query("SELECT COUNT(*)::int n FROM prepared_meals WHERE id=$1",[uncommittedMeal.id])).rows[0].n,0);
   } finally { await outboxClient.query("ROLLBACK"); outboxClient.release(); }
 
-  const tinyProduction = await dietService.completeCooking(user.id, {
-    idempotency_key: "postgres-precision-produce-205", inventory_item_ids: [], inventory_consumptions: [],
-    production: { food_name: "Postgres 小余量", produced_servings: 1, eaten_servings: 0.9995, meal_type: "午餐", nutrition_per_serving: {} },
-  });
-  const tinyMeal = tinyProduction.prepared_meal as { id: string; remaining_servings: number };
-  assert.equal(tinyMeal.remaining_servings, 0.0005);
-  const tinyEvent = { idempotency_key: "postgres-precision-discard-205", version: 1, type: "discard" as const, servings: 0.0005 };
-  const tinyResults = await Promise.all([dietService.applyMealEvent(user.id, tinyMeal.id, tinyEvent), dietService.applyMealEvent(user.id, tinyMeal.id, tinyEvent)]);
-  assert.deepEqual(tinyResults.map(result => result.repeated).sort(), [false, true]);
-  assert.equal((await dietService.listPreparedMeals(user.id)).find(meal => meal.id === tinyMeal.id)?.remaining_servings, 0);
+  await verifyPreparedMealPrecision(dietService, user.id);
 
   const correctProduction = await dietService.completeCooking(user.id, {
     idempotency_key: "postgres-correction-produce-203", inventory_item_ids: [], inventory_consumptions: [],
@@ -2562,6 +2555,9 @@ try {
   ]);
   assert.equal(concurrentClaims.filter(Boolean).length, 1);
   const winningClaim = concurrentClaims.find(Boolean)!;
+  assert.equal(await mediaCleanupRepository.complete(mediaJobId, "not-the-winning-claim"), false);
+  await mediaCleanupRepository.release(mediaJobId, "not-the-winning-claim", "stale worker");
+  assert.equal((await mediaCleanupRepository.job(mediaJobId, 30))?.claim_token, winningClaim.claim_token);
   await mediaCleanupRepository.release(mediaJobId, winningClaim.claim_token!, "integration retry");
   const deletedMediaReferences: unknown[] = [];
   const mediaCleanupService = new MediaCleanupService(mediaCleanupRepository, async (references) => {
@@ -2572,22 +2568,45 @@ try {
   const mediaCleanupPage = await mediaCleanupService.list({ status: "completed", page: 1, pageSize: 10 });
   assert(mediaCleanupPage.items.some((job) => job.id === mediaJobId && job.urlCount === 1));
 
-  // Failed legacy rows must not monopolize the default batch after an origin change.
-  const legacyCleanupIds: number[] = [];
-  for (let index = 0; index < 25; index += 1) {
-    const result = await pool.query("INSERT INTO media_cleanup_jobs(owner_user_id,urls_json) VALUES($1,$2::jsonb) RETURNING id",
-      [user.id, JSON.stringify([`https://retired.example/${index}.png`])]);
-    legacyCleanupIds.push(Number(result.rows[0].id));
-  }
-  const nextCleanupId = await mediaCleanupRepository.enqueue(user.id, ["/media/uploads/next.png"], [{ backend: "local", path: "/tmp/next.png" }]);
-  for (const id of legacyCleanupIds) await assert.rejects(() => mediaCleanupService.process(id), /无法定位/);
-  assert.ok((await mediaCleanupRepository.pending(25, 30)).includes(nextCleanupId));
-  assert.equal(await mediaCleanupService.process(nextCleanupId), true);
-  for (const id of legacyCleanupIds) {
-    assert.equal((await mediaCleanupRepository.job(id, 30))?.status, "pending");
-    await pool.query("UPDATE media_cleanup_jobs SET objects_json=$1::jsonb WHERE id=$2",
-      [JSON.stringify([{ backend: "local", path: `/tmp/recovered-${id}.png` }]), id]);
-    assert.equal(await mediaCleanupService.process(id), true);
+  // Reset only this isolated integration database's fixtures so the real default
+  // batch sees exactly 25 failed legacy jobs before the valid 26th job.
+  await pool.query("DELETE FROM media_cleanup_jobs");
+  deletedMediaReferences.length = 0;
+  const previousStorageOrigin = process.env.SUPABASE_URL;
+  const retiredStorageOrigin = "https://retired.example";
+  process.env.SUPABASE_URL = "https://current.example";
+  try {
+    const legacyCleanupIds: number[] = [];
+    for (let index = 0; index < 25; index += 1) {
+      const result = await pool.query("INSERT INTO media_cleanup_jobs(owner_user_id,urls_json) VALUES($1,$2::jsonb) RETURNING id",
+        [user.id, JSON.stringify([`${retiredStorageOrigin}/storage/v1/object/public/community-media/community/${user.id}/${index}.png`])]);
+      legacyCleanupIds.push(Number(result.rows[0].id));
+    }
+    const nextCleanupId = await mediaCleanupRepository.enqueue(user.id, ["/media/uploads/next.png"], [{ backend: "local", path: "/tmp/next.png" }]);
+    assert.deepEqual(await mediaCleanupService.processPending(), { checked: 25, completed: 0, failed: 25 });
+    assert.deepEqual(deletedMediaReferences, []);
+    assert.deepEqual(await mediaCleanupService.processPending(), { checked: 25, completed: 1, failed: 24 });
+    assert.equal((await mediaCleanupRepository.job(nextCleanupId, 30))?.status, "completed");
+    assert.deepEqual(deletedMediaReferences, [{ backend: "local", path: "/tmp/next.png" }]);
+    for (const id of legacyCleanupIds) {
+      const job = await mediaCleanupRepository.job(id, 30);
+      assert.equal(job?.status, "pending");
+      assert.ok(job!.attempts >= 1);
+      assert.match(job!.last_error!, /无法定位/);
+    }
+
+    // Restore configuration, leaving the original persisted jobs untouched.
+    process.env.SUPABASE_URL = retiredStorageOrigin;
+    assert.deepEqual(await mediaCleanupService.processPending(), { checked: 25, completed: 25, failed: 0 });
+    for (const id of legacyCleanupIds) assert.equal((await mediaCleanupRepository.job(id, 30))?.status, "completed");
+    assert.deepEqual(deletedMediaReferences.slice(1).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+      Array.from({ length: 25 }, (_, index) => ({ backend: "supabase", origin: retiredStorageOrigin,
+        bucket: "community-media", objectPath: `community/${user.id}/${index}.png` }))
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+    assert.deepEqual(await mediaCleanupService.processPending(), { checked: 0, completed: 0, failed: 0 });
+  } finally {
+    if (previousStorageOrigin === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = previousStorageOrigin;
   }
 
   await pool.query("DELETE FROM plan_maintenance_jobs");
@@ -2783,6 +2802,10 @@ try {
     await app.locals.closeRuntime();
   }
 
+  await verifyInventoryPrecision(inventoryRepository, user.id, async (sql, values = []) => {
+    let parameter = 0;
+    return (await pool.query(sql.replace(/\?/g, () => "$" + (++parameter)), values)).rows;
+  });
   const { verifyPostgresBackup } = await import("./postgresBackupAssertions.js");
   await verifyFeedbackPostgres(pool, user.id);
   await verifyAccountSecurityPostgres(pool);

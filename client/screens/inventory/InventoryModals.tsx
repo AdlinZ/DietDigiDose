@@ -5,6 +5,7 @@ import { useCSSVariable } from "uniwind";
 import type { DetectedFood, InventoryItem, KitchenwareCatalogItem } from "./types";
 import { COMMON_INGREDIENTS, type CommonIngredient } from "@/utils/ingredientRules";
 import type { InventoryLogEntry } from "@/utils/inventoryHistory";
+import { InventoryFieldEvidence } from "@/components/InventoryFieldEvidence";
 import { SmartDateInput } from "@/components/SmartDateInput";
 
 export type ExpiredCleanupResult = {
@@ -238,6 +239,7 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
                         {item.confidence == null ? "置信度待确认" : `置信度 ${Math.round(item.confidence * 100)}%`}
                       </Text>
                     </View>
+                    <InventoryFieldEvidence evidence={item.fieldEvidence} />
                     {item.missingFields?.length ? <Text className="text-[9px] font-bold text-critical">待确认：{item.missingFields.join("、")}</Text> : null}
                   </View>
                 ) : (

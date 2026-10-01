@@ -39,7 +39,7 @@ export function PreferenceVoiceInput({ onApply }: { onApply: (value: KitchenPref
     {statusText ? <Text className="text-copy-muted">{statusText}</Text> : null}
     {error ? <Text accessibilityRole="alert" className="text-critical">{error}</Text> : null}
     {text.trim() ? <>
-      <Text className="text-copy-muted">请核对摘要；目前可提取人数、分钟数和不吃辣，过敏及其他限制请在对应选项中补充。</Text>
+      <Text className="text-copy-muted">请核对摘要；可提取人数、时间、不吃辣、常用餐次、地点、带饭和冷藏/加热条件；未提取的内容和过敏限制请在对应选项中补充。</Text>
       <Text className="font-bold text-ink">{summary.labels.join(" · ") || "还没有可提取的条件，请使用下方选项"}</Text>
       <View className="flex-row gap-2">{[false, true].map(value => <TouchableOpacity key={String(value)} accessibilityRole="radio" accessibilityState={{ checked: persistent === value }} onPress={() => setPersistent(value)} className={`flex-1 rounded-xl border p-3 ${persistent === value ? "border-brand bg-brand-soft" : "border-line"}`}><Text className="text-ink">{value ? "保存为常用设置" : "仅本次使用"}</Text></TouchableOpacity>)}</View>
       <TouchableOpacity accessibilityRole="button" disabled={!summary.labels.length} onPress={() => onApply(summary.preferences, persistent)} className="min-h-12 justify-center rounded-xl bg-brand-fill p-3 disabled:opacity-40"><Text className="text-center font-bold text-white">确认摘要，应用到表单</Text></TouchableOpacity>

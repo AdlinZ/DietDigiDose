@@ -4,6 +4,7 @@ export type CookingQueueStatus = "waiting" | "preparing" | "ready" | "cooking" |
 export type CookingQueueMealType = "breakfast" | "lunch" | "dinner" | "snack";
 
 export type CookingQueueItem = {
+  productionMeals?: Array<{ date: string; mealType: CookingQueueMealType; servings: number }>;
   plannedServings?: number | null;
   sourcePlanItemId?: string | null;
   plannedDate?: string | null;

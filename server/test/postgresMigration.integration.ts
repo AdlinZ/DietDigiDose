@@ -2819,6 +2819,18 @@ try {
   await verifyPostgresBackup(connectionString);
   const { verifyPostgresRecoveryApi } = await import("./postgresRecoveryApiAssertions.js");
   await verifyPostgresRecoveryApi(connectionString);
+  const { verifyCommonProduction } = await import("./helpers/commonProduction.js");
+  await verifyCommonProduction(mealPlanRepository, dietService, user.id, async (sql, values = []) => {
+    let parameter = 0;
+    return (await pool.query(sql.replace(/\?/g, () => `$${++parameter}`), values)).rows;
+  }, cookingQueueRepository, async operation => {
+    await pool.query(`CREATE FUNCTION common_production_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected common production failure'; END $$;
+      CREATE TRIGGER common_production_failure BEFORE INSERT ON prepared_meal_allocations FOR EACH ROW EXECUTE FUNCTION common_production_failure();`);
+    try { await assert.rejects(operation(), /injected common production failure/); }
+    finally { await pool.query("DROP TRIGGER common_production_failure ON prepared_meal_allocations; DROP FUNCTION common_production_failure()"); }
+  });
+
+
 
   console.log(JSON.stringify({
     ok: true,

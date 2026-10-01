@@ -54,15 +54,20 @@ export function formatMealPlanItem(row: Row): MealPlanItemView {
 export function formatMealPlan(row: Row, items: MealPlanItemView[]): MealPlanView {
   const archived = Boolean(row.deleted_at);
   const executionItems = parseJson<Row>(row.constraints_json, {}).executionItems as Record<string, { servings?: number; targetMealId?: string }> | undefined;
-  const plannedItems = items.map(item => ({ ...item, plannedServings: executionItems?.[item.id]?.servings ?? null,
+  const plannedItems: (MealPlanItemView & { plannedServings: number | null; targetMealId: string | null })[] = items.map(item => ({ ...item, plannedServings: executionItems?.[item.id]?.servings ?? null,
     targetMealId: executionItems?.[item.id]?.targetMealId ?? null }));
+  const execution = plannedItems.map(item => {
+    const common = item.queueItemId ? plannedItems.filter(other => other.queueItemId === item.queueItemId) : [item];
+    return { ...item, productionServings: common.every(other => Number(other.plannedServings) > 0) ? common.reduce((sum, other) => sum + Number(other.plannedServings), 0) : null,
+      productionMealCount: common.length };
+  });
   return {
     id: String(row.id), title: String(row.title), startDate: String(row.start_date), endDate: String(row.end_date),
     status: String(row.status), source: String(row.source || "manual"),
     createdByRunId: row.created_by_run_id ? String(row.created_by_run_id) : null,
     constraints: parseJson<Row>(row.constraints_json, {}), version: Number(row.version || 1),
     undoState: archived && row.source === "agent" ? "undone" : "active", archived,
-    createdAt: dateTime(row.created_at), updatedAt: dateTime(row.updated_at), items: plannedItems,
+    createdAt: dateTime(row.created_at), updatedAt: dateTime(row.updated_at), items: execution,
   };
 }
 

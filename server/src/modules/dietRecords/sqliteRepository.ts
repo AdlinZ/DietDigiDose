@@ -1,3 +1,5 @@
+import { productionReservations, validateProductionTargets, type ProductionTarget } from "../mealPlans/commonProduction.js";
+import { parseJson } from "../mealPlans/formatters.js";
 import { SqliteMealAllocationsRepository } from "../mealAllocations/sqliteRepository.js";
 import { chooseAllocation, restoredAllocation, allocationMealType } from "../mealAllocations/model.js";
 import { mealEventIdentity, replayMealEvent } from "./mealEventIdentity.js";
@@ -189,9 +191,10 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
   private productionBefore(userId: number, input: PreparedCookingCompletion) {
     const production = input.production!;
     if (production.queue_item_id) {
-      const plan = this.database.prepare("SELECT id,version FROM meal_plan_items WHERE user_id=? AND queue_item_id=?").get(userId, production.queue_item_id) as { id: string; version: number } | undefined;
+      const plans = this.database.prepare("SELECT i.id,i.version FROM meal_plan_items i JOIN cooking_queue_items q ON q.id=i.queue_item_id AND q.user_id=i.user_id WHERE i.user_id=? AND i.queue_item_id=? ORDER BY CASE WHEN i.id=q.source_plan_item_id THEN 0 ELSE 1 END,i.id").all(userId, production.queue_item_id) as { id: string; version: number }[];
+      const plan = production.plan_item_id ? plans.find(row => row.id === production.plan_item_id) : plans[0];
+      if (production.plan_item_id && plans.length && !plan) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "制作队列与餐单不一致");
       if (plan) {
-        if (production.plan_item_id && production.plan_item_id !== plan.id) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "制作队列与餐单不一致");
         production.plan_item_id = plan.id;
         production.plan_version ??= plan.version;
       }
@@ -207,9 +210,14 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
       .get(userId, input.idempotency_key, production.queue_item_id ?? null, production.plan_item_id ?? null) as { result_json: string } | undefined;
     if (existing) return { ...JSON.parse(existing.result_json), repeated: true };
     if (production.queue_item_id) {
-      const row = this.database.prepare("SELECT version,status,recipe_id FROM cooking_queue_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(production.queue_item_id, userId) as Record<string, unknown> | undefined;
+      const row = this.database.prepare("SELECT version,status,recipe_id,recipe_snapshot_json FROM cooking_queue_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(production.queue_item_id, userId) as Record<string, unknown> | undefined;
       if (!row || row.version !== production.queue_version || ["completed", "cancelled"].includes(String(row.status)) || (input.recipe_id && Number(row.recipe_id) !== input.recipe_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "制作队列已变化，请刷新后重试");
       if (row.recipe_id != null) input.recipe_id ??= Number(row.recipe_id);
+      const targets = parseJson<{ productionPlanItems?: ProductionTarget[] }>(row.recipe_snapshot_json, {}).productionPlanItems;
+      if (targets) {
+        const plans = this.database.prepare("SELECT i.*,p.status AS plan_status,p.deleted_at AS plan_deleted_at FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.queue_item_id=? ORDER BY i.id").all(userId, production.queue_item_id) as Record<string, unknown>[];
+        validateProductionTargets(targets, plans, production, input.recipe_id);
+      }
     }
     if (production.plan_item_id) {
       const row = this.database.prepare("SELECT i.version,i.status,i.recipe_id,i.dining_json,p.status AS plan_status FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=? AND i.user_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL").get(production.plan_item_id, userId) as Record<string, unknown> | undefined;
@@ -230,13 +238,19 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
     const meal = formatPreparedMeal(this.database.prepare("SELECT * FROM prepared_meals WHERE id=?").get(id) as Record<string, unknown>);
     const record = production.eaten_servings > 0 ? this.createSync(userId, mealConsumptionRecord(meal, production.eaten_servings, production.eaten_at!, production.eaten_time ?? null)) : null;
     const queueSnapshot = production.queue_item_id ? (this.database.prepare("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=? AND user_id=?").get(production.queue_item_id,userId) as { recipe_snapshot_json: string } | undefined)?.recipe_snapshot_json : undefined;
+    const targets = parseJson<{ productionPlanItems?: ProductionTarget[] }>(queueSnapshot, {}).productionPlanItems;
+    if (targets) {
+      const allocations = new SqliteMealAllocationsRepository(this.database);
+      allocations.reserve(userId, targets[0].planId, productionReservations(targets, production, id));
+      meal.allocations = allocations.list(userId, id);
+    }
     const selectionEvidence = queueSnapshot ? (JSON.parse(queueSnapshot) as Record<string, unknown>).selectionEvidence ?? null : null;
     const response = { metric_environment: coreLoopEnvironment(), selection_evidence: selectionEvidence, prepared_meal: meal, diet_record: record, consumed_inventory_item_ids: consumedIds, inventory_consumption_changes: changes, repeated: false };
     this.database.prepare("UPDATE prepared_meals SET result_json=? WHERE id=?").run(JSON.stringify(response), id);
     if (record) this.database.prepare("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES(?,?,?,?,'eat',?,?,?,?)")
       .run(randomUUID(), userId, id, `production:${id}`, production.eaten_servings, production.eaten_at!, record.id, JSON.stringify(response));
     if (production.queue_item_id) this.database.prepare("UPDATE cooking_queue_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(production.queue_item_id, userId);
-    if (production.plan_item_id) this.database.prepare("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?").run(production.plan_item_id, userId);
+    if (production.plan_item_id) this.database.prepare("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND (id=? OR (? IS NOT NULL AND queue_item_id=?))").run(userId, production.plan_item_id, production.queue_item_id ?? null, production.queue_item_id ?? null);
     appendSqliteMaintenanceEvent(this.database, { userId, kind: "production", sourceId: id, subjectId: id,
       details: { version: meal.version, planItemId: production.plan_item_id ?? null, inventoryItemIds: consumedIds } });
     return response;

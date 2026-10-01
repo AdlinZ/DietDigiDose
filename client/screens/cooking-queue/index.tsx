@@ -424,6 +424,7 @@ export default function CookingQueueScreen() {
                       <View className="mt-2 flex-row flex-wrap gap-x-3 gap-y-1">
                         <Text className="text-[10px] font-black text-brand">{STATUS_LABELS[item.status]}</Text>
                         <Text className="text-[10px] font-bold text-copy-muted">{item.cookTime} 分钟</Text>
+                        {(item.productionMeals?.length ?? 0) > 1 && <Text className="text-[10px] font-bold text-copy-muted">{item.productionMeals?.length} 餐共用 · {item.plannedServings} 份</Text>}
                         <Text className="text-[10px] font-bold text-critical">{item.calories} kcal</Text>
                         <Text className={`text-[10px] font-black ${!ingredientDataReady || missing.length ? "text-critical" : "text-brand"}`}>
                           {!ingredientDataReady ? "食材待同步" : missing.length ? `缺 ${missing.length} 种食材` : "食材已齐"}

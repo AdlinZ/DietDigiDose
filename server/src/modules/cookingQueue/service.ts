@@ -12,6 +12,7 @@ export function formatQueueItem(row: QueueRow) {
   const snapshot = parseJson<Record<string, unknown>>(row.recipe_snapshot_json, {});
   const currentIngredients = parseJson<unknown[]>(row.current_ingredients_json, []);
   return {
+    productionMeals: Array.isArray(snapshot.productionPlanItems) ? snapshot.productionPlanItems.map((target: { date: string; mealType: string; servings: number }) => ({ date: target.date, mealType: target.mealType, servings: target.servings })) : [],
     plannedServings: Number(snapshot.plannedServings) > 0 ? Number(snapshot.plannedServings) : null,
     sourcePlanItemId: row.source_plan_item_id ? String(row.source_plan_item_id) : null,
     plannedDate: typeof snapshot.plannedDate === "string" ? snapshot.plannedDate : null,

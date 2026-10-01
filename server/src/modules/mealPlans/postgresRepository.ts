@@ -1,3 +1,4 @@
+import { commonProduction } from "./commonProduction.js";
 import { PostgresMealAllocationsRepository } from "../mealAllocations/postgresRepository.js";
 import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readPostgresDiningSupply } from "../households/postgresDiningSupply.js";
@@ -364,15 +365,24 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       await lockMealPlanning(client,userId);
       await this.lockExecution(client, userId, input.idempotencyKey);
       const repeated = await this.repeated(client, userId, input.idempotencyKey);
-      if (repeated) return { kind: "completed" as const, value: repeated };
+      if (repeated) {
+        if ((repeated.combineSameRecipe ?? false) !== (input.combineSameRecipe ?? false)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "该提交编号已用于另一种制作安排，请刷新后重试");
+        return { kind: "completed" as const, value: repeated };
+      }
       const item = await this.getItem(client, planId, itemId, userId, true);
       if (!item) return { kind: "not_found" as const };
       if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED","这是共餐安排，请从家庭制作入口记录产出");
       if (["completed","skipped"].includes(String(item.status)) || Number(item.version) !== input.version) return { kind: "version_conflict" as const };
       if (!item.recipe_id || item.recipe_status !== "approved" || item.recipe_deleted_at) return { kind: "recipe_unavailable" as const };
       await client.query("SELECT pg_advisory_xact_lock(9471, $1::integer)", [userId]);
-      const existing = await client.query(`SELECT id FROM cooking_queue_items WHERE user_id = $1 AND source_plan_item_id = $2
-        AND deleted_at IS NULL AND status IN (${activeQueueStatuses})`, [userId, itemId]);
+      const existing = await client.query(`SELECT id FROM cooking_queue_items WHERE user_id = $1 AND (source_plan_item_id = $2 OR id = $3)
+        AND deleted_at IS NULL AND status IN (${activeQueueStatuses})`, [userId, itemId, item.queue_item_id ?? null]);
+      if (existing.rows[0] && item.queue_item_id === existing.rows[0].id) {
+        const value = { queueItemId: String(existing.rows[0].id), added: false, combineSameRecipe: input.combineSameRecipe ?? false, repeated: false };
+        await this.saveExecution(client, userId, input.idempotencyKey, "queue", itemId, value);
+        return { kind: "completed" as const, value };
+      }
+      const group = input.combineSameRecipe ? commonProduction(item, (await client.query(`${itemSelect} WHERE i.plan_id=$1 AND i.user_id=$2 AND i.deleted_at IS NULL ORDER BY i.id FOR UPDATE OF i`,[planId,userId])).rows as Row[]) : null;
       let queueItemId = existing.rows[0]?.id as string | undefined;
       let added = false;
       if (!queueItemId) {
@@ -388,15 +398,18 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
           queueMealType(item.meal_type), null, JSON.stringify({
             title: item.recipe_title || item.title, imageUrl: item.recipe_image_url || null,
             cookTime: item.recipe_cook_time || 0, difficulty: item.recipe_difficulty || "难度未知",
-            ingredients: parseJson(item.ingredients_json, []),
-            plannedServings: formatMealPlanItem(item).plannedServings, planItemId: itemId, plannedDate: String(item.planned_date),
+            ingredients: group?.ingredients ?? parseJson(item.ingredients_json, []),
+            productionPlanItems: group?.targets,
+            plannedServings: group?.servings ?? formatMealPlanItem(item).plannedServings, planItemId: itemId, plannedDate: String(item.planned_date),
           }), `meal-plan:${itemId}:${input.version}`, itemId]);
         added = true;
       }
-      const changed = await client.query(`UPDATE meal_plan_items SET queue_item_id = $1, status = 'queued', version = version + 1,
-        updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3 AND version = $4`, [queueItemId, itemId, userId, input.version]);
-      if (changed.rowCount !== 1) return { kind: "version_conflict" as const };
-      const value = { queueItemId, added, repeated: false };
+      for (const member of group?.targets ?? [{ id: itemId, version: input.version + 1 }]) {
+        const changed = await client.query(`UPDATE meal_plan_items SET queue_item_id = $1, status = 'queued', version = version + 1,
+          updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3 AND version = $4`, [queueItemId, member.id, userId, member.version - 1]);
+        if (changed.rowCount !== 1) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "共用制作的餐次已变化，请刷新后重试");
+      }
+      const value = { queueItemId, added, combineSameRecipe: input.combineSameRecipe ?? false, repeated: false };
       await this.saveExecution(client, userId, input.idempotencyKey, "queue", itemId, value);
       return { kind: "completed" as const, value };
     });

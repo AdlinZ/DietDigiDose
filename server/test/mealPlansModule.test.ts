@@ -79,3 +79,33 @@ test("automatic meal changes distinguish shopping-list intent, actual purchases,
   assert.equal(mealChangeDecision({ status: "planned" }, undefined, [{ checked: true }]), "suggest");
   for (const status of ["preparing", "ready", "cooking", "completed"]) assert.equal(mealChangeDecision({ status: "planned" }, { status }, []), "keep");
 });
+
+import { commonProduction, productionReservations } from "../src/modules/mealPlans/commonProduction.js";
+import { mealPlanQueueSchema } from "../src/validation/schemas.js";
+
+test("common production combines compatible session demands and leaves replaced, queued and shared meals alone", () => {
+  const execution = { targetMealId: "first", recipeId: 1, title: "番茄炒蛋", servings: 1.5, recipeYield: 2,
+    demands: [{ food_name: "番茄", amount_value: 150, unit: "g" }, { food_name: "鸡蛋", amount_value: 1.5, unit: "piece" }] };
+  const first = { ...item, plan_constraints_json: { savedCookingDraft: { draft: { planningMode: "single_session" } }, executionItems: {
+    [item.id]: execution, second: { ...execution, targetMealId: "next", servings: 0.5, demands: [{ food_name: "番茄", amount_value: 50, unit: "g" }, { food_name: "鸡蛋", amount_value: 0.5, unit: "piece" }] },
+    replaced: execution, queued: execution, dining: execution,
+  } } };
+  const second = { ...item, id: "second", planned_date: "2026-09-03", version: 4 };
+  const group = commonProduction(first, [first, second, { ...item, id: "replaced", recipe_id: 2 }, { ...item, id: "queued", queue_item_id: "existing" }, { ...item, id: "dining", dining_json: {} }])!;
+  assert.equal(group.servings, 2);
+  assert.deepEqual(group.ingredients, [{ name: "番茄", amount: "200g" }, { name: "鸡蛋", amount: "2个" }]);
+  assert.equal(group.targets.find(target => target.id === "second")!.version, 5);
+  assert.equal(group.targets.find(target => target.id === "second")!.date, "2026-09-03");
+  assert.equal(commonProduction({ ...first, plan_constraints_json: { ...first.plan_constraints_json, currentCookingDraft: { planningMode: "weekly" } } }, [first, second]), null);
+  assert.equal(commonProduction({ ...first, plan_constraints_json: {} }, [first, second]), null);
+  const reservations = productionReservations(group.targets, { food_name: "番茄炒蛋", produced_servings: 3, eaten_servings: 0.5,
+    plan_item_id: "second", meal_type: "晚餐", nutrition_per_serving: {} }, "made-batch");
+  assert.deepEqual(reservations.map(meal => [meal.id, meal.preparedServings]), [["first", 1.5]], "selected next meal is eaten first; excess portions remain unallocated");
+});
+
+test("common production requires an explicit boolean and old queue requests stay valid", () => {
+  const input = { version: 1, idempotencyKey: "queue-compatibility-0001" };
+  assert.equal(mealPlanQueueSchema.parse(input).combineSameRecipe, undefined);
+  assert.equal(mealPlanQueueSchema.parse({ ...input, combineSameRecipe: true }).combineSameRecipe, true);
+  assert.equal(mealPlanQueueSchema.safeParse({ ...input, combineSameRecipe: "true" }).success, false);
+});

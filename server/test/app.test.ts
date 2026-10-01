@@ -4837,3 +4837,22 @@ test("inventory decimal precision failures return 409 and leave cooking and stoc
   assert.deepEqual(db.prepare("SELECT quantity_value,version FROM inventory_items WHERE id=?").get(id), { quantity_value: 1, version: 1 });
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM prepared_meals WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
 });
+
+
+test("same-session cooking shares production across meal plans atomically", async () => {
+  const { verifyCommonProduction } = await import("./helpers/commonProduction.js");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
+  const { DietRecordsService } = await import("../src/modules/dietRecords/service.js");
+  const { SqliteCookingQueueRepository } = await import("../src/modules/cookingQueue/sqliteRepository.js");
+  const account = await register("common-production@example.com");
+  await verifyCommonProduction(new SqliteMealPlansRepository(db), new DietRecordsService(new SqliteDietRecordsRepository(db)), account.user.id, async (sql, values = []) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...values) as Record<string, unknown>[];
+    statement.run(...values); return [];
+  }, new SqliteCookingQueueRepository(db), async operation => {
+    db.exec("CREATE TRIGGER common_production_failure BEFORE INSERT ON prepared_meal_allocations BEGIN SELECT RAISE(ABORT,'injected common production failure'); END");
+    try { await assert.rejects(operation(), /injected common production failure/); }
+    finally { db.exec("DROP TRIGGER common_production_failure"); }
+  });
+});

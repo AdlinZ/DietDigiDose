@@ -1,3 +1,4 @@
+import { commonProduction } from "./commonProduction.js";
 import { SqliteMealAllocationsRepository } from "../mealAllocations/sqliteRepository.js";
 import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readSqliteDiningSupply } from "../households/sqliteDiningSupply.js";
@@ -334,14 +335,23 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
     try {
       return this.database.transaction(() => {
         const repeated = this.repeated(userId, input.idempotencyKey);
-        if (repeated) return { kind: "completed" as const, value: repeated };
+        if (repeated) {
+          if ((repeated.combineSameRecipe ?? false) !== (input.combineSameRecipe ?? false)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "该提交编号已用于另一种制作安排，请刷新后重试");
+          return { kind: "completed" as const, value: repeated };
+        }
         const item = this.getItem(planId, itemId, userId);
         if (!item) return { kind: "not_found" as const };
       if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED","这是共餐安排，请从家庭制作入口记录产出");
         if (["completed","skipped"].includes(String(item.status)) || Number(item.version) !== input.version) return { kind: "version_conflict" as const };
         if (!item.recipe_id || item.recipe_status !== "approved" || item.recipe_deleted_at) return { kind: "recipe_unavailable" as const };
-        const existing = this.database.prepare(`SELECT id FROM cooking_queue_items WHERE user_id = ? AND source_plan_item_id = ?
-          AND deleted_at IS NULL AND status IN ('waiting', 'preparing', 'ready', 'cooking')`).get(userId, itemId) as { id: string } | undefined;
+        const existing = this.database.prepare(`SELECT id FROM cooking_queue_items WHERE user_id = ? AND (source_plan_item_id = ? OR id = ?)
+          AND deleted_at IS NULL AND status IN ('waiting', 'preparing', 'ready', 'cooking')`).get(userId, itemId, item.queue_item_id ?? null) as { id: string } | undefined;
+        if (existing && item.queue_item_id === existing.id) {
+          const value = { queueItemId: existing.id, added: false, combineSameRecipe: input.combineSameRecipe ?? false, repeated: false };
+          this.saveExecution(userId, input.idempotencyKey, "queue", itemId, value);
+          return { kind: "completed" as const, value };
+        }
+        const group = input.combineSameRecipe ? commonProduction(item, this.database.prepare(`${itemSelect} WHERE i.plan_id=? AND i.user_id=? AND i.deleted_at IS NULL ORDER BY i.id`).all(planId,userId) as Row[]) : null;
         let queueItemId = existing?.id;
         let added = false;
         if (!queueItemId) {
@@ -356,15 +366,18 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(queueItemId, userId, item.recipe_id, position, queueMealType(item.meal_type), null, JSON.stringify({
             title: item.recipe_title || item.title, imageUrl: item.recipe_image_url || null,
             cookTime: item.recipe_cook_time || 0, difficulty: item.recipe_difficulty || "难度未知",
-            ingredients: parseJson(item.ingredients_json, []),
-            plannedServings: formatMealPlanItem(item).plannedServings, planItemId: itemId, plannedDate: String(item.planned_date),
+            ingredients: group?.ingredients ?? parseJson(item.ingredients_json, []),
+            productionPlanItems: group?.targets,
+            plannedServings: group?.servings ?? formatMealPlanItem(item).plannedServings, planItemId: itemId, plannedDate: String(item.planned_date),
           }), `meal-plan:${itemId}:${input.version}`, itemId);
           added = true;
         }
-        const changed = this.database.prepare(`UPDATE meal_plan_items SET queue_item_id = ?, status = 'queued', version = version + 1,
-          updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ?`).run(queueItemId, itemId, userId, input.version);
-        if (changed.changes !== 1) throw new Error("MEAL_PLAN_VERSION_CONFLICT");
-        const value = { queueItemId, added, repeated: false };
+        for (const member of group?.targets ?? [{ id: itemId, version: input.version + 1 }]) {
+          const changed = this.database.prepare(`UPDATE meal_plan_items SET queue_item_id = ?, status = 'queued', version = version + 1,
+            updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ?`).run(queueItemId, member.id, userId, member.version - 1);
+          if (changed.changes !== 1) throw new Error("MEAL_PLAN_VERSION_CONFLICT");
+        }
+        const value = { queueItemId, added, combineSameRecipe: input.combineSameRecipe ?? false, repeated: false };
         this.saveExecution(userId, input.idempotencyKey, "queue", itemId, value);
         return { kind: "completed" as const, value };
       })();

@@ -49,7 +49,7 @@ export default function MealPlansScreen() {
   const [withoutStock, setWithoutStock] = useState(false);
   const [detailItem, setDetailItem] = useState<MealPlanItem | null>(null);
   useEffect(() => {
-    setProduced(String(detailItem?.plannedServings ?? 1));
+    setProduced(String(detailItem?.productionServings ?? detailItem?.plannedServings ?? 1));
     setEaten("0");
     setWithoutStock(false);
   }, [detailItem?.id]);
@@ -140,10 +140,20 @@ export default function MealPlansScreen() {
     }
   };
 
-  const addQueue = async (item: MealPlanItem, start = false) => {
+  const addQueue = async (item: MealPlanItem, start = false, combineSameRecipe?: boolean) => {
     if (!selectedPlan || savingAction) return;
     if (!item.recipeId || !item.recipeAvailable) {
       Alert.alert("菜谱不可执行", "请先为这个餐次替换一份可用菜谱");
+      return;
+    }
+    const savedDraft = (selectedPlan.constraints.currentCookingDraft ?? (selectedPlan.constraints.savedCookingDraft as { draft?: { planningMode?: string } } | undefined)?.draft) as { planningMode?: string } | undefined;
+    const common = savedDraft && savedDraft.planningMode !== "weekly" ? selectedPlan.items.filter(other => other.recipeId === item.recipeId && other.status === "planned" && !other.queueItemId && !other.dining && (other.plannedServings ?? 0) > 0) : [];
+    if (combineSameRecipe === undefined && common.length > 1 && !item.queueItemId) {
+      Alert.alert("相同菜谱共用制作", common.map(other => `${other.plannedDate} ${other.mealType} ${other.plannedServings}份`).join("\n"), [
+        { text: "取消", style: "cancel" },
+        { text: "只做这一餐", onPress: () => void addQueue(item, start, false) },
+        { text: `共做 ${common.reduce((sum, other) => sum + (other.plannedServings ?? 0), 0)} 份`, onPress: () => void addQueue(item, start, true) },
+      ]);
       return;
     }
     setSavingAction(`queue:${item.id}`);
@@ -151,6 +161,7 @@ export default function MealPlansScreen() {
       await mealPlansApi.addQueue(authFetch, selectedPlan.id, item.id, {
         version: item.version,
         idempotencyKey: executionKey("queue", item),
+        combineSameRecipe: combineSameRecipe ?? false,
       });
       await load();
       if (start) router.push("/cooking-queue");
@@ -380,7 +391,8 @@ export default function MealPlansScreen() {
                   <TouchableOpacity onPress={() => void addQueue(detailItem, true)} className="flex-1 items-center rounded-2xl bg-brand-soft py-3"><Text className="text-xs font-black text-brand">开始烹饪</Text></TouchableOpacity>
                 </View>
                 {detailItem.status !== "completed" ? <>
-                  <MealProductionFields produced={produced} eaten={eaten} onProducedChange={setProduced} onEatenChange={setEaten} />
+                  {(detailItem?.productionMealCount ?? 1) > 1 && <Text className="mb-3 text-copy-muted">共用一次制作 · {detailItem?.productionMealCount} 个餐次 · 共 {detailItem?.productionServings} 份；保存后分别保留各餐次安排。</Text>}
+              <MealProductionFields produced={produced} eaten={eaten} onProducedChange={setProduced} onEatenChange={setEaten} />
                   <TouchableOpacity onPress={() => setWithoutStock(value => !value)}><Text className="text-brand">{withoutStock ? "已确认：" : "点击确认："} 本次未使用库存原料</Text></TouchableOpacity>
                 </> : null}
                 {detailItem.dining ? <Text className="mb-3 text-copy-muted">已安排 {detailItem.dining.participants.length} 人共餐，共 {detailItem.dining.participants.reduce((sum,person) => sum+Math.round(person.servings*1_000_000),0)/1_000_000} 份；请从共餐入口记录家庭制作。</Text> : null}

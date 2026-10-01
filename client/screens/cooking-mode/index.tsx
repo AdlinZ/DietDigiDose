@@ -1437,6 +1437,7 @@ export default function CookingModeScreen() {
               您已成功完成了【{title || "自制菜品"}】的全部 {cookingSteps.length} 个步骤！
             </Text>
 
+            {(queueContext?.productionMeals?.length ?? 0) > 1 && <View className="mb-3 w-full"><Text className="font-bold text-ink">共用一次制作 · 共 {queueContext?.plannedServings} 份</Text>{queueContext?.productionMeals?.map((meal, index) => <Text key={index} className="mt-1 text-copy-muted">{meal.date} · {({ breakfast: "早餐", lunch: "午餐", dinner: "晚餐", snack: "加餐" })[meal.mealType]} · {meal.servings} 份</Text>)}</View>}
             <MealProductionFields produced={producedServings} eaten={eatenServings} onProducedChange={setProducedServings} onEatenChange={setEatenServings} />
             <Text className="mt-3 text-copy-muted">实际制作花了几分钟（可留空，不使用菜谱估时）</Text>
             <TextInput accessibilityLabel="用户报告的实际制作分钟" editable={!isCompleting && !completion.pending} value={reportedMinutes} onChangeText={setReportedMinutes} keyboardType="number-pad" placeholder="例如 25" className="mt-2 w-full rounded-xl border border-line p-3 text-ink" />

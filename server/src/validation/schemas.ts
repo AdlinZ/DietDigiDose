@@ -511,7 +511,7 @@ const mealPlanExecutionBaseSchema = z.object({
 }).strict();
 
 export const mealPlanShoppingSchema = mealPlanExecutionBaseSchema.extend({ householdNetFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),householdRecipeFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),householdTotalDemand: householdDiningPlanSchema.optional() }).strict();
-export const mealPlanQueueSchema = mealPlanExecutionBaseSchema;
+export const mealPlanQueueSchema = mealPlanExecutionBaseSchema.extend({ combineSameRecipe: z.boolean().optional() }).strict();
 export const mealPlanCompleteSchema = mealPlanExecutionBaseSchema.extend({
   dietRecordId: z.number().int().positive().optional(),
   production: mealProductionSchema.optional(),

@@ -15,6 +15,8 @@ export interface MealPlanItem {
   householdId?: number | null;
   confirmedAt?: string | null;
   change?: MealPlanChange;
+  productionServings?: number | null;
+  productionMealCount?: number;
   plannedServings?: number | null;
   targetMealId?: string | null;
   id: string;

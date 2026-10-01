@@ -1,3 +1,4 @@
+import { ReheatingDevicePicker } from "@/components/ReheatingDevicePicker";
 import { useEffect, useRef, useState } from "react";
 import { Alert, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import * as Crypto from "expo-crypto";
@@ -16,11 +17,12 @@ export default function WeeklyPlanScreen() {
   const [result,setResult] = useState<WeeklyPlanPreview | null>(null);
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState("");
+  const [reheatingDeviceIds, setReheatingDeviceIds] = useState<number[]>();
   const [mealTypes,setMealTypes] = useState<WeeklyPlanRequest["mealTypes"]>();
   const revision = useRef(0);
   const account = useRef(user?.id); account.current = user?.id;
   const draftId = useRef<string | null>(null);
-  useEffect(() => { revision.current += 1; setResult(null); draftId.current = null; setBusy(false); setError(""); },[user?.id]);
+  useEffect(() => { revision.current += 1; setResult(null); setReheatingDeviceIds(undefined); draftId.current = null; setBusy(false); setError(""); },[user?.id]);
   useEffect(() => () => { revision.current += 1; account.current = undefined; },[]);
   const invalidate = () => { revision.current += 1; setResult(null); draftId.current = null; };
   const generate = async () => {
@@ -28,7 +30,7 @@ export default function WeeklyPlanScreen() {
     const owner = user.id; const request = ++revision.current;
     setBusy(true); setError(""); setResult(null);
     try {
-      const value = await recommendationsApi.weeklyPlan(authFetch,{ startDate,...(mealTypes ? { mealTypes } : {}) });
+      const value = await recommendationsApi.weeklyPlan(authFetch,{ startDate,reheatingDeviceIds,...(mealTypes ? { mealTypes } : {}) });
       if (request !== revision.current || account.current !== owner) return;
       draftId.current = Crypto.randomUUID(); setResult(value);
     } catch (reason) { if (request === revision.current && account.current === owner) setError(reason instanceof Error ? reason.message : "生成失败"); }
@@ -54,6 +56,7 @@ export default function WeeklyPlanScreen() {
         invalidate(); const value = key as NonNullable<WeeklyPlanRequest["mealTypes"]>[number];
         setMealTypes(current => { const next = current?.includes(value) ? current.filter(item => item !== value) : [...(current ?? []),value]; return next.length ? next : undefined; });
       }}><Text className={mealTypes?.includes(key as NonNullable<WeeklyPlanRequest["mealTypes"]>[number]) ? "font-bold text-brand" : "text-copy-muted"}>{label}</Text></TouchableOpacity>)}</View>
+      <ReheatingDevicePicker key={user?.id ?? "guest"} value={reheatingDeviceIds} disabled={busy} onChange={ids => { invalidate(); setReheatingDeviceIds(ids); }} />
       {!user ? <TouchableOpacity onPress={() => router.push("/login")}><Text className="text-brand">登录后生成安排</Text></TouchableOpacity> : <TouchableOpacity disabled={busy} onPress={() => void generate()} className="bg-brand-fill rounded-xl p-4"><Text className="font-bold text-white text-center">{busy ? "处理中…" : "计算七日安排"}</Text></TouchableOpacity>}
       {error ? <Text className="text-danger">{error}</Text> : null}
       {result ? <>

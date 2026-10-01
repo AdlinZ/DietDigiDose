@@ -23,6 +23,10 @@ import type { RecommendationsRepository } from "./repository.js";
 import { formatRecommendationProfile, parseArray, RECIPE_CANDIDATE_VERSION, RECIPE_SCORING_VERSION, scoreRecipeRecommendations } from "./scoring.js";
 import type { RecommendationDataset, RecommendationEventInput, RecommendationInput, Row } from "./types.js";
 
+const executionProfiles = (rows: Row[]) => new Map(rows.flatMap(row => {
+  const review = reviewedExecution(row); return review ? [[Number(row.id), review] as const] : [];
+}));
+
 export class RecommendationsService {
   private readonly repository: RecommendationsRepository;
   private readonly kitchenware: Pick<KitchenwareService, "requirements" | "evaluateRequirements">;
@@ -59,7 +63,7 @@ export class RecommendationsService {
     const request = weeklyPlanRequestSchema.parse(input);
     const end = new Date(`${request.startDate}T00:00:00Z`); end.setUTCDate(end.getUTCDate()+6);
     const endDate = end.toISOString().slice(0,10);
-    const [computed,stock,batches,state] = await Promise.all([this.compute(userId,{ surface: "meal_plan" }),this.repository.inventory(userId),this.repository.preparedMeals(userId),this.repository.planningState(userId,request.startDate,endDate)]);
+    const [computed,stock,batches,state] = await Promise.all([this.compute(userId,{ surface: "meal_plan" }, request.reheatingDeviceIds?.length ? { reheating_available: true } : {}),this.repository.inventory(userId),this.repository.preparedMeals(userId),this.repository.planningState(userId,request.startDate,endDate)]);
     const reservations = activePreparedAllocations(state.plans);
     const items = [...state.items];
     for (const plan of state.plans) {
@@ -79,11 +83,9 @@ export class RecommendationsService {
         if (meal.cookServings === 0) items.push({ id: `prepared-plan:${plan.id}:${meal.id}`,planned_date: meal.date,meal_type: meal.mealType,title: meal.allocations.map(item => item.foodName).join("、"),prepared_only: true,status: "planned" });
       }
     }
-    const rules = new Map((batches.length ? await this.repository.recipes({ timeBudget: null }) : []).flatMap(row => {
-      const rule = reviewedExecution(row)?.profile.handling;
-      return rule ? [[Number(row.id), rule] as const] : [];
-    }));
-    return buildWeeklyPlan(request,computed.profile.kitchen,computed.results,stock,batches.map(formatPreparedMeal),items,state.shopping,reservations, await this.repository.kitchenware(userId), rules);
+    const profiles = executionProfiles(batches.length ? await this.repository.recipes({ timeBudget: null }) : []);
+    const rules = new Map([...profiles].flatMap(([id, review]) => review.profile.handling ? [[id, review.profile.handling] as const] : []));
+    return buildWeeklyPlan(request,computed.profile.kitchen,computed.results,stock,batches.map(formatPreparedMeal),items,state.shopping,reservations, await this.repository.kitchenware(userId), rules, profiles);
   }
 
   async planRequirements(userId: number, input: MealPlanRequirementsInput) {
@@ -91,7 +93,7 @@ export class RecommendationsService {
     const dates = request.meals.map(meal => meal.date).sort();
     const [profile, prepared, state] = await Promise.all([this.repository.profile(userId), this.repository.preparedMeals(userId),
       this.repository.planningState(userId, dates[0], dates[dates.length - 1])]);
-    const preferences = resolveKitchenPreferences(formatRecommendationProfile(profile).kitchen,request.preferences);
+    const preferences = resolveKitchenPreferences(formatRecommendationProfile(profile).kitchen,{ ...request.preferences, ...(request.reheatingDeviceIds?.length ? { reheating_available: true } : {}) });
     const rules = new Map((prepared.length ? await this.repository.recipes({ timeBudget: null }) : []).flatMap(row => {
       const rule = reviewedExecution(row)?.profile.handling;
       return rule ? [[Number(row.id), rule] as const] : [];
@@ -101,9 +103,12 @@ export class RecommendationsService {
 
   async cookingPlan(userId: number, input: MealPlanRequirementsInput) {
     const requirements = await this.planRequirements(userId, input);
-    const candidates = await this.compute(userId, { surface: "meal_plan" }, input.preferences);
-    return cookingPlanDraftSchema.parse({ ...buildCookingDraft(requirements, candidates.results, await this.repository.inventory(userId), candidates.timeBudget!, await this.repository.kitchenware(userId)),
-      effectivePreferences: candidates.profile.kitchen });
+    const candidates = await this.compute(userId, { surface: "meal_plan" }, { ...input.preferences, ...(input.reheatingDeviceIds?.length ? { reheating_available: true } : {}) });
+    const hasPrepared = requirements.meals.some(meal => meal.allocations.length);
+    const [stock, devices, prepared, rows] = await Promise.all([this.repository.inventory(userId), this.repository.kitchenware(userId),
+      hasPrepared ? this.repository.preparedMeals(userId) : Promise.resolve([]), hasPrepared ? this.repository.recipes({ timeBudget: null }) : Promise.resolve([])]);
+    return cookingPlanDraftSchema.parse(buildCookingDraft({ ...requirements, effectivePreferences: candidates.profile.kitchen }, candidates.results, stock, candidates.timeBudget!, devices,
+      { prepared: prepared.map(formatPreparedMeal), profiles: executionProfiles(rows) }));
   }
 
   async replaceCookingItem(userId: number, input: ReplaceCookingPlanItemInput) {
@@ -117,7 +122,7 @@ export class RecommendationsService {
     ]);
     const rules = new Map(recipes.flatMap(row => { const rule = reviewedExecution(row)?.profile.handling; return rule ? [[Number(row.id), rule] as const] : []; }));
     return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, stock,state?.items ?? [], devices,
-      preparedHandlingChecks(request.draft, prepared.map(formatPreparedMeal), rules));
+      preparedHandlingChecks(request.draft, prepared.map(formatPreparedMeal), rules), { prepared: prepared.map(formatPreparedMeal), profiles: executionProfiles(recipes) });
   }
 
   versions() { return { scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION }; }

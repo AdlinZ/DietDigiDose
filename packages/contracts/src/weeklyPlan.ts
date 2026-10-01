@@ -1,3 +1,4 @@
+import { reheatingDeviceIdsSchema } from "./recipeExecution.ts";
 import { z } from "zod";
 import type { CookingPlanDraft } from "./mealPlanRequirements.ts";
 export const weeklyPlanRequestSchema = z.object({
@@ -6,6 +7,7 @@ export const weeklyPlanRequestSchema = z.object({
     return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0,10) === value;
   }, "日期无效"),
   mealTypes: z.array(z.enum(["breakfast","lunch","dinner","snack"])).min(1).max(4).refine(values => new Set(values).size === values.length,"餐次不能重复").optional(),
+  reheatingDeviceIds: reheatingDeviceIdsSchema.optional(),
   servings: z.number().int().min(1).max(30).optional(),
 }).strict();
 export type WeeklyPlanRequest = z.infer<typeof weeklyPlanRequestSchema>;

@@ -177,12 +177,12 @@ export class AdminRecipesService {
         if (!target || target.deleted_at || target.status !== "approved" || target.quality_status !== "trusted" || !reviewedExecution(target)
           || rule.recipeKey !== executionRecipeKey(target) || !substitutionMatches(recipe, target, rule)) throw new AdminRecipesError(400, "替代菜谱须公开可信、制作流程仍已审核、份数相同且仅替换所列原料；请重新核对完整变体");
       }
-      if (input.profile.maxBatchServings > Number(recipe.serving_size || 0)) throw new AdminRecipesError(400, "批次份量不能超过菜谱已声明产出，请先核对菜谱份数");
+      if (Math.max(input.profile.maxBatchServings, input.profile.reheating?.maxBatchServings ?? 0) > Number(recipe.serving_size || 0)) throw new AdminRecipesError(400, "批次份量不能超过菜谱已声明产出，请先核对菜谱份数");
       const reviewedCapabilities = new Set<string>();
-      for (const tool of input.profile.tools) {
+      for (const tool of [...input.profile.tools, ...(input.profile.reheating?.tools ?? [])]) {
         const catalog = await this.catalog.resolveCatalog(tool.name);
         if (!catalog || catalog.confidence !== 1 || catalog.id !== tool.catalogId || (catalog.qualityStatus && catalog.qualityStatus !== "trusted")) throw new AdminRecipesError(400, `请为「${tool.name}」选择已审核的厨具目录项`);
-        for (const capability of catalog.capabilities) reviewedCapabilities.add(capability.code);
+        if (input.profile.tools.includes(tool)) for (const capability of catalog.capabilities) reviewedCapabilities.add(capability.code);
       }
       for (const required of parseArray(recipe.required_kitchenware_json)) {
         const name = typeof required === "string" ? required : String((required as Row)?.name || "");
@@ -195,7 +195,7 @@ export class AdminRecipesService {
     const execution = input.profile ? { recipeKey: input.recipeKey, profile: input.profile, reviewedBy: adminUserId, reviewedAt: new Date().toISOString() } : null;
     if (!await this.repository.reviewExecution(recipeId, execution, recipe, audit({ ...context, adminUserId }, {
       action: "recipe.execution_review", resourceId: recipeId, summary: `${execution ? "审核制作流程" : "撤销制作流程审核"}：${recipe.title}`,
-      details: { recipeKey: input.recipeKey, reference: input.profile?.reference ?? null, handling: input.profile?.handling ?? null, substitutions: input.profile?.substitutions ?? [] },
+      details: { recipeKey: input.recipeKey, reference: input.profile?.reference ?? null, handling: input.profile?.handling ?? null, reheating: input.profile?.reheating ?? null, substitutions: input.profile?.substitutions ?? [] },
     }))) throw new AdminRecipesError(409, "食谱内容已改变，请重新核对制作流程", "RECIPE_EXECUTION_CONFLICT");
     return { success: true, execution, reviewKey: executionReviewKey({ ...recipe, execution_json: execution }) };
   }

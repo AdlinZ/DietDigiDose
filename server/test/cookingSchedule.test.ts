@@ -75,3 +75,84 @@ test("reviewed handling excludes known conflicts and preserves uncertainty about
   const draft = { meals: [{ id: "lunch", date: "2099-01-02", allocations: [{ preparedMealId, version: 1, servings: 1 }] }], effectivePreferences: context.preferences } as Parameters<typeof preparedHandlingChecks>[0];
   assert.equal(preparedHandlingChecks(draft, [], new Map([[1, cold]]))[0].status, "conflict", "client evidence cannot replace the actual record");
 });
+
+test("audited reheating has independent bounds and cannot omit equipment, checks or cleanup", async () => {
+  const { recipeReheatingSchema } = await import("@dietdigidose/contracts");
+  const graph = reheatingFixture();
+  assert.equal(recipeReheatingSchema.safeParse(graph).success, true);
+  for (const value of [{ ...graph, tools: [] }, { ...graph, sourceUrl: "http://example.invalid" }, { ...graph, instructions: "" },
+    { ...graph, tasks: graph.tasks.slice(0, 2) }, { ...graph, tasks: graph.tasks.map(task => task.phase === "cooking" ? { ...task, minutes: 0 } : task) },
+    { ...graph, tasks: graph.tasks.map(task => task.id === "prepare" ? { ...task, dependsOn: ["clean"] } : task) }]) {
+    assert.equal(recipeReheatingSchema.safeParse(value).success, false);
+  }
+});
+
+function reheatingFixture() {
+  return { ...profile, sourceUrl: "https://example.invalid/reheating-fixture", instructions: "合成回归专用；实际温度和冷链须按独立审核条件检查",
+    tasks: profile.tasks.map(task => ({ ...task, title: task.phase === "cooking" ? "复热并检查" : task.title, minutes: task.phase === "preparation" ? 2 : task.phase === "cooking" ? 5 : 1 })) };
+}
+
+test("future or carried meals use a separate reheating session and explicit eating-location devices", async () => {
+  const { mealTime } = await import("../src/modules/recommendations/plan.js");
+  const reviewed = { ...recipe, execution_profile: { ...profile, reheating: reheatingFixture() } };
+  const candidates = [{ recipeId: 1, recipe: reviewed }] as Parameters<typeof mealTime>[1];
+  const cooking = [{ targetMealId: "lunch", recipeId: 1, title: "测试菜", servings: 2, recipeYield: 2, demands: [{ food_name: "番茄", amount_value: 2, unit: "piece" as const }] }];
+  const meal = { id: "lunch", date: "2099-01-02", mealType: "lunch" as const, servings: 2, preparedServings: 0, cookServings: 2, allocations: [] };
+  const context = { meals: [meal], productionDate: "2099-01-01", effectivePreferences: {} };
+  const future = mealTime(cooking, candidates, [device], 20, context);
+  assert.equal(future.schedule?.elapsedMinutes, 17); assert.equal(future.reheatingSessions?.[0].schedule.elapsedMinutes, 8);
+  assert.equal(future.incomplete, false); assert.equal(future.exceedsBudget, false);
+  const carry = { ...context, meals: [{ ...meal, date: context.productionDate }], effectivePreferences: { carry_meals: true } };
+  const unknown = mealTime(cooking, candidates, [device], 20, carry);
+  assert.equal(unknown.schedule?.elapsedMinutes, 17); assert.equal(unknown.incomplete, true);
+  assert(unknown.reheatingSessions?.[0].schedule.missing.includes("reheating_location_devices"));
+  for (const ids of [[], [999]]) assert.equal(mealTime(cooking, candidates, [device], 20, { ...carry, reheatingDeviceIds: ids }).incomplete, true);
+  assert.equal(mealTime(cooking, candidates, [device], 20, { ...carry, reheatingDeviceIds: [7] }).incomplete, false);
+  const noHeat = mealTime(cooking, candidates, [device], 20, { ...context, effectivePreferences: { reheating_available: false } });
+  assert.equal(noHeat.reheating?.[0].mode, "unknown"); assert.equal(noHeat.incomplete, true);
+  const split = mealTime(cooking, candidates, [{ ...device, attributes_json: { capacityMl: 500 } }], 20, context);
+  assert.equal(split.reheatingSessions?.[0].schedule.elapsedMinutes, 16); assert.equal(split.exceedsBudget, true, "production is also split by its actual device capacity");
+  const long = [{ recipeId: 1, recipe: { ...reviewed, execution_profile: { ...reviewed.execution_profile,
+    reheating: { ...reheatingFixture(), tasks: reheatingFixture().tasks.map(task => ({ ...task, minutes: task.phase === "cooking" ? 25 : task.minutes })) } } } }] as Parameters<typeof mealTime>[1];
+  const over = mealTime(cooking, long, [device], 20, context);
+  assert.equal(over.schedule?.elapsedMinutes, 17); assert.equal(over.reheatingSessions?.[0].schedule.elapsedMinutes, 28); assert.equal(over.exceedsBudget, true);
+});
+
+test("prepared reheating rereads actual recipe and version and shares same-day human and equipment capacity", async () => {
+  const { mealTime } = await import("../src/modules/recommendations/plan.js");
+  const { cookingPlanDraftSchema } = await import("@dietdigidose/contracts");
+  const id = "00000000-0000-4000-8000-000000000001";
+  const batch = { id, recipe_id: 1, food_name: "测试待吃餐", version: 1, produced_servings: 2, remaining_servings: 2, is_reserved: false, nutrition_per_serving: {}, planned_date: null,
+    meal_type: "", storage_location: "冷藏", produced_at: "2099-01-01T00:00:00Z", queue_item_id: null, plan_item_id: null };
+  const review = { recipeKey: "a".repeat(64), reviewedBy: 1, reviewedAt: "2026-10-01T00:00:00Z", profile: { ...profile, reheating: reheatingFixture() } };
+  const data = { prepared: [batch], profiles: new Map([[1, review]]) };
+  const meal = { id: "dinner", date: "2099-01-01", mealType: "dinner" as const, servings: 4, preparedServings: 2, cookServings: 2,
+    allocations: [{ preparedMealId: id, version: 1, foodName: batch.food_name, servings: 2, validationRequired: true as const }] };
+  const context = { meals: [meal], productionDate: meal.date, effectivePreferences: {} };
+  const candidates = [{ recipeId: 1, recipe }] as Parameters<typeof mealTime>[1];
+  const cooking = [{ targetMealId: "dinner", recipeId: 1, title: recipe.title, servings: 2, recipeYield: 2, demands: [{ food_name: "番茄", amount_value: 2, unit: "piece" as const }] }];
+  const time = mealTime(cooking, candidates, [device], 30, context, data);
+  assert.equal(time.schedule?.elapsedMinutes, 25); assert.equal(time.incomplete, false);
+  assert.equal(time.schedule?.batches.filter(batch => batch.kind === "reheating").length, 1);
+  cookingScheduleSchema.parse(time.schedule);
+  const draft = { ...context, status: "requires_validation" as const, totalCookServings: 2, cooking, unresolved: [], ingredientBudget: [], time, checksPending: [], excludedPreparedMealIds: [] };
+  assert.equal(cookingPlanDraftSchema.safeParse(draft).success, true);
+  for (const altered of [ { ...time, reheating: [] }, { ...time, reheating: time.reheating!.map(item => ({ ...item, servings: 1 })) },
+    { ...time, reheating: time.reheating!.map(item => ({ ...item, targetMealId: "unknown" })) } ]) assert.equal(cookingPlanDraftSchema.safeParse({ ...draft, time: altered }).success, false);
+  for (const actual of [{ prepared: [], profiles: data.profiles }, { prepared: [{ ...batch, version: 2 }], profiles: data.profiles }, { prepared: [batch], profiles: new Map() }]) {
+    const pending = mealTime(cooking, candidates, [device], 30, context, actual);
+    assert.equal(pending.incomplete, true); assert.equal(pending.reheating?.[0].mode, "unknown");
+  }
+  const cold = { ...review, profile: { ...profile, handling: { storage: "refrigerated" as const, maxHoldHours: 72, coldServingAllowed: true, carryAllowed: true,
+    sourceUrl: "https://example.invalid/cold", reference: "合成冷食测试来源", instructions: "合成回归专用，实际冷链必须另行核对" } } };
+  const coldTime = mealTime(cooking, candidates, [device], 30, context, { prepared: [batch], profiles: new Map([[1, cold]]) });
+  assert.equal(coldTime.schedule?.elapsedMinutes, 17); assert.equal(coldTime.reheating?.[0].mode, "cold"); assert.equal(coldTime.incomplete, false);
+  const { buildWeeklyPlan } = await import("../src/modules/recommendations/weeklyPlan.js");
+  const handling = { ...cold.profile.handling, coldServingAllowed: false };
+  const long = { ...review, profile: { ...review.profile, handling, reheating: { ...reheatingFixture(),
+    tasks: reheatingFixture().tasks.map(task => ({ ...task, minutes: task.phase === "cooking" ? 35 : task.minutes })) } } };
+  const weekly = buildWeeklyPlan({ startDate: meal.date, mealTypes: ["dinner"], servings: 2 }, { refrigeration_available: true, meal_time_minutes: 30 }, [], [], [batch], [], [], [], [device], new Map([[1, handling]]), new Map([[1, long]]));
+  assert.equal(weekly.slots[0].state, "unresolved", "over-budget prepared heating must not become a feasible weekly allocation");
+  assert.equal(weekly.draft?.meals[0].allocations.length, 0); assert.equal(weekly.draft?.meals[0].cookServings, 2);
+  cookingPlanDraftSchema.parse(weekly.draft);
+});

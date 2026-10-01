@@ -6,7 +6,7 @@ import type { AdminRecipesService } from "../../src/modules/adminRecipes/service
 import type { RecipesService } from "../../src/modules/recipes/service.js";
 import type { RecommendationsService } from "../../src/modules/recommendations/service.js";
 import type { KitchenwareService } from "../../src/modules/kitchenware/service.js";
-import { planTime } from "../../src/modules/recommendations/plan.js";
+import { mealTime } from "../../src/modules/recommendations/plan.js";
 import { reviewedExecution } from "../../src/modules/recipes/execution.js";
 
 export const executionFixture: RecipeExecutionProfile = { version: 1, maxBatchServings: 2,
@@ -56,9 +56,10 @@ export async function verifyRecipeExecution(admin: AdminRecipesService, recipes:
     meals: [{ id: "execution-dinner", date: "2099-01-01", mealType: "dinner", servings: 3 }] });
   // Other catalogue candidates exist; directly price this reviewed candidate for the requested portions too.
   assert(draft.time.schedule);
-  const split = planTime([{ targetMealId: "dinner", recipeId, title: body.title, servings: 3, recipeYield: 2,
+  const split = mealTime([{ targetMealId: "dinner", recipeId, title: body.title, servings: 3, recipeYield: 2,
     demands: [{ food_name: "排程回归原料", amount_value: 3, unit: "piece" }] }], computed.results,
-  [{ id: device.id, catalog_id: catalog.id, name: "平底锅", attributes_json: { capacityMl: 750 } }], 30);
+  [{ id: device.id, catalog_id: catalog.id, name: "平底锅", attributes_json: { capacityMl: 750 } }], 30, { productionDate: "2099-01-01", effectivePreferences: {}, meals: [{ id: "dinner", date: "2099-01-01", mealType: "dinner", servings: 3, preparedServings: 0, cookServings: 3, allocations: [] }] });
+  assert(split.schedule);
   assert.equal(split.schedule.elapsedMinutes, 34); assert.equal(split.exceedsBudget, true);
   await kitchenware.update(userId, Number(device.id), { name: "平底锅", attributes: { capacityMl: null } });
   const unknown = await recommendations.compute(userId, { surface: "meal_plan", search: body.title, maxCookTime: 20 });
@@ -139,5 +140,29 @@ export async function verifyRecipeExecution(admin: AdminRecipesService, recipes:
   const currentSource = await admin.execution(sourceId);
   await admin.reviewExecution(adminId, sourceId, { recipeKey: currentSource.recipeKey, reviewKey: currentSource.reviewKey, profile: null }, context);
   assert.equal((await mealPlans.activateDraft(userId, revokedId, 1)).kind, "recipe_not_available");
+
+  // Round-trip a separate heating graph through both real database repositories.
+  const reheatKeys = await admin.execution(targetId);
+  const reheating = { ...executionFixture, tools: profile.tools, reference: "合成复热专用审核依据", sourceUrl: "https://example.invalid/reheating-fixture",
+    instructions: "合成回归测试专用；真实食物温度和冷链必须另行实测核对",
+    tasks: profile.tasks.map(task => ({ ...task, minutes: task.phase === "preparation" ? 2 : task.phase === "cooking" ? 5 : 1 })) };
+  await admin.reviewExecution(adminId, targetId, { recipeKey: reheatKeys.recipeKey, reviewKey: reheatKeys.reviewKey,
+    profile: { ...profile, handling: { ...profile.handling, coldServingAllowed: false, carryAllowed: true }, reheating } }, context);
+  assert.deepEqual((await admin.execution(targetId)).execution?.profile.reheating, reheating);
+  const preparedId = randomUUID();
+  await query("INSERT INTO prepared_meals(id,user_id,idempotency_key,recipe_id,food_name,produced_servings,remaining_servings,storage_location,produced_at) VALUES(?,?,?,?,?,2,2,'冷藏','2099-01-01T00:00:00Z')",
+    [preparedId, userId, randomUUID(), targetId, "合成复热待吃餐"]);
+  const heatRequest = { productionDate: "2099-01-01", excludedPreparedMealIds: [], preferences: { meal_time_minutes: 20, carry_meals: true, refrigeration_available: true },
+    meals: [{ id: "heating-lunch", date: "2099-01-02", mealType: "lunch" as const, servings: 2 }] };
+  const noLocation = await recommendations.cookingPlan(userId, heatRequest);
+  assert.equal(noLocation.meals[0].preparedServings, 2); assert.equal(noLocation.time.incomplete, true);
+  const heated = await recommendations.cookingPlan(userId, { ...heatRequest, reheatingDeviceIds: [Number(device.id)] });
+  assert.equal(heated.time.schedule?.elapsedMinutes, 0); assert.equal(heated.time.reheatingSessions?.[0].schedule.elapsedMinutes, 8);
+  assert.equal(heated.time.incomplete, false); assert.equal(heated.time.reheating?.[0].preparedMealId, preparedId);
+  assert(heated.handlingChecks?.some(check => check.status === "pending"), "a time bound does not certify real food or cold-chain conditions");
+  const heatReview = await admin.execution(targetId);
+  await admin.reviewExecution(adminId, targetId, { recipeKey: heatReview.recipeKey, reviewKey: heatReview.reviewKey, profile: null }, context);
+  const withdrawn = await recommendations.cookingPlan(userId, { ...heatRequest, reheatingDeviceIds: [Number(device.id)] });
+  assert.equal(withdrawn.time.incomplete, true); assert.equal(withdrawn.time.reheating?.[0].mode, "unknown");
 
 }

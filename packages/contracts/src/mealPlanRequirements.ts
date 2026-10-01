@@ -1,5 +1,5 @@
 import { inventoryUnitSchema } from "./inventory.ts";
-import { cookingScheduleSchema, mealHandlingCheckSchema, recipeSubstitutionEvidenceSchema } from "./recipeExecution.ts";
+import { cookingScheduleSchema, mealHandlingCheckSchema, recipeSubstitutionEvidenceSchema, reheatingDeviceIdsSchema } from "./recipeExecution.ts";
 import { kitchenPreferencesSchema } from "./mealPreferences.ts";
 import { z } from "zod";
 
@@ -8,7 +8,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }, "日期无效");
 export const mealPlanRequirementsSchema = z.object({
-  productionDate: date.optional(),
+  productionDate: date.optional(), reheatingDeviceIds: reheatingDeviceIdsSchema.optional(),
   preferences: kitchenPreferencesSchema.optional(),
   meals: z.array(z.object({
     id: z.string().trim().min(1).max(80), date,
@@ -27,7 +27,7 @@ export const weeklyShoppingSchema = z.array(z.object({
   sources: z.array(z.object({ mealId: z.string().max(100),required: amount,missing: amount })).max(2800),
 })).max(2800);
 export const cookingPlanDraftSchema = z.object({
-  productionDate: date.optional(),
+  productionDate: date.optional(), reheatingDeviceIds: reheatingDeviceIdsSchema.optional(),
   handlingChecks: z.array(mealHandlingCheckSchema).max(3000).optional(),
   weeklyShopping: weeklyShoppingSchema.optional(),
   shoppingWindow: z.object({ startDate: date,endDate: date }).strict().refine(value => Date.parse(value.endDate)-Date.parse(value.startDate) === 6*86_400_000,"采购范围必须为七天").optional(),
@@ -56,6 +56,9 @@ export const cookingPlanDraftSchema = z.object({
   })).max(2800),
   time: z.object({ sessionBudgetMinutes: positiveAmount.optional(), budgetMinutes: positiveAmount, knownSequentialMinutes: amount, exceedsBudget: z.boolean(),
     isEstimate: z.boolean(), incomplete: z.boolean(), missing: z.array(z.string().max(200)).max(50),
+    reheating: z.array(z.object({ targetMealId: z.string().max(80), recipeId: z.number().int().positive().nullable(), preparedMealId: z.string().uuid().optional(),
+      servings: positiveAmount, mode: z.enum(["cold", "reheating", "unknown"]) })).max(2828).optional(),
+    reheatingSessions: z.array(z.object({ targetMealId: z.string().max(80), budgetMinutes: positiveAmount, schedule: cookingScheduleSchema })).max(28).optional(),
     schedule: cookingScheduleSchema.optional(),
     sessions: z.array(z.object({ targetMealId: z.string().max(80), schedule: cookingScheduleSchema })).max(28).optional() }),
   checksPending: z.array(z.string().max(200)).max(50),
@@ -104,18 +107,36 @@ export const cookingPlanDraftSchema = z.object({
   if (!close(draft.totalCookServings, draft.meals.reduce((sum, meal) => sum + meal.cookServings, 0))) invalid(["totalCookServings"], "总补做份量与各餐次不一致");
   const elapsed = draft.time.schedule?.elapsedMinutes ?? (draft.time.sessions?.length && draft.time.sessions.every(session => session.schedule.complete)
     ? draft.time.sessions.reduce((sum, session) => sum + session.schedule.elapsedMinutes!, 0) : draft.time.knownSequentialMinutes);
-  if (draft.time.exceedsBudget !== (elapsed > draft.time.budgetMinutes)) invalid(["time", "exceedsBudget"], "超时状态与时间预算不一致");
+  if (draft.time.exceedsBudget !== (elapsed > draft.time.budgetMinutes || (draft.time.reheatingSessions?.some(session => (session.schedule.elapsedMinutes ?? session.schedule.sequentialMinutes) > session.budgetMinutes) ?? false))) invalid(["time", "exceedsBudget"], "超时状态与时间预算不一致");
   if ((draft.time.schedule && draft.planningMode === "weekly") || (draft.time.sessions && draft.planningMode !== "weekly")) invalid(["time"], "单次与分次排程不能混用");
   if (draft.time.sessions && (new Set(draft.time.sessions.map(session => session.targetMealId)).size !== draft.time.sessions.length || draft.time.sessions.some(session => !ids.has(session.targetMealId)))) invalid(["time", "sessions"], "分次排程必须属于唯一现有餐次");
   if (draft.time.sessions && draft.time.sessions.length !== draft.meals.length) invalid(["time", "sessions"], "分次排程必须覆盖每个餐次");
+  const reheating = draft.time.reheating ?? [];
+  const reheatingId = (item: Pick<typeof reheating[number], "targetMealId" | "preparedMealId" | "recipeId">) => `${item.targetMealId}:${item.preparedMealId ?? `recipe:${item.recipeId}`}`;
+  if (new Set(reheating.map(reheatingId)).size !== reheating.length || reheating.some(item => !ids.has(item.targetMealId)
+    || (item.preparedMealId ? !draft.meals.find(meal => meal.id === item.targetMealId)?.allocations.some(allocation => allocation.preparedMealId === item.preparedMealId && close(allocation.servings, item.servings))
+      : !draft.cooking.some(cooking => cooking.targetMealId === item.targetMealId && cooking.recipeId === item.recipeId && close(cooking.servings, item.servings))))) invalid(["time", "reheating"], "复热需求必须对应唯一实际食物和份量");
+  if (draft.time.reheatingSessions && (new Set(draft.time.reheatingSessions.map(session => session.targetMealId)).size !== draft.time.reheatingSessions.length
+    || draft.time.reheatingSessions.some(session => !ids.has(session.targetMealId)))) invalid(["time", "reheatingSessions"], "食用前排程必须对应唯一实际餐次");
   const schedules = draft.time.schedule ? [{ schedule: draft.time.schedule, targetMealId: undefined }] : draft.time.sessions ?? [];
-  if (schedules.length && draft.time.incomplete !== schedules.some(item => !item.schedule.complete)) invalid(["time", "incomplete"], "完整时间状态必须与全部排程一致");
+  const allSchedules = [...schedules, ...(draft.time.reheatingSessions ?? [])];
+  if (allSchedules.length && draft.time.incomplete !== (allSchedules.some(item => !item.schedule.complete) || reheating.some(item => item.mode === "unknown"))) invalid(["time", "incomplete"], "完整时间状态必须与全部排程一致");
   for (const { schedule, targetMealId } of schedules) {
     const cooking = draft.cooking.filter(item => targetMealId === undefined || item.targetMealId === targetMealId);
-    if (schedule.batches.some(batch => !cooking.some(item => item.targetMealId === batch.targetMealId && item.recipeId === batch.recipeId))) invalid(["time"], "排程批次必须属于对应的新做菜");
-    if (schedule.complete && (cooking.some(item => !close(item.servings, schedule.batches.filter(batch => batch.targetMealId === item.targetMealId && batch.recipeId === item.recipeId).reduce((sum, batch) => sum + batch.servings, 0)))
-      || draft.unresolved.some(item => targetMealId === undefined || item.targetMealId === targetMealId)
-      || draft.meals.some(meal => (targetMealId === undefined || meal.id === targetMealId) && meal.preparedServings > 0))) invalid(["time"], "完整排程不能遗漏制作份量、未解决餐次或复热时间");
+    if (schedule.batches.some(batch => batch.kind === "reheating" ? !reheating.some(item => reheatingId(item) === reheatingId(batch) && item.recipeId === batch.recipeId && item.mode === "reheating") : !cooking.some(item => item.targetMealId === batch.targetMealId && item.recipeId === batch.recipeId))) invalid(["time"], "排程批次必须属于对应的新做菜");
+    if (schedule.complete && (cooking.some(item => !close(item.servings, schedule.batches.filter(batch => batch.kind !== "reheating" && batch.targetMealId === item.targetMealId && batch.recipeId === item.recipeId).reduce((sum, batch) => sum + batch.servings, 0)))
+      || draft.unresolved.some(item => targetMealId === undefined || item.targetMealId === targetMealId))) invalid(["time"], "完整排程不能遗漏制作份量、未解决餐次或复热时间");
+  }
+  for (const session of draft.time.reheatingSessions ?? []) if (session.schedule.batches.some(batch => batch.kind !== "reheating" || batch.targetMealId !== session.targetMealId
+    || !reheating.some(item => reheatingId(item) === reheatingId(batch) && item.recipeId === batch.recipeId && item.mode === "reheating"))) invalid(["time", "reheatingSessions"], "食用前排程不能包含无关制作任务");
+  const away = draft.effectivePreferences.carry_meals === true || (draft.effectivePreferences.eating_location != null && draft.effectivePreferences.eating_location !== "home");
+  if (!draft.time.incomplete && draft.cooking.some(item => (away || (draft.planningMode !== "weekly" && draft.meals.find(meal => meal.id === item.targetMealId)!.date > (draft.productionDate ?? draft.meals.map(meal => meal.date).sort()[0])))
+    && !reheating.some(heat => heat.targetMealId === item.targetMealId && !heat.preparedMealId && heat.recipeId === item.recipeId && heat.mode !== "unknown"))) invalid(["time"], "完整时间不能遗漏未来或携带餐的复热核对");
+  if (!draft.time.incomplete && (allSchedules.length || draft.time.reheating !== undefined) && draft.meals.some(meal => meal.allocations.some(allocation => !reheating.some(item => item.targetMealId === meal.id && item.preparedMealId === allocation.preparedMealId && item.mode !== "unknown")))) invalid(["time"], "完整时间不能遗漏待吃餐的复热核对");
+  if (reheating.some(item => item.mode !== "unknown" && item.recipeId === null)) invalid(["time", "reheating"], "已审核食用方式必须对应实际菜谱");
+  if (!draft.time.incomplete) for (const item of reheating.filter(item => item.mode === "reheating")) {
+    const servings = allSchedules.flatMap(session => session.schedule.batches).filter(batch => batch.kind === "reheating" && reheatingId(item) === reheatingId(batch)).reduce((sum, batch) => sum + batch.servings, 0);
+    if (!close(servings, item.servings)) invalid(["time", "reheating"], "完整排程不能遗漏或重复复热份量");
   }
 });
 export type CookingPlanDraft = z.infer<typeof cookingPlanDraftSchema>;

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const key = z.string().trim().min(1).max(60);
+export const reheatingDeviceIdsSchema = z.array(z.number().int().positive()).max(30).refine(ids => new Set(ids).size === ids.length, "复热设备不能重复");
 export const recipeSubstitutionSchema = z.object({
   recipeId: z.number().int().positive(), recipeKey: z.string().regex(/^[a-f0-9]{64}$/),
   removedIngredient: z.string().trim().min(1).max(200), replacementIngredient: z.string().trim().min(1).max(200),
@@ -28,12 +29,10 @@ export const mealHandlingCheckSchema = z.object({
 });
 export type MealHandlingCheck = z.infer<typeof mealHandlingCheckSchema>;
 /** Reviewed bounds for one batch; smaller batches use the same duration bounds. */
-export const recipeExecutionProfileSchema = z.object({
+export const recipeTaskGraphSchema = z.object({
   version: z.literal(1),
   maxBatchServings: z.number().finite().positive().max(30),
   reference: z.string().trim().min(5).max(2000),
-  handling: recipeHandlingSchema.optional(),
-  substitutions: z.array(recipeSubstitutionSchema).max(10).refine(rules => new Set(rules.map(rule => rule.recipeId)).size === rules.length, "替代菜谱不能重复").optional(),
   tools: z.array(z.object({
     key, name: z.string().trim().min(1).max(100), catalogId: z.number().int().positive(),
     capacity: z.discriminatedUnion("kind", [z.object({ kind: z.literal("not_applicable") }).strict(),
@@ -78,6 +77,17 @@ export const recipeExecutionProfileSchema = z.object({
     if (!reaches(task.id)) issue("每项准备或烹饪操作都必须有后续收尾任务");
   }
 });
+export type RecipeTaskGraph = z.infer<typeof recipeTaskGraphSchema>;
+export const recipeReheatingSchema = recipeTaskGraphSchema.safeExtend({
+  tools: recipeTaskGraphSchema.shape.tools.min(1, "复热须声明实际设备"),
+  tasks: recipeTaskGraphSchema.shape.tasks.refine(tasks => tasks.some(task => task.phase === "cooking" && task.minutes > 0 && task.tools.length > 0), "复热须有明确设备与正数用时的加热任务"),
+  sourceUrl: z.url().max(2000).refine(value => value.startsWith("https://"), "复热依据须使用 HTTPS"),
+  instructions: z.string().trim().min(10).max(2000),
+});
+export const recipeExecutionProfileSchema = recipeTaskGraphSchema.safeExtend({
+  handling: recipeHandlingSchema.optional(), reheating: recipeReheatingSchema.optional(),
+  substitutions: z.array(recipeSubstitutionSchema).max(10).refine(rules => new Set(rules.map(rule => rule.recipeId)).size === rules.length, "替代菜谱不能重复").optional(),
+});
 export type RecipeExecutionProfile = z.infer<typeof recipeExecutionProfileSchema>;
 export const recipeExecutionReviewSchema = z.object({
   recipeKey: z.string().regex(/^[a-f0-9]{64}$/), reviewKey: z.string().regex(/^[a-f0-9]{64}$/), profile: recipeExecutionProfileSchema.nullable(),
@@ -93,8 +103,8 @@ export const cookingScheduleSchema = z.object({
   sequentialMinutes: z.number().finite().nonnegative(),
   missing: z.array(z.string().max(200)).max(100), conflicts: z.array(z.string().max(500)).max(100),
   batches: z.array(z.object({
-    id: key, targetMealId: z.string().max(80), recipeId: z.number().int().positive(), servings: z.number().finite().positive(),
-    reference: z.string().max(2000), devices: z.array(z.object({ key, id: z.number().int().positive(), name: z.string().max(100) })).max(10),
+    id: key, kind: z.enum(["cooking", "reheating"]).optional(), preparedMealId: z.string().uuid().optional(), targetMealId: z.string().max(80), recipeId: z.number().int().positive(), servings: z.number().finite().positive(),
+    reference: z.string().max(2000), sourceUrl: z.url().max(2000).optional(), instructions: z.string().max(2000).optional(), devices: z.array(z.object({ key, id: z.number().int().positive(), name: z.string().max(100) })).max(10),
   })).max(500),
   tasks: z.array(z.object({
     id: z.string().max(130), batchId: key, title: z.string().max(200), phase: z.enum(["preparation", "cooking", "cleanup"]),

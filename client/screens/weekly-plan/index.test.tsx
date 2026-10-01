@@ -11,6 +11,7 @@ jest.mock("@/components/Screen", () => ({ Screen: "View" }));
 jest.mock("@/hooks/useSafeRouter", () => ({ useSafeRouter: () => ({ push: mockPush,back: jest.fn() }) }));
 jest.mock("expo-crypto", () => ({ randomUUID: () => "stable-draft-id" }));
 jest.mock("@/services/api", () => ({ recommendationsApi: { weeklyPlan: (...args: unknown[]) => mockGenerate(...args) },mealPlansApi: { saveDraft: (...args: unknown[]) => mockSave(...args) } }));
+jest.mock("@/services/api/inventory", () => ({ kitchenwareApi: { list: jest.fn().mockResolvedValue([]) } }));
 import WeeklyPlanScreen from "./index";
 const preview = { startDate: "2099-09-12",slots: [],shopping: [],plannedPurchases: [],checksPending: [],draft: { planningMode: "weekly" } };
 function press(tree: renderer.ReactTestRenderer,label: string) { tree.root.findAllByType(TouchableOpacity).find(node => node.findAllByType(Text).some(text => text.props.children === label))!.props.onPress(); }

@@ -36,7 +36,7 @@ export function allocatePreparedMeals(input: MealPlanRequirementsInput, prepared
     }
     return { ...target, preparedServings: round(target.servings - required), cookServings: required, allocations };
   });
-  return { productionDate, effectivePreferences: input.preferences ?? {}, handlingChecks: handlingChecks.slice(0, 2800), meals, totalCookServings: round(meals.reduce((total, meal) => total + meal.cookServings, 0)),
+  return { productionDate, ...(input.reheatingDeviceIds ? { reheatingDeviceIds: input.reheatingDeviceIds } : {}), effectivePreferences: input.preferences ?? {}, handlingChecks: handlingChecks.slice(0, 2800), meals, totalCookServings: round(meals.reduce((total, meal) => total + meal.cookServings, 0)),
     status: "requires_validation" as const,
     checksPending: [...(input.preferences?.avoid_spicy === true && prepared.length ? ["待吃餐辣度未核实，本次不自动分配"] : []),"prepared_meal_storage_and_food_safety", "allergies_and_reheating", "recipe_quantities", "whole_plan_time"],
     excludedPreparedMealIds: prepared.filter(meal => meal.is_reserved || excluded.has(meal.id)).map(meal => meal.id) };

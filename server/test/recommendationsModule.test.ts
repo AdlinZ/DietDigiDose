@@ -418,7 +418,7 @@ test("plans use current reviewed handling for future meals, replacement and inde
   assert.equal(noFridge.cooking.length, 0); assert.equal(noFridge.unresolved.length, 1);
   rows[1].execution_json.profile.handling.coldServingAllowed = false;
   const hot = await service.cookingPlan(7, { ...input, preferences: { reheating_available: true } });
-  assert.equal(hot.time.incomplete, true); assert(hot.time.schedule?.missing.includes("future_reheating_schedule"));
+  assert.equal(hot.time.incomplete, true); assert(hot.time.reheatingSessions?.[0].schedule.missing.includes("future_reheating_schedule"));
   const noHeat = await service.cookingPlan(7, { ...input, preferences: { reheating_available: false } });
   assert.equal(noHeat.cooking.length, 0);
   const carry = await service.cookingPlan(7, { ...input, preferences: { carry_meals: true } });
@@ -435,12 +435,12 @@ test("plans use current reviewed handling for future meals, replacement and inde
   const { interventionRecommendations } = await import("../src/modules/interventions/snapshot.js");
   assert.equal(interventionRecommendations(carryCandidates).length, 0, "unverified reheating cannot authorize an automatic dinner intervention");
   const sameDayCarry = await service.cookingPlan(7, { ...input, productionDate: "2099-01-02", preferences: { carry_meals: true, reheating_available: true } });
-  assert.equal(sameDayCarry.time.incomplete, true); assert(sameDayCarry.time.schedule?.missing.includes("future_reheating_schedule"));
+  assert.equal(sameDayCarry.time.incomplete, true); assert(sameDayCarry.time.reheatingSessions?.[0].schedule.missing.includes("future_reheating_schedule"));
   const carryReplacement = await service.replaceCookingItem(7, { draft: sameDayCarry, targetMealId: "lunch", recipeId: sameDayCarry.cooking[0].recipeId === 1 ? 2 : 1 });
-  assert.equal(carryReplacement.draft.time.incomplete, true); assert(carryReplacement.draft.time.schedule?.missing.includes("future_reheating_schedule"));
+  assert.equal(carryReplacement.draft.time.incomplete, true); assert(carryReplacement.draft.time.reheatingSessions?.[0].schedule.missing.includes("future_reheating_schedule"));
   const carryWeekly = await service.replaceCookingItem(7, { draft: { ...sameDayCarry, productionDate: undefined, planningMode: "weekly", shoppingWindow: { startDate: "2099-01-02", endDate: "2099-01-08" }, time: { ...sameDayCarry.time, schedule: undefined, sessions: [{ targetMealId: "lunch", schedule: sameDayCarry.time.schedule! }] } },
     targetMealId: "lunch", recipeId: sameDayCarry.cooking[0].recipeId === 1 ? 2 : 1 });
-  assert.equal(carryWeekly.draft.time.incomplete, true); assert(carryWeekly.draft.time.sessions?.[0].schedule.missing.includes("future_reheating_schedule"));
+  assert.equal(carryWeekly.draft.time.incomplete, true); assert(carryWeekly.draft.time.reheatingSessions?.[0].schedule.missing.includes("future_reheating_schedule"));
   const freshHome = await service.cookingPlan(7, { ...input, productionDate: "2099-01-02", preferences: { carry_meals: false } });
   assert.equal(freshHome.time.incomplete, false, "fresh home cooking does not invent a separate reheating session");
   rows.forEach(row => { row.execution_json.profile.handling.coldServingAllowed = true; });
@@ -496,4 +496,39 @@ test("reviewed ingredient variants consume their own quantities and never bypass
   allergies = [];
   rows[1].ingredients_json[1].amount = "300g";
   assert.equal((await service.cookingPlan(7, input)).cooking.some(item => item.substitution), false, "changing target quantities invalidates the link");
+});
+
+test("reviewed heating participates in full-plan choices, replacement and per-meal weekly budgets", async () => {
+  const { executionFixture } = await import("./helpers/recipeExecution.js");
+  const { executionRecipeKey } = await import("../src/modules/recipes/execution.js");
+  const { cookingPlanDraftSchema } = await import("@dietdigidose/contracts");
+  const rows = [1, 2].map(id => {
+    const row = { id, title: `合成复热菜${id}`, serving_size: 2, cook_time: 10, prep_time: 5,
+      ingredients_json: [{ name: id === 1 ? "足量原料" : "缺货原料", amount: "2个" }], steps_json: ["准备", "烹饪", "收尾"], required_kitchenware_json: [], optional_kitchenware_json: [] };
+    return { ...row, execution_json: { recipeKey: executionRecipeKey(row), reviewedBy: 1, reviewedAt: "2026-10-01T00:00:00Z", profile: { ...executionFixture,
+      handling: { storage: "refrigerated" as const, maxHoldHours: 72, coldServingAllowed: false, carryAllowed: true, sourceUrl: "https://example.invalid/handling", reference: "合成存放回归专用来源", instructions: "合成测试专用，实际冷链与温度须独立核对" },
+      reheating: { ...executionFixture, sourceUrl: "https://example.invalid/reheating", instructions: "合成测试专用，加热完成后还须核对实际温度",
+        tasks: executionFixture.tasks.map(task => ({ ...task, minutes: task.phase === "cooking" ? id === 1 ? 35 : 5 : 1 })) } } } };
+  });
+  const devices = [{ id: 7, catalog_id: 1, name: "合成设备", attributes_json: { capacityMl: 1000 } }];
+  const stock = [{ id: 1, food_name: "足量原料", quantity_value: 100, quantity_unit: "piece", expiration_date: "2099-12-31", version: 1 }];
+  const service = new RecommendationsService(repository({ recipes: async () => rows, kitchenware: async () => devices, inventory: async () => stock,
+    profile: async () => ({ kitchen_constraints_json: { carry_meals: true, refrigeration_available: true, servings: 2 } }) }), kitchenware);
+  const draft = await service.cookingPlan(7, { productionDate: "2099-01-01", reheatingDeviceIds: [7], excludedPreparedMealIds: [],
+    preferences: { refrigeration_available: true, meal_time_minutes: 30 }, meals: [{ id: "lunch", date: "2099-01-02", mealType: "lunch", servings: 2 }] });
+  assert.equal(draft.cooking[0].recipeId, 2, "feasible reheating is considered before ingredient shortages");
+  assert.equal(draft.time.schedule?.elapsedMinutes, 17); assert.equal(draft.time.reheatingSessions?.[0].schedule.elapsedMinutes, 7); assert.equal(draft.time.incomplete, false);
+  const replacement = await service.replaceCookingItem(7, { draft, targetMealId: "lunch", recipeId: 1 });
+  assert.equal(replacement.draft.time.exceedsBudget, true); assert(replacement.conflicts.some(reason => reason.includes("复热超过")));
+  const removed = { ...draft, time: { ...draft.time, reheating: [], reheatingSessions: [] } };
+  assert.equal(cookingPlanDraftSchema.safeParse(removed).success, false, "a complete future-meal time cannot omit heating requirements");
+  const weekly = await service.weeklyPlan(7, { startDate: "2099-01-01", mealTypes: ["lunch"], servings: 2, reheatingDeviceIds: [7] });
+  assert.equal(weekly.draft?.time.reheatingSessions?.length, 7); assert.equal(weekly.draft?.time.incomplete, false);
+  assert(weekly.draft?.cooking.every(item => item.recipeId === 2));
+  const weekReplacement = await service.replaceCookingItem(7, { draft: weekly.draft!, targetMealId: weekly.draft!.meals[0].id, recipeId: 1 });
+  assert.equal(weekReplacement.draft.time.exceedsBudget, true); assert(weekReplacement.conflicts.some(reason => reason.includes("复热超过")));
+  rows[0].execution_json.profile.reheating.tasks[1].minutes = 5;
+  rows[1].execution_json.profile.reheating.tasks[1].minutes = 35;
+  const changed = await service.replaceCookingItem(7, { draft, targetMealId: "lunch", recipeId: 1 });
+  assert.equal(changed.draft.time.reheatingSessions?.[0].schedule.elapsedMinutes, 7, "replacement rereads current reviewed bounds");
 });

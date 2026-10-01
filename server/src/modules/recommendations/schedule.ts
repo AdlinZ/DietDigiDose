@@ -1,14 +1,14 @@
-import { kitchenwareAttributesSchema, type CookingSchedule, type RecipeExecutionProfile } from "@dietdigidose/contracts";
+import { kitchenwareAttributesSchema, type CookingSchedule, type RecipeTaskGraph } from "@dietdigidose/contracts";
 import { parseJson } from "../mealPlans/formatters.js";
 import type { Row } from "./types.js";
 
-type Entry = { targetMealId: string; recipeId: number; servings: number; recipe: {
-  title: string; cook_time: number; prep_time: number | null; serving_size: number | null; execution_profile?: RecipeExecutionProfile | null;
+export type ScheduleEntry = { allowedDeviceIds?: number[]; kind?: "cooking" | "reheating"; preparedMealId?: string; targetMealId: string; recipeId: number; servings: number; recipe: {
+  title: string; cook_time: number; prep_time: number | null; serving_size: number | null; execution_profile?: (RecipeTaskGraph & { sourceUrl?: string; instructions?: string }) | null;
 } };
 const round = (value: number) => Math.round(value * 1_000_000) / 1_000_000;
 /** ponytail: greedy ready-task scheduling, with a 5000-task ceiling. It gives a
  * feasible upper bound; an optimizer is needed only to guarantee the shortest schedule. */
-export function scheduleCooking(entries: Entry[], owned: Row[]): CookingSchedule {
+export function scheduleCooking(entries: ScheduleEntry[], owned: Row[]): CookingSchedule {
   const result: CookingSchedule = { complete: false, elapsedMinutes: null, sequentialMinutes: 0, missing: [], conflicts: [], batches: [], tasks: [] };
   const deviceFree = new Map<number, number>(), deviceOwner = new Map<number, string>(), assignedWork = new Map<number, number>();
   const human: Array<{ start: number; end: number }> = [];
@@ -29,7 +29,7 @@ export function scheduleCooking(entries: Entry[], owned: Row[]): CookingSchedule
     const selected: Array<{ key: string; id: number; name: string }> = [];
     let capacity = profile.maxBatchServings;
     for (const tool of [...profile.tools].sort((a, b) => (b.capacity.kind === "volume" ? b.capacity.mlPerServing : 0) - (a.capacity.kind === "volume" ? a.capacity.mlPerServing : 0))) {
-      const options = owned.filter(row => Number(row.catalog_id) === tool.catalogId && !selected.some(item => item.id === Number(row.id))).flatMap(row => {
+      const options = owned.filter(row => (!entry.allowedDeviceIds || entry.allowedDeviceIds.includes(Number(row.id))) && Number(row.catalog_id) === tool.catalogId && !selected.some(item => item.id === Number(row.id))).flatMap(row => {
         const attributes = kitchenwareAttributesSchema.safeParse(parseJson(row.attributes_json, {}));
         if (tool.capacity.kind === "volume" && (!attributes.success || attributes.data.capacityMl == null)) return [];
         return [{ id: Number(row.id), name: String(row.name), capacity: Math.min(profile.maxBatchServings, entry.servings,
@@ -53,7 +53,7 @@ export function scheduleCooking(entries: Entry[], owned: Row[]): CookingSchedule
     for (let batch = 0; batch < count; batch++) {
       const id = `e${entryIndex}:b${batch}`;
       const servings = round(Math.min(capacity, entry.servings - batch * capacity));
-      result.batches.push({ id, targetMealId: entry.targetMealId, recipeId: entry.recipeId, servings, reference: profile.reference, devices: selected });
+      result.batches.push({ id, targetMealId: entry.targetMealId, recipeId: entry.recipeId, servings, ...(entry.kind ? { kind: entry.kind } : {}), ...(entry.preparedMealId ? { preparedMealId: entry.preparedMealId } : {}), reference: profile.reference, ...(profile.sourceUrl ? { sourceUrl: profile.sourceUrl, instructions: profile.instructions } : {}), devices: selected });
       batchState.set(id, { devices: selected.map(device => device.id), remaining: profile.tasks.length, end: 0 });
       for (const task of profile.tasks) pending.push({ id: `${id}:${task.id}`, batchId: id, title: task.title, phase: task.phase,
         active: task.active, minutes: task.minutes, dependsOn: task.dependsOn.length ? task.dependsOn.map(dependency => `${id}:${dependency}`) : previousLeaves,

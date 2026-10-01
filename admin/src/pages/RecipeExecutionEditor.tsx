@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { recipeExecutionProfileSchema, type RecipeExecutionProfile } from '@dietdigidose/contracts';
+import { recipeExecutionProfileSchema, type RecipeExecutionProfile } from '@dietdigidose/contracts/recipe-execution';
 import api from '../services/api';
 
 type Task = Omit<RecipeExecutionProfile['tasks'][number], 'minutes'> & { minutes: string };

@@ -4058,6 +4058,12 @@ test("saved cooking drafts activate into portioned meal items exactly once", asy
   const id = "732adb68-3a62-4c02-a2ac-9e8447877194";
   const save = await api("/api/v1/meal-plans/drafts", { token: account.token, method: "POST", body: JSON.stringify({ id, title: "三份备餐", draft }) });
   assert.equal(save.response.status, 201);
+  const forgedId = "942adb68-3a62-4c02-a2ac-9e8447877194";
+  const forged = { ...draft, cooking: draft.cooking.map(item => ({ ...item, demands: item.demands.map(demand => ({ ...demand, amount_value: 60 })) })) };
+  assert.equal((await api("/api/v1/meal-plans/drafts", { token: account.token, method: "POST", body: JSON.stringify({ id: forgedId, title: "客户端改写用量", draft: forged }) })).response.status, 201);
+  assert.equal((await api(`/api/v1/meal-plans/${forgedId}/activate`, { token: account.token, method: "POST", body: JSON.stringify({ version: 1 }) })).response.status, 409);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=?").get(forgedId) as JsonObject).n, 0);
+  assert.deepEqual(db.prepare("SELECT status,version FROM meal_plans WHERE id=?").get(forgedId), { status: "draft", version: 1 });
   const activate = (version = 1) => api(`/api/v1/meal-plans/${id}/activate`, { token: account.token, method: "POST", body: JSON.stringify({ version }) });
   const values = await Promise.all([activate(), activate()]);
   assert.deepEqual(values.map(value => value.response.status), [200,200]);

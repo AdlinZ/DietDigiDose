@@ -1,5 +1,5 @@
 import { commonProduction } from "./commonProduction.js";
-import { substitutionEvidenceMatches } from "../recipes/substitutions.js";
+import { cookingEvidenceMatches } from "../recipes/substitutions.js";
 import { PostgresMealAllocationsRepository } from "../mealAllocations/postgresRepository.js";
 import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readPostgresDiningSupply } from "../households/postgresDiningSupply.js";
@@ -68,7 +68,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
         if (!found.rows[0]) return { kind: "recipe_not_available" as const };
         recipes.set(recipeId, found.rows[0]);
       }
-      if (activation.items.some(item => !substitutionEvidenceMatches(item.allocation, recipes.get(item.allocation.substitution?.sourceRecipeId ?? 0), recipes.get(item.recipeId)))) return { kind: "recipe_not_available" as const };
+      if (activation.items.some(item => !cookingEvidenceMatches(item.allocation, recipes.get(item.allocation.substitution?.sourceRecipeId ?? 0), recipes.get(item.recipeId)))) return { kind: "recipe_not_available" as const };
       for (const item of activation.items) await client.query(`INSERT INTO meal_plan_items
         (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json,confirmed_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,CURRENT_TIMESTAMP)`, [item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),JSON.stringify(recipes.get(item.recipeId)!.steps_json)]);

@@ -1482,9 +1482,10 @@ try {
   assert.deepEqual((updatedDraftPlan!.constraints as Record<string, unknown>).currentCookingDraft, draftUpdateInput.draft);
 
 
+  const activationRecipe = (await pool.query("INSERT INTO recipes(title,status,ingredients_json,steps_json,serving_size) VALUES('PG激活回归','approved','[{\"name\":\"番茄\",\"amount\":\"200g\"}]','[]',1) RETURNING id,title")).rows[0];
   const activationInput: SaveCookingPlanDraftInput = { ...savedDraftInput, id: "1b5e226a-8e80-413b-bf8e-bfe60cf43194",
-    draft: { ...savedDraftInput.draft, unresolved: [], cooking: [{ targetMealId: "dinner", recipeId: Number(secondRecipe.id),
-      title: String(secondRecipe.title), servings: 1, recipeYield: 1, demands: [{ food_name: "番茄", amount_value: 200, unit: "g" }] }] } };
+    draft: { ...savedDraftInput.draft, unresolved: [], cooking: [{ targetMealId: "dinner", recipeId: Number(activationRecipe.id),
+      title: String(activationRecipe.title), servings: 1, recipeYield: 1, demands: [{ food_name: "番茄", amount_value: 200, unit: "g" }] }] } };
   const lockDraft = { ...activationInput,id: "19600000-0000-4000-8000-000000000099",draft: { ...activationInput.draft,planningMode: "weekly" as const,meals: activationInput.draft.meals.map(meal => ({ ...meal,date: "2099-09-12" })) } };
   await mealPlanRepository.saveDraft(user.id,lockDraft);
   const blocker = await pool.connect();

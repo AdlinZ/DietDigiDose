@@ -99,6 +99,32 @@ export async function verifyRecipeExecution(admin: AdminRecipesService, recipes:
   assert(await mealPlans.saveDraft(userId, { id: forgedId, title: "合成错误用量", draft: forged }));
   assert.equal((await mealPlans.activateDraft(userId, forgedId, 1)).kind, "recipe_not_available");
   assert.equal(Number((await query("SELECT COUNT(*) AS n FROM meal_plan_items WHERE plan_id=?", [forgedId]))[0].n), 0);
+  const plain = { ...substitutionDraft, cooking: substitutionDraft.cooking.map(({ substitution: _substitution, ...item }) => item) };
+  const original = plain.cooking[0];
+  const invalidDemands = [
+    { ...original, demands: original.demands.map(item => ({ ...item, amount_value: item.amount_value * 2 })) },
+    { ...original, recipeYield: original.recipeYield * 2 },
+    { ...original, demands: original.demands.slice(1) },
+    { ...original, demands: [...original.demands, original.demands[0]] },
+    { ...original, demands: original.demands.map(item => ({ ...item, food_name: "伪造原料" })) },
+    { ...original, demands: original.demands.map(item => ({ ...item, unit: "ml" as const })) },
+  ];
+  for (const cooking of invalidDemands) {
+    const rejectedId = randomUUID();
+    await mealPlans.saveDraft(userId, { id: rejectedId, title: "无替代字段的伪造用量", draft: { ...plain, cooking: [cooking] } });
+    assert.equal((await mealPlans.activateDraft(userId, rejectedId, 1)).kind, "recipe_not_available");
+    assert.equal(Number((await query("SELECT COUNT(*) AS n FROM meal_plan_items WHERE plan_id=?", [rejectedId]))[0].n), 0);
+    const rejected = await mealPlans.find(userId, rejectedId, false);
+    assert.equal(rejected?.status, "draft"); assert.equal(rejected?.version, 1);
+  }
+  const plainId = randomUUID();
+  await mealPlans.saveDraft(userId, { id: plainId, title: "完整用量的独立菜谱", draft: plain });
+  await query("UPDATE recipes SET quality_status='needs_review' WHERE id=?", [targetId]);
+  assert.equal((await mealPlans.activateDraft(userId, plainId, 1)).kind, "recipe_not_available");
+  await query("UPDATE recipes SET quality_status='trusted',ingredients_json=? WHERE id=?", [JSON.stringify([{ name: "替代原料乙", amount: "300g" }, { name: "替代共用料", amount: "1个" }]), targetId]);
+  assert.equal((await mealPlans.activateDraft(userId, plainId, 1)).kind, "recipe_not_available", "current recipe changes invalidate captured quantities");
+  await query("UPDATE recipes SET ingredients_json=? WHERE id=?", [JSON.stringify([{ name: "替代原料乙", amount: "200g" }, { name: "替代共用料", amount: "1个" }]), targetId]);
+  assert.equal((await mealPlans.activateDraft(userId, plainId, 1)).kind, "updated", "a fully specified ordinary recipe remains executable without substitution metadata");
   await query("UPDATE recipes SET quality_status='needs_review' WHERE id=?", [targetId]);
   assert.equal((await mealPlans.activateDraft(userId, id, 1)).kind, "recipe_not_available");
   await query("UPDATE recipes SET quality_status='trusted' WHERE id=?", [targetId]);

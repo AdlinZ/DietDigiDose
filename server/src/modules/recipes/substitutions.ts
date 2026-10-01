@@ -23,16 +23,21 @@ export function substitutionMatches(source: Row, target: Row, rule: RecipeSubsti
   return rest(original, rule.removedIngredient) === rest(variant, rule.replacementIngredient);
 }
 
-export function substitutionEvidenceMatches(cooking: CookingPlanDraft["cooking"][number], source: Row | undefined, target: Row | undefined) {
+export function cookingEvidenceMatches(cooking: CookingPlanDraft["cooking"][number], source: Row | undefined, target: Row | undefined) {
+  if (!target || target.status !== "approved" || target.quality_status !== "trusted" || target.deleted_at || Number(target.id) !== cooking.recipeId) return false;
+  const currentIngredients = ingredients(target);
+  if (currentIngredients.some(item => !item.name)) return false;
+  const expected = recipeDemands(currentIngredients, Number(target.serving_size), cooking.servings);
+  const sorted = (items: typeof cooking.demands) => [...items].sort((a, b) => a.food_name.localeCompare(b.food_name));
+  // All executable demands come from the current recipe, even without optional substitution metadata.
+  if (cooking.recipeYield !== Number(target.serving_size) || !expected || !isDeepStrictEqual(sorted(expected), sorted(cooking.demands))) return false;
   const evidence = cooking.substitution;
   if (!evidence) return true;
-  if (!source || !target || source.status !== "approved" || source.quality_status !== "trusted" || target.status !== "approved" || target.quality_status !== "trusted"
-    || source.deleted_at || target.deleted_at || Number(source.id) !== evidence.sourceRecipeId || Number(target.id) !== cooking.recipeId
+  if (!source || source.status !== "approved" || source.quality_status !== "trusted"
+    || source.deleted_at || Number(source.id) !== evidence.sourceRecipeId
     || source.title !== evidence.sourceTitle || executionRecipeKey(source) !== evidence.sourceRecipeKey || executionRecipeKey(target) !== evidence.recipeKey
     || !reviewedExecution(target) || !substitutionMatches(source, target, evidence)) return false;
   const rule = reviewedExecution(source)?.profile.substitutions?.find(rule => rule.recipeId === cooking.recipeId);
   if (!rule || !Object.entries(rule).every(([key, value]) => evidence[key as keyof typeof evidence] === value)) return false;
-  const expected = recipeDemands(ingredients(target), Number(target.serving_size), cooking.servings);
-  const sorted = (items: typeof cooking.demands) => [...items].sort((a, b) => a.food_name.localeCompare(b.food_name));
-  return cooking.recipeYield === Number(target.serving_size) && !!expected && isDeepStrictEqual(sorted(expected), sorted(cooking.demands));
+  return true;
 }

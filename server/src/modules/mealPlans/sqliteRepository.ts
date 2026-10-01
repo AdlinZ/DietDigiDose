@@ -1,5 +1,5 @@
 import { commonProduction } from "./commonProduction.js";
-import { substitutionEvidenceMatches } from "../recipes/substitutions.js";
+import { cookingEvidenceMatches } from "../recipes/substitutions.js";
 import { SqliteMealAllocationsRepository } from "../mealAllocations/sqliteRepository.js";
 import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readSqliteDiningSupply } from "../households/sqliteDiningSupply.js";
@@ -57,7 +57,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       if (this.getItems(id, userId).length) return { kind: "version_conflict" as const };
       const recipeIds = [...new Set(activation.items.flatMap(item => [item.recipeId, ...(item.allocation.substitution ? [item.allocation.substitution.sourceRecipeId] : [])]))].sort((a, b) => a-b);
       const recipes = new Map(recipeIds.map(recipeId => [recipeId, this.database.prepare("SELECT * FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(recipeId) as Row | undefined]));
-      if (activation.items.some(item => !recipes.get(item.recipeId) || !substitutionEvidenceMatches(item.allocation, recipes.get(item.allocation.substitution?.sourceRecipeId ?? 0), recipes.get(item.recipeId)))) return { kind: "recipe_not_available" as const };
+      if (activation.items.some(item => !recipes.get(item.recipeId) || !cookingEvidenceMatches(item.allocation, recipes.get(item.allocation.substitution?.sourceRecipeId ?? 0), recipes.get(item.recipeId)))) return { kind: "recipe_not_available" as const };
       activation.items.forEach(item => this.database.prepare(`INSERT INTO meal_plan_items
         (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json,confirmed_at)
         VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).run(item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),recipes.get(item.recipeId)!.steps_json));

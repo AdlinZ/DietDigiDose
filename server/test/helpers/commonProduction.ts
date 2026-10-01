@@ -9,7 +9,7 @@ import type { DietRecordsService } from "../../src/modules/dietRecords/service.j
 type Query = (sql: string, values?: (string | number)[]) => Promise<Record<string, unknown>[]>;
 export async function verifyCommonProduction(plans: MealPlansRepository, diet: DietRecordsService, userId: number, query: Query, queue: CookingQueueRepository,
   injectFailure: (operation: () => Promise<unknown>) => Promise<void>) {
-  const recipeId = Number((await query("INSERT INTO recipes(title,status,steps_json) VALUES(?,'approved','[]') RETURNING id", ["共用制作回归"]))[0].id);
+  const recipeId = Number((await query("INSERT INTO recipes(title,status,steps_json,ingredients_json,serving_size) VALUES(?,'approved','[]','[{\"name\":\"共做鸡蛋\",\"amount\":\"1个\"}]',1) RETURNING id", ["共用制作回归"]))[0].id);
   const stockId = Number((await query("INSERT INTO inventory_items(user_id,food_name,category,quantity,quantity_value,quantity_unit,expiration_date) VALUES(?,'共做鸡蛋','其他','6个',6,'piece','2099-12-31') RETURNING id", [userId]))[0].id);
   const planId = randomUUID();
   const draft = cookingPlanDraftSchema.parse({ planningMode: "single_session", status: "requires_validation",

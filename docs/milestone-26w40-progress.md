@@ -115,3 +115,6 @@ API 配置为 `DEPLOYMENT_ENV=staging`、PostgreSQL、`TRUST_PROXY=1`、`REQUIRE
 Node 22.23.2 下全量 `test:all` 通过：客户端 84 套/388 项、服务端 556 项通过/既有 1 项条件跳过、后台 9 套/30 项；新逻辑三端静态、架构、契约及 Web export 通过。临时本机 PostgreSQL 17 隔离库的完整迁移/恢复/HTTP 集成与新事务场景通过，已停止临时数据库；这不代替目标 PostgreSQL 16 CI 或线上候选恢复演练。依赖修复提交 `913a0991` 的三项远端 CI 已全部通过；本次共用制作提交仍需单独核验。
 
 #190/#194 的真实账号、实际设备、真实原料和跨日流程仍未完成，其他 26w40 任务范围不变；本轮仍未部署或分配安装包编号。
+
+
+共用制作初次远端 run 36835411131 在 `database:boundary:check` 失败：新增 SQLite 查询触发已有运行时访问冻结。现复用 mealPlans 的已有列表查询返回原始仓储行，并把制作来源查询同时用于成员版本核对；未改变基线、豁免名单或放宽门禁。`database:boundary:check` 仍保持原有 76 个文件基线并通过；查询仍位于既有 repository adapter 内。

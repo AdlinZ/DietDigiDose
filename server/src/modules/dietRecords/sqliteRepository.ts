@@ -188,15 +188,21 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
     })();
   }
 
+  private productionPlans(userId: number, queueId: string) {
+    return this.database.prepare(`SELECT i.*,p.status AS plan_status,p.deleted_at AS plan_deleted_at FROM meal_plan_items i
+      JOIN meal_plans p ON p.id=i.plan_id JOIN cooking_queue_items q ON q.id=i.queue_item_id AND q.user_id=i.user_id
+      WHERE i.user_id=? AND i.queue_item_id=? ORDER BY CASE WHEN i.id=q.source_plan_item_id THEN 0 ELSE 1 END,i.id`).all(userId, queueId) as Record<string, unknown>[];
+  }
+
   private productionBefore(userId: number, input: PreparedCookingCompletion) {
     const production = input.production!;
     if (production.queue_item_id) {
-      const plans = this.database.prepare("SELECT i.id,i.version FROM meal_plan_items i JOIN cooking_queue_items q ON q.id=i.queue_item_id AND q.user_id=i.user_id WHERE i.user_id=? AND i.queue_item_id=? ORDER BY CASE WHEN i.id=q.source_plan_item_id THEN 0 ELSE 1 END,i.id").all(userId, production.queue_item_id) as { id: string; version: number }[];
+      const plans = this.productionPlans(userId, production.queue_item_id);
       const plan = production.plan_item_id ? plans.find(row => row.id === production.plan_item_id) : plans[0];
       if (production.plan_item_id && plans.length && !plan) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "制作队列与餐单不一致");
       if (plan) {
-        production.plan_item_id = plan.id;
-        production.plan_version ??= plan.version;
+        production.plan_item_id = String(plan.id);
+        production.plan_version ??= Number(plan.version);
       }
     }
     if (production.plan_item_id && !production.queue_item_id) {
@@ -215,7 +221,7 @@ export class SqliteDietRecordsRepository implements DietRecordsRepository {
       if (row.recipe_id != null) input.recipe_id ??= Number(row.recipe_id);
       const targets = parseJson<{ productionPlanItems?: ProductionTarget[] }>(row.recipe_snapshot_json, {}).productionPlanItems;
       if (targets) {
-        const plans = this.database.prepare("SELECT i.*,p.status AS plan_status,p.deleted_at AS plan_deleted_at FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.queue_item_id=? ORDER BY i.id").all(userId, production.queue_item_id) as Record<string, unknown>[];
+        const plans = this.productionPlans(userId, production.queue_item_id);
         validateProductionTargets(targets, plans, production, input.recipe_id);
       }
     }

@@ -351,7 +351,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
           this.saveExecution(userId, input.idempotencyKey, "queue", itemId, value);
           return { kind: "completed" as const, value };
         }
-        const group = input.combineSameRecipe ? commonProduction(item, this.database.prepare(`${itemSelect} WHERE i.plan_id=? AND i.user_id=? AND i.deleted_at IS NULL ORDER BY i.id`).all(planId,userId) as Row[]) : null;
+        const group = input.combineSameRecipe ? commonProduction(item, this.getItems(planId, userId)) : null;
         let queueItemId = existing?.id;
         let added = false;
         if (!queueItemId) {
@@ -450,11 +450,11 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       .get(itemId, planId, userId) as Row | undefined;
   }
   private getItems(planId: string, userId: number) {
-    return (this.database.prepare(`${itemSelect} WHERE i.plan_id = ? AND i.user_id = ? AND i.deleted_at IS NULL
+    return this.database.prepare(`${itemSelect} WHERE i.plan_id = ? AND i.user_id = ? AND i.deleted_at IS NULL
       ORDER BY i.planned_date, CASE i.meal_type WHEN '早餐' THEN 0 WHEN '午餐' THEN 1 WHEN '晚餐' THEN 2 ELSE 3 END, i.id`)
-      .all(planId, userId) as Row[]).map(formatMealPlanItem);
+      .all(planId, userId) as Row[];
   }
-  private formatPlan(row: Row, userId: number) { return formatMealPlan(row, this.getItems(String(row.id), userId)); }
+  private formatPlan(row: Row, userId: number) { return formatMealPlan(row, this.getItems(String(row.id), userId).map(formatMealPlanItem)); }
   private repeated(userId: number, key: string) {
     const row = this.database.prepare("SELECT result_json FROM meal_plan_execution_requests WHERE user_id = ? AND idempotency_key = ?")
       .get(userId, key) as { result_json: string } | undefined;

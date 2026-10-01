@@ -374,7 +374,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
             (id, user_id, recipe_id, position, meal_type, planned_at, recipe_snapshot_json, idempotency_key, source_plan_item_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(queueItemId, userId, item.recipe_id, position, queueMealType(item.meal_type), null, JSON.stringify({
             title: item.recipe_title || item.title, imageUrl: item.recipe_image_url || null,
-            cookTime: item.recipe_cook_time || 0, difficulty: item.recipe_difficulty || "难度未知",
+            cookTime: item.recipe_cook_time ?? null, difficulty: item.recipe_difficulty || "难度未知",
             ingredients: group?.ingredients ?? parseJson(item.ingredients_json, []),
             productionPlanItems: group?.targets,
             plannedServings: group?.servings ?? formatMealPlanItem(item).plannedServings, planItemId: itemId, plannedDate: String(item.planned_date),

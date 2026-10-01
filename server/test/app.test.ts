@@ -4934,3 +4934,18 @@ test("changed activated recipes return HTTP 409 without starting the cooking que
   }
   assert.deepEqual(db.prepare("SELECT status,version FROM cooking_queue_items WHERE id=?").get(queueId), { status: "waiting", version: 1 });
 });
+
+
+test("queue HTTP preserves a current unknown cooking time instead of an old snapshot", async () => {
+  const account = await register("queue-time-http@example.com");
+  const id = Number(db.prepare("INSERT INTO recipes(title,status,cook_time,steps_json,ingredients_json) VALUES('队列时间回归','approved',10,'[]','[]')").run().lastInsertRowid);
+  const queued = await api("/api/v1/cooking-queue", { token: account.token, method: "POST", body: JSON.stringify({ recipeId: id }) });
+  assert.equal(queued.response.status, 201);
+  assert.equal((queued.body as JsonObject).item.cookTime, 10);
+  for (const cookTime of [null, 0, 12]) {
+    db.prepare("UPDATE recipes SET cook_time=? WHERE id=?").run(cookTime, id);
+    const listed = await api("/api/v1/cooking-queue", { token: account.token });
+    assert.equal(listed.response.status, 200);
+    assert.equal((listed.body as JsonObject[]).find(row => row.recipeId === id)!.cookTime, cookTime);
+  }
+});

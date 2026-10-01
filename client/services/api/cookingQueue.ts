@@ -17,7 +17,7 @@ export type CookingQueueItem = {
   version: number;
   title: string;
   imageUrl: string | null;
-  cookTime: number;
+  cookTime: number | null;
   calories: number;
   difficulty: string;
   ingredients: Array<{ name: string; amount: string; group?: string }>;

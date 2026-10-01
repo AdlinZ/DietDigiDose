@@ -383,7 +383,7 @@ export default function CookingQueueScreen() {
 
   const readyCount = items.filter((item) => item.ingredients.length > 0 && getMissingIngredients(item, inventory).length === 0).length;
   const reminderCount = items.filter((item) => item.reminderAt && item.reminderAt > Date.now()).length;
-  const totalCookTime = items.reduce((total, item) => total + item.cookTime, 0);
+  const totalCookTime = items.every(item => item.cookTime != null) ? items.reduce((total, item) => total + item.cookTime!, 0) : null;
 
   return (
     <Screen safeAreaEdges={["top", "bottom"]}>
@@ -411,7 +411,7 @@ export default function CookingQueueScreen() {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 44 }}>
           <View className="mb-4 w-full max-w-[760px] self-center flex-row rounded-[22px] bg-brand-fill p-4">
             <QueueSummary value={items.length} label="待烹饪" />
-            <QueueSummary value={totalCookTime} label="总分钟" />
+            <QueueSummary value={totalCookTime ?? "待核对"} label="菜谱分钟合计" />
             <QueueSummary value={readyCount} label="名称匹配" />
             <QueueSummary value={reminderCount} label="已设提醒" />
           </View>
@@ -426,9 +426,6 @@ export default function CookingQueueScreen() {
                 normalizeIngredientName(name) === normalizeIngredientName(ingredient.name)
               ))).length;
               const preparedPercent = ingredientDataReady ? Math.round((preparedCount / item.ingredients.length) * 100) : 0;
-              const expectedFinishAt = item.reminderAt
-                ? item.reminderAt + item.cookTime * 60 * 1000
-                : null;
               return (
                 <View key={item.recipeId} className={`overflow-hidden rounded-[22px] border bg-surface ${highlighted ? "border-warm" : "border-line"}`}>
                   <View className="flex-row">
@@ -452,7 +449,7 @@ export default function CookingQueueScreen() {
                       </View>
                       <View className="mt-2 flex-row flex-wrap gap-x-3 gap-y-1">
                         <Text className="text-[10px] font-black text-brand">{STATUS_LABELS[item.status]}</Text>
-                        <Text className="text-[10px] font-bold text-copy-muted">{item.cookTime} 分钟</Text>
+                        <Text className="text-[10px] font-bold text-copy-muted">{item.cookTime == null ? "烹饪时间未知" : `${item.cookTime} 分钟（菜谱参考）`}</Text>
                         {(item.productionMeals?.length ?? 0) > 1 && <Text className="text-[10px] font-bold text-copy-muted">{item.productionMeals?.length} 餐共用 · {item.plannedServings} 份</Text>}
                         <Text className="text-[10px] font-bold text-critical">{item.calories} kcal</Text>
                         <Text className={`text-[10px] font-black ${!ingredientDataReady || missing.length ? "text-critical" : "text-brand"}`}>
@@ -468,9 +465,7 @@ export default function CookingQueueScreen() {
                         </TouchableOpacity>
                       ) : null}
                       <Text className="mt-2 text-[9px] font-medium text-copy-muted">
-                        {expectedFinishAt
-                          ? `按计划预计 ${formatCookingReminderTime(expectedFinishAt)} 完成`
-                          : `开始后预计约 ${item.cookTime} 分钟完成`}
+                        完整制作时间还需核对准备、收尾、份量与设备安排
                       </Text>
                     </View>
                   </View>
@@ -630,7 +625,7 @@ export default function CookingQueueScreen() {
   );
 }
 
-function QueueSummary({ value, label }: { value: number; label: string }) {
+function QueueSummary({ value, label }: { value: number | string; label: string }) {
   return (
     <View className="flex-1 items-center border-r border-white/15 last:border-r-0">
       <Text className="text-xl font-black text-white">{value}</Text>

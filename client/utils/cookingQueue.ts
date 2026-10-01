@@ -10,7 +10,7 @@ export type CookingQueueItem = {
   recipeId: number;
   title: string;
   imageUrl: string | null;
-  cookTime: number;
+  cookTime: number | null;
   calories: number;
   difficulty: string;
   addedAt: number;
@@ -32,11 +32,12 @@ export function normalizeCookingQueue(value: unknown): CookingQueueItem[] {
     const title = typeof item.title === "string" ? item.title.trim() : "";
     if (!Number.isInteger(recipeId) || recipeId <= 0 || !title || seen.has(recipeId)) return [];
     seen.add(recipeId);
+    const minutes = typeof item.cookTime === "number" || typeof item.cookTime === "string" && item.cookTime.trim() !== "" ? Number(item.cookTime) : NaN;
     return [{
       recipeId,
       title,
       imageUrl: typeof item.imageUrl === "string" && item.imageUrl.trim() ? item.imageUrl : null,
-      cookTime: Math.max(0, Number(item.cookTime) || 0),
+      cookTime: Number.isFinite(minutes) && minutes >= 0 ? minutes : null,
       calories: Math.max(0, Number(item.calories) || 0),
       difficulty: typeof item.difficulty === "string" && item.difficulty.trim() ? item.difficulty.trim() : "难度未知",
       addedAt: Number.isFinite(Number(item.addedAt)) ? Number(item.addedAt) : Date.now(),

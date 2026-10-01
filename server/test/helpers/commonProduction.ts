@@ -9,7 +9,7 @@ import type { DietRecordsService } from "../../src/modules/dietRecords/service.j
 type Query = (sql: string, values?: (string | number)[]) => Promise<Record<string, unknown>[]>;
 export async function verifyCommonProduction(plans: MealPlansRepository, diet: DietRecordsService, userId: number, query: Query, queue: CookingQueueRepository,
   injectFailure: (operation: () => Promise<unknown>) => Promise<void>) {
-  const recipeId = Number((await query("INSERT INTO recipes(title,status,steps_json,ingredients_json,serving_size) VALUES(?,'approved','[]','[{\"name\":\"共做鸡蛋\",\"amount\":\"1个\"}]',1) RETURNING id", ["共用制作回归"]))[0].id);
+  const recipeId = Number((await query("INSERT INTO recipes(title,status,steps_json,ingredients_json,serving_size,cook_time) VALUES(?,'approved','[]','[{\"name\":\"共做鸡蛋\",\"amount\":\"1个\"}]',1,NULL) RETURNING id", ["共用制作回归"]))[0].id);
   const stockId = Number((await query("INSERT INTO inventory_items(user_id,food_name,category,quantity,quantity_value,quantity_unit,expiration_date) VALUES(?,'共做鸡蛋','其他','6个',6,'piece','2099-12-31') RETURNING id", [userId]))[0].id);
   const planId = randomUUID();
   const draft = cookingPlanDraftSchema.parse({ planningMode: "single_session", status: "requires_validation",
@@ -54,6 +54,15 @@ export async function verifyCommonProduction(plans: MealPlansRepository, diet: D
   assert.deepEqual(await query("SELECT id FROM diet_records WHERE user_id=? ORDER BY id", [userId]), legacyBefore);
   assert.deepEqual(await query("SELECT id,queue_item_id,version,status FROM meal_plan_items WHERE plan_id=? ORDER BY planned_date", [planId]), linked);
   const queueService = new CookingQueueService(queue);
+  assert.equal(snapshot.cookTime, null);
+  assert.equal((await queueService.list(userId, false)).find(row => row.id === queueId)!.cookTime, null);
+  await query("UPDATE recipes SET cook_time=10 WHERE id=?", [recipeId]);
+  assert.equal((await queueService.list(userId, false)).find(row => row.id === queueId)!.cookTime, 10);
+  await query("UPDATE recipes SET cook_time=0 WHERE id=?", [recipeId]);
+  assert.equal((await queueService.list(userId, false)).find(row => row.id === queueId)!.cookTime, 0);
+  await query("UPDATE recipes SET cook_time=NULL WHERE id=?", [recipeId]);
+  assert.equal((await queueService.list(userId, false)).find(row => row.id === queueId)!.cookTime, null);
+
   await query("UPDATE recipes SET steps_json='[\"后来改变的步骤\"]' WHERE id=?", [recipeId]);
   await assert.rejects(queueService.start(queueId, userId, 1), { code: "MEAL_RECIPE_CHANGED" });
   await assert.rejects(queueService.update(queueId, userId, { version: 1, status: "cooking" }), { code: "MEAL_RECIPE_CHANGED" });

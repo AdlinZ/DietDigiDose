@@ -10,6 +10,8 @@ function parseJson<T>(value: unknown, fallback: T): T {
 
 export function formatQueueItem(row: QueueRow) {
   const snapshot = parseJson<Record<string, unknown>>(row.recipe_snapshot_json, {});
+  const rawCookTime = Object.hasOwn(row, "current_cook_time") ? row.current_cook_time : snapshot.cookTime;
+  const minutes = typeof rawCookTime === "number" || typeof rawCookTime === "string" && rawCookTime.trim() !== "" ? Number(rawCookTime) : NaN;
   const currentIngredients = parseJson<unknown[]>(row.current_ingredients_json, []);
   return {
     productionMeals: Array.isArray(snapshot.productionPlanItems) ? snapshot.productionPlanItems.map((target: { date: string; mealType: string; servings: number }) => ({ date: target.date, mealType: target.mealType, servings: target.servings })) : [],
@@ -27,7 +29,7 @@ export function formatQueueItem(row: QueueRow) {
     imageUrl: row.current_image_url === null || row.current_image_url === undefined
       ? (typeof snapshot.imageUrl === "string" ? snapshot.imageUrl : null)
       : String(row.current_image_url),
-    cookTime: Number(row.current_cook_time ?? snapshot.cookTime ?? 0),
+    cookTime: Number.isFinite(minutes) && minutes >= 0 ? minutes : null,
     calories: Number(row.current_calories ?? snapshot.calories ?? 0),
     difficulty: String(row.current_difficulty || snapshot.difficulty || "难度未知"),
     ingredients: row.source_plan_item_id && Array.isArray(snapshot.ingredients) ? snapshot.ingredients : currentIngredients.length ? currentIngredients : Array.isArray(snapshot.ingredients) ? snapshot.ingredients : [],

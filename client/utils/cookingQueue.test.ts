@@ -60,3 +60,12 @@ describe("cooking queue", () => {
     );
   });
 });
+
+
+test("queue shadows preserve unknown and explicit zero across storage normalization", () => {
+  for (const cookTime of [null, undefined, "", " ", -1, "unknown", Infinity, false, true, [], {}]) {
+    expect(normalizeCookingQueue([{ recipeId: 1, title: "时间待核对", cookTime }])[0].cookTime).toBeNull();
+  }
+  expect(normalizeCookingQueue([{ recipeId: 1, title: "明确零", cookTime: 0 }])[0].cookTime).toBe(0);
+  expect(normalizeCookingQueue([{ recipeId: 1, title: "明确分钟", cookTime: "10" }])[0].cookTime).toBe(10);
+});

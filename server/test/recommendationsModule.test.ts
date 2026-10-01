@@ -427,6 +427,26 @@ test("plans use current reviewed handling for future meals, replacement and inde
   const week = await service.weeklyPlan(7, { startDate: "2099-01-01", mealTypes: ["dinner"], servings: 2 });
   assert.equal(week.draft?.productionDate, undefined); assert.equal(week.draft?.cooking.length, 7);
   assert(week.draft?.handlingChecks?.every(check => check.status === "conditions_match"));
+  const handlingBefore = rows.map(row => structuredClone(row.execution_json.profile.handling));
+  rows.forEach(row => { row.execution_json.profile.handling.storage = "refrigerated"; row.execution_json.profile.handling.maxHoldHours = 72;
+    row.execution_json.profile.handling.carryAllowed = true; row.execution_json.profile.handling.coldServingAllowed = false; });
+  const carryCandidates = (await service.compute(7, { surface: "home" }, { carry_meals: true, reheating_available: true })).results;
+  assert.equal(carryCandidates.length, 2); assert(carryCandidates.every(candidate => candidate.hardConstraints.pending.includes("time") && !candidate.hardConstraints.satisfied.includes("time")));
+  const { interventionRecommendations } = await import("../src/modules/interventions/snapshot.js");
+  assert.equal(interventionRecommendations(carryCandidates).length, 0, "unverified reheating cannot authorize an automatic dinner intervention");
+  const sameDayCarry = await service.cookingPlan(7, { ...input, productionDate: "2099-01-02", preferences: { carry_meals: true, reheating_available: true } });
+  assert.equal(sameDayCarry.time.incomplete, true); assert(sameDayCarry.time.schedule?.missing.includes("future_reheating_schedule"));
+  const carryReplacement = await service.replaceCookingItem(7, { draft: sameDayCarry, targetMealId: "lunch", recipeId: sameDayCarry.cooking[0].recipeId === 1 ? 2 : 1 });
+  assert.equal(carryReplacement.draft.time.incomplete, true); assert(carryReplacement.draft.time.schedule?.missing.includes("future_reheating_schedule"));
+  const carryWeekly = await service.replaceCookingItem(7, { draft: { ...sameDayCarry, productionDate: undefined, planningMode: "weekly", shoppingWindow: { startDate: "2099-01-02", endDate: "2099-01-08" }, time: { ...sameDayCarry.time, schedule: undefined, sessions: [{ targetMealId: "lunch", schedule: sameDayCarry.time.schedule! }] } },
+    targetMealId: "lunch", recipeId: sameDayCarry.cooking[0].recipeId === 1 ? 2 : 1 });
+  assert.equal(carryWeekly.draft.time.incomplete, true); assert(carryWeekly.draft.time.sessions?.[0].schedule.missing.includes("future_reheating_schedule"));
+  const freshHome = await service.cookingPlan(7, { ...input, productionDate: "2099-01-02", preferences: { carry_meals: false } });
+  assert.equal(freshHome.time.incomplete, false, "fresh home cooking does not invent a separate reheating session");
+  rows.forEach(row => { row.execution_json.profile.handling.coldServingAllowed = true; });
+  const coldCarry = await service.cookingPlan(7, { ...input, productionDate: "2099-01-02", preferences: { carry_meals: true, reheating_available: false } });
+  assert.equal(coldCarry.time.incomplete, false, "reviewed cold serving does not require an invented reheating duration");
+  rows.forEach((row, index) => { row.execution_json.profile.handling = handlingBefore[index]; });
   rows[1].ingredients_json[0].amount = "3个";
   const stale = await service.cookingPlan(7, input);
   assert.equal(stale.cooking[0].recipeId, 2); assert.equal(stale.handlingChecks?.[0].status, "pending", "content changes invalidate handling too");

@@ -6,7 +6,7 @@ import { recipeDemands } from "./quantities.js";
 import { buildFefoConsumptionPreviewFromCandidates } from "../../services/inventoryQuantity.js";
 import type { RecommendationDataset, RecommendationInput, Row } from "./types.js";
 
-export const RECIPE_SCORING_VERSION = "rules-2026-10-01.3";
+export const RECIPE_SCORING_VERSION = "rules-2026-10-01.4";
 export const RECIPE_CANDIDATE_VERSION = "sql-public-v1";
 export const RECOMMENDATION_WEIGHTS = Object.freeze({
   inventoryCoverage: 35, expiringUse: 20, missingPenalty: 20, timeFit: 15, nutritionFit: 10,
@@ -149,6 +149,7 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
       productionDate: today, targetDate: today, preferences: dataset.profile.kitchen }).status === "conflict") return [];
     const schedule = scheduleCooking([{ targetMealId: "candidate", recipeId: Number(recipe.id), servings, recipe: summary }], dataset.kitchenware);
     if (schedule.complete && timeBudget && schedule.elapsedMinutes! > timeBudget) return [];
+    const timeVerified = schedule.complete && !(dataset.profile.kitchen.carry_meals === true && summary.execution_profile?.handling?.coldServingAllowed !== true);
     const demands = ingredients.map(ingredient => recipeDemands([ingredient], Number(recipe.serving_size) || null, servings)?.[0]);
     const knownDemands = demands.filter((demand): demand is NonNullable<typeof demand> => !!demand);
     const preview = buildFefoConsumptionPreviewFromCandidates(dataset.inventory.map(item => ({ id: item.id, food_name: item.food_name,
@@ -189,19 +190,20 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
     else if (cookTime > 0) reasons.push(recipe.prep_time == null
       ? `烹饪约 ${cookTime} 分钟，准备与收尾时间待核实`
       : `准备与烹饪约 ${cookTime + Number(recipe.prep_time)} 分钟，尚未计入收尾及多菜设备安排`);
+    if (schedule.complete && !timeVerified) reasons.push("携带餐的复热设备与用时仍须核对");
     if (!reasons.length) reasons.push("通过公开权限、质量与安全硬约束检查");
     if (uncertain.length) reasons.unshift(`${uncertain.length} 项原料的用量或库存数量待核对`);
     const degraded: string[] = [];
     if (uncertain.length) degraded.push("inventory_quantity_unknown");
     if (!ingredients.length) degraded.push("ingredients_unstructured");
     if (dataset.profile.kitchen.avoid_spicy === true) degraded.push("spiciness_requires_ingredient_confirmation");
-    if (!schedule.complete) degraded.push("whole_plan_time_unverified");
+    if (!timeVerified) degraded.push("whole_plan_time_unverified");
     if (!schedule.complete && (!cookTime || recipe.prep_time == null)) degraded.push("preparation_time_unknown");
     if (dataset.profile.kitchen.budget_per_meal) degraded.push("recipe_price_unavailable");
     if (dataset.profile.kitchen.servings && !(Number(recipe.serving_size) > 0)) degraded.push("recipe_yield_unavailable");
     return [{ recipeId: Number(recipe.id), recipe: summary, score,
       scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION,
-      hardConstraints: { satisfied: ["quality", "permission", "allergy", "kitchenware", ...(schedule.complete ? ["time"] : [])], unmet: [] as string[], pending: schedule.complete ? [] : ["time"] },
+      hardConstraints: { satisfied: ["quality", "permission", "allergy", "kitchenware", ...(timeVerified ? ["time"] : [])], unmet: [] as string[], pending: timeVerified ? [] : ["time"] },
       features: { inventoryEvidence: { version: 1, scope: "personal", allocations: preview.flatMap(item => item.deductions.map(deduction => ({
         itemId: Number(deduction.item_id), itemVersion: Number(deduction.version), amount: Number(deduction.amount_value), unit: String(deduction.unit),
       }))) }, inventoryCoverage: Math.round(coverage * 100), matchedIngredients: matched, expiringIngredients: expiring,

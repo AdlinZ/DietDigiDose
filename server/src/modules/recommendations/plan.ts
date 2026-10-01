@@ -16,6 +16,9 @@ import type { Row } from "./types.js";
 type Candidate = ReturnType<typeof scoreRecipeRecommendations>["results"][number];
 type Demand = { food_name: string; amount_value: number; unit: InventoryUnit };
 const demands = (candidate: Candidate, portions: number) => recipeDemands(candidate.recipe.ingredients, candidate.recipe.serving_size, portions);
+const needsReheating = (cooking: CookingPlanDraft["cooking"], candidates: Candidate[], productionDate: string, meals: CookingPlanDraft["meals"], carry: boolean) => cooking.some(item =>
+  (carry || meals.find(meal => meal.id === item.targetMealId)!.date > productionDate)
+  && candidates.find(candidate => candidate.recipeId === item.recipeId)?.recipe.execution_profile?.handling?.coldServingAllowed !== true);
 
 function substitutionLinks(candidates: Candidate[]) {
   // ponytail: one reviewed variant hop; multiple ingredient swaps need a separately reviewed complete variant.
@@ -94,8 +97,7 @@ export function buildCookingDraft(requirements: ReturnType<typeof allocatePrepar
       servings: target.cookServings, recipeYield: recipe.serving_size!, demands: chosen.needed, ...(chosen.substitution ? { substitution: chosen.substitution } : {}) });
   }
   const ingredientBudget = buildFefoConsumptionPreviewFromCandidates(stock, budget);
-  const reheating = planned.some(item => requirements.meals.find(meal => meal.id === item.targetMealId)!.date > requirements.productionDate
-    && candidates.find(candidate => candidate.recipeId === item.recipeId)?.recipe.execution_profile?.handling?.coldServingAllowed !== true);
+  const reheating = needsReheating(planned, candidates, requirements.productionDate, requirements.meals, requirements.effectivePreferences?.carry_meals === true);
   const time = planTime(planned, candidates, devices, timeBudget, requirements.meals.some(meal => meal.preparedServings > 0), false, reheating);
   if (unresolved.length) { time.incomplete = true; time.schedule.complete = false; time.schedule.elapsedMinutes = null;
     time.schedule.missing.push("unresolved_cooking"); time.missing.push("unresolved_cooking"); }
@@ -142,9 +144,9 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
       draft.cooking.filter(item => item.targetMealId !== targetMealId).flatMap(item => item.demands), target.servings, target.recipeId);
     if (substitution && ingredientBudget.every(item => item.fully_covered && item.quantity_status === "sufficient")) replacement.substitution = substitution;
     const sessions = draft.planningMode === "weekly" ? draft.meals.map(meal => ({ targetMealId: meal.id,
-      time: planTime(cooking.filter(item => item.targetMealId === meal.id), candidates, devices, draft.time.sessionBudgetMinutes ?? draft.time.budgetMinutes, meal.preparedServings > 0, draft.unresolved.some(item => item.targetMealId === meal.id)) })) : [];
-    const reheating = draft.planningMode !== "weekly" && cooking.some(item => draft.meals.find(meal => meal.id === item.targetMealId)!.date > productionDate
-      && candidates.find(candidate => candidate.recipeId === item.recipeId)?.recipe.execution_profile?.handling?.coldServingAllowed !== true);
+      time: planTime(cooking.filter(item => item.targetMealId === meal.id), candidates, devices, draft.time.sessionBudgetMinutes ?? draft.time.budgetMinutes, meal.preparedServings > 0, draft.unresolved.some(item => item.targetMealId === meal.id),
+        needsReheating(cooking.filter(item => item.targetMealId === meal.id), candidates, meal.date, draft.meals, draft.effectivePreferences.carry_meals === true)) })) : [];
+    const reheating = draft.planningMode !== "weekly" && needsReheating(cooking, candidates, productionDate, draft.meals, draft.effectivePreferences.carry_meals === true);
     let time: CookingPlanDraft["time"] = planTime(cooking, candidates, devices, draft.time.budgetMinutes, draft.meals.some(meal => meal.preparedServings > 0), draft.unresolved.length > 0, reheating);
     if (sessions.length) {
       const { schedule: _schedule, ...totals } = time;

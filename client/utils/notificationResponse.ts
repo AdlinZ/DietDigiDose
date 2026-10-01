@@ -6,6 +6,7 @@ export type AppNotificationData = {
   interventionId?: string;
   inventoryItemId?: number;
   recipeId?: number;
+  queueItemId?: string;
   userId?: number;
 };
 
@@ -17,7 +18,7 @@ export type NotificationDestination =
   | { pathname: "/ai-assistant"; params: { prompt: string } }
   | { pathname: "/diet-record" }
   | { pathname: "/notifications" }
-  | { pathname: "/cooking-queue"; params: { highlightRecipeId: number } }
+  | { pathname: "/cooking-queue"; params: { highlightRecipeId: number; highlightQueueItemId?: string } }
   | { pathname: "/cooking-mode"; params: { recipeId: number; fromQueue: boolean } }
   | null;
 
@@ -56,9 +57,8 @@ export function resolveNotificationDestination(
   }
 
   if (data.type === "cooking_reminder" && typeof data.recipeId === "number") {
-    return actionIdentifier === "START_COOKING"
-      ? { pathname: "/cooking-mode", params: { recipeId: data.recipeId, fromQueue: true } }
-      : { pathname: "/cooking-queue", params: { highlightRecipeId: data.recipeId } };
+    return { pathname: "/cooking-queue", params: { highlightRecipeId: data.recipeId,
+      ...(typeof data.queueItemId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.queueItemId) ? { highlightQueueItemId: data.queueItemId } : {}) } };
   }
 
   if (data.type === "admin_campaign") return { pathname: "/notifications" };

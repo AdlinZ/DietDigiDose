@@ -3794,8 +3794,9 @@ test("Agent inventory undo preserves later changes and records a single compensa
 test("inventory intake resumes source items without duplicating previously saved batches", async () => {
   const account = await register("intake-identity-191@example.com");
   const other = await register("intake-identity-other-191@example.com");
+  const expirationDate = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
   const item = (id: string) => ({ field_evidence: { quantity: { status: "estimated", source: "recognition" } }, source_item_id: id, food_name: "同名大米", quantity: "1袋", quantity_value: 1, quantity_unit: "bag", category: "粮油干货",
-    expiration_date: "2026-10-01", storage_location: "常温", confirmed: true, source: "image" });
+    expiration_date: expirationDate, storage_location: "常温", confirmed: true, source: "image" });
   const submit = (key: string, items: JsonObject[], token = account.token) => api("/api/v1/inventory/bulk-intake", {
     token, method: "POST", body: JSON.stringify({ idempotency_key: key, source: "image", source_reference: "scan-job-191", items }),
   });

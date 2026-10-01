@@ -1,5 +1,5 @@
 import { inventoryUnitSchema } from "./inventory.ts";
-import { cookingScheduleSchema, mealHandlingCheckSchema } from "./recipeExecution.ts";
+import { cookingScheduleSchema, mealHandlingCheckSchema, recipeSubstitutionEvidenceSchema } from "./recipeExecution.ts";
 import { kitchenPreferencesSchema } from "./mealPreferences.ts";
 import { z } from "zod";
 
@@ -41,6 +41,7 @@ export const cookingPlanDraftSchema = z.object({
   })).min(1).max(28),
   totalCookServings: amount,
   cooking: z.array(z.object({ targetMealId: z.string().max(80), recipeId: z.number().int().positive(),
+    substitution: recipeSubstitutionEvidenceSchema.optional(),
     title: z.string().max(200), servings: positiveAmount, recipeYield: positiveAmount,
     demands: z.array(z.object({ food_name: z.string().max(200), amount_value: positiveAmount, unit: inventoryUnitSchema })).max(100),
   })).max(28),
@@ -93,6 +94,7 @@ export const cookingPlanDraftSchema = z.object({
     } else if (cooking.length || unresolved.length) invalid(["meals", index], "无需补做的餐次不能重复安排新做菜");
   });
   draft.cooking.forEach((item, index) => {
+    if (item.substitution && (item.substitution.recipeId !== item.recipeId || !item.demands.some(demand => demand.food_name === item.substitution!.replacementIngredient) || item.demands.some(demand => demand.food_name === item.substitution!.removedIngredient))) invalid(["cooking", index, "substitution"], "替代依据必须对应实际菜谱与原料");
     if (!ids.has(item.targetMealId)) invalid(["cooking", index, "targetMealId"], "新做菜必须属于现有餐次");
     if (!item.demands.length) invalid(["cooking", index, "demands"], "新做菜必须有明确原料用量");
   });

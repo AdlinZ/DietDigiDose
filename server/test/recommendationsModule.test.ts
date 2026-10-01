@@ -431,3 +431,49 @@ test("plans use current reviewed handling for future meals, replacement and inde
   const stale = await service.cookingPlan(7, input);
   assert.equal(stale.cooking[0].recipeId, 2); assert.equal(stale.handlingChecks?.[0].status, "pending", "content changes invalidate handling too");
 });
+
+
+test("reviewed ingredient variants consume their own quantities and never bypass current candidate constraints", async () => {
+  const { executionFixture } = await import("./helpers/recipeExecution.js");
+  const { executionRecipeKey } = await import("../src/modules/recipes/execution.js");
+  const { cookingPlanDraftSchema } = await import("@dietdigidose/contracts");
+  const rows = [1, 2, 3].map(id => {
+    const row = { id, title: `替代测试菜${id}`, serving_size: 2, cook_time: 10, prep_time: 5,
+      ingredients_json: [{ name: "番茄", amount: "1个" }, ...(id === 3 ? [] : [{ name: id === 1 ? "鸡蛋" : "豆腐", amount: id === 1 ? "2个" : "200g" }])],
+      steps_json: ["准备", "烹饪", "收尾"], required_kitchenware_json: [], optional_kitchenware_json: [] };
+    return { ...row, execution_json: { recipeKey: executionRecipeKey(row), reviewedBy: 1, reviewedAt: "2026-10-01T00:00:00Z", profile: { ...executionFixture } } };
+  });
+  const rule = { recipeId: 2, recipeKey: executionRecipeKey(rows[1]), removedIngredient: "鸡蛋", replacementIngredient: "豆腐",
+    sourceUrl: "https://example.invalid/substitution-fixture", reference: "合成替代审核依据，不用于实际食品" };
+  rows[0].execution_json.profile.substitutions = [rule];
+  let pool = rows;
+  let eggs = 0, tofu = 200;
+  let allergies: Array<{ name: string }> = [];
+  const stock = () => [{ id: 1, food_name: "番茄", quantity_value: 2, quantity_unit: "piece", expiration_date: "2099-12-31", version: 1 },
+    { id: 2, food_name: "豆腐", quantity_value: tofu, quantity_unit: "g", expiration_date: "2099-12-31", version: 1 },
+    { id: 3, food_name: "鸡蛋", quantity_value: eggs, quantity_unit: "piece", expiration_date: "2099-12-31", version: 1 }];
+  const service = new RecommendationsService(repository({ recipes: async () => pool, inventory: async () => stock(),
+    profile: async () => ({ allergies_json: allergies }), favoriteRecipeIds: async () => [3],
+    kitchenware: async () => [{ id: 1, catalog_id: 1, name: "测试锅", attributes_json: { capacityMl: 1000 } }],
+  }), kitchenware);
+  const input = { excludedPreparedMealIds: [], meals: [{ id: "dinner", date: "2099-01-01", mealType: "dinner" as const, servings: 2 }] };
+  const draft = await service.cookingPlan(7, input);
+  assert.equal(draft.cooking[0].recipeId, 2, "reviewed stocked variant takes priority over another fully stocked recipe");
+  assert.deepEqual(draft.cooking[0].substitution?.removedIngredient, "鸡蛋");
+  assert(draft.ingredientBudget.every(item => item.fully_covered)); assert(!draft.ingredientBudget.some(item => item.food_name === "鸡蛋"));
+  assert.equal(draft.time.schedule?.elapsedMinutes, 17);
+  assert.equal(cookingPlanDraftSchema.safeParse({ ...draft, cooking: [{ ...draft.cooking[0], substitution: { ...draft.cooking[0].substitution!, recipeId: 3 } }] }).success, false);
+  const two = await service.cookingPlan(7, { ...input, meals: [...input.meals, { ...input.meals[0], id: "another" }] });
+  assert.equal(two.cooking.filter(item => item.substitution).length, 1, "the same tofu cannot satisfy both meals");
+  assert(two.ingredientBudget.every(item => item.fully_covered));
+  pool = rows.slice(0, 2); eggs = 2; tofu = 0;
+  const original = await service.cookingPlan(7, input); assert.equal(original.cooking[0].recipeId, 1);
+  eggs = 0; tofu = 200;
+  const replacement = await service.replaceCookingItem(7, { draft: original, targetMealId: "dinner", recipeId: 2 });
+  assert(replacement.draft.cooking[0].substitution); assert(replacement.draft.ingredientBudget.every(item => item.fully_covered));
+  allergies = [{ name: "豆腐" }];
+  await assert.rejects(service.replaceCookingItem(7, { draft: original, targetMealId: "dinner", recipeId: 2 }), /没有符合/);
+  allergies = [];
+  rows[1].ingredients_json[1].amount = "300g";
+  assert.equal((await service.cookingPlan(7, input)).cooking.some(item => item.substitution), false, "changing target quantities invalidates the link");
+});

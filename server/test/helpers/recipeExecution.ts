@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import type { MealPlansRepository } from "../../src/modules/mealPlans/repository.js";
 import type { RecipeExecutionProfile } from "@dietdigidose/contracts";
 import type { AdminRecipesService } from "../../src/modules/adminRecipes/service.js";
 import type { RecipesService } from "../../src/modules/recipes/service.js";
@@ -18,7 +20,7 @@ export const executionFixture: RecipeExecutionProfile = { version: 1, maxBatchSe
 
 type Query = (sql: string, values?: unknown[]) => Promise<Record<string, unknown>[]>;
 export async function verifyRecipeExecution(admin: AdminRecipesService, recipes: RecipesService,
-  recommendations: RecommendationsService, kitchenware: KitchenwareService, adminId: number, query: Query) {
+  recommendations: RecommendationsService, kitchenware: KitchenwareService, adminId: number, query: Query, mealPlans: MealPlansRepository) {
   const userId = Number((await query("INSERT INTO users(username,email) VALUES('execution-fixture','execution-fixture@example.invalid') RETURNING id"))[0].id);
   const catalog = await kitchenware.resolveCatalog("平底锅"); assert(catalog && catalog.confidence === 1);
   const device = await kitchenware.create(userId, { name: "平底锅", attributes: { capacityMl: 1000 } });
@@ -72,4 +74,44 @@ export async function verifyRecipeExecution(admin: AdminRecipesService, recipes:
   await admin.reviewExecution(adminId, recipeId, { recipeKey: reviewed.recipeKey, reviewKey: reviewed.reviewKey, profile: null }, context);
   assert.equal((await query("SELECT execution_json FROM recipes WHERE id=?", [recipeId]))[0].execution_json, null);
   assert.equal(Number((await query("SELECT COUNT(*) AS n FROM admin_audit_logs WHERE action='recipe.execution_review' AND resource_id=?", [String(recipeId)]))[0].n), 3);
+  await kitchenware.update(userId, Number(device.id), { name: "平底锅", attributes: { capacityMl: 1000 } });
+  const sourceBody = { ...body, title: "合成替代原菜", ingredients: [{ name: "替代原料甲", amount: "2个" }, { name: "替代共用料", amount: "1个" }] };
+  const targetBody = { ...sourceBody, title: "合成替代变体", ingredients: [{ name: "替代原料乙", amount: "200g" }, { name: "替代共用料", amount: "1个" }], steps: ["变体准备", "变体烹饪", "收尾"] };
+  const sourceId = (await admin.create(adminId, sourceBody, context)).id;
+  const targetId = (await admin.create(adminId, targetBody, context)).id;
+  const targetKeys = await admin.execution(targetId);
+  await admin.reviewExecution(adminId, targetId, { recipeKey: targetKeys.recipeKey, reviewKey: targetKeys.reviewKey, profile }, context);
+  const sourceKeys = await admin.execution(sourceId);
+  const substitutions = [{ recipeId: targetId, recipeKey: targetKeys.recipeKey, removedIngredient: "替代原料甲", replacementIngredient: "替代原料乙",
+    sourceUrl: "https://example.invalid/substitution-fixture", reference: "合成替代审核回归，不作为真实食品依据" }];
+  await assert.rejects(admin.reviewExecution(adminId, sourceId, { recipeKey: sourceKeys.recipeKey, reviewKey: sourceKeys.reviewKey,
+    profile: { ...profile, substitutions: [{ ...substitutions[0], recipeKey: "0".repeat(64) }] } }, context), /替代菜谱/);
+  await admin.reviewExecution(adminId, sourceId, { recipeKey: sourceKeys.recipeKey, reviewKey: sourceKeys.reviewKey, profile: { ...profile, substitutions } }, context);
+  for (const [name, quantity, unit] of [["替代原料乙", 200, "g"], ["替代共用料", 1, "piece"]] as const) await query(
+    "INSERT INTO inventory_items(user_id,food_name,category,quantity,quantity_value,quantity_unit,expiration_date) VALUES(?,?,'其他',?,?,?,'2099-12-31')", [userId, name, `${quantity}${unit}`, quantity, unit]);
+  const substitutionDraft = await recommendations.cookingPlan(userId, { excludedPreparedMealIds: [], meals: [{ id: "substitution-dinner", date: "2099-01-01", mealType: "dinner", servings: 2 }] });
+  assert.equal(substitutionDraft.cooking[0].recipeId, targetId); assert.equal(substitutionDraft.cooking[0].substitution?.sourceRecipeId, sourceId);
+  assert(substitutionDraft.ingredientBudget.every(item => item.fully_covered)); assert(!substitutionDraft.ingredientBudget.some(item => item.food_name === "替代原料甲"));
+  const id = randomUUID();
+  assert(await mealPlans.saveDraft(userId, { id, title: "合成替代草案", draft: substitutionDraft }));
+  const forgedId = randomUUID();
+  const forged = { ...substitutionDraft, cooking: substitutionDraft.cooking.map(item => ({ ...item, demands: item.demands.map(demand => ({ ...demand, amount_value: demand.amount_value * 2 })) })) };
+  assert(await mealPlans.saveDraft(userId, { id: forgedId, title: "合成错误用量", draft: forged }));
+  assert.equal((await mealPlans.activateDraft(userId, forgedId, 1)).kind, "recipe_not_available");
+  assert.equal(Number((await query("SELECT COUNT(*) AS n FROM meal_plan_items WHERE plan_id=?", [forgedId]))[0].n), 0);
+  await query("UPDATE recipes SET quality_status='needs_review' WHERE id=?", [targetId]);
+  assert.equal((await mealPlans.activateDraft(userId, id, 1)).kind, "recipe_not_available");
+  await query("UPDATE recipes SET quality_status='trusted' WHERE id=?", [targetId]);
+  const activation = await mealPlans.activateDraft(userId, id, 1); assert.equal(activation.kind, "updated");
+  assert.equal((await mealPlans.activateDraft(userId, id, 1)).kind, "updated");
+  const activated = (await query("SELECT recipe_id,ingredients_json FROM meal_plan_items WHERE plan_id=?", [id]))[0];
+  assert.equal(Number(activated.recipe_id), targetId);
+  const captured = typeof activated.ingredients_json === "string" ? JSON.parse(activated.ingredients_json) : activated.ingredients_json;
+  assert(captured.some((item: { name: string; amount: string }) => item.name === "替代原料乙" && item.amount === "200g"));
+  const revokedId = randomUUID();
+  assert(await mealPlans.saveDraft(userId, { id: revokedId, title: "合成撤审草案", draft: substitutionDraft }));
+  const currentSource = await admin.execution(sourceId);
+  await admin.reviewExecution(adminId, sourceId, { recipeKey: currentSource.recipeKey, reviewKey: currentSource.reviewKey, profile: null }, context);
+  assert.equal((await mealPlans.activateDraft(userId, revokedId, 1)).kind, "recipe_not_available");
+
 }

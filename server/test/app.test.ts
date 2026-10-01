@@ -4894,7 +4894,7 @@ test("reviewed execution persists atomically and changed recipes invalidate sche
       const statement = db.prepare(sql);
       if (statement.reader) return statement.all(...values) as Record<string, unknown>[];
       statement.run(...values); return [];
-    });
+    }, new (await import("../src/modules/mealPlans/sqliteRepository.js")).SqliteMealPlansRepository(db));
   const account = await register("execution-acl@example.com");
   for (const method of ["GET", "PUT"]) assert.equal((await api("/api/v1/admin/recipes/1/execution", {
     token: account.token, method, ...(method === "PUT" ? { body: "{}" } : {}),

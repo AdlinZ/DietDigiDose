@@ -5,7 +5,8 @@ import { createPlanningBudget } from "./planningBudget.js";
 import { currentDateKey } from "../../utils/date.js";
 import { unexpiredInventory } from "./inventoryAvailability.js";
 import { recipeDemands } from "./quantities.js";
-import { cookingPlanDraftSchema, type CookingPlanDraft, type MealHandlingCheck } from "@dietdigidose/contracts";
+import { substitutionMatches } from "../recipes/substitutions.js";
+import { cookingPlanDraftSchema, type CookingPlanDraft, type MealHandlingCheck, type RecipeSubstitutionEvidence } from "@dietdigidose/contracts";
 import { RecommendationsError } from "./errors.js";
 import { buildFefoConsumptionPreviewFromCandidates, type InventoryUnit } from "../../services/inventoryQuantity.js";
 import type { allocatePreparedMeals } from "./requirements.js";
@@ -15,6 +16,31 @@ import type { Row } from "./types.js";
 type Candidate = ReturnType<typeof scoreRecipeRecommendations>["results"][number];
 type Demand = { food_name: string; amount_value: number; unit: InventoryUnit };
 const demands = (candidate: Candidate, portions: number) => recipeDemands(candidate.recipe.ingredients, candidate.recipe.serving_size, portions);
+
+function substitutionLinks(candidates: Candidate[]) {
+  // ponytail: one reviewed variant hop; multiple ingredient swaps need a separately reviewed complete variant.
+  const byId = new Map(candidates.map(candidate => [candidate.recipeId, candidate]));
+  const links = new Map<number, Array<{ source: Candidate; evidence: RecipeSubstitutionEvidence }>>();
+  for (const source of candidates) for (const rule of source.recipe.execution_profile?.substitutions ?? []) {
+    const target = byId.get(rule.recipeId);
+    if (!target?.recipe.execution_profile || target.recipe.execution_evidence?.recipeKey !== rule.recipeKey || !source.recipe.execution_evidence
+      || !substitutionMatches(source.recipe, target.recipe, rule)) continue;
+    const entries = links.get(rule.recipeId) ?? [];
+    entries.push({ source, evidence: { ...rule, sourceRecipeId: source.recipeId, sourceRecipeKey: source.recipe.execution_evidence.recipeKey, sourceTitle: source.recipe.title } });
+    links.set(rule.recipeId, entries);
+  }
+  return links;
+}
+function stockSubstitution(candidate: Candidate, links: ReturnType<typeof substitutionLinks>, stock: Parameters<typeof buildFefoConsumptionPreviewFromCandidates>[0], committed: Demand[], servings: number, sourceId?: number) {
+  const needed = demands(candidate, servings);
+  if (!needed || !buildFefoConsumptionPreviewFromCandidates(stock, [...committed, ...needed]).slice(committed.length).every(item => item.fully_covered && item.quantity_status === "sufficient")) return undefined;
+  return links.get(candidate.recipeId)?.find(({ source, evidence }) => {
+    if (sourceId !== undefined && source.recipeId !== sourceId) return false;
+    const original = demands(source, servings);
+    return original && buildFefoConsumptionPreviewFromCandidates(stock, [...committed, ...original]).slice(committed.length)
+      .some(item => item.food_name === evidence.removedIngredient && ["insufficient", "unavailable"].includes(item.quantity_status!));
+  })?.evidence;
+}
 
 export function planTime(cooking: CookingPlanDraft["cooking"], candidates: Candidate[], devices: Row[], budgetMinutes: number, prepared = false, unresolved = false, reheating = false) {
   const unavailable = cooking.filter(item => !candidates.some(candidate => candidate.recipeId === item.recipeId));
@@ -38,7 +64,8 @@ export function planTime(cooking: CookingPlanDraft["cooking"], candidates: Candi
 export function buildCookingDraft(requirements: ReturnType<typeof allocatePreparedMeals>, candidates: Candidate[], inventory: Row[], timeBudget: number, devices: Row[] = []) {
   const stock = unexpiredInventory(inventory, [currentDateKey(), requirements.productionDate].sort()[1]).map(item => ({ id: item.id, food_name: item.food_name, quantity_evidence_status: item.quantity_evidence_status as "known" | "estimated" | "unknown" | undefined, quantity_value: item.quantity_value,
     quantity_unit: item.quantity_unit, expiration_date: item.expiration_date, batch_code: item.batch_code, version: item.version }));
-  const planned: Array<{ targetMealId: string; recipeId: number; title: string; servings: number; recipeYield: number; demands: Demand[] }> = [];
+  const planned: CookingPlanDraft["cooking"] = [];
+  const links = substitutionLinks(candidates);
   const unresolved: Array<{ targetMealId: string; reason: string }> = [];
   let budget: Demand[] = [];
   for (const target of requirements.meals) {
@@ -56,14 +83,15 @@ export function buildCookingDraft(requirements: ReturnType<typeof allocatePrepar
       const unknownCount = preview.filter(item => item.quantity_status === "unknown").length;
       const time = planTime([...planned, { targetMealId: target.id, recipeId: candidate.recipeId, title: candidate.recipe.title,
         servings: target.cookServings, recipeYield: candidate.recipe.serving_size!, demands: needed }], candidates, devices, timeBudget);
-      return [{ candidate, handling, needed, unresolvedCount, unknownCount, exceedsTime: time.exceedsBudget }];
-    }).sort((a, b) => Number(a.exceedsTime) - Number(b.exceedsTime) || Number(a.handling.status === "pending") - Number(b.handling.status === "pending") || a.unresolvedCount - b.unresolvedCount || a.unknownCount - b.unknownCount || b.candidate.score - a.candidate.score);
+      const substitution = stockSubstitution(candidate, links, stock, budget, target.cookServings);
+      return [{ candidate, handling, needed, substitution, unresolvedCount, unknownCount, exceedsTime: time.exceedsBudget }];
+    }).sort((a, b) => Number(a.exceedsTime) - Number(b.exceedsTime) || Number(a.handling.status === "pending") - Number(b.handling.status === "pending") || a.unresolvedCount - b.unresolvedCount || a.unknownCount - b.unknownCount || Number(!a.substitution) - Number(!b.substitution) || b.candidate.score - a.candidate.score);
     const chosen = choices[0];
     if (!chosen) { unresolved.push({ targetMealId: target.id, reason: rejected.length ? `已审核条件冲突：${rejected.slice(0, 3).join("；")}`.slice(0, 1000) : "没有通过候选约束且有明确份数与原料用量的菜谱" }); continue; }
     const recipe = chosen.candidate.recipe;
     budget = [...budget, ...chosen.needed];
     planned.push({ targetMealId: target.id, recipeId: chosen.candidate.recipeId, title: recipe.title,
-      servings: target.cookServings, recipeYield: recipe.serving_size!, demands: chosen.needed });
+      servings: target.cookServings, recipeYield: recipe.serving_size!, demands: chosen.needed, ...(chosen.substitution ? { substitution: chosen.substitution } : {}) });
   }
   const ingredientBudget = buildFefoConsumptionPreviewFromCandidates(stock, budget);
   const reheating = planned.some(item => requirements.meals.find(meal => meal.id === item.targetMealId)!.date > requirements.productionDate
@@ -87,6 +115,9 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
   if (targets.length !== 1) throw new RecommendationsError(409, "请先指定唯一需要替换的新做菜", "COOKING_PLAN_TARGET_AMBIGUOUS");
   const target = targets[0];
   const productionDate = draft.productionDate ?? draft.meals.map(meal => meal.date).sort()[0];
+  const links = substitutionLinks(candidates);
+  const staleSubstitutions = draft.cooking.filter(item => item.targetMealId !== targetMealId && item.substitution && !links.get(item.recipeId)?.some(link =>
+    Object.entries(item.substitution!).every(([key, value]) => link.evidence[key as keyof typeof link.evidence] === value)));
   const choices = candidates.filter(candidate => candidate.recipeId !== target.recipeId && (recipeId === undefined || candidate.recipeId === recipeId)).flatMap(candidate => {
     const meal = draft.meals.find(meal => meal.id === targetMealId)!;
     const handling = evaluateHandling(candidate.recipe.execution_profile?.handling, { targetMealId, recipeId: candidate.recipeId,
@@ -94,14 +125,22 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
     if (handling.status === "conflict") return [];
     const needed = demands(candidate, target.servings);
     if (!needed) return [];
-    const replacement = { targetMealId, recipeId: candidate.recipeId, title: candidate.recipe.title,
+    const replacement: CookingPlanDraft["cooking"][number] = { targetMealId, recipeId: candidate.recipeId, title: candidate.recipe.title,
       servings: target.servings, recipeYield: candidate.recipe.serving_size!, demands: needed };
     const cooking = draft.cooking.map(item => item.targetMealId === targetMealId ? replacement : item);
     const singleBudget = buildFefoConsumptionPreviewFromCandidates(unexpiredInventory(inventory, [currentDateKey(), productionDate].sort()[1]).map(item => ({ id: item.id, food_name: item.food_name,
       quantity_evidence_status: item.quantity_evidence_status as "known" | "estimated" | "unknown" | undefined, quantity_value: item.quantity_value, quantity_unit: item.quantity_unit, expiration_date: item.expiration_date,
       batch_code: item.batch_code, version: item.version })), cooking.flatMap(item => item.demands));
     const weeklyBudget = draft.planningMode === "weekly" ? createPlanningBudget(inventory,existing.filter(item => !shoppingWindow || String(item.planned_date)>=shoppingWindow.startDate),shoppingWindow) : null;
-    const ingredientBudget = weeklyBudget ? [...draft.meals].sort((a,b) => a.date.localeCompare(b.date) || ["breakfast","lunch","dinner","snack"].indexOf(a.mealType)-["breakfast","lunch","dinner","snack"].indexOf(b.mealType)).flatMap(meal => weeklyBudget.consume(cooking.filter(item => item.targetMealId === meal.id).flatMap(item => item.demands),meal.date,meal.id)) : singleBudget;
+    let substitution: RecipeSubstitutionEvidence | undefined;
+    const ingredientBudget = weeklyBudget ? [...draft.meals].sort((a,b) => a.date.localeCompare(b.date) || ["breakfast","lunch","dinner","snack"].indexOf(a.mealType)-["breakfast","lunch","dinner","snack"].indexOf(b.mealType)).flatMap(meal => {
+      if (meal.id === targetMealId && !weeklyBudget.unknownCommitment) substitution = stockSubstitution(candidate, links,
+        unexpiredInventory(weeklyBudget.stock, meal.date) as Parameters<typeof buildFefoConsumptionPreviewFromCandidates>[0], [], target.servings, target.recipeId);
+      return weeklyBudget.consume(cooking.filter(item => item.targetMealId === meal.id).flatMap(item => item.demands),meal.date,meal.id);
+    }) : singleBudget;
+    if (!weeklyBudget) substitution = stockSubstitution(candidate, links, unexpiredInventory(inventory, [currentDateKey(), productionDate].sort()[1]) as Parameters<typeof buildFefoConsumptionPreviewFromCandidates>[0],
+      draft.cooking.filter(item => item.targetMealId !== targetMealId).flatMap(item => item.demands), target.servings, target.recipeId);
+    if (substitution && ingredientBudget.every(item => item.fully_covered && item.quantity_status === "sufficient")) replacement.substitution = substitution;
     const sessions = draft.planningMode === "weekly" ? draft.meals.map(meal => ({ targetMealId: meal.id,
       time: planTime(cooking.filter(item => item.targetMealId === meal.id), candidates, devices, draft.time.sessionBudgetMinutes ?? draft.time.budgetMinutes, meal.preparedServings > 0, draft.unresolved.some(item => item.targetMealId === meal.id)) })) : [];
     const reheating = draft.planningMode !== "weekly" && cooking.some(item => draft.meals.find(meal => meal.id === item.targetMealId)!.date > productionDate
@@ -119,13 +158,13 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
       return evaluateHandling(candidates.find(candidate => candidate.recipeId === item.recipeId)?.recipe.execution_profile?.handling,
         { targetMealId: item.targetMealId, recipeId: item.recipeId, productionDate: draft.planningMode === "weekly" ? meal.date : productionDate, targetDate: meal.date, preferences: draft.effectivePreferences });
     })];
-    return [{ cooking, handlingChecks, handling, ingredientBudget, time, sessionExceeds: sessions.some(session => session.time.exceedsBudget), weeklyBudget, score: candidate.score,
+    return [{ cooking, handlingChecks, handling, ingredientBudget, time, substitution: replacement.substitution, sessionExceeds: sessions.some(session => session.time.exceedsBudget), weeklyBudget, score: candidate.score,
       exceedsBudget: time.exceedsBudget,
       shortageCount: ingredientBudget.filter(item => !item.fully_covered).length }];
-  }).sort((a, b) => Number(a.exceedsBudget || a.sessionExceeds) - Number(b.exceedsBudget || b.sessionExceeds) || Number(a.handling.status === "pending") - Number(b.handling.status === "pending") || a.shortageCount - b.shortageCount || b.score - a.score);
+  }).sort((a, b) => Number(a.exceedsBudget || a.sessionExceeds) - Number(b.exceedsBudget || b.sessionExceeds) || Number(a.handling.status === "pending") - Number(b.handling.status === "pending") || a.shortageCount - b.shortageCount || Number(!a.substitution) - Number(!b.substitution) || b.score - a.score);
   const chosen = choices[0];
   if (!chosen) throw new RecommendationsError(409, "没有符合当前条件且用量明确的替代菜，原方案保持不变", "COOKING_PLAN_NO_REPLACEMENT");
-  const conflicts: string[] = [...(chosen.weeklyBudget?.checks ?? [])];
+  const conflicts: string[] = [...(chosen.weeklyBudget?.checks ?? []), ...staleSubstitutions.map(item => `「${item.title}」的替代审核已改变，请重新生成后再转为餐单`)];
   for (const check of chosen.handlingChecks) if (check.status !== "conditions_match") conflicts.push(...check.reasons);
   if (chosen.weeklyBudget?.unknownCommitment) conflicts.push("已有安排用量未核实，新增餐次的库存覆盖仅为暂算");
   for (const item of chosen.ingredientBudget) {

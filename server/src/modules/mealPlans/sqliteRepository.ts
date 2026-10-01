@@ -1,4 +1,5 @@
 import { commonProduction } from "./commonProduction.js";
+import { substitutionEvidenceMatches } from "../recipes/substitutions.js";
 import { SqliteMealAllocationsRepository } from "../mealAllocations/sqliteRepository.js";
 import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readSqliteDiningSupply } from "../households/sqliteDiningSupply.js";
@@ -54,11 +55,12 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
         if (activation.targets.some(target => occupied.some(item => String(item.planned_date) === target.date && queueMealType(item.meal_type) === target.mealType))) return { kind: "version_conflict" as const };
       }
       if (this.getItems(id, userId).length) return { kind: "version_conflict" as const };
-      const recipes = activation.items.map(item => this.database.prepare("SELECT steps_json FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(item.recipeId) as Row | undefined);
-      if (recipes.some(recipe => !recipe)) return { kind: "recipe_not_available" as const };
-      activation.items.forEach((item, index) => this.database.prepare(`INSERT INTO meal_plan_items
+      const recipeIds = [...new Set(activation.items.flatMap(item => [item.recipeId, ...(item.allocation.substitution ? [item.allocation.substitution.sourceRecipeId] : [])]))].sort((a, b) => a-b);
+      const recipes = new Map(recipeIds.map(recipeId => [recipeId, this.database.prepare("SELECT * FROM recipes WHERE id=? AND status='approved' AND deleted_at IS NULL").get(recipeId) as Row | undefined]));
+      if (activation.items.some(item => !recipes.get(item.recipeId) || !substitutionEvidenceMatches(item.allocation, recipes.get(item.allocation.substitution?.sourceRecipeId ?? 0), recipes.get(item.recipeId)))) return { kind: "recipe_not_available" as const };
+      activation.items.forEach(item => this.database.prepare(`INSERT INTO meal_plan_items
         (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json,confirmed_at)
-        VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).run(item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),recipes[index]!.steps_json));
+        VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).run(item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),recipes.get(item.recipeId)!.steps_json));
       this.database.prepare("UPDATE meal_plans SET status='active',constraints_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?")
         .run(JSON.stringify(activation.constraints),id,userId);
       new SqliteMealAllocationsRepository(this.database).reserve(userId,id,activation.targets);

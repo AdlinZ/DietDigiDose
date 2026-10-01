@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { recipeExecutionProfileSchema, type RecipeExecutionProfile } from '@dietdigidose/contracts/recipe-execution';
+import { recipeExecutionProfileSchema, type RecipeExecutionProfile, type RecipeSubstitution } from '@dietdigidose/contracts/recipe-execution';
 import api from '../services/api';
 
+type Variant = Omit<RecipeSubstitution, 'recipeId'> & { recipeId: string; preview?: { title: string; servingSize: number; ingredients: Array<{ name: string; amount: string }>; steps: string[] } };
 type Task = Omit<RecipeExecutionProfile['tasks'][number], 'minutes'> & { minutes: string };
 type Tool = { key: string; catalogId: string; capacityKind: 'not_applicable' | 'volume'; mlPerServing: string };
 type Catalog = { id: number; name: string; quality_status?: string };
@@ -13,6 +14,7 @@ const field = 'border rounded-lg px-2 py-1 w-full';
 export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
   const [recipeKey, setRecipeKey] = useState('');
   const [reviewKey, setReviewKey] = useState('');
+  const [variants, setVariants] = useState<Variant[]>([]);
   const [catalog, setCatalog] = useState<Catalog[]>([]);
   const [reference, setReference] = useState('');
   const [servings, setServings] = useState('');
@@ -31,6 +33,7 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
       setReviewKey(record.data.reviewKey);
       setCatalog(devices.data.filter((item: Catalog) => item.quality_status == null || item.quality_status === 'trusted'));
       const profile = record.data.execution?.profile as RecipeExecutionProfile | undefined;
+      setVariants(profile?.substitutions?.map(rule => ({ ...rule, recipeId: String(rule.recipeId) })) ?? []);
       const rule = profile?.handling;
       setHandling(rule ? { storage: rule.storage, hours: String(rule.maxHoldHours), cold: rule.coldServingAllowed ? 'yes' : 'no', carry: rule.carryAllowed ? 'yes' : 'no', sourceUrl: rule.sourceUrl, reference: rule.reference, instructions: rule.instructions } : emptyHandling);
       setReference(profile?.reference ?? ''); setServings(profile ? String(profile.maxBatchServings) : '');
@@ -47,9 +50,21 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
   }, [recipeId]);
   const update = (id: string, patch: Partial<Task>) => setTasks(current => current.map(task => task.id === id ? { ...task, ...patch } : task));
   const toggle = (values: string[], value: string) => values.includes(value) ? values.filter(item => item !== value) : [...values, value];
+  const readVariant = async (variant: Variant) => {
+    if (!/^\d+$/.test(variant.recipeId) || Number(variant.recipeId) === recipeId) { setMessage('请填写另一道变体菜谱的有效编号'); return; }
+    setBusy(true);
+    try {
+      const response = await api.get(`/admin/recipes/${variant.recipeId}/execution`);
+      if (!response.data.execution) throw new Error('请先审核变体的制作流程');
+      setVariants(current => current.map(item => item === variant ? { ...item, recipeKey: response.data.recipeKey, preview: response.data } : item));
+      setMessage('已读取变体当前版本，请核对完整用量、份数、步骤与替代依据。');
+    } catch (error: any) { setMessage(error.response?.data?.error || error.message || '读取变体失败'); }
+    finally { setBusy(false); }
+  };
   const save = async (remove = false) => {
     let profile: RecipeExecutionProfile | null = null;
     if (!remove) {
+      if (variants.some(variant => !variant.recipeKey)) { setMessage('请先读取并核对每道替代变体的当前版本，再保存审核。'); return; }
       if (!servings.trim() || tasks.some(task => !task.minutes.trim()) || tools.some(tool => !tool.catalogId || (tool.capacityKind === 'volume' && !tool.mlPerServing.trim()))) {
         setMessage('请填写批次份量、每项时间上限与设备容量依据；没有依据时请保留未审核状态。'); return;
       }
@@ -60,6 +75,7 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
         tools: tools.map(tool => ({ key: tool.key, name: catalog.find(item => String(item.id) === tool.catalogId)?.name ?? '', catalogId: Number(tool.catalogId),
           capacity: tool.capacityKind === 'volume' ? { kind: 'volume', mlPerServing: Number(tool.mlPerServing) } : { kind: 'not_applicable' } })),
         ...(handling.storage ? { handling: { storage: handling.storage, maxHoldHours: handling.storage === 'fresh_only' ? 0 : Number(handling.hours), coldServingAllowed: handling.cold === 'yes', carryAllowed: handling.carry === 'yes', sourceUrl: handling.sourceUrl, reference: handling.reference, instructions: handling.instructions } } : {}),
+        ...(variants.length ? { substitutions: variants.map(({ preview: _preview, ...rule }) => ({ ...rule, recipeId: Number(rule.recipeId) })) } : {}),
         tasks: tasks.map(task => ({ ...task, minutes: Number(task.minutes) })),
       });
       if (!parsed.success) { setMessage(parsed.error.issues.map(issue => issue.message).join('；')); return; }
@@ -109,6 +125,17 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
         <label className="block">核对依据<textarea aria-label="存放核对依据" value={handling.reference} onChange={event => setHandling(current => ({ ...current, reference: event.target.value }))} className={field} /></label>
         <label className="block">实际存放与食用条件<textarea aria-label="实际存放与食用条件" value={handling.instructions} onChange={event => setHandling(current => ({ ...current, instructions: event.target.value }))} className={field} /></label>
       </div> : null}
+      <h4 className="font-medium">原料替代的审核变体</h4>
+      <p className="text-sm text-text-muted">变体先独立填写完整用量、步骤和制作审核。仅替换所列一种原料，份数与其他原料不变；菜谱修改或撤审后不继续提供替代依据。</p>
+      {variants.map((variant, index) => <div key={index} className="border rounded-xl p-3 space-y-2">
+        <label className="block">变体菜谱编号<input aria-label={`替代 ${index + 1} 菜谱编号`} type="number" min="1" step="1" value={variant.recipeId} onChange={event => setVariants(current => current.map((item, i) => i === index ? { ...item, recipeId: event.target.value, recipeKey: '', preview: undefined } : item))} className={field} /></label>
+        <button type="button" className="admin-button" onClick={() => void readVariant(variant)}>读取并核对变体</button>
+        {variant.preview ? <div className="text-sm"><p>{variant.preview.title} · {variant.preview.servingSize} 份</p><p>用量：{variant.preview.ingredients.map(item => `${item.name} ${item.amount}`).join('；')}</p><p>步骤：{variant.preview.steps.join('；')}</p></div> : null}
+        {variant.recipeKey ? <p className="text-xs">已绑定变体版本 {variant.recipeKey.slice(0, 12)}</p> : null}
+        {([['removedIngredient', '原原料名称'], ['replacementIngredient', '替代原料名称'], ['sourceUrl', '替代来源链接'], ['reference', '替代核对依据']] as const).map(([key, label]) => <label key={key} className="block">{label}<input aria-label={`替代 ${index + 1} ${label}`} value={variant[key]} onChange={event => setVariants(current => current.map((item, i) => i === index ? { ...item, [key]: event.target.value } : item))} className={field} /></label>)}
+        <button type="button" className="admin-button" onClick={() => setVariants(current => current.filter((_, i) => i !== index))}>移除此替代关系</button>
+      </div>)}
+      <button type="button" className="admin-button" disabled={variants.length >= 10} onClick={() => setVariants(current => [...current, { recipeId: '', recipeKey: '', removedIngredient: '', replacementIngredient: '', sourceUrl: '', reference: '' }])}>添加审核变体</button>
       <div className="flex gap-2"><button type="button" className="admin-button" onClick={() => void save()}>审核保存制作流程</button><button type="button" className="admin-button" onClick={() => void save(true)}>撤销制作流程审核</button></div>
     </fieldset>
   </section>;

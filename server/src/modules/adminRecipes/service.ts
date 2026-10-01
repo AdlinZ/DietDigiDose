@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { recipeExecutionReviewSchema } from "@dietdigidose/contracts";
 import { executionRecipeKey, executionReviewKey, reviewedExecution } from "../recipes/execution.js";
+import { substitutionMatches } from "../recipes/substitutions.js";
 import { recipeMinutesSchema } from "../../utils/recipeMinutes.js";
 import { decodeCursor, encodeCursor } from "../../utils/cursor.js";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
@@ -161,7 +162,8 @@ export class AdminRecipesService {
   async execution(recipeId: number) {
     const recipe = await this.repository.find(recipeId);
     if (!recipe) throw new AdminRecipesError(404, "食谱未找到");
-    return { recipeKey: executionRecipeKey(recipe), reviewKey: executionReviewKey(recipe), execution: reviewedExecution(recipe) };
+    return { title: String(recipe.title), ingredients: parseArray(recipe.ingredients_json), steps: parseArray(recipe.steps_json), servingSize: Number(recipe.serving_size),
+      recipeKey: executionRecipeKey(recipe), reviewKey: executionReviewKey(recipe), execution: reviewedExecution(recipe) };
   }
 
   async reviewExecution(adminUserId: number, recipeId: number, body: Row, context: AuditContext) {
@@ -170,6 +172,11 @@ export class AdminRecipesService {
     if (!recipe) throw new AdminRecipesError(404, "食谱未找到");
     if (input.recipeKey !== executionRecipeKey(recipe) || input.reviewKey !== executionReviewKey(recipe)) throw new AdminRecipesError(409, "食谱内容或制作审核已改变，请重新核对", "RECIPE_EXECUTION_CONFLICT");
     if (input.profile) {
+      for (const rule of input.profile.substitutions ?? []) {
+        const target = await this.repository.find(rule.recipeId);
+        if (!target || target.deleted_at || target.status !== "approved" || target.quality_status !== "trusted" || !reviewedExecution(target)
+          || rule.recipeKey !== executionRecipeKey(target) || !substitutionMatches(recipe, target, rule)) throw new AdminRecipesError(400, "替代菜谱须公开可信、制作流程仍已审核、份数相同且仅替换所列原料；请重新核对完整变体");
+      }
       if (input.profile.maxBatchServings > Number(recipe.serving_size || 0)) throw new AdminRecipesError(400, "批次份量不能超过菜谱已声明产出，请先核对菜谱份数");
       const reviewedCapabilities = new Set<string>();
       for (const tool of input.profile.tools) {
@@ -188,7 +195,7 @@ export class AdminRecipesService {
     const execution = input.profile ? { recipeKey: input.recipeKey, profile: input.profile, reviewedBy: adminUserId, reviewedAt: new Date().toISOString() } : null;
     if (!await this.repository.reviewExecution(recipeId, execution, recipe, audit({ ...context, adminUserId }, {
       action: "recipe.execution_review", resourceId: recipeId, summary: `${execution ? "审核制作流程" : "撤销制作流程审核"}：${recipe.title}`,
-      details: { recipeKey: input.recipeKey, reference: input.profile?.reference ?? null, handling: input.profile?.handling ?? null },
+      details: { recipeKey: input.recipeKey, reference: input.profile?.reference ?? null, handling: input.profile?.handling ?? null, substitutions: input.profile?.substitutions ?? [] },
     }))) throw new AdminRecipesError(409, "食谱内容已改变，请重新核对制作流程", "RECIPE_EXECUTION_CONFLICT");
     return { success: true, execution, reviewKey: executionReviewKey({ ...recipe, execution_json: execution }) };
   }

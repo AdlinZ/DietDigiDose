@@ -1,6 +1,17 @@
 import { z } from "zod";
 
 const key = z.string().trim().min(1).max(60);
+export const recipeSubstitutionSchema = z.object({
+  recipeId: z.number().int().positive(), recipeKey: z.string().regex(/^[a-f0-9]{64}$/),
+  removedIngredient: z.string().trim().min(1).max(200), replacementIngredient: z.string().trim().min(1).max(200),
+  sourceUrl: z.url().max(2000).refine(value => value.startsWith("https://"), "替代依据须使用 HTTPS"),
+  reference: z.string().trim().min(5).max(2000),
+}).strict().refine(rule => rule.removedIngredient !== rule.replacementIngredient, "替代原料不能与原原料相同");
+export type RecipeSubstitution = z.infer<typeof recipeSubstitutionSchema>;
+export const recipeSubstitutionEvidenceSchema = recipeSubstitutionSchema.safeExtend({
+  sourceRecipeId: z.number().int().positive(), sourceRecipeKey: z.string().regex(/^[a-f0-9]{64}$/), sourceTitle: z.string().max(200),
+}).refine(rule => rule.sourceRecipeId !== rule.recipeId, "替代菜谱不能指向自身");
+export type RecipeSubstitutionEvidence = z.infer<typeof recipeSubstitutionEvidenceSchema>;
 export const recipeHandlingSchema = z.object({
   storage: z.enum(["fresh_only", "refrigerated"]),
   // Refrigerated leftovers have a general 3–4 day ceiling; recipe-specific limits may be shorter.
@@ -22,6 +33,7 @@ export const recipeExecutionProfileSchema = z.object({
   maxBatchServings: z.number().finite().positive().max(30),
   reference: z.string().trim().min(5).max(2000),
   handling: recipeHandlingSchema.optional(),
+  substitutions: z.array(recipeSubstitutionSchema).max(10).refine(rules => new Set(rules.map(rule => rule.recipeId)).size === rules.length, "替代菜谱不能重复").optional(),
   tools: z.array(z.object({
     key, name: z.string().trim().min(1).max(100), catalogId: z.number().int().positive(),
     capacity: z.discriminatedUnion("kind", [z.object({ kind: z.literal("not_applicable") }).strict(),

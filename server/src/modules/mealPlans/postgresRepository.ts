@@ -1,4 +1,5 @@
 import { commonProduction } from "./commonProduction.js";
+import { substitutionEvidenceMatches } from "../recipes/substitutions.js";
 import { PostgresMealAllocationsRepository } from "../mealAllocations/postgresRepository.js";
 import { preparedAllocationsAvailable } from "./preparedAllocations.js";
 import { readPostgresDiningSupply } from "../households/postgresDiningSupply.js";
@@ -60,15 +61,17 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
         if (activation.targets.some(target => occupied.some(item => String(item.planned_date) === target.date && queueMealType(item.meal_type) === target.mealType))) return { kind: "version_conflict" as const };
       }
       if ((await client.query("SELECT id FROM meal_plan_items WHERE plan_id=$1 AND user_id=$2 AND deleted_at IS NULL LIMIT 1", [id,userId])).rowCount) return { kind: "version_conflict" as const };
-      const recipes: Row[] = [];
-      for (const item of activation.items) {
-        const found = await client.query("SELECT steps_json FROM recipes WHERE id=$1 AND status='approved' AND deleted_at IS NULL FOR SHARE", [item.recipeId]);
+      const recipes = new Map<number, Row>();
+      const recipeIds = [...new Set(activation.items.flatMap(item => [item.recipeId, ...(item.allocation.substitution ? [item.allocation.substitution.sourceRecipeId] : [])]))].sort((a, b) => a-b);
+      for (const recipeId of recipeIds) {
+        const found = await client.query("SELECT * FROM recipes WHERE id=$1 AND status='approved' AND deleted_at IS NULL FOR SHARE", [recipeId]);
         if (!found.rows[0]) return { kind: "recipe_not_available" as const };
-        recipes.push(found.rows[0]);
+        recipes.set(recipeId, found.rows[0]);
       }
-      for (const [index,item] of activation.items.entries()) await client.query(`INSERT INTO meal_plan_items
+      if (activation.items.some(item => !substitutionEvidenceMatches(item.allocation, recipes.get(item.allocation.substitution?.sourceRecipeId ?? 0), recipes.get(item.recipeId)))) return { kind: "recipe_not_available" as const };
+      for (const item of activation.items) await client.query(`INSERT INTO meal_plan_items
         (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json,confirmed_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,CURRENT_TIMESTAMP)`, [item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),JSON.stringify(recipes[index].steps_json)]);
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,CURRENT_TIMESTAMP)`, [item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),JSON.stringify(recipes.get(item.recipeId)!.steps_json)]);
       const updated = await client.query("UPDATE meal_plans SET status='active',constraints_json=$1::jsonb,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$2 AND user_id=$3 RETURNING *", [JSON.stringify(activation.constraints),id,userId]);
       await new PostgresMealAllocationsRepository(client).reserve(userId,id,activation.targets);
       return { kind: "updated" as const, value: { plan: await this.formatPlan(client,updated.rows[0],userId), repeated: false } };

@@ -1,4 +1,4 @@
-import { combineInventoryDeductions } from "@/utils/inventoryConsumptions";
+import { combineInventoryDeductions, ingredientConsumptionRequests, inventoryPreviewWarnings } from "@/utils/inventoryConsumptions";
 import { KitchenwareSafetyHints } from "@/screens/cooking-mode/KitchenwareSafetyHints";
 import { useCookingTimer } from "@/hooks/useCookingTimer";
 import type { CookingQueueItem } from "@/services/api/cookingQueue";
@@ -28,7 +28,6 @@ import { toLocalDateKey, toLocalTimeKey } from "@/utils/date";
 import { aiApi, cookingQueueApi, inventoryApi, recipesApi, waitForAgentRun, type Recipe } from "@/services/api";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import { useRealtimeCookingVoice } from "@/hooks/useRealtimeCookingVoice";
-import { parseStructuredQuantity, structuredUnitLabel } from "@/utils/structuredQuantity";
 import { enqueueVoiceOutput, prefetchVoiceText, prewarmVoicePack, speakWithVoiceFallback, stopVoiceOutput, type VoiceSource } from "@/services/voicePackManager";
 
 interface CookingStep {
@@ -615,24 +614,14 @@ export default function CookingModeScreen() {
         .map((item) => ({ item_id: item.id, version: item.version || 1, mode: "all" as const }));
     }
 
-    const requests = ingredients.flatMap((ingredient) => {
-      if (!ingredient.checked) return [];
-      const input = inventoryConsumptionMode === "actual"
-        ? actualConsumptionAmounts[ingredient.name] || ingredient.amount
-        : ingredient.amount;
-      const parsed = parseStructuredQuantity(input);
-      return parsed ? [{ food_name: ingredient.name, amount_value: parsed.amount, unit: parsed.unit }] : [];
-    });
-    if (!requests.length) throw new Error("菜谱用量缺少可换算的数值和单位，请选择“整项用完”或先修改实际用量。");
+    const { requests, unknown } = ingredientConsumptionRequests(ingredients.filter(ingredient => ingredient.checked).map(ingredient => ({
+      name: ingredient.name, amount: inventoryConsumptionMode === "actual" ? actualConsumptionAmounts[ingredient.name] || ingredient.amount : ingredient.amount,
+    })));
+    if (unknown.length) throw new Error(`用量无法换算：${unknown.join("、")}。请填写明确数值和单位，或确认实际整项用完后选择“整项用完”。`);
+    if (!requests.length) throw new Error("请勾选本次实际使用的原料，或确认未使用库存原料后保存制作。");
     const preview = await inventoryApi.consumptionPreview(authFetch, requests);
-    const uncovered = preview.items.filter((item) => !item.fully_covered);
-    if (uncovered.length) {
-      const description = uncovered.slice(0, 3).map((item) => (
-        item.quantity_status === "unknown" ? `${item.food_name}数量或换算依据未知，请核对实际用量`
-          : `${item.food_name}缺 ${item.missing_value}${structuredUnitLabel(item.unit)}`
-      )).join("、");
-      throw new Error(`库存不足或单位不可换算：${description}`);
-    }
+    const warnings = inventoryPreviewWarnings(preview);
+    if (warnings.length) throw new Error(`库存不足或单位不可换算：${warnings.join("、")}`);
     return combineInventoryDeductions(preview.items.flatMap((item) => item.deductions));
   };
 

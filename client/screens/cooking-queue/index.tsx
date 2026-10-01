@@ -1,3 +1,4 @@
+import { ingredientConsumptionRequests, inventoryPreviewWarnings } from "@/utils/inventoryConsumptions";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
@@ -90,9 +91,18 @@ function getMissingIngredients(item: CookingQueueItem, inventory: InventoryItem[
 export default function CookingQueueScreen() {
   const router = useSafeRouter();
   const { highlightRecipeId } = useSafeSearchParams<{ highlightRecipeId?: number }>();
-  const { user } = useAuth();
+  const { user, sessionGeneration, isSessionCurrent } = useAuth();
   const authFetch = useAuthFetch();
   const userId = user?.id;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const starting = useRef(false);
+  const stockConfirmation = useRef<((confirmed: boolean) => void) | null>(null);
+  const [stockWarning, setStockWarning] = useState("");
+  useEffect(() => { setStockWarning(""); return () => { stockConfirmation.current?.(false); stockConfirmation.current = null; }; }, [sessionGeneration]);
+  const answerStockCheck = (confirmed: boolean) => {
+    stockConfirmation.current?.(confirmed); stockConfirmation.current = null; setStockWarning("");
+  };
   const [items, setItems] = useState<CookingQueueItem[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -227,15 +237,33 @@ export default function CookingQueueScreen() {
   };
 
   const startCooking = async (item: CookingQueueItem) => {
-    if (!userId) return;
+    if (!userId || starting.current) return;
+    const current = () => mounted.current && isSessionCurrent(userId, sessionGeneration);
+    starting.current = true;
     try {
-      await cancelCookingReminder(item.reminderNotificationId);
+      if (item.status !== "cooking") {
+        const { requests, unknown } = ingredientConsumptionRequests(item.ingredients);
+        const preview = requests.length ? await inventoryApi.consumptionPreview(authFetch, requests) : { items: [] };
+        if (!current()) return;
+        const warnings = inventoryPreviewWarnings(preview, unknown);
+        if (!item.ingredients.length) warnings.push("菜谱未提供配料用量，请核对实际原料");
+        if (warnings.length) {
+          const message = `${warnings.join("\n")}\n\n请核对实际备料；如已另外备齐，可继续制作。当前检查不会扣库存，完成时仍按最新批次核对实际扣减。`;
+          const confirmed = await new Promise<boolean>(resolve => { stockConfirmation.current = resolve; setStockWarning(message); });
+          if (!confirmed) return;
+        }
+      }
+      if (!current()) return;
       const started = await cookingQueueApi.start(authFetch, item.id, item.version);
+      if (!current()) return;
+      await cancelCookingReminder(item.reminderNotificationId);
+      if (!current()) return;
       const next = items.map((candidate) => candidate.id === item.id
         ? { ...started, reminderAt: undefined, reminderNotificationId: undefined }
         : candidate);
       setItems(next);
       await saveCookingQueue(userId, next.map(localShadow));
+      if (!current()) return;
       router.push("/cooking-mode", {
         recipeId: item.recipeId,
         fromQueue: true,
@@ -243,9 +271,10 @@ export default function CookingQueueScreen() {
         queueVersion: started.version,
       });
     } catch (error) {
+      if (!current()) return;
       Alert.alert("无法开始烹饪", error instanceof Error ? error.message : "请刷新队列后重试");
       await loadQueue();
-    }
+    } finally { starting.current = false; }
   };
 
   useEffect(() => {
@@ -383,7 +412,7 @@ export default function CookingQueueScreen() {
           <View className="mb-4 w-full max-w-[760px] self-center flex-row rounded-[22px] bg-brand-fill p-4">
             <QueueSummary value={items.length} label="待烹饪" />
             <QueueSummary value={totalCookTime} label="总分钟" />
-            <QueueSummary value={readyCount} label="食材已齐" />
+            <QueueSummary value={readyCount} label="名称匹配" />
             <QueueSummary value={reminderCount} label="已设提醒" />
           </View>
           <View className="w-full max-w-[760px] self-center gap-3">
@@ -427,7 +456,7 @@ export default function CookingQueueScreen() {
                         {(item.productionMeals?.length ?? 0) > 1 && <Text className="text-[10px] font-bold text-copy-muted">{item.productionMeals?.length} 餐共用 · {item.plannedServings} 份</Text>}
                         <Text className="text-[10px] font-bold text-critical">{item.calories} kcal</Text>
                         <Text className={`text-[10px] font-black ${!ingredientDataReady || missing.length ? "text-critical" : "text-brand"}`}>
-                          {!ingredientDataReady ? "食材待同步" : missing.length ? `缺 ${missing.length} 种食材` : "食材已齐"}
+                          {!ingredientDataReady ? "食材待同步" : missing.length ? `缺 ${missing.length} 种食材` : "名称匹配，开火前核量"}
                         </Text>
                       </View>
                       {item.reminderAt ? (
@@ -560,6 +589,18 @@ export default function CookingQueueScreen() {
         </ScrollView>
       )}
 
+      <Modal visible={Boolean(stockWarning)} animationType="fade" transparent onRequestClose={() => answerStockCheck(false)}>
+        <View className="flex-1 items-center justify-center bg-black/45 px-5">
+          <View className="max-h-[80%] w-full max-w-lg rounded-3xl bg-surface p-5">
+            <Text accessibilityRole="header" className="text-lg font-black text-ink">开火前核对库存</Text>
+            <ScrollView className="my-4 shrink"><Text className="text-sm leading-6 text-copy-muted">{stockWarning}</Text></ScrollView>
+            <View className="flex-row gap-3">
+              <TouchableOpacity accessibilityRole="button" onPress={() => answerStockCheck(false)} className="flex-1 items-center rounded-xl bg-background-secondary py-3"><Text className="font-bold text-copy-muted">暂不开火</Text></TouchableOpacity>
+              <TouchableOpacity accessibilityRole="button" onPress={() => answerStockCheck(true)} className="flex-1 items-center rounded-xl bg-brand-fill py-3"><Text className="font-bold text-white">已备齐，继续</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <Modal visible={Boolean(reminderItem)} animationType="fade" transparent onRequestClose={() => setReminderItem(null)}>
         <View className="flex-1 justify-end bg-black/45">
           <View className="rounded-t-[30px] bg-surface px-5 pb-8 pt-5">

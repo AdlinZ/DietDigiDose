@@ -642,10 +642,11 @@ describe("API security baseline", () => {
     });
     assert.equal(created.response.status, 200);
     const recipeId = Number((created.body as JsonObject).id);
-    const stored = db.prepare("SELECT title, status, quality_status, tags FROM recipes WHERE id = ?").get(recipeId) as JsonObject;
+    const stored = db.prepare("SELECT title, status, quality_status, tags, prep_time FROM recipes WHERE id = ?").get(recipeId) as JsonObject;
     assert.equal(stored.title, payload.title);
     assert.equal(stored.status, "approved");
     assert.equal(stored.quality_status, "trusted");
+    assert.equal(stored.prep_time, null);
     assert.deepEqual(JSON.parse(stored.tags), ["事务"]);
     assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM recipe_kitchenware_requirements r
       JOIN kitchenware_catalog c ON c.id = r.catalog_id WHERE r.recipe_id = ? AND c.name = '空气炸锅'`).get(recipeId) as JsonObject).count, 1);
@@ -655,13 +656,19 @@ describe("API security baseline", () => {
       WHERE action = 'recipe.create' AND resource_id = ?`).get(String(recipeId)) as JsonObject).count, 1);
 
     const updated = await api(`/api/v1/admin/recipes/${recipeId}`, {
-      method: "PUT", token: adminToken, body: JSON.stringify({ ...payload, title: "管理员仓储更新菜", required_kitchenware: ["烤箱"] }),
+      method: "PUT", token: adminToken, body: JSON.stringify({ ...payload, prep_time: "0", title: "管理员仓储更新菜", required_kitchenware: ["烤箱"] }),
     });
     assert.equal(updated.response.status, 200);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, 0);
     assert.equal((db.prepare(`SELECT c.name FROM recipe_kitchenware_requirements r JOIN kitchenware_catalog c ON c.id = r.catalog_id
       WHERE r.recipe_id = ? AND r.role = 'required'`).get(recipeId) as JsonObject).name, "烤箱");
     assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM admin_audit_logs
       WHERE action = 'recipe.update' AND resource_id = ?`).get(String(recipeId)) as JsonObject).count, 1);
+    const clearPreparation = await api(`/api/v1/admin/recipes/${recipeId}`, {
+      method: "PUT", token: adminToken, body: JSON.stringify({ ...payload, prep_time: "" }),
+    });
+    assert.equal(clearPreparation.response.status, 200);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, null);
     db.prepare("DELETE FROM recipes WHERE id = ?").run(recipeId);
   });
 
@@ -2818,6 +2825,12 @@ describe("core business authorization", () => {
 
     const publicDetail = await api(`/api/v1/recipes/${recipeId}`);
     assert.equal(publicDetail.response.status, 404);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, null);
+    const invalidPreparation = await api(`/api/v1/recipes/submissions/${recipeId}`, {
+      method: "PUT", token: first.token, body: JSON.stringify({ ...payload, prep_time: -1 }),
+    });
+    assert.equal(invalidPreparation.response.status, 400);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, null);
 
     const forbidden = await api(`/api/v1/recipes/submissions/${recipeId}`, {
       method: "PUT",
@@ -2829,9 +2842,14 @@ describe("core business authorization", () => {
     const updated = await api(`/api/v1/recipes/submissions/${recipeId}`, {
       method: "PUT",
       token: first.token,
-      body: JSON.stringify({ ...payload, title: "番茄鸡蛋更新菜谱", required_kitchenware: ["空气炸锅"] }),
+      body: JSON.stringify({ ...payload, prep_time: 0, title: "番茄鸡蛋更新菜谱", required_kitchenware: ["空气炸锅"] }),
     });
     assert.equal(updated.response.status, 200);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, 0);
+    const unknownPreparation = await api(`/api/v1/recipes/submissions/${recipeId}`, {
+      method: "PUT", token: first.token, body: JSON.stringify({ ...payload, prep_time: null, title: "番茄鸡蛋更新菜谱", required_kitchenware: ["空气炸锅"] }),
+    });
+    assert.equal(unknownPreparation.response.status, 200);
     const storedSubmission = db.prepare("SELECT title, status FROM recipes WHERE id = ?").get(recipeId) as JsonObject;
     assert.deepEqual(storedSubmission, { title: "番茄鸡蛋更新菜谱", status: "pending" });
     const storedRequirement = db.prepare(`SELECT c.name FROM recipe_kitchenware_requirements r
@@ -2854,6 +2872,7 @@ describe("core business authorization", () => {
 
     const visible = await api(`/api/v1/recipes/${recipeId}`);
     assert.equal(visible.response.status, 200);
+    assert.equal((visible.body as JsonObject).prep_time, null);
   });
 
   test("admins can update a regular user's login identifier and reset their password", async () => {

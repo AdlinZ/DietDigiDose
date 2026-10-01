@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { recipeMinutesSchema } from "../../utils/recipeMinutes.js";
 import { decodeCursor, encodeCursor } from "../../utils/cursor.js";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
 import { AdminRecipesError } from "./errors.js";
@@ -70,7 +71,7 @@ function publicationIssues(input: AdminRecipeWrite) {
   if (!input.title) issues.push("missing_title");
   if (!input.dataLicense) issues.push("missing_license");
   if (!Number.isInteger(input.servingSize) || input.servingSize <= 0) issues.push("missing_serving_size");
-  if (input.prepTime + input.cookTime <= 0) issues.push("missing_time");
+  if ((input.prepTime ?? 0) + input.cookTime <= 0) issues.push("missing_time");
   if (!input.ingredients.length) issues.push("missing_ingredients");
   if (input.steps.length < 2) issues.push("missing_steps");
   if (!input.requiredKitchenware.length) issues.push("missing_kitchenware_mapping");
@@ -203,11 +204,11 @@ export class AdminRecipesService {
     const title = String(body.title || "").trim();
     return {
       title, description: String(body.description || "").trim(), imageUrl: body.image_url ? String(body.image_url) : null,
-      cookTime: Number(body.cook_time) || 0, difficulty: String(body.difficulty || "简单"), calories: Number(body.calories) || 0,
+      cookTime: recipeMinutesSchema.parse(body.cook_time) ?? 0, difficulty: String(body.difficulty || "简单"), calories: Number(body.calories) || 0,
       protein: Number(body.protein) || 0, carbs: Number(body.carbs) || 0, fat: Number(body.fat) || 0,
       category: String(body.category || "其他"), tags: parseArray(body.tags), steps, ingredients,
       canonicalKey: normalizeContentTerm(title), sourceContentHash: fingerprint(title, ingredients, steps),
-      servingSize: Number(body.serving_size) || 2, prepTime: Number(body.prep_time) || 0,
+      servingSize: Number(body.serving_size) || 2, prepTime: recipeMinutesSchema.parse(body.prep_time),
       cuisine: body.cuisine ? String(body.cuisine) : null, mealTypes: parseArray(body.meal_types), requiredKitchenware,
       optionalKitchenware, sourceUrl: body.source_url ? String(body.source_url) : null,
       dataLicense: String(body.data_license || "DietDigiDose-Original"), sourceRevision: String(body.source_revision || "manual-v1"),
@@ -222,7 +223,7 @@ export class AdminRecipesService {
       cookTime: Number(row.cook_time), difficulty: String(row.difficulty || ""), calories: Number(row.calories), protein: Number(row.protein),
       carbs: Number(row.carbs), fat: Number(row.fat), category: String(row.category || ""), tags: parseArray(row.tags),
       steps: parseArray(row.steps_json), ingredients: parseArray(row.ingredients_json), canonicalKey: String(row.canonical_key || ""),
-      sourceContentHash: String(row.source_content_hash || ""), servingSize: Number(row.serving_size), prepTime: Number(row.prep_time),
+      sourceContentHash: String(row.source_content_hash || ""), servingSize: Number(row.serving_size), prepTime: recipeMinutesSchema.catch(null).parse(row.prep_time),
       cuisine: row.cuisine ? String(row.cuisine) : null, mealTypes: parseArray(row.meal_types_json),
       requiredKitchenware: parseArray(row.required_kitchenware_json), optionalKitchenware: parseArray(row.optional_kitchenware_json),
       sourceUrl: row.source_url ? String(row.source_url) : null, dataLicense: String(row.data_license || ""),

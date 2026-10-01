@@ -83,8 +83,30 @@ test("recommendations apply the shared default time and never claim whole-plan f
   assert.equal(result.results[0].recipe.serving_size, 3);
   assert.equal(result.results[0].recipe.prep_time, 20);
   assert(result.results[0].degraded.includes("whole_plan_time_unverified"));
+  assert.equal(result.results[0].hardConstraints.satisfied.includes("time"), false);
+  assert.deepEqual(result.results[0].hardConstraints.pending, ["time"]);
+  assert.equal(result.results[0].features.estimatedTimeMinutes, 40);
   assert.doesNotMatch(result.results[0].reasons.join(" "), /符合.*分钟/);
   assert.equal((await saved.compute(7, { surface: "meal_plan", maxCookTime: 30 })).results.length, 0);
+});
+
+test("unknown recipe preparation remains pending in drafts and cannot feed automatic dinner offers", async () => {
+  const { interventionRecommendations } = await import("../src/modules/interventions/snapshot.js");
+  const recipe = { id: 1, title: "准备待核实的汤", ingredients_json: [{ name: "番茄", amount: "1个" }],
+    steps_json: ["煮熟"], status: "approved", cook_time: 10, prep_time: null, serving_size: 1 };
+  const service = new RecommendationsService(repository({ recipes: async () => [recipe], inventory: async () => [
+    { id: 1, food_name: "番茄", quantity_value: 2, quantity_unit: "piece", expiration_date: "2099-09-20", version: 1 },
+  ] }), kitchenware);
+  const computed = await service.compute(7, { surface: "meal_plan" });
+  assert.equal(computed.results[0].recipe.prep_time, null);
+  assert(computed.results[0].degraded.includes("preparation_time_unknown"));
+  assert.deepEqual(interventionRecommendations(computed.results), []);
+  const draft = await service.cookingPlan(7, { excludedPreparedMealIds: [], meals: [
+    { id: "dinner", date: "2099-09-09", mealType: "dinner", servings: 1 },
+  ] });
+  assert.equal(draft.time.knownSequentialMinutes, 10);
+  assert.equal(draft.time.incomplete, true);
+  assert(draft.time.missing.includes("preparation_or_cooking"));
 });
 
 test("cooking drafts scale portions and share stock across meals without claiming time feasibility", async () => {
@@ -305,11 +327,16 @@ test("intervention snapshots use local-day stock and preserve engine hard-constr
   assert.deepEqual(snapshot.dates,["2026-09-12","2026-09-13"]);
   assert.deepEqual(dates.sort(),["2026-09-12","2026-09-12","2026-09-13"]);
   assert.equal(snapshot.inventory[0].userId,7);
-  assert.deepEqual(snapshot.recommendations[0].inventoryIds,[11]);
+  assert.deepEqual(snapshot.recommendations,[], "whole preparation, cleanup and device time are still unverified");
+  const sameDay = await service.compute(7,{ surface: "inventory",mealType: "dinner" },{},snapshot.dates[0]);
+  assert.deepEqual(sameDay.results[0].features.inventoryEvidence.allocations.map(item => item.itemId),[11]);
+  const nextDay = await service.compute(7,{ surface: "inventory",mealType: "dinner" },{},snapshot.dates[1]);
+  assert.deepEqual(nextDay.results[0].features.inventoryEvidence.allocations,[]);
   const blocked = new RecommendationsService(repository({ inventory: async () => stock,recipes: async () => [recipe],
     profile: async () => ({ allergies_json: [{ name: "番茄" }] }),planningState: async () => ({ items: [],plans: [],shopping: [] }),
   }),kitchenware);
   assert.deepEqual((await blocked.interventionSnapshot(7,Date.parse("2026-09-13T00:30:00Z"),"America/Los_Angeles")).recommendations,[]);
+  assert.equal((await blocked.compute(7,{ surface: "inventory" },{},snapshot.dates[0])).results.length,0);
 });
 
 test("single-session recommendations use only unallocated portions across all active plans", async () => {

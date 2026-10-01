@@ -1,4 +1,5 @@
 import { runtimePolicySchema } from "../modules/aiRuntime/policy.js";
+import { recipeMinutesSchema } from "../utils/recipeMinutes.js";
 import { kitchenwareAttributesSchema } from "@dietdigidose/contracts";
 import { householdDiningPlanSchema, mealProductionSchema, kitchenPreferencesSchema } from "@dietdigidose/contracts";
 import { z } from "zod";
@@ -284,7 +285,7 @@ export const recipeSubmissionSchema = z.object({
   title: trimmedString(2, 80, "食谱标题"),
   description: z.string().trim().max(1000).default(""),
   image_url: z.string().trim().max(4_000_000).optional(),
-  cook_time: z.union([z.number(), z.string()]).optional(),
+  cook_time: recipeMinutesSchema,
   difficulty: z.string().trim().max(20).optional(),
   calories: z.union([z.number(), z.string()]).optional(),
   protein: z.union([z.number(), z.string()]).optional(),
@@ -299,7 +300,7 @@ export const recipeSubmissionSchema = z.object({
   ingredients: recipeArrayOrJson.optional(),
   ingredients_json: recipeArrayOrJson.optional(),
   serving_size: z.union([z.number(), z.string()]).optional(),
-  prep_time: z.union([z.number(), z.string()]).optional(),
+  prep_time: recipeMinutesSchema,
   cuisine: z.string().trim().max(80).optional(),
   meal_types: recipeArrayOrJson.optional(),
   required_kitchenware: recipeArrayOrJson.optional(),

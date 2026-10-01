@@ -27,6 +27,7 @@ interface MyRecipe {
   description: string;
   image_url: string | null;
   cook_time: number;
+  prep_time?: number | null;
   difficulty: string;
   calories: number;
   protein: number;
@@ -50,7 +51,8 @@ const emptyForm = () => ({
   title: "",
   description: "",
   imageUrl: "",
-  cookTime: "20",
+  cookTime: "",
+  prepTime: "",
   difficulty: "简单",
   calories: "",
   protein: "",
@@ -129,7 +131,8 @@ export default function RecipeSubmitScreen() {
           title: form.title.trim(),
           description: form.description.trim(),
           image_url: form.imageUrl,
-          cook_time: Number(form.cookTime) || 0,
+          cook_time: form.cookTime,
+          prep_time: form.prepTime,
           difficulty: form.difficulty,
           calories: Number(form.calories) || 0,
           protein: Number(form.protein) || 0,
@@ -170,7 +173,8 @@ export default function RecipeSubmitScreen() {
       title: recipe.title || "",
       description: recipe.description || "",
       imageUrl: recipe.image_url || "",
-      cookTime: String(recipe.cook_time || 20),
+      cookTime: recipe.cook_time ? String(recipe.cook_time) : "",
+      prepTime: recipe.prep_time == null ? "" : String(recipe.prep_time),
       difficulty: recipe.difficulty || "简单",
       calories: String(recipe.calories || ""),
       protein: String(recipe.protein || ""),
@@ -294,7 +298,8 @@ export default function RecipeSubmitScreen() {
                 />
               ))}
             </View>
-            <Field label="烹饪时间（分钟）" value={form.cookTime} onChangeText={(value) => setForm({ ...form, cookTime: value })} keyboardType="numeric" />
+            <Field label="烹饪时间（分钟）" value={form.cookTime} onChangeText={(value) => setForm({ ...form, cookTime: value })} keyboardType="numeric" placeholder="未核实可留空" />
+            <Field label="准备时间（分钟）" value={form.prepTime} onChangeText={(value) => setForm({ ...form, prepTime: value })} keyboardType="numeric" placeholder="未核实可留空，确实无需准备填 0" />
             <Field label="标签（用逗号分隔）" value={form.tags} onChangeText={(value) => setForm({ ...form, tags: value })} placeholder="低脂，高蛋白，快手" />
           </Section>
 

@@ -9,7 +9,7 @@ export interface RecipeRecommendationItem<TRecipe> {
   score: number;
   scoringVersion: string;
   candidateVersion: string;
-  hardConstraints: { satisfied: string[]; unmet: string[] };
+  hardConstraints: { satisfied: string[]; unmet: string[]; pending?: string[] };
   features: {
     inventoryCoverage: number;
     matchedIngredients: Array<{ name: string; amount?: string }>;

@@ -26,6 +26,7 @@ type Recipe = {
   carbs?: number;
   fat?: number;
   cook_time?: string | number;
+  prep_time?: number | null;
   difficulty?: string;
   image_url: string;
   description?: string;
@@ -55,6 +56,7 @@ type RecipeFormState = {
   carbs: string;
   fat: string;
   cook_time: string;
+  prep_time: string;
   difficulty: string;
   image_url: string;
   description: string;
@@ -71,7 +73,8 @@ const INITIAL_FORM_STATE: RecipeFormState = {
   protein: '',
   carbs: '',
   fat: '',
-  cook_time: '15分钟',
+  cook_time: '',
+  prep_time: '',
   difficulty: '简单',
   image_url: '',
   description: '',
@@ -218,7 +221,8 @@ export default function Recipes() {
       protein: recipe.protein ? String(recipe.protein) : '',
       carbs: recipe.carbs ? String(recipe.carbs) : '',
       fat: recipe.fat ? String(recipe.fat) : '',
-      cook_time: recipe.cook_time ? String(recipe.cook_time) : '15分钟',
+      cook_time: recipe.cook_time ? String(recipe.cook_time).replace(/\s*分钟$/, '') : '',
+      prep_time: recipe.prep_time == null ? '' : String(recipe.prep_time),
       difficulty: recipe.difficulty || '简单',
       image_url: recipe.image_url || '',
       description: recipe.description || '',
@@ -245,6 +249,7 @@ export default function Recipes() {
         carbs: Number(formData.carbs) || 0,
         fat: Number(formData.fat) || 0,
         cook_time: formData.cook_time,
+        prep_time: formData.prep_time,
         difficulty: formData.difficulty,
         image_url: formData.image_url.trim(),
         description: formData.description.trim(),
@@ -452,12 +457,26 @@ export default function Recipes() {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-text-main mb-1">预计烹饪时长</label>
+                    <label className="block text-xs font-bold text-text-main mb-1">烹饪时间（分钟）</label>
                     <input
-                      type="text"
-                      placeholder="例如：20分钟"
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="未核实可留空"
                       value={formData.cook_time}
                       onChange={(e) => setFormData({ ...formData, cook_time: e.target.value })}
+                      className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-primary text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-text-main mb-1">准备时间（分钟）</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="未核实可留空"
+                      value={formData.prep_time}
+                      onChange={(e) => setFormData({ ...formData, prep_time: e.target.value })}
                       className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-primary text-sm"
                     />
                   </div>

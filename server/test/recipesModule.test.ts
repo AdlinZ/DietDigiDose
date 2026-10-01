@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import type { RecipesRepository } from "../src/modules/recipes/repository.js";
 import { RecipesService } from "../src/modules/recipes/service.js";
 import type { RecipeSubmissionWrite } from "../src/modules/recipes/types.js";
+import { recipeSubmissionSchema } from "../src/validation/schemas.js";
 
 function repository(overrides: Partial<RecipesRepository> = {}): RecipesRepository {
   return {
@@ -88,6 +89,7 @@ describe("recipes module", () => {
     });
     assert.equal(result.id, 42);
     assert.equal(captured?.authorUserId, 7);
+    assert.equal(captured?.recipe.prepTime, null);
     assert.equal(captured?.sourceContentHash.length, 64);
     assert.deepEqual(captured?.requirements.map((item) => [item.rawName, item.catalogId]),
       [["空气炸锅", 9], ["未知器具", null]]);
@@ -99,4 +101,15 @@ describe("recipes module", () => {
     await assert.rejects(() => service.addFavorite(2, 99), /未找到该食谱/);
     await assert.rejects(() => service.list(undefined, { scope: "personal" }, { protocol: "http" }), /登录后查看个人食谱库/);
   });
+});
+
+test("recipe duration input keeps unknown distinct from explicit zero and rejects invalid minutes", () => {
+  const body = { title: "时间依据测试", steps: ["烹饪"], ingredients: [{ name: "番茄" }] };
+  for (const prep_time of [undefined, null, "", "  "]) assert.equal(recipeSubmissionSchema.parse({ ...body, prep_time }).prep_time, null);
+  for (const prep_time of [0, "0", "0分钟"]) assert.equal(recipeSubmissionSchema.parse({ ...body, prep_time }).prep_time, 0);
+  assert.equal(recipeSubmissionSchema.parse({ ...body, cook_time: "15分钟", prep_time: "5" }).cook_time, 15);
+  for (const value of [-1, 1.5, Infinity, "未知", "NaN", "1.5", true]) {
+    assert.equal(recipeSubmissionSchema.safeParse({ ...body, prep_time: value }).success, false);
+    assert.equal(recipeSubmissionSchema.safeParse({ ...body, cook_time: value }).success, false);
+  }
 });

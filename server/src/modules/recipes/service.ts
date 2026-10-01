@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { recipeMinutesSchema } from "../../utils/recipeMinutes.js";
 import { decodeCursor, encodeCursor } from "../../utils/cursor.js";
 import { ensureIngredientGroups, normalizeIngredientGroup } from "../../utils/ingredientGroups.js";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
@@ -80,12 +81,12 @@ export function normalizeRecipeInput(body: Row): RecipeInput {
     ? body.optional_kitchenware.map(String).map((item) => item.trim()).filter(Boolean) : [];
   return {
     title, description: String(body.description || "").trim(), imageUrl: String(body.image_url || "").trim(),
-    cookTime: Math.max(0, Number(body.cook_time) || 0), difficulty: String(body.difficulty || "简单").trim(),
+    cookTime: recipeMinutesSchema.parse(body.cook_time) ?? 0, difficulty: String(body.difficulty || "简单").trim(),
     calories: Math.max(0, Number(body.calories) || 0), protein: Math.max(0, Number(body.protein) || 0),
     carbs: Math.max(0, Number(body.carbs) || 0), fat: Math.max(0, Number(body.fat) || 0),
     nutrition: parseNutrition(body.nutrition ?? body.nutrition_json), category: String(body.category || "其他").trim(),
     tags, steps, ingredients: ensureIngredientGroups(ingredients, title),
-    servingSize: Number(body.serving_size) || 2, prepTime: Number(body.prep_time) || 0,
+    servingSize: Number(body.serving_size) || 2, prepTime: recipeMinutesSchema.parse(body.prep_time),
     cuisine: body.cuisine ? String(body.cuisine) : null,
     mealTypes: Array.isArray(body.meal_types) ? body.meal_types.map(String) : [],
     requiredKitchenware, optionalKitchenware,

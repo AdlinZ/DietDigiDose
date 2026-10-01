@@ -3,7 +3,7 @@ import { recipeDemands } from "./quantities.js";
 import { buildFefoConsumptionPreviewFromCandidates } from "../../services/inventoryQuantity.js";
 import type { RecommendationDataset, RecommendationInput, Row } from "./types.js";
 
-export const RECIPE_SCORING_VERSION = "rules-2026-09-12.7";
+export const RECIPE_SCORING_VERSION = "rules-2026-10-01.1";
 export const RECIPE_CANDIDATE_VERSION = "sql-public-v1";
 export const RECOMMENDATION_WEIGHTS = Object.freeze({
   inventoryCoverage: 35, expiringUse: 20, missingPenalty: 20, timeFit: 15, nutritionFit: 10,
@@ -157,7 +157,8 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
     if (input.matchStatus === "missing_few" && (missing.length < 1 || missing.length > 2 || uncertain.length > 0)) return [];
     if (input.matchStatus === "expiring" && expiring.length === 0) return [];
     const cookTime = Number(recipe.cook_time || 0);
-    const timeFit = timeBudget ? Math.max(0, 1 - Math.abs(timeBudget - cookTime) / Math.max(timeBudget, 1)) : Math.max(0, 1 - cookTime / 120);
+    const knownTime = cookTime + Number(recipe.prep_time ?? 0);
+    const timeFit = timeBudget ? Math.max(0, 1 - Math.abs(timeBudget - knownTime) / Math.max(timeBudget, 1)) : Math.max(0, 1 - knownTime / 120);
     const calorieFit = Math.max(0, 1 - Math.abs(Number(recipe.calories || 0) - expectedCalories) / Math.max(expectedCalories, 1));
     const proteinFit = expectedProtein ? Math.max(0, 1 - Math.abs(Number(recipe.protein || 0) - expectedProtein) / Math.max(expectedProtein, 1)) : calorieFit;
     const nutritionFit = (calorieFit + proteinFit) / 2;
@@ -188,11 +189,11 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
     if (dataset.profile.kitchen.servings && !(Number(recipe.serving_size) > 0)) degraded.push("recipe_yield_unavailable");
     return [{ recipeId: Number(recipe.id), recipe: recipeSummary(recipe, dataset.requirements.get(Number(recipe.id)) || []), score,
       scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION,
-      hardConstraints: { satisfied: ["quality", "permission", "allergy", "time", "kitchenware"], unmet: [] as string[] },
+      hardConstraints: { satisfied: ["quality", "permission", "allergy", "kitchenware"], unmet: [] as string[], pending: ["time"] },
       features: { inventoryEvidence: { version: 1, scope: "personal", allocations: preview.flatMap(item => item.deductions.map(deduction => ({
         itemId: Number(deduction.item_id), itemVersion: Number(deduction.version), amount: Number(deduction.amount_value), unit: String(deduction.unit),
       }))) }, inventoryCoverage: Math.round(coverage * 100), matchedIngredients: matched, expiringIngredients: expiring,
-        missingIngredients: missing, uncertainIngredients: uncertain, nameMatchedIngredients: nameMatched, timeBudgetMinutes: timeBudget, estimatedTimeMinutes: cookTime, nutritionFit: Math.round(nutritionFit * 100),
+        missingIngredients: missing, uncertainIngredients: uncertain, nameMatchedIngredients: nameMatched, timeBudgetMinutes: timeBudget, estimatedTimeMinutes: knownTime, nutritionFit: Math.round(nutritionFit * 100),
         favorite: favorites.has(Number(recipe.id)), recentRepeat: recent.has(Number(recipe.id)), skippedRecently: skipped.has(Number(recipe.id)) },
       reasons: reasons.slice(0, 3), dataUpdatedAt, degraded }];
   }).sort((a, b) => b.score - a.score || a.recipeId - b.recipeId);

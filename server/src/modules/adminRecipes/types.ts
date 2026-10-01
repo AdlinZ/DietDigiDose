@@ -51,7 +51,7 @@ export type AdminRecipeWrite = {
   canonicalKey: string;
   sourceContentHash: string;
   servingSize: number;
-  prepTime: number;
+  prepTime: number | null;
   cuisine: string | null;
   mealTypes: unknown[];
   requiredKitchenware: unknown[];

@@ -1,4 +1,4 @@
-import { blankIntakeEntry, buildIntake, quantityFields, summarizeInventoryText } from "./intakeEntry";
+import { blankIntakeEntry, buildIntake, buildRecognitionIntake, quantityFields, summarizeInventoryText } from "./intakeEntry";
 
 test("manual inventory keeps absent and approximate quantities unknown", () => {
   expect(quantityFields("")).toEqual({ quantity: "数量未知", quantity_value: null, quantity_unit: null });
@@ -19,4 +19,13 @@ test("editable summaries preserve explicit quantities without inventing omitted 
 test("saving an incomplete summary is rejected before any request is sent", () => {
   expect(() => buildIntake([{ ...blankIntakeEntry }], "stable-intake-request-1")).toThrow();
   expect(() => buildIntake([], "stable-intake-request-1")).toThrow();
+});
+
+test("recognition submission preserves reviewed evidence, unknown expiry and stable item identity", () => {
+  const food = { id: "scan:0", foodName: "米", quantity: "一袋", suggestedStorageLocation: "常温", estimatedExpireDays: null, selected: true, expirationDate: "",
+    fieldEvidence: { quantity: { status: "unknown" as const, source: "user" as const } } };
+  const request = buildRecognitionIntake([food, { ...food, id: "scan:1", selected: false }], "recognition-review-request", "image", "scan");
+  expect(request.items).toHaveLength(1);
+  expect(request).toMatchObject({ idempotency_key: "recognition-review-request", source_reference: "scan", items: [{ source_item_id: "scan:0", quantity: "一袋", quantity_value: null, expiration_date: "", field_evidence: food.fieldEvidence }] });
+  expect(() => buildRecognitionIntake([{ ...food, suggestedStorageLocation: "" }], "recognition-review-request", "image", "scan")).toThrow("存放位置");
 });

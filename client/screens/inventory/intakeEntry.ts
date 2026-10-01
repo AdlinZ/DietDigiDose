@@ -1,7 +1,8 @@
 import { inventoryBulkIntakeSchema, type InventoryBulkIntakeData } from "@dietdigidose/contracts";
 import { z } from "zod";
 import { parseStructuredQuantity } from "@/utils/structuredQuantity";
-import { inferCategoryByName } from "@/utils/ingredientRules";
+import type { DetectedFood, StorageLocation } from "./types";
+import { inferIngredientDefaults, inferCategoryByName } from "@/utils/ingredientRules";
 
 export const intakeEntrySchema = z.object({
   foodName: z.string().max(100), quantity: z.string().max(40), category: z.string().max(40),
@@ -38,4 +39,18 @@ export function summarizeInventoryText(text: string): IntakeEntry[] {
     const foodName = (certain ? candidateName : part).trim();
     return { ...blankIntakeEntry, foodName, category: inferCategoryByName(foodName), quantity: certain ? match[0] : "" };
   });
+}
+
+/** Confirmed review fields are persisted as one exact, replayable request. */
+export function buildRecognitionIntake(foods: DetectedFood[], batchKey: string, source: "barcode" | "receipt" | "image", jobId: string | null): InventoryBulkIntakeData {
+  const selected = foods.filter(item => item.selected);
+  if (!selected.length) throw new Error("请至少选择一项需要入库的食材");
+  if (selected.some(item => !item.foodName.trim() || !["冷藏", "冷冻", "常温"].includes(item.suggestedStorageLocation))) {
+    throw new Error("请补全名称并选择存放位置；数量和到期日期可以留空");
+  }
+  return inventoryBulkIntakeSchema.parse({ idempotency_key: batchKey, source: jobId ? "image" : source, source_reference: jobId,
+    items: selected.map(item => ({ food_name: item.foodName, category: inferIngredientDefaults(item.foodName, item.suggestedStorageLocation as StorageLocation).category,
+      ...quantityFields(item.quantity), expiration_date: item.expirationDate || "", storage_location: item.suggestedStorageLocation,
+      image_url: null, ...(jobId ? { source_item_id: item.id } : {}), field_evidence: item.fieldEvidence,
+      confidence: item.confidence ?? null, confirmed: true, source: jobId ? "image" : item.source || source, barcode: item.barcode ?? null })) });
 }

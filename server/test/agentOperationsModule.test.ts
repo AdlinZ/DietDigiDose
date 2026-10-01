@@ -1,3 +1,4 @@
+import { dateKeyAfterDays } from "../src/utils/date.js";
 import { InventoryService } from "../src/modules/inventory/service.js";
 import { SqliteInventoryRepository } from "../src/modules/inventory/sqliteRepository.js";
 import assert from "node:assert/strict";
@@ -112,12 +113,12 @@ test("Agent inventory uses quantity transactions, versions, history and rollback
   }
   const run = (actions: ReturnType<typeof proposal>[]) => repo.executeActions(42, "inventory-run", actions);
   const row = () => db.prepare("SELECT quantity,quantity_value,quantity_unit,is_available,version FROM inventory_items WHERE id=1").get();
-  await run([proposal("add_inventory_item", { name: "鸡蛋", quantity: "十枚", expirationDate: "2026-09-20" })]);
+  await run([proposal("add_inventory_item", { name: "鸡蛋", quantity: "十枚", expirationDate: dateKeyAfterDays(30) })]);
   assert.deepEqual(row(), { quantity: "10个", quantity_value: 10, quantity_unit: "piece", is_available: 1, version: 1 });
   const eventCount = () => (db.prepare("SELECT COUNT(*) n FROM plan_maintenance_events").get() as { n: number }).n;
   assert.equal(eventCount(), 1);
   await assert.rejects(() => run([
-    proposal("add_inventory_item", { name: "应回滚的入库", quantity: "1个", expirationDate: "2026-09-20" }),
+    proposal("add_inventory_item", { name: "应回滚的入库", quantity: "1个", expirationDate: dateKeyAfterDays(30) }),
     proposal("update_inventory_item", { itemId: 999, version: 1, quantity: "5个" }),
   ]));
   assert.equal(eventCount(), 1);

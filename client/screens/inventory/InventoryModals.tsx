@@ -119,6 +119,8 @@ export function ExpiredCleanupModal({
 }
 
 interface BatchReviewModalProps {
+  locked?: boolean;
+  error?: string;
   visible: boolean;
   foods: DetectedFood[];
   saving: boolean;
@@ -129,8 +131,9 @@ interface BatchReviewModalProps {
   onMergeDuplicates?: () => void;
 }
 
-export function BatchReviewModal({ visible, foods, saving, onClose, onChange, onSave, onAddItem, onMergeDuplicates }: BatchReviewModalProps) {
+export function BatchReviewModal({ visible, foods, saving, locked = false, error, onClose, onChange: changeFoods, onSave, onAddItem, onMergeDuplicates }: BatchReviewModalProps) {
   const [brand, muted] = useCSSVariable(["--color-brand", "--color-copy-muted"]) as string[];
+  const onChange = (next: DetectedFood[]) => { if (!locked && !saving) changeFoods(next); };
   const allSelected = foods.length > 0 && foods.every((food) => food.selected);
   const selectedCount = foods.filter((food) => food.selected).length;
 
@@ -148,7 +151,8 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
             </TouchableOpacity>
           </View>
 
-          {onAddItem && (
+          {error ? <Text accessibilityRole="alert" className="mt-3 text-xs text-critical">{error}</Text> : null}
+          {!locked && onAddItem && (
             <View className="mt-3">
               <Text className="text-xs font-bold text-copy-muted mb-1.5">快捷加一项</Text>
               <View>
@@ -167,7 +171,7 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
               </View>
             </View>
           )}
-          {onMergeDuplicates ? (
+          {!locked && onMergeDuplicates ? (
             <TouchableOpacity onPress={onMergeDuplicates} className="mt-2 self-start rounded-full bg-background-secondary px-3 py-2">
               <Text className="text-[10px] font-black text-copy-muted">检查重复项目（同名批次分别保留）</Text>
             </TouchableOpacity>
@@ -177,6 +181,7 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
             {foods.map((item) => (
               <View
                 key={item.id}
+                pointerEvents={locked || saving ? "none" : "auto"}
                 className={`rounded-card border p-3.5 ${item.selected ? "border-brand/30 bg-brand-soft" : "border-line bg-canvas opacity-disabled"}`}
               >
                 <View className="flex-row items-center">
@@ -191,7 +196,7 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
                   <TextInput
                     value={item.foodName}
                     onChangeText={(foodName) => onChange(foods.map((food) => food.id === item.id ? { ...food, foodName, fieldEvidence: { ...food.fieldEvidence, food_name: { status: "known", source: "user" } } } : food))}
-                    editable={item.selected}
+                    editable={item.selected && !locked && !saving}
                     className="h-10 min-w-0 flex-1 text-body font-black text-ink"
                     accessibilityLabel="食材名称"
                   />
@@ -206,6 +211,7 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
                         <Text className="pt-2 text-[9px] font-bold text-copy-muted">{item.fieldEvidence?.quantity?.status === "estimated" ? "数量与单位（识别估计）" : "数量与单位"}</Text>
                         <TextInput
                           value={item.quantity}
+                          editable={!locked && !saving}
                           onChangeText={(quantity) => onChange(foods.map((food) => food.id === item.id ? { ...food, quantity, fieldEvidence: { ...food.fieldEvidence, quantity: { status: quantity.trim() ? "known" : "unknown", source: "user" } }, missingFields: quantity.trim() ? food.missingFields?.filter(field => field !== "数量") : food.missingFields } : food))}
                           placeholder="数量未知可留空"
                           placeholderTextColorClassName="accent-copy-muted"
@@ -254,7 +260,8 @@ export function BatchReviewModal({ visible, foods, saving, onClose, onChange, on
               onPress={() => onChange(foods.map((item) => ({ ...item, selected: !allSelected })))}
               className="min-h-touch items-center justify-center rounded-control border border-line bg-canvas px-4"
               accessibilityRole="checkbox"
-              accessibilityState={{ checked: allSelected }}
+              disabled={locked || saving}
+              accessibilityState={{ checked: allSelected, disabled: locked || saving }}
               accessibilityLabel="全选识别结果"
             >
               <Text className="text-caption font-bold text-copy-muted">全选</Text>

@@ -32,21 +32,23 @@ export function useUserDraft<T>(name: string, initial: T, parse: (value: unknown
   }, [key]);
   const save = useCallback((value: T) => {
     setState({ key, value, ready: true });
-    if (!userId || !key) return;
+    if (!userId || !key) return Promise.resolve();
     const generation = getPrivateStorageGeneration(userId);
     // Serialize writes so a slow older keystroke cannot replace a newer draft.
     pending.current = pending.current.catch(() => undefined).then(async () => {
-      if (owner.current !== key) return;
+      if (owner.current !== key) throw new Error("登录状态已变化，请重新打开页面");
       try {
-        await writeUserPrivateStorage(name, userId, generation, JSON.stringify(value));
+        if (!await writeUserPrivateStorage(name, userId, generation, JSON.stringify(value))) throw new Error("登录状态已变化，请重新打开页面");
         if (owner.current === key) setError("");
-      } catch { if (owner.current === key) setError("草稿尚未保存到本机，请暂时不要退出"); }
+      } catch (reason) { if (owner.current === key) setError("草稿尚未保存到本机，请暂时不要退出"); throw reason; }
     });
+    void pending.current.catch(() => undefined);
+    return pending.current;
   }, [key, name, userId]);
   const clear = useCallback(async () => {
     if (!userId || !key) return;
     const generation = getPrivateStorageGeneration(userId);
-    await pending.current;
+    await pending.current.catch(() => undefined);
     if (owner.current !== key || generation !== getPrivateStorageGeneration(userId)) return;
     const removed = await removeUserPrivateStorage(name, userId, generation);
     if (removed && owner.current === key) setState({ key, value: initialRef.current, ready: true });

@@ -1,11 +1,27 @@
 import { z } from "zod";
 
 const key = z.string().trim().min(1).max(60);
+export const recipeHandlingSchema = z.object({
+  storage: z.enum(["fresh_only", "refrigerated"]),
+  // Refrigerated leftovers have a general 3–4 day ceiling; recipe-specific limits may be shorter.
+  maxHoldHours: z.number().int().min(0).max(96),
+  coldServingAllowed: z.boolean(), carryAllowed: z.boolean(),
+  sourceUrl: z.url().max(2000).refine(value => value.startsWith("https://"), "审核来源须使用 HTTPS"),
+  reference: z.string().trim().min(5).max(2000), instructions: z.string().trim().min(10).max(2000),
+}).strict().refine(rule => rule.storage === "fresh_only" ? rule.maxHoldHours === 0 : rule.maxHoldHours > 0, "现做现吃不设置保存期限，冷藏须填写明确的小时上限");
+export type RecipeHandling = z.infer<typeof recipeHandlingSchema>;
+export const mealHandlingCheckSchema = z.object({
+  targetMealId: z.string().min(1).max(80), recipeId: z.number().int().positive().nullable(), preparedMealId: z.string().uuid().optional(),
+  status: z.enum(["conditions_match", "pending", "conflict"]), reasons: z.array(z.string().max(500)).max(20),
+  reference: z.string().max(2000).nullable(), sourceUrl: z.url().max(2000).refine(value => value.startsWith("https://"), "审核来源须使用 HTTPS").nullable(), instructions: z.string().max(2000).nullable(),
+});
+export type MealHandlingCheck = z.infer<typeof mealHandlingCheckSchema>;
 /** Reviewed bounds for one batch; smaller batches use the same duration bounds. */
 export const recipeExecutionProfileSchema = z.object({
   version: z.literal(1),
   maxBatchServings: z.number().finite().positive().max(30),
   reference: z.string().trim().min(5).max(2000),
+  handling: recipeHandlingSchema.optional(),
   tools: z.array(z.object({
     key, name: z.string().trim().min(1).max(100), catalogId: z.number().int().positive(),
     capacity: z.discriminatedUnion("kind", [z.object({ kind: z.literal("not_applicable") }).strict(),

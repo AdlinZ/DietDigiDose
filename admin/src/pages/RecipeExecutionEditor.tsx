@@ -5,6 +5,8 @@ import api from '../services/api';
 type Task = Omit<RecipeExecutionProfile['tasks'][number], 'minutes'> & { minutes: string };
 type Tool = { key: string; catalogId: string; capacityKind: 'not_applicable' | 'volume'; mlPerServing: string };
 type Catalog = { id: number; name: string; quality_status?: string };
+type HandlingForm = { storage: '' | 'fresh_only' | 'refrigerated'; hours: string; cold: '' | 'yes' | 'no'; carry: '' | 'yes' | 'no'; sourceUrl: string; reference: string; instructions: string };
+const emptyHandling: HandlingForm = { storage: '', hours: '', cold: '', carry: '', sourceUrl: '', reference: '', instructions: '' };
 const phases = { preparation: '准备', cooking: '烹饪', cleanup: '收尾' };
 const field = 'border rounded-lg px-2 py-1 w-full';
 
@@ -15,6 +17,7 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
   const [reference, setReference] = useState('');
   const [servings, setServings] = useState('');
   const [tools, setTools] = useState<Tool[]>([]);
+  const [handling, setHandling] = useState<HandlingForm>(emptyHandling);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -28,6 +31,8 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
       setReviewKey(record.data.reviewKey);
       setCatalog(devices.data.filter((item: Catalog) => item.quality_status == null || item.quality_status === 'trusted'));
       const profile = record.data.execution?.profile as RecipeExecutionProfile | undefined;
+      const rule = profile?.handling;
+      setHandling(rule ? { storage: rule.storage, hours: String(rule.maxHoldHours), cold: rule.coldServingAllowed ? 'yes' : 'no', carry: rule.carryAllowed ? 'yes' : 'no', sourceUrl: rule.sourceUrl, reference: rule.reference, instructions: rule.instructions } : emptyHandling);
       setReference(profile?.reference ?? ''); setServings(profile ? String(profile.maxBatchServings) : '');
       setTools(profile?.tools.map(tool => ({ key: tool.key, catalogId: String(tool.catalogId), capacityKind: tool.capacity.kind,
         mlPerServing: tool.capacity.kind === 'volume' ? String(tool.capacity.mlPerServing) : '' })) ?? []);
@@ -48,9 +53,13 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
       if (!servings.trim() || tasks.some(task => !task.minutes.trim()) || tools.some(tool => !tool.catalogId || (tool.capacityKind === 'volume' && !tool.mlPerServing.trim()))) {
         setMessage('请填写批次份量、每项时间上限与设备容量依据；没有依据时请保留未审核状态。'); return;
       }
+      if (handling.storage && (!handling.cold || !handling.carry || (handling.storage === 'refrigerated' && !handling.hours.trim()))) {
+        setMessage('请明确冷藏期限、冷食与携带适用性；没有审核依据时选择未审核。'); return;
+      }
       const parsed = recipeExecutionProfileSchema.safeParse({ version: 1, reference, maxBatchServings: Number(servings),
         tools: tools.map(tool => ({ key: tool.key, name: catalog.find(item => String(item.id) === tool.catalogId)?.name ?? '', catalogId: Number(tool.catalogId),
           capacity: tool.capacityKind === 'volume' ? { kind: 'volume', mlPerServing: Number(tool.mlPerServing) } : { kind: 'not_applicable' } })),
+        ...(handling.storage ? { handling: { storage: handling.storage, maxHoldHours: handling.storage === 'fresh_only' ? 0 : Number(handling.hours), coldServingAllowed: handling.cold === 'yes', carryAllowed: handling.carry === 'yes', sourceUrl: handling.sourceUrl, reference: handling.reference, instructions: handling.instructions } } : {}),
         tasks: tasks.map(task => ({ ...task, minutes: Number(task.minutes) })),
       });
       if (!parsed.success) { setMessage(parsed.error.issues.map(issue => issue.message).join('；')); return; }
@@ -90,6 +99,16 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
         <button type="button" className="admin-button" onClick={() => setTasks(current => current.filter(item => item.id !== task.id).map(item => ({ ...item, dependsOn: item.dependsOn.filter(id => id !== task.id) })))}>移除此任务</button>
       </div>)}
       <button type="button" className="admin-button" onClick={() => setTasks(current => [...current, { id: crypto.randomUUID(), title: '', phase: 'preparation', minutes: '', active: true, dependsOn: [], tools: [] }])}>添加任务</button>
+      <h4 className="font-medium">存放、携带与复热审核</h4>
+      <p className="text-sm text-text-muted">填写适用于该菜谱的来源与条件。未审核时保留未知；日期核对覆盖食用日全天，实际冷链与复热仍需确认。</p>
+      <label className="block">存放规则<select aria-label="存放规则" value={handling.storage} onChange={event => setHandling(current => ({ ...current, storage: event.target.value as HandlingForm['storage'] }))} className={field}><option value="">未审核</option><option value="fresh_only">仅限现做现吃</option><option value="refrigerated">符合条件时冷藏</option></select></label>
+      {handling.storage ? <div className="space-y-2">
+        {handling.storage === 'refrigerated' ? <label className="block">冷藏期限上限（小时）<input aria-label="冷藏期限上限" type="number" min="1" max="96" step="1" value={handling.hours} onChange={event => setHandling(current => ({ ...current, hours: event.target.value }))} className={field} /></label> : null}
+        {([['cold', '是否可冷食'], ['carry', '是否支持携带']] as const).map(([key, label]) => <label key={key} className="block">{label}<select aria-label={label} value={handling[key]} onChange={event => setHandling(current => ({ ...current, [key]: event.target.value as HandlingForm['cold'] }))} className={field}><option value="">尚未确认</option><option value="yes">审核允许（须满足所列条件）</option><option value="no">审核不允许</option></select></label>)}
+        <label className="block">来源链接<input aria-label="存放审核来源链接" type="url" value={handling.sourceUrl} onChange={event => setHandling(current => ({ ...current, sourceUrl: event.target.value }))} placeholder="https://" className={field} /></label>
+        <label className="block">核对依据<textarea aria-label="存放核对依据" value={handling.reference} onChange={event => setHandling(current => ({ ...current, reference: event.target.value }))} className={field} /></label>
+        <label className="block">实际存放与食用条件<textarea aria-label="实际存放与食用条件" value={handling.instructions} onChange={event => setHandling(current => ({ ...current, instructions: event.target.value }))} className={field} /></label>
+      </div> : null}
       <div className="flex gap-2"><button type="button" className="admin-button" onClick={() => void save()}>审核保存制作流程</button><button type="button" className="admin-button" onClick={() => void save(true)}>撤销制作流程审核</button></div>
     </fieldset>
   </section>;

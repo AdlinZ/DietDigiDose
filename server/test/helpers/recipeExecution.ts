@@ -26,7 +26,8 @@ export async function verifyRecipeExecution(admin: AdminRecipesService, recipes:
     steps: ["准备", "煮熟", "收尾"], cook_time: 10, prep_time: 5, serving_size: 2, required_kitchenware: ["平底锅"] };
   const context = { adminUserId: adminId };
   const recipeId = (await admin.create(adminId, body, context)).id;
-  const profile = { ...executionFixture, tools: [{ ...executionFixture.tools[0], name: "平底锅", catalogId: catalog.id }] };
+  const profile = { ...executionFixture, handling: { storage: "refrigerated" as const, maxHoldHours: 72, coldServingAllowed: true, carryAllowed: false,
+    sourceUrl: "https://example.invalid/handling-fixture", reference: "合成存放审核回归依据", instructions: "合成测试专用，不作为实际菜谱存放和食用依据" }, tools: [{ ...executionFixture.tools[0], name: "平底锅", catalogId: catalog.id }] };
   const keys = await admin.execution(recipeId); assert.equal(keys.execution, null);
   const input = { recipeKey: keys.recipeKey, reviewKey: keys.reviewKey, profile };
   await assert.rejects(admin.reviewExecution(adminId, recipeId, { ...input, profile: { ...profile, tools: [] } }, context));

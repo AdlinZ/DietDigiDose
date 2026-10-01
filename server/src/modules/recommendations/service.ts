@@ -5,6 +5,8 @@ import { formatOutcomeEvidence } from "./outcomeEvidence.js";
 import { effectiveDislikeRecipeIds, learningOverrides, formatLearningState } from "./preferenceEvidence.js";
 import { preferenceLearningUpdateSchema, type PreferenceLearningUpdate } from "@dietdigidose/contracts";
 import { buildWeeklyPlan } from "./weeklyPlan.js";
+import { reviewedExecution } from "../recipes/execution.js";
+import { preparedHandlingChecks } from "./handling.js";
 import { weeklyPlanRequestSchema, type WeeklyPlanRequest } from "@dietdigidose/contracts";
 import { parseJson } from "../mealPlans/formatters.js";
 import { buildCookingDraft, replaceCookingDraft } from "./plan.js";
@@ -77,7 +79,11 @@ export class RecommendationsService {
         if (meal.cookServings === 0) items.push({ id: `prepared-plan:${plan.id}:${meal.id}`,planned_date: meal.date,meal_type: meal.mealType,title: meal.allocations.map(item => item.foodName).join("、"),prepared_only: true,status: "planned" });
       }
     }
-    return buildWeeklyPlan(request,computed.profile.kitchen,computed.results,stock,batches.map(formatPreparedMeal),items,state.shopping,reservations, await this.repository.kitchenware(userId));
+    const rules = new Map((batches.length ? await this.repository.recipes({ timeBudget: null }) : []).flatMap(row => {
+      const rule = reviewedExecution(row)?.profile.handling;
+      return rule ? [[Number(row.id), rule] as const] : [];
+    }));
+    return buildWeeklyPlan(request,computed.profile.kitchen,computed.results,stock,batches.map(formatPreparedMeal),items,state.shopping,reservations, await this.repository.kitchenware(userId), rules);
   }
 
   async planRequirements(userId: number, input: MealPlanRequirementsInput) {
@@ -86,7 +92,11 @@ export class RecommendationsService {
     const [profile, prepared, state] = await Promise.all([this.repository.profile(userId), this.repository.preparedMeals(userId),
       this.repository.planningState(userId, dates[0], dates[dates.length - 1])]);
     const preferences = resolveKitchenPreferences(formatRecommendationProfile(profile).kitchen,request.preferences);
-    return allocatePreparedMeals({ ...request,preferences }, unallocatedPreparedMeals(prepared.map(formatPreparedMeal), state.plans));
+    const rules = new Map((prepared.length ? await this.repository.recipes({ timeBudget: null }) : []).flatMap(row => {
+      const rule = reviewedExecution(row)?.profile.handling;
+      return rule ? [[Number(row.id), rule] as const] : [];
+    }));
+    return allocatePreparedMeals({ ...request,preferences }, unallocatedPreparedMeals(prepared.map(formatPreparedMeal), state.plans), rules);
   }
 
   async cookingPlan(userId: number, input: MealPlanRequirementsInput) {
@@ -100,8 +110,14 @@ export class RecommendationsService {
     const request = replaceCookingPlanItemSchema.parse(input);
     const candidates = await this.compute(userId, { surface: "meal_plan" }, request.draft.effectivePreferences);
     const dates = request.draft.meals.map(meal => meal.date).sort();
-    const existing = request.draft.planningMode === "weekly" ? (await this.repository.planningState(userId,weeklyHistoryStart(request.draft),request.draft.shoppingWindow?.endDate ?? dates[dates.length-1])).items : [];
-    return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId),existing, await this.repository.kitchenware(userId));
+    const [stock, devices, prepared, recipes, state] = await Promise.all([
+      this.repository.inventory(userId), this.repository.kitchenware(userId), this.repository.preparedMeals(userId),
+      request.draft.meals.some(meal => meal.allocations.length) ? this.repository.recipes({ timeBudget: null }) : Promise.resolve([]),
+      request.draft.planningMode === "weekly" ? this.repository.planningState(userId,weeklyHistoryStart(request.draft),request.draft.shoppingWindow?.endDate ?? dates[dates.length-1]) : Promise.resolve(null),
+    ]);
+    const rules = new Map(recipes.flatMap(row => { const rule = reviewedExecution(row)?.profile.handling; return rule ? [[Number(row.id), rule] as const] : []; }));
+    return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, stock,state?.items ?? [], devices,
+      preparedHandlingChecks(request.draft, prepared.map(formatPreparedMeal), rules));
   }
 
   versions() { return { scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION }; }

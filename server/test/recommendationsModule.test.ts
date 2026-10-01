@@ -34,7 +34,8 @@ test("reviewed full plans recompute parallel time on replacement and keep weekly
     const row = { id, title: `排程菜${id}`, serving_size: 2, cook_time: 10, prep_time: 5, ingredients_json: [{ name: "番茄", amount: "2个" }],
       steps_json: ["准备", "烹饪", "收尾"], required_kitchenware_json: [], optional_kitchenware_json: [] };
     return { ...row, execution_json: { recipeKey: executionRecipeKey(row), reviewedBy: 1, reviewedAt: "2026-10-01T00:00:00Z",
-      profile: { ...executionFixture, tools: [{ ...executionFixture.tools[0], catalogId: id }] } } };
+      profile: { ...executionFixture, handling: { storage: "refrigerated", maxHoldHours: 72, coldServingAllowed: true, carryAllowed: false,
+        sourceUrl: "https://example.invalid/handling-fixture", reference: "合成存放审核回归依据", instructions: "合成测试专用，不作为真实食物的存放食用依据" }, tools: [{ ...executionFixture.tools[0], catalogId: id }] } } };
   });
   const devices = rows.map(row => ({ id: row.id, catalog_id: row.id, name: `测试锅${row.id}`, attributes_json: { capacityMl: 1000 } }));
   const stock = [{ id: 1, food_name: "番茄", quantity_value: 100, quantity_unit: "piece", expiration_date: "2099-12-31", version: 1 }];
@@ -379,7 +380,7 @@ test("single-session recommendations use only unallocated portions across all ac
   const service = new RecommendationsService(repository({ preparedMeals: async () => [batch], planningState: async () => ({ items: [], shopping: [], plans }) }), kitchenware);
   const request = { meals: [{ id: "dinner", date: "2030-09-09", mealType: "dinner" as const, servings: 1 }], excludedPreparedMealIds: [] };
   const initial = await service.cookingPlan(7, request);
-  const draft = { ...initial, meals: initial.meals.map(meal => ({ ...meal, date: "2030-09-08" })) };
+  const draft = { ...initial, productionDate: "2030-09-08", meals: initial.meals.map(meal => ({ ...meal, date: "2030-09-08" })) };
   plans = [{ constraints_json: JSON.stringify({ savedCookingDraft: { draft } }) }];
   const partial = await service.planRequirements(7, { ...request, meals: [{ ...request.meals[0], servings: 2 }] });
   assert.equal(partial.meals[0].preparedServings, 1);
@@ -389,4 +390,44 @@ test("single-session recommendations use only unallocated portions across all ac
   plans = [];
   assert.equal((await service.planRequirements(7, request)).meals[0].preparedServings, 1);
   assert.equal(batch.remaining_servings, 2, "recommendation must not consume the batch");
+});
+
+
+test("plans use current reviewed handling for future meals, replacement and independent weekly cooking", async () => {
+  const { executionFixture } = await import("./helpers/recipeExecution.js");
+  const { executionRecipeKey } = await import("../src/modules/recipes/execution.js");
+  const source = { sourceUrl: "https://example.invalid/handling-fixture", reference: "合成存放审核回归依据", instructions: "合成测试专用，不作为真实食物的存放食用依据" };
+  const rows = [1, 2].map(id => {
+    const row = { id, title: `存放测试菜${id}`, serving_size: 2, cook_time: 10, prep_time: 5,
+      ingredients_json: [{ name: "番茄", amount: "2个" }], steps_json: ["准备", "烹饪", "收尾"], required_kitchenware_json: [], optional_kitchenware_json: [] };
+    return { ...row, execution_json: { recipeKey: executionRecipeKey(row), reviewedBy: 1, reviewedAt: "2026-10-01T00:00:00Z",
+      profile: { ...executionFixture, handling: { ...source, storage: id === 1 ? "fresh_only" as const : "refrigerated" as const,
+        maxHoldHours: id === 1 ? 0 : 72, coldServingAllowed: true, carryAllowed: false } } } };
+  });
+  const service = new RecommendationsService(repository({ recipes: async () => rows,
+    profile: async () => ({ kitchen_constraints_json: { refrigeration_available: true } }),
+    kitchenware: async () => [{ id: 1, catalog_id: 1, name: "测试锅", attributes_json: { capacityMl: 1000 } }],
+    inventory: async () => [{ id: 1, food_name: "番茄", quantity_value: 100, quantity_unit: "piece", expiration_date: "2099-12-31", version: 1 }],
+  }), kitchenware);
+  const input = { productionDate: "2099-01-01", excludedPreparedMealIds: [], meals: [{ id: "lunch", date: "2099-01-02", mealType: "lunch" as const, servings: 2 }] };
+  const draft = await service.cookingPlan(7, input);
+  assert.equal(draft.cooking[0].recipeId, 2); assert.equal(draft.handlingChecks?.[0].status, "conditions_match");
+  assert.equal(draft.productionDate, input.productionDate);
+  await assert.rejects(service.replaceCookingItem(7, { draft, targetMealId: "lunch", recipeId: 1 }), /没有符合/);
+  const noFridge = await service.cookingPlan(7, { ...input, preferences: { refrigeration_available: false } });
+  assert.equal(noFridge.cooking.length, 0); assert.equal(noFridge.unresolved.length, 1);
+  rows[1].execution_json.profile.handling.coldServingAllowed = false;
+  const hot = await service.cookingPlan(7, { ...input, preferences: { reheating_available: true } });
+  assert.equal(hot.time.incomplete, true); assert(hot.time.schedule?.missing.includes("future_reheating_schedule"));
+  const noHeat = await service.cookingPlan(7, { ...input, preferences: { reheating_available: false } });
+  assert.equal(noHeat.cooking.length, 0);
+  const carry = await service.cookingPlan(7, { ...input, preferences: { carry_meals: true } });
+  assert.equal(carry.cooking.length, 0);
+  assert.equal((await service.compute(7, { surface: "home" }, { carry_meals: true })).results.length, 0);
+  const week = await service.weeklyPlan(7, { startDate: "2099-01-01", mealTypes: ["dinner"], servings: 2 });
+  assert.equal(week.draft?.productionDate, undefined); assert.equal(week.draft?.cooking.length, 7);
+  assert(week.draft?.handlingChecks?.every(check => check.status === "conditions_match"));
+  rows[1].ingredients_json[0].amount = "3个";
+  const stale = await service.cookingPlan(7, input);
+  assert.equal(stale.cooking[0].recipeId, 2); assert.equal(stale.handlingChecks?.[0].status, "pending", "content changes invalidate handling too");
 });

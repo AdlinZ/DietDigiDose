@@ -1,5 +1,5 @@
 import { inventoryUnitSchema } from "./inventory.ts";
-import { cookingScheduleSchema } from "./recipeExecution.ts";
+import { cookingScheduleSchema, mealHandlingCheckSchema } from "./recipeExecution.ts";
 import { kitchenPreferencesSchema } from "./mealPreferences.ts";
 import { z } from "zod";
 
@@ -8,6 +8,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }, "日期无效");
 export const mealPlanRequirementsSchema = z.object({
+  productionDate: date.optional(),
   preferences: kitchenPreferencesSchema.optional(),
   meals: z.array(z.object({
     id: z.string().trim().min(1).max(80), date,
@@ -15,7 +16,8 @@ export const mealPlanRequirementsSchema = z.object({
     servings: z.number().finite().min(0.001).max(30),
   }).strict()).min(1).max(28),
   excludedPreparedMealIds: z.array(z.string().uuid()).max(100).default([]),
-}).strict().refine(value => new Set(value.meals.map(meal => meal.id)).size === value.meals.length, "餐次标识不能重复");
+}).strict().refine(value => new Set(value.meals.map(meal => meal.id)).size === value.meals.length, "餐次标识不能重复")
+  .refine(value => !value.productionDate || value.meals.every(meal => meal.date >= value.productionDate!), "制作日期不能晚于目标餐次");
 export type MealPlanRequirementsInput = z.infer<typeof mealPlanRequirementsSchema>;
 
 const amount = z.number().finite().nonnegative();
@@ -25,6 +27,8 @@ export const weeklyShoppingSchema = z.array(z.object({
   sources: z.array(z.object({ mealId: z.string().max(100),required: amount,missing: amount })).max(2800),
 })).max(2800);
 export const cookingPlanDraftSchema = z.object({
+  productionDate: date.optional(),
+  handlingChecks: z.array(mealHandlingCheckSchema).max(3000).optional(),
   weeklyShopping: weeklyShoppingSchema.optional(),
   shoppingWindow: z.object({ startDate: date,endDate: date }).strict().refine(value => Date.parse(value.endDate)-Date.parse(value.startDate) === 6*86_400_000,"采购范围必须为七天").optional(),
   planningMode: z.enum(["single_session", "weekly"]).optional(),
@@ -63,6 +67,11 @@ export const cookingPlanDraftSchema = z.object({
     invalid(["shoppingWindow"],"七日采购范围必须包含方案餐次");
   }
   const ids = new Set(draft.meals.map(meal => meal.id));
+  if (draft.productionDate && (draft.planningMode === "weekly" || draft.meals.some(meal => meal.date < draft.productionDate!))) invalid(["productionDate"], "单次制作日期不能用于周计划或晚于目标餐次");
+  if (draft.handlingChecks?.some(check => !ids.has(check.targetMealId))) invalid(["handlingChecks"], "存放核对必须属于方案餐次");
+  const handlingIds = draft.handlingChecks?.map(check => `${check.targetMealId}:${check.preparedMealId ?? `recipe:${check.recipeId}`}`) ?? [];
+  if (new Set(handlingIds).size !== handlingIds.length) invalid(["handlingChecks"], "同一餐次的同一食物不能重复核对");
+  if (draft.handlingChecks?.some(check => !check.preparedMealId && !draft.cooking.some(item => item.targetMealId === check.targetMealId && item.recipeId === check.recipeId))) invalid(["handlingChecks"], "新做菜的存放核对必须对应实际菜谱");
   if (ids.size !== draft.meals.length) invalid(["meals"], "餐次标识不能重复");
   const excluded = new Set(draft.excludedPreparedMealIds);
   const batchVersions = new Map<string, number>();

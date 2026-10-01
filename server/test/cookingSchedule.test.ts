@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cookingScheduleSchema, recipeExecutionProfileSchema } from "@dietdigidose/contracts";
+import { cookingScheduleSchema, recipeExecutionProfileSchema, recipeHandlingSchema } from "@dietdigidose/contracts";
 import { scheduleCooking } from "../src/modules/recommendations/schedule.js";
 
 import { executionFixture as profile } from "./helpers/recipeExecution.js";
@@ -52,4 +52,26 @@ test("review and saved-schedule validation reject cycles, omitted cleanup and do
   assert.equal(cookingScheduleSchema.safeParse({ ...schedule, elapsedMinutes: 15, tasks: schedule.tasks.slice(0, 2) }).success, false);
   schedule.tasks[2].startMinute = 5; schedule.tasks[2].endMinute = 7;
   assert.equal(cookingScheduleSchema.safeParse(schedule).success, false);
+});
+
+
+test("reviewed handling excludes known conflicts and preserves uncertainty about actual food", async () => {
+  const { evaluateHandling, preparedHandlingChecks } = await import("../src/modules/recommendations/handling.js");
+  const cold = recipeHandlingSchema.parse({ storage: "refrigerated", maxHoldHours: 72, coldServingAllowed: true, carryAllowed: false,
+    sourceUrl: "https://example.invalid/reviewed-fixture", reference: "合成测试来源，不用于真实食物", instructions: "合成测试专用，实际存放和冷链条件必须另行核对" });
+  const context = { targetMealId: "lunch", recipeId: 1, productionDate: "2099-01-01", targetDate: "2099-01-02", preferences: { refrigeration_available: true } };
+  assert.equal(evaluateHandling(cold, context).status, "conditions_match");
+  assert.equal(evaluateHandling(undefined, context).status, "pending");
+  assert.equal(evaluateHandling(cold, { ...context, preferences: {} }).status, "pending");
+  for (const rule of [{ ...cold, maxHoldHours: 24 }, { ...cold, storage: "fresh_only" as const, maxHoldHours: 0 }]) assert.equal(evaluateHandling(rule, context).status, "conflict");
+  assert.equal(evaluateHandling(cold, { ...context, preferences: { refrigeration_available: false } }).status, "conflict");
+  assert.equal(evaluateHandling(cold, { ...context, preferences: { refrigeration_available: true, carry_meals: true } }).status, "conflict");
+  assert.equal(evaluateHandling({ ...cold, coldServingAllowed: false }, { ...context, preferences: { refrigeration_available: true, reheating_available: false } }).status, "conflict");
+  assert.equal(evaluateHandling({ ...cold, coldServingAllowed: false }, { ...context, preferences: { refrigeration_available: true, reheating_available: true } }).status, "pending");
+  const preparedMealId = "00000000-0000-4000-8000-000000000001";
+  assert.equal(evaluateHandling(cold, { ...context, preparedMealId, storageLocation: "冷藏" }).status, "pending");
+  assert.equal(evaluateHandling(cold, { ...context, preparedMealId, storageLocation: "常温" }).status, "conflict");
+  for (const rule of [{ ...cold, maxHoldHours: 97 }, { ...cold, sourceUrl: "http://example.invalid" }, { ...cold, reference: "" }]) assert.equal(recipeHandlingSchema.safeParse(rule).success, false);
+  const draft = { meals: [{ id: "lunch", date: "2099-01-02", allocations: [{ preparedMealId, version: 1, servings: 1 }] }], effectivePreferences: context.preferences } as Parameters<typeof preparedHandlingChecks>[0];
+  assert.equal(preparedHandlingChecks(draft, [], new Map([[1, cold]]))[0].status, "conflict", "client evidence cannot replace the actual record");
 });

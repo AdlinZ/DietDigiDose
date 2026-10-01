@@ -188,7 +188,7 @@ export class AdminRecipesService {
     const execution = input.profile ? { recipeKey: input.recipeKey, profile: input.profile, reviewedBy: adminUserId, reviewedAt: new Date().toISOString() } : null;
     if (!await this.repository.reviewExecution(recipeId, execution, recipe, audit({ ...context, adminUserId }, {
       action: "recipe.execution_review", resourceId: recipeId, summary: `${execution ? "审核制作流程" : "撤销制作流程审核"}：${recipe.title}`,
-      details: { recipeKey: input.recipeKey, reference: input.profile?.reference ?? null },
+      details: { recipeKey: input.recipeKey, reference: input.profile?.reference ?? null, handling: input.profile?.handling ?? null },
     }))) throw new AdminRecipesError(409, "食谱内容已改变，请重新核对制作流程", "RECIPE_EXECUTION_CONFLICT");
     return { success: true, execution, reviewKey: executionReviewKey({ ...recipe, execution_json: execution }) };
   }

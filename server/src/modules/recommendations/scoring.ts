@@ -1,11 +1,12 @@
 import { unexpiredInventory } from "./inventoryAvailability.js";
 import { reviewedExecution } from "../recipes/execution.js";
 import { scheduleCooking } from "./schedule.js";
+import { evaluateHandling } from "./handling.js";
 import { recipeDemands } from "./quantities.js";
 import { buildFefoConsumptionPreviewFromCandidates } from "../../services/inventoryQuantity.js";
 import type { RecommendationDataset, RecommendationInput, Row } from "./types.js";
 
-export const RECIPE_SCORING_VERSION = "rules-2026-10-01.2";
+export const RECIPE_SCORING_VERSION = "rules-2026-10-01.3";
 export const RECIPE_CANDIDATE_VERSION = "sql-public-v1";
 export const RECOMMENDATION_WEIGHTS = Object.freeze({
   inventoryCoverage: 35, expiringUse: 20, missingPenalty: 20, timeFit: 15, nutritionFit: 10,
@@ -144,6 +145,8 @@ export function scoreRecipeRecommendations(dataset: RecommendationDataset,
     const nameMatched = ingredients.filter((ingredient) => dataset.inventory.some((item) => nameMatches(ingredient.name, String(item.food_name))));
     const servings = Number(dataset.profile.kitchen.servings) || Number(recipe.serving_size) || 1;
     const summary = recipeSummary(recipe, dataset.requirements.get(Number(recipe.id)) || []);
+    if (evaluateHandling(summary.execution_profile?.handling, { targetMealId: "candidate", recipeId: Number(recipe.id),
+      productionDate: today, targetDate: today, preferences: dataset.profile.kitchen }).status === "conflict") return [];
     const schedule = scheduleCooking([{ targetMealId: "candidate", recipeId: Number(recipe.id), servings, recipe: summary }], dataset.kitchenware);
     if (schedule.complete && timeBudget && schedule.elapsedMinutes! > timeBudget) return [];
     const demands = ingredients.map(ingredient => recipeDemands([ingredient], Number(recipe.serving_size) || null, servings)?.[0]);

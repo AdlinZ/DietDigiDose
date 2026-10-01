@@ -8,6 +8,7 @@ import { SqlitePlanMaintenanceRepository } from "../src/modules/planMaintenance/
 import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
 import { SqliteMaintenanceQueueRepository } from "../src/modules/planMaintenance/sqliteQueueRepository.js";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { verifyAccountSecurityHttp } from "./accountSecurityHttpAssertions.js";
 import { after, before, describe, test } from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -4905,4 +4906,31 @@ test("reviewed execution persists atomically and changed recipes invalidate sche
   for (const method of ["GET", "PUT"]) assert.equal((await api("/api/v1/admin/recipes/1/execution", {
     token: account.token, method, ...(method === "PUT" ? { body: "{}" } : {}),
   })).response.status, 403);
+});
+
+
+test("changed activated recipes return HTTP 409 without starting the cooking queue", async () => {
+  const account = await register("execution-http-conflict@example.com");
+  const { cookingPlanDraftSchema } = await import("@dietdigidose/contracts");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  const recipeId = Number(db.prepare("INSERT INTO recipes(title,status,steps_json,ingredients_json,serving_size) VALUES('执行接口回归','approved','[]','[{\"name\":\"鸡蛋\",\"amount\":\"1个\"}]',1)").run().lastInsertRowid);
+  const plans = new SqliteMealPlansRepository(db), planId = randomUUID();
+  const draft = cookingPlanDraftSchema.parse({ planningMode: "single_session", status: "requires_validation",
+    meals: [{ id: "http-meal", date: "2099-09-10", mealType: "dinner", servings: 1, preparedServings: 0, cookServings: 1, allocations: [] }],
+    cooking: [{ targetMealId: "http-meal", recipeId, title: "执行接口回归", servings: 1, recipeYield: 1, demands: [{ food_name: "鸡蛋", amount_value: 1, unit: "piece" }] }],
+    totalCookServings: 1, unresolved: [], ingredientBudget: [], time: { budgetMinutes: 30, knownSequentialMinutes: 10, exceedsBudget: false, isEstimate: true, incomplete: true, missing: ["storage"] }, checksPending: ["storage"], excludedPreparedMealIds: [], effectivePreferences: {} });
+  await plans.saveDraft(account.user.id, { id: planId, title: "执行接口回归", draft });
+  await plans.activateDraft(account.user.id, planId, 1);
+  const item = db.prepare("SELECT id FROM meal_plan_items WHERE plan_id=?").get(planId) as JsonObject;
+  const queued = await plans.enqueue(account.user.id, planId, String(item.id), { version: 1, idempotencyKey: randomUUID() });
+  assert.equal(queued.kind, "completed");
+  if (queued.kind !== "completed") throw new Error("queue missing");
+  const queueId = queued.value.queueItemId;
+  db.prepare("UPDATE recipes SET steps_json='[\"内容变化\"]' WHERE id=?").run(recipeId);
+  for (const [method, path, body] of [["POST", `/api/v1/cooking-queue/${queueId}/start`, { version: 1 }], ["PATCH", `/api/v1/cooking-queue/${queueId}`, { version: 1, status: "cooking" }]] as const) {
+    const result = await api(path, { token: account.token, method, body: JSON.stringify(body) });
+    assert.equal(result.response.status, 409);
+    assert.equal((result.body as JsonObject).code, "MEAL_RECIPE_CHANGED");
+  }
+  assert.deepEqual(db.prepare("SELECT status,version FROM cooking_queue_items WHERE id=?").get(queueId), { status: "waiting", version: 1 });
 });

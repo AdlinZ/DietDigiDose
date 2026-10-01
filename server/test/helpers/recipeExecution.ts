@@ -137,9 +137,17 @@ export async function verifyRecipeExecution(admin: AdminRecipesService, recipes:
   assert(captured.some((item: { name: string; amount: string }) => item.name === "替代原料乙" && item.amount === "200g"));
   const revokedId = randomUUID();
   assert(await mealPlans.saveDraft(userId, { id: revokedId, title: "合成撤审草案", draft: substitutionDraft }));
+  const executionItem = (await query("SELECT id,version FROM meal_plan_items WHERE plan_id=?", [id]))[0];
+  const variantQueueKey = randomUUID();
+  assert.equal((await mealPlans.enqueue(userId, id, String(executionItem.id), { version: Number(executionItem.version), idempotencyKey: variantQueueKey })).kind, "completed");
   const currentSource = await admin.execution(sourceId);
   await admin.reviewExecution(adminId, sourceId, { recipeKey: currentSource.recipeKey, reviewKey: currentSource.reviewKey, profile: null }, context);
   assert.equal((await mealPlans.activateDraft(userId, revokedId, 1)).kind, "recipe_not_available");
+  await assert.rejects(mealPlans.enqueue(userId, id, String(executionItem.id), { version: 2, idempotencyKey: randomUUID() }), { code: "MEAL_RECIPE_CHANGED" });
+  await assert.rejects(mealPlans.complete(userId, id, String(executionItem.id), { version: 2, idempotencyKey: randomUUID() }), { code: "MEAL_RECIPE_CHANGED" });
+  assert.equal((await mealPlans.enqueue(userId, id, String(executionItem.id), { version: Number(executionItem.version), idempotencyKey: variantQueueKey })).kind, "completed", "successful queue receipt replay is preserved");
+  assert.equal(Number((await query("SELECT version FROM meal_plan_items WHERE id=?", [String(executionItem.id)]))[0].version), 2);
+
 
   // Round-trip a separate heating graph through both real database repositories.
   const reheatKeys = await admin.execution(targetId);

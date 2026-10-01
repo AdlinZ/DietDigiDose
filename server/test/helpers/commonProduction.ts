@@ -19,6 +19,12 @@ export async function verifyCommonProduction(plans: MealPlansRepository, diet: D
   await plans.saveDraft(userId, { id: planId, title: "一次制作三餐", draft });
   assert.equal((await plans.activateDraft(userId, planId, 1)).kind, "updated");
   const items = (await query("SELECT id,version FROM meal_plan_items WHERE plan_id=? ORDER BY planned_date", [planId]));
+  // A newly queued execution must still match the content captured during activation.
+  await query("UPDATE recipes SET ingredients_json='[{\"name\":\"共做鸡蛋\",\"amount\":\"2个\"}]' WHERE id=?", [recipeId]);
+  await assert.rejects(plans.enqueue(userId, planId, String(items[0].id), { version: 1, idempotencyKey: randomUUID(), combineSameRecipe: true }), { code: "MEAL_RECIPE_CHANGED" });
+  assert((await query("SELECT status,version FROM meal_plan_items WHERE plan_id=?", [planId])).every(row => row.status === "planned" && Number(row.version) === 1));
+  assert.equal((await query("SELECT id FROM cooking_queue_items WHERE source_plan_item_id=?", [String(items[0].id)])).length, 0);
+  await query("UPDATE recipes SET ingredients_json='[{\"name\":\"共做鸡蛋\",\"amount\":\"1个\"}]' WHERE id=?", [recipeId]);
   const queueKey = randomUUID();
   const queued = await plans.enqueue(userId, planId, String(items[0].id), { version: 1, idempotencyKey: queueKey, combineSameRecipe: true });
   await assert.rejects(plans.enqueue(userId, planId, String(items[0].id), { version: 1, idempotencyKey: queueKey, combineSameRecipe: false }), { code: "MEAL_SOURCE_CONFLICT" });
@@ -48,12 +54,26 @@ export async function verifyCommonProduction(plans: MealPlansRepository, diet: D
   assert.deepEqual(await query("SELECT id FROM diet_records WHERE user_id=? ORDER BY id", [userId]), legacyBefore);
   assert.deepEqual(await query("SELECT id,queue_item_id,version,status FROM meal_plan_items WHERE plan_id=? ORDER BY planned_date", [planId]), linked);
   const queueService = new CookingQueueService(queue);
+  await query("UPDATE recipes SET steps_json='[\"后来改变的步骤\"]' WHERE id=?", [recipeId]);
+  await assert.rejects(queueService.start(queueId, userId, 1), { code: "MEAL_RECIPE_CHANGED" });
+  await assert.rejects(queueService.update(queueId, userId, { version: 1, status: "cooking" }), { code: "MEAL_RECIPE_CHANGED" });
+  assert.equal((await queue.findOwned(queueId, userId))!.status, "waiting");
+  assert.equal(Number((await queue.findOwned(queueId, userId))!.version), 1);
+  await query("UPDATE recipes SET steps_json='[]' WHERE id=?", [recipeId]);
   const started = await queueService.start(queueId, userId, 1);
   await assert.rejects(queueService.complete(queueId, userId, started.version), { code: "COOKING_QUEUE_INVALID_TRANSITION" });
   await assert.rejects(queueService.update(queueId, userId, { version: started.version, status: "completed" }), { code: "COOKING_QUEUE_INVALID_TRANSITION" });
   assert.equal((await queue.findOwned(queueId, userId))!.status, "cooking");
   const input = { idempotency_key: randomUUID(), inventory_item_ids: [], inventory_consumptions: [{ item_id: stockId, version: 1, mode: "amount" as const, amount_value: 3, unit: "piece" as const }],
     production: { food_name: "共用制作回归", produced_servings: 3, eaten_servings: 1, eaten_at: "2099-09-10", meal_type: "晚餐", queue_item_id: queueId, queue_version: started.version, nutrition_per_serving: {} } };
+  const priorStock = await query("SELECT quantity_value,version FROM inventory_items WHERE id=?", [stockId]);
+  await query("UPDATE recipes SET quality_status='needs_review' WHERE id=?", [recipeId]);
+  await assert.rejects(diet.completeCooking(userId, input), { code: "MEAL_RECIPE_CHANGED" });
+  await assert.rejects(plans.complete(userId, planId, String(items[0].id), { version: 4, idempotencyKey: randomUUID(), production: { ...input.production, queue_item_id: undefined, queue_version: undefined } }), { code: "MEAL_RECIPE_CHANGED" });
+  assert.deepEqual(await query("SELECT quantity_value,version FROM inventory_items WHERE id=?", [stockId]), priorStock);
+  assert.equal((await query("SELECT id FROM prepared_meals WHERE queue_item_id=?", [queueId])).length, 0);
+  assert.deepEqual(await query("SELECT id,queue_item_id,version,status FROM meal_plan_items WHERE plan_id=? ORDER BY planned_date", [planId]), linked);
+  await query("UPDATE recipes SET quality_status='trusted' WHERE id=?", [recipeId]);
   await assert.rejects(diet.completeCooking(userId, { ...input, production: { ...input.production, produced_servings: 2 } }), { code: "MEAL_PRODUCTION_INSUFFICIENT" });
   await query("UPDATE meal_plan_items SET version=version+1 WHERE id=?", [String(items[2].id)]);
   await assert.rejects(diet.completeCooking(userId, input), { code: "MEAL_SOURCE_CONFLICT" });
@@ -76,6 +96,8 @@ export async function verifyCommonProduction(plans: MealPlansRepository, diet: D
   assert.deepEqual(made.allocations!.map(row => [row.plannedDate, row.remainingServings]), [["2099-09-11", 1], ["2099-09-12", 1]]);
   assert.equal(Number((await query("SELECT quantity_value FROM inventory_items WHERE id=?", [stockId]))[0].quantity_value), 3);
   assert((await query("SELECT status FROM meal_plan_items WHERE plan_id=?", [planId])).every(row => row.status === "completed"));
+  await query("UPDATE recipes SET steps_json='[\"完成后内容改变\"]' WHERE id=?", [recipeId]);
+  assert.equal((await diet.completeCooking(userId, input)).repeated, true, "committed production replay survives later content changes");
   const fromOtherMeal = await plans.complete(userId, planId, String(items[2].id), { version: 2, idempotencyKey: randomUUID(), production: { ...input.production, queue_item_id: undefined, queue_version: undefined } });
   assert.equal(fromOtherMeal.kind, "completed");
   if (fromOtherMeal.kind === "completed") assert.equal((fromOtherMeal.value.prepared_meal as PreparedMeal).id, made.id);

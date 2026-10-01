@@ -1,3 +1,5 @@
+import { assertPostgresPlanExecution } from "../recipes/postgresRepository.js";
+import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { randomUUID } from "node:crypto";
 import { queueInterventionRequest, validateQueueIntervention } from "./intervention.js";
 import { CookingQueueError } from "./errors.js";
@@ -115,6 +117,7 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
 
   async update(id: string, userId: number, version: number, patch: QueuePatch) {
     const update = async (client: PoolClient) => {
+      await this.assertPlanSource(client, id, userId, version, patch.status);
       const result = await client.query(`UPDATE cooking_queue_items SET status = $1, meal_type = $2, planned_at = $3,
         prepared_ingredients_json = $4::jsonb, shopping_list_synced_at = $5, completed_at = $6,
         version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $7 AND user_id = $8 AND version = $9`,
@@ -126,6 +129,14 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
       return owned(client, id, userId);
     };
     return this.queueTransaction(userId, update);
+  }
+
+  private async assertPlanSource(client: PoolClient, id: string, userId: number, version: number, status: string) {
+    const queue = await owned(client, id, userId);
+    if (!["cooking", "completed"].includes(status) || !queue?.source_plan_item_id || Number(queue.version) !== version || ["completed", "cancelled"].includes(String(queue.status))) return;
+    const rows = (await client.query("SELECT i.*,p.constraints_json AS plan_constraints_json FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=$1 AND i.queue_item_id=$2 AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active' ORDER BY i.id FOR SHARE OF i", [userId, id])).rows as QueueRow[];
+    if (!rows.some(row => row.id === queue.source_plan_item_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "原餐次已变化，请刷新后重新核对");
+    await assertPostgresPlanExecution(client, rows);
   }
 
   async reorder(userId: number, items: Array<{ id: string; version: number }>) {
@@ -155,6 +166,7 @@ export class PostgresCookingQueueRepository implements CookingQueueRepository {
 
   async transition(id: string, userId: number, version: number, status: "cooking" | "completed") {
     return this.queueTransaction(userId, async client => {
+    await this.assertPlanSource(client, id, userId, version, status);
     const result = status === "cooking"
       ? await client.query(`UPDATE cooking_queue_items SET status = 'cooking', planned_at = NULL,
           version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND version = $3`, [id, userId, version])

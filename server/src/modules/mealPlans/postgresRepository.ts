@@ -1,3 +1,5 @@
+import { recipeExecutionProof } from "../recipes/planExecution.js";
+import { assertPostgresPlanExecution } from "../recipes/postgresRepository.js";
 import { commonProduction } from "./commonProduction.js";
 import { cookingEvidenceMatches } from "../recipes/substitutions.js";
 import { PostgresMealAllocationsRepository } from "../mealAllocations/postgresRepository.js";
@@ -69,6 +71,8 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
         recipes.set(recipeId, found.rows[0]);
       }
       if (activation.items.some(item => !cookingEvidenceMatches(item.allocation, recipes.get(item.allocation.substitution?.sourceRecipeId ?? 0), recipes.get(item.recipeId)))) return { kind: "recipe_not_available" as const };
+      Object.assign(activation.constraints, { executionRecipeKeys: Object.fromEntries(activation.items.map(item => [item.id,
+        recipeExecutionProof(recipes.get(item.recipeId)!, recipes.get(item.allocation.substitution?.sourceRecipeId ?? 0))])) });
       for (const item of activation.items) await client.query(`INSERT INTO meal_plan_items
         (id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json,confirmed_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,CURRENT_TIMESTAMP)`, [item.id,id,userId,item.date,item.mealType,item.title,item.recipeId,JSON.stringify(item.ingredients),JSON.stringify(recipes.get(item.recipeId)!.steps_json)]);
@@ -272,8 +276,8 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     if (dining) await validatePostgresDiningPlan(client,userId,input.recipeId === undefined ? current.recipe_id : input.recipeId,dining);
     let replacement: Row | undefined;
     if (input.recipeId !== undefined && input.recipeId !== null) {
-      const selected = await client.query(`SELECT id, title, ingredients_json, steps_json, calories, protein, carbs, fat, serving_size
-        FROM recipes WHERE id = $1 AND status = 'approved' AND deleted_at IS NULL`, [input.recipeId]);
+      const selected = await client.query(`SELECT *
+        FROM recipes WHERE id = $1 AND status = 'approved' AND deleted_at IS NULL FOR SHARE`, [input.recipeId]);
       replacement = selected.rows[0] as Row | undefined;
       if (!replacement) return { kind: "recipe_not_available" as const };
     }
@@ -381,12 +385,14 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       await client.query("SELECT pg_advisory_xact_lock(9471, $1::integer)", [userId]);
       const existing = await client.query(`SELECT id FROM cooking_queue_items WHERE user_id = $1 AND (source_plan_item_id = $2 OR id = $3)
         AND deleted_at IS NULL AND status IN (${activeQueueStatuses})`, [userId, itemId, item.queue_item_id ?? null]);
+      await assertPostgresPlanExecution(client, [item]);
       if (existing.rows[0] && item.queue_item_id === existing.rows[0].id) {
         const value = { queueItemId: String(existing.rows[0].id), added: false, combineSameRecipe: input.combineSameRecipe ?? false, repeated: false };
         await this.saveExecution(client, userId, input.idempotencyKey, "queue", itemId, value);
         return { kind: "completed" as const, value };
       }
       const group = input.combineSameRecipe ? commonProduction(item, (await client.query(`${itemSelect} WHERE i.plan_id=$1 AND i.user_id=$2 AND i.deleted_at IS NULL ORDER BY i.id FOR UPDATE OF i`,[planId,userId])).rows as Row[]) : null;
+      await assertPostgresPlanExecution(client, (await client.query(`${itemSelect} WHERE i.plan_id=$1 AND i.user_id=$2 AND i.deleted_at IS NULL ORDER BY i.id FOR SHARE OF i`, [planId, userId])).rows.filter(row => row.id === itemId || group?.targets.some(target => target.id === row.id)));
       let queueItemId = existing.rows[0]?.id as string | undefined;
       let added = false;
       if (!queueItemId) {
@@ -447,6 +453,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
         return { kind: "completed" as const, value: { dietRecordId: Number(item.diet_record_id), repeated: true } };
       }
       if (item.status === "completed" || Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      await assertPostgresPlanExecution(client, [item]);
       const shared = parseJson<{ productionPlanItems?: unknown[] }>(item.queue_snapshot_json, {}).productionPlanItems;
       if (Array.isArray(shared) && shared.length > 1) throw new InventoryQuantityError("MEAL_SHARED_PRODUCTION_REQUIRED", "这是多餐共用制作，请先保存总产出和实际食用份量；原安排和库存未改变");
       let dietRecordId = input.dietRecordId;

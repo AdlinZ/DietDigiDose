@@ -1,3 +1,4 @@
+import { assertPostgresPlanExecution } from "../recipes/postgresRepository.js";
 import { productionReservations, validateProductionTargets, type ProductionTarget } from "../mealPlans/commonProduction.js";
 import { parseJson } from "../mealPlans/formatters.js";
 import { lockMealPlanning } from "../mealPlans/postgresLock.js";
@@ -243,19 +244,22 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
       [userId, input.idempotency_key, production.queue_item_id ?? null, production.plan_item_id ?? null])).rows[0];
     if (existing) return { ...existing.result_json, repeated: true };
     if (production.queue_item_id) {
-      const row = (await client.query("SELECT version,status,recipe_id,recipe_snapshot_json FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [production.queue_item_id, userId])).rows[0];
+      const row = (await client.query("SELECT version,status,recipe_id,recipe_snapshot_json,source_plan_item_id FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [production.queue_item_id, userId])).rows[0];
       if (!row || Number(row.version) !== production.queue_version || ["completed", "cancelled"].includes(row.status) || (input.recipe_id && Number(row.recipe_id) !== input.recipe_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "制作队列已变化，请刷新后重试");
       if (row.recipe_id != null) input.recipe_id ??= Number(row.recipe_id);
       const targets = parseJson<{ productionPlanItems?: ProductionTarget[] }>(row.recipe_snapshot_json, {}).productionPlanItems;
-      if (targets) {
-        const plans = (await client.query("SELECT i.*,p.status AS plan_status,p.deleted_at AS plan_deleted_at FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=$1 AND i.queue_item_id=$2 ORDER BY i.id FOR UPDATE OF i",[userId,production.queue_item_id])).rows;
-        validateProductionTargets(targets, plans, production, input.recipe_id);
+      if (targets || row.source_plan_item_id) {
+        const plans = (await client.query("SELECT i.*,p.constraints_json AS plan_constraints_json,p.status AS plan_status,p.deleted_at AS plan_deleted_at FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=$1 AND i.queue_item_id=$2 ORDER BY i.id FOR UPDATE OF i",[userId,production.queue_item_id])).rows;
+        if (row.source_plan_item_id && !plans.some(plan => plan.id === row.source_plan_item_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "原餐次已变化，请刷新后重新核对");
+        await assertPostgresPlanExecution(client, plans);
+        if (targets) validateProductionTargets(targets, plans, production, input.recipe_id);
       }
     }
     if (production.plan_item_id) {
-      const row = (await client.query("SELECT i.version,i.status,i.recipe_id,i.dining_json,p.status AS plan_status FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=$1 AND i.user_id=$2 AND i.deleted_at IS NULL AND p.deleted_at IS NULL FOR UPDATE OF i", [production.plan_item_id, userId])).rows[0];
+      const row = (await client.query("SELECT i.*,p.constraints_json AS plan_constraints_json,p.status AS plan_status FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=$1 AND i.user_id=$2 AND i.deleted_at IS NULL AND p.deleted_at IS NULL FOR UPDATE OF i", [production.plan_item_id, userId])).rows[0];
       if (row?.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED", "这是共餐安排，请从家庭制作入口记录产出");
       if (!row || row.plan_status !== "active" || Number(row.version) !== production.plan_version || ["completed", "skipped"].includes(row.status) || (input.recipe_id && Number(row.recipe_id) !== input.recipe_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "餐次已变化，请刷新后重试");
+      await assertPostgresPlanExecution(client, [row]);
       if (row.recipe_id != null) input.recipe_id ??= Number(row.recipe_id);
     }
     return null;

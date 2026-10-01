@@ -1,3 +1,5 @@
+import { assertSqlitePlanExecution } from "../recipes/sqliteRepository.js";
+import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { randomUUID } from "node:crypto";
 import { queueInterventionRequest, validateQueueIntervention } from "./intervention.js";
 import { CookingQueueError } from "./errors.js";
@@ -114,6 +116,7 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
 
   async update(id: string, userId: number, version: number, patch: QueuePatch) {
     return this.database.transaction(() => {
+      this.assertPlanSource(id, userId, version, patch.status);
       const result = this.database.prepare(`
         UPDATE cooking_queue_items SET status = ?, meal_type = ?, planned_at = ?, prepared_ingredients_json = ?,
           shopping_list_synced_at = ?, completed_at = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
@@ -125,6 +128,14 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
       if (patch.status === "cooking") this.recordInterventionStart(id,userId);
       return this.findOwnedRow(id, userId)!;
     })();
+  }
+
+  private assertPlanSource(id: string, userId: number, version: number, status: string) {
+    const queue = this.findOwnedRow(id, userId);
+    if (!["cooking", "completed"].includes(status) || !queue?.source_plan_item_id || Number(queue.version) !== version || ["completed", "cancelled"].includes(String(queue.status))) return;
+    const rows = this.database.prepare("SELECT i.*,p.constraints_json AS plan_constraints_json FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=? AND i.queue_item_id=? AND i.deleted_at IS NULL AND p.deleted_at IS NULL AND p.status='active' ORDER BY i.id").all(userId, id) as QueueRow[];
+    if (!rows.some(row => row.id === queue.source_plan_item_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "原餐次已变化，请刷新后重新核对");
+    assertSqlitePlanExecution(this.database, rows);
   }
 
   async reorder(userId: number, items: Array<{ id: string; version: number }>) {
@@ -152,11 +163,12 @@ export class SqliteCookingQueueRepository implements CookingQueueRepository {
 
   async transition(id: string, userId: number, version: number, status: "cooking" | "completed") {
     return this.database.transaction(() => {
-    const result = status === "cooking"
-      ? this.database.prepare(`UPDATE cooking_queue_items SET status = 'cooking', planned_at = NULL,
-          version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ?`).run(id, userId, version)
-      : this.database.prepare(`UPDATE cooking_queue_items SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
-          version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ?`).run(id, userId, version);
+    this.assertPlanSource(id, userId, version, status);
+    const result = this.database.prepare(`UPDATE cooking_queue_items SET status = ?,
+        planned_at = CASE WHEN ? = 'cooking' THEN NULL ELSE planned_at END,
+        completed_at = CASE WHEN ? = 'completed' THEN CURRENT_TIMESTAMP ELSE completed_at END,
+        version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND version = ?`)
+      .run(status, status, status, id, userId, version);
     if (result.changes !== 1) return null;
     if (status === "cooking") this.recordInterventionStart(id,userId);
     return this.findOwnedRow(id, userId)!;

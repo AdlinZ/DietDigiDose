@@ -1,3 +1,4 @@
+import { assertPlanExecution, planExecutionRecipeIds } from "./planExecution.js";
 import type { Pool, PoolClient } from "pg";
 import type { RecipesRepository } from "./repository.js";
 import type { PublicRecipeQuery, RecipeRequirementWrite, RecipeSubmissionWrite, Row } from "./types.js";
@@ -172,4 +173,10 @@ export class PostgresRecipesRepository implements RecipesRepository {
       }
     }
   }
+}
+
+export async function assertPostgresPlanExecution(client: PoolClient, items: Row[]) {
+  const ids = planExecutionRecipeIds(items);
+  const rows = ids.length ? (await client.query("SELECT * FROM recipes WHERE id=ANY($1::integer[]) ORDER BY id FOR SHARE", [ids])).rows as Row[] : [];
+  assertPlanExecution(items, new Map(rows.map(row => [Number(row.id), row])));
 }

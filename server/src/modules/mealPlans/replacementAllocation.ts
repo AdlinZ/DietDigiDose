@@ -1,3 +1,4 @@
+import { recipeExecutionProof } from "../recipes/planExecution.js";
 import { recipeDemands } from "../recommendations/quantities.js";
 import { ingredient, parseJson, type Row } from "./formatters.js";
 
@@ -15,8 +16,10 @@ export function replacementAllocation(current: Row, replacement: Row) {
   if (!demands || demands.some(demand => !Number.isFinite(demand.amount_value) || Number(demand.amount_value.toFixed(6))<=0)) return null;
   const units: Record<string,string> = { piece: "个",serving: "份",bag: "袋",box: "盒",bottle: "瓶",can: "罐" };
   const scaled = demands.map(demand => ({ name: demand.food_name,amount: `${Number(demand.amount_value.toFixed(6))}${units[demand.unit] ?? demand.unit}` }));
+  const { substitution: _previousSubstitution, ...ordinary } = allocation;
   return { ingredients: scaled,constraints: { ...constraints,
-    executionItems: { ...executions,[String(current.id)]: { ...allocation,recipeId: Number(replacement.id),title: String(replacement.title),recipeYield: yieldSize,demands } } as Record<string,Row>,
+    executionItems: { ...executions,[String(current.id)]: { ...ordinary,recipeId: Number(replacement.id),title: String(replacement.title),recipeYield: yieldSize,demands } } as Record<string,Row>,
+    executionRecipeKeys: { ...(constraints.executionRecipeKeys as Record<string, unknown> ?? {}), [String(current.id)]: recipeExecutionProof(replacement) },
     executionNeedsRevalidation: true,
   } };
 }

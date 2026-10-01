@@ -25,6 +25,39 @@ const kitchenware = {
   evaluateRequirements: async () => ({ requirements: [], blocking: [] }),
 };
 
+test("reviewed full plans recompute parallel time on replacement and keep weekly sessions separate", async () => {
+  const { executionFixture } = await import("./helpers/recipeExecution.js");
+  const { executionRecipeKey } = await import("../src/modules/recipes/execution.js");
+  const { replaceCookingDraft } = await import("../src/modules/recommendations/plan.js");
+  const { cookingPlanDraftSchema } = await import("@dietdigidose/contracts");
+  const rows = [1, 2].map(id => {
+    const row = { id, title: `排程菜${id}`, serving_size: 2, cook_time: 10, prep_time: 5, ingredients_json: [{ name: "番茄", amount: "2个" }],
+      steps_json: ["准备", "烹饪", "收尾"], required_kitchenware_json: [], optional_kitchenware_json: [] };
+    return { ...row, execution_json: { recipeKey: executionRecipeKey(row), reviewedBy: 1, reviewedAt: "2026-10-01T00:00:00Z",
+      profile: { ...executionFixture, tools: [{ ...executionFixture.tools[0], catalogId: id }] } } };
+  });
+  const devices = rows.map(row => ({ id: row.id, catalog_id: row.id, name: `测试锅${row.id}`, attributes_json: { capacityMl: 1000 } }));
+  const stock = [{ id: 1, food_name: "番茄", quantity_value: 100, quantity_unit: "piece", expiration_date: "2099-12-31", version: 1 }];
+  const service = new RecommendationsService(repository({ recipes: async () => rows, kitchenware: async () => devices, inventory: async () => stock }), kitchenware);
+  const draft = await service.cookingPlan(7, { excludedPreparedMealIds: [], preferences: { meal_time_minutes: 30 }, meals: [
+    { id: "dinner", date: "2099-01-01", mealType: "dinner", servings: 2 },
+    { id: "lunch", date: "2099-01-02", mealType: "lunch", servings: 2 },
+  ] });
+  assert.equal(draft.time.schedule?.elapsedMinutes, 22); assert.equal(draft.time.exceedsBudget, false);
+  const computed = await service.compute(7, { surface: "meal_plan", maxCookTime: 30 });
+  const first = draft.cooking[0], second = draft.cooking[1]; assert.notEqual(first.recipeId, second.recipeId);
+  const replacement = replaceCookingDraft(draft, second.targetMealId, first.recipeId, computed.results, stock, [], devices);
+  assert.equal(replacement.draft.time.schedule?.elapsedMinutes, 34); assert.equal(replacement.draft.time.exceedsBudget, true);
+  assert(replacement.conflicts.some(conflict => conflict.includes("34")));
+  const weekly = await service.weeklyPlan(7, { startDate: "2099-01-01", mealTypes: ["dinner"], servings: 2 });
+  assert.equal(weekly.draft?.time.incomplete, false); assert.equal(weekly.draft?.time.schedule, undefined);
+  assert.equal(weekly.draft?.time.sessions?.length, 7); assert(weekly.draft?.time.sessions?.every(session => session.schedule.elapsedMinutes === 17));
+  assert(weekly.draft);
+  assert.equal(cookingPlanDraftSchema.safeParse({ ...weekly.draft, time: { ...weekly.draft.time, sessions: [...weekly.draft.time.sessions!, weekly.draft.time.sessions![0]] } }).success, false);
+  const over = await service.weeklyPlan(7, { startDate: "2099-01-01", mealTypes: ["dinner"], servings: 3 });
+  assert.equal(over.draft?.time.incomplete, true); assert(over.draft?.time.sessions?.every(session => !session.schedule.complete));
+});
+
 describe("recommendations module", () => {
   test('reference catalogue recipes are not automatic nutrition recommendation candidates', async () => {
     const db = new Database(':memory:');

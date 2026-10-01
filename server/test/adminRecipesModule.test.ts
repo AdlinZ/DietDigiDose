@@ -10,7 +10,7 @@ function repository(overrides: Partial<AdminRecipesRepository> = {}): AdminRecip
     duplicateSources: async () => [], create: async () => 1, update: async () => false, find: async () => null,
     replaceKitchenware: async () => false, scanDuplicates: async () => undefined,
     coverage: async () => ({ byCategory: [], byDifficulty: [], byTime: [], sources: [], qualityFailures: [], duplicates: [], baselines: [] }),
-    approve: async () => false, reviewQuality: async () => false, reject: async () => false, remove: async () => false,
+    approve: async () => false, reviewQuality: async () => false, reviewExecution: async () => false, reject: async () => false, remove: async () => false,
     ...overrides,
   };
 }

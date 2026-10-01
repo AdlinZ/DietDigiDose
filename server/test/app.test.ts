@@ -4875,3 +4875,28 @@ test("same-session cooking shares production across meal plans atomically", asyn
     finally { db.exec("DROP TRIGGER common_production_failure"); }
   });
 });
+
+test("reviewed execution persists atomically and changed recipes invalidate scheduling evidence", async () => {
+  const { verifyRecipeExecution } = await import("./helpers/recipeExecution.js");
+  const { AdminRecipesService } = await import("../src/modules/adminRecipes/service.js");
+  const { SqliteAdminRecipesRepository } = await import("../src/modules/adminRecipes/sqliteRepository.js");
+  const { RecipesService } = await import("../src/modules/recipes/service.js");
+  const { SqliteRecipesRepository } = await import("../src/modules/recipes/sqliteRepository.js");
+  const { RecommendationsService } = await import("../src/modules/recommendations/service.js");
+  const { SqliteRecommendationsRepository } = await import("../src/modules/recommendations/sqliteRepository.js");
+  const { KitchenwareService } = await import("../src/modules/kitchenware/service.js");
+  const { SqliteKitchenwareRepository } = await import("../src/modules/kitchenware/sqliteRepository.js");
+  const kitchenware = new KitchenwareService(new SqliteKitchenwareRepository(db));
+  const adminId = Number((db.prepare("SELECT id FROM users WHERE username='admin'").get() as JsonObject).id);
+  await verifyRecipeExecution(new AdminRecipesService(new SqliteAdminRecipesRepository(db), kitchenware),
+    new RecipesService(new SqliteRecipesRepository(db), kitchenware), new RecommendationsService(new SqliteRecommendationsRepository(db), kitchenware),
+    kitchenware, adminId, async (sql, values = []) => {
+      const statement = db.prepare(sql);
+      if (statement.reader) return statement.all(...values) as Record<string, unknown>[];
+      statement.run(...values); return [];
+    });
+  const account = await register("execution-acl@example.com");
+  for (const method of ["GET", "PUT"]) assert.equal((await api("/api/v1/admin/recipes/1/execution", {
+    token: account.token, method, ...(method === "PUT" ? { body: "{}" } : {}),
+  })).response.status, 403);
+});

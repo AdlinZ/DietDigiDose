@@ -77,7 +77,7 @@ export class RecommendationsService {
         if (meal.cookServings === 0) items.push({ id: `prepared-plan:${plan.id}:${meal.id}`,planned_date: meal.date,meal_type: meal.mealType,title: meal.allocations.map(item => item.foodName).join("、"),prepared_only: true,status: "planned" });
       }
     }
-    return buildWeeklyPlan(request,computed.profile.kitchen,computed.results,stock,batches.map(formatPreparedMeal),items,state.shopping,reservations);
+    return buildWeeklyPlan(request,computed.profile.kitchen,computed.results,stock,batches.map(formatPreparedMeal),items,state.shopping,reservations, await this.repository.kitchenware(userId));
   }
 
   async planRequirements(userId: number, input: MealPlanRequirementsInput) {
@@ -92,7 +92,7 @@ export class RecommendationsService {
   async cookingPlan(userId: number, input: MealPlanRequirementsInput) {
     const requirements = await this.planRequirements(userId, input);
     const candidates = await this.compute(userId, { surface: "meal_plan" }, input.preferences);
-    return cookingPlanDraftSchema.parse({ ...buildCookingDraft(requirements, candidates.results, await this.repository.inventory(userId), candidates.timeBudget!),
+    return cookingPlanDraftSchema.parse({ ...buildCookingDraft(requirements, candidates.results, await this.repository.inventory(userId), candidates.timeBudget!, await this.repository.kitchenware(userId)),
       effectivePreferences: candidates.profile.kitchen });
   }
 
@@ -101,7 +101,7 @@ export class RecommendationsService {
     const candidates = await this.compute(userId, { surface: "meal_plan" }, request.draft.effectivePreferences);
     const dates = request.draft.meals.map(meal => meal.date).sort();
     const existing = request.draft.planningMode === "weekly" ? (await this.repository.planningState(userId,weeklyHistoryStart(request.draft),request.draft.shoppingWindow?.endDate ?? dates[dates.length-1])).items : [];
-    return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId),existing);
+    return replaceCookingDraft(request.draft, request.targetMealId, request.recipeId, candidates.results, await this.repository.inventory(userId),existing, await this.repository.kitchenware(userId));
   }
 
   versions() { return { scoringVersion: RECIPE_SCORING_VERSION, candidateVersion: RECIPE_CANDIDATE_VERSION }; }

@@ -1,4 +1,5 @@
 import { weeklyShoppingWindow } from "./shoppingWindow.js";
+import { scheduleCooking } from "./schedule.js";
 import { createPlanningBudget } from "./planningBudget.js";
 import { currentDateKey } from "../../utils/date.js";
 import { unexpiredInventory } from "./inventoryAvailability.js";
@@ -14,14 +15,30 @@ type Candidate = ReturnType<typeof scoreRecipeRecommendations>["results"][number
 type Demand = { food_name: string; amount_value: number; unit: InventoryUnit };
 const demands = (candidate: Candidate, portions: number) => recipeDemands(candidate.recipe.ingredients, candidate.recipe.serving_size, portions);
 
-export function buildCookingDraft(requirements: ReturnType<typeof allocatePreparedMeals>, candidates: Candidate[], inventory: Row[], timeBudget: number) {
+export function planTime(cooking: CookingPlanDraft["cooking"], candidates: Candidate[], devices: Row[], budgetMinutes: number, prepared = false, unresolved = false) {
+  const unavailable = cooking.filter(item => !candidates.some(candidate => candidate.recipeId === item.recipeId));
+  const schedule = scheduleCooking(cooking.flatMap(item => {
+    const recipe = candidates.find(candidate => candidate.recipeId === item.recipeId)?.recipe;
+    return recipe ? [{ ...item, recipe }] : [];
+  }), devices);
+  schedule.missing.push(...unavailable.map(item => `recipe_unavailable:${item.recipeId}`));
+  if (prepared) schedule.missing.push("prepared_reheating_time");
+  if (unresolved) schedule.missing.push("unresolved_cooking");
+  if (schedule.missing.length) { schedule.complete = false; schedule.elapsedMinutes = null; }
+  const preparationUnknown = cooking.some(item => { const recipe = candidates.find(candidate => candidate.recipeId === item.recipeId)?.recipe;
+    return !recipe || (!recipe.execution_profile && (!recipe.cook_time || recipe.prep_time == null)); });
+  return { budgetMinutes, knownSequentialMinutes: schedule.sequentialMinutes,
+    exceedsBudget: (schedule.elapsedMinutes ?? schedule.sequentialMinutes) > budgetMinutes,
+    isEstimate: true, incomplete: !schedule.complete,
+    missing: [...(schedule.complete ? [] : ["cleanup", "equipment_capacity"]), ...(preparationUnknown ? ["preparation_or_cooking"] : []), ...schedule.missing].slice(0, 50), schedule };
+}
+
+export function buildCookingDraft(requirements: ReturnType<typeof allocatePreparedMeals>, candidates: Candidate[], inventory: Row[], timeBudget: number, devices: Row[] = []) {
   const stock = unexpiredInventory(inventory, currentDateKey()).map(item => ({ id: item.id, food_name: item.food_name, quantity_evidence_status: item.quantity_evidence_status as "known" | "estimated" | "unknown" | undefined, quantity_value: item.quantity_value,
     quantity_unit: item.quantity_unit, expiration_date: item.expiration_date, batch_code: item.batch_code, version: item.version }));
   const planned: Array<{ targetMealId: string; recipeId: number; title: string; servings: number; recipeYield: number; demands: Demand[] }> = [];
   const unresolved: Array<{ targetMealId: string; reason: string }> = [];
   let budget: Demand[] = [];
-  let knownTime = 0;
-  let timeUnknown = false;
   for (const target of requirements.meals) {
     if (target.cookServings <= 0) continue;
     const choices = candidates.flatMap(candidate => {
@@ -31,8 +48,9 @@ export function buildCookingDraft(requirements: ReturnType<typeof allocatePrepar
       // Compare unmet demand items, never add incompatible mass/count quantities.
       const unresolvedCount = preview.filter(item => !item.fully_covered).length;
       const unknownCount = preview.filter(item => item.quantity_status === "unknown").length;
-      const addedTime = (candidate.recipe.cook_time + (candidate.recipe.prep_time ?? 0)) * Math.ceil(target.cookServings / candidate.recipe.serving_size!);
-      return [{ candidate, needed, unresolvedCount, unknownCount, exceedsTime: knownTime + addedTime > timeBudget }];
+      const time = planTime([...planned, { targetMealId: target.id, recipeId: candidate.recipeId, title: candidate.recipe.title,
+        servings: target.cookServings, recipeYield: candidate.recipe.serving_size!, demands: needed }], candidates, devices, timeBudget);
+      return [{ candidate, needed, unresolvedCount, unknownCount, exceedsTime: time.exceedsBudget }];
     }).sort((a, b) => Number(a.exceedsTime) - Number(b.exceedsTime) || a.unresolvedCount - b.unresolvedCount || a.unknownCount - b.unknownCount || b.candidate.score - a.candidate.score);
     const chosen = choices[0];
     if (!chosen) { unresolved.push({ targetMealId: target.id, reason: "没有通过候选约束且有明确份数与原料用量的菜谱" }); continue; }
@@ -40,20 +58,19 @@ export function buildCookingDraft(requirements: ReturnType<typeof allocatePrepar
     budget = [...budget, ...chosen.needed];
     planned.push({ targetMealId: target.id, recipeId: chosen.candidate.recipeId, title: recipe.title,
       servings: target.cookServings, recipeYield: recipe.serving_size!, demands: chosen.needed });
-    const batches = Math.ceil(target.cookServings / recipe.serving_size!);
-    knownTime += (recipe.cook_time + (recipe.prep_time ?? 0)) * batches;
-    if (!recipe.cook_time || recipe.prep_time == null) timeUnknown = true;
   }
   const ingredientBudget = buildFefoConsumptionPreviewFromCandidates(stock, budget);
+  const time = planTime(planned, candidates, devices, timeBudget, requirements.meals.some(meal => meal.preparedServings > 0));
+  if (unresolved.length) { time.incomplete = true; time.schedule.complete = false; time.schedule.elapsedMinutes = null;
+    time.schedule.missing.push("unresolved_cooking"); time.missing.push("unresolved_cooking"); }
   return { ...requirements, cooking: planned, unresolved, ingredientBudget,
-    time: { budgetMinutes: timeBudget, knownSequentialMinutes: knownTime, exceedsBudget: knownTime > timeBudget,
-      isEstimate: true, incomplete: true, missing: ["cleanup", "equipment_capacity", ...(timeUnknown ? ["preparation_or_cooking"] : [])] },
+    time,
     status: "requires_validation" as const,
     checksPending: [...requirements.checksPending, "storage_and_carry_suitability", "substitution_validation", "execution_stock_refresh"] };
 }
 
 /** Reprice the entire draft while changing exactly one cooking entry. */
-export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: string, recipeId: number | undefined, candidates: Candidate[], inventory: Row[], existing: Row[] = []) {
+export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: string, recipeId: number | undefined, candidates: Candidate[], inventory: Row[], existing: Row[] = [], devices: Row[] = []) {
   const shoppingWindow = draft.planningMode === "weekly" ? weeklyShoppingWindow(draft,existing) : undefined;
   const targets = draft.cooking.filter(item => item.targetMealId === targetMealId);
   if (targets.length !== 1) throw new RecommendationsError(409, "请先指定唯一需要替换的新做菜", "COOKING_PLAN_TARGET_AMBIGUOUS");
@@ -69,20 +86,17 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
       batch_code: item.batch_code, version: item.version })), cooking.flatMap(item => item.demands));
     const weeklyBudget = draft.planningMode === "weekly" ? createPlanningBudget(inventory,existing.filter(item => !shoppingWindow || String(item.planned_date)>=shoppingWindow.startDate),shoppingWindow) : null;
     const ingredientBudget = weeklyBudget ? [...draft.meals].sort((a,b) => a.date.localeCompare(b.date) || ["breakfast","lunch","dinner","snack"].indexOf(a.mealType)-["breakfast","lunch","dinner","snack"].indexOf(b.mealType)).flatMap(meal => weeklyBudget.consume(cooking.filter(item => item.targetMealId === meal.id).flatMap(item => item.demands),meal.date,meal.id)) : singleBudget;
-    const missingTime: string[] = [];
-    let knownTime = 0;
-    let sessionExceeds = false;
-    for (const item of cooking) {
-      const current = candidates.find(entry => entry.recipeId === item.recipeId);
-      if (!current) { missingTime.push(item.title); continue; }
-      const recipe = current.recipe;
-      const sessionTime = (recipe.cook_time + (recipe.prep_time ?? 0)) * Math.ceil(item.servings / item.recipeYield);
-      knownTime += sessionTime;
-      if (draft.planningMode === "weekly" && sessionTime > (draft.time.sessionBudgetMinutes ?? draft.time.budgetMinutes)) sessionExceeds = true;
-      if (!recipe.cook_time || recipe.prep_time == null) missingTime.push(item.title);
+    const sessions = draft.planningMode === "weekly" ? draft.meals.map(meal => ({ targetMealId: meal.id,
+      time: planTime(cooking.filter(item => item.targetMealId === meal.id), candidates, devices, draft.time.sessionBudgetMinutes ?? draft.time.budgetMinutes, meal.preparedServings > 0, draft.unresolved.some(item => item.targetMealId === meal.id)) })) : [];
+    let time: CookingPlanDraft["time"] = planTime(cooking, candidates, devices, draft.time.budgetMinutes, draft.meals.some(meal => meal.preparedServings > 0), draft.unresolved.length > 0);
+    if (sessions.length) {
+      const { schedule: _schedule, ...totals } = time;
+      const elapsed = sessions.every(session => !session.time.incomplete) ? sessions.reduce((sum, session) => sum + session.time.schedule.elapsedMinutes!, 0) : time.knownSequentialMinutes;
+      time = { ...totals, incomplete: sessions.some(session => session.time.incomplete), exceedsBudget: elapsed > draft.time.budgetMinutes,
+        sessions: sessions.map(session => ({ targetMealId: session.targetMealId, schedule: session.time.schedule })) };
     }
-    return [{ cooking, ingredientBudget, knownTime, missingTime, sessionExceeds, weeklyBudget, score: candidate.score,
-      exceedsBudget: knownTime > draft.time.budgetMinutes,
+    return [{ cooking, ingredientBudget, time, sessionExceeds: sessions.some(session => session.time.exceedsBudget), weeklyBudget, score: candidate.score,
+      exceedsBudget: time.exceedsBudget,
       shortageCount: ingredientBudget.filter(item => !item.fully_covered).length }];
   }).sort((a, b) => Number(a.exceedsBudget || a.sessionExceeds) - Number(b.exceedsBudget || b.sessionExceeds) || a.shortageCount - b.shortageCount || b.score - a.score);
   const chosen = choices[0];
@@ -94,11 +108,10 @@ export function replaceCookingDraft(draft: CookingPlanDraft, targetMealId: strin
     else if (!item.fully_covered) conflicts.push(`${item.food_name} 的整套需求超过已知库存`);
   }
   if (chosen.sessionExceeds) conflicts.push(`替换后的单次制作超过 ${draft.time.sessionBudgetMinutes} 分钟上限`);
-  if (chosen.exceedsBudget) conflicts.push(`整套已知顺序耗时 ${chosen.knownTime} 分钟，超过 ${draft.time.budgetMinutes} 分钟上限`);
-  if (chosen.missingTime.length) conflicts.push(`无法核实这些保留菜谱的完整时间或当前可用条件：${chosen.missingTime.join("、")}`);
+  if (chosen.exceedsBudget) conflicts.push(`整套${chosen.time.incomplete ? "已知顺序" : "排程"}耗时 ${chosen.time.schedule?.elapsedMinutes ?? chosen.time.knownSequentialMinutes} 分钟，超过 ${draft.time.budgetMinutes} 分钟上限`);
+  if (chosen.time.incomplete) conflicts.push("替换后的完整制作时间或设备容量仍需核实");
   return { draft: cookingPlanDraftSchema.parse({ ...draft, ...(shoppingWindow ? { shoppingWindow } : {}), cooking: chosen.cooking, ingredientBudget: chosen.ingredientBudget,
-    time: { ...draft.time, knownSequentialMinutes: chosen.knownTime, exceedsBudget: chosen.exceedsBudget,
-      incomplete: true, isEstimate: true, missing: [...new Set([...draft.time.missing, ...chosen.missingTime.map(title => `recipe:${title}`)])] },
+    time: { ...chosen.time, sessionBudgetMinutes: draft.time.sessionBudgetMinutes },
     weeklyShopping: chosen.weeklyBudget ? [...chosen.weeklyBudget.aggregate.values()] : draft.weeklyShopping,
     checksPending: [...new Set([...draft.checksPending,...conflicts])].slice(0,50),
     status: "requires_validation" }), shopping: chosen.weeklyBudget ? [...chosen.weeklyBudget.aggregate.values()] : undefined, conflicts: [...new Set(conflicts)] };

@@ -2841,6 +2841,12 @@ try {
 
 
 
+  const { verifyRecipeExecution } = await import("./helpers/recipeExecution.js");
+  await verifyRecipeExecution(adminRecipesService, recipesService, recommendationsService, kitchenwareService, user.id, async (sql, values = []) => {
+    let parameter = 0;
+    return (await pool.query(sql.replace(/\?/g, () => `$${++parameter}`), values)).rows;
+  });
+
   console.log(JSON.stringify({
     ok: true,
     tables: report.tableCount,

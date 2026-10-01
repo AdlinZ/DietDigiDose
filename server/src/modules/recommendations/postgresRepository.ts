@@ -23,8 +23,9 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
     kitchen_constraints_json, nutrition_targets_json, updated_at FROM user_health_profiles WHERE user_id = $1`, [userId])).rows[0] as Row | undefined) || null; }
   async inventory(userId: number): Promise<Row[]> { const rows = (await this.pool.query(`SELECT id, food_name, expiration_date, updated_at, quantity_value, quantity_unit, batch_code, version, (SELECT metadata_json FROM inventory_change_logs e WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id AND e.metadata_json->'field_evidence'->>'quantity' IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence FROM inventory_items
     WHERE user_id = $1 AND is_available = TRUE AND deleted_at IS NULL ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date, id`, [userId])).rows as Row[]; return rows.map(row => ({ ...row, quantity_evidence_status: quantityEvidenceStatus(row.quantity_evidence, row.version) })); }
-  async kitchenware(userId: number) { return (await this.pool.query(`SELECT name, updated_at FROM kitchenware_items
-    WHERE user_id = $1 AND deleted_at IS NULL AND status <> '维修中' ORDER BY id`, [userId])).rows as Row[]; }
+  async kitchenware(userId: number) { return (await this.pool.query(`SELECT k.id, k.name, k.updated_at, k.attributes_json,
+    (SELECT c.id FROM kitchenware_catalog c WHERE c.quality_status='trusted' AND (c.id=k.catalog_id OR (k.catalog_id IS NULL AND c.name=k.name)) LIMIT 1) AS catalog_id
+    FROM kitchenware_items k WHERE k.user_id = $1 AND k.deleted_at IS NULL AND k.status <> '维修中' ORDER BY k.id`, [userId])).rows as Row[]; }
   async recipes(query: RecipeQuery) {
     const filters = ["deleted_at IS NULL", "status = 'approved'", "COALESCE(quality_status, 'trusted') NOT IN ('needs_review','reference')"];
     const params: Array<string | number> = [];
@@ -32,7 +33,7 @@ export class PostgresRecommendationsRepository implements RecommendationsReposit
     if (query.category && query.category !== "全部" && query.category !== "冰箱可做") filters.push(`category = ${parameter(query.category)}`);
     if (query.search) { const term = parameter(`%${query.search}%`); filters.push(`(title ILIKE ${term} OR description ILIKE ${term}
       OR tags::text ILIKE ${term} OR ingredients_json::text ILIKE ${term})`); }
-    if (query.timeBudget) filters.push(`cook_time <= ${parameter(query.timeBudget)}`);
+    if (query.timeBudget) filters.push(`(cook_time <= ${parameter(query.timeBudget)} OR execution_json IS NOT NULL)`);
     return (await this.pool.query(`SELECT * FROM recipes WHERE ${filters.join(" AND ")} ORDER BY id`, params)).rows as Row[];
   }
   async favoriteRecipeIds(userId: number) { return (await this.pool.query("SELECT recipe_id FROM recipe_favorites WHERE user_id = $1", [userId])).rows.map((row) => Number(row.recipe_id)); }

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { recipeExecutionReviewSchema } from "@dietdigidose/contracts";
+import { executionRecipeKey, executionReviewKey, reviewedExecution } from "../recipes/execution.js";
 import { recipeMinutesSchema } from "../../utils/recipeMinutes.js";
 import { decodeCursor, encodeCursor } from "../../utils/cursor.js";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
@@ -10,6 +12,7 @@ type CatalogResolver = {
   resolveCatalog(rawName: string): Promise<{
     id: number;
     confidence: number;
+    qualityStatus?: string;
     capabilities: Array<{ code: string }>;
   } | null>;
 };
@@ -154,6 +157,41 @@ export class AdminRecipesService {
   }
 
   coverage() { return this.repository.coverage(); }
+
+  async execution(recipeId: number) {
+    const recipe = await this.repository.find(recipeId);
+    if (!recipe) throw new AdminRecipesError(404, "食谱未找到");
+    return { recipeKey: executionRecipeKey(recipe), reviewKey: executionReviewKey(recipe), execution: reviewedExecution(recipe) };
+  }
+
+  async reviewExecution(adminUserId: number, recipeId: number, body: Row, context: AuditContext) {
+    const input = recipeExecutionReviewSchema.parse(body);
+    const recipe = await this.repository.find(recipeId);
+    if (!recipe) throw new AdminRecipesError(404, "食谱未找到");
+    if (input.recipeKey !== executionRecipeKey(recipe) || input.reviewKey !== executionReviewKey(recipe)) throw new AdminRecipesError(409, "食谱内容或制作审核已改变，请重新核对", "RECIPE_EXECUTION_CONFLICT");
+    if (input.profile) {
+      if (input.profile.maxBatchServings > Number(recipe.serving_size || 0)) throw new AdminRecipesError(400, "批次份量不能超过菜谱已声明产出，请先核对菜谱份数");
+      const reviewedCapabilities = new Set<string>();
+      for (const tool of input.profile.tools) {
+        const catalog = await this.catalog.resolveCatalog(tool.name);
+        if (!catalog || catalog.confidence !== 1 || catalog.id !== tool.catalogId || (catalog.qualityStatus && catalog.qualityStatus !== "trusted")) throw new AdminRecipesError(400, `请为「${tool.name}」选择已审核的厨具目录项`);
+        for (const capability of catalog.capabilities) reviewedCapabilities.add(capability.code);
+      }
+      for (const required of parseArray(recipe.required_kitchenware_json)) {
+        const name = typeof required === "string" ? required : String((required as Row)?.name || "");
+        const capability = typeof required === "object" && required ? String((required as Row).capabilityCode || "") : "";
+        const catalog = name ? await this.catalog.resolveCatalog(name) : null;
+        if ((name ? !catalog || !input.profile.tools.some(tool => tool.catalogId === catalog.id) : !capability)
+          || (capability && !reviewedCapabilities.has(capability))) throw new AdminRecipesError(400, `制作流程尚未覆盖所需厨具「${name || capability || "未映射设备"}」`);
+      }
+    }
+    const execution = input.profile ? { recipeKey: input.recipeKey, profile: input.profile, reviewedBy: adminUserId, reviewedAt: new Date().toISOString() } : null;
+    if (!await this.repository.reviewExecution(recipeId, execution, recipe, audit({ ...context, adminUserId }, {
+      action: "recipe.execution_review", resourceId: recipeId, summary: `${execution ? "审核制作流程" : "撤销制作流程审核"}：${recipe.title}`,
+      details: { recipeKey: input.recipeKey, reference: input.profile?.reference ?? null },
+    }))) throw new AdminRecipesError(409, "食谱内容已改变，请重新核对制作流程", "RECIPE_EXECUTION_CONFLICT");
+    return { success: true, execution, reviewKey: executionReviewKey({ ...recipe, execution_json: execution }) };
+  }
 
   async approve(adminUserId: number, recipeId: number, context: AuditContext) {
     const recipe = await this.repository.find(recipeId);

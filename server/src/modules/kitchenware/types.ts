@@ -16,6 +16,7 @@ export type StoredKitchenwareInput = KitchenwareInput & {
 };
 
 export type ResolvedCatalog = {
+  qualityStatus?: string;
   id: number;
   name: string;
   category: string;

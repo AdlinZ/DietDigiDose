@@ -190,7 +190,7 @@ function CookingPlanForm() {
         <Text className="font-black text-ink">替换预览 · 其余安排保留</Text>
         {replacement.draft.cooking.filter(item => result?.cooking.find(old => old.targetMealId === item.targetMealId)?.recipeId !== item.recipeId).map(item => <Text key={item.targetMealId} className="text-ink">改为 {item.title} {item.servings} 份</Text>)}
         {replacement.conflicts.map(message => <Text key={message} className="text-danger">{message}</Text>)}
-        <Text className="text-copy-muted">整套已知顺序耗时 {replacement.draft.time.knownSequentialMinutes} 分钟，完整时间与存放条件仍需核对。</Text>
+        <Text className="text-copy-muted">整套{replacement.draft.time.schedule?.complete ? "排程" : "已知顺序"}耗时 {replacement.draft.time.schedule?.elapsedMinutes ?? replacement.draft.time.knownSequentialMinutes} 分钟，制作前仍需核对当前条件。</Text>
         <TouchableOpacity onPress={() => { setResult(replacement.draft); setReplacement(null); setSaved(false); saveId.current = Crypto.randomUUID(); }}><Text className="font-bold text-brand">采用这次替换草案</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => setReplacement(null)}><Text className="text-copy-muted">保留原方案</Text></TouchableOpacity>
       </View> : null}
@@ -199,7 +199,9 @@ function CookingPlanForm() {
         <TouchableOpacity disabled={saved || saving || loading || !!replacement} onPress={() => void save()} className="rounded-xl bg-brand-fill p-3 items-center"><Text className="font-bold text-white">{saving ? "正在保存" : saved ? "已保存 · 可从餐单恢复" : "保存此方案草案"}</Text></TouchableOpacity>
         <Text className="text-copy-muted">保存的是计算时的方案；库存变化后请重新核对。</Text>
         {saved ? <TouchableOpacity disabled={saving || loading || activated || !!replacement || !!result.unresolved.length} onPress={() => void activate()} className="rounded-xl bg-brand-soft p-3"><Text className="font-bold text-brand">{activated ? "已转为餐单 · 从餐单开始制作" : "转为餐单，选择要制作的菜"}</Text></TouchableOpacity> : null}
-        <View className="rounded-2xl bg-warm-soft p-4 gap-2"><Text className="font-black text-ink">方案草案 · 还需核对</Text><Text className="text-copy-muted">{result.planningMode === "weekly" ? "各餐分次制作，累计已知耗时约" : "已知顺序耗时约"} {result.time.knownSequentialMinutes} 分钟，{result.planningMode === "weekly" ? `单次上限 ${result.time.sessionBudgetMinutes} 分钟` : `上限 ${result.time.budgetMinutes} 分钟`}{result.time.exceedsBudget ? "，已超时" : ""}。尚未计入完整收尾、设备安排；保鲜、携带和加热条件也需核实。</Text></View>
+        <View className="rounded-2xl bg-warm-soft p-4 gap-2"><Text className="font-black text-ink">方案草案 · 还需核对</Text><Text className="text-copy-muted">{result.planningMode === "weekly" ? "各餐分次制作，累计已知顺序耗时约" : result.time.schedule?.complete ? "整套排程上限约" : "已知顺序耗时约"} {result.time.schedule?.elapsedMinutes ?? result.time.knownSequentialMinutes} 分钟，{result.planningMode === "weekly" ? `单次上限 ${result.time.sessionBudgetMinutes} 分钟` : `上限 ${result.time.budgetMinutes} 分钟`}{result.time.exceedsBudget ? "，已超时" : ""}。{result.time.incomplete ? "完整收尾、设备安排或加热时间仍需核对。" : "具体制作顺序与并行安排见排程。"}保鲜、携带和加热适用条件也需核实。</Text></View>
+        {result.time.schedule ? <CookingSchedulePanel schedule={result.time.schedule} titles={Object.fromEntries(result.cooking.map(item => [item.recipeId, item.title]))} /> : null}
+        {result.time.sessions?.map(session => <View key={session.targetMealId} className="gap-2"><Text className="font-bold text-ink">{result.meals.find(meal => meal.id === session.targetMealId)?.date} · 分次制作</Text><CookingSchedulePanel schedule={session.schedule} titles={Object.fromEntries(result.cooking.map(item => [item.recipeId, item.title]))} /></View>)}
         {result.meals.map(meal => <View key={meal.id} className="rounded-2xl bg-surface p-4 gap-2"><Text className="font-black text-ink">{meal.date} · {({ breakfast: "早餐",lunch: "午餐",dinner: "晚餐",snack: "加餐" })[meal.mealType]}</Text><Text className="text-brand">需要 {meal.servings} 份 · 待吃餐 {meal.preparedServings} 份 · 补做 {meal.cookServings} 份</Text>
           {meal.allocations.map(item => <Text key={item.preparedMealId} className="text-copy-muted">待吃：{item.foodName} {item.servings} 份（存放条件待核对）</Text>)}
           {result.cooking.filter(item => item.targetMealId === meal.id).map(item => <View key={item.recipeId} className="gap-2"><TouchableOpacity onPress={() => router.push({ pathname: "/recipe-detail", params: { id: item.recipeId } })}><Text className="font-bold text-brand">补做：{item.title} {item.servings} 份 · 查看菜谱</Text></TouchableOpacity><TouchableOpacity disabled={loading || saving || activated} onPress={() => void replace(meal.id)}><Text className="font-bold text-brand">这道换一个</Text></TouchableOpacity></View>)}
@@ -212,3 +214,4 @@ function CookingPlanForm() {
     </ScrollView>
   </Screen>;
 }
+import { CookingSchedulePanel } from "@/components/CookingSchedulePanel";

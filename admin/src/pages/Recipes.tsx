@@ -1,4 +1,5 @@
 import { PageHeader } from '../components/admin/PageHeader';
+import { RecipeExecutionEditor } from './RecipeExecutionEditor';
 import { FilterBar } from '../components/admin/ListPrimitives';
 import { DetailPanel } from '../components/admin/DetailPanel';
 import { StatusBadge } from '../components/admin/StatusBadge';
@@ -394,6 +395,7 @@ export default function Recipes() {
           <div><h3 className="font-semibold mb-2">营养质量</h3><StatusBadge tone={selectedRecipe.quality_status==='needs_review'?'warning':'neutral'}>{selectedRecipe.quality_status==='trusted'?'可信':selectedRecipe.quality_status==='estimated'?'营养估算':'待复核'}</StatusBadge><p className="mt-2">{selectedRecipe.quality_review_reason || '暂无质量审核说明'}</p><p className="admin-muted mt-2">热量 {selectedRecipe.calories} kcal · 蛋白质 {selectedRecipe.protein ?? '—'} g · 碳水 {selectedRecipe.carbs ?? '—'} g · 脂肪 {selectedRecipe.fat ?? '—'} g</p></div>
           <section><h3 className="font-semibold mb-2">原料</h3><ul className="space-y-2">{(recipeDetailArray(selectedRecipe.ingredients_json) as Ingredient[]).map((item,index)=><li key={index}>{item.name} · {item.amount}</li>)}</ul></section>
           <section><h3 className="font-semibold mb-2">做法</h3><ol className="list-decimal pl-5 space-y-3">{(recipeDetailArray(selectedRecipe.steps_json) as string[]).map((item,index)=><li key={index}>{item}</li>)}</ol></section>
+          <RecipeExecutionEditor key={selectedRecipe.id} recipeId={selectedRecipe.id} />
           <button className="admin-button" onClick={()=>{handleOpenEdit(selectedRecipe);setSelectedRecipe(null);}}>编辑食谱</button>
         </div>
       </DetailPanel>}

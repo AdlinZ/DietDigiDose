@@ -1,4 +1,5 @@
 import { inventoryUnitSchema } from "./inventory.ts";
+import { cookingScheduleSchema } from "./recipeExecution.ts";
 import { kitchenPreferencesSchema } from "./mealPreferences.ts";
 import { z } from "zod";
 
@@ -49,7 +50,9 @@ export const cookingPlanDraftSchema = z.object({
     quantity_status: z.enum(["sufficient", "insufficient", "unknown", "unavailable"]).optional(),
   })).max(2800),
   time: z.object({ sessionBudgetMinutes: positiveAmount.optional(), budgetMinutes: positiveAmount, knownSequentialMinutes: amount, exceedsBudget: z.boolean(),
-    isEstimate: z.boolean(), incomplete: z.boolean(), missing: z.array(z.string().max(200)).max(50) }),
+    isEstimate: z.boolean(), incomplete: z.boolean(), missing: z.array(z.string().max(200)).max(50),
+    schedule: cookingScheduleSchema.optional(),
+    sessions: z.array(z.object({ targetMealId: z.string().max(80), schedule: cookingScheduleSchema })).max(28).optional() }),
   checksPending: z.array(z.string().max(200)).max(50),
   excludedPreparedMealIds: z.array(z.string().uuid()).max(100),
   effectivePreferences: kitchenPreferencesSchema,
@@ -88,7 +91,21 @@ export const cookingPlanDraftSchema = z.object({
     if (!ids.has(item.targetMealId)) invalid(["unresolved", index, "targetMealId"], "待解决项必须属于现有餐次");
   });
   if (!close(draft.totalCookServings, draft.meals.reduce((sum, meal) => sum + meal.cookServings, 0))) invalid(["totalCookServings"], "总补做份量与各餐次不一致");
-  if (draft.time.exceedsBudget !== (draft.time.knownSequentialMinutes > draft.time.budgetMinutes)) invalid(["time", "exceedsBudget"], "超时状态与时间预算不一致");
+  const elapsed = draft.time.schedule?.elapsedMinutes ?? (draft.time.sessions?.length && draft.time.sessions.every(session => session.schedule.complete)
+    ? draft.time.sessions.reduce((sum, session) => sum + session.schedule.elapsedMinutes!, 0) : draft.time.knownSequentialMinutes);
+  if (draft.time.exceedsBudget !== (elapsed > draft.time.budgetMinutes)) invalid(["time", "exceedsBudget"], "超时状态与时间预算不一致");
+  if ((draft.time.schedule && draft.planningMode === "weekly") || (draft.time.sessions && draft.planningMode !== "weekly")) invalid(["time"], "单次与分次排程不能混用");
+  if (draft.time.sessions && (new Set(draft.time.sessions.map(session => session.targetMealId)).size !== draft.time.sessions.length || draft.time.sessions.some(session => !ids.has(session.targetMealId)))) invalid(["time", "sessions"], "分次排程必须属于唯一现有餐次");
+  if (draft.time.sessions && draft.time.sessions.length !== draft.meals.length) invalid(["time", "sessions"], "分次排程必须覆盖每个餐次");
+  const schedules = draft.time.schedule ? [{ schedule: draft.time.schedule, targetMealId: undefined }] : draft.time.sessions ?? [];
+  if (schedules.length && draft.time.incomplete !== schedules.some(item => !item.schedule.complete)) invalid(["time", "incomplete"], "完整时间状态必须与全部排程一致");
+  for (const { schedule, targetMealId } of schedules) {
+    const cooking = draft.cooking.filter(item => targetMealId === undefined || item.targetMealId === targetMealId);
+    if (schedule.batches.some(batch => !cooking.some(item => item.targetMealId === batch.targetMealId && item.recipeId === batch.recipeId))) invalid(["time"], "排程批次必须属于对应的新做菜");
+    if (schedule.complete && (cooking.some(item => !close(item.servings, schedule.batches.filter(batch => batch.targetMealId === item.targetMealId && batch.recipeId === item.recipeId).reduce((sum, batch) => sum + batch.servings, 0)))
+      || draft.unresolved.some(item => targetMealId === undefined || item.targetMealId === targetMealId)
+      || draft.meals.some(meal => (targetMealId === undefined || meal.id === targetMealId) && meal.preparedServings > 0))) invalid(["time"], "完整排程不能遗漏制作份量、未解决餐次或复热时间");
+  }
 });
 export type CookingPlanDraft = z.infer<typeof cookingPlanDraftSchema>;
 export const saveCookingPlanDraftSchema = z.object({

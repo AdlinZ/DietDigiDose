@@ -126,6 +126,14 @@ export class SqliteAdminRecipesRepository implements AdminRecipesRepository {
       WHERE id=? AND deleted_at IS NULL`, [status, event.adminUserId, reason, recipeId], event);
   }
 
+  async reviewExecution(recipeId: number, execution: import("@dietdigidose/contracts").ReviewedRecipeExecution | null, expected: Row, event: AdminAudit) {
+    return this.reviewTransaction(recipeId, `UPDATE recipes SET execution_json=?, updated_at=CURRENT_TIMESTAMP
+      WHERE id=? AND deleted_at IS NULL AND title IS ? AND serving_size IS ? AND cook_time IS ? AND prep_time IS ?
+      AND ingredients_json IS ? AND steps_json IS ? AND required_kitchenware_json IS ? AND optional_kitchenware_json IS ? AND execution_json IS ?`,
+    [execution ? JSON.stringify(execution) : null, recipeId, expected.title, expected.serving_size ?? null, expected.cook_time ?? null,
+      expected.prep_time ?? null, expected.ingredients_json, expected.steps_json, expected.required_kitchenware_json, expected.optional_kitchenware_json, expected.execution_json ?? null], event);
+  }
+
   async reject(recipeId: number, reviewerId: number, reason: string, event: AdminAudit) { return this.reviewTransaction(recipeId,
     `UPDATE recipes SET status='rejected', reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP, reject_reason=?,
       updated_at=CURRENT_TIMESTAMP WHERE id=? AND source='user' AND deleted_at IS NULL`, [reviewerId, reason, recipeId], event); }

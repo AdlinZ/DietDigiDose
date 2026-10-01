@@ -94,6 +94,7 @@ export class KitchenwareService {
     const capabilities = await this.repository.capabilitiesForCatalog(Number(best.row.id));
     return {
       id: Number(best.row.id), name: String(best.row.name), category: String(best.row.category), confidence: best.score,
+      qualityStatus: String(best.row.quality_status || "trusted"),
       attributes: parseJson(best.row.attributes_json, {}),
       capabilities: capabilities.map((capability) => ({
         code: String(capability.code), name: String(capability.name), safetyLevel: String(capability.safety_level),

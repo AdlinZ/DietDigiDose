@@ -1,4 +1,5 @@
 import { Router, type NextFunction, type Response } from "express";
+import { recipeExecutionReviewSchema } from "@dietdigidose/contracts";
 import type { AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
 import { positiveIntegerParam } from "../../middleware/validateParam.js";
@@ -36,6 +37,12 @@ export function createAdminRecipesRouter(service: AdminRecipesService) {
   router.put("/recipes/:id/quality", validateBody(adminRecipeQualitySchema), (req: AuthRequest, res, next) => {
     void service.reviewQuality(req.userId!, Number(req.params.id), req.body.status, String(req.body.reason).trim(), context(req))
       .then((value) => res.json(value)).catch((error) => handle(error, res, next));
+  });
+  router.get("/recipes/:id/execution", (req, res, next) => {
+    void service.execution(Number(req.params.id)).then(value => res.json(value)).catch(error => handle(error, res, next));
+  });
+  router.put("/recipes/:id/execution", validateBody(recipeExecutionReviewSchema), (req: AuthRequest, res, next) => {
+    void service.reviewExecution(req.userId!, Number(req.params.id), req.body, context(req)).then(value => res.json(value)).catch(error => handle(error, res, next));
   });
   router.post("/recipes/:id/reject", validateBody(adminRecipeRejectSchema), (req: AuthRequest, res, next) => {
     void service.reject(req.userId!, Number(req.params.id), String(req.body.reason).trim(), context(req))

@@ -54,6 +54,13 @@ const versionConflict = () => new CookingQueueError(409, "烹饪队列已在其�
 const invalidTransition = (message = "当前烹饪状态不能执行该操作") =>
   new CookingQueueError(409, message, "COOKING_QUEUE_INVALID_TRANSITION");
 
+function assertSharedProductionSaved(current: QueueRow, nextStatus: string) {
+  const snapshot = parseJson<{ productionPlanItems?: unknown[] }>(current.recipe_snapshot_json, {});
+  if (nextStatus === "completed" && current.status !== "completed" && Array.isArray(snapshot.productionPlanItems) && snapshot.productionPlanItems.length > 1) {
+    throw invalidTransition("这是多餐共用制作，请先保存总产出和实际食用份量");
+  }
+}
+
 export class CookingQueueService {
   private readonly repository: CookingQueueRepository;
 
@@ -97,6 +104,7 @@ export class CookingQueueService {
     if (Number(current.version) !== input.version) throw versionConflict();
     if (input.status && !transitions[String(current.status)]?.has(input.status)) throw invalidTransition();
     const nextStatus = input.status ?? String(current.status);
+    assertSharedProductionSaved(current, nextStatus);
     const updated = await this.repository.update(id, userId, input.version, {
       status: nextStatus as QueueUpdateInput["status"] & string,
       mealType: input.mealType === undefined ? current.meal_type : input.mealType,
@@ -132,6 +140,7 @@ export class CookingQueueService {
     if (!current) throw notFound();
     if (current.status === "completed") return formatQueueItem(current);
     if (current.status !== "cooking") throw invalidTransition("请先开始烹饪再完成");
+    assertSharedProductionSaved(current, "completed");
     const updated = await this.repository.transition(id, userId, version, "completed");
     if (!updated) throw versionConflict();
     return formatQueueItem(updated);

@@ -118,3 +118,11 @@ Node 22.23.2 下全量 `test:all` 通过：客户端 84 套/388 项、服务端 
 
 
 共用制作初次远端 run 36835411131 在 `database:boundary:check` 失败：新增 SQLite 查询触发已有运行时访问冻结。现复用 mealPlans 的已有列表查询返回原始仓储行，并把制作来源查询同时用于成员版本核对；未改变基线、豁免名单或放宽门禁。`database:boundary:check` 仍保持原有 76 个文件基线并通过；查询仍位于既有 repository adapter 内。
+
+## 共用制作旧入口保护
+
+提交 `bc30c665` 的远端 CI [run 36836089826](https://github.com/AdlinZ/DietDigiDose/actions/runs/36836089826) 三项全部通过，包含 PostgreSQL 16.10 的迁移/恢复及共享制作事务集成。
+
+后续交叉检查发现旧版完成餐次、直接完成队列及 PATCH completed 可以绕过共用制作产出。现在保存产出前拒绝这些路径，保留原餐次、库存及摄入；保存后旧餐次入口与队列重试复用已提交批次。两个数据库沿用已有仓储查询检查队列快照，不增加 SQLite 访问点或迁移。
+
+验证：共享事务 fixture 新增旧入口拒绝、原数据不变及保存后重试，供 SQLite 与 PostgreSQL 集成共用；队列单测覆盖 JSON 文本与 JSONB 对象的 POST/PATCH 拒绝。Node 22.23.2 服务端全量 557 项通过、既有 1 项跳过，服务端静态及原 76 文件 SQLite 边界通过。本次新提交仍需核对远端 PostgreSQL 16 CI。未部署服务器，未完成真机或独立环境验收。

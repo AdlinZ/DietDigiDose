@@ -24,6 +24,7 @@ import type { MealPlanCompleteInput, MealPlanExecutionInput, MealPlanItemUpdateI
 
 const activeQueueStatuses = "'waiting', 'preparing', 'ready', 'cooking'";
 const itemSelect = `SELECT i.*,
+  (SELECT q.recipe_snapshot_json FROM cooking_queue_items q WHERE q.id=i.queue_item_id AND q.user_id=i.user_id) AS queue_snapshot_json,
   (SELECT hm.id FROM household_meal_batches hm WHERE hm.plan_item_id=i.id AND hm.created_by_user_id=i.user_id) AS household_meal_id,
   (SELECT hm.household_id FROM household_meal_batches hm WHERE hm.plan_item_id=i.id AND hm.created_by_user_id=i.user_id) AS household_id, p.constraints_json AS plan_constraints_json, r.title AS recipe_title, r.image_url AS recipe_image_url,
   r.cook_time AS recipe_cook_time, r.difficulty AS recipe_difficulty,
@@ -437,12 +438,14 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       const item = await this.getItem(client, planId, itemId, userId, true);
       if (!item) return { kind: "not_found" as const };
       if (item.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED","这是共餐安排，请从家庭制作入口记录产出");
-      const produced = (await client.query("SELECT result_json FROM prepared_meals WHERE user_id=$1 AND plan_item_id=$2", [userId, itemId])).rows[0];
+      const produced = (await client.query("SELECT result_json FROM prepared_meals WHERE user_id=$1 AND (plan_item_id=$2 OR queue_item_id=$3)", [userId, itemId, item.queue_item_id ?? null])).rows[0];
       if (produced) return { kind: "completed" as const, value: { ...produced.result_json, repeated: true } };
       if (item.status === "completed" && item.diet_record_id) {
         return { kind: "completed" as const, value: { dietRecordId: Number(item.diet_record_id), repeated: true } };
       }
       if (item.status === "completed" || Number(item.version) !== input.version) return { kind: "version_conflict" as const };
+      const shared = parseJson<{ productionPlanItems?: unknown[] }>(item.queue_snapshot_json, {}).productionPlanItems;
+      if (Array.isArray(shared) && shared.length > 1) throw new InventoryQuantityError("MEAL_SHARED_PRODUCTION_REQUIRED", "这是多餐共用制作，请先保存总产出和实际食用份量；原安排和库存未改变");
       let dietRecordId = input.dietRecordId;
       if (dietRecordId) {
         const record = await client.query("SELECT id FROM diet_records WHERE id = $1 AND user_id = $2", [dietRecordId, userId]);

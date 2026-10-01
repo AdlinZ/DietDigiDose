@@ -14,6 +14,7 @@ jest.mock("expo-notifications", () => ({
   scheduleNotificationAsync: jest.fn(async () => "timer"),
 }));
 import * as Notifications from "expo-notifications";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { invalidatePrivateStorage } from "@/utils/userStorage";
 import { useCookingTimer } from "./useCookingTimer";
 let hook!: ReturnType<typeof useCookingTimer>;
@@ -52,5 +53,56 @@ test("logout while permission is pending cannot leave a reminder", async () => {
   invalidatePrivateStorage(802);
   await act(async () => { resolve({ status: "granted" }); });
   expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  act(() => tree.unmount());
+});
+
+test("a failed system cancellation cannot lose the persisted pause or extension", async () => {
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<Harness user={803} />); });
+  await act(async () => { hook.setIsTimerRunning(true); });
+  await act(async () => { jest.advanceTimersByTime(30000); });
+  (Notifications.cancelScheduledNotificationAsync as jest.Mock).mockRejectedValueOnce(new Error("OS unavailable"));
+  await act(async () => { hook.setIsTimerRunning(false); });
+  expect(JSON.parse(mockStore.get("cooking-timer:queue:1:user:803")!).startedAt).toBeNull();
+  expect(hook.notice).toContain("计时已保存");
+  act(() => tree.unmount());
+  jest.setSystemTime(160000);
+  await act(async () => { tree = renderer.create(<Harness user={803} />); });
+  expect(hook.timerSeconds).toBe(150);
+  expect(hook.isTimerRunning).toBe(false);
+  (Notifications.cancelScheduledNotificationAsync as jest.Mock).mockRejectedValueOnce(new Error("OS unavailable"));
+  await act(async () => { hook.setTimerSeconds(value => value + 60); });
+  act(() => tree.unmount());
+  await act(async () => { tree = renderer.create(<Harness user={803} />); });
+  expect(hook.timerSeconds).toBe(210);
+  act(() => tree.unmount());
+});
+
+test("a failed storage write leaves the prior notification intact and reports lost persistence", async () => {
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<Harness user={804} />); });
+  await act(async () => { hook.setIsTimerRunning(true); });
+  jest.clearAllMocks();
+  (AsyncStorage.setItem as jest.Mock).mockRejectedValueOnce(new Error("disk full"));
+  await act(async () => { hook.setIsTimerRunning(false); });
+  expect(hook.notice).toContain("计时保存失败");
+  expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+  expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+  act(() => tree.unmount());
+  await act(async () => { tree = renderer.create(<Harness user={804} />); });
+  expect(hook.isTimerRunning).toBe(true);
+  act(() => tree.unmount());
+});
+
+test("logout while a timer read is pending cannot restore the old account timer", async () => {
+  let resolve!: (value: string) => void;
+  (AsyncStorage.getItem as jest.Mock).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<Harness user={805} />); });
+  expect(hook.ready).toBe(false);
+  invalidatePrivateStorage(805);
+  await act(async () => { resolve(JSON.stringify({ mode: "countdown", seconds: 600, startedAt: 100000 })); });
+  expect(hook.ready).toBe(false);
+  expect(hook.isTimerRunning).toBe(false);
   act(() => tree.unmount());
 });

@@ -67,7 +67,7 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
     enabled: isAuthenticated,
     queryFn: async (): Promise<CachedResult<InventoryItem[]>> => {
       try {
-        const value = await inventoryApi.list(authFetch);
+        const value = await inventoryApi.list(authFetch, true);
         if (inventoryCacheKey) void AsyncStorage.setItem(inventoryCacheKey, JSON.stringify(value));
         return { value };
       } catch (error) {

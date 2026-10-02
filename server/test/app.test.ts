@@ -145,6 +145,12 @@ describe("API security baseline", () => {
     db.prepare(`INSERT INTO system_settings(key,value,updated_at) VALUES('auth.sms.enabled','1',CURRENT_TIMESTAMP)
       ON CONFLICT(key) DO UPDATE SET value='1',updated_at=CURRENT_TIMESTAMP`).run();
     try {
+      for (const invalidToken of ["wrong", "x".repeat("contract-callback-token".length), "中".repeat("contract-callback-token".length)]) {
+        const rejected = await api(`/api/v1/webhooks/aliyun/sms-delivery/${encodeURIComponent(invalidToken)}`, {
+          method: "POST", body: "[]", signal: AbortSignal.timeout(2000),
+        });
+        assert.equal(rejected.response.status, 404);
+      }
       const sent = await api("/api/v1/auth/sms/send", {
         method: "POST", body: JSON.stringify({ phone: "13500135000" }),
       });

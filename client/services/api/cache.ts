@@ -102,7 +102,11 @@ function isUsable(entry: CacheEntry, now: number) {
 }
 
 async function readPersistent<T>(key: string, scope: CacheScope) {
+  const epoch = scopeEpochs.get(scope) || 0;
+  scopeEpochs.set(scope, epoch);
+  await maintenance;
   const raw = await AsyncStorage.getItem(storageKey(key, scope));
+  if ((scopeEpochs.get(scope) || 0) !== epoch) return null;
   if (!raw) return null;
   try {
     const entry = JSON.parse(raw) as CacheEntry<T>;
@@ -119,8 +123,17 @@ async function readPersistent<T>(key: string, scope: CacheScope) {
   }
 }
 
+function enqueueMaintenance(task: () => Promise<void>) {
+  const result = maintenance.then(task);
+  maintenance = result.catch(() => undefined);
+  return result;
+}
+
 function persistEntry(entry: CacheEntry) {
-  maintenance = maintenance.then(async () => {
+  const epoch = scopeEpochs.get(entry.scope) || 0;
+  // Pending snapshots must not recreate entries after a mutation or logout.
+  void enqueueMaintenance(async () => {
+    if ((scopeEpochs.get(entry.scope) || 0) !== epoch) return;
     await AsyncStorage.setItem(storageKey(entry.logicalKey, entry.scope), JSON.stringify(entry));
     const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(API_CACHE_STORAGE_PREFIX));
     const rows = (await AsyncStorage.multiGet(keys)).flatMap(([key, raw]) => {
@@ -250,17 +263,19 @@ export async function invalidateApiCacheForMutation(apiFetch: ApiFetch, path: st
   scopeEpochs.set(scope, (scopeEpochs.get(scope) || 0) + 1);
   const logicalKeys = [...memory.entries()].filter(([, entry]) => entry.scope === scope && prefixes.some((prefix) => entry.path.startsWith(prefix))).map(([key]) => key);
   logicalKeys.forEach((key) => memory.delete(key));
-  const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(API_CACHE_STORAGE_PREFIX));
-  const rows = await AsyncStorage.multiGet(keys);
-  const removals = rows.flatMap(([key, raw]) => {
-    try {
-      const entry = raw ? JSON.parse(raw) as CacheEntry : null;
-      return entry?.scope === scope && prefixes.some((prefix) => entry.path.startsWith(prefix)) ? [key] : [];
-    } catch {
-      return [key];
-    }
+  await enqueueMaintenance(async () => {
+    const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(API_CACHE_STORAGE_PREFIX));
+    const rows = await AsyncStorage.multiGet(keys);
+    const removals = rows.flatMap(([key, raw]) => {
+      try {
+        const entry = raw ? JSON.parse(raw) as CacheEntry : null;
+        return entry?.scope === scope && prefixes.some((prefix) => entry.path.startsWith(prefix)) ? [key] : [];
+      } catch {
+        return [key];
+      }
+    });
+    if (removals.length) await AsyncStorage.multiRemove(removals);
   });
-  if (removals.length) await AsyncStorage.multiRemove(removals);
 }
 
 export async function clearApiCacheScope(scopeOrUserId?: CacheScope | number | null) {
@@ -268,14 +283,16 @@ export async function clearApiCacheScope(scopeOrUserId?: CacheScope | number | n
   if (scope) scopeEpochs.set(scope, (scopeEpochs.get(scope) || 0) + 1);
   else for (const knownScope of new Set([...scopeEpochs.keys(), ...[...memory.values()].map((entry) => entry.scope)])) scopeEpochs.set(knownScope, (scopeEpochs.get(knownScope) || 0) + 1);
   for (const [key, entry] of memory) if (!scope || entry.scope === scope) memory.delete(key);
-  const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(API_CACHE_STORAGE_PREFIX));
-  if (!scope) {
-    if (keys.length) await AsyncStorage.multiRemove(keys);
-    metrics.bytes = 0;
-    return;
-  }
-  const scopedKeys = keys.filter((key) => scope === "public" ? !key.includes(":user:") : key.endsWith(`:user:${scope.slice(5)}`));
-  if (scopedKeys.length) await AsyncStorage.multiRemove(scopedKeys);
+  await enqueueMaintenance(async () => {
+    const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(API_CACHE_STORAGE_PREFIX));
+    if (!scope) {
+      if (keys.length) await AsyncStorage.multiRemove(keys);
+      metrics.bytes = 0;
+      return;
+    }
+    const scopedKeys = keys.filter((key) => scope === "public" ? !key.includes(":user:") : key.endsWith(`:user:${scope.slice(5)}`));
+    if (scopedKeys.length) await AsyncStorage.multiRemove(scopedKeys);
+  });
 }
 
 export function recordCacheRender(durationMs: number, hot: boolean) {

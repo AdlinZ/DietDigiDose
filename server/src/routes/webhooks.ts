@@ -7,17 +7,17 @@ const router = Router();
 
 function validCallbackToken(received: string) {
   const expected = process.env.ALIYUN_SMS_CALLBACK_TOKEN?.trim() || "";
-  if (!expected || received.length !== expected.length) return false;
+  if (!expected) return false;
   const receivedBytes = new TextEncoder().encode(received);
   const expectedBytes = new TextEncoder().encode(expected);
+  if (receivedBytes.byteLength !== expectedBytes.byteLength) return false;
   return crypto.timingSafeEqual(new DataView(receivedBytes.buffer), new DataView(expectedBytes.buffer));
 }
 
 router.post("/aliyun/sms-delivery/:token", async (req, res) => {
-  if (!validCallbackToken(req.params.token)) return res.status(404).json({ code: 404, msg: "Not found" });
-  if (!Array.isArray(req.body)) return res.status(400).json({ code: 400, msg: "Invalid payload" });
-
   try {
+    if (!validCallbackToken(req.params.token)) return res.status(404).json({ code: 404, msg: "Not found" });
+    if (!Array.isArray(req.body)) return res.status(400).json({ code: 400, msg: "Invalid payload" });
     for (const report of req.body.slice(0, 1000)) {
         const bizId = typeof report?.biz_id === "string" ? report.biz_id.trim() : "";
         const outId = typeof report?.out_id === "string" ? report.out_id.trim() : "";

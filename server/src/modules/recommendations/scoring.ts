@@ -81,18 +81,20 @@ export function formatRecommendationProfile(row: Row | null) {
 
 function recipeSummary(row: Row, requirements: Array<Row & { role: string }>) {
   const execution = reviewedExecution(row);
+  const nutritionUnknown = row.nutrition_basis === "unknown";
+  const nutrient = (value: unknown) => nutritionUnknown || value == null ? null : Number(value);
   return {
     id: Number(row.id), title: String(row.title), description: String(row.description || ""),
     image_url: row.image_url ? String(row.image_url) : null, cook_time: Number(row.cook_time || 0),
-    difficulty: String(row.difficulty || "简单"), calories: Number(row.calories || 0), protein: Number(row.protein || 0),
-    carbs: Number(row.carbs || 0), fat: Number(row.fat || 0), category: String(row.category || "其他"),
+    difficulty: String(row.difficulty || "简单"), calories: nutrient(row.calories), protein: nutrient(row.protein),
+    carbs: nutrient(row.carbs), fat: nutrient(row.fat), category: String(row.category || "其他"),
     tags: parseArray(row.tags).map(String), steps: parseArray(row.steps_json).map(String), ingredients: ingredientList(row),
     serving_size: row.serving_size == null ? null : Number(row.serving_size),
     prep_time: row.prep_time == null ? null : Number(row.prep_time),
     execution_profile: execution?.profile ?? null,
     execution_evidence: execution ? { recipeKey: execution.recipeKey, reviewedAt: execution.reviewedAt, reference: execution.profile.reference } : null,
     quality_status: String(row.quality_status || "trusted"), nutrition_basis: String(row.nutrition_basis || "source"),
-    nutrition_is_estimated: String(row.nutrition_basis || "source") !== "source",
+    nutrition_is_estimated: !nutritionUnknown && String(row.nutrition_basis || "source") !== "source",
     required_kitchenware: requirements.length ? requirements.filter((item) => item.role === "required")
       : requiredTools(row).map((name) => ({ role: "required", catalogName: name, capabilityCode: null })),
   };

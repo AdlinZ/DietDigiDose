@@ -21,3 +21,8 @@ describe("home recommendation presentation", () => {
     expect(formatRecommendationMetric({ title: "燕麦早餐", tag: "早餐", desc: "均衡搭配", calories: 320 })).toBe("320 kcal");
   });
 });
+
+test("food cards preserve unknown nutrition and legitimate zero", () => {
+  expect(formatRecommendationMetric({ title: "蒸蛋", calories: null })).toBe("营养待补全");
+  expect(formatRecommendationMetric({ title: "清茶", calories: 0 })).toBe("0 kcal");
+});

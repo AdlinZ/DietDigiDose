@@ -532,3 +532,20 @@ test("reviewed heating participates in full-plan choices, replacement and per-me
   const changed = await service.replaceCookingItem(7, { draft, targetMealId: "lunch", recipeId: 1 });
   assert.equal(changed.draft.time.reheatingSessions?.[0].schedule.elapsedMinutes, 7, "replacement rereads current reviewed bounds");
 });
+
+test("recommendation recipe summaries preserve unknown nutrients and real zero", async () => {
+  const values = [
+    { id: 11, nutrition_basis: "unknown", calories: 0, protein: 0, carbs: 0, fat: 0 },
+    { id: 12, nutrition_basis: "source", calories: null, protein: null, carbs: null, fat: null },
+    { id: 13, nutrition_basis: "source", calories: 0, protein: 0, carbs: 0, fat: 0 },
+  ];
+  const service = new RecommendationsService(repository({ recipes: async () => values.map(value => ({
+    ...value, title: "合成营养回归", ingredients_json: [{ name: "水", amount: "100ml" }], steps_json: ["仅用于测试"],
+  })) }), kitchenware);
+  const page = await service.page(7, { surface: "home", matchStatus: "all", pageSize: 10 });
+  for (const id of [11, 12, 13]) {
+    const recipe = page.items.find(item => item.recipeId === id)!.recipe as Record<string, unknown>;
+    for (const key of ["calories", "protein", "carbs", "fat"]) assert.equal(recipe[key], id === 13 ? 0 : null);
+    assert.equal(recipe.nutrition_is_estimated, false);
+  }
+});

@@ -48,6 +48,9 @@ patchedDependencies:
   decode-uri-component@0.5.0:
     hash: 51c6277b7a353765f0a95735b55b2b46d0b6bda209f604721ea7bf63ae030d2b
     path: patches/decode-uri-component@0.5.0.patch
+  node-forge@1.4.0:
+    hash: 4fa957cddb4b4601a48b535053d0fec7ed013f9d075660a38365f285fc830fe0
+    path: patches/node-forge@1.4.0.patch
 
 importers:
 
@@ -8661,7 +8664,7 @@ snapshots:
       glob: 13.0.0
       lan-network: 0.2.1
       minimatch: 9.0.7
-      node-forge: 1.4.0
+      node-forge: 1.4.0(patch_hash=4fa957cddb4b4601a48b535053d0fec7ed013f9d075660a38365f285fc830fe0)
       npm-package-arg: 11.0.3
       ora: 3.4.0
       picomatch: 4.0.4
@@ -8697,7 +8700,7 @@ snapshots:
 
   '@expo/code-signing-certificates@0.0.6':
     dependencies:
-      node-forge: 1.4.0
+      node-forge: 1.4.0(patch_hash=4fa957cddb4b4601a48b535053d0fec7ed013f9d075660a38365f285fc830fe0)
 
   '@expo/config-plugins@54.0.4':
     dependencies:
@@ -13967,7 +13970,7 @@ snapshots:
     dependencies:
       whatwg-url: 5.0.0
 
-  node-forge@1.4.0: {}
+  node-forge@1.4.0(patch_hash=4fa957cddb4b4601a48b535053d0fec7ed013f9d075660a38365f285fc830fe0): {}
 
   node-int64@0.4.0: {}
 

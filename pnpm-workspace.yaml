@@ -16,6 +16,8 @@ auditConfig:
   ignoreCves:
     - CVE-2025-71329
     - CVE-2025-71330
+    # Locally patched; audit:prod runs the regression first. See docs/testing.md.
+    - CVE-2026-85393
 
 overrides:
   "@tootallnate/once": 2.0.1
@@ -57,3 +59,4 @@ overrides:
 patchedDependencies:
   '@siteed/audio-studio@3.2.1': patches/@siteed__audio-studio@3.2.1.patch
   decode-uri-component@0.5.0: patches/decode-uri-component@0.5.0.patch
+  node-forge@1.4.0: patches/node-forge@1.4.0.patch

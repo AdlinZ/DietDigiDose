@@ -252,7 +252,7 @@ router.post("/home-recommendations", validateBody(aiHomeRecommendationsSchema), 
         title: String(recipe.title || "推荐菜谱"),
         tag: reasons[0]?.includes("临期") ? "临期优先" : "食语推荐",
         desc: reasons.slice(0, 2).join("；"),
-        calories: Number(recipe.calories || 0),
+        calories: recipe.calories == null ? null : Number(recipe.calories),
         prompt: `请介绍平台菜谱 #${item.recipeId}「${String(recipe.title || "") }」的做法`,
       };
     });

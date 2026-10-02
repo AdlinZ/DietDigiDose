@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Dimensions,
   Alert,
   Modal,
   Platform,
@@ -18,11 +17,10 @@ import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { getAvatarSource } from "@/utils/defaultAvatar";
-import { LineChart } from "react-native-chart-kit";
 import { addLocalDays, toLocalDateKey } from "@/utils/date";
 import { communityApi, dietApi, healthApi, recipesApi } from "@/services/api";
 import { ALLERGY_LABELS, hasSafetyProfile, type HealthProfile as SavedHealthProfile } from "@/utils/healthProfile";
-import { useAppThemeColors } from "@/hooks/useAppThemeColors";
+import { formatNutritionSummary, summarizeNutrition } from "@/utils/nutritionSummary";
 
 
 interface HealthData {
@@ -57,13 +55,12 @@ function ProfileContent() {
   const insets = useSafeAreaInsets();
   const { user, isAuthenticated, isLoading: authLoading, logout } = useAuth();
   const authFetch = useAuthFetch();
-  const colors = useAppThemeColors();
 
   const [healthData, setHealthData] = useState<HealthData | null>(null);
   const [healthProfile, setHealthProfile] = useState<SavedHealthProfile | null>(null);
   const [recentRecords, setRecentRecords] = useState<DietRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dietTrend, setDietTrend] = useState<{ date: string; calories: number }[]>([]);
+  const [dietTrend, setDietTrend] = useState<{ date: string; calories: ReturnType<typeof summarizeNutrition>; count: number }[]>([]);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const [waterMl, setWaterMl] = useState<number | null>(null);
@@ -117,7 +114,7 @@ function ProfileContent() {
 
     if (dietResult.status === "fulfilled") {
       const dietList = Array.isArray(dietResult.value) ? dietResult.value : [];
-      setRecentRecords(dietList.slice(0, 5));
+      setRecentRecords(dietList);
       setDietRecordCount(dietList.length);
       const recordedDays = new Set(dietList.map((record: DietRecord) => record.recorded_at));
       let streak = 0;
@@ -125,16 +122,13 @@ function ProfileContent() {
       setStreakDays(streak);
 
       // Compute diet trend for last 7 days
-      const last7Days: { date: string; calories: number }[] = [];
+      const last7Days: typeof dietTrend = [];
       for (let i = 6; i >= 0; i--) {
         const d = addLocalDays(-i);
         const dateStr = toLocalDateKey(d);
         const dayRecords = dietList.filter((r: DietRecord) => r.recorded_at === dateStr);
-        const totalCalories = dayRecords.reduce(
-          (sum: number, r: DietRecord) => sum + (r.calories || 0),
-          0
-        );
-        last7Days.push({ date: dateStr, calories: totalCalories });
+        last7Days.push({ date: dateStr, count: dayRecords.length,
+          calories: summarizeNutrition(dayRecords.map((record: DietRecord) => record.calories)) });
       }
       setDietTrend(last7Days);
     } else failedSections.push("饮食趋势");
@@ -241,14 +235,11 @@ function ProfileContent() {
       : "text-critical";
 
   const todayRecords = recentRecords.filter((r) => r.recorded_at === today);
-  const todayCalories = todayRecords.reduce((sum, r) => sum + (r.calories || 0), 0);
-  const avgCalories =
-    dietTrend.length > 0
-      ? Math.round(
-          dietTrend.reduce((sum, d) => sum + d.calories, 0) /
-            (dietTrend.filter((d) => d.calories > 0).length || 1)
-        )
-      : 0;
+  const todayNutrition = summarizeNutrition(todayRecords.map(record => record.calories));
+  const knownDays = dietTrend.filter(day => day.calories.total != null && !day.calories.incomplete);
+  const avgCalories = knownDays.length
+    ? Math.round(knownDays.reduce((sum, day) => sum + day.calories.total!, 0) / knownDays.length) : null;
+  const maxCalories = Math.max(1, ...dietTrend.map(day => day.calories.total ?? 0));
 
   const miniTopOffset = Platform.OS === "web" ? 12 : Math.max(insets.top + 6, 12);
   const waterPercent = Math.min(Math.round(((waterMl ?? 0) / 2000) * 100), 100);
@@ -549,69 +540,42 @@ function ProfileContent() {
 
         {/* 7日热量趋势 Chart */}
         <View className="mx-5 mb-4 rounded-[28px] border border-line bg-surface p-4 shadow-xs">
-          <View className="mb-3 flex-row items-center justify-between">
+          <View className="mb-3 flex-row flex-wrap items-center justify-between gap-2">
             <View className="flex-row items-center gap-2">
               <View className="h-8 w-8 items-center justify-center rounded-xl bg-brand/10">
                 <FontAwesome6 name="chart-line" size={13} colorClassName="accent-brand" />
               </View>
               <View>
                 <Text className="text-sm font-black text-ink">近 7 日热量趋势</Text>
-                <Text className="mt-0.5 text-[10px] text-copy-muted">观察摄入变化，不追求单日完美</Text>
+                <Text className="mt-0.5 text-[10px] text-copy-muted">仅统计已记录餐次，缺失日不计均值</Text>
               </View>
             </View>
-            {avgCalories > 0 && (
+            {avgCalories != null && (
               <View className="bg-brand/10 px-2.5 py-1 rounded-full">
                 <Text className="text-[10px] font-bold text-brand">
-                  日均摄入 {avgCalories} kcal
+                  热量齐全的 {knownDays.length} 天均值 {avgCalories} kcal
                 </Text>
               </View>
             )}
           </View>
 
-          {dietTrend.length > 0 && dietTrend.some((d) => d.calories > 0) ? (
-            <View className="items-center overflow-hidden">
-              {/* @ts-ignore */}
-              <LineChart
-                data={{
-                  labels: dietTrend.map((item) => item.date.slice(5)),
-                  datasets: [{ data: dietTrend.map((item) => item.calories || 0) }],
-                }}
-                width={Dimensions.get("window").width - 80}
-                height={180}
-                fromZero
-                yAxisSuffix="k"
-                chartConfig={{
-                  backgroundColor: colors.surface,
-                  backgroundGradientFrom: colors.surface,
-                  backgroundGradientTo: colors.surface,
-                  color: () => colors.brand,
-                  labelColor: () => colors["copy-muted"],
-                  propsForDots: {
-                    r: "4",
-                    strokeWidth: "2",
-                    stroke: colors.brand,
-                  },
-                }}
-                bezier
-                style={{ borderRadius: 16, marginVertical: 4 }}
-              />
-            </View>
-          ) : (
-            <View className="flex-row items-center rounded-2xl bg-canvas/60 px-3.5 py-4">
-              <View className="h-10 w-10 items-center justify-center rounded-2xl bg-brand/10">
-                <FontAwesome6 name="chart-line" size={15} colorClassName="accent-brand" />
+          {dietTrend.map(day => (
+            <View key={day.date} className="mb-2 flex-row items-center gap-3">
+              <Text className="text-xs text-copy-muted">{day.date.slice(5)}</Text>
+              <View className="h-1.5 flex-1 overflow-hidden rounded-full bg-canvas">
+                {day.calories.total != null && <View
+                  className="h-full rounded-full bg-brand-fill"
+                  style={{ width: `${day.calories.total / maxCalories * 100}%` }}
+                />}
               </View>
-              <View className="ml-3 flex-1">
-                <Text className="text-xs font-black text-ink">还没有形成趋势</Text>
-                <Text className="mt-1 text-[10px] text-copy-muted">记录第一餐后开始生成热量曲线</Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => router.push("/diet-record")}
-                className="rounded-full bg-brand-fill px-3 py-2 active:opacity-90"
-              >
-                <Text className="text-[11px] font-bold text-white">记录一餐</Text>
-              </TouchableOpacity>
+              <Text className="text-xs text-ink">
+                {day.count === 0 ? "未记录" : day.calories.total == null ? "热量未知"
+                  : formatNutritionSummary(day.calories, " kcal")}
+              </Text>
             </View>
+          ))}
+          {dietTrend.some(day => day.calories.incomplete) && (
+            <Text className="mt-1 text-[10px] text-copy-muted">部分餐次热量未知，“已知”仅为小计</Text>
           )}
         </View>
 
@@ -645,9 +609,11 @@ function ProfileContent() {
             ) : (
               <View className="space-y-2">
                 <View className="flex-row items-center justify-between mb-2 px-1">
-                  <Text className="text-xs font-bold text-copy-muted">今日已累计摄入</Text>
+                  <Text className="text-xs font-bold text-copy-muted">
+                    {todayNutrition.incomplete ? "今日已知热量合计" : "今日已累计摄入"}
+                  </Text>
                   <Text className="text-sm font-black text-brand">
-                    {todayCalories} kcal
+                    {todayNutrition.total == null ? "热量未知" : `${todayNutrition.total} kcal`}
                   </Text>
                 </View>
                 {todayRecords.slice(0, 3).map((record) => (
@@ -669,7 +635,7 @@ function ProfileContent() {
                       </View>
                     </View>
                     <Text className="text-xs font-black text-critical">
-                      {record.calories || 0} kcal
+                      {record.calories == null ? "热量未知" : `${record.calories} kcal`}
                     </Text>
                   </View>
                 ))}

@@ -5,15 +5,16 @@ export interface Recipe {
   image_url: string;
   cook_time: number;
   difficulty: string;
-  calories: number;
-  protein: number;
-  carbs: number;
-  fat: number;
+  calories: number | null;
+  protein: number | null;
+  carbs: number | null;
+  fat: number | null;
   category: string;
   tags: string[];
   ingredients: Array<{ name?: string; amount?: string } | string>;
   quality_status?: "trusted" | "estimated" | "needs_review";
   nutrition_is_estimated?: boolean;
+  nutrition_basis?: string;
 }
 
 export interface RankedRecipe extends Recipe {

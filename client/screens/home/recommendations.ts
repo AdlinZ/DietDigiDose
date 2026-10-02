@@ -11,8 +11,8 @@ const NON_FOOD_RECOMMENDATION_PATTERN = /记录|添加食材|完善资料|补水
 export function formatRecommendationMetric(card: Record<string, unknown>) {
   if (typeof card.metric === "string" && card.metric.trim()) return card.metric.trim();
 
-  const calories = Number(card.calories);
+  const calories = card.calories == null || card.calories === "" ? null : Number(card.calories);
   const searchableText = `${String(card.title || "")} ${String(card.tag || "")} ${String(card.desc || "")}`;
-  if (NON_FOOD_RECOMMENDATION_PATTERN.test(searchableText) && calories <= 1) return "查看建议";
-  return calories > 0 ? `${calories} kcal` : "查看建议";
+  if (NON_FOOD_RECOMMENDATION_PATTERN.test(searchableText) && (calories == null || calories <= 1)) return "查看建议";
+  return calories != null && Number.isFinite(calories) && calories >= 0 ? `${calories} kcal` : "营养待补全";
 }

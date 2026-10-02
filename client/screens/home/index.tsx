@@ -26,11 +26,12 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { daysUntilDateKey } from "@/utils/inventory";
 import { aiApi, cookingQueueApi, recommendationsApi, recipesApi, type RecipeRecommendationItem, type RecipeRecommendationPage } from "@/services/api";
 import type { InventoryHighlight, RankedRecipe, RecommendationCard, Recipe } from "./types";
-import { getRecommendationPeriod } from "./recommendations";
+import { formatRecommendationMetric, getRecommendationPeriod } from "./recommendations";
 import { useHomeData } from "./useHomeData";
 import { useHealthSummary } from "@/hooks/useHealthSummary";
 import { OnboardingProgressCard } from "@/components/OnboardingProgressCard";
 import { TodayRecordsModal } from "./TodayRecordsModal";
+import { formatNutritionSummary, summarizeNutrition } from "@/utils/nutritionSummary";
 import { getHorizontalSwipeDirection } from "./carousel";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -110,13 +111,17 @@ function HomeContent() {
     }, [authFetch, refresh, shoppingStorageKey, userId])
   );
 
-  // 计算今日三大营养素
-  const totalCalories = todayRecords.reduce((sum, r) => sum + (r.calories || 0), 0);
-  const totalProtein = todayRecords.reduce((sum, r) => sum + (r.protein || 0), 0);
-  const totalCarbs = todayRecords.reduce((sum, r) => sum + (r.carbs || 0), 0);
-  const totalFat = todayRecords.reduce((sum, r) => sum + (r.fat || 0), 0);
-
-  const calPercent = Math.min(Math.round((totalCalories / targetCalories) * 100), 100);
+  const calories = summarizeNutrition(todayRecords.map(record => record.calories));
+  const protein = summarizeNutrition(todayRecords.map(record => record.protein));
+  const carbs = summarizeNutrition(todayRecords.map(record => record.carbs));
+  const fat = summarizeNutrition(todayRecords.map(record => record.fat));
+  const totalCalories = calories.total;
+  const totalProtein = protein.total;
+  const calorieLabel = todayRecords.length === 0 ? "今日尚未记录饮食"
+    : totalCalories == null ? "今日热量未知"
+    : `${calories.incomplete ? "今日已知热量" : "今日已记录"} ${totalCalories} kcal`;
+  const calPercent = totalCalories == null || calories.incomplete ? null
+    : Math.min(Math.round((totalCalories / targetCalories) * 100), 100);
   const todayWaterMl = healthLogs.find((log) => log.recorded_date === today)?.water_ml || 0;
   const priorityInventoryItem = expiringItems[0];
   const priorityExpiryDays = priorityInventoryItem
@@ -243,7 +248,7 @@ function HomeContent() {
 
   useEffect(() => {
     Animated.timing(calorieProgress, {
-      toValue: calPercent,
+      toValue: calPercent ?? 0,
       duration: 700,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
@@ -341,7 +346,7 @@ function HomeContent() {
     if (!isAuthenticated || loading) return;
 
     const period = getRecommendationPeriod(new Date().getHours());
-    const requestKey = `${period}:${targetCalories}:${totalCalories}:${totalProtein}:${inventoryItems.map((item) => `${item.id}-${item.expiration_date}`).join(",")}`;
+    const requestKey = `${period}:${targetCalories}:${totalCalories}:${totalProtein}:${calories.incomplete}:${protein.incomplete}:${inventoryItems.map((item) => `${item.id}-${item.expiration_date}`).join(",")}`;
     if (aiRecommendationRequestKey.current === requestKey) return;
     aiRecommendationRequestKey.current = requestKey;
 
@@ -362,10 +367,10 @@ function HomeContent() {
               title: typeof card.title === "string" ? card.title : "",
               tag: typeof card.tag === "string" ? card.tag : "",
               desc: typeof card.desc === "string" ? card.desc : "",
-              calories: `${Number(card.calories) || 0} kcal`,
+              calories: formatRecommendationMetric(card),
               prompt: typeof card.prompt === "string" ? card.prompt : "",
             }))
-            .filter((card: RecommendationCard) => card.title && card.tag && card.desc && card.calories !== "0 kcal" && card.prompt)
+            .filter((card: RecommendationCard) => card.title && card.tag && card.desc && card.prompt)
             .slice(0, 5)
           : [];
         if (active && cards.length > 0) setAiRecCards(cards);
@@ -392,7 +397,7 @@ function HomeContent() {
 
     void fetchAIRecommendations();
     return () => { active = false; };
-  }, [authFetch, inventoryItems, isAuthenticated, loading, targetCalories, totalCalories, totalProtein]);
+  }, [authFetch, inventoryItems, isAuthenticated, loading, targetCalories, totalCalories, totalProtein, calories.incomplete, protein.incomplete]);
 
   const filteredRecipes = useMemo<RankedRecipe[]>(() => {
     if (isAuthenticated) {
@@ -461,7 +466,7 @@ function HomeContent() {
             <View className="bg-brand/10 px-2.5 py-1 rounded-full flex-row items-center gap-1">
               <FontAwesome6 name="fire-flame-curved" size={11} colorClassName="accent-brand" />
               <Text className="text-xs font-black text-brand">
-                {totalCalories} / {targetCalories} kcal
+                {calorieLabel}
               </Text>
             </View>
 
@@ -662,13 +667,15 @@ function HomeContent() {
               actionLabel: "安排消耗方案",
             }] : []),
             {
-              title: `今日已摄入 ${totalCalories} kcal`,
+              title: calorieLabel,
               tag: "热量进度",
-              desc: totalCalories >= targetCalories
+              desc: calPercent == null
+                ? `${targetLabel} ${targetCalories} kcal；${todayRecords.length ? "记录中有热量待补全，暂不计算进度" : "记录第一餐后查看进度"}`
+                : totalCalories! >= targetCalories
                 ? "已接近今日目标，接下来优先选择清淡低热量食物"
                 : `${targetLabel} ${targetCalories} kcal，已记录 ${totalCalories} kcal`,
-              calories: `${calPercent}%`,
-              prompt: `我今天已记录${totalCalories} kcal。${targetLabel}为${targetCalories} kcal。请根据我现有库存规划今天接下来的饮食，不要把系统参考值当成我确认的目标。`,
+              calories: calPercent == null ? "待补全" : `${calPercent}%`,
+              prompt: `${calorieLabel}。${calories.incomplete ? "部分餐次热量未知，不要将已知小计当作全天总量。" : ""}${targetLabel}为${targetCalories} kcal。请根据我现有库存规划今天接下来的饮食，不要把系统参考值当成我确认的目标。`,
               headerTitle: "今日饮食进度",
               actionLabel: "规划下一餐",
             },
@@ -813,19 +820,19 @@ function HomeContent() {
                   <FontAwesome6 name="fire" size={15} colorClassName="accent-highlight" />
                 </View>
                 <View>
-                  <Text className="text-[10px] font-bold text-copy-muted">今日热量</Text>
+                  <Text className="text-[10px] font-bold text-copy-muted">{calories.incomplete ? "今日已知热量" : "今日热量"}</Text>
                   <View className="flex-row items-baseline gap-1 mt-0.5">
-                    <Text className="text-xl font-black text-brand">{totalCalories}</Text>
+                    <Text className="text-xl font-black text-brand">{totalCalories ?? "未知"}</Text>
                     <Text className="text-[10px] text-copy-muted">/ {targetCalories} kcal · {targetLabel}</Text>
                   </View>
                 </View>
               </View>
               <View className="bg-brand/10 px-2.5 py-1 rounded-full">
-                <Text className="text-[11px] font-black text-brand">{calPercent}%</Text>
+                <Text className="text-[11px] font-black text-brand">{calPercent == null ? "热量待补全" : `${calPercent}%`}</Text>
               </View>
             </View>
 
-            <View className="h-1.5 rounded-full bg-background-secondary mt-3 overflow-hidden">
+            {calPercent != null && <View className="h-1.5 rounded-full bg-background-secondary mt-3 overflow-hidden">
               <Animated.View
                 className="h-full rounded-full bg-brand-fill"
                 style={{
@@ -835,7 +842,7 @@ function HomeContent() {
                   }),
                 }}
               />
-            </View>
+            </View>}
 
             <TouchableOpacity
               activeOpacity={0.8}
@@ -851,9 +858,9 @@ function HomeContent() {
                 {activeCaloriePanel === 0 ? (
                   <View className="flex-row items-center">
                     {[
-                      { label: "蛋白质", value: `${totalProtein}g` },
-                      { label: "碳水", value: `${totalCarbs}g` },
-                      { label: "脂肪", value: `${totalFat}g` },
+                      { label: "蛋白质", value: formatNutritionSummary(protein, "g") },
+                      { label: "碳水", value: formatNutritionSummary(carbs, "g") },
+                      { label: "脂肪", value: formatNutritionSummary(fat, "g") },
                     ].map((metric, index) => (
                       <View key={metric.label} className={`flex-1 items-center ${index < 2 ? "border-r border-line" : ""}`}>
                         <Text className="text-[9px] text-copy-muted">{metric.label}</Text>
@@ -1209,10 +1216,10 @@ function HomeContent() {
                       <View className="flex-row items-center justify-between mt-2.5 pt-2.5 border-t border-background-secondary">
                         <View className="flex-row items-center gap-3">
                           <Text className="text-xs font-bold text-brand">
-                            <FontAwesome6 name="fire" size={11} colorClassName="accent-brand" /> {recipe.calories == null ? '营养待补全' : `${recipe.nutrition_is_estimated ? '约' : ''}${recipe.calories} kcal`}
+                            <FontAwesome6 name="fire" size={11} colorClassName="accent-brand" /> {recipe.nutrition_basis === 'unknown' || recipe.calories == null ? '营养待补全' : `${recipe.nutrition_is_estimated ? '约' : ''}${recipe.calories} kcal`}
                           </Text>
                           <Text className="text-xs text-copy-muted">
-                            蛋白 {recipe.protein ?? '—'}g
+                            {recipe.nutrition_basis === 'unknown' || recipe.protein == null ? '蛋白质未知' : `蛋白 ${recipe.protein}g`}
                           </Text>
                         </View>
                         {recipe.nutrition_is_estimated ? <Text className="text-[10px] font-bold text-warm">营养估算</Text> : null}

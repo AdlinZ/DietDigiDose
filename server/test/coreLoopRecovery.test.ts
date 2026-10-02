@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import Database from "better-sqlite3";
 
@@ -40,7 +40,7 @@ test("HTTP core loop survives crashes, lost responses, duplicate submissions and
   });
   async function start() {
     let output = "";
-    child = spawn(process.execPath, ["--import", require.resolve("tsx"), fileURLToPath(new URL("../src/index.ts", import.meta.url))], {
+    child = spawn(process.execPath, ["--import", pathToFileURL(require.resolve("tsx")).href, fileURLToPath(new URL("../src/index.ts", import.meta.url))], {
       cwd: directory, env, stdio: ["ignore", "pipe", "pipe"],
     });
     const running = child;

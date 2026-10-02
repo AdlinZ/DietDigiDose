@@ -1,3 +1,4 @@
+import { ingredientConsumptionRequests, inventoryPreviewWarnings } from "@/utils/inventoryConsumptions";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
@@ -17,6 +18,7 @@ import {
 } from "@/services/api";
 import {
   getCookingQueue,
+  mergeCookingQueueRuntime,
   markCookingQueueServerMigrated,
   needsCookingQueueServerMigration,
   saveCookingQueue,
@@ -26,7 +28,7 @@ import {
   cancelCookingReminder,
   formatCookingReminderTime,
   getCookingReminderPresets,
-  scheduleCookingReminder,
+  replaceCookingReminder,
 } from "@/utils/cookingReminders";
 import { inferCategoryByName, inferIngredientDefaults } from "@/utils/ingredientRules";
 import { ingredientNamesMatch, normalizeIngredientName } from "@/utils/ingredients";
@@ -55,6 +57,7 @@ const STATUS_LABELS: Record<CookingQueueItem["status"], string> = {
 
 function localShadow(item: CookingQueueItem): LocalCookingQueueItem {
   return {
+    queueItemId: item.id,
     recipeId: item.recipeId,
     title: item.title,
     imageUrl: item.imageUrl,
@@ -70,17 +73,6 @@ function localShadow(item: CookingQueueItem): LocalCookingQueueItem {
   };
 }
 
-function mergeLocalRuntime(items: ServerCookingQueueItem[], localItems: LocalCookingQueueItem[]): CookingQueueItem[] {
-  return items.map((item) => {
-    const local = localItems.find((candidate) => candidate.recipeId === item.recipeId);
-    return {
-      ...item,
-      reminderAt: item.plannedAt ? Date.parse(item.plannedAt) : undefined,
-      reminderNotificationId: local?.reminderNotificationId,
-    };
-  });
-}
-
 function getMissingIngredients(item: CookingQueueItem, inventory: InventoryItem[]) {
   return item.ingredients.filter((ingredient) => !inventory.some((stock) => (
     stock.is_available && ingredientNamesMatch(ingredient.name, stock.food_name)
@@ -89,19 +81,32 @@ function getMissingIngredients(item: CookingQueueItem, inventory: InventoryItem[
 
 export default function CookingQueueScreen() {
   const router = useSafeRouter();
-  const { highlightRecipeId } = useSafeSearchParams<{ highlightRecipeId?: number }>();
-  const { user } = useAuth();
+  const { highlightRecipeId, highlightQueueItemId } = useSafeSearchParams<{ highlightRecipeId?: number; highlightQueueItemId?: string }>();
+  const { user, sessionGeneration, isSessionCurrent } = useAuth();
   const authFetch = useAuthFetch();
   const userId = user?.id;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const starting = useRef(false);
+  const stockConfirmation = useRef<((confirmed: boolean) => void) | null>(null);
+  const [stockWarning, setStockWarning] = useState("");
+  const answerStockCheck = (confirmed: boolean) => {
+    stockConfirmation.current?.(confirmed); stockConfirmation.current = null; setStockWarning("");
+  };
   const [items, setItems] = useState<CookingQueueItem[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [shoppingSavingId, setShoppingSavingId] = useState<number | null>(null);
   const [reminderItem, setReminderItem] = useState<CookingQueueItem | null>(null);
   const [reminderSaving, setReminderSaving] = useState(false);
-  const [expandedRecipeIds, setExpandedRecipeIds] = useState<Set<number>>(() => new Set());
-  const dueAlertedRecipeId = useRef<number | null>(null);
+  const [expandedQueueIds, setExpandedQueueIds] = useState<Set<string>>(() => new Set());
+  const dueAlertedQueueIds = useRef(new Set<string>());
   const initializedExpansion = useRef(false);
+  useEffect(() => {
+    setStockWarning(""); setReminderItem(null); setItems([]); setInventory([]);
+    setExpandedQueueIds(new Set()); initializedExpansion.current = false; dueAlertedQueueIds.current.clear();
+    return () => { stockConfirmation.current?.(false); stockConfirmation.current = null; };
+  }, [sessionGeneration]);
 
   const loadQueue = useCallback(async () => {
     if (!userId) {
@@ -110,37 +115,48 @@ export default function CookingQueueScreen() {
       setLoading(false);
       return;
     }
+    const current = () => mounted.current && isSessionCurrent(userId, sessionGeneration);
     setLoading(true);
     try {
       const [localItems, inventoryItems] = await Promise.all([
         getCookingQueue(userId),
         inventoryApi.list(authFetch).catch(() => []),
       ]);
+      if (!current()) return;
       if (await needsCookingQueueServerMigration(userId)) {
         for (const item of localItems) {
+          if (!current()) return;
+          if (item.queueItemId) continue;
           await cookingQueueApi.add(authFetch, {
             recipeId: item.recipeId,
             idempotencyKey: `legacy-queue-${userId}-${item.recipeId}`,
             plannedAt: item.reminderAt ? new Date(item.reminderAt).toISOString() : null,
           });
         }
+        if (!current()) return;
         await markCookingQueueServerMigrated(userId);
       }
       const serverItems = await cookingQueueApi.list(authFetch);
-      const hydratedItems = mergeLocalRuntime(serverItems, localItems);
+      if (!current()) return;
+      const hydratedItems = mergeCookingQueueRuntime(serverItems, localItems);
+      const retainedReminders = new Set(hydratedItems.map(item => item.reminderNotificationId).filter(Boolean));
+      await Promise.all(localItems.filter(item => item.reminderNotificationId && !retainedReminders.has(item.reminderNotificationId)).map(item => cancelCookingReminder(item.reminderNotificationId)));
+      if (!current()) return;
       await saveCookingQueue(userId, hydratedItems.map(localShadow));
+      if (!current()) return;
       setItems(hydratedItems);
       setInventory(inventoryItems);
       if (!initializedExpansion.current && hydratedItems.length) {
         initializedExpansion.current = true;
-        setExpandedRecipeIds(new Set([Number(highlightRecipeId) || hydratedItems[0].recipeId]));
+        setExpandedQueueIds(new Set([(hydratedItems.find(item => item.id === highlightQueueItemId) ?? hydratedItems.find(item => item.recipeId === Number(highlightRecipeId)) ?? hydratedItems[0]).id]));
       }
     } catch (error) {
+      if (!current()) return;
       Alert.alert("队列同步失败", error instanceof Error ? error.message : "请检查网络后重试");
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
-  }, [authFetch, highlightRecipeId, userId]);
+  }, [authFetch, highlightRecipeId, highlightQueueItemId, userId, sessionGeneration, isSessionCurrent]);
 
   useFocusEffect(useCallback(() => { void loadQueue(); }, [loadQueue]));
 
@@ -165,7 +181,7 @@ export default function CookingQueueScreen() {
     const reordered = [...items];
     [reordered[currentIndex], reordered[targetIndex]] = [reordered[targetIndex], reordered[currentIndex]];
     try {
-      const updated = mergeLocalRuntime(
+      const updated = mergeCookingQueueRuntime(
         await cookingQueueApi.reorder(authFetch, reordered.map(({ id, version }) => ({ id, version }))),
         reordered.map(localShadow),
       );
@@ -182,9 +198,10 @@ export default function CookingQueueScreen() {
     updates: Parameters<typeof cookingQueueApi.update>[2],
     localUpdates: Partial<Pick<CookingQueueItem, "reminderAt" | "reminderNotificationId">> = {},
   ) => {
-    if (!userId) return null;
+    if (!userId || !mounted.current || !isSessionCurrent(userId, sessionGeneration)) return null;
     try {
       const updated = await cookingQueueApi.update(authFetch, item.id, { ...updates, version: item.version });
+      if (!mounted.current || !isSessionCurrent(userId, sessionGeneration)) return null;
       const merged: CookingQueueItem = {
         ...updated,
         reminderAt: updated.plannedAt ? Date.parse(updated.plannedAt) : undefined,
@@ -196,6 +213,7 @@ export default function CookingQueueScreen() {
       await saveCookingQueue(userId, next.map(localShadow));
       return merged;
     } catch (error) {
+      if (!mounted.current || !isSessionCurrent(userId, sessionGeneration)) return null;
       Alert.alert("队列已变化", error instanceof Error ? error.message : "正在重新同步队列");
       await loadQueue();
       return null;
@@ -217,25 +235,43 @@ export default function CookingQueueScreen() {
     await updateItem(item, { version: item.version, preparedIngredientNames, status });
   };
 
-  const toggleExpanded = (recipeId: number) => {
-    setExpandedRecipeIds((current) => {
+  const toggleExpanded = (queueItemId: string) => {
+    setExpandedQueueIds((current) => {
       const next = new Set(current);
-      if (next.has(recipeId)) next.delete(recipeId);
-      else next.add(recipeId);
+      if (next.has(queueItemId)) next.delete(queueItemId);
+      else next.add(queueItemId);
       return next;
     });
   };
 
   const startCooking = async (item: CookingQueueItem) => {
-    if (!userId) return;
+    if (!userId || starting.current) return;
+    const current = () => mounted.current && isSessionCurrent(userId, sessionGeneration);
+    starting.current = true;
     try {
-      await cancelCookingReminder(item.reminderNotificationId);
+      if (item.status !== "cooking") {
+        const { requests, unknown } = ingredientConsumptionRequests(item.ingredients);
+        const preview = requests.length ? await inventoryApi.consumptionPreview(authFetch, requests) : { items: [] };
+        if (!current()) return;
+        const warnings = inventoryPreviewWarnings(preview, unknown);
+        if (!item.ingredients.length) warnings.push("菜谱未提供配料用量，请核对实际原料");
+        if (warnings.length) {
+          const message = `${warnings.join("\n")}\n\n请核对实际备料；如已另外备齐，可继续制作。当前检查不会扣库存，完成时仍按最新批次核对实际扣减。`;
+          const confirmed = await new Promise<boolean>(resolve => { stockConfirmation.current = resolve; setStockWarning(message); });
+          if (!confirmed) return;
+        }
+      }
+      if (!current()) return;
       const started = await cookingQueueApi.start(authFetch, item.id, item.version);
+      if (!current()) return;
+      await cancelCookingReminder(item.reminderNotificationId);
+      if (!current()) return;
       const next = items.map((candidate) => candidate.id === item.id
         ? { ...started, reminderAt: undefined, reminderNotificationId: undefined }
         : candidate);
       setItems(next);
       await saveCookingQueue(userId, next.map(localShadow));
+      if (!current()) return;
       router.push("/cooking-mode", {
         recipeId: item.recipeId,
         fromQueue: true,
@@ -243,15 +279,17 @@ export default function CookingQueueScreen() {
         queueVersion: started.version,
       });
     } catch (error) {
+      if (!current()) return;
       Alert.alert("无法开始烹饪", error instanceof Error ? error.message : "请刷新队列后重试");
       await loadQueue();
-    }
+    } finally { starting.current = false; }
   };
 
   useEffect(() => {
-    const dueItem = items.find((item) => item.reminderAt && item.reminderAt <= Date.now());
-    if (!dueItem || dueAlertedRecipeId.current === dueItem.recipeId) return;
-    dueAlertedRecipeId.current = dueItem.recipeId;
+    if (starting.current) return;
+    const dueItem = items.find(item => item.reminderAt && item.reminderAt <= Date.now() && !dueAlertedQueueIds.current.has(`${item.id}:${item.plannedAt}`));
+    if (!dueItem) return;
+    dueAlertedQueueIds.current.add(`${dueItem.id}:${dueItem.plannedAt}`);
     Alert.alert("烹饪提醒", `计划烹饪【${dueItem.title}】的时间到了，现在开始准备吗？`, [
       { text: "稍后", style: "cancel" },
       { text: "开始烹饪", onPress: () => void startCooking(dueItem) },
@@ -299,18 +337,15 @@ export default function CookingQueueScreen() {
     if (!userId || reminderSaving) return;
     setReminderSaving(true);
     try {
-      await cancelCookingReminder(item.reminderNotificationId);
-      const scheduled = await scheduleCookingReminder({
-        recipeId: item.recipeId,
-        recipeTitle: item.title,
-        userId,
-        date,
+      const scheduled = await replaceCookingReminder({
+        queueItemId: item.id, recipeId: item.recipeId, recipeTitle: item.title, userId, date,
+      }, item.reminderNotificationId, async next => {
+        if (!mounted.current || !isSessionCurrent(userId, sessionGeneration)) return false;
+        return Boolean(await updateItem(item,
+          { version: item.version, plannedAt: date.toISOString(), mealType: item.mealType },
+          { reminderAt: date.getTime(), reminderNotificationId: next.notificationId }));
       });
-      await updateItem(
-        item,
-        { version: item.version, plannedAt: date.toISOString(), mealType: item.mealType },
-        { reminderAt: date.getTime(), reminderNotificationId: scheduled.notificationId },
-      );
+      if (!scheduled || !mounted.current || !isSessionCurrent(userId, sessionGeneration)) return;
       setReminderItem(null);
       Alert.alert(
         "提醒已设置",
@@ -319,6 +354,7 @@ export default function CookingQueueScreen() {
           : `已保存${formatCookingReminderTime(date)}的站内提醒；Web 端需打开应用后提示。`,
       );
     } catch (error) {
+      if (!mounted.current || !isSessionCurrent(userId, sessionGeneration)) return;
       Alert.alert("提醒设置失败", error instanceof Error ? error.message : "请检查系统通知权限后重试。");
     } finally {
       setReminderSaving(false);
@@ -327,12 +363,13 @@ export default function CookingQueueScreen() {
 
   const clearReminder = async (item: CookingQueueItem) => {
     if (!userId) return;
-    await cancelCookingReminder(item.reminderNotificationId);
-    await updateItem(
+    const updated = await updateItem(
       item,
       { version: item.version, plannedAt: null },
       { reminderAt: undefined, reminderNotificationId: undefined },
     );
+    if (!updated) return;
+    await cancelCookingReminder(item.reminderNotificationId);
     setReminderItem(null);
   };
 
@@ -354,7 +391,7 @@ export default function CookingQueueScreen() {
 
   const readyCount = items.filter((item) => item.ingredients.length > 0 && getMissingIngredients(item, inventory).length === 0).length;
   const reminderCount = items.filter((item) => item.reminderAt && item.reminderAt > Date.now()).length;
-  const totalCookTime = items.reduce((total, item) => total + item.cookTime, 0);
+  const totalCookTime = items.every(item => item.cookTime != null) ? items.reduce((total, item) => total + item.cookTime!, 0) : null;
 
   return (
     <Screen safeAreaEdges={["top", "bottom"]}>
@@ -382,26 +419,23 @@ export default function CookingQueueScreen() {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 44 }}>
           <View className="mb-4 w-full max-w-[760px] self-center flex-row rounded-[22px] bg-brand-fill p-4">
             <QueueSummary value={items.length} label="待烹饪" />
-            <QueueSummary value={totalCookTime} label="总分钟" />
-            <QueueSummary value={readyCount} label="食材已齐" />
+            <QueueSummary value={totalCookTime ?? "待核对"} label="菜谱分钟合计" />
+            <QueueSummary value={readyCount} label="名称匹配" />
             <QueueSummary value={reminderCount} label="已设提醒" />
           </View>
           <View className="w-full max-w-[760px] self-center gap-3">
             {items.map((item, index) => {
               const missing = getMissingIngredients(item, inventory);
               const ingredientDataReady = item.ingredients.length > 0;
-              const highlighted = Number(highlightRecipeId) === item.recipeId;
+              const highlighted = highlightQueueItemId ? highlightQueueItemId === item.id : Number(highlightRecipeId) === item.recipeId;
               const reminderDue = Boolean(item.reminderAt && item.reminderAt <= Date.now());
-              const expanded = expandedRecipeIds.has(item.recipeId);
+              const expanded = expandedQueueIds.has(item.id);
               const preparedCount = item.ingredients.filter((ingredient) => item.preparedIngredientNames.some((name) => (
                 normalizeIngredientName(name) === normalizeIngredientName(ingredient.name)
               ))).length;
               const preparedPercent = ingredientDataReady ? Math.round((preparedCount / item.ingredients.length) * 100) : 0;
-              const expectedFinishAt = item.reminderAt
-                ? item.reminderAt + item.cookTime * 60 * 1000
-                : null;
               return (
-                <View key={item.recipeId} className={`overflow-hidden rounded-[22px] border bg-surface ${highlighted ? "border-warm" : "border-line"}`}>
+                <View key={item.id} className={`overflow-hidden rounded-[22px] border bg-surface ${highlighted ? "border-warm" : "border-line"}`}>
                   <View className="flex-row">
                     <View className="relative h-32 w-32 shrink-0">
                       <RecipeCover uri={item.imageUrl} className="h-full w-full" placeholderClassName="h-full w-full" />
@@ -423,10 +457,12 @@ export default function CookingQueueScreen() {
                       </View>
                       <View className="mt-2 flex-row flex-wrap gap-x-3 gap-y-1">
                         <Text className="text-[10px] font-black text-brand">{STATUS_LABELS[item.status]}</Text>
-                        <Text className="text-[10px] font-bold text-copy-muted">{item.cookTime} 分钟</Text>
+                        <Text className="text-[10px] font-bold text-copy-muted">{item.cookTime == null ? "烹饪时间未知" : `${item.cookTime} 分钟（菜谱参考）`}</Text>
+                        {item.plannedDate && <Text className="text-[10px] font-bold text-copy-muted">目标餐 {item.plannedDate} · {item.plannedServings ?? "待核对"} 份</Text>}
+                        {(item.productionMeals?.length ?? 0) > 1 && <Text className="text-[10px] font-bold text-copy-muted">{item.productionMeals?.length} 餐共用 · {item.plannedServings} 份</Text>}
                         <Text className="text-[10px] font-bold text-critical">{item.calories} kcal</Text>
                         <Text className={`text-[10px] font-black ${!ingredientDataReady || missing.length ? "text-critical" : "text-brand"}`}>
-                          {!ingredientDataReady ? "食材待同步" : missing.length ? `缺 ${missing.length} 种食材` : "食材已齐"}
+                          {!ingredientDataReady ? "食材待同步" : missing.length ? `缺 ${missing.length} 种食材` : "名称匹配，开火前核量"}
                         </Text>
                       </View>
                       {item.reminderAt ? (
@@ -438,9 +474,7 @@ export default function CookingQueueScreen() {
                         </TouchableOpacity>
                       ) : null}
                       <Text className="mt-2 text-[9px] font-medium text-copy-muted">
-                        {expectedFinishAt
-                          ? `按计划预计 ${formatCookingReminderTime(expectedFinishAt)} 完成`
-                          : `开始后预计约 ${item.cookTime} 分钟完成`}
+                        完整制作时间还需核对准备、收尾、份量与设备安排
                       </Text>
                     </View>
                   </View>
@@ -470,7 +504,7 @@ export default function CookingQueueScreen() {
                       <View className="flex-row items-center gap-1.5">
                         <View className={`rounded-full px-2 py-1 ${missing.length ? "bg-danger-soft" : "bg-brand-soft"}`}>
                           <Text className={`text-[9px] font-black ${missing.length ? "text-critical" : "text-brand"}`}>
-                            {missing.length ? `采购 ${missing.length} 项` : "库存已齐"}
+                            {missing.length ? `采购 ${missing.length} 项` : "名称匹配"}
                           </Text>
                         </View>
                         <Text className="text-[10px] font-black text-brand">{preparedPercent}%</Text>
@@ -480,7 +514,7 @@ export default function CookingQueueScreen() {
                       <View className="h-full rounded-full bg-brand-fill" style={{ width: `${preparedPercent}%` }} />
                     </View>
 
-                    <TouchableOpacity onPress={() => toggleExpanded(item.recipeId)} className="mt-3 flex-row items-center justify-between rounded-xl bg-canvas px-3 py-2.5">
+                    <TouchableOpacity onPress={() => toggleExpanded(item.id)} className="mt-3 flex-row items-center justify-between rounded-xl bg-canvas px-3 py-2.5">
                       <View className="flex-row items-center">
                         <FontAwesome6 name="clipboard-check" size={11} colorClassName="accent-brand" />
                         <Text className="ml-2 text-[11px] font-black text-ink">备料清单与库存状态</Text>
@@ -559,6 +593,18 @@ export default function CookingQueueScreen() {
         </ScrollView>
       )}
 
+      <Modal visible={Boolean(stockWarning)} animationType="fade" transparent onRequestClose={() => answerStockCheck(false)}>
+        <View className="flex-1 items-center justify-center bg-black/45 px-5">
+          <View className="max-h-[80%] w-full max-w-lg rounded-3xl bg-surface p-5">
+            <Text accessibilityRole="header" className="text-lg font-black text-ink">开火前核对库存</Text>
+            <ScrollView className="my-4 shrink"><Text className="text-sm leading-6 text-copy-muted">{stockWarning}</Text></ScrollView>
+            <View className="flex-row gap-3">
+              <TouchableOpacity accessibilityRole="button" onPress={() => answerStockCheck(false)} className="flex-1 items-center rounded-xl bg-background-secondary py-3"><Text className="font-bold text-copy-muted">暂不开火</Text></TouchableOpacity>
+              <TouchableOpacity accessibilityRole="button" onPress={() => answerStockCheck(true)} className="flex-1 items-center rounded-xl bg-brand-fill py-3"><Text className="font-bold text-white">已备齐，继续</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <Modal visible={Boolean(reminderItem)} animationType="fade" transparent onRequestClose={() => setReminderItem(null)}>
         <View className="flex-1 justify-end bg-black/45">
           <View className="rounded-t-[30px] bg-surface px-5 pb-8 pt-5">
@@ -588,7 +634,7 @@ export default function CookingQueueScreen() {
   );
 }
 
-function QueueSummary({ value, label }: { value: number; label: string }) {
+function QueueSummary({ value, label }: { value: number | string; label: string }) {
   return (
     <View className="flex-1 items-center border-r border-white/15 last:border-r-0">
       <Text className="text-xl font-black text-white">{value}</Text>

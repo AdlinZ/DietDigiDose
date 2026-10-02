@@ -34,6 +34,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   INVENTORY_SCAN_JOB_STORAGE_KEY,
   getUserStorageKey,
+  getPrivateStorageGeneration,
 } from "@/utils/userStorage";
 import { dateKeyAfterDays } from "@/utils/date";
 import { daysUntilDateKey, getExpirationBadgeConfig, getInventoryStatus } from "@/utils/inventory";
@@ -47,7 +48,8 @@ import { KitchenwareSection, type KitchenwareStarterKit } from "./KitchenwareSec
 import { InventoryEntryForm } from "./InventoryEntryForm";
 import { ManualInventoryEntry } from "./ManualInventoryEntry";
 import { InventoryTextIntake } from "./InventoryTextIntake";
-import { quantityFields } from "./intakeEntry";
+import { useRecognitionReview } from "./useRecognitionReview";
+import { buildRecognitionIntake, quantityFields } from "./intakeEntry";
 import { normalizeShoppingItems } from "@/utils/shoppingList";
 import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
 import {
@@ -100,6 +102,8 @@ export default function InventoryScreen() {
     INVENTORY_SCAN_JOB_STORAGE_KEY,
     user?.id,
   );
+  const recognitionOwner = useRef(user?.id);
+  recognitionOwner.current = user?.id;
   const authFetch = useAuthFetch();
   const {
     items,
@@ -264,11 +268,18 @@ export default function InventoryScreen() {
   const [scanningReceipt, setScanningReceipt] = useState(false);
   const [aiAssisting, setAiAssisting] = useState(false);
   const [batchReviewVisible, setBatchReviewVisible] = useState(false);
-  const [detectedFoods, setDetectedFoods] = useState<DetectedFood[]>([]);
+  const review = useRecognitionReview(value => {
+    setSavingDetectedFoods(false);
+    setBatchReviewVisible(Boolean(value.foods.length || value.pending));
+    setPendingScanJobId(value.jobId);
+  });
+  const detectedFoods = review.value.foods;
+  const setDetectedFoods = review.setFoods;
   const [savingDetectedFoods, setSavingDetectedFoods] = useState(false);
   const [pendingScanJobId, setPendingScanJobId] = useState<string | null>(null);
-  const [intakeBatchKey, setIntakeBatchKey] = useState(() => `inventory-intake-${Date.now()}`);
-  const [pendingIntakeSource, setPendingIntakeSource] = useState<"barcode" | "receipt" | "image">("image");
+  const intakeBatchKey = review.value.batchKey;
+  const pendingIntakeSource = review.value.source;
+  const setPendingIntakeSource = (source: "barcode" | "receipt" | "image") => { void review.update({ source }).catch(() => undefined); };
   const [barcodeScannerVisible, setBarcodeScannerVisible] = useState(false);
   const [barcodeInput, setBarcodeInput] = useState("");
   const [barcodeLookingUp, setBarcodeLookingUp] = useState(false);
@@ -656,11 +667,14 @@ export default function InventoryScreen() {
   const suggestedDate = (days: number) => dateKeyAfterDays(days);
 
   const presentScanRecognition = async (recognized: DetectedFood[], jobId: string, isActive = () => true) => {
+    const canPresent = () => isActive() && review.canPresent(jobId);
+    if (!canPresent()) return;
     const accepted = await inventoryMutations.acceptScan.mutateAsync(jobId);
-    if (!isActive()) return;
+    if (!canPresent()) return;
     if (accepted.items.length) void fetchData();
     const savedIds = new Set(accepted.savedSourceItemIds);
-    const remaining = recognized.filter(item => !savedIds.has(item.id));
+    const reviewed = review.current.current.jobId === jobId ? review.current.current.foods : recognized;
+    const remaining = reviewed.filter(item => !savedIds.has(item.id));
     if (accepted.items.length) Alert.alert("识别项目已保存", `${accepted.items.map(item => item.food_name).join("、")}已保存。${remaining.length ? `还有 ${remaining.length} 项需要确认。` : "本次项目已全部保存。"}`, [
       { text: "关闭", style: "cancel" },
       { text: "撤销本次入库", onPress: () => { void inventoryMutations.undoScan.mutateAsync(jobId).then(() => {
@@ -670,7 +684,7 @@ export default function InventoryScreen() {
       }).catch(error => { if (isActive()) Alert.alert("未能撤销", error instanceof Error ? error.message : "请检查网络后重试"); }); } },
     ]);
     else if (accepted.undoneSourceItemIds.length) Alert.alert("本次入库已撤销", remaining.length ? `还有 ${remaining.length} 项尚未确认。` : "未重新添加已撤销的项目。");
-    if (remaining.length) presentRecognition(remaining, true);
+    if (remaining.length) presentRecognition(remaining, true, jobId);
     else if (!recognized.length) presentRecognition([], true);
   };
 
@@ -698,6 +712,7 @@ export default function InventoryScreen() {
   };
 
   const startScanConversation = async (base64: string, imageUri: string) => {
+    if (!review.ready || review.value.pending) throw new Error("请先恢复并重试上次入库，再开始新识别");
     if (base64.length > MAX_AI_IMAGE_BASE64_LENGTH) {
       throw new Error("图片文件过大，请裁剪到只保留订单或商品区域后重试。");
     }
@@ -728,6 +743,8 @@ export default function InventoryScreen() {
   };
 
   useEffect(() => {
+    if (!review.ready) return;
+    if (review.value.foods.length || review.value.pending) return;
     setPendingScanJobId(null);
     if (!isAuthenticated || !inventoryScanJobStorageKey) return;
     let active = true;
@@ -757,9 +774,9 @@ export default function InventoryScreen() {
     };
     void restorePendingScan();
     return () => { active = false; };
-  }, [isAuthenticated, inventoryScanJobStorageKey]);
+  }, [isAuthenticated, inventoryScanJobStorageKey, review.ready]);
 
-  const presentRecognition = (recognized: DetectedFood[], _openManualForm = false) => {
+  const presentRecognition = (recognized: DetectedFood[], _openManualForm = false, jobId = pendingScanJobId) => {
     if (recognized.length === 0) {
       Alert.alert("暂未识别到食材", "请确认图片清晰、商品名称可见；你也可以改为手动录入。");
       return;
@@ -769,9 +786,7 @@ export default function InventoryScreen() {
       source: item.source || pendingIntakeSource,
       expirationDate: item.expirationDate || (item.estimatedExpireDays == null ? "" : suggestedDate(item.estimatedExpireDays)),
     }));
-    setIntakeBatchKey(`inventory-intake-${pendingScanJobId || Date.now()}`);
-
-    setDetectedFoods(prepared);
+    void review.update({ foods: prepared, batchKey: `inventory-intake-${jobId || Date.now()}`, source: pendingIntakeSource, jobId }).catch(() => undefined);
     setModalVisible(false);
     setBatchReviewVisible(true);
   };
@@ -807,6 +822,11 @@ export default function InventoryScreen() {
   };
 
   const openBarcodeScanner = async () => {
+    if (!review.ready || review.value.pending) {
+      setBatchReviewVisible(true);
+      Alert.alert("请先处理上次入库", "确认上次入库结果后再开始新的录入。");
+      return;
+    }
     if (Platform.OS !== "web" && !cameraPermission?.granted) {
       const permission = await requestCameraPermission();
       if (!permission.granted) {
@@ -814,9 +834,7 @@ export default function InventoryScreen() {
       }
     }
     scannedBarcodesRef.current = new Set();
-    setDetectedFoods([]);
-    setPendingIntakeSource("barcode");
-    setIntakeBatchKey(`inventory-intake-barcode-${Date.now()}`);
+    await review.update({ foods: [], source: "barcode", batchKey: `inventory-intake-barcode-${Date.now()}`, jobId: null });
     setModalVisible(false);
     setBarcodeScannerVisible(true);
   };
@@ -827,6 +845,10 @@ export default function InventoryScreen() {
 
   const openPendingScanResult = async () => {
     if (!pendingScanJobId) return;
+    if (review.value.jobId === pendingScanJobId && (review.value.foods.length || review.value.pending)) {
+      setBatchReviewVisible(true);
+      return;
+    }
     setScanningReceipt(true);
     try {
       const job = await getScanJob(pendingScanJobId);
@@ -849,55 +871,30 @@ export default function InventoryScreen() {
   };
 
   const saveDetectedFoods = async () => {
-    const selectedFoods = detectedFoods.filter((item) => item.selected);
-    if (selectedFoods.length === 0) {
-      Alert.alert("请至少选择一项", "勾选需要加入食材库的食材后再保存。");
-      return;
-    }
-    if (selectedFoods.some((item) => !item.foodName.trim() || !["冷藏", "冷冻", "常温"].includes(item.suggestedStorageLocation))) {
-      Alert.alert("请补全待确认字段", "请补全名称并选择存放位置；数量和到期日期可以留空。");
-      return;
-    }
-
+    if (!review.ready || savingDetectedFoods) return;
+    const owner = user?.id;
+    if (!owner) return;
+    const generation = getPrivateStorageGeneration(owner);
+    const current = () => recognitionOwner.current === owner && generation === getPrivateStorageGeneration(owner);
     setSavingDetectedFoods(true);
     try {
-      const itemsToImport = selectedFoods.map((item) => {
-        const defaults = inferIngredientDefaults(item.foodName, item.suggestedStorageLocation as StorageLocation);
-        return {
-          food_name: item.foodName,
-          category: defaults.category,
-          ...quantityFields(item.quantity),
-          expiration_date: item.expirationDate || "",
-          storage_location: item.suggestedStorageLocation as StorageLocation,
-          image_url: null,
-          ...(pendingScanJobId ? { source_item_id: item.id } : {}),
-          field_evidence: item.fieldEvidence,
-          confidence: item.confidence ?? null,
-          confirmed: true,
-          source: pendingScanJobId ? "image" as const : item.source || pendingIntakeSource,
-          barcode: item.barcode ?? null,
-        };
-      });
-
-      await inventoryMutations.bulkIntake.mutateAsync({
-        idempotency_key: intakeBatchKey,
-        source: pendingScanJobId ? "image" : pendingIntakeSource,
-        source_reference: pendingScanJobId,
-        items: itemsToImport,
-      });
-      for (const item of itemsToImport) {
-        await addInventoryLog({ foodName: item.food_name, action: "add", quantity: item.quantity, storageLocation: item.storage_location }, user?.id);
-      }
-      if (inventoryScanJobStorageKey) {
-        await AsyncStorage.removeItem(inventoryScanJobStorageKey);
-      }
+      const request = review.current.current.pending ?? buildRecognitionIntake(detectedFoods, intakeBatchKey, pendingIntakeSource, review.value.jobId);
+      await review.submit(request, async value => {
+        await inventoryMutations.bulkIntake.mutateAsync(value);
+        if (current() && review.value.jobId && inventoryScanJobStorageKey
+          && await AsyncStorage.getItem(inventoryScanJobStorageKey) === review.value.jobId) await AsyncStorage.removeItem(inventoryScanJobStorageKey);
+      }, current);
+      if (!current()) return;
+      await Promise.allSettled(request.items.map(item => addInventoryLog({ foodName: item.food_name, action: "add", quantity: item.quantity, storageLocation: item.storage_location }, owner)));
+      if (!current()) return;
       setPendingScanJobId(null);
       setBatchReviewVisible(false);
-      Alert.alert("已一键批量入库", `已成功将 ${itemsToImport.length} 种食材导入你的保鲜库！`);
-    } catch {
-      Alert.alert("批量入库失败", "网络异常，请稍后重试。");
+      Alert.alert("已一键批量入库", `已成功将 ${request.items.length} 种食材导入你的保鲜库！`);
+    } catch (error) {
+      if (!current()) return;
+      Alert.alert("入库结果尚未确认", error instanceof Error ? error.message : "请检查网络后重试原请求。");
     } finally {
-      setSavingDetectedFoods(false);
+      if (current()) setSavingDetectedFoods(false);
     }
   };
 
@@ -931,6 +928,11 @@ export default function InventoryScreen() {
   };
 
   const openAiFoodAssist = () => {
+    if (!review.ready || review.value.pending) {
+      setBatchReviewVisible(true);
+      Alert.alert("请先处理上次入库", "确认上次入库结果后再开始新的录入。");
+      return;
+    }
     setPendingIntakeSource("image");
     // React Native 的 Alert 在 Web 端没有稳定的操作按钮支持；浏览器里直接打开相册选择器。
     if (Platform.OS === "web") {
@@ -2452,6 +2454,8 @@ export default function InventoryScreen() {
           visible={batchReviewVisible}
           foods={detectedFoods}
           saving={savingDetectedFoods}
+          locked={Boolean(review.value.pending)}
+          error={review.error || (review.value.pending ? "上次入库结果尚未确认，重试将沿用原始请求；确认前不能修改项目。" : "")}
           onClose={() => setBatchReviewVisible(false)}
           onChange={setDetectedFoods}
           onSave={saveDetectedFoods}

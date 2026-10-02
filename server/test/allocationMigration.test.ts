@@ -25,6 +25,8 @@ test("allocation migration retains source records and marks overbooking and fore
     db.prepare("INSERT INTO schema_migrations VALUES(83,'separate feedback fixture')").run();
     // Intake migrations are covered by their own complete-schema fixtures.
     for (const version of [84, 85, 86]) db.prepare("INSERT INTO schema_migrations VALUES(?,'separate intake fixture')").run(version);
+    // Execution metadata is verified by the complete recipe fixtures in app.test.ts.
+    db.prepare("INSERT INTO schema_migrations VALUES(88,'separate recipe fixture')").run();
     runMigrations(db); runMigrations(db);
     assert.deepEqual(db.prepare("SELECT plan_id,status FROM prepared_meal_allocations ORDER BY plan_id").all(), [
       { plan_id: "p1",status: "conflict" },{ plan_id: "p2",status: "conflict" },{ plan_id: "p3",status: "conflict" },

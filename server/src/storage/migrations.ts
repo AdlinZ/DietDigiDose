@@ -2427,7 +2427,8 @@ UPDATE prepared_meal_allocations AS target SET status='conflict' WHERE EXISTS (
 ];
 
 // Keep independently developed feature migrations ordered with the historical chain.
-migrations.push(healthProfileMigration, passwordlessMigration, onboardingMigration, manualDietRequestMigration);
+migrations.push(healthProfileMigration, passwordlessMigration, onboardingMigration, manualDietRequestMigration,
+  { version: 88, name: "reviewed_recipe_execution", up(database) { addColumn(database, "recipes", "execution_json", "TEXT"); } });
 
 export function runMigrations(database: Database.Database) {
   database.exec(`

@@ -27,7 +27,7 @@ describe("notification response routing", () => {
     expect(resolveNotificationDestination({ type: "cooking_reminder", recipeId: 8 }, "default"))
       .toEqual({ pathname: "/cooking-queue", params: { highlightRecipeId: 8 } });
     expect(resolveNotificationDestination({ type: "cooking_reminder", recipeId: 8 }, "START_COOKING"))
-      .toEqual({ pathname: "/cooking-mode", params: { recipeId: 8, fromQueue: true } });
+      .toEqual({ pathname: "/cooking-queue", params: { highlightRecipeId: 8 } });
   });
 
   it("preserves expiring inventory actions", () => {
@@ -48,4 +48,13 @@ describe("proactive intervention navigation", () => {
     expect(resolveNotificationDestination({ type: "proactive_intervention",interventionId: id },"COMPLETE")).toEqual({ pathname: "/intervention",params: { id } });
     expect(resolveNotificationDestination({ type: "proactive_intervention",interventionId: "invalid" },"DEFAULT")).toEqual({ pathname: "/notifications" });
   });
+});
+
+
+test("cooking notification actions select the exact queue task and always re-enter current validation", () => {
+  const queueItemId = "00000000-0000-4000-8000-000000000001";
+  for (const action of ["default", "START_COOKING"]) {
+    expect(resolveNotificationDestination({ type: "cooking_reminder", recipeId: 8, queueItemId }, action)).toEqual({ pathname: "/cooking-queue", params: { highlightRecipeId: 8, highlightQueueItemId: queueItemId } });
+    expect(resolveNotificationDestination({ type: "cooking_reminder", recipeId: 8, queueItemId: "invalid" }, action)).toEqual({ pathname: "/cooking-queue", params: { highlightRecipeId: 8 } });
+  }
 });

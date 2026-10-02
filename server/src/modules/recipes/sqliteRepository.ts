@@ -1,3 +1,4 @@
+import { assertPlanExecution, planExecutionRecipeIds } from "./planExecution.js";
 import type Database from "better-sqlite3";
 import type { RecipesRepository } from "./repository.js";
 import type { PublicRecipeQuery, RecipeRequirementWrite, RecipeSubmissionWrite, Row } from "./types.js";
@@ -37,9 +38,10 @@ export class SqliteRecipesRepository implements RecipesRepository {
 
   async librarySummary(userId?: number) {
     const boundary = "deleted_at IS NULL AND status = 'approved' AND COALESCE(quality_status, 'trusted') <> 'needs_review'";
-    const official = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM recipes WHERE ${boundary} AND source <> 'user'
-      AND COALESCE(json_extract(base_data_payload,'$.is_primary'),1) <> 0`).get() as Row).count);
-    const community = Number((this.database.prepare(`SELECT COUNT(*) AS count FROM recipes WHERE ${boundary} AND source = 'user'`).get() as Row).count);
+    const totals = this.database.prepare(`SELECT
+      SUM(CASE WHEN source <> 'user' AND COALESCE(json_extract(base_data_payload,'$.is_primary'),1) <> 0 THEN 1 ELSE 0 END) AS official,
+      SUM(CASE WHEN source = 'user' THEN 1 ELSE 0 END) AS community FROM recipes WHERE ${boundary}`).get() as Row;
+    const official = Number(totals.official || 0), community = Number(totals.community || 0);
     const personal = userId ? Number((this.database.prepare(`SELECT COUNT(*) AS count FROM recipes r WHERE ${boundary}
       AND (r.author_user_id = ? OR EXISTS(SELECT 1 FROM recipe_favorites f WHERE f.recipe_id = r.id AND f.user_id = ?))`)
       .get(userId, userId) as Row).count) : 0;
@@ -158,4 +160,10 @@ export class SqliteRecipesRepository implements RecipesRepository {
       else review.run(requirement.rawName.trim(), requirement.normalizedName, String(recipeId), requirement.confidence, null);
     }
   }
+}
+
+export function assertSqlitePlanExecution(database: Database.Database, items: Row[]) {
+  const ids = planExecutionRecipeIds(items);
+  const rows = ids.length ? database.prepare(`SELECT * FROM recipes WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Row[] : [];
+  assertPlanExecution(items, new Map(rows.map(row => [Number(row.id), row])));
 }

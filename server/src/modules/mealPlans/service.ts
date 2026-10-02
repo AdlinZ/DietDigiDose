@@ -11,7 +11,7 @@ export class MealPlansService {
   async activateDraft(userId: number, id: string, version: number) {
     const result = await this.repository.activateDraft(userId, id, version);
     if (result.kind === "not_found") throw new MealPlansError(404, "草案不存在", "MEAL_PLAN_NOT_FOUND");
-    if (result.kind !== "updated") throw new MealPlansError(409, "草案有未解决餐次、版本变化或菜谱已不可用，请重新核对", "MEAL_PLAN_ACTIVATION_CONFLICT");
+    if (result.kind !== "updated") throw new MealPlansError(409, "草案有未解决餐次、版本变化，或菜谱用量与审核已改变，请重新生成并核对", "MEAL_PLAN_ACTIVATION_CONFLICT");
     return result.value;
   }
   async updateDraft(userId: number, id: string, input: UpdateCookingPlanDraftInput) {

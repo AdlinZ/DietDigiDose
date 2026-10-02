@@ -137,6 +137,17 @@ export class PostgresAdminRecipesRepository implements AdminRecipesRepository {
       quality_review_reason=$3, updated_at=CURRENT_TIMESTAMP WHERE id=$4 AND deleted_at IS NULL`,
     [status, event.adminUserId, reason, recipeId], event); }
 
+  async reviewExecution(recipeId: number, execution: import("@dietdigidose/contracts").ReviewedRecipeExecution | null, expected: Row, event: AdminAudit) {
+    return this.reviewTransaction(`UPDATE recipes SET execution_json=$1::jsonb, updated_at=CURRENT_TIMESTAMP
+      WHERE id=$2 AND deleted_at IS NULL AND title IS NOT DISTINCT FROM $3 AND serving_size IS NOT DISTINCT FROM $4
+      AND cook_time IS NOT DISTINCT FROM $5 AND prep_time IS NOT DISTINCT FROM $6
+      AND ingredients_json IS NOT DISTINCT FROM $7::jsonb AND steps_json IS NOT DISTINCT FROM $8::jsonb
+      AND required_kitchenware_json IS NOT DISTINCT FROM $9::jsonb AND optional_kitchenware_json IS NOT DISTINCT FROM $10::jsonb AND execution_json IS NOT DISTINCT FROM $11::jsonb`,
+    [execution ? JSON.stringify(execution) : null, recipeId, expected.title, expected.serving_size ?? null, expected.cook_time ?? null,
+      expected.prep_time ?? null, JSON.stringify(expected.ingredients_json), JSON.stringify(expected.steps_json),
+      JSON.stringify(expected.required_kitchenware_json), JSON.stringify(expected.optional_kitchenware_json), expected.execution_json == null ? null : JSON.stringify(expected.execution_json)], event);
+  }
+
   async reject(recipeId: number, reviewerId: number, reason: string, event: AdminAudit) { return this.reviewTransaction(
     `UPDATE recipes SET status='rejected', reviewed_by=$1, reviewed_at=CURRENT_TIMESTAMP, reject_reason=$2,
       updated_at=CURRENT_TIMESTAMP WHERE id=$3 AND source='user' AND deleted_at IS NULL`, [reviewerId, reason, recipeId], event); }

@@ -10,6 +10,8 @@ import {
   registerApiFetchScope,
   resetApiCacheForTests,
   cachedApiGet,
+  apiCachePolicy,
+  invalidateApiCacheForMutation,
 } from "../cache";
 
 const jsonResponse = (body: unknown, status = 200) => ({
@@ -23,6 +25,50 @@ describe("API client", () => {
   beforeEach(async () => {
     resetApiCacheForTests();
     await AsyncStorage.clear();
+  });
+
+  it.each(["write", "logout", "clear-all"])("drains queued persistent snapshots before %s finishes", async action => {
+    const apiFetch: ApiFetch = jest.fn();
+    registerApiFetchScope(apiFetch, 1401);
+    const paths = ["/api/v1/inventory", "/api/v1/diet-records", "/api/v1/health-data", "/api/v1/meal-plans", "/api/v1/cooking-queue"];
+    await Promise.all(paths.map(path => cachedApiGet(apiFetch, path, apiCachePolicy(path)!, async () => ({ data: { version: 1 } }))));
+    if (action === "write") await invalidateApiCacheForMutation(apiFetch, "/api/v1/diet-records/cooking-completions");
+    else await clearApiCacheScope(action === "logout" ? 1401 : undefined);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const fresh = jest.fn(async () => ({ data: { version: 2 } }));
+    for (const path of paths) {
+      await expect(cachedApiGet(apiFetch, path, apiCachePolicy(path)!, fresh)).resolves.toEqual({ version: 2 });
+    }
+    expect(fresh).toHaveBeenCalledTimes(paths.length);
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
+  it.each(["write", "logout", "clear-all"])("does not restore a disk snapshot whose read overlaps %s", async action => {
+    let version = 1;
+    const apiFetch: ApiFetch = jest.fn(async () => jsonResponse({ version }));
+    registerApiFetchScope(apiFetch, 1403);
+    await requestJson(apiFetch, "/api/v1/inventory");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const [key] = await AsyncStorage.getAllKeys();
+    const snapshot = await AsyncStorage.getItem(key);
+    resetApiCacheForTests();
+    let finishRead!: (value: string | null) => void;
+    const getItem = jest.mocked(AsyncStorage.getItem);
+    const originalGetItem = getItem.getMockImplementation()!;
+    getItem.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    try {
+      const reading = requestJson(apiFetch, "/api/v1/inventory");
+      await new Promise(resolve => setTimeout(resolve, 0));
+      version = 2;
+      if (action === "write") await invalidateApiCacheForMutation(apiFetch, "/api/v1/inventory/1");
+      else await clearApiCacheScope(action === "logout" ? 1403 : undefined);
+      finishRead(snapshot);
+      await expect(reading).resolves.toEqual({ version: 2 });
+      await expect(requestJson(apiFetch, "/api/v1/inventory")).resolves.toEqual({ version: 2 });
+      await new Promise(resolve => setTimeout(resolve, 0));
+    } finally {
+      getItem.mockImplementation(originalGetItem);
+    }
   });
 
   it("invalidates shopping and inventory caches together after atomic intake", async () => {

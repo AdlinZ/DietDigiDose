@@ -1,3 +1,4 @@
+import { parseStructuredQuantity, structuredUnitLabel } from "@/utils/structuredQuantity";
 import { addQuantityValues } from "@dietdigidose/contracts/quantity-decimal";
 import type { InventoryConsumptionInput, InventoryConsumptionPreviewResponse } from "@dietdigidose/contracts";
 
@@ -20,4 +21,23 @@ export function combineInventoryDeductions(deductions: Deduction[]): InventoryCo
     }
   }
   return [...combined.values()];
+}
+
+
+/** Keep unquantified ingredients visible instead of silently dropping their demand. */
+export function ingredientConsumptionRequests(ingredients: { name: string; amount: string }[]) {
+  const requests: { food_name: string; amount_value: number; unit: NonNullable<ReturnType<typeof parseStructuredQuantity>>["unit"] }[] = [];
+  const unknown: string[] = [];
+  for (const ingredient of ingredients) {
+    const quantity = parseStructuredQuantity(ingredient.amount);
+    if (quantity) requests.push({ food_name: ingredient.name, amount_value: quantity.amount, unit: quantity.unit });
+    else unknown.push(ingredient.name);
+  }
+  return { requests, unknown };
+}
+
+export function inventoryPreviewWarnings(preview: InventoryConsumptionPreviewResponse, unknown: string[] = []) {
+  return [...unknown.map(name => `${name}用量未知，请核对实际用量`), ...preview.items.filter(item => !item.fully_covered).map(item =>
+    item.quantity_status === "unknown" ? `${item.food_name}库存数量或换算依据未知，请核对实际用量`
+      : `${item.food_name}缺 ${item.missing_value}${structuredUnitLabel(item.unit)}`)];
 }

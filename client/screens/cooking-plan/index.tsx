@@ -1,3 +1,5 @@
+import { ReheatingDevicePicker } from "@/components/ReheatingDevicePicker";
+import { CookingSchedulePanel } from "@/components/CookingSchedulePanel";
 import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
@@ -32,10 +34,12 @@ function CookingPlanForm() {
   const { profile: healthProfile } = useHealthSummary();
   const [safetyReviewed, setSafetyReviewed] = useState(Boolean(onboarding));
   const [allowShopping, setAllowShopping] = useState(sourceMode !== "inventory");
+  const [productionDate, setProductionDate] = useState(toLocalDateKey());
   const [date, setDate] = useState(toLocalDateKey());
   const [servings, setServings] = useState(String(initialServings ?? 1));
   const [minutes, setMinutes] = useState(initialMinutes == null ? "" : String(initialMinutes));
   const [temporaryAvoidSpicy,setTemporaryAvoidSpicy] = useState<boolean | undefined>(initialAvoidSpicy ?? undefined);
+  const [reheatingDeviceIds, setReheatingDeviceIds] = useState<number[]>();
   const [includeLunch, setIncludeLunch] = useState(!onboarding);
   const [result, setResult] = useState<CookingPlanDraft | null>(null);
   const [error, setError] = useState("");
@@ -50,6 +54,7 @@ function CookingPlanForm() {
       setLoading(false); setSaving(false);
       return () => { requestSequence.current += 1; };
     }
+    setReheatingDeviceIds(undefined);
     setTemporaryAvoidSpicy(initialAvoidSpicy ?? undefined);
     setResult(null); setError(""); setLoading(false); setSaved(false); setSaving(false); setReplacement(null); setActivated(false);
     persistedPlan.current = null;
@@ -66,7 +71,9 @@ function CookingPlanForm() {
         loadedContext.current = context;
         persistedPlan.current = { id: plan.id, version: plan.version };
         setTemporaryAvoidSpicy(draft.effectivePreferences.avoid_spicy ?? undefined);
+        setReheatingDeviceIds(draft.reheatingDeviceIds);
         setResult(draft); setSaved(true); setActivated(plan.status !== "draft");
+        setProductionDate(draft.productionDate ?? draft.meals[0].date);
         setDate(draft.meals[0].date); setServings(String(draft.meals[0].servings));
         setMinutes(String(draft.time.budgetMinutes));
         setIncludeLunch(draft.meals.some(meal => meal.mealType === "lunch"));
@@ -98,10 +105,11 @@ function CookingPlanForm() {
       const parsed = new Date(`${date}T12:00:00`);
       const nextDate = Number.isFinite(parsed.getTime()) ? toLocalDateKey(addLocalDays(1, parsed)) : "";
       const draft = await recommendationsApi.cookingPlan(authFetch, {
+        productionDate, reheatingDeviceIds,
         meals: [{ id: "dinner", date, mealType: "dinner", servings: Number(servings) },
           ...(includeLunch ? [{ id: "lunch", date: nextDate, mealType: "lunch" as const, servings: Number(servings) }] : [])],
         excludedPreparedMealIds: [],
-        preferences: { ...(minutes.trim() ? { meal_time_minutes: Number(minutes) } : {}),...(temporaryAvoidSpicy === undefined ? {} : { avoid_spicy: temporaryAvoidSpicy }) },
+        preferences: { ...(reheatingDeviceIds?.length ? { reheating_available: true } : {}), ...(minutes.trim() ? { meal_time_minutes: Number(minutes) } : {}),...(temporaryAvoidSpicy === undefined ? {} : { avoid_spicy: temporaryAvoidSpicy }) },
       });
       if (account.current === owner && requestSequence.current === sequence) setResult(draft);
     } catch (e) { if (account.current === owner && requestSequence.current === sequence) setError(e instanceof Error ? e.message : "方案计算失败"); }
@@ -178,10 +186,12 @@ function CookingPlanForm() {
       <Text className="text-copy-muted">先用未保留的待吃餐，再计算需要补做的份量。可到待吃餐页标记“这份留着”。</Text>
       <TouchableOpacity onPress={() => router.push("/prepared-meals")}><Text className="font-bold text-brand">查看待吃餐与保留项</Text></TouchableOpacity>
       {result?.planningMode === "weekly" ? <TouchableOpacity onPress={() => router.push("/weekly-plan")}><Text className="font-bold text-brand">重新核对七日安排与采购缺口</Text></TouchableOpacity> : <View className="rounded-2xl bg-surface p-4 gap-3">
-        <Text className="font-bold text-ink">晚餐日期</Text><TextInput accessibilityLabel="晚餐日期" value={date} onChangeText={value => { setDate(value); invalidateDraft(); }} className="rounded-xl border border-line p-3 text-ink" placeholder="YYYY-MM-DD" />
+        <Text className="font-bold text-ink">晚餐日期</Text><TextInput accessibilityLabel="晚餐日期" value={date} onChangeText={value => { setDate(value); if (productionDate === date) setProductionDate(value); invalidateDraft(); }} className="rounded-xl border border-line p-3 text-ink" placeholder="YYYY-MM-DD" />
+        <Text className="font-bold text-ink">本次制作日期</Text><TextInput accessibilityLabel="本次制作日期" value={productionDate} onChangeText={value => { setProductionDate(value); invalidateDraft(); }} className="rounded-xl border border-line p-3 text-ink" placeholder="YYYY-MM-DD" />
         <Text className="font-bold text-ink">每餐需要几份</Text><TextInput accessibilityLabel="每餐份量" value={servings} onChangeText={value => { setServings(value); invalidateDraft(); }} keyboardType="decimal-pad" className="rounded-xl border border-line p-3 text-ink" />
         <Text className="font-bold text-ink">本次时间上限（分钟）</Text><TextInput accessibilityLabel="本次时间上限" value={minutes} onChangeText={value => { setMinutes(value); invalidateDraft(); }} keyboardType="number-pad" placeholder="留空沿用长期设置，未设置为30" className="rounded-xl border border-line p-3 text-ink" />
         <View className="flex-row flex-wrap gap-3">{([[undefined,"辣度沿用档案"],[true,"本次不吃辣"],[false,"本次不限辣度"]] as Array<[boolean | undefined,string]>).map(([value,label]) => <TouchableOpacity key={label} onPress={() => { setTemporaryAvoidSpicy(value); invalidateDraft(); }}><Text className={temporaryAvoidSpicy === value ? "font-bold text-brand" : "text-copy-muted"}>{label}</Text></TouchableOpacity>)}</View>
+        <ReheatingDevicePicker value={reheatingDeviceIds} disabled={loading || saving} onChange={ids => { setReheatingDeviceIds(ids); invalidateDraft(); }} />
         <TouchableOpacity accessibilityRole="checkbox" accessibilityState={{ checked: includeLunch }} onPress={() => { setIncludeLunch(value => !value); invalidateDraft(); }}><Text className="font-bold text-brand">{includeLunch ? "已包含" : "未包含"} · 次日午餐</Text></TouchableOpacity>
         <TouchableOpacity disabled={!user || loading} onPress={() => void calculate()} className="rounded-xl bg-brand-fill p-3 items-center">{loading ? <ActivityIndicator color="#fff" /> : <Text className="font-bold text-white">{user ? "按当前库存重新计算" : "请先登录"}</Text>}</TouchableOpacity>
       </View>}
@@ -190,7 +200,8 @@ function CookingPlanForm() {
         <Text className="font-black text-ink">替换预览 · 其余安排保留</Text>
         {replacement.draft.cooking.filter(item => result?.cooking.find(old => old.targetMealId === item.targetMealId)?.recipeId !== item.recipeId).map(item => <Text key={item.targetMealId} className="text-ink">改为 {item.title} {item.servings} 份</Text>)}
         {replacement.conflicts.map(message => <Text key={message} className="text-danger">{message}</Text>)}
-        <Text className="text-copy-muted">整套已知顺序耗时 {replacement.draft.time.knownSequentialMinutes} 分钟，完整时间与存放条件仍需核对。</Text>
+        <Text className="text-copy-muted">制作{replacement.draft.time.schedule?.complete ? "排程" : "已知顺序"}耗时 {replacement.draft.time.schedule?.elapsedMinutes ?? replacement.draft.time.knownSequentialMinutes} 分钟，制作前仍需核对当前条件。</Text>
+        {replacement.draft.time.reheatingSessions?.map(session => <CookingSchedulePanel key={session.targetMealId} schedule={session.schedule} heading="替换后的食用前复热" titles={Object.fromEntries(replacement.draft.cooking.map(item => [item.recipeId, item.title]))} />)}
         <TouchableOpacity onPress={() => { setResult(replacement.draft); setReplacement(null); setSaved(false); saveId.current = Crypto.randomUUID(); }}><Text className="font-bold text-brand">采用这次替换草案</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => setReplacement(null)}><Text className="text-copy-muted">保留原方案</Text></TouchableOpacity>
       </View> : null}
@@ -199,10 +210,21 @@ function CookingPlanForm() {
         <TouchableOpacity disabled={saved || saving || loading || !!replacement} onPress={() => void save()} className="rounded-xl bg-brand-fill p-3 items-center"><Text className="font-bold text-white">{saving ? "正在保存" : saved ? "已保存 · 可从餐单恢复" : "保存此方案草案"}</Text></TouchableOpacity>
         <Text className="text-copy-muted">保存的是计算时的方案；库存变化后请重新核对。</Text>
         {saved ? <TouchableOpacity disabled={saving || loading || activated || !!replacement || !!result.unresolved.length} onPress={() => void activate()} className="rounded-xl bg-brand-soft p-3"><Text className="font-bold text-brand">{activated ? "已转为餐单 · 从餐单开始制作" : "转为餐单，选择要制作的菜"}</Text></TouchableOpacity> : null}
-        <View className="rounded-2xl bg-warm-soft p-4 gap-2"><Text className="font-black text-ink">方案草案 · 还需核对</Text><Text className="text-copy-muted">{result.planningMode === "weekly" ? "各餐分次制作，累计已知耗时约" : "已知顺序耗时约"} {result.time.knownSequentialMinutes} 分钟，{result.planningMode === "weekly" ? `单次上限 ${result.time.sessionBudgetMinutes} 分钟` : `上限 ${result.time.budgetMinutes} 分钟`}{result.time.exceedsBudget ? "，已超时" : ""}。尚未计入完整收尾、设备安排；保鲜、携带和加热条件也需核实。</Text></View>
+        <View className="rounded-2xl bg-warm-soft p-4 gap-2"><Text className="font-black text-ink">方案草案 · 还需核对</Text><Text className="text-copy-muted">{result.planningMode === "weekly" ? "各餐分次制作，累计已知顺序耗时约" : result.time.schedule?.complete ? "制作排程上限约" : "已知顺序耗时约"} {result.time.schedule?.elapsedMinutes ?? result.time.knownSequentialMinutes} 分钟，{result.planningMode === "weekly" ? `单次上限 ${result.time.sessionBudgetMinutes} 分钟` : `上限 ${result.time.budgetMinutes} 分钟`}{result.time.exceedsBudget ? "，已超时" : ""}。{result.time.incomplete ? "完整收尾、设备安排或加热时间仍需核对。" : "具体制作顺序与并行安排见排程。"}保鲜、携带和加热适用条件也需核实。</Text></View>
+        {result.productionDate ? <Text className="text-copy-muted">按 {result.productionDate} 制作核对存放期限；未填写食用时间，期限须覆盖目标日全天。</Text> : null}
+        {result.time.schedule ? <CookingSchedulePanel schedule={result.time.schedule} titles={Object.fromEntries(result.cooking.map(item => [item.recipeId, item.title]))} /> : null}
+        {result.time.sessions?.map(session => <View key={session.targetMealId} className="gap-2"><Text className="font-bold text-ink">{result.meals.find(meal => meal.id === session.targetMealId)?.date} · 分次制作</Text><CookingSchedulePanel schedule={session.schedule} titles={Object.fromEntries(result.cooking.map(item => [item.recipeId, item.title]))} /></View>)}
+        {result.time.reheatingSessions?.map(session => <View key={session.targetMealId} className="gap-2"><Text className="font-bold text-ink">{result.meals.find(meal => meal.id === session.targetMealId)?.date} · 食用前复热 · 上限 {session.budgetMinutes} 分钟{(session.schedule.elapsedMinutes ?? session.schedule.sequentialMinutes) > session.budgetMinutes ? "，已超时" : ""}</Text><CookingSchedulePanel heading="复热排程" schedule={session.schedule} titles={Object.fromEntries(result.cooking.map(item => [item.recipeId, item.title]))} /></View>)}
         {result.meals.map(meal => <View key={meal.id} className="rounded-2xl bg-surface p-4 gap-2"><Text className="font-black text-ink">{meal.date} · {({ breakfast: "早餐",lunch: "午餐",dinner: "晚餐",snack: "加餐" })[meal.mealType]}</Text><Text className="text-brand">需要 {meal.servings} 份 · 待吃餐 {meal.preparedServings} 份 · 补做 {meal.cookServings} 份</Text>
           {meal.allocations.map(item => <Text key={item.preparedMealId} className="text-copy-muted">待吃：{item.foodName} {item.servings} 份（存放条件待核对）</Text>)}
-          {result.cooking.filter(item => item.targetMealId === meal.id).map(item => <View key={item.recipeId} className="gap-2"><TouchableOpacity onPress={() => router.push({ pathname: "/recipe-detail", params: { id: item.recipeId } })}><Text className="font-bold text-brand">补做：{item.title} {item.servings} 份 · 查看菜谱</Text></TouchableOpacity><TouchableOpacity disabled={loading || saving || activated} onPress={() => void replace(meal.id)}><Text className="font-bold text-brand">这道换一个</Text></TouchableOpacity></View>)}
+          {result.cooking.filter(item => item.targetMealId === meal.id).map(item => <View key={item.recipeId} className="gap-2">{item.substitution ? <View className="gap-1"><Text className="text-brand">缺料时采用审核变体：{item.substitution.sourceTitle}的{item.substitution.removedIngredient} → {item.substitution.replacementIngredient}</Text><Text className="text-copy-muted text-xs">生成时依据：{item.substitution.reference}。按变体完整用量与步骤制作，制作前重新核对。</Text><Text selectable className="text-copy-muted text-xs">来源：{item.substitution.sourceUrl}</Text></View> : null}<TouchableOpacity onPress={() => router.push({ pathname: "/recipe-detail", params: { id: item.recipeId } })}><Text className="font-bold text-brand">补做：{item.title} {item.servings} 份 · 查看菜谱</Text></TouchableOpacity><TouchableOpacity disabled={loading || saving || activated} onPress={() => void replace(meal.id)}><Text className="font-bold text-brand">这道换一个</Text></TouchableOpacity></View>)}
+          {result.handlingChecks?.filter(check => check.targetMealId === meal.id).map((check, index) => <View key={`handling:${index}`} className="gap-1">
+            <Text className={check.status === "conflict" ? "text-danger" : "text-copy-muted"}>{check.preparedMealId ? "待吃餐" : "新做菜"}存放：{check.status === "conditions_match" ? "已知计划条件匹配，食用前仍须核对实际存放" : check.status === "conflict" ? "已知条件冲突" : "待核对"}</Text>
+            {check.reasons.map(reason => <Text key={reason} className="text-copy-muted text-xs">{reason}</Text>)}
+            {check.reference ? <Text className="text-copy-muted text-xs">依据：{check.reference}</Text> : null}
+            {check.instructions ? <Text className="text-copy-muted text-xs">{check.instructions}</Text> : null}
+            {check.sourceUrl ? <Text selectable className="text-copy-muted text-xs">来源：{check.sourceUrl}</Text> : null}
+          </View>)}
           {result.unresolved.filter(item => item.targetMealId === meal.id).map(item => <Text key={item.targetMealId} className="text-danger">{item.reason}</Text>)}
         </View>)}
         <View className="rounded-2xl bg-surface p-4 gap-2"><Text className="font-black text-ink">整套原料预算</Text>{result.ingredientBudget.map((item, index) => <Text key={index} className="text-copy-muted">{item.food_name}：{item.quantity_status === "unknown" ? "数量或换算依据未知" : item.fully_covered ? "已知库存足量" : `缺 ${item.missing_value} ${item.unit}`}</Text>)}</View>

@@ -10,8 +10,11 @@ function parseJson<T>(value: unknown, fallback: T): T {
 
 export function formatQueueItem(row: QueueRow) {
   const snapshot = parseJson<Record<string, unknown>>(row.recipe_snapshot_json, {});
+  const rawCookTime = Object.hasOwn(row, "current_cook_time") ? row.current_cook_time : snapshot.cookTime;
+  const minutes = typeof rawCookTime === "number" || typeof rawCookTime === "string" && rawCookTime.trim() !== "" ? Number(rawCookTime) : NaN;
   const currentIngredients = parseJson<unknown[]>(row.current_ingredients_json, []);
   return {
+    productionMeals: Array.isArray(snapshot.productionPlanItems) ? snapshot.productionPlanItems.map((target: { date: string; mealType: string; servings: number }) => ({ date: target.date, mealType: target.mealType, servings: target.servings })) : [],
     plannedServings: Number(snapshot.plannedServings) > 0 ? Number(snapshot.plannedServings) : null,
     sourcePlanItemId: row.source_plan_item_id ? String(row.source_plan_item_id) : null,
     plannedDate: typeof snapshot.plannedDate === "string" ? snapshot.plannedDate : null,
@@ -26,7 +29,7 @@ export function formatQueueItem(row: QueueRow) {
     imageUrl: row.current_image_url === null || row.current_image_url === undefined
       ? (typeof snapshot.imageUrl === "string" ? snapshot.imageUrl : null)
       : String(row.current_image_url),
-    cookTime: Number(row.current_cook_time ?? snapshot.cookTime ?? 0),
+    cookTime: Number.isFinite(minutes) && minutes >= 0 ? minutes : null,
     calories: Number(row.current_calories ?? snapshot.calories ?? 0),
     difficulty: String(row.current_difficulty || snapshot.difficulty || "难度未知"),
     ingredients: row.source_plan_item_id && Array.isArray(snapshot.ingredients) ? snapshot.ingredients : currentIngredients.length ? currentIngredients : Array.isArray(snapshot.ingredients) ? snapshot.ingredients : [],
@@ -52,6 +55,13 @@ const notFound = () => new CookingQueueError(404, "烹饪队列项不存在", "C
 const versionConflict = () => new CookingQueueError(409, "烹饪队列已在其他设备更新，请刷新后重试", "COOKING_QUEUE_VERSION_CONFLICT");
 const invalidTransition = (message = "当前烹饪状态不能执行该操作") =>
   new CookingQueueError(409, message, "COOKING_QUEUE_INVALID_TRANSITION");
+
+function assertSharedProductionSaved(current: QueueRow, nextStatus: string) {
+  const snapshot = parseJson<{ productionPlanItems?: unknown[] }>(current.recipe_snapshot_json, {});
+  if (nextStatus === "completed" && current.status !== "completed" && Array.isArray(snapshot.productionPlanItems) && snapshot.productionPlanItems.length > 1) {
+    throw invalidTransition("这是多餐共用制作，请先保存总产出和实际食用份量");
+  }
+}
 
 export class CookingQueueService {
   private readonly repository: CookingQueueRepository;
@@ -96,6 +106,7 @@ export class CookingQueueService {
     if (Number(current.version) !== input.version) throw versionConflict();
     if (input.status && !transitions[String(current.status)]?.has(input.status)) throw invalidTransition();
     const nextStatus = input.status ?? String(current.status);
+    assertSharedProductionSaved(current, nextStatus);
     const updated = await this.repository.update(id, userId, input.version, {
       status: nextStatus as QueueUpdateInput["status"] & string,
       mealType: input.mealType === undefined ? current.meal_type : input.mealType,
@@ -131,6 +142,7 @@ export class CookingQueueService {
     if (!current) throw notFound();
     if (current.status === "completed") return formatQueueItem(current);
     if (current.status !== "cooking") throw invalidTransition("请先开始烹饪再完成");
+    assertSharedProductionSaved(current, "completed");
     const updated = await this.repository.transition(id, userId, version, "completed");
     if (!updated) throw versionConflict();
     return formatQueueItem(updated);

@@ -42,6 +42,7 @@ export function formatCookingReminderTime(value: Date | number, now: Date = new 
 }
 
 export async function scheduleCookingReminder(input: {
+  queueItemId?: string;
   recipeId: number;
   recipeTitle: string;
   userId: number;
@@ -55,7 +56,7 @@ export async function scheduleCookingReminder(input: {
   if (permission.status !== "granted") throw new Error("请先在系统设置中允许通知权限");
 
   await Notifications.setNotificationCategoryAsync("cooking-reminder", [
-    { identifier: "START_COOKING", buttonTitle: "开始烹饪" },
+    { identifier: "START_COOKING", buttonTitle: "核对并开火" },
   ]);
   const notificationId = await Notifications.scheduleNotificationAsync({
     content: {
@@ -65,9 +66,10 @@ export async function scheduleCookingReminder(input: {
       categoryIdentifier: "cooking-reminder",
       data: {
         type: "cooking_reminder",
+        ...(input.queueItemId ? { queueItemId: input.queueItemId } : {}),
         recipeId: input.recipeId,
         userId: input.userId,
-        sourceId: `cooking:${input.userId}:${input.recipeId}:${input.date.getTime()}`,
+        sourceId: `cooking:${input.userId}:${input.queueItemId ?? input.recipeId}:${input.date.getTime()}`,
       },
     },
     trigger: {
@@ -87,4 +89,17 @@ export async function cancelCookingQueueRemindersForUser(userId?: number | null)
   if (Platform.OS === "web" || !userId) return;
   const items = await getCookingQueue(userId);
   await Promise.all(items.map((item) => cancelCookingReminder(item.reminderNotificationId)));
+}
+
+
+/** Keep the prior reminder until the server/local commit succeeds; compensate new scheduling on failure. */
+export async function replaceCookingReminder(input: Parameters<typeof scheduleCookingReminder>[0], previousId: string | undefined,
+  persist: (scheduled: Awaited<ReturnType<typeof scheduleCookingReminder>>) => Promise<boolean>) {
+  const scheduled = await scheduleCookingReminder(input);
+  let saved = false;
+  try { saved = await persist(scheduled); }
+  finally { if (!saved) await cancelCookingReminder(scheduled.notificationId); }
+  if (!saved) return null;
+  await cancelCookingReminder(previousId);
+  return scheduled;
 }

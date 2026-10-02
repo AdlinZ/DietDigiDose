@@ -1,3 +1,4 @@
+import { InventoryFieldEvidence } from "@/components/InventoryFieldEvidence";
 import { approvalFields, editApprovalField } from "./approvalFields";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Image, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
@@ -427,6 +428,7 @@ export function AssistantMessageItem({
                                   <Text className="mt-0.5 text-[9px] text-copy-muted" numberOfLines={1}>
                                     {item.quantity || "数量待确认"}{item.fieldEvidence?.quantity?.status === "estimated" ? "（估计）" : ""} · {item.suggestedStorageLocation || "位置待确认"} · {item.estimatedExpireDays == null ? "期限待确认" : `建议 ${item.estimatedExpireDays} 天（待核对）`}
                                   </Text>
+                                  <InventoryFieldEvidence evidence={item.fieldEvidence} />
                                 </View>
                                 {msg.inventoryScanCard?.status === "review" ? (
                                   <TouchableOpacity

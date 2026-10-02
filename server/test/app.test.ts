@@ -8,6 +8,7 @@ import { SqlitePlanMaintenanceRepository } from "../src/modules/planMaintenance/
 import { verifyMaintenanceQueue } from "./maintenanceQueueAssertions.js";
 import { SqliteMaintenanceQueueRepository } from "../src/modules/planMaintenance/sqliteQueueRepository.js";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { verifyAccountSecurityHttp } from "./accountSecurityHttpAssertions.js";
 import { after, before, describe, test } from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -144,6 +145,12 @@ describe("API security baseline", () => {
     db.prepare(`INSERT INTO system_settings(key,value,updated_at) VALUES('auth.sms.enabled','1',CURRENT_TIMESTAMP)
       ON CONFLICT(key) DO UPDATE SET value='1',updated_at=CURRENT_TIMESTAMP`).run();
     try {
+      for (const invalidToken of ["wrong", "x".repeat("contract-callback-token".length), "中".repeat("contract-callback-token".length)]) {
+        const rejected = await api(`/api/v1/webhooks/aliyun/sms-delivery/${encodeURIComponent(invalidToken)}`, {
+          method: "POST", body: "[]", signal: AbortSignal.timeout(2000),
+        });
+        assert.equal(rejected.response.status, 404);
+      }
       const sent = await api("/api/v1/auth/sms/send", {
         method: "POST", body: JSON.stringify({ phone: "13500135000" }),
       });
@@ -642,10 +649,11 @@ describe("API security baseline", () => {
     });
     assert.equal(created.response.status, 200);
     const recipeId = Number((created.body as JsonObject).id);
-    const stored = db.prepare("SELECT title, status, quality_status, tags FROM recipes WHERE id = ?").get(recipeId) as JsonObject;
+    const stored = db.prepare("SELECT title, status, quality_status, tags, prep_time FROM recipes WHERE id = ?").get(recipeId) as JsonObject;
     assert.equal(stored.title, payload.title);
     assert.equal(stored.status, "approved");
     assert.equal(stored.quality_status, "trusted");
+    assert.equal(stored.prep_time, null);
     assert.deepEqual(JSON.parse(stored.tags), ["事务"]);
     assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM recipe_kitchenware_requirements r
       JOIN kitchenware_catalog c ON c.id = r.catalog_id WHERE r.recipe_id = ? AND c.name = '空气炸锅'`).get(recipeId) as JsonObject).count, 1);
@@ -655,13 +663,19 @@ describe("API security baseline", () => {
       WHERE action = 'recipe.create' AND resource_id = ?`).get(String(recipeId)) as JsonObject).count, 1);
 
     const updated = await api(`/api/v1/admin/recipes/${recipeId}`, {
-      method: "PUT", token: adminToken, body: JSON.stringify({ ...payload, title: "管理员仓储更新菜", required_kitchenware: ["烤箱"] }),
+      method: "PUT", token: adminToken, body: JSON.stringify({ ...payload, prep_time: "0", title: "管理员仓储更新菜", required_kitchenware: ["烤箱"] }),
     });
     assert.equal(updated.response.status, 200);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, 0);
     assert.equal((db.prepare(`SELECT c.name FROM recipe_kitchenware_requirements r JOIN kitchenware_catalog c ON c.id = r.catalog_id
       WHERE r.recipe_id = ? AND r.role = 'required'`).get(recipeId) as JsonObject).name, "烤箱");
     assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM admin_audit_logs
       WHERE action = 'recipe.update' AND resource_id = ?`).get(String(recipeId)) as JsonObject).count, 1);
+    const clearPreparation = await api(`/api/v1/admin/recipes/${recipeId}`, {
+      method: "PUT", token: adminToken, body: JSON.stringify({ ...payload, prep_time: "" }),
+    });
+    assert.equal(clearPreparation.response.status, 200);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, null);
     db.prepare("DELETE FROM recipes WHERE id = ?").run(recipeId);
   });
 
@@ -2818,6 +2832,12 @@ describe("core business authorization", () => {
 
     const publicDetail = await api(`/api/v1/recipes/${recipeId}`);
     assert.equal(publicDetail.response.status, 404);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, null);
+    const invalidPreparation = await api(`/api/v1/recipes/submissions/${recipeId}`, {
+      method: "PUT", token: first.token, body: JSON.stringify({ ...payload, prep_time: -1 }),
+    });
+    assert.equal(invalidPreparation.response.status, 400);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, null);
 
     const forbidden = await api(`/api/v1/recipes/submissions/${recipeId}`, {
       method: "PUT",
@@ -2829,9 +2849,14 @@ describe("core business authorization", () => {
     const updated = await api(`/api/v1/recipes/submissions/${recipeId}`, {
       method: "PUT",
       token: first.token,
-      body: JSON.stringify({ ...payload, title: "番茄鸡蛋更新菜谱", required_kitchenware: ["空气炸锅"] }),
+      body: JSON.stringify({ ...payload, prep_time: 0, title: "番茄鸡蛋更新菜谱", required_kitchenware: ["空气炸锅"] }),
     });
     assert.equal(updated.response.status, 200);
+    assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, 0);
+    const unknownPreparation = await api(`/api/v1/recipes/submissions/${recipeId}`, {
+      method: "PUT", token: first.token, body: JSON.stringify({ ...payload, prep_time: null, title: "番茄鸡蛋更新菜谱", required_kitchenware: ["空气炸锅"] }),
+    });
+    assert.equal(unknownPreparation.response.status, 200);
     const storedSubmission = db.prepare("SELECT title, status FROM recipes WHERE id = ?").get(recipeId) as JsonObject;
     assert.deepEqual(storedSubmission, { title: "番茄鸡蛋更新菜谱", status: "pending" });
     const storedRequirement = db.prepare(`SELECT c.name FROM recipe_kitchenware_requirements r
@@ -2854,6 +2879,7 @@ describe("core business authorization", () => {
 
     const visible = await api(`/api/v1/recipes/${recipeId}`);
     assert.equal(visible.response.status, 200);
+    assert.equal((visible.body as JsonObject).prep_time, null);
   });
 
   test("admins can update a regular user's login identifier and reset their password", async () => {
@@ -3774,8 +3800,9 @@ test("Agent inventory undo preserves later changes and records a single compensa
 test("inventory intake resumes source items without duplicating previously saved batches", async () => {
   const account = await register("intake-identity-191@example.com");
   const other = await register("intake-identity-other-191@example.com");
+  const expirationDate = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
   const item = (id: string) => ({ field_evidence: { quantity: { status: "estimated", source: "recognition" } }, source_item_id: id, food_name: "同名大米", quantity: "1袋", quantity_value: 1, quantity_unit: "bag", category: "粮油干货",
-    expiration_date: "2026-10-01", storage_location: "常温", confirmed: true, source: "image" });
+    expiration_date: expirationDate, storage_location: "常温", confirmed: true, source: "image" });
   const submit = (key: string, items: JsonObject[], token = account.token) => api("/api/v1/inventory/bulk-intake", {
     token, method: "POST", body: JSON.stringify({ idempotency_key: key, source: "image", source_reference: "scan-job-191", items }),
   });
@@ -4039,6 +4066,12 @@ test("saved cooking drafts activate into portioned meal items exactly once", asy
   const id = "732adb68-3a62-4c02-a2ac-9e8447877194";
   const save = await api("/api/v1/meal-plans/drafts", { token: account.token, method: "POST", body: JSON.stringify({ id, title: "三份备餐", draft }) });
   assert.equal(save.response.status, 201);
+  const forgedId = "942adb68-3a62-4c02-a2ac-9e8447877194";
+  const forged = { ...draft, cooking: draft.cooking.map(item => ({ ...item, demands: item.demands.map(demand => ({ ...demand, amount_value: 60 })) })) };
+  assert.equal((await api("/api/v1/meal-plans/drafts", { token: account.token, method: "POST", body: JSON.stringify({ id: forgedId, title: "客户端改写用量", draft: forged }) })).response.status, 201);
+  assert.equal((await api(`/api/v1/meal-plans/${forgedId}/activate`, { token: account.token, method: "POST", body: JSON.stringify({ version: 1 }) })).response.status, 409);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM meal_plan_items WHERE plan_id=?").get(forgedId) as JsonObject).n, 0);
+  assert.deepEqual(db.prepare("SELECT status,version FROM meal_plans WHERE id=?").get(forgedId), { status: "draft", version: 1 });
   const activate = (version = 1) => api(`/api/v1/meal-plans/${id}/activate`, { token: account.token, method: "POST", body: JSON.stringify({ version }) });
   const values = await Promise.all([activate(), activate()]);
   assert.deepEqual(values.map(value => value.response.status), [200,200]);
@@ -4836,4 +4869,90 @@ test("inventory decimal precision failures return 409 and leave cooking and stoc
   assert.equal((cooking.body as JsonObject).code, "QUANTITY_PRECISION_REQUIRED");
   assert.deepEqual(db.prepare("SELECT quantity_value,version FROM inventory_items WHERE id=?").get(id), { quantity_value: 1, version: 1 });
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM prepared_meals WHERE user_id=?").get(account.user.id) as JsonObject).n, 0);
+});
+
+
+test("same-session cooking shares production across meal plans atomically", async () => {
+  const { verifyCommonProduction } = await import("./helpers/commonProduction.js");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  const { SqliteDietRecordsRepository } = await import("../src/modules/dietRecords/sqliteRepository.js");
+  const { DietRecordsService } = await import("../src/modules/dietRecords/service.js");
+  const { SqliteCookingQueueRepository } = await import("../src/modules/cookingQueue/sqliteRepository.js");
+  const account = await register("common-production@example.com");
+  await verifyCommonProduction(new SqliteMealPlansRepository(db), new DietRecordsService(new SqliteDietRecordsRepository(db)), account.user.id, async (sql, values = []) => {
+    const statement = db.prepare(sql);
+    if (statement.reader) return statement.all(...values) as Record<string, unknown>[];
+    statement.run(...values); return [];
+  }, new SqliteCookingQueueRepository(db), async operation => {
+    db.exec("CREATE TRIGGER common_production_failure BEFORE INSERT ON prepared_meal_allocations BEGIN SELECT RAISE(ABORT,'injected common production failure'); END");
+    try { await assert.rejects(operation(), /injected common production failure/); }
+    finally { db.exec("DROP TRIGGER common_production_failure"); }
+  });
+});
+
+test("reviewed execution persists atomically and changed recipes invalidate scheduling evidence", async () => {
+  const { verifyRecipeExecution } = await import("./helpers/recipeExecution.js");
+  const { AdminRecipesService } = await import("../src/modules/adminRecipes/service.js");
+  const { SqliteAdminRecipesRepository } = await import("../src/modules/adminRecipes/sqliteRepository.js");
+  const { RecipesService } = await import("../src/modules/recipes/service.js");
+  const { SqliteRecipesRepository } = await import("../src/modules/recipes/sqliteRepository.js");
+  const { RecommendationsService } = await import("../src/modules/recommendations/service.js");
+  const { SqliteRecommendationsRepository } = await import("../src/modules/recommendations/sqliteRepository.js");
+  const { KitchenwareService } = await import("../src/modules/kitchenware/service.js");
+  const { SqliteKitchenwareRepository } = await import("../src/modules/kitchenware/sqliteRepository.js");
+  const kitchenware = new KitchenwareService(new SqliteKitchenwareRepository(db));
+  const adminId = Number((db.prepare("SELECT id FROM users WHERE username='admin'").get() as JsonObject).id);
+  await verifyRecipeExecution(new AdminRecipesService(new SqliteAdminRecipesRepository(db), kitchenware),
+    new RecipesService(new SqliteRecipesRepository(db), kitchenware), new RecommendationsService(new SqliteRecommendationsRepository(db), kitchenware),
+    kitchenware, adminId, async (sql, values = []) => {
+      const statement = db.prepare(sql);
+      if (statement.reader) return statement.all(...values) as Record<string, unknown>[];
+      statement.run(...values); return [];
+    }, new (await import("../src/modules/mealPlans/sqliteRepository.js")).SqliteMealPlansRepository(db));
+  const account = await register("execution-acl@example.com");
+  for (const method of ["GET", "PUT"]) assert.equal((await api("/api/v1/admin/recipes/1/execution", {
+    token: account.token, method, ...(method === "PUT" ? { body: "{}" } : {}),
+  })).response.status, 403);
+});
+
+
+test("changed activated recipes return HTTP 409 without starting the cooking queue", async () => {
+  const account = await register("execution-http-conflict@example.com");
+  const { cookingPlanDraftSchema } = await import("@dietdigidose/contracts");
+  const { SqliteMealPlansRepository } = await import("../src/modules/mealPlans/sqliteRepository.js");
+  const recipeId = Number(db.prepare("INSERT INTO recipes(title,status,steps_json,ingredients_json,serving_size) VALUES('执行接口回归','approved','[]','[{\"name\":\"鸡蛋\",\"amount\":\"1个\"}]',1)").run().lastInsertRowid);
+  const plans = new SqliteMealPlansRepository(db), planId = randomUUID();
+  const draft = cookingPlanDraftSchema.parse({ planningMode: "single_session", status: "requires_validation",
+    meals: [{ id: "http-meal", date: "2099-09-10", mealType: "dinner", servings: 1, preparedServings: 0, cookServings: 1, allocations: [] }],
+    cooking: [{ targetMealId: "http-meal", recipeId, title: "执行接口回归", servings: 1, recipeYield: 1, demands: [{ food_name: "鸡蛋", amount_value: 1, unit: "piece" }] }],
+    totalCookServings: 1, unresolved: [], ingredientBudget: [], time: { budgetMinutes: 30, knownSequentialMinutes: 10, exceedsBudget: false, isEstimate: true, incomplete: true, missing: ["storage"] }, checksPending: ["storage"], excludedPreparedMealIds: [], effectivePreferences: {} });
+  await plans.saveDraft(account.user.id, { id: planId, title: "执行接口回归", draft });
+  await plans.activateDraft(account.user.id, planId, 1);
+  const item = db.prepare("SELECT id FROM meal_plan_items WHERE plan_id=?").get(planId) as JsonObject;
+  const queued = await plans.enqueue(account.user.id, planId, String(item.id), { version: 1, idempotencyKey: randomUUID() });
+  assert.equal(queued.kind, "completed");
+  if (queued.kind !== "completed") throw new Error("queue missing");
+  const queueId = queued.value.queueItemId;
+  db.prepare("UPDATE recipes SET steps_json='[\"内容变化\"]' WHERE id=?").run(recipeId);
+  for (const [method, path, body] of [["POST", `/api/v1/cooking-queue/${queueId}/start`, { version: 1 }], ["PATCH", `/api/v1/cooking-queue/${queueId}`, { version: 1, status: "cooking" }]] as const) {
+    const result = await api(path, { token: account.token, method, body: JSON.stringify(body) });
+    assert.equal(result.response.status, 409);
+    assert.equal((result.body as JsonObject).code, "MEAL_RECIPE_CHANGED");
+  }
+  assert.deepEqual(db.prepare("SELECT status,version FROM cooking_queue_items WHERE id=?").get(queueId), { status: "waiting", version: 1 });
+});
+
+
+test("queue HTTP preserves a current unknown cooking time instead of an old snapshot", async () => {
+  const account = await register("queue-time-http@example.com");
+  const id = Number(db.prepare("INSERT INTO recipes(title,status,cook_time,steps_json,ingredients_json) VALUES('队列时间回归','approved',10,'[]','[]')").run().lastInsertRowid);
+  const queued = await api("/api/v1/cooking-queue", { token: account.token, method: "POST", body: JSON.stringify({ recipeId: id }) });
+  assert.equal(queued.response.status, 201);
+  assert.equal((queued.body as JsonObject).item.cookTime, 10);
+  for (const cookTime of [null, 0, 12]) {
+    db.prepare("UPDATE recipes SET cook_time=? WHERE id=?").run(cookTime, id);
+    const listed = await api("/api/v1/cooking-queue", { token: account.token });
+    assert.equal(listed.response.status, 200);
+    assert.equal((listed.body as JsonObject[]).find(row => row.recipeId === id)!.cookTime, cookTime);
+  }
 });

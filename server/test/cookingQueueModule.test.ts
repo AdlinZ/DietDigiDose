@@ -122,3 +122,30 @@ test("queue selection snapshots belong to the user and recipe and cannot be take
   await service.create(7, { recipeId: 1 });
   assert.equal(snapshot?.selectionEvidence, null);
 });
+
+test("shared queues cannot complete through POST or PATCH before production is saved", async () => {
+  let writes = 0;
+  for (const snapshot of [{ productionPlanItems: [{ id: "first" }, { id: "second" }] }, JSON.stringify({ productionPlanItems: [{ id: "first" }, { id: "second" }] })]) {
+    const current = { ...row, status: "cooking", recipe_snapshot_json: snapshot };
+    const service = new CookingQueueService(fakeRepository({
+      findOwned: async () => current,
+      transition: async () => { writes++; return { ...current, status: "completed" }; },
+      update: async () => { writes++; return { ...current, status: "completed" }; },
+    }));
+    await assert.rejects(service.complete(String(row.id), 1, 1), { code: "COOKING_QUEUE_INVALID_TRANSITION" });
+    await assert.rejects(service.update(String(row.id), 1, { version: 1, status: "completed" }), { code: "COOKING_QUEUE_INVALID_TRANSITION" });
+    current.status = "completed";
+    assert.equal((await service.complete(String(row.id), 1, 1)).status, "completed", "committed production remains replayable");
+  }
+  assert.equal(writes, 0);
+});
+
+
+test("queue time preserves unknown and explicit zero without reviving a superseded snapshot", () => {
+  for (const value of [null, undefined, "", " ", -1, "invalid", Infinity, false, true, [], {}]) {
+    assert.equal(formatQueueItem({ current_cook_time: value, recipe_snapshot_json: { cookTime: 10 } }).cookTime, null);
+  }
+  for (const value of [0, "0", 10, "10"]) assert.equal(formatQueueItem({ current_cook_time: value }).cookTime, Number(value));
+  assert.equal(formatQueueItem({ recipe_snapshot_json: { cookTime: 8 } }).cookTime, 8);
+  assert.equal(formatQueueItem({ recipe_snapshot_json: {} }).cookTime, null);
+});

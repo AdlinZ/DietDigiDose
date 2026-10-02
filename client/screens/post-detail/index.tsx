@@ -95,7 +95,7 @@ const getPostImages = (post: Post): string[] => {
 export default function PostDetailScreen() {
   const router = useSafeRouter();
   const insets = useSafeAreaInsets();
-  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const { width: viewportWidth } = useWindowDimensions();
   const params = useSafeSearchParams<{
     id?: number | string;
     postData?: Post | string;
@@ -127,9 +127,11 @@ export default function PostDetailScreen() {
   const [isMentionPickerVisible, setIsMentionPickerVisible] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionUsers, setMentionUsers] = useState<MentionUser[]>([]);
-  const [keyboardInset, setKeyboardInset] = useState(0);
+  const [keyboardTop, setKeyboardTop] = useState<number | null>(null);
+  const [composerHeight, setComposerHeight] = useState(0);
+  const keyboardInset = keyboardTop === null ? 0
+    : calculateKeyboardInset(composerHeight, keyboardTop);
   const commentInputRef = useRef<TextInput>(null);
-  const keyboardTopRef = useRef<number | null>(null);
 
   const fetchPostDetail = useCallback(async () => {
     if (!params.id) {
@@ -169,19 +171,16 @@ export default function PostDetailScreen() {
 
   useEffect(() => {
     if (!isCommentComposerVisible) {
-      keyboardTopRef.current = null;
-      setKeyboardInset(0);
+      setKeyboardTop(null);
       return;
     }
 
     const updateKeyboardInset = (event: KeyboardEvent) => {
       Keyboard.scheduleLayoutAnimation(event);
-      keyboardTopRef.current = event.endCoordinates.screenY;
-      setKeyboardInset(calculateKeyboardInset(viewportHeight, event.endCoordinates.screenY));
+      setKeyboardTop(event.endCoordinates.screenY);
     };
     const resetKeyboardInset = () => {
-      keyboardTopRef.current = null;
-      setKeyboardInset(0);
+      setKeyboardTop(null);
     };
     const showEvent = Platform.OS === "ios" ? "keyboardWillChangeFrame" : "keyboardDidShow";
     const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
@@ -191,12 +190,7 @@ export default function PostDetailScreen() {
       showSubscription.remove();
       hideSubscription.remove();
     };
-  }, [isCommentComposerVisible, viewportHeight]);
-
-  useEffect(() => {
-    if (keyboardTopRef.current === null) return;
-    setKeyboardInset(calculateKeyboardInset(viewportHeight, keyboardTopRef.current));
-  }, [viewportHeight]);
+  }, [isCommentComposerVisible]);
 
   const goToLogin = (pendingAction: PendingPostAction, commentId?: number) => {
     if (!post) return;
@@ -866,13 +860,19 @@ export default function PostDetailScreen() {
         <Modal
           visible={isCommentComposerVisible}
           transparent
-          animationType="slide"
+          animationType="fade"
           onRequestClose={closeCommentComposer}
-          onShow={() => commentInputRef.current?.focus()}
+          onShow={() => {
+            setKeyboardTop(Keyboard.metrics()?.screenY ?? null);
+            commentInputRef.current?.focus();
+          }}
           statusBarTranslucent
           navigationBarTranslucent
         >
-          <View className="flex-1 justify-end">
+          <View
+            onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)}
+            className="flex-1 justify-end"
+          >
             <TouchableOpacity
               activeOpacity={1}
               onPress={closeCommentComposer}
@@ -885,77 +885,80 @@ export default function PostDetailScreen() {
               className="bg-surface rounded-t-[28px] px-5 pt-4 shadow-2xl"
               style={{
                 marginBottom: keyboardInset,
+                maxHeight: composerHeight > 0
+                  ? Math.max(0, composerHeight - keyboardInset - insets.top) : undefined,
                 paddingBottom: keyboardInset > 0 ? 14 : Math.max(insets.bottom, 14),
               }}
             >
               <View className="w-10 h-1 rounded-full bg-background-secondary self-center mb-4" />
               <View className="flex-row items-center justify-between mb-3">
                 <Text className="text-base font-bold text-ink">{post.category === "问答" ? "写回答" : "写评论"}</Text>
-                <TouchableOpacity onPress={closeCommentComposer} className="p-1.5" accessibilityLabel="取消评论">
+                <TouchableOpacity onPress={closeCommentComposer} className="min-h-touch min-w-touch items-center justify-center" accessibilityLabel="取消评论">
                   <Text className="text-sm text-copy-muted">取消</Text>
                 </TouchableOpacity>
               </View>
 
-              <View className="h-32 max-h-32 rounded-2xl bg-background-secondary px-4 py-3 border border-line">
-                <TextInput
-                  ref={commentInputRef}
-                  value={commentText}
-                  onChangeText={setCommentText}
-                  placeholder="友善地说说你的想法吧..."
-                  placeholderTextColorClassName="accent-copy-muted"
-                  multiline
-                  maxLength={300}
-                  textAlignVertical="top"
-                  className="flex-1 min-h-16 text-[15px] leading-6 text-ink"
-                  accessibilityLabel="评论内容"
-                />
-                <Text className="self-end text-[11px] text-copy-muted mt-1">{commentText.length}/300</Text>
-              </View>
-
-              {commentImageUrl ? (
-                <View className="mt-3 self-start relative">
-                  <Image source={{ uri: commentImageUrl }} className="w-20 h-20 rounded-xl" resizeMode="cover" />
-                  <TouchableOpacity
-                    onPress={() => setCommentImageUrl(null)}
-                    className="absolute -right-2 -top-2 w-6 h-6 rounded-full bg-black/65 items-center justify-center"
-                    accessibilityLabel="移除评论图片"
-                  >
-                    <FontAwesome6 name="xmark" size={11} colorClassName="accent-on-brand" />
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-
-              {isMentionPickerVisible ? (
-                <View className="mt-3 max-h-40 rounded-xl bg-background-secondary overflow-hidden border border-line">
+              <ScrollView keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }}>
+                <View className="h-32 max-h-32 rounded-2xl bg-background-secondary px-4 py-3 border border-line">
                   <TextInput
-                    value={mentionQuery}
-                    onChangeText={(value) => {
-                      setMentionQuery(value);
-                      loadMentionUsers(value);
-                    }}
-                    placeholder="搜索用户"
+                    ref={commentInputRef}
+                    value={commentText}
+                    onChangeText={setCommentText}
+                    placeholder="友善地说说你的想法吧..."
                     placeholderTextColorClassName="accent-copy-muted"
-                    autoFocus
-                    className="px-3 py-2.5 text-sm text-ink border-b border-line"
+                    multiline
+                    maxLength={300}
+                    textAlignVertical="top"
+                    className="flex-1 min-h-16 text-[15px] leading-6 text-ink"
+                    accessibilityLabel="评论内容"
                   />
-                  <ScrollView keyboardShouldPersistTaps="handled">
-                    {mentionUsers.map((user) => (
-                      <TouchableOpacity
-                        key={user.id}
-                        onPress={() => selectMention(user)}
-                        className="flex-row items-center gap-2.5 px-3 py-2"
-                      >
-                        <Image
-                          source={getAvatarSource(user.avatar_url, user.id ?? user.username)}
-                          className="w-7 h-7 rounded-full"
-                        />
-                        <View>
-                          <Text className="text-xs font-bold text-ink">{user.username}</Text>
-                          <Text className="text-[10px] text-copy-muted">@{user.username}</Text>
-                        </View>
-                      </TouchableOpacity>
-                    ))}
-                    {!mentionUsers.length ? <Text className="px-3 py-4 text-xs text-copy-muted">没有找到匹配的用户</Text> : null}
+                  <Text className="self-end text-[11px] text-copy-muted mt-1">{commentText.length}/300</Text>
+                </View>
+
+                {commentImageUrl ? (
+                  <View className="mt-3 self-start relative">
+                    <Image source={{ uri: commentImageUrl }} className="w-20 h-20 rounded-xl" resizeMode="cover" />
+                    <TouchableOpacity
+                      onPress={() => setCommentImageUrl(null)}
+                      className="absolute -right-2 -top-2 w-6 h-6 rounded-full bg-black/65 items-center justify-center"
+                      accessibilityLabel="移除评论图片"
+                    >
+                      <FontAwesome6 name="xmark" size={11} colorClassName="accent-on-brand" />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+
+                {isMentionPickerVisible ? (
+                  <View className="mt-3 max-h-40 rounded-xl bg-background-secondary overflow-hidden border border-line">
+                    <TextInput
+                      value={mentionQuery}
+                      onChangeText={(value) => {
+                        setMentionQuery(value);
+                        loadMentionUsers(value);
+                      }}
+                      placeholder="搜索用户"
+                      placeholderTextColorClassName="accent-copy-muted"
+                      autoFocus
+                      className="px-3 py-2.5 text-sm text-ink border-b border-line"
+                    />
+                    <ScrollView keyboardShouldPersistTaps="handled">
+                      {mentionUsers.map((user) => (
+                        <TouchableOpacity
+                          key={user.id}
+                          onPress={() => selectMention(user)}
+                          className="flex-row items-center gap-2.5 px-3 py-2"
+                        >
+                          <Image
+                            source={getAvatarSource(user.avatar_url, user.id ?? user.username)}
+                            className="w-7 h-7 rounded-full"
+                          />
+                          <View>
+                            <Text className="text-xs font-bold text-ink">{user.username}</Text>
+                            <Text className="text-[10px] text-copy-muted">@{user.username}</Text>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                      {!mentionUsers.length ? <Text className="px-3 py-4 text-xs text-copy-muted">没有找到匹配的用户</Text> : null}
                   </ScrollView>
                 </View>
               ) : null}
@@ -987,6 +990,7 @@ export default function PostDetailScreen() {
                 </View>
               ) : null}
 
+              </ScrollView>
               <View className="flex-row items-center justify-between mt-3">
                 <View className="flex-row items-center gap-1">
                   <TouchableOpacity onPress={pickCommentImage} className="w-10 h-10 items-center justify-center rounded-full active:bg-background-secondary" accessibilityLabel="添加图片">

@@ -10,7 +10,7 @@ function repository(overrides: Partial<AdminRecipesRepository> = {}): AdminRecip
     duplicateSources: async () => [], create: async () => 1, update: async () => false, find: async () => null,
     replaceKitchenware: async () => false, scanDuplicates: async () => undefined,
     coverage: async () => ({ byCategory: [], byDifficulty: [], byTime: [], sources: [], qualityFailures: [], duplicates: [], baselines: [] }),
-    approve: async () => false, reviewQuality: async () => false, reject: async () => false, remove: async () => false,
+    approve: async () => false, reviewQuality: async () => false, reviewExecution: async () => false, reject: async () => false, remove: async () => false,
     ...overrides,
   };
 }
@@ -29,6 +29,7 @@ describe("admin recipes module", () => {
     }, { adminUserId: 7, ipAddress: "127.0.0.1" });
     assert.deepEqual(result, { success: true, id: 42 });
     assert.equal(captured?.sourceContentHash.length, 64);
+    assert.equal(captured?.prepTime, null);
     assert.deepEqual(captured?.requirements.map((item) => [item.rawName, item.catalogId, item.capabilityCode]), [
       ["空气炸锅", 3, "dry_heat"], ["未知锅", null, null],
     ]);

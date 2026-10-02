@@ -1,3 +1,6 @@
+import { assertPostgresPlanExecution } from "../recipes/postgresRepository.js";
+import { productionReservations, validateProductionTargets, type ProductionTarget } from "../mealPlans/commonProduction.js";
+import { parseJson } from "../mealPlans/formatters.js";
 import { lockMealPlanning } from "../mealPlans/postgresLock.js";
 import { PostgresMealAllocationsRepository } from "../mealAllocations/postgresRepository.js";
 import { chooseAllocation, restoredAllocation, allocationMealType } from "../mealAllocations/model.js";
@@ -222,9 +225,10 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
   private async productionBefore(client: PoolClient, userId: number, input: PreparedCookingCompletion) {
     const production = input.production!;
     if (production.queue_item_id) {
-      const plan = (await client.query("SELECT id,version FROM meal_plan_items WHERE user_id=$1 AND queue_item_id=$2", [userId, production.queue_item_id])).rows[0];
+      const plans = (await client.query("SELECT i.id,i.version FROM meal_plan_items i JOIN cooking_queue_items q ON q.id=i.queue_item_id AND q.user_id=i.user_id WHERE i.user_id=$1 AND i.queue_item_id=$2 ORDER BY CASE WHEN i.id=q.source_plan_item_id THEN 0 ELSE 1 END,i.id", [userId, production.queue_item_id])).rows;
+      const plan = production.plan_item_id ? plans.find(row => row.id === production.plan_item_id) : plans[0];
+      if (production.plan_item_id && plans.length && !plan) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "制作队列与餐单不一致");
       if (plan) {
-        if (production.plan_item_id && production.plan_item_id !== plan.id) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "制作队列与餐单不一致");
         production.plan_item_id = plan.id;
         production.plan_version ??= Number(plan.version);
       }
@@ -240,14 +244,22 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
       [userId, input.idempotency_key, production.queue_item_id ?? null, production.plan_item_id ?? null])).rows[0];
     if (existing) return { ...existing.result_json, repeated: true };
     if (production.queue_item_id) {
-      const row = (await client.query("SELECT version,status,recipe_id FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [production.queue_item_id, userId])).rows[0];
+      const row = (await client.query("SELECT version,status,recipe_id,recipe_snapshot_json,source_plan_item_id FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [production.queue_item_id, userId])).rows[0];
       if (!row || Number(row.version) !== production.queue_version || ["completed", "cancelled"].includes(row.status) || (input.recipe_id && Number(row.recipe_id) !== input.recipe_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "制作队列已变化，请刷新后重试");
       if (row.recipe_id != null) input.recipe_id ??= Number(row.recipe_id);
+      const targets = parseJson<{ productionPlanItems?: ProductionTarget[] }>(row.recipe_snapshot_json, {}).productionPlanItems;
+      if (targets || row.source_plan_item_id) {
+        const plans = (await client.query("SELECT i.*,p.constraints_json AS plan_constraints_json,p.status AS plan_status,p.deleted_at AS plan_deleted_at FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.user_id=$1 AND i.queue_item_id=$2 ORDER BY i.id FOR UPDATE OF i",[userId,production.queue_item_id])).rows;
+        if (row.source_plan_item_id && !plans.some(plan => plan.id === row.source_plan_item_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "原餐次已变化，请刷新后重新核对");
+        await assertPostgresPlanExecution(client, plans);
+        if (targets) validateProductionTargets(targets, plans, production, input.recipe_id);
+      }
     }
     if (production.plan_item_id) {
-      const row = (await client.query("SELECT i.version,i.status,i.recipe_id,i.dining_json,p.status AS plan_status FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=$1 AND i.user_id=$2 AND i.deleted_at IS NULL AND p.deleted_at IS NULL FOR UPDATE OF i", [production.plan_item_id, userId])).rows[0];
+      const row = (await client.query("SELECT i.*,p.constraints_json AS plan_constraints_json,p.status AS plan_status FROM meal_plan_items i JOIN meal_plans p ON p.id=i.plan_id WHERE i.id=$1 AND i.user_id=$2 AND i.deleted_at IS NULL AND p.deleted_at IS NULL FOR UPDATE OF i", [production.plan_item_id, userId])).rows[0];
       if (row?.dining_json) throw new InventoryQuantityError("HOUSEHOLD_PRODUCTION_REQUIRED", "这是共餐安排，请从家庭制作入口记录产出");
       if (!row || row.plan_status !== "active" || Number(row.version) !== production.plan_version || ["completed", "skipped"].includes(row.status) || (input.recipe_id && Number(row.recipe_id) !== input.recipe_id)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "餐次已变化，请刷新后重试");
+      await assertPostgresPlanExecution(client, [row]);
       if (row.recipe_id != null) input.recipe_id ??= Number(row.recipe_id);
     }
     return null;
@@ -263,13 +275,19 @@ export class PostgresDietRecordsRepository implements DietRecordsRepository {
     const meal = formatPreparedMeal(inserted.rows[0]);
     const record = production.eaten_servings > 0 ? await insertRecord(client, userId, mealConsumptionRecord(meal, production.eaten_servings, production.eaten_at!, production.eaten_time ?? null)) : null;
     const queueSnapshot = production.queue_item_id ? (await client.query("SELECT recipe_snapshot_json FROM cooking_queue_items WHERE id=$1 AND user_id=$2",[production.queue_item_id,userId])).rows[0]?.recipe_snapshot_json : null;
+    const targets = parseJson<{ productionPlanItems?: ProductionTarget[] }>(queueSnapshot, {}).productionPlanItems;
+    if (targets) {
+      const allocations = new PostgresMealAllocationsRepository(client);
+      await allocations.reserve(userId, targets[0].planId, productionReservations(targets, production, id));
+      meal.allocations = await allocations.list(userId, id);
+    }
     const selectionEvidence = queueSnapshot?.selectionEvidence ?? null;
     const response = { metric_environment: coreLoopEnvironment(), selection_evidence: selectionEvidence, prepared_meal: meal, diet_record: record, consumed_inventory_item_ids: consumedIds, inventory_consumption_changes: changes, repeated: false };
     await client.query("UPDATE prepared_meals SET result_json=$1::jsonb WHERE id=$2", [JSON.stringify(response), id]);
     if (record) await client.query("INSERT INTO prepared_meal_events(id,user_id,prepared_meal_id,idempotency_key,event_type,servings,recorded_at,diet_record_id,result_json) VALUES($1,$2,$3,$4,'eat',$5,$6,$7,$8::jsonb)",
       [randomUUID(), userId, id, `production:${id}`, production.eaten_servings, production.eaten_at!, record.id, JSON.stringify(response)]);
     if (production.queue_item_id) await client.query("UPDATE cooking_queue_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2", [production.queue_item_id, userId]);
-    if (production.plan_item_id) await client.query("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2", [production.plan_item_id, userId]);
+    if (production.plan_item_id) await client.query("UPDATE meal_plan_items SET status='completed',completed_at=CURRENT_TIMESTAMP,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE user_id=$1 AND (id=$2 OR ($3::text IS NOT NULL AND queue_item_id=$3))", [userId, production.plan_item_id, production.queue_item_id ?? null]);
     await appendPostgresMaintenanceEvent(client, { userId, kind: "production", sourceId: id, subjectId: id,
       details: { version: meal.version, planItemId: production.plan_item_id ?? null, inventoryItemIds: consumedIds } });
     return response;

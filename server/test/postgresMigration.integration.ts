@@ -1482,9 +1482,10 @@ try {
   assert.deepEqual((updatedDraftPlan!.constraints as Record<string, unknown>).currentCookingDraft, draftUpdateInput.draft);
 
 
+  const activationRecipe = (await pool.query("INSERT INTO recipes(title,status,ingredients_json,steps_json,serving_size) VALUES('PG激活回归','approved','[{\"name\":\"番茄\",\"amount\":\"200g\"}]','[]',1) RETURNING id,title")).rows[0];
   const activationInput: SaveCookingPlanDraftInput = { ...savedDraftInput, id: "1b5e226a-8e80-413b-bf8e-bfe60cf43194",
-    draft: { ...savedDraftInput.draft, unresolved: [], cooking: [{ targetMealId: "dinner", recipeId: Number(secondRecipe.id),
-      title: String(secondRecipe.title), servings: 1, recipeYield: 1, demands: [{ food_name: "番茄", amount_value: 200, unit: "g" }] }] } };
+    draft: { ...savedDraftInput.draft, unresolved: [], cooking: [{ targetMealId: "dinner", recipeId: Number(activationRecipe.id),
+      title: String(activationRecipe.title), servings: 1, recipeYield: 1, demands: [{ food_name: "番茄", amount_value: 200, unit: "g" }] }] } };
   const lockDraft = { ...activationInput,id: "19600000-0000-4000-8000-000000000099",draft: { ...activationInput.draft,planningMode: "weekly" as const,meals: activationInput.draft.meals.map(meal => ({ ...meal,date: "2099-09-12" })) } };
   await mealPlanRepository.saveDraft(user.id,lockDraft);
   const blocker = await pool.connect();
@@ -2167,10 +2168,11 @@ try {
   assert.equal(await recipesRepository.findPublic(submissionId), null);
   assert.equal((await recipesRepository.listMine(user.id)).some((recipe) => Number(recipe.id) === submissionId), true);
   assert.equal(await recipesRepository.findSubmission(user.id + 1, submissionId), null);
-  const storedSubmission = await pool.query(`SELECT tags, ingredients_json, status FROM recipes WHERE id = $1`, [submissionId]);
+  const storedSubmission = await pool.query(`SELECT tags, ingredients_json, status, prep_time FROM recipes WHERE id = $1`, [submissionId]);
   assert.deepEqual(storedSubmission.rows[0]?.tags, ["postgres"]);
   assert.equal(storedSubmission.rows[0]?.ingredients_json[0]?.name, "番茄");
   assert.equal(storedSubmission.rows[0]?.status, "pending");
+  assert.equal(storedSubmission.rows[0]?.prep_time, null);
   const storedRequirements = await pool.query(`SELECT c.name, r.role FROM recipe_kitchenware_requirements r
     JOIN kitchenware_catalog c ON c.id = r.catalog_id WHERE r.recipe_id = $1 ORDER BY c.name`, [submissionId]);
   assert.deepEqual(storedRequirements.rows, [{ name: "空气炸锅", role: "required" }]);
@@ -2179,11 +2181,14 @@ try {
   assert.deepEqual(storedReview.rows, [{ raw_name: "Postgres 未知锅", status: "pending" }]);
   await assert.rejects(() => recipesService.updateSubmission(user.id + 1, submissionId, submissionBody), /未找到该投稿/);
   await recipesService.updateSubmission(user.id, submissionId, {
-    ...submissionBody, title: "Postgres 用户投稿已更新", required_kitchenware: ["烤箱"],
+    ...submissionBody, prep_time: 0, title: "Postgres 用户投稿已更新", required_kitchenware: ["烤箱"],
   });
   const updatedRequirements = await pool.query(`SELECT c.name FROM recipe_kitchenware_requirements r
     JOIN kitchenware_catalog c ON c.id = r.catalog_id WHERE r.recipe_id = $1`, [submissionId]);
   assert.deepEqual(updatedRequirements.rows, [{ name: "烤箱" }]);
+  assert.equal((await pool.query("SELECT prep_time FROM recipes WHERE id=$1", [submissionId])).rows[0].prep_time, 0);
+  await recipesService.updateSubmission(user.id, submissionId, { ...submissionBody, prep_time: "" });
+  assert.equal((await pool.query("SELECT prep_time FROM recipes WHERE id=$1", [submissionId])).rows[0].prep_time, null);
 
   await pool.query("DELETE FROM recipe_favorites WHERE user_id = $1 AND recipe_id = $2", [user.id, kitchenwareRecipeId]);
   const favoriteWrites = await Promise.all([
@@ -2222,11 +2227,12 @@ try {
   const secondAdminRecipe = await adminRecipesService.create(user.id, { ...adminRecipeBody, description: "重复检测样本" }, adminContext);
   const adminList = await adminRecipesService.list({ search: "Postgres 管理员事务菜", pageSize: 10 });
   assert.equal((adminList as { total: number }).total, 2);
-  const adminStored = await pool.query(`SELECT tags, steps_json, status, quality_status FROM recipes WHERE id=$1`, [firstAdminRecipe.id]);
+  const adminStored = await pool.query(`SELECT tags, steps_json, status, quality_status, prep_time FROM recipes WHERE id=$1`, [firstAdminRecipe.id]);
   assert.deepEqual(adminStored.rows[0]?.tags, ["postgres-admin"]);
   assert.equal(adminStored.rows[0]?.steps_json.length, 2);
   assert.equal(adminStored.rows[0]?.status, "approved");
   assert.equal(adminStored.rows[0]?.quality_status, "trusted");
+  assert.equal(adminStored.rows[0]?.prep_time, null);
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM recipe_duplicate_candidates
     WHERE recipe_id=$1 AND candidate_recipe_id=$2`, [Math.min(firstAdminRecipe.id, secondAdminRecipe.id), Math.max(firstAdminRecipe.id, secondAdminRecipe.id)])).rows[0]?.count), 1);
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM kitchenware_mapping_reviews
@@ -2242,6 +2248,10 @@ try {
   assert.deepEqual((await pool.query("SELECT required_kitchenware_json FROM recipes WHERE id=$1", [firstAdminRecipe.id])).rows[0]?.required_kitchenware_json, beforeFailedMapping);
   assert.equal(Number((await pool.query(`SELECT COUNT(*)::integer AS count FROM admin_audit_logs
     WHERE action='recipe.kitchenware_update' AND resource_id=$1 AND summary='必须回滚'`, [String(firstAdminRecipe.id)])).rows[0]?.count), 0);
+  await adminRecipesService.update(user.id, firstAdminRecipe.id, { ...adminRecipeBody, prep_time: "0" }, adminContext);
+  assert.equal((await pool.query("SELECT prep_time FROM recipes WHERE id=$1", [firstAdminRecipe.id])).rows[0].prep_time, 0);
+  await adminRecipesService.update(user.id, firstAdminRecipe.id, { ...adminRecipeBody, prep_time: null }, adminContext);
+  assert.equal((await pool.query("SELECT prep_time FROM recipes WHERE id=$1", [firstAdminRecipe.id])).rows[0].prep_time, null);
   const adminCoverage = await adminRecipesService.coverage();
   assert(adminCoverage.byCategory.some((row) => row.value === "晚餐"));
   await adminRecipesService.reviewQuality(user.id, firstAdminRecipe.id, "needs_review", "PostgreSQL 集成复核", adminContext);
@@ -2819,6 +2829,24 @@ try {
   await verifyPostgresBackup(connectionString);
   const { verifyPostgresRecoveryApi } = await import("./postgresRecoveryApiAssertions.js");
   await verifyPostgresRecoveryApi(connectionString);
+  const { verifyCommonProduction } = await import("./helpers/commonProduction.js");
+  await verifyCommonProduction(mealPlanRepository, dietService, user.id, async (sql, values = []) => {
+    let parameter = 0;
+    return (await pool.query(sql.replace(/\?/g, () => `$${++parameter}`), values)).rows;
+  }, cookingQueueRepository, async operation => {
+    await pool.query(`CREATE FUNCTION common_production_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected common production failure'; END $$;
+      CREATE TRIGGER common_production_failure BEFORE INSERT ON prepared_meal_allocations FOR EACH ROW EXECUTE FUNCTION common_production_failure();`);
+    try { await assert.rejects(operation(), /injected common production failure/); }
+    finally { await pool.query("DROP TRIGGER common_production_failure ON prepared_meal_allocations; DROP FUNCTION common_production_failure()"); }
+  });
+
+
+
+  const { verifyRecipeExecution } = await import("./helpers/recipeExecution.js");
+  await verifyRecipeExecution(adminRecipesService, recipesService, recommendationsService, kitchenwareService, user.id, async (sql, values = []) => {
+    let parameter = 0;
+    return (await pool.query(sql.replace(/\?/g, () => `$${++parameter}`), values)).rows;
+  }, mealPlanRepository);
 
   console.log(JSON.stringify({
     ok: true,

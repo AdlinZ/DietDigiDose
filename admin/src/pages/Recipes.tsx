@@ -1,4 +1,5 @@
 import { PageHeader } from '../components/admin/PageHeader';
+import { RecipeExecutionEditor } from './RecipeExecutionEditor';
 import { FilterBar } from '../components/admin/ListPrimitives';
 import { DetailPanel } from '../components/admin/DetailPanel';
 import { StatusBadge } from '../components/admin/StatusBadge';
@@ -26,6 +27,7 @@ type Recipe = {
   carbs?: number;
   fat?: number;
   cook_time?: string | number;
+  prep_time?: number | null;
   difficulty?: string;
   image_url: string;
   description?: string;
@@ -55,6 +57,7 @@ type RecipeFormState = {
   carbs: string;
   fat: string;
   cook_time: string;
+  prep_time: string;
   difficulty: string;
   image_url: string;
   description: string;
@@ -71,7 +74,8 @@ const INITIAL_FORM_STATE: RecipeFormState = {
   protein: '',
   carbs: '',
   fat: '',
-  cook_time: '15分钟',
+  cook_time: '',
+  prep_time: '',
   difficulty: '简单',
   image_url: '',
   description: '',
@@ -218,7 +222,8 @@ export default function Recipes() {
       protein: recipe.protein ? String(recipe.protein) : '',
       carbs: recipe.carbs ? String(recipe.carbs) : '',
       fat: recipe.fat ? String(recipe.fat) : '',
-      cook_time: recipe.cook_time ? String(recipe.cook_time) : '15分钟',
+      cook_time: recipe.cook_time ? String(recipe.cook_time).replace(/\s*分钟$/, '') : '',
+      prep_time: recipe.prep_time == null ? '' : String(recipe.prep_time),
       difficulty: recipe.difficulty || '简单',
       image_url: recipe.image_url || '',
       description: recipe.description || '',
@@ -245,6 +250,7 @@ export default function Recipes() {
         carbs: Number(formData.carbs) || 0,
         fat: Number(formData.fat) || 0,
         cook_time: formData.cook_time,
+        prep_time: formData.prep_time,
         difficulty: formData.difficulty,
         image_url: formData.image_url.trim(),
         description: formData.description.trim(),
@@ -389,6 +395,7 @@ export default function Recipes() {
           <div><h3 className="font-semibold mb-2">营养质量</h3><StatusBadge tone={selectedRecipe.quality_status==='needs_review'?'warning':'neutral'}>{selectedRecipe.quality_status==='trusted'?'可信':selectedRecipe.quality_status==='estimated'?'营养估算':'待复核'}</StatusBadge><p className="mt-2">{selectedRecipe.quality_review_reason || '暂无质量审核说明'}</p><p className="admin-muted mt-2">热量 {selectedRecipe.calories} kcal · 蛋白质 {selectedRecipe.protein ?? '—'} g · 碳水 {selectedRecipe.carbs ?? '—'} g · 脂肪 {selectedRecipe.fat ?? '—'} g</p></div>
           <section><h3 className="font-semibold mb-2">原料</h3><ul className="space-y-2">{(recipeDetailArray(selectedRecipe.ingredients_json) as Ingredient[]).map((item,index)=><li key={index}>{item.name} · {item.amount}</li>)}</ul></section>
           <section><h3 className="font-semibold mb-2">做法</h3><ol className="list-decimal pl-5 space-y-3">{(recipeDetailArray(selectedRecipe.steps_json) as string[]).map((item,index)=><li key={index}>{item}</li>)}</ol></section>
+          <RecipeExecutionEditor key={selectedRecipe.id} recipeId={selectedRecipe.id} />
           <button className="admin-button" onClick={()=>{handleOpenEdit(selectedRecipe);setSelectedRecipe(null);}}>编辑食谱</button>
         </div>
       </DetailPanel>}
@@ -452,12 +459,26 @@ export default function Recipes() {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-text-main mb-1">预计烹饪时长</label>
+                    <label className="block text-xs font-bold text-text-main mb-1">烹饪时间（分钟）</label>
                     <input
-                      type="text"
-                      placeholder="例如：20分钟"
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="未核实可留空"
                       value={formData.cook_time}
                       onChange={(e) => setFormData({ ...formData, cook_time: e.target.value })}
+                      className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-primary text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-text-main mb-1">准备时间（分钟）</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="未核实可留空"
+                      value={formData.prep_time}
+                      onChange={(e) => setFormData({ ...formData, prep_time: e.target.value })}
                       className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-primary text-sm"
                     />
                   </div>

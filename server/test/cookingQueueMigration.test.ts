@@ -31,6 +31,8 @@ test("queue migration separates legacy shared meal links without discarding cook
     db.prepare("INSERT INTO schema_migrations VALUES(83,'separate feedback fixture')").run();
     // Intake migrations are covered by their own complete-schema fixtures.
     for (const version of [84, 85, 86]) db.prepare("INSERT INTO schema_migrations VALUES(?,'separate intake fixture')").run(version);
+    // Execution metadata is verified by the complete recipe fixtures in app.test.ts.
+    db.prepare("INSERT INTO schema_migrations VALUES(88,'separate recipe fixture')").run();
     runMigrations(db);
     assert.equal((db.prepare("SELECT reported_cooking_minutes FROM prepared_meals").get() as { reported_cooking_minutes: number | null }).reported_cooking_minutes,null);
     const q = db.prepare("SELECT * FROM cooking_queue_items").get() as Record<string, unknown>;

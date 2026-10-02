@@ -1,3 +1,4 @@
+import { InventoryQuantityError } from "../../services/inventoryQuantity.js";
 import { Router, type NextFunction, type Response } from "express";
 import { authMiddleware, type AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
@@ -10,6 +11,7 @@ import { CookingQueueError } from "./errors.js";
 import type { CookingQueueService } from "./service.js";
 
 function handle(error: unknown, res: Response, next: NextFunction) {
+  if (error instanceof InventoryQuantityError) return sendError(res, 409, error.message, error.code);
   if (error instanceof CookingQueueError) return sendError(res, error.status, error.message, error.code);
   return next(error);
 }

@@ -10,7 +10,7 @@ const UNIT_ALIASES: Record<string, StructuredUnit> = {
 };
 
 export function parseStructuredQuantity(value?: string | null) {
-  const match = String(value || "").trim().match(/(\d+(?:\.\d+)?)\s*(kg|千克|公斤|ml|毫升|[gl克升个枚只片份袋盒瓶罐])/i);
+  const match = String(value || "").trim().match(/^(\d+(?:\.\d+)?)\s*(kg|千克|公斤|ml|毫升|[gl克升个枚只片份袋盒瓶罐])$/i);
   if (!match) return null;
   const amount = Number(match[1]);
   const unit = UNIT_ALIASES[match[2].toLocaleLowerCase()] || UNIT_ALIASES[match[2]];

@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import { recipeExecutionReviewSchema } from "@dietdigidose/contracts";
+import { executionRecipeKey, executionReviewKey, reviewedExecution } from "../recipes/execution.js";
+import { substitutionMatches } from "../recipes/substitutions.js";
+import { recipeMinutesSchema } from "../../utils/recipeMinutes.js";
 import { decodeCursor, encodeCursor } from "../../utils/cursor.js";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
 import { AdminRecipesError } from "./errors.js";
@@ -9,6 +13,7 @@ type CatalogResolver = {
   resolveCatalog(rawName: string): Promise<{
     id: number;
     confidence: number;
+    qualityStatus?: string;
     capabilities: Array<{ code: string }>;
   } | null>;
 };
@@ -70,7 +75,7 @@ function publicationIssues(input: AdminRecipeWrite) {
   if (!input.title) issues.push("missing_title");
   if (!input.dataLicense) issues.push("missing_license");
   if (!Number.isInteger(input.servingSize) || input.servingSize <= 0) issues.push("missing_serving_size");
-  if (input.prepTime + input.cookTime <= 0) issues.push("missing_time");
+  if ((input.prepTime ?? 0) + input.cookTime <= 0) issues.push("missing_time");
   if (!input.ingredients.length) issues.push("missing_ingredients");
   if (input.steps.length < 2) issues.push("missing_steps");
   if (!input.requiredKitchenware.length) issues.push("missing_kitchenware_mapping");
@@ -154,6 +159,47 @@ export class AdminRecipesService {
 
   coverage() { return this.repository.coverage(); }
 
+  async execution(recipeId: number) {
+    const recipe = await this.repository.find(recipeId);
+    if (!recipe) throw new AdminRecipesError(404, "食谱未找到");
+    return { title: String(recipe.title), ingredients: parseArray(recipe.ingredients_json), steps: parseArray(recipe.steps_json), servingSize: Number(recipe.serving_size),
+      recipeKey: executionRecipeKey(recipe), reviewKey: executionReviewKey(recipe), execution: reviewedExecution(recipe) };
+  }
+
+  async reviewExecution(adminUserId: number, recipeId: number, body: Row, context: AuditContext) {
+    const input = recipeExecutionReviewSchema.parse(body);
+    const recipe = await this.repository.find(recipeId);
+    if (!recipe) throw new AdminRecipesError(404, "食谱未找到");
+    if (input.recipeKey !== executionRecipeKey(recipe) || input.reviewKey !== executionReviewKey(recipe)) throw new AdminRecipesError(409, "食谱内容或制作审核已改变，请重新核对", "RECIPE_EXECUTION_CONFLICT");
+    if (input.profile) {
+      for (const rule of input.profile.substitutions ?? []) {
+        const target = await this.repository.find(rule.recipeId);
+        if (!target || target.deleted_at || target.status !== "approved" || target.quality_status !== "trusted" || !reviewedExecution(target)
+          || rule.recipeKey !== executionRecipeKey(target) || !substitutionMatches(recipe, target, rule)) throw new AdminRecipesError(400, "替代菜谱须公开可信、制作流程仍已审核、份数相同且仅替换所列原料；请重新核对完整变体");
+      }
+      if (Math.max(input.profile.maxBatchServings, input.profile.reheating?.maxBatchServings ?? 0) > Number(recipe.serving_size || 0)) throw new AdminRecipesError(400, "批次份量不能超过菜谱已声明产出，请先核对菜谱份数");
+      const reviewedCapabilities = new Set<string>();
+      for (const tool of [...input.profile.tools, ...(input.profile.reheating?.tools ?? [])]) {
+        const catalog = await this.catalog.resolveCatalog(tool.name);
+        if (!catalog || catalog.confidence !== 1 || catalog.id !== tool.catalogId || (catalog.qualityStatus && catalog.qualityStatus !== "trusted")) throw new AdminRecipesError(400, `请为「${tool.name}」选择已审核的厨具目录项`);
+        if (input.profile.tools.includes(tool)) for (const capability of catalog.capabilities) reviewedCapabilities.add(capability.code);
+      }
+      for (const required of parseArray(recipe.required_kitchenware_json)) {
+        const name = typeof required === "string" ? required : String((required as Row)?.name || "");
+        const capability = typeof required === "object" && required ? String((required as Row).capabilityCode || "") : "";
+        const catalog = name ? await this.catalog.resolveCatalog(name) : null;
+        if ((name ? !catalog || !input.profile.tools.some(tool => tool.catalogId === catalog.id) : !capability)
+          || (capability && !reviewedCapabilities.has(capability))) throw new AdminRecipesError(400, `制作流程尚未覆盖所需厨具「${name || capability || "未映射设备"}」`);
+      }
+    }
+    const execution = input.profile ? { recipeKey: input.recipeKey, profile: input.profile, reviewedBy: adminUserId, reviewedAt: new Date().toISOString() } : null;
+    if (!await this.repository.reviewExecution(recipeId, execution, recipe, audit({ ...context, adminUserId }, {
+      action: "recipe.execution_review", resourceId: recipeId, summary: `${execution ? "审核制作流程" : "撤销制作流程审核"}：${recipe.title}`,
+      details: { recipeKey: input.recipeKey, reference: input.profile?.reference ?? null, handling: input.profile?.handling ?? null, reheating: input.profile?.reheating ?? null, substitutions: input.profile?.substitutions ?? [] },
+    }))) throw new AdminRecipesError(409, "食谱内容已改变，请重新核对制作流程", "RECIPE_EXECUTION_CONFLICT");
+    return { success: true, execution, reviewKey: executionReviewKey({ ...recipe, execution_json: execution }) };
+  }
+
   async approve(adminUserId: number, recipeId: number, context: AuditContext) {
     const recipe = await this.repository.find(recipeId);
     if (!recipe || recipe.source !== "user") throw new AdminRecipesError(404, "未找到用户投稿");
@@ -203,11 +249,11 @@ export class AdminRecipesService {
     const title = String(body.title || "").trim();
     return {
       title, description: String(body.description || "").trim(), imageUrl: body.image_url ? String(body.image_url) : null,
-      cookTime: Number(body.cook_time) || 0, difficulty: String(body.difficulty || "简单"), calories: Number(body.calories) || 0,
+      cookTime: recipeMinutesSchema.parse(body.cook_time) ?? 0, difficulty: String(body.difficulty || "简单"), calories: Number(body.calories) || 0,
       protein: Number(body.protein) || 0, carbs: Number(body.carbs) || 0, fat: Number(body.fat) || 0,
       category: String(body.category || "其他"), tags: parseArray(body.tags), steps, ingredients,
       canonicalKey: normalizeContentTerm(title), sourceContentHash: fingerprint(title, ingredients, steps),
-      servingSize: Number(body.serving_size) || 2, prepTime: Number(body.prep_time) || 0,
+      servingSize: Number(body.serving_size) || 2, prepTime: recipeMinutesSchema.parse(body.prep_time),
       cuisine: body.cuisine ? String(body.cuisine) : null, mealTypes: parseArray(body.meal_types), requiredKitchenware,
       optionalKitchenware, sourceUrl: body.source_url ? String(body.source_url) : null,
       dataLicense: String(body.data_license || "DietDigiDose-Original"), sourceRevision: String(body.source_revision || "manual-v1"),
@@ -222,7 +268,7 @@ export class AdminRecipesService {
       cookTime: Number(row.cook_time), difficulty: String(row.difficulty || ""), calories: Number(row.calories), protein: Number(row.protein),
       carbs: Number(row.carbs), fat: Number(row.fat), category: String(row.category || ""), tags: parseArray(row.tags),
       steps: parseArray(row.steps_json), ingredients: parseArray(row.ingredients_json), canonicalKey: String(row.canonical_key || ""),
-      sourceContentHash: String(row.source_content_hash || ""), servingSize: Number(row.serving_size), prepTime: Number(row.prep_time),
+      sourceContentHash: String(row.source_content_hash || ""), servingSize: Number(row.serving_size), prepTime: recipeMinutesSchema.catch(null).parse(row.prep_time),
       cuisine: row.cuisine ? String(row.cuisine) : null, mealTypes: parseArray(row.meal_types_json),
       requiredKitchenware: parseArray(row.required_kitchenware_json), optionalKitchenware: parseArray(row.optional_kitchenware_json),
       sourceUrl: row.source_url ? String(row.source_url) : null, dataLicense: String(row.data_license || ""),

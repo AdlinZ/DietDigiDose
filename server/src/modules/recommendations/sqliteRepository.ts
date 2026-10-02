@@ -22,15 +22,16 @@ export class SqliteRecommendationsRepository implements RecommendationsRepositor
     kitchen_constraints_json, nutrition_targets_json, updated_at FROM user_health_profiles WHERE user_id = ?`).get(userId) as Row | undefined) || null; }
   async inventory(userId: number): Promise<Row[]> { const rows = this.database.prepare(`SELECT id, food_name, expiration_date, updated_at, quantity_value, quantity_unit, batch_code, version, (SELECT metadata_json FROM inventory_change_logs e WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id AND json_extract(e.metadata_json,'$.field_evidence.quantity.status') IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence FROM inventory_items
     WHERE user_id = ? AND is_available = 1 AND deleted_at IS NULL ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date, id`).all(userId) as Row[]; return rows.map(row => ({ ...row, quantity_evidence_status: quantityEvidenceStatus(row.quantity_evidence, row.version) })); }
-  async kitchenware(userId: number) { return this.database.prepare(`SELECT name, updated_at FROM kitchenware_items
-    WHERE user_id = ? AND deleted_at IS NULL AND status <> '维修中' ORDER BY id`).all(userId) as Row[]; }
+  async kitchenware(userId: number) { return this.database.prepare(`SELECT k.id, k.name, k.updated_at, k.attributes_json,
+    (SELECT c.id FROM kitchenware_catalog c WHERE c.quality_status='trusted' AND (c.id=k.catalog_id OR (k.catalog_id IS NULL AND c.name=k.name)) LIMIT 1) AS catalog_id
+    FROM kitchenware_items k WHERE k.user_id = ? AND k.deleted_at IS NULL AND k.status <> '维修中' ORDER BY k.id`).all(userId) as Row[]; }
   async recipes(query: RecipeQuery) {
     const filters = ["deleted_at IS NULL", "status = 'approved'", "COALESCE(quality_status, 'trusted') NOT IN ('needs_review','reference')"];
     const params: Array<string | number> = [];
     if (query.category && query.category !== "全部" && query.category !== "冰箱可做") { filters.push("category = ?"); params.push(query.category); }
     if (query.search) { filters.push("(title LIKE ? OR description LIKE ? OR tags LIKE ? OR ingredients_json LIKE ?)");
       const term = `%${query.search}%`; params.push(term, term, term, term); }
-    if (query.timeBudget) { filters.push("cook_time <= ?"); params.push(query.timeBudget); }
+    if (query.timeBudget) { filters.push("(cook_time <= ? OR execution_json IS NOT NULL)"); params.push(query.timeBudget); }
     return this.database.prepare(`SELECT * FROM recipes WHERE ${filters.join(" AND ")} ORDER BY id`).all(...params) as Row[];
   }
   async favoriteRecipeIds(userId: number) { return (this.database.prepare("SELECT recipe_id FROM recipe_favorites WHERE user_id = ?")

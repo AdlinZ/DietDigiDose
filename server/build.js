@@ -21,6 +21,7 @@ try {
     },
     bundle: true,
     splitting: true,
+    minifySyntax: true,
     platform: 'node',
     format: 'esm',
     outdir: 'dist',

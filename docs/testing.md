@@ -44,3 +44,11 @@ CI 的 `stability` job 从同一提交连续运行两轮全量测试，并上传
 `pnpm -w audit:prod` 对任何新增生产依赖告警失败。`pnpm-workspace.yaml` 只允许精确、已记录且有上游跟踪 issue 的临时 CVE 例外；上游发布修复后必须升级并删除例外，不能用通配规则掩盖告警。
 
 若安全版本改变模块格式而旧版上游消费者尚未兼容，可用 `patchedDependencies` 仅恢复模块互操作层；不得回退安全实现，并必须同时验证真实消费路径、客户端构建与生产依赖审计。
+
+### node-forge 临时安全回补（2026-10-02）
+
+- `CVE-2026-85393` / [GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv)：RSA PKCS#1 v1.5 验签未拒绝嵌套 `DigestAlgorithm` 中的额外元素。当前 npm 最新版 `1.4.0` 仍受影响。
+- 实际依赖来自 Expo CLI 和 `@expo/code-signing-certificates`；后者在证书、CSR 和 manifest 签名验证中调用该解析器，不能仅按开发工具豁免。
+- `patches/node-forge@1.4.0.patch` 回补[上游 PR #1152](https://github.com/digitalbazaar/forge/pull/1152) 提交 `ceba34402e329f0365134f23fe19898756527d65` 的 `lib/rsa.js` 修复，增加嵌套元素数量校验。上游跟踪：[issue #1149](https://github.com/digitalbazaar/forge/issues/1149)。这是项目本地回补，上游尚未发布修复版本。
+- 版本审计无法识别 pnpm 补丁，因此仅对该 CVE 设置临时精确例外。`audit:prod` 必须先运行 `test:dependency-security`：沿两个真实消费者解析依赖，验证有/无 NULL 参数时拒绝额外元素，并验证正常证书、CSR、manifest 签名和 Node 原生验签兼容。原版有 4 项回归失败，应用补丁后全部通过；移除补丁会阻止审计命令继续。完整测试也包含此检查。
+- 维护责任：仓库依赖维护者。上游发布修复后，升级 `node-forge` override，同时移除补丁、`patchedDependencies` 条目与该 CVE 例外，保留回归测试并重新运行完整 CI。其他新漏洞仍直接阻止合并。

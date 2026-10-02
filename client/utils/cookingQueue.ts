@@ -7,10 +7,11 @@ const COOKING_QUEUE_MIGRATION_KEY = "@dietdigidose:cooking_queue_server_migrated
 const MAX_QUEUE_ITEMS = 30;
 
 export type CookingQueueItem = {
+  queueItemId?: string;
   recipeId: number;
   title: string;
   imageUrl: string | null;
-  cookTime: number;
+  cookTime: number | null;
   calories: number;
   difficulty: string;
   addedAt: number;
@@ -24,19 +25,23 @@ export type CookingQueueItem = {
 export function normalizeCookingQueue(value: unknown): CookingQueueItem[] {
   if (!Array.isArray(value)) return [];
 
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   return value.flatMap((raw) => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
     const recipeId = Number(item.recipeId);
     const title = typeof item.title === "string" ? item.title.trim() : "";
-    if (!Number.isInteger(recipeId) || recipeId <= 0 || !title || seen.has(recipeId)) return [];
-    seen.add(recipeId);
+    const queueItemId = typeof item.queueItemId === "string" && item.queueItemId.trim() ? item.queueItemId.trim() : undefined;
+    const identity = queueItemId ? `queue:${queueItemId}` : `recipe:${recipeId}`;
+    if (!Number.isInteger(recipeId) || recipeId <= 0 || !title || seen.has(identity)) return [];
+    seen.add(identity);
+    const minutes = typeof item.cookTime === "number" || typeof item.cookTime === "string" && item.cookTime.trim() !== "" ? Number(item.cookTime) : NaN;
     return [{
+      ...(queueItemId ? { queueItemId } : {}),
       recipeId,
       title,
       imageUrl: typeof item.imageUrl === "string" && item.imageUrl.trim() ? item.imageUrl : null,
-      cookTime: Math.max(0, Number(item.cookTime) || 0),
+      cookTime: Number.isFinite(minutes) && minutes >= 0 ? minutes : null,
       calories: Math.max(0, Number(item.calories) || 0),
       difficulty: typeof item.difficulty === "string" && item.difficulty.trim() ? item.difficulty.trim() : "难度未知",
       addedAt: Number.isFinite(Number(item.addedAt)) ? Number(item.addedAt) : Date.now(),
@@ -107,7 +112,7 @@ export async function addToCookingQueue(userId: number, item: CookingQueueItem) 
   const storageKey = queueStorageKey(userId);
   if (!storageKey) throw new Error("登录后才能使用烹饪队列");
   const current = await getCookingQueue(userId);
-  if (current.some((queuedItem) => queuedItem.recipeId === item.recipeId)) {
+  if (current.some(queuedItem => item.queueItemId ? queuedItem.queueItemId === item.queueItemId : !queuedItem.queueItemId && queuedItem.recipeId === item.recipeId)) {
     return { items: current, added: false };
   }
   const items = [...current, item].slice(-MAX_QUEUE_ITEMS);
@@ -130,13 +135,13 @@ export async function updateCookingQueueItem(
 ) {
   const current = await getCookingQueue(userId);
   return saveCookingQueue(userId, current.map((item) => (
-    item.recipeId === recipeId ? { ...item, ...updates } : item
+    !item.queueItemId && item.recipeId === recipeId ? { ...item, ...updates } : item
   )));
 }
 
 export async function moveCookingQueueItem(userId: number, recipeId: number, offset: -1 | 1) {
   const current = await getCookingQueue(userId);
-  const currentIndex = current.findIndex((item) => item.recipeId === recipeId);
+  const currentIndex = current.findIndex((item) => !item.queueItemId && item.recipeId === recipeId);
   const targetIndex = currentIndex + offset;
   if (currentIndex < 0 || targetIndex < 0 || targetIndex >= current.length) return current;
   const items = [...current];
@@ -147,7 +152,7 @@ export async function moveCookingQueueItem(userId: number, recipeId: number, off
 export async function removeFromCookingQueue(userId: number, recipeId: number) {
   const storageKey = queueStorageKey(userId);
   if (!storageKey) return [];
-  const items = (await getCookingQueue(userId)).filter((item) => item.recipeId !== recipeId);
+  const items = (await getCookingQueue(userId)).filter((item) => item.queueItemId || item.recipeId !== recipeId);
   await AsyncStorage.setItem(storageKey, JSON.stringify(items));
   return items;
 }
@@ -155,4 +160,17 @@ export async function removeFromCookingQueue(userId: number, recipeId: number) {
 export async function clearCookingQueue(userId: number) {
   const storageKey = queueStorageKey(userId);
   if (storageKey) await AsyncStorage.removeItem(storageKey);
+}
+
+
+/** Legacy recipe-only reminders are recoverable only when the task is unambiguous. */
+// ponytail: scan at most 30 queue items; index identities if that cap grows.
+export function mergeCookingQueueRuntime<T extends { id: string; recipeId: number; plannedAt: string | null }>(items: T[], localItems: CookingQueueItem[]) {
+  return items.map(item => {
+    const exact = localItems.find(local => local.queueItemId === item.id);
+    const legacy = localItems.filter(local => !local.queueItemId && local.recipeId === item.recipeId);
+    const local = exact ?? (items.filter(candidate => candidate.recipeId === item.recipeId).length === 1 && legacy.length === 1 ? legacy[0] : undefined);
+    const reminderAt = item.plannedAt ? Date.parse(item.plannedAt) : undefined;
+    return { ...item, reminderAt, reminderNotificationId: reminderAt != null && local?.reminderAt === reminderAt ? local.reminderNotificationId : undefined };
+  });
 }

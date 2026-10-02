@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { reviewedExecution } from "./execution.js";
+import { recipeMinutesSchema } from "../../utils/recipeMinutes.js";
 import { decodeCursor, encodeCursor } from "../../utils/cursor.js";
 import { ensureIngredientGroups, normalizeIngredientGroup } from "../../utils/ingredientGroups.js";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
@@ -80,12 +82,12 @@ export function normalizeRecipeInput(body: Row): RecipeInput {
     ? body.optional_kitchenware.map(String).map((item) => item.trim()).filter(Boolean) : [];
   return {
     title, description: String(body.description || "").trim(), imageUrl: String(body.image_url || "").trim(),
-    cookTime: Math.max(0, Number(body.cook_time) || 0), difficulty: String(body.difficulty || "简单").trim(),
+    cookTime: recipeMinutesSchema.parse(body.cook_time) ?? 0, difficulty: String(body.difficulty || "简单").trim(),
     calories: Math.max(0, Number(body.calories) || 0), protein: Math.max(0, Number(body.protein) || 0),
     carbs: Math.max(0, Number(body.carbs) || 0), fat: Math.max(0, Number(body.fat) || 0),
     nutrition: parseNutrition(body.nutrition ?? body.nutrition_json), category: String(body.category || "其他").trim(),
     tags, steps, ingredients: ensureIngredientGroups(ingredients, title),
-    servingSize: Number(body.serving_size) || 2, prepTime: Number(body.prep_time) || 0,
+    servingSize: Number(body.serving_size) || 2, prepTime: recipeMinutesSchema.parse(body.prep_time),
     cuisine: body.cuisine ? String(body.cuisine) : null,
     mealTypes: Array.isArray(body.meal_types) ? body.meal_types.map(String) : [],
     requiredKitchenware, optionalKitchenware,
@@ -245,7 +247,8 @@ export class RecipesService {
     return rows.map((rawRow) => {
       const recipe = normalizeRowDates(rawRow);
       const { base_data_payload: basePayload, quality_issues_json: _qualityIssues, quality_reviewed_by: _qualityReviewer,
-        quality_reviewed_at: _qualityReviewedAt, quality_review_reason: _qualityReviewReason, ...publicRecipe } = recipe;
+        quality_reviewed_at: _qualityReviewedAt, quality_review_reason: _qualityReviewReason, execution_json: _execution, ...publicRecipe } = recipe;
+      const execution = reviewedExecution(recipe);
       let concept: Row = {};
       try { concept = typeof basePayload === 'string' ? JSON.parse(basePayload) : (basePayload as Row) || {}; } catch { /* Legacy payload. */ }
       const nutritionUnknown = recipe.nutrition_basis === 'unknown';
@@ -271,7 +274,9 @@ export class RecipesService {
         { key: "carbs", label: "碳水", value: Math.max(0, Number(recipe.carbs) || 0), unit: "g" },
         { key: "fat", label: "脂肪", value: Math.max(0, Number(recipe.fat) || 0), unit: "g" },
       ];
-      return { ...publicRecipe, quality_status: recipe.quality_status || "trusted",
+      return { ...publicRecipe, execution_profile: execution?.profile ?? null,
+        execution_evidence: execution ? { reference: execution.profile.reference, reviewedAt: execution.reviewedAt } : null,
+        quality_status: recipe.quality_status || "trusted",
         nutrition_basis: recipe.nutrition_basis || "source",
         nutrition_is_estimated: !nutritionUnknown && (recipe.nutrition_basis || "source") !== "source", image_url: imageUrl,
         ...(concept.concept_id ? { concept_id: concept.concept_id, recipe_concept_id: concept.recipe_concept_id,

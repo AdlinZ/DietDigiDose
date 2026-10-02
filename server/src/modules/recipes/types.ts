@@ -25,7 +25,7 @@ export type RecipeInput = {
   steps: string[];
   ingredients: Array<{ name: string; amount: string; group: IngredientGroup }>;
   servingSize: number;
-  prepTime: number;
+  prepTime: number | null;
   cuisine: string | null;
   mealTypes: string[];
   requiredKitchenware: string[];

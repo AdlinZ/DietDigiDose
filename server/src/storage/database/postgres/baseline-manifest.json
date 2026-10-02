@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "051153b19b82ebe7c1d68189866e175e6fb9310447f0b5d3413a7944204e0efc",
+  "sourceSchemaSha256": "eecfbd382b00048fd1a1d2a7b83e61d49fa9488bb6f34299276a502947d4e069",
   "tableCount": 119,
   "indexCount": 172,
   "foreignKeyCount": 190,
@@ -9393,6 +9393,13 @@
         },
         {
           "name": "base_data_payload",
+          "sqliteType": "TEXT",
+          "postgresType": "jsonb",
+          "transform": "JSON text -> jsonb",
+          "nullable": true
+        },
+        {
+          "name": "execution_json",
           "sqliteType": "TEXT",
           "postgresType": "jsonb",
           "transform": "JSON text -> jsonb",

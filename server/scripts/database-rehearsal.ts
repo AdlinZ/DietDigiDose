@@ -318,12 +318,18 @@ async function main() {
     const legacyDatabase = new Database(legacyPath);
     const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
       .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 29 }, (_, index) => 59 + index).includes(migration.version));
+    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 30 }, (_, index) => 59 + index).includes(migration.version));
     if (unsupportedVersions.length) {
       legacyDatabase.close();
       throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
     }
     for (const migration of newerVersions) {
+      if (migration.version === 88) {
+        // This reversal is limited to the fresh, unreviewed drill fixture.
+        const reviewed = legacyDatabase.prepare("SELECT COUNT(*) n FROM recipes WHERE execution_json IS NOT NULL").get() as { n: number };
+        if (reviewed.n) throw new Error("Cannot downgrade fixture containing reviewed execution evidence");
+        legacyDatabase.exec("ALTER TABLE recipes DROP COLUMN execution_json");
+      }
       if (migration.version === 87) legacyDatabase.exec("DROP TABLE diet_record_create_requests");
       if (migration.version === 86) legacyDatabase.exec("DROP TABLE onboarding_event_receipts; DROP TABLE user_onboarding;");
       if (migration.version === 85) {

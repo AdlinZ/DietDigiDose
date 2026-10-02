@@ -20,12 +20,13 @@ export function useCookingTimer(userId: number | undefined, task: string, initia
   useEffect(() => {
     const sequence = ++scope.current;
     if (!key || !userId || initialSeconds === undefined) return;
-    storageGeneration.current = getPrivateStorageGeneration(userId);
+    const generation = getPrivateStorageGeneration(userId);
+    storageGeneration.current = generation;
     void (async () => {
       await pendingWrites.get(key);
       const value = parseTimer(await AsyncStorage.getItem(key)) || { mode: "countdown" as const, seconds: initialSeconds, startedAt: null };
-      if (sequence !== scope.current) return;
-      current.current = value; setTimer(value); setNow(Date.now()); setLoadedKey(key);
+      if (sequence !== scope.current || generation !== getPrivateStorageGeneration(userId)) return;
+      current.current = value; setTimer(value); setNow(Date.now()); setLoadedKey(key); setNotice("");
     })().catch(() => { if (sequence === scope.current) setNotice("计时记录读取失败，请退出后重试。"); });
     return () => { scope.current = sequence + 1; };
   }, [key, userId, initialSeconds]);
@@ -45,10 +46,13 @@ export function useCookingTimer(userId: number | undefined, task: string, initia
     const generation = storageGeneration.current;
     const sequence = scope.current;
     const active = () => generation === getPrivateStorageGeneration(userId) && revisions.get(key) === revision;
+    let persisted = false;
     const write = (pendingWrites.get(key) || Promise.resolve()).catch(() => undefined).then(async () => {
       if (!active()) return;
-      if (Platform.OS !== "web") await Notifications.cancelScheduledNotificationAsync(key);
       if (!await writeUserPrivateStorage(base, userId, generation, JSON.stringify(value))) return;
+      persisted = true;
+      if (!active()) return;
+      if (Platform.OS !== "web") await Notifications.cancelScheduledNotificationAsync(key);
       let message = "切换步骤会保留当前计时；点重置可使用当前步骤时长。";
       if (value.startedAt !== null && value.mode === "countdown" && timerValue(value, Date.now()) > 0) {
         if (Platform.OS === "web") message = "网页关闭后不能响铃；重新打开会恢复实际剩余时间。";
@@ -68,7 +72,7 @@ export function useCookingTimer(userId: number | undefined, task: string, initia
         }
       }
       if (scope.current === sequence) setNotice(message);
-    }).catch(() => { if (scope.current === sequence) setNotice("计时保存或系统提醒设置失败，请重试暂停/继续。当前显示仍按实际时间计算。"); });
+    }).catch(() => { if (scope.current === sequence) setNotice(persisted ? "计时已保存，但系统提醒更新失败，旧提醒可能仍响起；请重试暂停/继续。" : "计时保存失败，重开后可能恢复旧状态；请重试。当前显示仍按实际时间计算。"); });
     pendingWrites.set(key, write);
     void write.finally(() => { if (pendingWrites.get(key) === write) pendingWrites.delete(key); });
   }, [base, key, loadedKey, userId]);

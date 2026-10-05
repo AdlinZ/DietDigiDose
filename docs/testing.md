@@ -52,3 +52,12 @@ CI 的 `stability` job 从同一提交连续运行两轮全量测试，并上传
 - `patches/node-forge@1.4.0.patch` 回补[上游 PR #1152](https://github.com/digitalbazaar/forge/pull/1152) 提交 `ceba34402e329f0365134f23fe19898756527d65` 的 `lib/rsa.js` 修复，增加嵌套元素数量校验。上游跟踪：[issue #1149](https://github.com/digitalbazaar/forge/issues/1149)。这是项目本地回补，上游尚未发布修复版本。
 - 版本审计无法识别 pnpm 补丁，因此仅对该 CVE 设置临时精确例外。`audit:prod` 必须先运行 `test:dependency-security`：沿两个真实消费者解析依赖，验证有/无 NULL 参数时拒绝额外元素，并验证正常证书、CSR、manifest 签名和 Node 原生验签兼容。原版有 4 项回归失败，应用补丁后全部通过；移除补丁会阻止审计命令继续。完整测试也包含此检查。
 - 维护责任：仓库依赖维护者。上游发布修复后，升级 `node-forge` override，同时移除补丁、`patchedDependencies` 条目与该 CVE 例外，保留回归测试并重新运行完整 CI。其他新漏洞仍直接阻止合并。
+
+### braces 临时安全修复（2026-10-05）
+
+- `CVE-2026-93687` / [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)：长度限制内的深层嵌套模式仍可导致递归栈耗尽。核对当日 npm 最新版仍为受影响的 `3.0.3`，官方尚无修复版本；[上游 PR #75](https://github.com/micromatch/braces/pull/75) 尚未合并。
+- `patches/braces@3.0.3.patch` 是本项目维护的修复，基于官方 `3.0.3`，不是已发布的上游补丁。它在解析、编译、展开、字符串化、嵌套数组遍历及父节点遍历中设置固定深度界限，超限抛出可识别的 `RangeError`。路径预算为 64，文本最多允许 63 层实际括号嵌套；普通转义及浅层匹配保持原行为。此补丁解决深层递归与循环遍历，不改变原有 `rangeLimit`，也不声称覆盖所有资源耗尽风险。
+- `scripts/braces-security.test.mjs` 沿 Expo/Metro、Jest、开发代理和依赖检查工具的 8 条真实消费链解析 `micromatch` / `braces`，对每个实际副本验证深层字符串、未闭合括号、直接 AST、循环节点/父节点、嵌套数组及正常匹配；危险输入在有超时的独立子进程执行。原版 2 组安全回归失败、1 组兼容回归通过；修补后全部通过。固定界限不能由 `maxDepth: Infinity/NaN` 绕过。
+- 额外兼容检查使用官方 `3.0.3` 标签提交 `74b2db2938fad48a2ea54a9c8bf27a37a62c350d` 的全部 12 个测试文件、764 项测试，原版和修补版均通过。临时 runner 使用 Node 内置断言并禁止 shell 调用，没有给项目增加测试依赖；这些外部 fixtures 不替代仓库内的持续安全回归。
+- 审计只识别版本号，因此沿用现有机制，仅为该 CVE 添加精确临时例外；`audit:prod` 和 `test:all` 都先执行安全回归，补丁缺失或任何实际消费副本未修复都会失败。没有放宽其他告警或使用通配忽略。
+- 维护责任：仓库依赖维护者。最迟于 2026-10-19 复核上游状态；上游发布修复后升级到兼容安全版本，删除补丁、`patchedDependencies` 条目及该 CVE 例外，保留回归测试并重新运行完整 CI。

@@ -45,7 +45,7 @@
     "test:all": "pnpm test:dependency-security && pnpm test:staging-smoke && pnpm test:release && pnpm test:upstream-security-watch && pnpm test:client && pnpm test:server && pnpm test:admin",
     "quality:test-quarantine": "node scripts/check-test-quarantine.mjs",
     "quality:build-budgets": "node scripts/check-build-budgets.mjs",
-    "test:dependency-security": "node --test scripts/node-forge-security.test.mjs",
+    "test:dependency-security": "node --test scripts/node-forge-security.test.mjs scripts/braces-security.test.mjs",
     "audit:prod": "pnpm test:dependency-security && pnpm audit --prod --registry=https://registry.npmjs.org",
     "test:staging-smoke": "node --test deploy/staging-smoke.test.mjs deploy/p0-report.test.mjs"
   },

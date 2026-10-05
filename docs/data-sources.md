@@ -89,6 +89,6 @@ python3 -m unittest discover -s datasets/base-data -p test_expand_nutrition.py -
 - 临时 PostgreSQL 17.11 的完整迁移、备份恢复、HTTP 集成，以及 10 项基础数据导入和双库营养写入回归通过；目标 PostgreSQL 16 与 Windows 以当前提交远端 CI 为准。
 - 新增数据 Python 测试 11 项、两份来源审计与最新补充包逐字节重建通过，冻结包和原始摘要未改。全 Python 检查因本机缺锁定 rc.7 附件而有一项旧测试初始化失败，附件下载三次超时；没有替换原附件、修改来源锁或将该次检查宣称通过。
 
-依赖审计仍失败：当前 `braces@3.0.3` 命中 [CVE-2026-93687 / GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)，官方尚无修复版本。本轮未修改依赖、锁文件或审计例外，此项继续阻止发布。
+初次收尾的依赖审计被 `braces@3.0.3` 的 [CVE-2026-93687 / GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) 阻止。随后补入项目维护的深度限制修复、真实消费链回归及精确临时审计例外，详见 [依赖安全修复记录](testing.md#braces-临时安全修复2026-10-05)。官方尚无修复版本；例外必须与强制安全回归共同保留，不能单独忽略告警。
 
 本轮是代码与冻结数据包收尾，未部署、未执行线上导入、未分配安装包编号；0029 迁移仍须随正式部署应用。真实菜谱审核、设备验收及 #187/#218 的原关闭条件保持不变。

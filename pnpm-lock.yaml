@@ -45,6 +45,9 @@ patchedDependencies:
   '@siteed/audio-studio@3.2.1':
     hash: ff7583257734ef204ce228cc3b958f834f2a2b57b8df4725388dba0a901c9608
     path: patches/@siteed__audio-studio@3.2.1.patch
+  braces@3.0.3:
+    hash: f1bd9caa0e3c9d8991a6306999662df01c0e9d23991873f9e85fde65bbeeabac
+    path: patches/braces@3.0.3.patch
   decode-uri-component@0.5.0:
     hash: 51c6277b7a353765f0a95735b55b2b46d0b6bda209f604721ea7bf63ae030d2b
     path: patches/decode-uri-component@0.5.0.patch
@@ -10947,7 +10950,7 @@ snapshots:
     dependencies:
       balanced-match: 4.0.4
 
-  braces@3.0.3:
+  braces@3.0.3(patch_hash=f1bd9caa0e3c9d8991a6306999662df01c0e9d23991873f9e85fde65bbeeabac):
     dependencies:
       fill-range: 7.1.1
 
@@ -13859,7 +13862,7 @@ snapshots:
 
   micromatch@4.0.8:
     dependencies:
-      braces: 3.0.3
+      braces: 3.0.3(patch_hash=f1bd9caa0e3c9d8991a6306999662df01c0e9d23991873f9e85fde65bbeeabac)
       picomatch: 2.3.2
 
   mime-db@1.52.0: {}

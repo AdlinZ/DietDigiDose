@@ -2567,7 +2567,7 @@
         {
           "name": "calories",
           "sqliteType": "INTEGER",
-          "postgresType": "integer",
+          "postgresType": "double precision",
           "transform": "identity",
           "nullable": true
         },

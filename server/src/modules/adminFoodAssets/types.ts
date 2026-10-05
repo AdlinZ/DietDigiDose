@@ -18,10 +18,12 @@ export type IngredientInput = {
   name: string;
   normalizedName: string;
   category: string | null;
-  calories100g: number;
-  protein100g: number;
-  carbs100g: number;
-  fat100g: number;
+  calories100g: number | null;
+  protein100g: number | null;
+  carbs100g: number | null;
+  fat100g: number | null;
+  /** Completeness of calories, protein, carbs and fat; not source verification. */
+  nutritionStatus: "unknown" | "incomplete" | "core_complete";
   source: string;
   aliases: Array<{ value: string; normalized: string }>;
   searchKeywords: string;
@@ -30,6 +32,9 @@ export type IngredientInput = {
   dataLicense: string;
   edibleRatio: number;
 };
+
+export type IngredientUpdateInput = Pick<IngredientInput, "name" | "normalizedName"> &
+  Partial<Omit<IngredientInput, "name" | "normalizedName" | "nutritionStatus">>;
 
 export type IngredientQuery = {
   deleted: "active" | "deleted" | "all";

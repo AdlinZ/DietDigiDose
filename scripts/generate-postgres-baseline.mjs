@@ -97,6 +97,8 @@ function targetKind(table, column) {
   if (BOOLEAN_COLUMNS.has(key)) return "boolean";
   if (JSON_COLUMNS.has(key) || column.name.endsWith("_json")) return "jsonb";
   if (BIGINT_COLUMNS.has(key)) return "bigint";
+  // SQLite INTEGER affinity accepts fractional calories; the API preserves them too.
+  if (key === "diet_records.calories") return "double precision";
   if (sourceType.includes("INT")) return "integer";
   if (sourceType.includes("REAL") || sourceType.includes("FLOA") || sourceType.includes("DOUB")) return "double precision";
   if (sourceType.includes("DATE") || sourceType.includes("TIME")) return "timestamp with time zone";

@@ -8,5 +8,6 @@ export function summarizeNutrition(values: readonly (number | null | undefined)[
 }
 
 export function formatNutritionSummary(summary: ReturnType<typeof summarizeNutrition>, unit: string) {
-  return summary.total == null ? "未知" : `${summary.incomplete ? "已知 " : ""}${summary.total}${unit}`;
+  // Limit display precision only; keep small values and the unrounded sum for calculations.
+  return summary.total == null ? "未知" : `${summary.incomplete ? "已知 " : ""}${Number(summary.total.toPrecision(12))}${unit}`;
 }

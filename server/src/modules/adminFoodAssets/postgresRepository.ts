@@ -1,7 +1,8 @@
 import type { Pool, PoolClient } from "pg";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
+import { mergeIngredientUpdate } from "./ingredientUpdate.js";
 import type { AdminFoodAssetsRepository } from "./repository.js";
-import type { AdminAudit, IngredientInput, IngredientQuery, Row } from "./types.js";
+import type { AdminAudit, IngredientInput, IngredientUpdateInput, IngredientQuery, Row } from "./types.js";
 
 export class PostgresAdminFoodAssetsRepository implements AdminFoodAssetsRepository {
   private readonly pool: Pool;
@@ -25,24 +26,34 @@ export class PostgresAdminFoodAssetsRepository implements AdminFoodAssetsReposit
   async createIngredient(input: IngredientInput, audit: AdminAudit) { return this.tx(async (client) => {
     const result = await client.query(`INSERT INTO ingredients_library
       (name, normalized_name, aliases_json, search_keywords, preparation_state, calories_100g, protein_100g,
-       carbs_100g, fat_100g, category, source, source_version, source_updated_at, data_license, edible_ratio, quality_status)
-      VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_TIMESTAMP,$13,$14,'trusted') RETURNING id`,
+       carbs_100g, fat_100g, category, source, source_version, source_updated_at, data_license, edible_ratio, nutrition_status, quality_status)
+      VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,$11,$12,CURRENT_TIMESTAMP,$13,$14,$15,$16) RETURNING id`,
     [input.name, input.normalizedName, JSON.stringify(input.aliases.map((item) => item.value)), input.searchKeywords,
       input.preparationState, input.calories100g, input.protein100g, input.carbs100g, input.fat100g, input.category,
-      input.source, input.sourceVersion, input.dataLicense, input.edibleRatio]);
+      input.source, input.sourceVersion, input.dataLicense, input.edibleRatio, input.nutritionStatus,
+      input.nutritionStatus === "core_complete" ? "trusted" : "needs_review"]);
     const id = Number(result.rows[0]!.id); await this.replaceAliases(client, id, input);
     await this.insertAudit(client, { ...audit, resourceId: id }); return id;
   }); }
 
-  async updateIngredient(id: number, input: IngredientInput, audit: AdminAudit) { return this.tx(async (client) => {
-    const updated = await client.query(`UPDATE ingredients_library SET name=$1, normalized_name=$2, aliases_json=$3::jsonb,
-      search_keywords=$4, preparation_state=$5, calories_100g=$6, protein_100g=$7, carbs_100g=$8, fat_100g=$9,
-      category=$10, source=$11, source_version=$12, source_updated_at=CURRENT_TIMESTAMP, data_license=$13,
-      edible_ratio=$14, quality_status='trusted' WHERE id=$15 AND deleted_at IS NULL`,
-    [input.name, input.normalizedName, JSON.stringify(input.aliases.map((item) => item.value)), input.searchKeywords,
+  async updateIngredient(id: number, patch: IngredientUpdateInput, audit: AdminAudit) { return this.tx(async (client) => {
+    const current = (await client.query("SELECT * FROM ingredients_library WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", [id])).rows[0] as Row | undefined;
+    if (!current) return false;
+    const input = mergeIngredientUpdate(current, patch);
+    const updated = await client.query(`UPDATE ingredients_library SET name=$1, normalized_name=$2, aliases_json=COALESCE($3::jsonb,aliases_json),
+      search_keywords=COALESCE($4,search_keywords), preparation_state=COALESCE($5,preparation_state),
+      calories_100g=$6, protein_100g=$7, carbs_100g=$8, fat_100g=$9,
+      category=$10, source=COALESCE($11,source), source_version=$12, data_license=$13,
+      edible_ratio=COALESCE($14,edible_ratio), nutrition_status=$15,
+      quality_status=CASE WHEN ($15 <> 'core_complete' OR $17::boolean) AND quality_status='trusted' THEN 'needs_review' ELSE quality_status END,
+      source_updated_at=CASE WHEN $17::boolean THEN NULL ELSE source_updated_at END
+      WHERE id=$16 AND deleted_at IS NULL`,
+    [input.name, input.normalizedName, input.aliases === undefined ? null : JSON.stringify(input.aliases.map((item) => item.value)), input.searchKeywords,
       input.preparationState, input.calories100g, input.protein100g, input.carbs100g, input.fat100g, input.category,
-      input.source, input.sourceVersion, input.dataLicense, input.edibleRatio, id]);
-    if (updated.rowCount !== 1) return false; await this.replaceAliases(client, id, input); await this.insertAudit(client, audit); return true;
+      input.source, input.sourceVersion, input.dataLicense, input.edibleRatio, input.nutritionStatus, id, input.sourceChanged]);
+    if (updated.rowCount !== 1) return false;
+    await this.replaceAliases(client, id, input);
+    await this.insertAudit(client, audit); return true;
   }); }
 
   async removeIngredient(id: number, audit: AdminAudit) { return this.tx(async (client) => {
@@ -116,11 +127,12 @@ export class PostgresAdminFoodAssetsRepository implements AdminFoodAssetsReposit
 
   private async aliases(client: PoolClient, id: number) { return (await client.query(`SELECT alias FROM ingredient_aliases
     WHERE ingredient_id=$1 AND alias_type <> 'canonical' ORDER BY alias`, [id])).rows.map((item) => String(item.alias)); }
-  private async replaceAliases(client: PoolClient, id: number, input: IngredientInput) {
-    await client.query("DELETE FROM ingredient_aliases WHERE ingredient_id=$1", [id]);
+  private async replaceAliases(client: PoolClient, id: number, input: Pick<IngredientUpdateInput, "name" | "normalizedName" | "aliases">) {
+    await client.query("DELETE FROM ingredient_aliases WHERE ingredient_id=$1 AND ($2::boolean OR alias_type='canonical')",
+      [id, input.aliases !== undefined]);
     await client.query(`INSERT INTO ingredient_aliases (ingredient_id, alias, normalized_alias, alias_type)
       VALUES ($1,$2,$3,'canonical') ON CONFLICT (ingredient_id, normalized_alias) DO NOTHING`, [id, input.name, input.normalizedName]);
-    for (const alias of input.aliases) await client.query(`INSERT INTO ingredient_aliases
+    for (const alias of input.aliases ?? []) await client.query(`INSERT INTO ingredient_aliases
       (ingredient_id, alias, normalized_alias, alias_type) VALUES ($1,$2,$3,'synonym')
       ON CONFLICT (ingredient_id, normalized_alias) DO NOTHING`, [id, alias.value, alias.normalized]);
   }

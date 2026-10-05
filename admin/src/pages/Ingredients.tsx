@@ -4,6 +4,7 @@ import { useCallback, useState, useEffect } from 'react';
 import api from '../services/api';
 import { Apple, PlusCircle, Check, X, Search, Trash2, Pencil, Filter, ChevronLeft, ChevronRight, Database, Eye, Barcode } from 'lucide-react';
 import { cn } from '../utils/cn';
+import { ingredientFormPayload, type IngredientForm } from './ingredientForm';
 
 const CATEGORIES = ['全部', '肉类', '蔬菜', '水果', '谷物', '乳制品', '海鲜', '豆制品', '其他'];
 
@@ -88,6 +89,7 @@ export default function Ingredients() {
   };
 
   const [formData, setFormData] = useState(initialForm);
+  const [originalForm, setOriginalForm] = useState<IngredientForm>();
 
   const showToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -174,13 +176,14 @@ export default function Ingredients() {
   const openAddModal = () => {
     setModalMode('add');
     setFormData(initialForm);
+    setOriginalForm(undefined);
     setShowModal(true);
   };
 
   const openEditModal = (item: any) => {
     setModalMode('edit');
     setEditingId(item.id);
-    setFormData({
+    const form = {
       name: item.name || '',
       category: item.category || '其他',
       calories_100g: item.calories_100g?.toString() || '',
@@ -188,7 +191,9 @@ export default function Ingredients() {
       carbs_100g: item.carbs_100g?.toString() || '',
       fat_100g: item.fat_100g?.toString() || '',
       source: item.source || 'official',
-    });
+    };
+    setFormData(form);
+    setOriginalForm(form);
     setShowModal(true);
   };
 
@@ -202,22 +207,9 @@ export default function Ingredients() {
       showToast('请输入食材名称', 'error');
       return;
     }
-    if (!formData.calories_100g) {
-      showToast('请输入每100g热量', 'error');
-      return;
-    }
-
     try {
       setSubmitting(true);
-      const payload = {
-        name: formData.name.trim(),
-        category: formData.category,
-        calories_100g: parseFloat(formData.calories_100g) || 0,
-        protein_100g: parseFloat(formData.protein_100g) || 0,
-        carbs_100g: parseFloat(formData.carbs_100g) || 0,
-        fat_100g: parseFloat(formData.fat_100g) || 0,
-        source: formData.source,
-      };
+      const payload = ingredientFormPayload(formData, modalMode === 'edit' ? originalForm : undefined);
 
       if (modalMode === 'add') {
         await api.post('/admin/ingredients', payload);
@@ -234,7 +226,7 @@ export default function Ingredients() {
         fetchLibrary();
       }
     } catch (err: any) {
-      showToast(err.response?.data?.error || (modalMode === 'add' ? '添加失败' : '修改失败'), 'error');
+      showToast(err.response?.data?.error || err.message || (modalMode === 'add' ? '添加失败' : '修改失败'), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -419,7 +411,7 @@ export default function Ingredients() {
                     onClick={() => openDetailModal(item)}
                   >
                     <td className="px-4 py-3"><div className="flex items-center gap-3"><div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">{item.image_url ? <img src={item.image_url} alt={item.name} className="w-9 h-9 rounded-lg object-cover" /> : <Apple className="w-4 h-4 text-primary" />}</div><div className="min-w-0"><button type="button" onClick={(event) => { event.stopPropagation(); openDetailModal(item); }} className="font-medium text-text-main hover:text-primary text-left max-w-[240px] truncate block focus:outline-none focus:underline">{item.name}</button>{item.original_name && item.original_name !== item.name && <div className="text-xs text-gray-400 truncate max-w-[240px]" title={item.original_name}>原名：{item.original_name}</div>}{item.brands && <div className="text-xs text-gray-400 truncate max-w-[240px]">{item.brands}</div>}</div></div></td>
-                    <td className="px-4 py-3 whitespace-nowrap"><div className="whitespace-nowrap">{item.category || '未分类'}</div><div className="text-xs text-gray-400 mt-1 whitespace-nowrap">{item.source}</div></td><td className="px-4 py-3 font-medium whitespace-nowrap">{item.calories_100g ?? '—'} <span className="text-xs font-normal text-gray-400">kcal</span></td><td className="px-4 py-3 text-gray-600 whitespace-nowrap">碳 {item.carbs_100g ?? 0}g　蛋 {item.protein_100g ?? 0}g　脂 {item.fat_100g ?? 0}g</td><td className="px-4 py-3 whitespace-nowrap">{item.micronutrients_json ? <span className="inline-flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-1 rounded-full whitespace-nowrap"><Database size={12} /> 已收录</span> : <span className="text-xs text-gray-400 whitespace-nowrap">未收录</span>}</td>
+                    <td className="px-4 py-3 whitespace-nowrap"><div className="whitespace-nowrap">{item.category || '未分类'}</div><div className="text-xs text-gray-400 mt-1 whitespace-nowrap">{item.source}</div></td><td className="px-4 py-3 font-medium whitespace-nowrap">{item.calories_100g ?? '—'} <span className="text-xs font-normal text-gray-400">kcal</span></td><td className="px-4 py-3 text-gray-600 whitespace-nowrap">碳 {item.carbs_100g == null ? '未知' : `${item.carbs_100g}g`}　蛋 {item.protein_100g == null ? '未知' : `${item.protein_100g}g`}　脂 {item.fat_100g == null ? '未知' : `${item.fat_100g}g`}</td><td className="px-4 py-3 whitespace-nowrap">{item.micronutrients_json ? <span className="inline-flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-1 rounded-full whitespace-nowrap"><Database size={12} /> 已收录</span> : <span className="text-xs text-gray-400 whitespace-nowrap">未收录</span>}</td>
                     <td className="px-4 py-3"><div className="flex justify-end gap-1">
                       <button
                         onClick={(event) => { event.stopPropagation(); openDetailModal(item); }}
@@ -610,7 +602,7 @@ export default function Ingredients() {
                     <div key={nutrient.label} className={cn('rounded-2xl p-4', nutrient.color)}>
                       <p className="text-xs opacity-75">{nutrient.label}</p>
                       <p className="text-xl font-bold mt-1">
-                        {nutrient.value ?? 0}<span className="text-xs font-medium ml-1">g/100g</span>
+                        {nutrient.value ?? '未知'}{nutrient.value != null && <span className="text-xs font-medium ml-1">g/100g</span>}
                       </p>
                     </div>
                   ))}
@@ -680,6 +672,7 @@ export default function Ingredients() {
             </div>
 
             <form onSubmit={handleFormSubmit} className="space-y-4">
+              <p className="text-xs text-gray-500">营养值留空表示未知，只有确认含量为零时才填 0。缺项会标记待审核；填写完整不代表来源已验证。</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-gray-700 mb-1">食材名称 *</label>
@@ -708,12 +701,13 @@ export default function Ingredients() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">热量 (kcal/100g) *</label>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">热量 (kcal/100g)</label>
                   <input
                     type="number"
-                    step="0.1"
-                    required
-                    placeholder="133"
+                    step="any"
+                    min="0"
+                    max="1000"
+                    placeholder="未知可留空"
                     value={formData.calories_100g}
                     onChange={(e) =>
                       setFormData({ ...formData, calories_100g: e.target.value })
@@ -728,9 +722,8 @@ export default function Ingredients() {
                     onChange={(e) => setFormData({ ...formData, source: e.target.value })}
                     className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-primary text-sm"
                   >
-                    <option value="official">官方验证</option>
-                    <option value="usda">USDA 数据库</option>
-                    <option value="cn_food">中国食物成分表</option>
+                    {Object.entries(SOURCE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    {!SOURCE_LABELS[formData.source] && <option value={formData.source}>{formData.source}</option>}
                   </select>
                 </div>
               </div>
@@ -740,8 +733,10 @@ export default function Ingredients() {
                   <label className="block text-xs font-bold text-gray-700 mb-1">碳水化合物 (g)</label>
                   <input
                     type="number"
-                    step="0.1"
-                    placeholder="0"
+                    step="any"
+                    min="0"
+                    max="100"
+                    placeholder="未知可留空"
                     value={formData.carbs_100g}
                     onChange={(e) => setFormData({ ...formData, carbs_100g: e.target.value })}
                     className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-primary text-sm"
@@ -751,8 +746,10 @@ export default function Ingredients() {
                   <label className="block text-xs font-bold text-gray-700 mb-1">蛋白质 (g)</label>
                   <input
                     type="number"
-                    step="0.1"
-                    placeholder="0"
+                    step="any"
+                    min="0"
+                    max="100"
+                    placeholder="未知可留空"
                     value={formData.protein_100g}
                     onChange={(e) =>
                       setFormData({ ...formData, protein_100g: e.target.value })
@@ -764,8 +761,10 @@ export default function Ingredients() {
                   <label className="block text-xs font-bold text-gray-700 mb-1">脂肪 (g)</label>
                   <input
                     type="number"
-                    step="0.1"
-                    placeholder="0"
+                    step="any"
+                    min="0"
+                    max="100"
+                    placeholder="未知可留空"
                     value={formData.fat_100g}
                     onChange={(e) => setFormData({ ...formData, fat_100g: e.target.value })}
                     className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-primary text-sm"

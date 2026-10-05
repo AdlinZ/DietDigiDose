@@ -29,5 +29,13 @@ export async function verifyManualDietPostgres(pool:Pool) {
     } finally {await pool.query(`DROP TRIGGER ${functionName} ON diet_record_create_requests; DROP FUNCTION ${functionName}()`);}
     const legacy={meal_type:"晚餐",food_name:"旧端记录",amount:"1份"};
     assert.notEqual((await service.create(ids[0],legacy)).id,(await service.create(ids[0],legacy)).id);
+    for (const calories of [0.04, 0, null]) {
+      const fractional = { ...legacy, calories, protein: null, carbs: 0, fat: null, idempotency_key: `precision-${calories}-${suffix}` };
+      const saved = await service.create(ids[0], fractional);
+      assert.equal(saved.calories, calories);
+      assert.equal((await service.create(ids[0], fractional)).calories, calories);
+      const stored = (await pool.query("SELECT calories,protein,carbs,fat FROM diet_records WHERE id=$1", [saved.id])).rows[0];
+      assert.deepEqual(stored, { calories, protein: null, carbs: 0, fat: null });
+    }
   } finally {if(ids.length) await pool.query("DELETE FROM users WHERE id=ANY($1::integer[])",[ids]);}
 }

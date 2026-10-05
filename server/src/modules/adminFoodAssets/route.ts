@@ -2,7 +2,7 @@ import { Router, type NextFunction, type Response } from "express";
 import type { AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
 import { positiveIntegerParam } from "../../middleware/validateParam.js";
-import { adminIngredientSchema } from "../../validation/schemas.js";
+import { adminIngredientSchema, adminIngredientUpdateSchema } from "../../validation/schemas.js";
 import { AdminFoodAssetsError } from "./errors.js";
 import type { AdminFoodAssetsService } from "./service.js";
 
@@ -20,7 +20,7 @@ export function createAdminFoodAssetsRouter(service: AdminFoodAssetsService) {
   router.post("/ingredients", validateBody(adminIngredientSchema), (req: AuthRequest, res, next) => {
     void service.createIngredient(req.body, context(req)).then((value) => res.json(value)).catch((error) => handle(error, res, next));
   });
-  router.put("/ingredients/:id", validateBody(adminIngredientSchema), (req: AuthRequest, res, next) => {
+  router.put("/ingredients/:id", validateBody(adminIngredientUpdateSchema), (req: AuthRequest, res, next) => {
     void service.updateIngredient(Number(req.params.id), req.body, context(req)).then((value) => res.json(value)).catch((error) => handle(error, res, next));
   });
   router.delete("/ingredients/:id", (req: AuthRequest, res, next) => {

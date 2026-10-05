@@ -28,6 +28,14 @@ The vendored component source is integrated locally. A copy of the Apache Licens
 
 Imported records preserve the upstream source URL, source revision and data license in the database. A copy of the upstream license is provided at [`LICENSES/Unlicense.txt`](LICENSES/Unlicense.txt).
 
+## USDA FoodData Central and TFDA nutrition references
+
+- Locations: scoped nutrition references in `datasets/releases/system-data-2026-09-15.2.zip`, `datasets/releases/concept-enrichment-2026-10-02.1.zip` and `datasets/releases/concept-enrichment-2026-10-03.1.zip`, and source observations in `datasets/base-data/evidence/`
+- USDA FoodData Central: CC0 1.0, as declared in the [official API guide](https://fdc.nal.usda.gov/api-guide/). Attribution: U.S. Department of Agriculture, Agricultural Research Service, FoodData Central. Preserve each record's FDC ID, data type, source URL and snapshot information.
+- Taiwan Food and Drug Administration: Government Data Open License, version 1, as declared by the [official dataset catalogue](https://data.gov.tw/dataset/8543). Preserve sample identifiers, source descriptions and nutrient units.
+
+These are scoped reference samples, not measurements of every similarly named ingredient. Missing values remain unknown. Source-evidence coverage and the remaining gaps are documented in [data-sources.md](docs/data-sources.md).
+
 ## Space Mono
 
 - Upstream: <https://github.com/googlefonts/spacemono>

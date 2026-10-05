@@ -20,6 +20,17 @@ rc.7 附件另由 `archive.lock.json` 校验。缺文件、下载失败或哈希
 目录引用和全部 20 道菜的营养重算，保留未知值及禁止自动配餐的约束。
 营养逻辑测试使用冻结包中的输入，不依赖开发者电脑上的输出目录。
 
+`test_source_coverage.py` 逐值比对随包原始观测与补充的锁定来源证据，重算营养并校验覆盖报告；缺少原始观测会明确列为缺口，不因链接存在而记为已核验。`pnpm data:audit` 可独立输出该报告，无须数据库或网络。
+
+`test_expand_nutrition.py` 使用已核验并固定摘要的 60 条 TFDA 原始行，离线逐字节重建 `concept-enrichment-2026-10-03.1.zip`；核对 46 个参考、44 个食材概念及原菜谱文件逐字不变。`pnpm data:audit:expanded` 核对基础包叠加补充包后的覆盖。新增补充包测试不依赖历史中间目录。
+
+```sh
+python3 -m unittest discover -s datasets/base-data -p test_expand_nutrition.py -v
+python3 datasets/base-data/expand_nutrition.py /tmp/rebuilt-nutrition.zip
+```
+
+输出路径必须不存在，避免覆盖已分发版本。有完整锁定 TFDA ZIP 时可加 `--tfda /path/to/tfda.zip`，额外逐行核对原始归档位置；本次发布执行了此核对。来源快照变化时建立新版本，不更改旧快照摘要。
+
 字符转换使用随仓库固定分发的 OpenCC 字符字典，Linux/macOS/Windows 结果一致；
 不再调用 Windows NLS。来源及许可见 `reclean/opencc/README.md`。
 

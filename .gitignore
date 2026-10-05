@@ -81,6 +81,8 @@ logs/
 *.dmg
 *.rar
 *.zip
+!datasets/releases/concept-enrichment-2026-10-02.1.zip
+!datasets/releases/concept-enrichment-2026-10-03.1.zip
 *.gz
 
 # 文档类也默认加入

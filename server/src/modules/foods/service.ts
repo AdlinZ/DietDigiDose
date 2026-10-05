@@ -8,7 +8,7 @@ type FoodServiceDependencies = {
 };
 
 function publicFood<T extends object>(food: T): Omit<T, "micronutrients_json"> & { micronutrients: unknown } {
-  const { micronutrients_json: micronutrientsJson, base_data_payload: payload, ...result } = food as T & { micronutrients_json?: unknown; base_data_payload?: unknown };
+  const { micronutrients_json: micronutrientsJson, base_data_payload: payload, ...result } = food as T & { source?: string; micronutrients_json?: unknown; base_data_payload?: unknown };
   let concept: Record<string, unknown> | null = null;
   try { concept = typeof payload === 'string' ? JSON.parse(payload) : payload as Record<string, unknown> || null; } catch { /* Missing legacy metadata. */ }
   let micronutrients: unknown = null;
@@ -21,10 +21,13 @@ function publicFood<T extends object>(food: T): Omit<T, "micronutrients_json"> &
   } else if (micronutrientsJson && typeof micronutrientsJson === "object") {
     micronutrients = micronutrientsJson;
   }
-  return { ...result, micronutrients,
+  const conceptBased = result.source === 'concept_base' || Boolean(concept?.concept_id);
+  return { ...result, micronutrients: conceptBased ? null : micronutrients,
     ...(concept?.concept_id ? { concept_id: concept.concept_id, forms: concept.forms, aliases: concept.aliases,
       nutrition_references: concept.nutrition_references || [], enrichment_version: concept.enrichment_version,
-      nutrition_status: 'unknown', automatic_calculation_allowed: false, edible_ratio: null } : {}),
+    } : {}),
+    ...(conceptBased ? { calories_100g: null, protein_100g: null, carbs_100g: null, fat_100g: null,
+      nutrition_basis: 'unknown', nutrition_status: 'unknown', automatic_calculation_allowed: false, edible_ratio: null } : {}),
   } as Omit<T, "micronutrients_json"> & { micronutrients: unknown };
 }
 

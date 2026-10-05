@@ -13,23 +13,52 @@ const normalize = s => s.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').tr
 const toolCategory = name => ({'餐具与食物容器':'刀具餐具','刀具与手动工具':'刀具餐具','锅具与烘焙器具':'烹饪锅具','料理与饮品电器':'小家电','烹饪电器':'小家电','制冷与清洗电器':'小家电','厨卫电器':'小家电'}[name] || '其他');
 const recipeCategory = name => ({meat_dish:'荤菜',vegetable_dish:'素菜',staple:'主食',aquatic:'水产',breakfast:'早餐',soup:'汤羹',drink:'饮品',project_draft:'家常菜',dessert:'甜品', 'semi-finished':'半成品',condiment:'调味'}[name] || '其他');
 const counts = { ingredients: 0, kitchenware: 0, methods: 0, primaryRecipes: 0, reused: 0, inserted: 0 };
+const preserved = new Set();
 try {
   await db.query('BEGIN');
   await db.query("SET LOCAL lock_timeout='10s'; SET LOCAL statement_timeout='120s'");
   await db.query('SELECT pg_advisory_xact_lock(187,8)');
-  const existing = new Map((await db.query('SELECT * FROM base_data_runtime_ids')).rows.map(r => [`${r.collection}:${r.logical_id}`, Number(r.target_id)]));
-  const get = (collection, id) => existing.get(`${collection}:${id}`);
+  const existing = new Map((await db.query('SELECT * FROM base_data_runtime_ids')).rows.map(r => [`${r.collection}:${r.logical_id}`, r]));
+  const tables = {ingredients:'ingredients_library',concept_ingredients:'ingredients_library',kitchenware:'kitchenware_catalog',concept_kitchenware:'kitchenware_catalog',recipes:'recipes',concept_methods:'recipes'};
+  const get = (collection, id) => {
+    const row = existing.get(`${collection}:${id}`);
+    if (!row) return undefined;
+    const target = Number(row.target_id);
+    if (!Number.isSafeInteger(target) || target <= 0 || row.target_table !== tables[collection] || row.imported_version !== (collection.startsWith('concept_') ? version : '0.1.0-rc.7')) {
+      throw new Error(`Runtime mapping changed: ${collection}:${id}`);
+    }
+    return target;
+  };
   async function mapping(collection, logical, table, id) {
     await db.query(`INSERT INTO base_data_runtime_ids(collection,logical_id,target_table,target_id,imported_version)
       VALUES($1,$2,$3,$4,$5) ON CONFLICT(collection,logical_id) DO UPDATE SET
       target_id=excluded.target_id,imported_version=excluded.imported_version,imported_at=now()`, [collection,logical,table,String(id),version]);
-    existing.set(`${collection}:${logical}`, id);
+    existing.set(`${collection}:${logical}`, {target_id:id,target_table:table,imported_version:version});
   }
-  async function save(table, row, id) {
+  async function save(table, row, id, legacyIds) {
     const keys = Object.keys(row), values = Object.values(row);
     if (id) {
-      const old = (await db.query(`SELECT source FROM ${table} WHERE id=$1`, [id])).rows[0];
+      const old = (await db.query(`SELECT * FROM ${table} WHERE id=$1 FOR UPDATE`, [id])).rows[0];
       if (!old || !['base_data','concept_base'].includes(old.source)) throw new Error(`Refusing to overwrite non-imported ${table}:${id}`);
+      if (old.source === 'concept_base') {
+        const expected = JSON.parse(row.base_data_payload), actual = old.base_data_payload;
+        const collection = {ingredients_library:'concept_ingredients',kitchenware_catalog:'concept_kitchenware',recipes:'concept_methods'}[table];
+        if (actual?.version !== version || actual.concept_id !== expected.concept_id ||
+            get(collection, expected.method_id || expected.concept_id) !== id ||
+            (table === 'ingredients_library' && old.source_version !== version) ||
+            (table === 'recipes' && (old.source_revision !== version || old.external_id !== row.external_id || actual.method_id !== expected.method_id))) {
+          throw new Error(`Concept identity or version changed: ${table}:${id}`);
+        }
+        // Replaying this fixed release must preserve enrichment and later administrator edits.
+        preserved.add(`${table}:${id}`);
+        counts.reused++;
+        return id;
+      }
+      if (!legacyIds.includes(old.base_data_payload?.id) ||
+          (table === 'ingredients_library' && old.source_version !== '0.1.0-rc.7') ||
+          (table === 'recipes' && (old.source_revision !== '0.1.0-rc.7' || old.external_id !== old.base_data_payload.id))) {
+        throw new Error(`Legacy identity or version changed: ${table}:${id}`);
+      }
       await db.query(`UPDATE ${table} SET ${keys.map((k,i) => `${k}=$${i+1}`).join(',')} WHERE id=$${keys.length+1}`, [...values,id]);
       counts.reused++;
       return id;
@@ -57,12 +86,13 @@ try {
       data_license:c.sources.map(s=>s.source_license).filter(Boolean).join('; ') || null,
       review_notes:'概念目录可检索；具体部位、状态与营养记录尚需逐项匹配。',
       base_data_payload:json({concept_id:c.id,version,concept:c,forms:fs,aliases:aa,nutrition_status:'unknown',automatic_calculation_allowed:false}),
-    },oldId);
-    ingredientIds.set(c.id,id); await mapping('concept_ingredients',c.id,'ingredients_library',id);
+    },oldId,fs.map(f=>f.legacy_ingredient_id));
+    ingredientIds.set(c.id,id); counts.ingredients++;
+    if (preserved.has(`ingredients_library:${id}`)) continue;
+    await mapping('concept_ingredients',c.id,'ingredients_library',id);
     for (const name of names) await db.query(`INSERT INTO ingredient_aliases(ingredient_id,alias,normalized_alias,locale,alias_type)
       VALUES($1,$2,$3,$4,'concept') ON CONFLICT(ingredient_id,normalized_alias) DO NOTHING`,
       [id,name,normalize(name),aa.find(a=>a.text===name)?.language || 'zh']);
-    counts.ingredients++;
   }
   for (const r of data.baseline.kitchenware) {
     const link = data['legacy-map'].find(m=>m.legacy_table==='kitchenware' && m.legacy_id===r.id);
@@ -74,8 +104,9 @@ try {
       name:c.name_zh,category:toolCategory(r.category),aliases:json([...new Set([...r.aliases,...aa.map(a=>a.text)])]),
       source:'concept_base',quality_status:'reference',base_data_payload:json({concept_id:c.id,version,concept:c,aliases:aa,source_record:r}),
       attributes_json:json({automatic_substitution_allowed:false,source_url:r.source_url}),
-    },get('concept_kitchenware',c.id)||get('kitchenware',r.id)||collision?.id);
-    toolIds.set(c.id,id);await mapping('concept_kitchenware',c.id,'kitchenware_catalog',id);counts.kitchenware++;
+    },get('concept_kitchenware',c.id)||get('kitchenware',r.id)||collision?.id,[r.id]);
+    toolIds.set(c.id,id);counts.kitchenware++;
+    if (!preserved.has(`kitchenware_catalog:${id}`)) await mapping('concept_kitchenware',c.id,'kitchenware_catalog',id);
   }
   const recipeSource = new Map(data.baseline.recipes.map(r=>[r.id,r]));
   const recipeConcepts = new Map(data['recipe-concepts'].map(r=>[r.dish_concept_id,r]));
@@ -100,8 +131,10 @@ try {
       base_data_payload:json({concept_id:c.id,recipe_concept_id:rc.id,method_id:m.id,is_primary:primary,version,
         primary_selection:rc.primary_selection,missing_fields:m.missing_fields,equipment_requirements:m.equipment_requirements,
         nutrition_status:'unknown',nutrition_calculation_basis:'whole_recipe',source:m.source}),
-    },get('concept_methods',m.id)||get('recipes',m.source_method_id));
-    await mapping('concept_methods',m.id,'recipes',id);methodIds.set(m.id,id);counts.methods++; if(primary)counts.primaryRecipes++;
+    },get('concept_methods',m.id)||get('recipes',m.source_method_id),[m.source_method_id]);
+    methodIds.set(m.id,id);counts.methods++; if(primary)counts.primaryRecipes++;
+    if (preserved.has(`recipes:${id}`)) continue;
+    await mapping('concept_methods',m.id,'recipes',id);
     // Source references without classified roles remain separate; never assert they are mandatory.
     await db.query("DELETE FROM recipe_kitchenware_requirements WHERE recipe_id=$1 AND source IN ('base_data','concept_base')",[id]);
     for (const e of m.equipment_requirements.filter(e=>['required','optional'].includes(e.role))) {
@@ -113,6 +146,7 @@ try {
     }
   }
   for (const m of data.methods) {
+    if (preserved.has(`recipes:${methodIds.get(m.id)}`)) continue;
     const rc=recipeConcepts.get(m.dish_concept_id);
     const variants=rc.method_ids.map(mid=>({recipe_id:methodIds.get(mid),method_id:mid,title:data.methods.find(x=>x.id===mid).title,is_primary:mid===rc.primary_method_id}));
     const equipment=m.equipment_requirements.map(e=>({...e,items:e.concept_ids.map(cid=>({catalog_id:toolIds.get(cid),name:concepts.get(cid)?.name_zh}))}));

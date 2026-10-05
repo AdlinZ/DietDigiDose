@@ -1,7 +1,8 @@
 import type Database from "better-sqlite3";
 import { normalizeContentTerm } from "../../utils/contentNormalization.js";
+import { mergeIngredientUpdate } from "./ingredientUpdate.js";
 import type { AdminFoodAssetsRepository } from "./repository.js";
-import type { AdminAudit, IngredientInput, IngredientQuery, Row } from "./types.js";
+import type { AdminAudit, IngredientInput, IngredientUpdateInput, IngredientQuery, Row } from "./types.js";
 
 export class SqliteAdminFoodAssetsRepository implements AdminFoodAssetsRepository {
   private readonly database: Database.Database;
@@ -25,27 +26,39 @@ export class SqliteAdminFoodAssetsRepository implements AdminFoodAssetsRepositor
   async createIngredient(input: IngredientInput, audit: AdminAudit) { return this.database.transaction(() => {
     const inserted = this.database.prepare(`INSERT INTO ingredients_library
       (name, normalized_name, aliases_json, search_keywords, preparation_state, calories_100g, protein_100g,
-       carbs_100g, fat_100g, category, source, source_version, source_updated_at, data_license, edible_ratio, quality_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, 'trusted')`)
+       carbs_100g, fat_100g, category, source, source_version, source_updated_at, data_license, edible_ratio, nutrition_status, quality_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)`)
       .run(input.name, input.normalizedName, JSON.stringify(input.aliases.map((item) => item.value)), input.searchKeywords,
         input.preparationState, input.calories100g, input.protein100g, input.carbs100g, input.fat100g, input.category,
-        input.source, input.sourceVersion, input.dataLicense, input.edibleRatio);
+        input.source, input.sourceVersion, input.dataLicense, input.edibleRatio, input.nutritionStatus,
+        input.nutritionStatus === "core_complete" ? "trusted" : "needs_review");
     const id = Number(inserted.lastInsertRowid); this.replaceAliases(id, input);
     this.insertAudit({ ...audit, resourceId: id }); return id;
   })(); }
 
-  async updateIngredient(id: number, input: IngredientInput, audit: AdminAudit) { return this.database.transaction(() => {
-    const updated = this.database.prepare(`UPDATE ingredients_library SET name=?, normalized_name=?, aliases_json=?,
-      search_keywords=?, preparation_state=?, calories_100g=?, protein_100g=?, carbs_100g=?, fat_100g=?, category=?, source=?,
-      source_version=?, source_updated_at=CURRENT_TIMESTAMP, data_license=?, edible_ratio=?, quality_status='trusted'
-      WHERE id=? AND deleted_at IS NULL`).run(input.name, input.normalizedName, JSON.stringify(input.aliases.map((item) => item.value)),
-      input.searchKeywords, input.preparationState, input.calories100g, input.protein100g, input.carbs100g, input.fat100g,
-      input.category, input.source, input.sourceVersion, input.dataLicense, input.edibleRatio, id);
-    if (!updated.changes) return false; this.replaceAliases(id, input); this.insertAudit(audit); return true;
+  async updateIngredient(id: number, patch: IngredientUpdateInput, audit: AdminAudit) { return this.database.transaction(() => {
+    const current = this.getIngredient(id);
+    if (!current) return false;
+    const input = mergeIngredientUpdate(current, patch);
+    const updated = this.database.prepare(`UPDATE ingredients_library SET name=?, normalized_name=?, aliases_json=COALESCE(?,aliases_json),
+      search_keywords=COALESCE(?,search_keywords), preparation_state=COALESCE(?,preparation_state),
+      calories_100g=?, protein_100g=?, carbs_100g=?, fat_100g=?, category=?, source=COALESCE(?,source),
+      source_version=?, data_license=?,
+      edible_ratio=COALESCE(?,edible_ratio), nutrition_status=?,
+      quality_status=CASE WHEN (? <> 'core_complete' OR ?) AND quality_status='trusted' THEN 'needs_review' ELSE quality_status END,
+      source_updated_at=CASE WHEN ? THEN NULL ELSE source_updated_at END
+      WHERE id=? AND deleted_at IS NULL`).run(input.name, input.normalizedName,
+      input.aliases === undefined ? null : JSON.stringify(input.aliases.map((item) => item.value)),
+      input.searchKeywords ?? null, input.preparationState ?? null, input.calories100g, input.protein100g, input.carbs100g, input.fat100g,
+      input.category, input.source ?? null, input.sourceVersion ?? null, input.dataLicense ?? null, input.edibleRatio ?? null, input.nutritionStatus,
+      input.nutritionStatus, Number(input.sourceChanged), Number(input.sourceChanged), id);
+    if (!updated.changes) return false;
+    this.replaceAliases(id, input);
+    this.insertAudit(audit); return true;
   })(); }
 
   async removeIngredient(id: number, audit: AdminAudit) { return this.database.transaction(() => {
-    const item = this.database.prepare("SELECT name FROM ingredients_library WHERE id=? AND deleted_at IS NULL").get(id) as Row | undefined;
+    const item = this.getIngredient(id);
     if (!item) return false;
     this.database.prepare("UPDATE ingredients_library SET deleted_at=CURRENT_TIMESTAMP, deleted_by=? WHERE id=? AND deleted_at IS NULL")
       .run(audit.adminUserId, id);
@@ -53,7 +66,7 @@ export class SqliteAdminFoodAssetsRepository implements AdminFoodAssetsRepositor
   })(); }
 
   async addAlias(id: number, alias: string, normalized: string, audit: AdminAudit) { return this.database.transaction(() => {
-    const item = this.database.prepare("SELECT name FROM ingredients_library WHERE id=? AND deleted_at IS NULL").get(id) as Row | undefined;
+    const item = this.getIngredient(id);
     if (!item) return { kind: "missing" as const };
     this.database.prepare(`INSERT OR IGNORE INTO ingredient_aliases
       (ingredient_id, alias, normalized_alias, alias_type) VALUES (?, ?, ?, 'synonym')`).run(id, alias, normalized);
@@ -64,8 +77,8 @@ export class SqliteAdminFoodAssetsRepository implements AdminFoodAssetsRepositor
   })(); }
 
   async mergeIngredient(sourceId: number, targetId: number, audit: AdminAudit) { return this.database.transaction(() => {
-    const source = this.database.prepare("SELECT name FROM ingredients_library WHERE id=? AND deleted_at IS NULL").get(sourceId) as Row | undefined;
-    const target = this.database.prepare("SELECT name FROM ingredients_library WHERE id=? AND deleted_at IS NULL").get(targetId) as Row | undefined;
+    const source = this.getIngredient(sourceId);
+    const target = this.getIngredient(targetId);
     if (!source || !target) return { kind: "missing" as const };
     const insert = this.database.prepare(`INSERT OR IGNORE INTO ingredient_aliases
       (ingredient_id, alias, normalized_alias, alias_type) VALUES (?, ?, ?, 'merged')`);
@@ -113,14 +126,18 @@ export class SqliteAdminFoodAssetsRepository implements AdminFoodAssetsRepositor
     return { kind: "reviewed" as const, name: String(item.name) };
   })(); }
 
+  private getIngredient(id: number) {
+    return this.database.prepare("SELECT * FROM ingredients_library WHERE id=? AND deleted_at IS NULL").get(id) as Row | undefined;
+  }
   private aliases(id: number) { return (this.database.prepare(`SELECT alias FROM ingredient_aliases
     WHERE ingredient_id=? AND alias_type <> 'canonical' ORDER BY alias`).all(id) as Array<{ alias: string }>).map((item) => item.alias); }
-  private replaceAliases(id: number, input: IngredientInput) {
-    this.database.prepare("DELETE FROM ingredient_aliases WHERE ingredient_id=?").run(id);
+  private replaceAliases(id: number, input: Pick<IngredientUpdateInput, "name" | "normalizedName" | "aliases">) {
+    this.database.prepare("DELETE FROM ingredient_aliases WHERE ingredient_id=? AND (? OR alias_type='canonical')")
+      .run(id, Number(input.aliases !== undefined));
     const insert = this.database.prepare(`INSERT OR IGNORE INTO ingredient_aliases
       (ingredient_id, alias, normalized_alias, alias_type) VALUES (?, ?, ?, ?)`);
     insert.run(id, input.name, input.normalizedName, "canonical");
-    for (const alias of input.aliases) insert.run(id, alias.value, alias.normalized, "synonym");
+    for (const alias of input.aliases ?? []) insert.run(id, alias.value, alias.normalized, "synonym");
   }
   private insertAudit(audit: AdminAudit) { this.database.prepare(`INSERT INTO admin_audit_logs
     (admin_user_id, action, resource_type, resource_id, summary, details_json, ip_address, user_agent)

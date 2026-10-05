@@ -459,7 +459,7 @@ export const dietRecords = pgTable("diet_records", {
   meal_type: text("meal_type").notNull(),
   food_name: text("food_name").notNull(),
   amount: text("amount").notNull(),
-  calories: integer("calories"),
+  calories: doublePrecision("calories"),
   protein: doublePrecision("protein").default(0),
   carbs: doublePrecision("carbs").default(0),
   fat: doublePrecision("fat").default(0),

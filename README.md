@@ -1,5 +1,7 @@
 # 食光烙记（DietDigiDose）
 
+> **2026-10-11 打包推进：** 已将经过验证的 W41 代码按依赖安全、清理与异步保护、账号恢复、Android 更新分为四个提交（至 `76a48fac`），纳入 #248。当前等待候选 CI 与合并后构建，目标 `26w41a` 尚未预留；官网独立改动保留在工作区。以下旧 SHA 和未提交说明为各轮历史核对，最终构建结果另行登记。
+
 <p align="center">
   <img src="client/assets/logo.svg" alt="食光烙记 Logo" width="160" />
 </p>
@@ -39,15 +41,17 @@
 
 ## 当前版本与完成度
 
-- **产品版本：** `1.0.6`
-- **发布周期：** `26w36`
-- **候选快照：** `26w36a`
+- **当前周：** `26w41`（上海时区 ISO 第 41 周，2026-10-05～10-11）
+- **仓库版本元数据：** `1.0.6` / `26w36a` / build `263601`（不是最新构建产物）
+- **最近成功 Android 构建：** [`26w38a` / build `263801`](https://github.com/AdlinZ/DietDigiDose/actions/runs/35517119184)，源码 `818cdefe`
 - **阶段：** 可信 Beta 收口
-- **最近更新：** 2026-09-03
+- **最近更新：** 2026-10-11
 
-三端代码、自动化测试、构建、版本元数据校验和生产依赖审计均已纳入 CI。官网、管理端、API 和 HTTPS 生产环境已上线；正式进入移动端外部内测前，仍需完成同一提交的 iOS/Android 候选包、双端真机闭环及隔离备份恢复演练。
+主分支 `a22c6cb5` 已合并多餐共做、制作与复热审核，以及核心流程故障恢复和未知营养展示（#246、#247），[对应 CI](https://github.com/AdlinZ/DietDigiDose/actions/runs/37003624773) 全部通过。[草稿 PR #248](https://github.com/AdlinZ/DietDigiDose/pull/248) 补齐营养来源、数据导入和依赖安全处理，提交 `258d0dba` 的 [CI](https://github.com/AdlinZ/DietDigiDose/actions/runs/37284683370) 已通过，但尚未合并、部署或打包。CI 结果只覆盖对应提交。10 月 7 日另行完成当前工作区审阅，修复 5 项新增依赖告警，并通过本地测试、覆盖率、静态检查、三端构建和审计；修改尚未提交，统一候选和真实验收仍待完成。
 
-详见 [候选验收记录](docs/release-candidate-26w37a.md)、[上一候选记录](docs/release-candidate-26w35a.md) 与 [真机验收清单](docs/device-beta-checklist.md)。候选记录保留当时的版本号，不随新版本回写。
+10 月 11 日已将 W41 的 **20 项未完成 Issue** 结转至 [W42 里程碑](https://github.com/AdlinZ/DietDigiDose/milestone/12)（10 月 12–18 日），W41 按周归档。范围包括：W40 结转 18 项，10 月 7 日新增 [#221 自助找回密码](https://github.com/AdlinZ/DietDigiDose/issues/221) 和 [#219 应用内更新](https://github.com/AdlinZ/DietDigiDose/issues/219)。两项本地代码已实现，仍待部署、真实短信与 Android 真机验收；Android 更新模块原生编译已通过。恢复一期支持已验证绑定手机，不支持邮箱；更新一期为完整 APK，OTA 留待二期，详见[实现与验收记录](docs/w41-account-recovery-and-app-updates.md)。Backlog 剩余 21 项待排期。[W40](https://github.com/AdlinZ/DietDigiDose/milestone/10) 保留 4 项已关闭 Issue 作为历史记录。官网、管理端、API、PostgreSQL 与 workers 已有公网运行记录，最近确认的部署仍是 `w39-818cdefe`（10 月 2 日）。独立环境与持久化验收、同候选完整恢复演练、同提交双端候选与真机闭环（#105、#106、#107）仍是三项 P0 门槛；排期不代表验收通过或承诺本周完成全部 20 项。
+
+当前打包检查与下周安排见 [W42 进度与执行计划](docs/milestone-26w42-progress.md)、[开发与 Beta 收口清单](TODO.md) 与 [真机验收清单](docs/device-beta-checklist.md)。[W40 历史验收记录](docs/milestone-26w40-progress.md) 和 [历史候选验收记录](docs/release-candidate-26w37a.md) 保留既有证据及当时的版本号；仓库元数据仅在新打包前分配更新，文档更新不会生成候选包或递增快照。
 
 ## 在线服务
 
@@ -70,7 +74,7 @@
 | `admin` | React、Vite、Tailwind CSS | 运营审核与系统管理后台 |
 | `deploy` | Docker Compose、Caddy | HTTPS 部署、持久化与恢复演练 |
 
-本地开发默认使用 SQLite，当前生产环境使用 PostgreSQL；Supabase 用于可选的社区媒体对象存储。
+本地开发默认使用 SQLite，当前公网服务使用 PostgreSQL；Supabase 用于可选的社区媒体对象存储，独立 staging bucket 仍待验收。
 
 ## 仓库结构
 
@@ -161,7 +165,7 @@ pnpm dev:admin
 
 `client/eas.json` 提供 iOS/Android 的 preview 与 production 配置，所有可分发构建都必须连接 HTTPS API。只有本机 simulator 调试可显式使用 localhost HTTP，不得使用真实敏感数据。
 
-生产依赖审计目前对 Expo/Metro 构建链中的 `CVE-2025-71329` 与 `CVE-2025-71330` 设置了精确临时例外；上游尚无修复版本，因此不能将当前状态描述为“零漏洞”。每次 Expo/Metro 升级及候选验收都必须重新检查。
+依赖审计通过不代表“零漏洞”。截至 2026-10-06，主分支 `a22c6cb5` 配置了三项精确临时审计例外，并包含 `node-forge` 项目补丁；草稿 PR #248 的 `258d0dba` 增加 `braces` 补丁及强制回归后共四项例外，该新增修复尚未合并或部署。例外原因、补丁校验和复查要求见 [分层测试与质量门禁](docs/testing.md) 与 [`pnpm-workspace.yaml`](pnpm-workspace.yaml)，每次依赖升级和候选验收都必须重新检查。
 
 部署前请阅读：
 

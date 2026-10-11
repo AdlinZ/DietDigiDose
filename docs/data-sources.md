@@ -1,6 +1,6 @@
 # 食材营养与菜谱来源核对
 
-核对日期：2026-10-03。范围是 `system-data-2026-09-15.2.zip`、当前补充包 `concept-enrichment-2026-10-03.1.zip`、恢复的来源证据和当前代码，不代表线上数据库已经更新。
+最近离线核对：2026-10-07（26w41）。范围是 `system-data-2026-09-15.2.zip`、当前补充包 `concept-enrichment-2026-10-03.1.zip`、恢复的来源证据和当前代码，不代表线上数据库已经更新。
 
 通用覆盖补充累计新增 15 个 TFDA 样品参考，新增覆盖 13 个已有食材概念。累计 **46 个营养参考、44 个有参考的食材概念**；原 20 道菜的估算保持不变，仍为 8 道具有完整四项每份估算。2026-10-03 的补充包更新仅修复导入器，没有再次增加营养样品。补充包只追加参考，不改通用食材营养列或菜谱。
 
@@ -21,7 +21,6 @@
 ```sh
 pnpm data:audit
 pnpm data:audit:expanded
-python3 datasets/base-data/source_coverage.py --output datasets/base-data/source-coverage.json
 python3 -m unittest discover -s datasets/base-data -p test_source_coverage.py -v
 python3 -m unittest discover -s datasets/base-data -p test_expand_nutrition.py -v
 ```
@@ -92,3 +91,102 @@ python3 -m unittest discover -s datasets/base-data -p test_expand_nutrition.py -
 初次收尾的依赖审计被 `braces@3.0.3` 的 [CVE-2026-93687 / GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) 阻止。随后补入项目维护的深度限制修复、真实消费链回归及精确临时审计例外，详见 [依赖安全修复记录](testing.md#braces-临时安全修复2026-10-05)。官方尚无修复版本；例外必须与强制安全回归共同保留，不能单独忽略告警。
 
 本轮是代码与冻结数据包收尾，未部署、未执行线上导入、未分配安装包编号；0029 迁移仍须随正式部署应用。真实菜谱审核、设备验收及 #187/#218 的原关闭条件保持不变。
+
+## 2026-10-07：W41 内容审核准备结果
+
+本节是 [W41 执行清单](milestone-26w41-progress.md) 中 #187/#218/#193 的离线准备交付。已复查冻结包、恢复的证据和审核字段，形成以下待审核队列；**尚未批准任何真实菜谱，也未选定最终发布范围**。
+
+### 锁定输入与复核结论
+
+- 基础包 SHA256：`5bc9345bf6e232e34a0c6cbd4091d55f1a7f1ecce3f2e930f847431c19db3f30`；补充包 SHA256：`2ac8fc7032be26155e4365bdf4113d425c7b3def37c31d70e721ec7c609daa80`，均与[分发说明](../datasets/releases/README.md)一致。
+- 两份审计成功，来源覆盖测试 **6 项**、补充包测试 **5 项**通过，含补充包在临时目录逐字节重建、原菜谱不变和缺失营养不能补零的检查。基础包 31/31、叠加补充包 46/46 个样品的核心原始观测可核对；配方仍为 8 份四项估算齐全、12 份缺项。
+- 冻结目录 **389/389** 种做法的 `kitchen_tested` 和 `automatic_execution_allowed` 均为 `false`；补充后 **46/46** 个样品的 `professional_review_performed`、`automatic_runtime_binding` 均为 `false`，`requires_scope_confirmation` 均为 `true`。这比“字段齐全”更接近当前真实审核状态。
+- 20 份营养计算恰好对应全部 20 份缺来源 URL/声明许可的项目草稿；另外 369 种做法保留 HowToCook 提交 `2b19c9e9ee926fd925a68207a57582a338813f9c` 的逐条 URL 和 `Unlicense` 声明，但本包没有这些做法的营养评估。来源声明不代表已完成发布授权核对。
+
+### 先审核哪一批
+
+先准备下列 8 份已有完整四项每份估算的草稿，避免让新增营养样品成为首批审核的前置条件。**8 份仍全部缺来源/发布许可记录和真实制作审核**；估算使用的样品适配、可食部称量假设也须逐条确认。
+
+下表 ID 均在冻结包 `data/nutrition/recipe-inputs.json`、`recipe-nutrition.json` 中；完整 ID 为 `METHOD:DDD-R-` 加表中后缀。
+
+| 候选做法 | ID 后缀 | 当前营养结果 |
+| --- | --- | --- |
+| 胡萝卜炒蛋 | `carrot-egg` | 四项每份估算齐全 |
+| 芹菜炒胡萝卜 | `celery-carrot` | 四项每份估算齐全 |
+| 蒜蓉西兰花 | `garlic-broccoli` | 四项每份估算齐全 |
+| 南瓜小米粥 | `pumpkin-millet` | 四项每份估算齐全 |
+| 红薯焖饭 | `sweetpotato-rice` | 四项每份估算齐全 |
+| 番茄炒蛋 | `tomato-egg` | 四项每份估算齐全 |
+| 番茄鸡蛋汤面 | `tomato-noodles` | 四项每份估算齐全 |
+| 西葫芦炒蛋 | `zucchini-egg` | 四项每份估算齐全 |
+
+其余 12 份先按营养缺口整理证据，下表同时保留重叠项。它们与前 8 份共有的来源、许可和制作审核要求不因补齐营养而消失。
+
+| 待补做法 | ID 后缀 | 尚缺营养依据 |
+| --- | --- | --- |
+| 蒜香花椰菜 | `garlic-cauliflower` | 生抽酱油 |
+| 青椒鸡丁 | `pepper-chicken` | 生抽酱油 |
+| 香菇炒白菜 | `shiitake-cabbage` | 生抽酱油 |
+| 香菇蒸鸡胸肉 | `steamed-chicken` | 生抽酱油 |
+| 白菜炖豆腐 | `cabbage-tofu` | 北豆腐 |
+| 番茄豆腐汤 | `tomato-tofu` | 北豆腐 |
+| 醋溜土豆丝 | `potato-strips` | 米醋 |
+| 紫菜蛋花汤 | `seaweed-egg` | 芝麻香油 |
+| 玉米牛奶燕麦粥 | `corn-oat-milk` | 巴氏杀菌纯牛奶 |
+| 蒜香拌黄瓜 | `cucumber-salad` | 芝麻香油、米醋 |
+| 虾仁豆腐煮 | `shrimp-tofu` | 去壳虾仁、北豆腐 |
+| 蒜汁蒸茄子 | `steamed-eggplant` | 生抽酱油、芝麻香油、米醋 |
+
+### 营养证据的补齐顺序
+
+“仅此一项”表示该配方当前只有这一类营养缺口，**不是已能执行、发布或必然可被新样品覆盖的数量**。影响数来自冻结报告，不能相加当作不同配方总数。
+
+| 顺序 | 缺口 | 影响 / 仅此一项 | 先核查的现有记录 | 还需什么；禁止自动推断什么 |
+| --- | --- | --- | --- | --- |
+| 1 | 生抽酱油 | 5 / 4 | `matching-decisions.json` 的 `TFDA:P0700401` | 确认原方加工、配料和样品适配；泛型淡色酱油参考不自动绑定生抽，也不代选品牌或把标签上界写成零 |
+| 2 | 北豆腐 | 3 / 2 | `matching-decisions.json`、`nutrition-profiles.json` 的 `TFDA:R4700902` | 凝固剂、含水状态及原方称量依据；名称相近不能批准等价 |
+| 3 | 米醋 | 3 / 1 | `nutrition-profiles.json` 的 `TFDA:P0600101`，原始观测在 `tfda-selected-records.json` | 蛋白质和脂肪原值为空；须取得适配且有明确数值的依据，不能补零或删掉调味料 |
+| 3 | 芝麻香油 | 3 / 1 | `matching-decisions.json` 的 `TFDA:P0900201`、`TFDA:M1500101`；新增黑芝麻油 `TFDA:M1500201` 的限定范围 | 明确纯油/调和油及焙炒加工；新增黑芝麻油参考也未证明与原方等价 |
+| 4 | 巴氏杀菌纯牛奶 | 1 / 1 | `nutrition-profiles.json` 的 `TFDA:L01021`、`corn-oat-milk` 的用量 | 适用密度证据，或另立按克称量的配方版本；不能把毫升直接当同数克 |
+| 4 | 去壳虾仁 | 1 / 0 | `matching-decisions.json` 的 `TFDA:J2200501`、`shrimp-tofu` 的食材行 | 明确虾种及保水处理；该菜同时缺北豆腐依据，不能仅凭虾仁参考宣布完整 |
+
+表中 JSON 均在补充包 `concept-enrichment-2026-10-03.1/` 下。原始样品新增依据另见 [TFDA 选样范围](../datasets/base-data/evidence/tfda-expansion-selections.json)及[原始核心行](../datasets/base-data/evidence/tfda-expansion-rows.json)；每条审批须回到样品编号、原始位置、单位和值。此轮没有新增外部下载、选择品牌或对许可作法律判断。
+
+### 每条候选的审核交付物
+
+- **#187 来源与许可**：记录做法 ID/内容摘要、作者或出处、许可声明与适用内容、核查证据位置、审核人及日期。项目草稿须补本项目编辑与发布依据，不能借用 HowToCook 的许可声明；第三方做法须回到其锁定提交中的对应文件。先审本次候选，369 种外部做法仍保持参考用途；份数 279 项、厨具 290 项、食材身份/精确用量 272 项的缺口另行处理，集合有重叠。
+- **#193 制作与复热**：按[当前审核契约](../packages/contracts/src/recipeExecution.ts)准备单批份数上限、实际厨具及容量依据、准备/烹饪/收尾任务与用时、人工占用及依赖；需要存放、携带、冷食、复热或替代的候选还须相应依据和适用条件。冻结包的步骤时间只是原文摘录，没有上述经审核执行档案，不能相加后冒充总制作时长，也不能填入通用保存时限代替具体审核。
+- **#218 发布清单**：审核完成后再确定纳入/排除的精确记录、版本、摘要及待审项；若内容或安装脚本需要重新分发，创建新不可变版本，保留本次两个冻结 ZIP。独立环境导入、云端发布与 Android 可见性仍须另行验收，本节不关闭该任务。
+
+### 复现命令与执行限制
+
+在仓库根目录执行；两个审计命令只输出 stdout，测试重建使用临时目录，不覆盖冻结报告或 ZIP：
+
+```sh
+shasum -a 256 datasets/releases/system-data-2026-09-15.2.zip datasets/releases/concept-enrichment-2026-10-03.1.zip
+pnpm data:audit
+pnpm data:audit:expanded
+python3 -m unittest discover -s datasets/base-data -p test_source_coverage.py -v
+python3 -m unittest discover -s datasets/base-data -p test_expand_nutrition.py -v
+```
+
+以下只读命令可重新列出上述 20 份候选及审核边界，输出文件内的真实 ID，不另造审批数据：
+
+```sh
+python3 - <<'PY'
+import sys
+from collections import Counter
+sys.path.insert(0, 'datasets/base-data')
+from source_coverage import ARCHIVE, read_package, with_supplement
+data = with_supplement(read_package(ARCHIVE), 'datasets/releases/concept-enrichment-2026-10-03.1.zip')
+for recipe in data['recipe-nutrition']:
+    gaps = '、'.join(gap['name'] for gap in recipe['gaps'])
+    print(recipe['method_id'], recipe['title'], gaps or '四项每份估算齐全（待审核）')
+for key in ('kitchen_tested', 'automatic_execution_allowed'):
+    print(key, dict(Counter(method.get(key) for method in data['catalogue']['methods'])))
+for key in ('professional_review_performed', 'automatic_runtime_binding', 'requires_scope_confirmation'):
+    print(key, dict(Counter(profile.get(key) for profile in data['nutrition-profiles'])))
+PY
+```
+
+以上命令已于 2026-10-07 通过。本次未运行依赖历史附件的全量 Python 重建；未访问线上服务器、导入数据库或发布数据，冻结报告与分发包没有改动。来源数值核对不证明本地食材等价、专业审核、真实制作可行或线上状态。

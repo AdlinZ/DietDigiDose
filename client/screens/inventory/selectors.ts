@@ -193,30 +193,6 @@ export function filterAndRankRecipes(
     .map(({ recipe }) => recipe);
 }
 
-/** 保留已展示卡片的相对顺序，并把分页首次出现的食谱追加到末尾。 */
-export function preserveRecipePaginationOrder(
-  previousOrder: Recipe[],
-  rankedRecipes: Recipe[],
-) {
-  const rankedById = new Map(rankedRecipes.map((recipe) => [recipe.id, recipe]));
-  const retained = previousOrder
-    .map((recipe) => rankedById.get(recipe.id))
-    .filter((recipe): recipe is Recipe => Boolean(recipe));
-  const retainedIds = new Set(retained.map((recipe) => recipe.id));
-  return [
-    ...retained,
-    ...rankedRecipes.filter((recipe) => !retainedIds.has(recipe.id)),
-  ];
-}
-
-export function recipeMatchesInventory(recipe: Recipe, inventoryItems: InventoryItem[]) {
-  return inventoryItems
-    .filter((i) => i.is_available !== false)
-    .map((item) => item.food_name.trim())
-    .filter(Boolean)
-    .some((name) => recipe.title.includes(name) || recipe.description?.includes(name));
-}
-
 export function filterKitchenware(items: KitchenwareItem[], category: string) {
   return category === "全部" ? items : items.filter((item) => item.category === category);
 }

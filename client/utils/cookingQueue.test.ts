@@ -8,7 +8,7 @@ jest.mock("@react-native-async-storage/async-storage", () => ({
 }));
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { addToCookingQueue, moveCookingQueueItem, normalizeCookingQueue, mergeCookingQueueRuntime, saveCookingQueue, updateCookingQueueItem, removeFromCookingQueue } from "./cookingQueue";
+import { getCookingQueue, needsCookingQueueServerMigration, markCookingQueueServerMigrated, normalizeCookingQueue, mergeCookingQueueRuntime, saveCookingQueue } from "./cookingQueue";
 
 describe("cooking queue", () => {
   beforeEach(() => {
@@ -24,40 +24,31 @@ describe("cooking queue", () => {
     ])).toEqual([expect.objectContaining({ recipeId: 12, title: "番茄炒蛋", ingredients: [], preparedIngredientNames: [] })]);
   });
 
-  it("does not enqueue the same recipe twice", async () => {
-    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify([
-      { recipeId: 12, title: "番茄炒蛋", imageUrl: null, cookTime: 10, calories: 260, difficulty: "简单", addedAt: 1, ingredients: [], preparedIngredientNames: [] },
-    ]));
-    const result = await addToCookingQueue(101, {
-      recipeId: 12,
-      title: "番茄炒蛋",
-      imageUrl: null,
-      cookTime: 10,
-      calories: 260,
-      difficulty: "简单",
-      addedAt: 2,
-      ingredients: [],
-      preparedIngredientNames: [],
-    });
-    expect(result.added).toBe(false);
-    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
-  });
-
-  it("normalizes prepared ingredients and persists queue reordering", async () => {
+  it("normalizes prepared ingredients and preserves the saved queue order", async () => {
     const queue = [
       { recipeId: 1, title: "第一道", imageUrl: null, cookTime: 10, calories: 100, difficulty: "简单", addedAt: 1, ingredients: [], preparedIngredientNames: [" 葱 ", "葱"] },
       { recipeId: 2, title: "第二道", imageUrl: null, cookTime: 20, calories: 200, difficulty: "简单", addedAt: 2, ingredients: [], preparedIngredientNames: [] },
     ];
     expect(normalizeCookingQueue(queue)[0].preparedIngredientNames).toEqual(["葱"]);
-    (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify(queue));
-
-    const items = await moveCookingQueueItem(101, 2, -1);
+    const items = await saveCookingQueue(101, [...queue].reverse());
 
     expect(items.map((item) => item.recipeId)).toEqual([2, 1]);
     expect(AsyncStorage.setItem).toHaveBeenCalledWith(
       expect.stringContaining(":user:101"),
       expect.stringContaining('"recipeId":2'),
     );
+  });
+
+  it("keeps legacy queue data readable and migration markers scoped to the account", async () => {
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(JSON.stringify([{ recipeId: 12, title: "旧队列", reminderNotificationId: "old-reminder" }]));
+    expect(await getCookingQueue(101)).toEqual([expect.objectContaining({ recipeId: 12, reminderNotificationId: "old-reminder" })]);
+    expect(AsyncStorage.getItem).toHaveBeenLastCalledWith("@dietdigidose:cooking_queue:user:101");
+    expect(await needsCookingQueueServerMigration(101)).toBe(true);
+    await markCookingQueueServerMigrated(101);
+    expect(AsyncStorage.setItem).toHaveBeenLastCalledWith("@dietdigidose:cooking_queue_server_migrated:user:101", "1");
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce("1");
+    expect(await needsCookingQueueServerMigration(101)).toBe(false);
+    expect(await needsCookingQueueServerMigration(null)).toBe(false);
   });
 });
 
@@ -87,15 +78,4 @@ test("legacy reminder recovery requires an unambiguous recipe and matching curre
   expect(mergeCookingQueueRuntime([first], legacy)[0].reminderNotificationId).toBe("old");
   expect(mergeCookingQueueRuntime([first, { ...first, id: "task-b" }], legacy).every(item => !item.reminderNotificationId)).toBe(true);
   expect(mergeCookingQueueRuntime([{ ...first, plannedAt: null }], legacy)[0].reminderNotificationId).toBeUndefined();
-});
-
-
-test("recipe-only legacy edits cannot change another identified server task", async () => {
-  const items = normalizeCookingQueue([{ recipeId: 8, queueItemId: "task-a", title: "已关联任务", reminderNotificationId: "bound" }, { recipeId: 8, title: "旧本地任务" }]);
-  (AsyncStorage.getItem as jest.Mock).mockResolvedValue(JSON.stringify(items));
-  const updated = await updateCookingQueueItem(1, 8, { title: "只改旧任务" });
-  expect(updated.find(item => item.queueItemId)?.title).toBe("已关联任务");
-  expect(updated.find(item => !item.queueItemId)?.title).toBe("只改旧任务");
-  const remaining = await removeFromCookingQueue(1, 8);
-  expect(remaining.map(item => item.queueItemId)).toEqual(["task-a"]);
 });

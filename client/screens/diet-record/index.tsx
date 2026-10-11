@@ -18,6 +18,7 @@ import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { addLocalDays, parseDateKey, toLocalDateKey } from "@/utils/date";
+import { formatNutritionSummary, summarizeNutrition } from "@/utils/nutritionSummary";
 import { aiApi, ApiError, dietApi, waitForAgentRun, type DietRecord } from "@/services/api";
 
 import * as ImagePicker from "expo-image-picker";
@@ -344,10 +345,10 @@ export default function DietRecordScreen() {
       if (data) {
           if (data.foodName) setFoodName(String(data.foodName));
           if (data.estimatedWeightGrams) setAmount(`${data.estimatedWeightGrams}g`);
-          if (data.calories) setCalories(String(data.calories));
-          if (data.proteinGrams !== undefined) setProtein(String(data.proteinGrams));
-          if (data.carbsGrams !== undefined) setCarbs(String(data.carbsGrams));
-          if (data.fatGrams !== undefined) setFat(String(data.fatGrams));
+          setCalories(data.calories == null ? "" : String(data.calories));
+          setProtein(data.proteinGrams == null ? "" : String(data.proteinGrams));
+          setCarbs(data.carbsGrams == null ? "" : String(data.carbsGrams));
+          setFat(data.fatGrams == null ? "" : String(data.fatGrams));
           Alert.alert("AI 识别成功", `已自动识别【${data.foodName || "餐食"}】并估算营养成分！`);
       } else if (json.rawText || run.reply) {
         Alert.alert("AI 识别提示", json.rawText || run.reply);
@@ -434,10 +435,10 @@ export default function DietRecordScreen() {
     }
   };
 
-  const dayTotalCal = records.reduce((s, r) => s + (r.calories || 0), 0);
-  const dayTotalProtein = Math.round(records.reduce((s, r) => s + (r.protein || 0), 0) * 10) / 10;
-  const dayTotalCarbs = Math.round(records.reduce((s, r) => s + (r.carbs || 0), 0) * 10) / 10;
-  const dayTotalFat = Math.round(records.reduce((s, r) => s + (r.fat || 0), 0) * 10) / 10;
+  const dayCalories = summarizeNutrition(records.map(r => r.calories));
+  const dayProtein = summarizeNutrition(records.map(r => r.protein));
+  const dayCarbs = summarizeNutrition(records.map(r => r.carbs));
+  const dayFat = summarizeNutrition(records.map(r => r.fat));
   const sortedRecords = [...records].sort((a, b) => (a.recorded_time || "").localeCompare(b.recorded_time || ""));
   const timePosition = (time?: string | null) => {
     if (!time) return 0;
@@ -445,8 +446,9 @@ export default function DietRecordScreen() {
     return Math.min(DAY_TIMELINE_HEIGHT - 12, Math.max(0, ((hours * 60 + minutes) / (24 * 60)) * DAY_TIMELINE_HEIGHT));
   };
 
-  const progressPercent = Math.min(Math.round((dayTotalCal / targetCal) * 100), 100);
-  const remainingCal = Math.max(0, targetCal - dayTotalCal);
+  const completeCalories = !dayCalories.incomplete && dayCalories.total != null;
+  const progressPercent = completeCalories ? Math.min(Math.round((dayCalories.total! / targetCal) * 100), 100) : null;
+  const remainingCal = completeCalories ? Math.max(0, targetCal - dayCalories.total!) : null;
   const isSelectedToday = selectedDate === todayStr;
 
   const handleCloseModal = () => {
@@ -793,31 +795,31 @@ export default function DietRecordScreen() {
                 <View>
                   <Text className="text-[11px] font-bold text-brand">{isSelectedToday ? "今日营养汇总" : "当日营养汇总"}</Text>
                   <View className="mt-1 flex-row items-baseline gap-1.5">
-                    <Text className="text-[30px] font-black text-ink">{dayTotalCal}</Text>
+                    <Text className="text-[30px] font-black text-ink">{formatNutritionSummary(dayCalories, "")}</Text>
                     <Text className="text-xs font-medium text-copy-muted">/ {targetCal} kcal · {targetLabel}</Text>
                   </View>
                 </View>
                 <View className="rounded-full bg-surface px-3 py-2">
-                  <Text className="text-[10px] font-medium text-copy-muted">{remainingCal > 0 ? "剩余可摄入" : "今日状态"}</Text>
+                  <Text className="text-[10px] font-medium text-copy-muted">{remainingCal == null ? "热量数据不全" : remainingCal > 0 ? "剩余可摄入" : "今日状态"}</Text>
                   <Text className="mt-0.5 text-xs font-black text-brand">
-                    {remainingCal > 0 ? `${remainingCal} kcal` : "目标已达成"}
+                    {remainingCal == null ? "暂不计算剩余额度" : remainingCal > 0 ? formatNutritionSummary({ total: remainingCal, incomplete: false }, " kcal") : "目标已达成"}
                   </Text>
                 </View>
               </View>
 
-              <View className="mt-3 h-2 overflow-hidden rounded-full bg-brand/10">
+              {progressPercent != null ? <View className="mt-3 h-2 overflow-hidden rounded-full bg-brand/10">
                 <View className="h-full rounded-full bg-brand-fill" style={{ width: `${progressPercent}%` }} />
-              </View>
+              </View> : <Text className="mt-3 text-xs text-copy-muted">部分记录未填写热量，已知小计不代表全天总摄入。</Text>}
 
               <View className="mt-4 flex-row border-t border-brand/10 pt-3">
                 {[
-                  { label: "蛋白质", value: dayTotalProtein },
-                  { label: "碳水", value: dayTotalCarbs },
-                  { label: "脂肪", value: dayTotalFat },
+                  { label: "蛋白质", summary: dayProtein },
+                  { label: "碳水", summary: dayCarbs },
+                  { label: "脂肪", summary: dayFat },
                 ].map((metric, index) => (
                   <View key={metric.label} className={`flex-1 ${index > 0 ? "border-l border-brand/10 pl-4" : ""}`}>
                     <Text className="text-[10px] text-copy-muted">{metric.label}</Text>
-                    <Text className="mt-1 text-sm font-black text-ink">{metric.value}<Text className="text-[10px] font-medium text-copy-muted"> g</Text></Text>
+                    <Text className="mt-1 text-sm font-black text-ink">{formatNutritionSummary(metric.summary, " g")}</Text>
                   </View>
                 ))}
               </View>

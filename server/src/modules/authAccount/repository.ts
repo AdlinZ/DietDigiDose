@@ -7,7 +7,7 @@ import type { AccountMutationProof } from "./reauthProof.js";
 export interface AuthAccountRepository {
   createUser(input: RegistrationInput): Promise<RegistrationResult>;
   findLoginUser(identifier: LoginIdentifier | null, adminUsername: string | null): Promise<LoginUser | null>;
-  recordSuccessfulLogin(userId: number, at: string, ipAddress: string): Promise<number>;
+  recordSuccessfulLogin(userId: number, at: string, ipAddress: string, credentials: { passwordHash: string; sessionVersion: number }): Promise<number | null>;
   recordFunnelEvent(userId: number, eventName: "account_registered" | "login_succeeded"): Promise<void>;
   recordAdminAudit(audit: AdminAudit): Promise<void>;
   getMe(userId: number): Promise<Row | null>;

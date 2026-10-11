@@ -39,7 +39,22 @@ export class AdminFoodAssetsService {
     const input = this.ingredientInput(body); this.assertQuality(input);
     const audit = event(context, { action: "ingredient.update", resourceType: "ingredients", resourceId: id,
       summary: `更新食材：${input.name}` });
-    if (!await this.repository.updateIngredient(id, input, audit)) throw new AdminFoodAssetsError(404, "食材未找到");
+    // Creation defaults must not overwrite evidence omitted by the editor.
+    if (!await this.repository.updateIngredient(id, {
+      ...input,
+      category: body.category === undefined ? undefined : input.category,
+      calories100g: body.calories_100g === undefined ? undefined : input.calories100g,
+      protein100g: body.protein_100g === undefined ? undefined : input.protein100g,
+      carbs100g: body.carbs_100g === undefined ? undefined : input.carbs100g,
+      fat100g: body.fat_100g === undefined ? undefined : input.fat100g,
+      source: body.source === undefined ? undefined : input.source,
+      aliases: body.aliases === undefined ? undefined : input.aliases,
+      searchKeywords: body.search_keywords === undefined ? undefined : input.searchKeywords,
+      preparationState: body.preparation_state === undefined ? undefined : input.preparationState,
+      sourceVersion: body.source_version === undefined ? undefined : input.sourceVersion,
+      dataLicense: body.data_license === undefined ? undefined : input.dataLicense,
+      edibleRatio: body.edible_ratio === undefined ? undefined : input.edibleRatio,
+    }, audit)) throw new AdminFoodAssetsError(404, "食材未找到");
     return { success: true, message: "食材更新成功" };
   }
 
@@ -91,11 +106,16 @@ export class AdminFoodAssetsService {
 
   private ingredientInput(body: Row): IngredientInput {
     const aliases = Array.isArray(body.aliases) ? body.aliases.map(String) : [];
+    const [calories100g, protein100g, carbs100g, fat100g] =
+      [body.calories_100g, body.protein_100g, body.carbs_100g, body.fat_100g]
+        .map((value) => value == null ? null : Number(value));
+    const nutrients = [calories100g, protein100g, carbs100g, fat100g];
     return {
       name: String(body.name).trim(), normalizedName: normalizeContentTerm(String(body.name)),
-      category: body.category ? String(body.category) : null, calories100g: Number(body.calories_100g),
-      protein100g: Number(body.protein_100g) || 0, carbs100g: Number(body.carbs_100g) || 0,
-      fat100g: Number(body.fat_100g) || 0, source: String(body.source),
+      category: body.category ? String(body.category) : null, calories100g, protein100g, carbs100g, fat100g,
+      nutritionStatus: nutrients.every((value) => value === null) ? "unknown"
+        : nutrients.every((value) => value !== null) ? "core_complete" : "incomplete",
+      source: String(body.source ?? "official"),
       aliases: aliases.map((value) => ({ value, normalized: normalizeContentTerm(value) })),
       searchKeywords: String(body.search_keywords || ""), preparationState: String(body.preparation_state || "unspecified"),
       sourceVersion: String(body.source_version || "manual-v1"), dataLicense: String(body.data_license || "DietDigiDose-Original"),

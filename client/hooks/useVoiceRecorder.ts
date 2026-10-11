@@ -21,7 +21,6 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
   const [statusText, setStatusText] = useState("");
   const mediaRecorderRef = useRef<any>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const webRecognitionRef = useRef<any>(null);
   const transcriptRef = useRef("");
   const submittedRef = useRef(false);
   const emptyNotifiedRef = useRef(false);
@@ -41,7 +40,6 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
       cleanupAudioRef.current?.(); cleanupAudioRef.current = null;
       const native = nativeRecordingRef.current; nativeRecordingRef.current = null;
       if (native) void native.stopAndUnloadAsync().catch(() => undefined);
-      webRecognitionRef.current?.abort?.();
     };
   }, []);
 
@@ -99,13 +97,6 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
       void transcribeNativeRecording(recording);
       return;
     }
-    if (webRecognitionRef.current) {
-      try {
-        webRecognitionRef.current.stop();
-      } catch {}
-      webRecognitionRef.current = null;
-    }
-
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       try {
         mediaRecorderRef.current.stop();

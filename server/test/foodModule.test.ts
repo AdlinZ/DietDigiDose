@@ -66,10 +66,13 @@ describe("foods module", () => {
       searchExternal: async () => [{
         name: "Purple carrot",
         calories_100g: 41,
-        protein_100g: 0.9,
+        protein_100g: null,
         carbs_100g: 9.6,
         fat_100g: 0.2,
         source: "open_api",
+        source_provider: "usda_fdc",
+        fdc_id: 170393,
+        source_url: "https://fdc.nal.usda.gov/food-details/170393/nutrients",
       }],
     });
 
@@ -78,6 +81,10 @@ describe("foods module", () => {
     assert.equal(results[0]!.quality_status, "external_unverified");
     assert.equal("cacheable" in results[0]! && results[0]!.cacheable, false);
     assert.equal("requires_review" in results[0]! && results[0]!.requires_review, true);
+    assert.equal(results[0]!.protein_100g, null);
+    assert.equal("fdc_id" in results[0]! && results[0]!.fdc_id, 170393);
+    assert.equal("source_provider" in results[0]! && results[0]!.source_provider, "usda_fdc");
+    assert.equal("source_url" in results[0]! && results[0]!.source_url, "https://fdc.nal.usda.gov/food-details/170393/nutrients");
   });
 
   test("rejects queries that normalize to an empty value", async () => {
@@ -86,6 +93,19 @@ describe("foods module", () => {
       () => service.search("（新鲜）"),
       (error: unknown) => error instanceof FoodDomainError && error.code === "INVALID_FOOD_QUERY",
     );
+  });
+
+  test("concept references never expose generic nutrition after manual edits or damaged metadata", async () => {
+    for (const base_data_payload of [JSON.stringify({ concept_id: 'tomato', nutrition_references: [{ id: 'sample' }] }), '{broken', null]) {
+      const edited = { ...food(1), source: 'concept_base', quality_status: 'reference', base_data_payload };
+      const service = new FoodService(fakeRepository({ searchTrusted: async () => [edited] }), { searchExternal: async () => [] });
+      const [result] = await service.search('番茄');
+      assert.deepEqual([result!.calories_100g, result!.protein_100g, result!.carbs_100g, result!.fat_100g], [null, null, null, null]);
+      assert.equal(result!.micronutrients, null);
+      assert.equal(result!.nutrition_basis, 'unknown');
+      assert.equal('automatic_calculation_allowed' in result! && result.automatic_calculation_allowed, false);
+      if (base_data_payload?.startsWith('{"')) assert.deepEqual('nutrition_references' in result! && result.nutrition_references, [{ id: 'sample' }]);
+    }
   });
 
   test("SQLite adapter owns barcode, search-gap, trusted search, and custom-food writes", async () => {

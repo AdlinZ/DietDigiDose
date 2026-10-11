@@ -11,9 +11,8 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import api from '../services/api';
+import { createLatestRequest } from '../utils/latestRequest';
 import {
-  canRetryMediaCleanupJob,
-  createLatestMediaCleanupRequest,
   mediaCleanupErrorMessage,
   mediaCleanupRetryConfirmation,
   mediaCleanupRetryFeedback,
@@ -45,7 +44,7 @@ export default function MediaCleanup() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [retryingId, setRetryingId] = useState<number | null>(null);
-  const requestGuardRef = useRef(createLatestMediaCleanupRequest());
+  const requestGuardRef = useRef(createLatestRequest());
   const queryRef = useRef({ page, status, olderThanHours });
   queryRef.current = { page, status, olderThanHours };
 
@@ -73,7 +72,7 @@ export default function MediaCleanup() {
   useEffect(() => () => requestGuardRef.current.cancel(), []);
 
   const retry = async (job: MediaCleanupJob) => {
-    if (!canRetryMediaCleanupJob(job) || retryingId !== null) return;
+    if (!job.eligibleForRetry || retryingId !== null) return;
     if (!window.confirm(mediaCleanupRetryConfirmation(job))) return;
     setRetryingId(job.id);
     setError('');
@@ -158,7 +157,7 @@ export default function MediaCleanup() {
 function JobRow({ job, retrying, onRetry }: { job: MediaCleanupJob; retrying: boolean; onRetry: (job: MediaCleanupJob) => Promise<void> }) {
   const status = mediaCleanupStatusPresentation(job);
   const statusClass = { danger: 'bg-red-50 text-red-700', warning: 'bg-amber-50 text-amber-700', info: 'bg-blue-50 text-blue-700', success: 'bg-emerald-50 text-emerald-700' }[status.tone];
-  return <tr className="align-top"><td className="px-5 py-4"><p className="font-semibold text-text-main">#{job.id}</p><p className="mt-1 text-xs text-text-muted">原用户 ID {job.ownerUserId}</p><p className="mt-1 text-[11px] text-text-muted">已存在 {formatAge(job.ageSeconds)}</p></td><td className="px-4 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass}`}>{status.label}</span></td><td className="px-4 py-4 text-text-main">{job.urlCount} 个对象</td><td className="px-4 py-4 text-text-main">{job.attempts} 次</td><td className="max-w-80 px-4 py-4"><p className="line-clamp-3 text-xs leading-5 text-red-600" title={job.lastError || ''}>{job.lastError || '—'}</p></td><td className="px-4 py-4 text-xs text-text-muted">{formatDate(job.updatedAt)}</td><td className="px-5 py-4 text-right"><button type="button" disabled={!canRetryMediaCleanupJob(job) || retrying} onClick={() => void onRetry(job)} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white disabled:bg-gray-200 disabled:text-gray-500">{retrying ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}{retrying ? '重试中' : '立即重试'}</button></td></tr>;
+  return <tr className="align-top"><td className="px-5 py-4"><p className="font-semibold text-text-main">#{job.id}</p><p className="mt-1 text-xs text-text-muted">原用户 ID {job.ownerUserId}</p><p className="mt-1 text-[11px] text-text-muted">已存在 {formatAge(job.ageSeconds)}</p></td><td className="px-4 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass}`}>{status.label}</span></td><td className="px-4 py-4 text-text-main">{job.urlCount} 个对象</td><td className="px-4 py-4 text-text-main">{job.attempts} 次</td><td className="max-w-80 px-4 py-4"><p className="line-clamp-3 text-xs leading-5 text-red-600" title={job.lastError || ''}>{job.lastError || '—'}</p></td><td className="px-4 py-4 text-xs text-text-muted">{formatDate(job.updatedAt)}</td><td className="px-5 py-4 text-right"><button type="button" disabled={!job.eligibleForRetry || retrying} onClick={() => void onRetry(job)} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white disabled:bg-gray-200 disabled:text-gray-500">{retrying ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}{retrying ? '重试中' : '立即重试'}</button></td></tr>;
 }
 
 function SummaryCard({ label, value, icon: Icon, tone }: { label: string; value: number; icon: typeof Clock3; tone: 'amber' | 'blue' | 'red' | 'green' }) {

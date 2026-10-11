@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
-import { ACCOUNT_SECURITY_CAPABILITY, reauthSendSchema, reauthVerifySchema, type ReauthPurpose } from "@dietdigidose/contracts";
+import { ACCOUNT_SECURITY_CAPABILITY, reauthSendSchema, reauthVerifySchema, passwordRecoverySendSchema, passwordRecoveryVerifySchema, type ReauthPurpose } from "@dietdigidose/contracts";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import type { ReauthUser } from "../modules/authVerification/types.js";
 import bcrypt from "bcryptjs";
@@ -21,10 +21,17 @@ import {
   recordVerificationEvent,
   type VerificationSubjectRow,
 } from "../services/authVerification.js";
-import { hashRegistrationToken } from "../services/authVerificationCrypto.js";
+import { hashPasswordRecoveryToken, hashRegistrationToken } from "../services/authVerificationCrypto.js";
 import { getSmsProvider, smsCredentialsStatus } from "../services/smsVerificationProvider.js";
 
+import { getRateLimitClientIp, sharedRateLimit } from "../middleware/sharedRateLimit.js";
+
 const router = Router();
+export const passwordRecoveryRouter = Router();
+type SmsPurpose = "login" | ReauthPurpose | "password_recovery";
+const recoveryRateLimit = (namespace: string, limit: number, key: (req: Request) => string = getRateLimitClientIp) =>
+  sharedRateLimit({ namespace: `password-recovery-${namespace}`, limit, windowMs: 15 * 60_000, key,
+    message: "恢复请求过于频繁，请稍后重试", code: "PASSWORD_RECOVERY_RATE_LIMITED" });
 export const reauthRouter = Router();
 
 type ChallengeRow = {
@@ -57,7 +64,7 @@ function challengeSubject(row: ChallengeRow): VerificationSubjectRow {
   };
 }
 
-async function sendSms(req: Request, res: Response, purpose: "login" | ReauthPurpose = "login", boundUser?: ReauthUser) {
+async function sendSms(req: Request, res: Response, purpose: SmsPurpose = "login", boundUser?: ReauthUser) {
   const phone = normalizeMainlandPhone(boundUser?.phone ?? req.body?.phone);
   if (!phone) return sendError(res, 400, "请输入有效的中国大陆手机号", "INVALID_PHONE");
 
@@ -125,7 +132,7 @@ async function sendSms(req: Request, res: Response, purpose: "login" | ReauthPur
         eventType: "send_rejected",
         outcome: "provider_error",
         providerCode: result.code,
-        providerMessage: result.message,
+        providerMessage: purpose === "password_recovery" ? undefined : result.message,
         providerRequestId: result.requestId,
         bizId: result.bizId,
         outId,
@@ -143,7 +150,7 @@ async function sendSms(req: Request, res: Response, purpose: "login" | ReauthPur
         eventType: "send_accepted",
         outcome: "accepted",
         providerCode: result.code,
-        providerMessage: result.message,
+        providerMessage: purpose === "password_recovery" ? undefined : result.message,
         providerRequestId: result.requestId,
         bizId: result.bizId,
         outId,
@@ -175,7 +182,7 @@ async function sendSms(req: Request, res: Response, purpose: "login" | ReauthPur
 }
 router.post("/send", (req,res,next) => { void sendSms(req,res).catch(next); });
 
-async function verifySms(req: Request, res: Response, purpose: "login" | ReauthPurpose = "login", boundUser?: ReauthUser) {
+async function verifySms(req: Request, res: Response, purpose: SmsPurpose = "login", boundUser?: ReauthUser) {
   const challengeId = typeof req.body?.challengeId === "string" ? req.body.challengeId.trim() : "";
   const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
   if (!challengeId || !/^\d{6}$/.test(code)) {
@@ -185,7 +192,7 @@ async function verifySms(req: Request, res: Response, purpose: "login" | ReauthP
   const challenge = await authVerificationService().challenge(challengeId) as ChallengeRow | null;
   if (!challenge) return sendError(res, 404, "验证码请求不存在", "SMS_CHALLENGE_NOT_FOUND");
   if (challenge.purpose !== purpose) return sendError(res, 403, "验证码用途不匹配，请重新获取", "SMS_CHALLENGE_PURPOSE_MISMATCH");
-  if (purpose !== "login" && (!boundUser || challenge.reauth_user_id !== boundUser.id || challenge.reauth_session_version !== boundUser.session_version
+  if (purpose !== "login" && purpose !== "password_recovery" && (!boundUser || challenge.reauth_user_id !== boundUser.id || challenge.reauth_session_version !== boundUser.session_version
     || decryptSubjectPhone(challengeSubject(challenge)) !== boundUser.phone)) return sendError(res,403,"身份验证已失效，请重新获取","REAUTH_REQUIRED");
 
   const sourceIp = getClientIp(req);
@@ -221,7 +228,7 @@ async function verifySms(req: Request, res: Response, purpose: "login" | ReauthP
         eventType: "verify_failed",
         outcome: "provider_error",
         providerCode: result.code,
-        providerMessage: result.message,
+        providerMessage: purpose === "password_recovery" ? undefined : result.message,
         sourceIp,
         userAgent,
         outId: challenge.out_id,
@@ -238,7 +245,7 @@ async function verifySms(req: Request, res: Response, purpose: "login" | ReauthP
         eventType: "verify_failed",
         outcome: "mismatch",
         providerCode: result.code,
-        providerMessage: result.message,
+        providerMessage: purpose === "password_recovery" ? undefined : result.message,
         sourceIp,
         userAgent,
         outId: challenge.out_id,
@@ -248,6 +255,20 @@ async function verifySms(req: Request, res: Response, purpose: "login" | ReauthP
     }
 
     await incrementDailyUsage("verify_passed");
+    if (purpose === "password_recovery") {
+      if (!boundUser || !boundUser.phone_verified_at || boundUser.is_disabled || challenge.reauth_user_id !== boundUser.id
+        || challenge.reauth_session_version !== boundUser.session_version || phone !== boundUser.phone) {
+        await authVerificationService().failChallenge(challengeId);
+        return sendError(res, 400, "无法完成恢复，请重新验证或联系邀请你的管理员", "PASSWORD_RECOVERY_INVALID");
+      }
+      const recoveryToken = `${boundUser.id}.${crypto.randomBytes(32).toString("base64url")}`;
+      const issued = await authVerificationService().issueReauthGrant({ challengeId, challengePurpose: "password_recovery",
+        userId: boundUser.id, purpose: "password_update", phone, sessionVersion: boundUser.session_version,
+        tokenHash: hashPasswordRecoveryToken(recoveryToken), expiresAt: new Date(Date.now() + 5 * 60_000).toISOString() });
+      if (!issued) return sendError(res, 400, "恢复凭据已失效，请重新验证手机号", "PASSWORD_RECOVERY_INVALID");
+      await recordVerificationEvent({ subjectId: subject.id, challengeId, eventType: "password_recovery", outcome: "verified", sourceIp, userAgent });
+      return res.json({ recoveryToken, expiresIn: 300 });
+    }
     if (purpose !== "login" && boundUser) {
       const reauthToken = crypto.randomBytes(32).toString("base64url");
       const issued = await authVerificationService().issueReauthGrant({ challengeId,userId:boundUser.id,purpose,phone,
@@ -313,6 +334,28 @@ async function verifySms(req: Request, res: Response, purpose: "login" | ReauthP
   }
 }
 router.post("/verify", (req,res,next) => { void verifySms(req,res).catch(next); });
+
+passwordRecoveryRouter.post("/send", recoveryRateLimit("send-ip", 10),
+  recoveryRateLimit("send-phone", 3, (req) => normalizeMainlandPhone(req.body?.phone) || "invalid"), async (req,res,next) => {
+  try {
+    const parsed = passwordRecoverySendSchema.safeParse(req.body);
+    if (!parsed.success) return sendError(res,400,"请输入已绑定的中国大陆手机号","INVALID_PHONE");
+    const existing = await authVerificationService().userByPhone(parsed.data.phone);
+    const user = existing ? await authVerificationService().reauthUser(existing.id) : null;
+    // Send a real SMS for every valid number: neither provider failures nor accepted sends reveal membership.
+    // Only an already verified binding at send time can later issue a recovery proof.
+    return await sendSms(req,res,"password_recovery",user?.phone_verified_at && !user.is_disabled ? user : undefined);
+  } catch (error) { return next(error); }
+});
+passwordRecoveryRouter.post("/verify", recoveryRateLimit("verify-ip", 30), async (req,res,next) => {
+  try {
+    const parsed = passwordRecoveryVerifySchema.safeParse(req.body);
+    if (!parsed.success) return sendError(res,400,"请输入有效的验证码","INVALID_VERIFICATION_INPUT");
+    const challenge = await authVerificationService().challenge(parsed.data.challengeId);
+    const user = challenge?.reauth_user_id ? await authVerificationService().reauthUser(challenge.reauth_user_id) : null;
+    return await verifySms(req,res,"password_recovery",user ?? undefined);
+  } catch (error) { return next(error); }
+});
 
 reauthRouter.use(authMiddleware);
 reauthRouter.post("/send",async (req: AuthRequest,res,next) => {

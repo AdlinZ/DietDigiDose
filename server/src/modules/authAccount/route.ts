@@ -5,7 +5,7 @@ import { getRateLimitClientIp, sharedRateLimit } from "../../middleware/sharedRa
 import { validateBody } from "../../middleware/validate.js";
 import { sendError } from "../../utils/http.js";
 import { changePasswordSchema, loginSchema, profileSchema, registerSchema } from "../../validation/schemas.js";
-import { ACCOUNT_SECURITY_CAPABILITY, accountDeletionSchema, setAccountPasswordSchema } from "@dietdigidose/contracts";
+import { ACCOUNT_SECURITY_CAPABILITY, accountDeletionSchema, passwordRecoveryResetSchema, setAccountPasswordSchema } from "@dietdigidose/contracts";
 import { AuthAccountError } from "./errors.js";
 import type { AuthAccountService } from "./service.js";
 
@@ -47,6 +47,11 @@ export function createAuthAccountRouter(service: AuthAccountService) {
       if (value.hasPassword === false && req.get("X-Account-Security") !== ACCOUNT_SECURITY_CAPABILITY) return sendError(res,426,"请更新应用后管理此账号","CLIENT_UPDATE_REQUIRED");
       return res.json(value);
     }).catch((error) => handle(error,res,next));
+  });
+  router.post("/password-recovery/reset", sharedRateLimit({ namespace: "password-recovery-reset", limit: 30, windowMs: 15 * 60_000,
+    key: getRateLimitClientIp, message: "恢复请求过于频繁，请稍后重试", code: "PASSWORD_RECOVERY_RATE_LIMITED" }), validateBody(passwordRecoveryResetSchema), async (req,res,next) => {
+    try { return res.json(await service.recoverPassword(req.body.recoveryToken, req.body.newPassword)); }
+    catch (error) { return handle(error,res,next); }
   });
   router.post("/password",authMiddleware,validateBody(setAccountPasswordSchema),async (req: AuthRequest,res) => {
     try { return res.json(await service.setPassword(req.userId!,req.body.newPassword,req.body.reauthToken)); }

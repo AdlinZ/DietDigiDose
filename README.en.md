@@ -1,5 +1,7 @@
 # DietDigiDose (食光烙记)
 
+> **October 11 build preparation:** Verified W41 changes are now committed through `76a48fac` in PR #248. Candidate CI and merge are pending before requesting `26w41a`; that identifier has not been reserved. Independent website changes remain local. Older SHA and uncommitted-work statements below describe historical checks.
+
 <p align="center">
   <img src="client/assets/logo.svg" alt="DietDigiDose logo" width="160" />
 </p>
@@ -39,15 +41,17 @@ The repository currently includes:
 
 ## Version and status
 
-- **Product version:** `1.0.6`
-- **Release cycle:** `26w36`
-- **Candidate snapshot:** `26w36a`
+- **Current week:** `26w41` (ISO week 41 in Asia/Shanghai, October 5–11, 2026)
+- **Repository version metadata:** `1.0.6` / `26w36a` / build `263601` (not the latest build artifact)
+- **Latest successful Android build:** [`26w38a` / build `263801`](https://github.com/AdlinZ/DietDigiDose/actions/runs/35517119184), source commit `818cdefe`
 - **Stage:** trusted Beta hardening
-- **Last updated:** September 3, 2026
+- **Last updated:** October 11, 2026
 
-Static checks, automated tests, builds, release metadata validation, and production dependency auditing for all three applications are enforced in CI. The website, admin console, API, and HTTPS production environment are live. Before external mobile testing, the project still needs iOS and Android candidates built from the same commit, end-to-end testing on both platforms, and an isolated backup-restore exercise.
+Main at `a22c6cb5` includes multi-meal cooking, preparation and reheating review, core workflow recovery, and unknown-nutrition display (#246 and #247), with all [CI checks](https://github.com/AdlinZ/DietDigiDose/actions/runs/37003624773) passing. [Draft PR #248](https://github.com/AdlinZ/DietDigiDose/pull/248) adds nutrition provenance, data import, and dependency security work; its commit `258d0dba` passed [CI](https://github.com/AdlinZ/DietDigiDose/actions/runs/37284683370) but has not been merged, deployed, or packaged. CI results apply only to the referenced commits. On October 7, the current worktree was separately reviewed, five new dependency audit findings were addressed, and local tests, coverage, static checks, all three builds, and the audit passed. These changes remain uncommitted; a unified candidate and real-environment acceptance are still pending.
 
-See the [candidate records](docs/release-candidate-26w37a.md) and [device Beta checklist](docs/device-beta-checklist.md) for the exact boundary. Candidate records retain their original version metadata and are not rewritten for later releases.
+On October 11, all **20 unfinished W41 issues** were carried into [W42](https://github.com/AdlinZ/DietDigiDose/milestone/12) (October 12–18), and W41 was archived as a weekly schedule. The scope includes: 18 carried over from W40, plus [#221 self-service password recovery](https://github.com/AdlinZ/DietDigiDose/issues/221) and [#219 in-app updates](https://github.com/AdlinZ/DietDigiDose/issues/219), added on October 7. Both are implemented locally; the Android update module compiles successfully, while deployment, real SMS delivery, and Android device acceptance remain pending. Recovery supports verified phone bindings but not email; updates use complete APK packages, with OTA left for a later phase. See the [implementation and acceptance record](docs/w41-account-recovery-and-app-updates.md). Another 21 Backlog issues remain unscheduled. [W40](https://github.com/AdlinZ/DietDigiDose/milestone/10) retains its 4 closed issues as history. The website, admin console, API, PostgreSQL, and workers have recorded public deployment evidence; the latest confirmed deployment remains `w39-818cdefe` (October 2). Independent environment and persistence acceptance, a complete recovery exercise for the same candidate, and Android/iOS candidates from the same commit with real-device workflow evidence (#105, #106, and #107) remain the three P0 gates. Scheduling does not establish acceptance or promise completion of all 20 this week.
+
+See the [W42 packaging readiness and execution plan](docs/milestone-26w42-progress.md), [development and Beta hardening checklist](TODO.md), and [device Beta checklist](docs/device-beta-checklist.md). The [W40 acceptance history](docs/milestone-26w40-progress.md) and [historical candidate records](docs/release-candidate-26w37a.md) retain existing evidence and original version metadata. Repository build metadata is allocated only before a new build; documentation updates do not create a candidate or increment its snapshot.
 
 ## Live services
 
@@ -70,7 +74,7 @@ This repository is a pnpm workspace monorepo:
 | `admin` | React, Vite, Tailwind CSS | Moderation and system administration console |
 | `deploy` | Docker Compose, Caddy | HTTPS deployment, persistence, and recovery exercises |
 
-Local development uses SQLite by default, while the current production environment uses PostgreSQL. Supabase remains optional object storage for community media.
+Local development uses SQLite by default, while the current public service uses PostgreSQL. Supabase remains optional object storage for community media; acceptance of an independent staging bucket is still pending.
 
 ## Repository layout
 
@@ -89,16 +93,20 @@ Dietdigidose/
 
 ### Requirements
 
-- Node.js 20 or newer (CI uses Node.js 22)
+- Node.js 22.23.2 (as specified in `.nvmrc` and `.node-version`)
 - pnpm 10.18.0
 
 ### Install and configure
 
 ```bash
+corepack enable
+corepack prepare pnpm@10.18.0 --activate
 pnpm install --frozen-lockfile
 cp client/.env.example client/.env
 cp server/.env.example server/.env
 ```
+
+When using nvm, fnm, mise, or asdf, load the repository's Node version files first. Regular CI, Android builds, and the recommended local environment must use the same Node version; upgrades must update the version files, root package `engines`, and all workflows in one PR.
 
 At minimum, point the client to the local API:
 
@@ -106,7 +114,7 @@ At minimum, point the client to the local API:
 EXPO_PUBLIC_BACKEND_BASE_URL=http://localhost:9090
 ```
 
-Development mode can generate a local JWT secret automatically. Production and staging must define a strong `JWT_SECRET`, `ADMIN_INITIAL_PASSWORD`, explicit `CORS_ORIGINS`, and a `DATABASE_PATH` on persistent storage. See [`server/.env.example`](server/.env.example) for all settings.
+Development mode can use the default SQLite database and generate a local JWT secret automatically. Production and staging must define a strong `JWT_SECRET`, `ADMIN_INITIAL_PASSWORD`, and explicit `CORS_ORIGINS`, and connect to persistent PostgreSQL using `DATABASE_DRIVER=postgresql` and `DATABASE_URL`. See [`server/.env.example`](server/.env.example) for all settings.
 
 ### Run
 
@@ -142,17 +150,22 @@ The local SQLite database is created automatically at `server/data/dietdigidose.
 | `pnpm dev:all` | Start the client, API, and admin console |
 | `pnpm lint:all` | Check `client`, `server`, and `admin` |
 | `pnpm test:all` | Run all automated tests |
+| `pnpm test:coverage` | Run client/server coverage gates |
+| `pnpm test:stability` | Run the full test suite twice and generate a stability report |
 | `pnpm build:client` | Export the Expo web build |
 | `pnpm build:server` | Build the Express server |
 | `pnpm build:admin` | Build the admin console |
+| `pnpm validate:toolchain` | Validate Node/pnpm versions against CI declarations |
 | `pnpm validate:release` | Validate versions, snapshot, and native build numbers |
 | `pnpm audit:prod` | Audit production dependencies |
+
+See [layered testing and quality gates](docs/testing.md) for test layers, coverage, artifact budgets, and flaky/quarantine handling.
 
 ## Release and security boundary
 
 `client/eas.json` contains iOS and Android preview and production profiles, and every distributable build requires an HTTPS API. Only local simulator development may explicitly use localhost HTTP, and it must not use real sensitive data.
 
-The production dependency audit currently has narrow temporary exceptions for `CVE-2025-71329` and `CVE-2025-71330` in the Expo/Metro build chain. No upstream fix is available yet, so the current state must not be described as “zero vulnerabilities.” These exceptions must be reviewed after every Expo/Metro upgrade and before every candidate release.
+A passing dependency audit does not mean “zero vulnerabilities.” As of October 6, 2026, main at `a22c6cb5` configures three narrow temporary audit exceptions and includes the project patch for `node-forge`. Draft PR #248 at `258d0dba` adds the `braces` patch and mandatory regression checks, bringing the exception count to four; that additional fix has not been merged or deployed. See [layered testing and quality gates](docs/testing.md) and [`pnpm-workspace.yaml`](pnpm-workspace.yaml) for exception rationale, patch validation, and review requirements. Review them after every dependency upgrade and before candidate acceptance.
 
 Read these documents before deployment:
 

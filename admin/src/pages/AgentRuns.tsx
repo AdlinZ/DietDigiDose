@@ -116,29 +116,6 @@ interface AgentUsageSummary {
   avgLatencyMs?: number;
 }
 
-const statusOptions: Array<{ value: '' | RunStatus; label: string }> = [
-  { value: '', label: '全部状态' },
-  { value: 'running', label: '运行中' },
-  { value: 'queued', label: '排队中' },
-  { value: 'awaiting_input', label: '等待用户输入' },
-  { value: 'awaiting_approval', label: '等待用户确认' },
-  { value: 'completed', label: '已完成' },
-  { value: 'failed', label: '失败' },
-  { value: 'cancelled', label: '已取消' },
-  { value: 'expired', label: '已过期' },
-];
-
-const modalityOptions: Array<{ value: '' | Modality; label: string }> = [
-  { value: '', label: '全部模态' },
-  { value: 'text', label: '文字' },
-  { value: 'home', label: '首页推荐' },
-  { value: 'cooking', label: '烹饪' },
-  { value: 'image', label: '食物图片' },
-  { value: 'audio', label: '语音' },
-  { value: 'inventory_scan', label: '库存扫描' },
-  { value: 'receipt', label: '小票扫描' },
-];
-
 const agentOptions = ['', 'NutritionPlanningAgent', 'RecipeCookingAgent', 'VisionAgent', 'VoiceAgent', 'OperationsAgent'];
 
 const statusStyles: Record<RunStatus, string> = {
@@ -153,7 +130,7 @@ const statusStyles: Record<RunStatus, string> = {
 };
 
 const statusLabels: Record<RunStatus, string> = {
-  queued: '排队中', running: '运行中', awaiting_input: '等待用户输入', awaiting_approval: '等待用户确认',
+  running: '运行中', queued: '排队中', awaiting_input: '等待用户输入', awaiting_approval: '等待用户确认',
   completed: '已完成', failed: '失败', cancelled: '已取消', expired: '已过期',
 };
 
@@ -248,8 +225,8 @@ export default function AgentRuns() {
   const [statusCounts, setStatusCounts] = useState<Array<{ status: RunStatus; count: number }>>([]);
   const [usageSummary, setUsageSummary] = useState<AgentUsageSummary>({ modelCalls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 });
   const [query, setQuery] = useQueryState<string>('q', '');
-  const [status, setStatus] = useQueryState<string>('status', '', ["", "queued", "running", "awaiting_input", "awaiting_approval", "completed", "failed", "cancelled", "expired"]);
-  const [modality, setModality] = useQueryState<string>('modality', '', ["", "text", "home", "cooking", "image", "audio", "inventory_scan", "receipt"]);
+  const [status, setStatus] = useQueryState<string>('status', '', ['', ...Object.keys(statusLabels)]);
+  const [modality, setModality] = useQueryState<string>('modality', '', ['', ...Object.keys(modalityLabels)]);
   const [agent, setAgent] = useQueryState<string>('agent', '', agentOptions);
   const [range, setRange] = useQueryState<string>('range', '30d', ["7d", "30d", "90d", "all"]);
   const [page, setPage] = useState(1);
@@ -321,8 +298,8 @@ export default function AgentRuns() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative min-w-[200px] sm:min-w-64 flex-1"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" /><input value={query} onChange={(event) => resetPage(setQuery, event.target.value)} placeholder="搜索 Run ID、会话、用户名或用户 ID" className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-primary" /></div>
           <Filter className="h-4 w-4 text-text-muted hidden sm:block" />
-          <select value={status} onChange={(event) => resetPage(setStatus, event.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-text-main max-w-full">{statusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-          <select value={modality} onChange={(event) => resetPage(setModality, event.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-text-main max-w-full">{modalityOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+          <select value={status} onChange={(event) => resetPage(setStatus, event.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-text-main max-w-full"><option value="">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+          <select value={modality} onChange={(event) => resetPage(setModality, event.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-text-main max-w-full"><option value="">全部模态</option>{Object.entries(modalityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
           <select value={agent} onChange={(event) => resetPage(setAgent, event.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-text-main max-w-full">{agentOptions.map((value) => <option key={value || 'all'} value={value}>{value || '全部专业 Agent'}</option>)}</select>
           <select value={range} onChange={(event) => resetPage(setRange, event.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-text-main max-w-full"><option value="7d">近 7 天</option><option value="30d">近 30 天</option><option value="90d">近 90 天</option><option value="all">全部时间</option></select>
         </div>

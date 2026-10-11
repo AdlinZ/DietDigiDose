@@ -18,28 +18,6 @@ export type MediaCleanupJob = {
   eligibleForRetry: boolean;
 };
 
-export function createLatestMediaCleanupRequest() {
-  let generation = 0;
-  let activeController: AbortController | null = null;
-  return {
-    begin() {
-      activeController?.abort();
-      const controller = new AbortController();
-      activeController = controller;
-      const requestGeneration = ++generation;
-      return {
-        signal: controller.signal,
-        isLatest: () => requestGeneration === generation && !controller.signal.aborted,
-      };
-    },
-    cancel() {
-      generation += 1;
-      activeController?.abort();
-      activeController = null;
-    },
-  };
-}
-
 export function mediaCleanupViewState(loading: boolean, error: string, itemCount: number) {
   if (loading) return 'loading' as const;
   if (error) return 'error' as const;
@@ -53,10 +31,6 @@ export function mediaCleanupStatusPresentation(job: Pick<MediaCleanupJob, 'statu
   if (job.status === 'pending') return { label: '等待重试', tone: 'warning' as const };
   if (job.status === 'processing') return { label: '处理中', tone: 'info' as const };
   return { label: '已完成', tone: 'success' as const };
-}
-
-export function canRetryMediaCleanupJob(job: Pick<MediaCleanupJob, 'eligibleForRetry'>) {
-  return job.eligibleForRetry;
 }
 
 export function mediaCleanupRetryConfirmation(job: Pick<MediaCleanupJob, 'id' | 'urlCount'>) {

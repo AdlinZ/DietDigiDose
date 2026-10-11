@@ -44,7 +44,7 @@ export type UsageCounter =
 export type ChallengeCreate = {
   id: string;
   subjectId: number;
-  purpose: "login" | "admin_test" | "password_update" | "account_delete";
+  purpose: "login" | "admin_test" | "password_update" | "account_delete" | "password_recovery";
   reauthUserId?: number;
   reauthSessionVersion?: number;
   outId: string;
@@ -54,7 +54,7 @@ export type ChallengeCreate = {
 };
 
 export type ReauthUser = { id: number; phone: string; phone_verified_at: string | null; session_version: number; is_disabled: boolean | number; role: string };
-export type ReauthGrantInput = { challengeId: string; userId: number; purpose: "password_update" | "account_delete"; phone: string; sessionVersion: number; tokenHash: string; expiresAt: string };
+export type ReauthGrantInput = { challengePurpose?: "password_recovery"; challengeId: string; userId: number; purpose: "password_update" | "account_delete"; phone: string; sessionVersion: number; tokenHash: string; expiresAt: string };
 
 export type EventFilters = {
   userId?: number;

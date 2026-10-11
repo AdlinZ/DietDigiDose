@@ -30,9 +30,17 @@ export type CustomFoodCreateData = {
 
 export type ExternalFood = {
   name: string;
-  calories_100g: number;
-  protein_100g: number;
-  carbs_100g: number;
-  fat_100g: number;
+  calories_100g: number | null;
+  protein_100g: number | null;
+  carbs_100g: number | null;
+  fat_100g: number | null;
   source: string;
+  source_provider?: string;
+  fdc_id?: number;
+  source_url?: string;
+  source_data_type?: string | null;
+  source_serving_size_unit?: string | null;
+  source_published_at?: string | null;
+  data_license?: string;
+  nutrition_basis?: string;
 };

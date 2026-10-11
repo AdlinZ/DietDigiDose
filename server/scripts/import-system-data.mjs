@@ -49,7 +49,7 @@ export async function importSystem(db, data, {apply=false,authorId,activation}={
     if(exists===0)reports.push(await importConcept(stage,data.baseline,{apply:true,checksum:data.manifest.files['data/runtime-input.json']}));
     else if(exists!==389)throw new Error('Partial baseline import; review before proceeding');
     else reports.push({baseline:'existing_389_methods_preserved'});
-    reports.push(await importRelease(stage,data.nutrition,data.manifest.files['data/nutrition/manifest.json'],true));
+    reports.push(await importRelease(stage,data.nutrition,data.manifest.files['data/nutrition/manifest.json'],true,{preserveNewerReferences:true}));
     reports.push(await importCommunity(stage,data.community,{apply:true,authorId,activation}));
     await db.query('INSERT INTO system_data_package_imports(version,manifest_sha256) VALUES($1,$2)',[data.manifest.version,digest]);
     await db.query(apply?'COMMIT':'ROLLBACK');
@@ -58,7 +58,9 @@ export async function importSystem(db, data, {apply=false,authorId,activation}={
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
-  const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+  const directories=process.argv.slice(2).filter(arg=>arg!=='--apply');
+  if(directories.length>1)throw new Error('Usage: import-system-data.mjs [package-directory] [--apply]');
+  const root=directories.length?resolve(directories[0]):resolve(dirname(fileURLToPath(import.meta.url)),'..');
   const data=loadSystemPackage(root);
   if(!process.env.DATABASE_URL)throw new Error('Set DATABASE_URL');
   const pool=new pg.Pool({connectionString:process.env.DATABASE_URL});const db=await pool.connect();

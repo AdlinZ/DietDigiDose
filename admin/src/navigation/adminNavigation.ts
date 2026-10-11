@@ -1,8 +1,7 @@
-import { LayoutDashboard, BookOpen, Users, BarChart3, Bot, Settings } from 'lucide-react';
+import { BookOpen, Users, BarChart3, Bot, Settings } from 'lucide-react';
 export interface AdminPage { path: string; label: string }
 export interface AdminGroup { id: string; label: string; icon: typeof Settings; pages: AdminPage[] }
 export const workbench: AdminPage = { path: '/admin', label: '工作台' };
-export const workbenchIcon = LayoutDashboard;
 export const adminGroups: AdminGroup[] = [
   { id: 'content', label: '内容管理', icon: BookOpen, pages: [
     { path: '/admin/ingredients', label: '食材库' }, { path: '/admin/recipes', label: '食谱库' },

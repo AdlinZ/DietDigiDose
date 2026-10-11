@@ -675,6 +675,10 @@ export const adminQuestionSchema = z.object({
   accepted_comment_id: z.number().int().positive().nullable().optional(),
 }).strict();
 export const adminIngredientSchema = customFoodSchema.extend({
+  calories_100g: z.number().finite().min(0).max(1000).nullable().default(null),
+  protein_100g: z.number().finite().min(0).max(100).nullable().default(null),
+  carbs_100g: z.number().finite().min(0).max(100).nullable().default(null),
+  fat_100g: z.number().finite().min(0).max(100).nullable().default(null),
   category: z.string().trim().max(80).nullable().optional(),
   source: z.string().trim().min(1).max(80).default("official"),
   aliases: z.array(z.string().trim().min(1).max(80)).max(30).default([]),
@@ -683,6 +687,20 @@ export const adminIngredientSchema = customFoodSchema.extend({
   source_version: z.string().trim().min(1).max(120).default("manual-v1"),
   data_license: z.string().trim().min(1).max(120).default("DietDigiDose-Original"),
   edible_ratio: z.number().positive().max(1).default(1),
+}).strict();
+// PUT still requires name; omitted fields are preserved, while explicit nutrient/category null clears them.
+export const adminIngredientUpdateSchema = adminIngredientSchema.extend({
+  calories_100g: adminIngredientSchema.shape.calories_100g.removeDefault().optional(),
+  protein_100g: adminIngredientSchema.shape.protein_100g.removeDefault().optional(),
+  carbs_100g: adminIngredientSchema.shape.carbs_100g.removeDefault().optional(),
+  fat_100g: adminIngredientSchema.shape.fat_100g.removeDefault().optional(),
+  source: adminIngredientSchema.shape.source.removeDefault().optional(),
+  aliases: adminIngredientSchema.shape.aliases.removeDefault().optional(),
+  search_keywords: adminIngredientSchema.shape.search_keywords.removeDefault().optional(),
+  preparation_state: adminIngredientSchema.shape.preparation_state.removeDefault().optional(),
+  source_version: adminIngredientSchema.shape.source_version.removeDefault().optional(),
+  data_license: adminIngredientSchema.shape.data_license.removeDefault().optional(),
+  edible_ratio: adminIngredientSchema.shape.edible_ratio.removeDefault().optional(),
 }).strict();
 const optionalUrlSchema = z.string().trim().max(2000).optional().refine(
   (val) => !val || /^https?:\/\/\S+/i.test(val),

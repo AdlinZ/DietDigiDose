@@ -20,27 +20,13 @@ export function sanitizeAIErrorMessage(value: unknown) {
 
 export function classifyAIError(value: unknown): AIErrorDetails {
   const adminMessage = sanitizeAIErrorMessage(value);
-  if (/未配置|api key|missing.*key|authentication.*provider/i.test(adminMessage)) {
-    return {
-      code: "AI_NOT_CONFIGURED",
-      type: "configuration",
-      adminMessage,
-      publicMessage: "AI 服务尚未完成配置，请稍后重试或联系管理员。",
-    };
-  }
-  if (/timeout|timed out|超时|aborted/i.test(adminMessage)) {
-    return { code: "AI_TIMEOUT", type: "timeout", adminMessage, publicMessage: "AI 服务响应超时，请稍后重试。" };
-  }
-  if (/429|rate.?limit|限流|too many requests/i.test(adminMessage)) {
-    return { code: "AI_RATE_LIMITED", type: "rate_limit", adminMessage, publicMessage: "AI 请求较多，请稍后再试。" };
-  }
-  if (/network|fetch failed|econn|enotfound|socket|网络/i.test(adminMessage)) {
-    return { code: "AI_NETWORK_ERROR", type: "network", adminMessage, publicMessage: "AI 服务网络暂时不可用，请稍后重试。" };
-  }
-  if (/provider|model|openai|response|status\s*[45]\d\d/i.test(adminMessage)) {
-    return { code: "AI_PROVIDER_ERROR", type: "provider", adminMessage, publicMessage: "AI 服务暂时不可用，请稍后重试。" };
-  }
-  return { code: "AI_AGENT_FAILED", type: "server", adminMessage, publicMessage: "AI 处理失败，请稍后重试。" };
+  let code = "AI_AGENT_FAILED";
+  if (/未配置|api key|missing.*key|authentication.*provider/i.test(adminMessage)) code = "AI_NOT_CONFIGURED";
+  else if (/timeout|timed out|超时|aborted/i.test(adminMessage)) code = "AI_TIMEOUT";
+  else if (/429|rate.?limit|限流|too many requests/i.test(adminMessage)) code = "AI_RATE_LIMITED";
+  else if (/network|fetch failed|econn|enotfound|socket|网络/i.test(adminMessage)) code = "AI_NETWORK_ERROR";
+  else if (/provider|model|openai|response|status\s*[45]\d\d/i.test(adminMessage)) code = "AI_PROVIDER_ERROR";
+  return { code, type: aiErrorTypeForCode(code), adminMessage, publicMessage: publicAIErrorMessage(code) };
 }
 
 export function publicAIErrorMessage(code?: string | null) {

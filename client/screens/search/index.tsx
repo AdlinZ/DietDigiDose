@@ -19,6 +19,7 @@ import { communityApi, foodsApi, recipesApi, type CommunityPost, type Recipe } f
 import { getAvatarSource } from "@/utils/defaultAvatar";
 import { formatLocalPostDate } from "@/utils/postDate";
 import { getUserStorageKey, SEARCH_HISTORY_STORAGE_KEY } from "@/utils/userStorage";
+import { FoodSourceDetails, type FoodSourceData } from "@/screens/search/FoodSourceDetails";
 
 const MAX_HISTORY_ITEMS = 8;
 const POPULAR_SEARCHES = ["高蛋白早餐", "鸡胸肉", "15分钟晚餐", "减脂便当", "燕麦"];
@@ -26,7 +27,7 @@ const POPULAR_SEARCHES = ["高蛋白早餐", "鸡胸肉", "15分钟晚餐", "减
 type SearchCategory = "all" | "recipes" | "foods" | "posts" | "users";
 type IconName = ComponentProps<typeof FontAwesome6>["name"];
 
-type FoodSearchResult = {
+type FoodSearchResult = FoodSourceData & {
   id?: number | string;
   name: string;
   category?: string | null;
@@ -35,8 +36,13 @@ type FoodSearchResult = {
   carbs_100g: number | null;
   fat_100g: number | null;
   aliases?: { text: string; language: string; regions: string[] }[];
-  source?: string;
 };
+
+function canPrefillNutrition(food: FoodSearchResult) {
+  if (food.source === "concept_base" || food.automatic_calculation_allowed === false) return false;
+  if (food.source === "open_api" || food.source_provider === "usda_fdc") return food.nutrition_basis === "per_100g";
+  return !food.nutrition_basis || food.nutrition_basis === "per_100g";
+}
 
 type UserSearchResult = {
   id: number;
@@ -214,13 +220,14 @@ export default function SearchScreen() {
 
   const openFood = (food: FoodSearchResult) => {
     commitHistory(query);
+    const nutrition = canPrefillNutrition(food) ? food : null;
     router.push("/diet-record", {
       prefill_food: food.name,
       prefill_amount: "100g",
-      prefill_calories: food.calories_100g ?? '',
-      prefill_protein: food.protein_100g ?? '',
-      prefill_carbs: food.carbs_100g ?? '',
-      prefill_fat: food.fat_100g ?? '',
+      prefill_calories: nutrition?.calories_100g ?? '',
+      prefill_protein: nutrition?.protein_100g ?? '',
+      prefill_carbs: nutrition?.carbs_100g ?? '',
+      prefill_fat: nutrition?.fat_100g ?? '',
     });
   };
 
@@ -260,12 +267,18 @@ export default function SearchScreen() {
     </TouchableOpacity>
   );
 
-  const renderFood = (food: FoodSearchResult, index: number) => (
-    <TouchableOpacity
+  const renderFood = (food: FoodSearchResult, index: number) => {
+    const nutrition = canPrefillNutrition(food) ? food : null;
+    return (
+    <View
       key={`${food.id ?? food.name}-${index}`}
+      className="mb-3 overflow-hidden rounded-[20px] border border-line bg-surface"
+    >
+    <TouchableOpacity
       onPress={() => openFood(food)}
+      accessibilityRole="button"
       accessibilityLabel={`记录食材${food.name}`}
-      className="mb-3 flex-row items-center rounded-[20px] border border-line bg-surface p-3.5 active:opacity-85"
+      className="flex-row items-center p-3.5 active:opacity-85"
     >
       <View className="h-12 w-12 items-center justify-center rounded-2xl bg-warm-soft">
         <FontAwesome6 name="leaf" size={17} colorClassName="accent-warm" />
@@ -278,18 +291,21 @@ export default function SearchScreen() {
           </Text>
         </View>
         <Text className="mt-1 text-[10px] text-copy-muted">
-          蛋白质 {food.protein_100g ?? '—'}g · 碳水 {food.carbs_100g ?? '—'}g · 脂肪 {food.fat_100g ?? '—'}g
+          蛋白质 {nutrition?.protein_100g ?? '—'}g · 碳水 {nutrition?.carbs_100g ?? '—'}g · 脂肪 {nutrition?.fat_100g ?? '—'}g
         </Text>
         {food.aliases?.filter(alias => alias.text === query.trim() && alias.regions.length).map(alias => (
           <Text key={`${alias.text}-${alias.regions.join('-')}`} className="mt-1 text-[10px] text-copy-muted">{alias.text} · {alias.regions.join(' / ')}</Text>
         ))}
       </View>
       <View className="items-end">
-        <Text className="text-xs font-black text-brand">{food.calories_100g == null ? '营养待补全' : `${food.calories_100g} kcal`}</Text>
+        <Text className="text-xs font-black text-brand">{nutrition?.calories_100g == null ? '营养待补全' : `${nutrition.calories_100g} kcal`}</Text>
         <Text className="mt-1 text-[9px] text-copy-muted">按 100g 记餐</Text>
       </View>
     </TouchableOpacity>
-  );
+    <FoodSourceDetails food={food} />
+    </View>
+    );
+  };
 
   const renderPost = (post: CommunityPost) => (
     <TouchableOpacity

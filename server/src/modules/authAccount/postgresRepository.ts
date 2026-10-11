@@ -52,10 +52,11 @@ export class PostgresAuthAccountRepository implements AuthAccountRepository {
     return (result.rows[0] as LoginUser | undefined) || null;
   }
 
-  async recordSuccessfulLogin(userId: number, at: string, ipAddress: string) { return this.tx(async (client) => {
+  async recordSuccessfulLogin(userId: number, at: string, ipAddress: string, credentials: { passwordHash: string; sessionVersion: number }) { return this.tx(async (client) => {
+    const result = await client.query("UPDATE users SET last_login_at=$1,last_login_ip=$2 WHERE id=$3 AND password_hash=$4 AND session_version=$5 AND NOT COALESCE(is_disabled,FALSE) RETURNING session_version",[at,ipAddress,userId,credentials.passwordHash,credentials.sessionVersion]);
+    if (!result.rowCount) return null;
     await this.ensureInitialState(client,userId);
-    const result = await client.query("UPDATE users SET last_login_at=$1,last_login_ip=$2 WHERE id=$3 RETURNING session_version",[at,ipAddress,userId]);
-    if (!result.rowCount) throw new Error("USER_NOT_FOUND"); return Number(result.rows[0].session_version || 1);
+    return Number(result.rows[0].session_version || 1);
   }); }
 
   async recordFunnelEvent(userId: number, eventName: "account_registered" | "login_succeeded") {

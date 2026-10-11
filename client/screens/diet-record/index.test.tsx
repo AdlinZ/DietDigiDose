@@ -60,6 +60,38 @@ async function renderScreen() {
   return tree;
 }
 
+test.each([
+  { name: 'all unknown', values: [null], expected: '未知', incomplete: true },
+  { name: 'known subtotal', values: [null, 120], expected: '已知 120', incomplete: true },
+  { name: 'actual zero', values: [0], expected: '0', remaining: '2000 kcal', incomplete: false },
+  { name: 'decimal sum', values: [0.1, 0.2], expected: '0.3', remaining: '1999.7 kcal', incomplete: false },
+  { name: 'small calorie value', values: [0.04], expected: '0.04', remaining: '1999.96 kcal', incomplete: false },
+])('daily totals distinguish $name from complete intake', async ({ values, expected, remaining, incomplete }) => {
+  mockList.mockResolvedValue(values.map((value, i) => ({ ...record(`餐次${i}`), id: i + 1,
+    calories: value, protein: value, carbs: value, fat: value })));
+  const tree = await renderScreen();
+  const text = output(tree);
+  expect(tree.root.findAllByType(Text).some(node => node.props.children === expected)).toBe(true);
+  if (incomplete) {
+    expect(text).toContain('热量数据不全');
+    expect(text).toContain('暂不计算剩余额度');
+    expect(text).not.toContain('剩余可摄入');
+    expect(text).not.toContain('目标已达成');
+  } else {
+    expect(text).toContain('剩余可摄入');
+    expect(text).toContain(remaining!);
+    expect(text).not.toContain('热量数据不全');
+  }
+  act(() => tree.unmount());
+});
+
+test("an empty day is not described as incomplete nutrition", async () => {
+  const tree = await renderScreen();
+  expect(output(tree)).not.toContain('热量数据不全');
+  expect(output(tree)).not.toContain('部分记录未填写热量');
+  act(() => tree.unmount());
+});
+
 // React Native transforms some native components lazily on the first render.
 // Keep that cold-start work in bounded setup, outside the behavioral test timeout.
 beforeAll(async () => {
@@ -251,5 +283,20 @@ test("prefilling a historical date keeps the meal form and local calendar label"
   expect(tree.root.findAllByType(TextInput).some(node => node.props.value === "预填餐食")).toBe(true);
   await act(async () => { press(tree, "保存这餐"); });
   expect(mockCreate.mock.calls[0][1]).toMatchObject({ recorded_at: "2026-09-18", food_name: "预填餐食", calories: 321 });
+  act(() => tree.unmount());
+});
+
+test("photo nutrition replaces a preset with actual zero, decimals and unknown values", async () => {
+  mockPick.mockResolvedValue({ canceled: false, assets: [{ uri: "water.jpg", base64: "image" }] });
+  mockVision.mockResolvedValue({ data: { foodName: "识别饮品", calories: 0, proteinGrams: null, carbsGrams: 0.04 }, run: { id: "photo", status: "completed" } });
+  mockWait.mockResolvedValue({ id: "photo", status: "completed" });
+  const tree = await renderScreen();
+  await act(async () => { press(tree, "记录一餐"); });
+  await act(async () => { press(tree, "水煮蛋"); });
+  await act(async () => { press(tree, "AI 智能拍照识菜"); });
+  await act(async () => { press(tree, "保存这餐"); });
+  expect(mockCreate.mock.calls[0][1]).toMatchObject({
+    food_name: "识别饮品", calories: 0, protein: null, carbs: 0.04, fat: null,
+  });
   act(() => tree.unmount());
 });

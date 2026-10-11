@@ -49,6 +49,15 @@ describe("auth account module", () => {
       .register("test@example.com","tester","safePass1"),/用户名/);
   });
 
+  test("login refuses a session when credentials changed after password comparison",async () => {
+    const passwordHash=bcrypt.hashSync("BeforeReset1",4);
+    const service=new AuthAccountService(repository({
+      findLoginUser:async () => ({id:8,username:"member",password_hash:passwordHash,session_version:4,is_disabled:false,role:"user"}),
+      recordSuccessfulLogin:async (_id,_at,_ip,credentials) => {assert.deepEqual(credentials,{passwordHash,sessionVersion:4});return null;},
+    }));
+    await assert.rejects(service.login("member@example.com","BeforeReset1","127.0.0.1"),/密码错误/);
+  });
+
   test("normalizes PostgreSQL booleans and keeps login telemetry non-authoritative", async () => {
     const hash = bcrypt.hashSync("safePass1",4); const events: string[] = [];
     const service = new AuthAccountService(repository({

@@ -102,7 +102,7 @@ const deserializeParams = <T = Record<string, unknown>>(
 
 export type SafeRouterTarget = string | { pathname: string; params?: Record<string, unknown> };
 
-const normalizeTarget = (target: SafeRouterTarget, extraParams: Record<string, unknown> = {}) => {
+const encodeTarget = (target: SafeRouterTarget, extraParams: Record<string, unknown> = {}) => {
   let pathname = '';
   let params: Record<string, unknown> = {};
 
@@ -114,8 +114,9 @@ const normalizeTarget = (target: SafeRouterTarget, extraParams: Record<string, u
     params = { ...(target.params || {}), ...(extraParams || {}) };
   }
 
-  const sanitizedParams = sanitizeParams({ ...(params || {}) });
-  return { pathname, params: sanitizedParams };
+  const encodedPayload = serializeParams(sanitizeParams({ ...(params || {}) }));
+  const path = pathname as `/${string}`;
+  return encodedPayload ? { pathname: path, params: { [PAYLOAD_KEY]: encodedPayload } } : path;
 };
 
 /**
@@ -129,45 +130,6 @@ const normalizeTarget = (target: SafeRouterTarget, extraParams: Record<string, u
 export function useSafeRouter() {
   const router = useExpoRouter();
   const rawParams = useExpoParams<Record<string, string | string[]>>();
-
-  const push = (target: SafeRouterTarget, extraParams: Record<string, unknown> = {}) => {
-    const { pathname, params } = normalizeTarget(target, extraParams);
-    const encodedPayload = serializeParams(params);
-    if (!encodedPayload) {
-      router.push(pathname as `/${string}`);
-      return;
-    }
-    router.push({
-      pathname: pathname as `/${string}`,
-      params: { [PAYLOAD_KEY]: encodedPayload },
-    });
-  };
-
-  const replace = (target: SafeRouterTarget, extraParams: Record<string, unknown> = {}) => {
-    const { pathname, params } = normalizeTarget(target, extraParams);
-    const encodedPayload = serializeParams(params);
-    if (!encodedPayload) {
-      router.replace(pathname as `/${string}`);
-      return;
-    }
-    router.replace({
-      pathname: pathname as `/${string}`,
-      params: { [PAYLOAD_KEY]: encodedPayload },
-    });
-  };
-
-  const navigate = (target: SafeRouterTarget, extraParams: Record<string, unknown> = {}) => {
-    const { pathname, params } = normalizeTarget(target, extraParams);
-    const encodedPayload = serializeParams(params);
-    if (!encodedPayload) {
-      router.navigate(pathname as `/${string}`);
-      return;
-    }
-    router.navigate({
-      pathname: pathname as `/${string}`,
-      params: { [PAYLOAD_KEY]: encodedPayload },
-    });
-  };
 
   const setParams = (params: Record<string, unknown>) => {
     const shouldClearAll = Object.keys(params).length === 0;
@@ -186,9 +148,9 @@ export function useSafeRouter() {
 
   return {
     ...router,
-    push,
-    replace,
-    navigate,
+    push: (target: SafeRouterTarget, params?: Record<string, unknown>) => router.push(encodeTarget(target, params)),
+    replace: (target: SafeRouterTarget, params?: Record<string, unknown>) => router.replace(encodeTarget(target, params)),
+    navigate: (target: SafeRouterTarget, params?: Record<string, unknown>) => router.navigate(encodeTarget(target, params)),
     setParams,
   };
 }

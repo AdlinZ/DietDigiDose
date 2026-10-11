@@ -1,3 +1,4 @@
+import { verifyPasswordRecoveryHttp } from "./passwordRecoveryHttpAssertions.js";
 import assert from "node:assert/strict";
 import type Database from "better-sqlite3";
 import { ACCOUNT_SECURITY_CAPABILITY } from "@dietdigidose/contracts";
@@ -62,6 +63,7 @@ export async function verifyAccountSecurityHttp(api: Api, db: Database.Database)
     const directDelete=await proof(noPassword.token,"account_delete");
     assert.equal((await request("/account",{reauthToken:directDelete,confirmation:"DELETE"},noPassword.token,"DELETE")).status,200);
     assert.equal(db.prepare("SELECT id FROM users WHERE id=?").get(noPassword.user.id),undefined);
+    await verifyPasswordRecoveryHttp(api,db);
   } finally {
     setSmsProviderForTests(null);
     if(previousKey===undefined) delete process.env.ALIYUN_ACCESS_KEY_ID;else process.env.ALIYUN_ACCESS_KEY_ID=previousKey;

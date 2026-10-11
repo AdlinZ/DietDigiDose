@@ -42,6 +42,7 @@ jobs:
     env:
       EAS_BUILD_PROFILE: ${{ inputs.build_profile || 'preview' }}
       STAGING_BACKEND_BASE_URL: ${{ vars.STAGING_BACKEND_BASE_URL }}
+      EXPO_PUBLIC_APK_DOWNLOAD_ORIGINS: ${{ vars.APK_DOWNLOAD_ORIGINS }}
       GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g\ -XX:MaxMetaspaceSize=1536m\ -Dfile.encoding=UTF-8 -Dorg.gradle.workers.max=2
 
     steps:
@@ -190,12 +191,15 @@ jobs:
           fi
           "$APKANALYZER" manifest application-id "$APK_PATH" | grep -Fx "$EXPECTED_ANDROID_PACKAGE"
           "$APKANALYZER" manifest version-code "$APK_PATH" | grep -Fx "$EXPO_PUBLIC_ANDROID_VERSION_CODE"
+          "$APKANALYZER" manifest version-name "$APK_PATH" | grep -Fx "$PRODUCT_VERSION"
 
       - name: Prepare artifact
         working-directory: client
         run: |
           mkdir -p artifact
           cp android/app/build/outputs/apk/release/app-release.apk "artifact/DietDigiDose-${PRODUCT_VERSION}-${RELEASE_SNAPSHOT}-build${EXPO_PUBLIC_ANDROID_VERSION_CODE}-${EAS_BUILD_PROFILE}-${{ github.sha }}.apk"
+          cp ../release.json artifact/release.json
+          node -e "const fs=require('node:fs'); const r=require('../release.json'); fs.writeFileSync('artifact/build-identity.json',JSON.stringify({sourceSha:process.env.SIGNED_SOURCE_SHA,applicationId:process.env.EXPECTED_ANDROID_PACKAGE,channel:process.env.EAS_BUILD_PROFILE,...r},null,2)+'\n')"
           cd artifact
           sha256sum *.apk > SHA256SUMS.txt
 

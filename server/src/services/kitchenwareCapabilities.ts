@@ -119,28 +119,6 @@ export function enqueueKitchenwareMappingReview(rawName: string, sourceType: str
   }
 }
 
-export function kitchenwareRequirementsForRecipe(recipeId: number) {
-  if (!tableExists("recipe_kitchenware_requirements")) return [];
-  try {
-    return (db.prepare(`SELECT r.role, r.notes, r.confidence, r.capability_code,
-        c.id AS catalog_id, c.name AS catalog_name
-      FROM recipe_kitchenware_requirements r
-      LEFT JOIN kitchenware_catalog c ON c.id = r.catalog_id
-      WHERE r.recipe_id = ? ORDER BY CASE r.role WHEN 'required' THEN 0 WHEN 'optional' THEN 1 ELSE 2 END, r.id`)
-      .all(recipeId) as Row[]).map((row) => ({
-        role: String(row.role),
-        catalogId: row.catalog_id == null ? null : Number(row.catalog_id),
-        catalogName: row.catalog_name == null ? null : String(row.catalog_name),
-        capabilityCode: row.capability_code == null ? null : String(row.capability_code),
-        confidence: Number(row.confidence),
-        notes: String(row.notes || ""),
-      }));
-  } catch (error) {
-    if (isSchemaDriftError(error)) return [];
-    throw error;
-  }
-}
-
 export function setRecipeKitchenwareRequirements(recipeId: number, names: string[], input: {
   role?: "required" | "optional" | "convenience";
   source?: string;

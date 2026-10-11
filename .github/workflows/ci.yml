@@ -68,6 +68,8 @@ jobs:
       - run: pnpm -w quality:test-quarantine
       - run: pnpm -w lint:all
       - run: pnpm -w test:all
+        env:
+          ADMIN_FOOD_ASSETS_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration
       - run: pnpm -w test:coverage
       - run: pnpm -w build:client
       - run: pnpm -w build:server

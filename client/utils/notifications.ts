@@ -136,13 +136,6 @@ function minutesToTime(total: number) {
   return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
 }
 
-async function scheduleDaily(title: string, body: string, hour: number) {
-  return Notifications.scheduleNotificationAsync({
-    content: { title, body, sound: "default" },
-    trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour, minute: 0 },
-  });
-}
-
 /** Keeps on-device meal and hydration reminders aligned with the saved preferences. */
 export async function syncLocalNotificationSchedules(
   preferences: NotificationPreferences,
@@ -256,21 +249,4 @@ export async function cancelAllLocalNotificationsForUser(userId?: number | null)
       Promise.all(items.filter(item => item.content.data?.type === "cooking_timer" && item.content.data?.userId === userId)
         .map(item => Notifications.cancelScheduledNotificationAsync(item.identifier)))),
   ]);
-}
-
-export async function sendImmediateTestNotification(
-  title: string = "食光烙记通知测试",
-  body: string = "你的本地临期提醒配置正常！"
-) {
-  if (Platform.OS === "web") return;
-  const permission = await Notifications.getPermissionsAsync();
-  if (permission.status !== "granted") {
-    const request = await Notifications.requestPermissionsAsync();
-    if (request.status !== "granted") return;
-  }
-
-  await Notifications.scheduleNotificationAsync({
-    content: { title, body, sound: "default" },
-    trigger: null,
-  });
 }

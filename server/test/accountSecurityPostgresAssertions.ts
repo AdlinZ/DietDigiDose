@@ -6,7 +6,7 @@ import { AuthVerificationService } from "../src/modules/authVerification/service
 import { PostgresAuthAccountRepository } from "../src/modules/authAccount/postgresRepository.js";
 import { AuthAccountService } from "../src/modules/authAccount/service.js";
 import { consumeAccountProofPostgres } from "../src/modules/authAccount/reauthProof.js";
-import { hashRegistrationToken } from "../src/services/authVerificationCrypto.js";
+import { hashPasswordRecoveryToken, hashRegistrationToken } from "../src/services/authVerificationCrypto.js";
 
 /** Run only against the migration integration suite's isolated pool. Creates and removes its own users. */
 export async function verifyAccountSecurityPostgres(pool: Pool) {
@@ -31,12 +31,14 @@ export async function verifyAccountSecurityPostgres(pool: Pool) {
     assert.equal((await verification.register({tokenHash,phone:value,username:name,passwordHash:null,at:new Date().toISOString()})).status,"invalid_token");
     return {id:result.userId,phone:value,subjectId:subject.id};
   };
-  const grant = async (user: {id:number;phone:string;subjectId:number}, purpose:"password_update"|"account_delete") => {
+  const grant = async (user: {id:number;phone:string;subjectId:number}, purpose:"password_update"|"account_delete"|"password_recovery") => {
     const current = await verification.reauthUser(user.id);assert.ok(current);
-    const challengeId=randomUUID();const token=randomBytes(32).toString("base64url");
+    const challengeId=randomUUID();const token=`${purpose === "password_recovery" ? `${user.id}.` : ""}${randomBytes(32).toString("base64url")}`;
     await verification.createChallenge({id:challengeId,subjectId:user.subjectId,purpose,outId:randomUUID(),expiresAt:expiresAt(),sourceIp:null,userAgent:"account-security-postgres",reauthUserId:user.id,reauthSessionVersion:current.session_version});
     assert.equal(await verification.beginVerification(challengeId),true);
-    const proof={challengeId,userId:user.id,purpose,phone:user.phone,sessionVersion:current.session_version,tokenHash:hashRegistrationToken(token),expiresAt:expiresAt()};
+    const proof={challengeId,userId:user.id,purpose:purpose === "password_recovery" ? "password_update" as const : purpose,
+      ...(purpose === "password_recovery" ? {challengePurpose:"password_recovery" as const} : {}),phone:user.phone,sessionVersion:current.session_version,
+      tokenHash:purpose === "password_recovery" ? hashPasswordRecoveryToken(token) : hashRegistrationToken(token),expiresAt:expiresAt()};
     assert.equal(await verification.issueReauthGrant(proof),true);
     assert.equal(await verification.issueReauthGrant({...proof,tokenHash:randomUUID()}),false);
     return {token,tokenHash:proof.tokenHash};
@@ -59,6 +61,24 @@ export async function verifyAccountSecurityPostgres(pool: Pool) {
     assert.equal((await verification.reauthUser(first.id))?.session_version,2);
     assert.equal((await account.me(first.id)).hasPassword,true);
     assert.equal((await account.me(second.id)).hasPassword,false);
+
+    const beforeRecovery=await new PostgresAuthAccountRepository(pool).getCredentials(first.id);
+    const recovery=await grant(first,"password_recovery");
+    await assert.rejects(account.recoverPassword(`${second.id}.${recovery.token.split(".")[1]}`,"CrossUser1"),/已失效/);
+    await assert.rejects(account.setPassword(first.id,"CrossPurpose1",recovery.token),/重新验证/);
+    const reauth=await grant(first,"password_update");
+    await assert.rejects(account.recoverPassword(reauth.token,"CrossPurpose1"),/已失效/);
+    const recoveryAttempts=await Promise.allSettled([account.recoverPassword(recovery.token,"RecoveredPass1"),account.recoverPassword(recovery.token,"RecoveredPass1")]);
+    assert.equal(recoveryAttempts.filter(result => result.status==="fulfilled").length,1);
+    assert.equal((await verification.reauthUser(first.id))?.session_version,3);
+    assert.equal(await new PostgresAuthAccountRepository(pool).recordSuccessfulLogin(first.id,new Date().toISOString(),"127.0.0.1",{passwordHash:beforeRecovery!.password_hash!,sessionVersion:2}),null);
+    assert.equal((await account.login(first.phone,"RecoveredPass1","127.0.0.1")).user.id,first.id);
+    const disabledRecovery=await grant(first,"password_recovery");
+    await pool.query("UPDATE users SET is_disabled=TRUE WHERE id=$1",[first.id]);
+    await assert.rejects(account.recoverPassword(disabledRecovery.token,"BlockedPass1"),/已失效/);
+    await pool.query("UPDATE users SET is_disabled=FALSE WHERE id=$1",[first.id]);
+    await pool.query("UPDATE account_reauth_grants SET expires_at=CURRENT_TIMESTAMP-INTERVAL '1 minute' WHERE token_hash=$1",[disabledRecovery.tokenHash]);
+    await assert.rejects(account.recoverPassword(disabledRecovery.token,"ExpiredPass1"),/已失效/);
 
     const expired=await grant(second,"account_delete");
     await pool.query("UPDATE account_reauth_grants SET expires_at=CURRENT_TIMESTAMP-INTERVAL '1 minute' WHERE token_hash=$1",[expired.tokenHash]);

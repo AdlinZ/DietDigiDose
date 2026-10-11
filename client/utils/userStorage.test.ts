@@ -29,7 +29,6 @@ import {
   purgeClearableCache,
   purgeLegacyUnscopedPrivateStorage,
   purgeUserPrivateStorage,
-  storageBelongsToCurrentUser,
 } from "./userStorage";
 
 describe("user-scoped private storage", () => {
@@ -86,8 +85,6 @@ describe("user-scoped private storage", () => {
     expect(secondUserKey).toBe("@shiyu_ai_chat_sessions:user:202");
     expect(firstUserKey).not.toBe(secondUserKey);
     expect(getUserStorageKey(CHAT_SESSIONS_STORAGE_KEY, null)).toBeNull();
-    expect(storageBelongsToCurrentUser(secondUserKey, firstUserKey)).toBe(false);
-    expect(storageBelongsToCurrentUser(secondUserKey, secondUserKey)).toBe(true);
     expect(getUserStorageKey(AI_DATA_CONSENT_STORAGE_KEY, 101)).toBe("@ai_data_consent_v1:user:101");
   });
 

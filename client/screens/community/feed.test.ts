@@ -18,4 +18,12 @@ describe("buildRefreshedFeed", () => {
     expect(second.slice(0, 3)).toEqual(first.slice(0, 3));
     expect(second.slice(3)).not.toEqual(first.slice(3));
   });
+
+  it("keeps the first copy of each post and supports missing feeds", () => {
+    const first = { id: 1, title: "first" };
+    const duplicate = { id: 1, title: "duplicate" };
+    expect(buildRefreshedFeed([duplicate], [first, duplicate], 1)).toEqual([first]);
+    expect(buildRefreshedFeed([first, duplicate], null, 1)).toEqual([first]);
+    expect(buildRefreshedFeed(undefined, undefined, 1)).toEqual([]);
+  });
 });

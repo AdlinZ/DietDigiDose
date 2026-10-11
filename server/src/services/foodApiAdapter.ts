@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from "../utils/fetchWithTimeout.js";
+import type { ExternalFood } from "../modules/foods/types.js";
 
 /**
  * Adapter for External Food Data APIs
@@ -8,14 +9,19 @@ import { fetchWithTimeout } from "../utils/fetchWithTimeout.js";
 // USDA API requires an API key. We use DEMO_KEY by default which has rate limits.
 const USDA_API_KEY = process.env.USDA_API_KEY || 'DEMO_KEY';
 
-export type StandardFoodInfo = {
-  name: string;
-  calories_100g: number;
-  protein_100g: number;
-  carbs_100g: number;
-  fat_100g: number;
-  source: string;
-};
+export type StandardFoodInfo = ExternalFood;
+
+function nutrientValue(nutrients: unknown, ids: number[], unit: string): number | null {
+  if (!Array.isArray(nutrients)) return null;
+  for (const id of ids) {
+    const observation = nutrients.find((nutrient) => nutrient && typeof nutrient === 'object'
+      && nutrient.nutrientId === id && typeof nutrient.unitName === 'string'
+      && nutrient.unitName.trim().toUpperCase() === unit
+      && typeof nutrient.value === 'number' && Number.isFinite(nutrient.value) && nutrient.value >= 0);
+    if (observation) return observation.value;
+  }
+  return null;
+}
 
 export async function searchFoodUSDA(query: string): Promise<StandardFoodInfo[]> {
   try {
@@ -26,34 +32,39 @@ export async function searchFoodUSDA(query: string): Promise<StandardFoodInfo[]>
       return [];
     }
 
-    const data = (await response.json()) as any;
+    const data: unknown = await response.json();
     const results: StandardFoodInfo[] = [];
 
-    if (data.foods && Array.isArray(data.foods)) {
+    if (data && typeof data === 'object' && 'foods' in data && Array.isArray(data.foods)) {
       for (const item of data.foods) {
-        // USDA provides nutrients array. We need to extract Energy (kcal), Protein (g), Carbohydrate (g), Total lipid (fat) (g).
-        // Usually, these are per 100g in USDA unless specified otherwise.
-        let calories = 0, protein = 0, carbs = 0, fat = 0;
-        
-        for (const n of item.foodNutrients || []) {
-          const name = n.nutrientName?.toLowerCase() || '';
-          if (name.includes('energy') && n.unitName === 'KCAL') calories = n.value;
-          else if (name.includes('protein') && n.unitName === 'G') protein = n.value;
-          else if (name.includes('carbohydrate') && n.unitName === 'G') carbs = n.value;
-          else if (name.includes('lipid (fat)') && n.unitName === 'G') fat = n.value;
-        }
-
-        // Only add if we found calories
-        if (calories > 0) {
-          results.push({
-            name: item.description,
-            calories_100g: Number(calories.toFixed(1)),
-            protein_100g: Number(protein.toFixed(1)),
-            carbs_100g: Number(carbs.toFixed(1)),
-            fat_100g: Number(fat.toFixed(1)),
-            source: 'open_api', // Tag as external API
-          });
-        }
+        if (!item || typeof item !== 'object' || !Number.isSafeInteger(item.fdcId) || item.fdcId <= 0
+          || typeof item.description !== 'string' || !item.description.trim()) continue;
+        const sourceType = typeof item.dataType === 'string' ? item.dataType : null;
+        const servingUnit = typeof item.servingSizeUnit === 'string' ? item.servingSizeUnit.trim() : null;
+        // Branded foods use 100 g or 100 ml according to the provider's serving unit.
+        // A volume basis cannot be converted to grams without a food-specific density.
+        const basis = sourceType === 'Branded'
+          ? servingUnit?.toLowerCase() === 'g' ? 'per_100g' : servingUnit?.toLowerCase() === 'ml' ? 'per_100ml' : 'unknown'
+          : ['Foundation', 'SR Legacy', 'Survey (FNDDS)'].includes(sourceType || '') ? 'per_100g' : 'unknown';
+        const nutrients = basis === 'per_100g' ? item.foodNutrients : null;
+        results.push({
+          name: item.description,
+          // Foundation Foods may use Atwater specific (2048) or general (2047) energy.
+          calories_100g: nutrientValue(nutrients, [1008, 2048, 2047], 'KCAL'),
+          protein_100g: nutrientValue(nutrients, [1003], 'G'),
+          carbs_100g: nutrientValue(nutrients, [1005], 'G'),
+          fat_100g: nutrientValue(nutrients, [1004], 'G'),
+          source: 'open_api',
+          source_provider: 'usda_fdc',
+          fdc_id: item.fdcId,
+          source_url: `https://fdc.nal.usda.gov/food-details/${item.fdcId}/nutrients`,
+          source_data_type: sourceType,
+          source_serving_size_unit: servingUnit,
+          source_published_at: typeof item.publishedDate === 'string' ? item.publishedDate
+            : typeof item.publicationDate === 'string' ? item.publicationDate : null,
+          data_license: 'CC0-1.0',
+          nutrition_basis: basis,
+        });
       }
     }
     return results;

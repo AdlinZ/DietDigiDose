@@ -1,7 +1,6 @@
 import { QuantityDecimal, QuantityPrecisionError } from "@dietdigidose/contracts/quantity-decimal";
 import { nextQuantityEvidence } from "../modules/inventory/evidence.js";
 import { appendSqliteMaintenanceEvent } from "../modules/planMaintenance/sqliteEventWriter.js";
-import { currentDateKey } from "../utils/date.js";
 import type Database from "better-sqlite3";
 
 export const INVENTORY_UNITS = ["g", "kg", "ml", "l", "piece", "serving", "bag", "box", "bottle", "can"] as const;
@@ -188,29 +187,6 @@ export function inventoryFoodNamesMatch(left: string, right: string) {
   const a = normalizeFoodName(left);
   const b = normalizeFoodName(right);
   return Boolean(a && b && (a.includes(b) || b.includes(a)));
-}
-
-export function buildFefoConsumptionPreview(
-  database: Database.Database,
-  userId: number,
-  requests: Array<{ food_name: string; amount_value: number; unit: InventoryUnit }>,
-) {
-  const inventory = database.prepare(`
-    SELECT id, food_name, quantity_value, quantity_unit, expiration_date, batch_code, version
-    FROM inventory_items
-    WHERE user_id = ? AND is_available = 1 AND deleted_at IS NULL
-    ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date ASC, id ASC
-  `).all(userId) as Array<{
-    id: unknown;
-    food_name: unknown;
-    quantity_value: unknown;
-    quantity_unit: unknown;
-    expiration_date: unknown;
-    batch_code: unknown;
-    version: unknown;
-  }>;
-
-  return buildFefoConsumptionPreviewFromCandidates(inventory, requests, currentDateKey());
 }
 
 export function buildFefoConsumptionPreviewFromCandidates(

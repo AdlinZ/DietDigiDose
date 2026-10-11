@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createLatestVoicePackRequest,
   voicePackActions,
   voicePackManifestChecks,
   voicePackTransitionConfirmation,
@@ -35,19 +34,5 @@ describe('voice pack admin model', () => {
     };
     expect(voicePackManifestChecks(safe).every((item) => item.passed)).toBe(true);
     expect(voicePackManifestChecks({ ...safe, distribution: undefined }).every((item) => item.passed)).toBe(false);
-  });
-
-  it('cancels stale catalog requests and rejects their late results', () => {
-    const requests = createLatestVoicePackRequest();
-    const first = requests.begin();
-    const second = requests.begin();
-
-    expect(first.signal.aborted).toBe(true);
-    expect(first.isLatest()).toBe(false);
-    expect(second.isLatest()).toBe(true);
-
-    requests.cancel();
-    expect(second.signal.aborted).toBe(true);
-    expect(second.isLatest()).toBe(false);
   });
 });

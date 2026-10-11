@@ -129,7 +129,7 @@ export class PostgresAuthVerificationRepository implements AuthVerificationRepos
     const valid = await client.query(`SELECT u.id FROM users u JOIN auth_verification_challenges c ON c.reauth_user_id=u.id
       WHERE u.id=$1 AND u.phone=$2 AND u.phone_verified_at IS NOT NULL AND u.session_version=$3 AND NOT COALESCE(u.is_disabled,FALSE)
       AND c.id=$4 AND c.purpose=$5 AND c.reauth_session_version=u.session_version AND c.status='verifying' AND c.expires_at>CURRENT_TIMESTAMP FOR UPDATE OF u,c`,
-      [input.userId,input.phone,input.sessionVersion,input.challengeId,input.purpose]);
+      [input.userId,input.phone,input.sessionVersion,input.challengeId,input.challengePurpose ?? input.purpose]);
     if (!valid.rowCount) return false;
     await client.query(`INSERT INTO account_reauth_grants(token_hash,user_id,purpose,phone,session_version,expires_at) VALUES($1,$2,$3,$4,$5,$6)`,
       [input.tokenHash,input.userId,input.purpose,input.phone,input.sessionVersion,input.expiresAt]);

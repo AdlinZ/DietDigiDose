@@ -51,7 +51,7 @@ import { InventoryTextIntake } from "./InventoryTextIntake";
 import { useRecognitionReview } from "./useRecognitionReview";
 import { buildRecognitionIntake, quantityFields } from "./intakeEntry";
 import { normalizeShoppingItems } from "@/utils/shoppingList";
-import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, recipeMatchesInventory } from "./selectors";
+import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware } from "./selectors";
 import {
   BatchReviewModal,
   CatalogDetailModal,

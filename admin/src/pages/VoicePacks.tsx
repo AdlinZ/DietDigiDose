@@ -15,9 +15,9 @@ import {
   X,
 } from 'lucide-react';
 import api from '../services/api';
+import { createLatestRequest } from '../utils/latestRequest';
 import {
   voicePackActions,
-  createLatestVoicePackRequest,
   voicePackManifestChecks,
   voicePackStatusPresentation,
   voicePackTransitionConfirmation,
@@ -81,7 +81,7 @@ export default function VoicePacks() {
   const [styleTags, setStyleTags] = useState('');
   const [providerVoice, setProviderVoice] = useState('');
   const [history, setHistory] = useState<{ item: VoicePackItem; rows: HistoryItem[] } | null>(null);
-  const latestRequest = useRef(createLatestVoicePackRequest());
+  const latestRequest = useRef(createLatestRequest());
 
   const load = useCallback(async () => {
     const request = latestRequest.current.begin();

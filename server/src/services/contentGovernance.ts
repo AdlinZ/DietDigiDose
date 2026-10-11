@@ -94,15 +94,6 @@ export function validateRecipePublication(input: {
   return [...issues];
 }
 
-export function ingredientPortionGrams(ingredientId: number, label: string, quantity = 1) {
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("份量必须大于 0");
-  const normalized = normalizeContentTerm(label);
-  const portion = (db.prepare("SELECT label, grams FROM ingredient_portions WHERE ingredient_id = ?").all(ingredientId) as Array<{ label: string; grams: number }>)
-    .find((row) => normalizeContentTerm(row.label) === normalized);
-  if (!portion) return null;
-  return Math.round(portion.grams * quantity * 1000) / 1000;
-}
-
 export function findRecipeDuplicateCandidates(recipeId: number) {
   const recipe = db.prepare(`SELECT id, title, ingredients_json, steps_json FROM recipes WHERE id = ? AND deleted_at IS NULL`)
     .get(recipeId) as Record<string, unknown> | undefined;

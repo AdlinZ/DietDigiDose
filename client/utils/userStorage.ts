@@ -67,13 +67,6 @@ export function getUserStorageKey(baseKey: string, userId?: number | null) {
   return `${baseKey}:user:${userId}`;
 }
 
-export function storageBelongsToCurrentUser(
-  currentUserStorageKey: string | null,
-  loadedStorageKey: string | null,
-) {
-  return Boolean(currentUserStorageKey && currentUserStorageKey === loadedStorageKey);
-}
-
 /**
  * Older builds stored private data under device-wide keys. Those records cannot
  * be attributed to a user safely, so they must not be migrated into any account.
@@ -90,15 +83,6 @@ export async function purgeUserPrivateStorage(userId?: number | null) {
   const keys = await AsyncStorage.getAllKeys();
   const userKeys = keys.filter((key) => key.endsWith(suffix) || key === `prepared-meal-pending:${userId}`);
   if (userKeys.length) await AsyncStorage.multiRemove(userKeys);
-}
-
-export async function getUserPrivateStorageSize(userId?: number | null) {
-  if (!Number.isInteger(userId) || Number(userId) <= 0) return 0;
-  const suffix = `:user:${userId}`;
-  const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.endsWith(suffix));
-  if (!keys.length) return 0;
-  const entries = await AsyncStorage.multiGet(keys);
-  return entries.reduce((total, [key, value]) => total + key.length + (value?.length || 0), 0) * 2;
 }
 
 export function isClearableCacheKey(key: string, userId?: number | null) {

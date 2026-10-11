@@ -16,6 +16,12 @@ describe('recipe review database formats', () => {
       expect(parseRecipeArray<unknown>(value)).toEqual(value);
       expect(parseRecipeArray(JSON.stringify(value))).toEqual(value);
     }
+    for (const value of [null, undefined, '', '[]', []]) {
+      expect(parseRecipeArray(value)).toEqual([]);
+    }
+    for (const value of ['{', '{}', 'null']) {
+      expect(() => parseRecipeArray(value)).toThrow();
+    }
   });
 
   it('keeps malformed records visible as errors and preserves unknown issue codes', () => {

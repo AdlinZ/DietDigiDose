@@ -4,7 +4,6 @@ import {
   StyleSheet,
   ScrollView,
   View,
-  TouchableWithoutFeedback,
   Keyboard,
   ViewStyle,
   FlatList,
@@ -218,9 +217,6 @@ const RawScreen = ({
   const useScrollContainer = !childIsNativeScrollable;
 
   // 2. 滚动容器配置
-  // 如果使用滚动容器，则使用 KeyboardAwareScrollView 替代原有的 ScrollView
-  const Container = useScrollContainer ? KeyboardAwareScrollView : View;
-
   const containerProps = useScrollContainer ? {
     contentContainerStyle: {
       flexGrow: 1,
@@ -294,22 +290,14 @@ const RawScreen = ({
       {useScrollContainer ? (
          // 替换为 KeyboardAwareScrollView，移除原先的 KeyboardAvoidingView 包裹
          // 因为 KeyboardAwareScrollView 已经内置了处理逻辑
-        <Container style={[styles.innerContainer, style]} {...containerProps}>
+        <KeyboardAwareScrollView style={[styles.innerContainer, style]} {...containerProps}>
           {children}
-        </Container>
+        </KeyboardAwareScrollView>
       ) : (
         // 页面自身已处理滚动，不启用全局键盘避让，保证固定底部栏不随键盘上移
-        childIsNativeScrollable ? (
-          <View style={[styles.innerContainer, style]}>
-            {wrapScrollableWithKeyboardAvoid(children)}
-          </View>
-        ) : (
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-            <View style={[styles.innerContainer, style]}>
-              {children}
-            </View>
-          </TouchableWithoutFeedback>
-        )
+        <View style={[styles.innerContainer, style]}>
+          {wrapScrollableWithKeyboardAvoid(children)}
+        </View>
       )}
     </View>
   );

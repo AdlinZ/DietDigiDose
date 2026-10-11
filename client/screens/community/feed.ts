@@ -1,15 +1,11 @@
+import { appendUniqueItemsByKey } from "@/utils/pagination";
+
 interface FeedItem {
   id: number;
 }
 
-const uniqueById = <T extends FeedItem>(items: T[]) => {
-  const seen = new Set<number>();
-  return items.filter((item) => {
-    if (seen.has(item.id)) return false;
-    seen.add(item.id);
-    return true;
-  });
-};
+const uniqueById = <T extends FeedItem>(items: T[]) =>
+  appendUniqueItemsByKey([], items, (item) => item.id);
 
 /**
  * Keep the newest posts visible after a pull-to-refresh, then rotate the

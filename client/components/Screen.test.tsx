@@ -1,6 +1,7 @@
 import React from "react";
 import renderer from "react-test-renderer";
-import { Text, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-aware-scroll-view";
 
 let mockIsFocused = false;
 
@@ -45,4 +46,22 @@ test("resolves the native page background to a concrete theme color", () => {
   expect(tree!.root.findAllByType(View)[0].props.style.backgroundColor).toBe("#111713");
   renderer.act(() => { tree!.update(<Screen backgroundColor="#123456"><Text>自定义背景</Text></Screen>); });
   expect(tree!.root.findAllByType(View)[0].props.style.backgroundColor).toBe("#123456");
+});
+
+test("adds scrolling for plain content and keeps fixed siblings outside an existing scroll view", () => {
+  let tree: renderer.ReactTestRenderer;
+  const body = <Text>正文</Text>;
+  const footer = <Text>固定操作</Text>;
+  renderer.act(() => { tree = renderer.create(<Screen>{body}</Screen>); });
+  expect(tree!.root.findByType(KeyboardAwareScrollView).props.children).toBe(body);
+
+  renderer.act(() => {
+    tree!.update(<Screen><ScrollView keyboardShouldPersistTaps="always">{body}</ScrollView>{footer}</Screen>);
+  });
+  const scroll = tree!.root.findByType(KeyboardAwareScrollView);
+  expect(scroll.props.children).toBe(body);
+  expect(scroll.props.keyboardShouldPersistTaps).toBe("always");
+  expect(tree!.root.findAllByType(Text).some(node => node.props.children === "固定操作")).toBe(true);
+  expect(scroll.findAllByType(Text).some(node => node.props.children === "固定操作")).toBe(false);
+  renderer.act(() => tree!.unmount());
 });

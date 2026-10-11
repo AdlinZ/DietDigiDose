@@ -1,4 +1,4 @@
-import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware, preserveRecipePaginationOrder } from "./selectors";
+import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware } from "./selectors";
 import type { InventoryItem, KitchenwareItem, Recipe } from "./types";
 import { dateKeyAfterDays } from "@/utils/date";
 
@@ -31,19 +31,6 @@ test("filters recipes by cook time limit", () => {
 test("never includes recipes marked as needs review in recommendations", () => {
   const unsafe = { ...recipes[1], id: 99, quality_status: "needs_review" as const };
   expect(filterAndRankRecipes([...recipes, unsafe], inventory, "全部", "").some((recipe) => recipe.id === 99)).toBe(false);
-});
-
-test("appends newly paged recipes without moving previously displayed cards", () => {
-  const firstPage = [recipes[1], recipes[0]];
-  const rerankedAfterNextPage = [recipes[2], recipes[0], recipes[1]];
-
-  expect(preserveRecipePaginationOrder(firstPage, rerankedAfterNextPage).map((recipe) => recipe.id))
-    .toEqual([2, 1, 3]);
-});
-
-test("drops filtered recipes while preserving the remaining order", () => {
-  expect(preserveRecipePaginationOrder(recipes, [recipes[2], recipes[0]]).map((recipe) => recipe.id))
-    .toEqual([1, 3]);
 });
 
 test("analyzeRecipeInventoryMatch detects expiring ingredients and calculates status", () => {

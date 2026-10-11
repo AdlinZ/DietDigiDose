@@ -108,18 +108,6 @@ export async function getCookingQueue(userId?: number | null) {
   }
 }
 
-export async function addToCookingQueue(userId: number, item: CookingQueueItem) {
-  const storageKey = queueStorageKey(userId);
-  if (!storageKey) throw new Error("登录后才能使用烹饪队列");
-  const current = await getCookingQueue(userId);
-  if (current.some(queuedItem => item.queueItemId ? queuedItem.queueItemId === item.queueItemId : !queuedItem.queueItemId && queuedItem.recipeId === item.recipeId)) {
-    return { items: current, added: false };
-  }
-  const items = [...current, item].slice(-MAX_QUEUE_ITEMS);
-  await AsyncStorage.setItem(storageKey, JSON.stringify(items));
-  return { items, added: true };
-}
-
 export async function saveCookingQueue(userId: number, items: CookingQueueItem[]) {
   const storageKey = queueStorageKey(userId);
   if (!storageKey) return [];
@@ -127,41 +115,6 @@ export async function saveCookingQueue(userId: number, items: CookingQueueItem[]
   await AsyncStorage.setItem(storageKey, JSON.stringify(normalized));
   return normalized;
 }
-
-export async function updateCookingQueueItem(
-  userId: number,
-  recipeId: number,
-  updates: Partial<Omit<CookingQueueItem, "recipeId">>,
-) {
-  const current = await getCookingQueue(userId);
-  return saveCookingQueue(userId, current.map((item) => (
-    !item.queueItemId && item.recipeId === recipeId ? { ...item, ...updates } : item
-  )));
-}
-
-export async function moveCookingQueueItem(userId: number, recipeId: number, offset: -1 | 1) {
-  const current = await getCookingQueue(userId);
-  const currentIndex = current.findIndex((item) => !item.queueItemId && item.recipeId === recipeId);
-  const targetIndex = currentIndex + offset;
-  if (currentIndex < 0 || targetIndex < 0 || targetIndex >= current.length) return current;
-  const items = [...current];
-  [items[currentIndex], items[targetIndex]] = [items[targetIndex], items[currentIndex]];
-  return saveCookingQueue(userId, items);
-}
-
-export async function removeFromCookingQueue(userId: number, recipeId: number) {
-  const storageKey = queueStorageKey(userId);
-  if (!storageKey) return [];
-  const items = (await getCookingQueue(userId)).filter((item) => item.queueItemId || item.recipeId !== recipeId);
-  await AsyncStorage.setItem(storageKey, JSON.stringify(items));
-  return items;
-}
-
-export async function clearCookingQueue(userId: number) {
-  const storageKey = queueStorageKey(userId);
-  if (storageKey) await AsyncStorage.removeItem(storageKey);
-}
-
 
 /** Legacy recipe-only reminders are recoverable only when the task is unambiguous. */
 // ponytail: scan at most 30 queue items; index identities if that cap grows.

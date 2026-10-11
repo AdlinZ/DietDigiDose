@@ -198,22 +198,8 @@ export default function Recipes() {
 
   const handleOpenEdit = (recipe: Recipe) => {
     setEditingId(recipe.id);
-    
-    let parsedSteps = [''];
-    try {
-      if (recipe.steps_json) {
-        const parsed = parseRecipeArray(recipe.steps_json);
-        if (Array.isArray(parsed) && parsed.length > 0) parsedSteps = parsed;
-      }
-    } catch {}
-
-    let parsedIngredients = [{ name: '', amount: '' }];
-    try {
-      if (recipe.ingredients_json) {
-        const parsed = parseRecipeArray(recipe.ingredients_json);
-        if (Array.isArray(parsed) && parsed.length > 0) parsedIngredients = parsed;
-      }
-    } catch {}
+    const parsedSteps = recipeDetailArray<string>(recipe.steps_json);
+    const parsedIngredients = recipeDetailArray<Ingredient>(recipe.ingredients_json);
 
     setFormData({
       title: recipe.title || '',
@@ -227,8 +213,8 @@ export default function Recipes() {
       difficulty: recipe.difficulty || '简单',
       image_url: recipe.image_url || '',
       description: recipe.description || '',
-      steps: parsedSteps,
-      ingredients: parsedIngredients,
+      steps: parsedSteps.length ? parsedSteps : INITIAL_FORM_STATE.steps,
+      ingredients: parsedIngredients.length ? parsedIngredients : INITIAL_FORM_STATE.ingredients,
     });
     setShowModal(true);
   };
@@ -275,8 +261,6 @@ export default function Recipes() {
     }
   };
 
-  const filteredRecipes = recipes;
-
   const updateStep = (index: number, val: string) => {
     const newSteps = [...formData.steps];
     newSteps[index] = val;
@@ -318,7 +302,7 @@ export default function Recipes() {
       </FilterBar>
       {loadError && <p role="alert" className="admin-error">{loadError}</p>}
       {loading && <p role="status" className="admin-muted">正在加载…</p>}
-      {filteredRecipes.length === 0 && !loading && !loadError ? (
+      {recipes.length === 0 && !loading && !loadError ? (
         <div className="bg-white rounded-[24px] p-12 text-center text-text-muted border border-gray-100">
           未搜索到相关食谱
         </div>
@@ -337,7 +321,7 @@ export default function Recipes() {
                 <tr><th className="px-5 py-4 font-medium">食谱 / 来源</th><th className="px-3 py-4 font-medium">分类 / 制作</th><th className="px-3 py-4 font-medium">营养</th><th className="px-3 py-4 font-medium">发布审核 / 营养质量</th><th className="px-5 py-4 text-right font-medium">操作</th></tr>
               </thead>
               <tbody className="divide-y divide-background-alt">
-                {filteredRecipes.map((recipe) => <tr key={recipe.id} className="hover:bg-[#FCFDFB]">
+                {recipes.map((recipe) => <tr key={recipe.id} className="hover:bg-[#FCFDFB]">
                   <td className="px-5 py-3">
                     <div className="flex min-w-0 items-start gap-3">
                       {recipe.image_url ? <img src={recipe.image_url} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" /> : <span className="h-12 w-12 shrink-0 rounded bg-gray-100 flex items-center justify-center text-gray-400"><UtensilsCrossed size={20}/></span>}

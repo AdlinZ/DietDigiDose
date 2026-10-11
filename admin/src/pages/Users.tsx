@@ -97,15 +97,12 @@ export default function Users() {
   const healthProfileRequestSequence = useRef(0);
 
   const [confirmRoleModal, setConfirmRoleModal] = useState<{
-    isOpen: boolean;
     userId: number;
     currentRole: string;
   } | null>(null);
 
   const [confirmStatusModal, setConfirmStatusModal] = useState<{
-    isOpen: boolean;
     userId: number;
-    username: string;
     currentDisabled: boolean;
   } | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -469,9 +466,7 @@ export default function Users() {
                           onClick={(e) => {
                             e.stopPropagation();
                             setConfirmStatusModal({
-                              isOpen: true,
                               userId: user.id,
-                              username: user.username,
                               currentDisabled: isDisabled,
                             });
                           }}
@@ -613,9 +608,7 @@ export default function Users() {
                 type="button"
                 onClick={() => {
                   setConfirmStatusModal({
-                    isOpen: true,
                     userId: selectedUser.id,
-                    username: selectedUser.username,
                     currentDisabled: Boolean(selectedUser.is_disabled),
                   });
                 }}
@@ -647,7 +640,7 @@ export default function Users() {
               <button
                 type="button"
                 onClick={() => {
-                  setConfirmRoleModal({ isOpen: true, userId: selectedUser.id, currentRole: selectedUser.role });
+                  setConfirmRoleModal({ userId: selectedUser.id, currentRole: selectedUser.role });
                 }}
                 className={cn(
                   "w-full py-3 rounded-2xl font-medium text-sm transition-colors flex items-center justify-center gap-2",

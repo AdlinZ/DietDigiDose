@@ -60,7 +60,8 @@ export function replaceRelease(previous: AppUpdateManifest, release: AppUpdateRe
 export function validateApkPublication(manifestXml: string, signatureOutput: string, expected: { channel: string; snapshot: string; certificate: string }) {
   const certificate = expected.certificate.replaceAll(":", "").toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(certificate)) throw new Error("Expected certificate SHA-256 must be a pinned 64-digit fingerprint");
-  const signers = [...signatureOutput.matchAll(/^Signer #\d+ certificate SHA-256 digest: ([a-f0-9]+)\s*$/gim)].map((match) => match[1].toLowerCase());
+  // Build Tools used for 26w41a label the sole v2 signer differently from older releases.
+  const signers = [...signatureOutput.matchAll(/^(?:Signer #\d+|V2 Signer:) certificate SHA-256 digest: ([a-f0-9]+)\s*$/gim)].map((match) => match[1].toLowerCase());
   if (signers.length !== 1 || signers[0] !== certificate) throw new Error("APK signer does not match the channel certificate");
   const metadata = [...manifestXml.replace(/<!--[\s\S]*?-->/g, "").matchAll(/<meta-data\b[^>]*>/g)].map((match) => match[0]);
   for (const [key, value] of [["channel", expected.channel], ["snapshot", expected.snapshot]]) {

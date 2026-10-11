@@ -12,3 +12,9 @@ export const accountDeletionSchema = z.union([
   z.object({ reauthToken: z.string().min(32).max(256), confirmation: z.literal("DELETE") }).strict(),
 ]);
 export type AccountDeletionProof = { password: string } | { reauthToken: string };
+
+export const passwordRecoverySendSchema = z.object({ phone: z.string().regex(/^1[3-9]\d{9}$/) }).strict();
+export const passwordRecoveryVerifySchema = z.object({ challengeId: z.string().uuid(), code: z.string().regex(/^\d{6}$/) }).strict();
+export const passwordRecoveryTokenSchema = z.string().regex(/^[1-9]\d{0,15}\.[A-Za-z0-9_-]{43}$/)
+  .refine((token) => Number.isSafeInteger(Number(token.split(".")[0])));
+export const passwordRecoveryResetSchema = z.object({ recoveryToken: passwordRecoveryTokenSchema, newPassword: accountPasswordSchema }).strict();

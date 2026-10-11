@@ -59,3 +59,8 @@ export function hashRegistrationToken(value: string) {
 export function maskMainlandPhone(phone: string) {
   return phone.replace(/^(\d{3})\d{4}(\d{4})$/, "$1****$2");
 }
+
+// A stored-hash prefix keeps recovery proofs separate even if a caller changes the raw token.
+export function hashPasswordRecoveryToken(value: string) {
+  return `password-recovery:${hashRegistrationToken(value)}`;
+}

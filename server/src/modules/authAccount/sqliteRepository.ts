@@ -48,12 +48,12 @@ export class SqliteAuthAccountRepository implements AuthAccountRepository {
     return (row as LoginUser | undefined) || null;
   }
 
-  async recordSuccessfulLogin(userId: number, at: string, ipAddress: string) {
+  async recordSuccessfulLogin(userId: number, at: string, ipAddress: string, credentials: { passwordHash: string; sessionVersion: number }) {
     return this.database.transaction(() => {
+      const updated = this.database.prepare("UPDATE users SET last_login_at=?,last_login_ip=? WHERE id=? AND password_hash=? AND session_version=? AND COALESCE(is_disabled,0)=0 RETURNING session_version")
+        .get(at, ipAddress, userId, credentials.passwordHash, credentials.sessionVersion) as Row | undefined;
+      if (!updated) return null;
       this.ensureInitialState(userId);
-      const updated = this.database.prepare("UPDATE users SET last_login_at=?,last_login_ip=? WHERE id=? RETURNING session_version")
-        .get(at, ipAddress, userId) as Row | undefined;
-      if (!updated) throw new Error("USER_NOT_FOUND");
       return Number(updated.session_version || 1);
     })();
   }

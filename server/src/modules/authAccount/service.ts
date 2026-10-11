@@ -6,8 +6,8 @@ import { describeStoredMediaUrls } from "../../services/mediaStorage.js";
 import { AuthAccountError } from "./errors.js";
 import type { AuthAccountRepository } from "./repository.js";
 import type { ProfileInput, Row } from "./types.js";
-import { accountPasswordSchema, type AccountDeletionProof } from "@dietdigidose/contracts";
-import { hashRegistrationToken } from "../../services/authVerificationCrypto.js";
+import { accountPasswordSchema, passwordRecoveryTokenSchema, type AccountDeletionProof } from "@dietdigidose/contracts";
+import { hashPasswordRecoveryToken, hashRegistrationToken } from "../../services/authVerificationCrypto.js";
 import type { AccountMutationProof } from "./reauthProof.js";
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -72,7 +72,8 @@ export class AuthAccountService {
       throw new AuthAccountError(403, "账号已被停用", "ACCOUNT_DISABLED");
     }
     const nowIso = new Date().toISOString();
-    const sessionVersion = await this.repository.recordSuccessfulLogin(user.id, nowIso, clientIp);
+    const sessionVersion = await this.repository.recordSuccessfulLogin(user.id, nowIso, clientIp, { passwordHash: user.password_hash, sessionVersion: user.session_version });
+    if (sessionVersion === null) throw new AuthAccountError(401, "账号、邮箱、手机号或密码错误", "INVALID_CREDENTIALS", true);
     if (user.role !== "admin") await this.repository.recordFunnelEvent(user.id, "login_succeeded");
     if (user.role === "admin") await this.repository.recordAdminAudit({ adminUserId: user.id, action: "auth.login",
       resourceType: "session", resourceId: user.id, summary: "管理员登录成功", ipAddress: clientIp, userAgent });
@@ -99,6 +100,23 @@ export class AuthAccountService {
     if (user.role === "admin") await this.repository.recordAdminAudit({ adminUserId: userId, action: "auth.password.change",
       resourceType: "user", resourceId: userId, summary: `管理员 ${user.username || "admin"} 修改密码`, ipAddress, userAgent });
     return { success: true, message: "密码修改成功" };
+  }
+
+  async recoverPassword(recoveryToken: string, newPassword: string) {
+    if (!accountPasswordSchema.safeParse(newPassword).success) throw new AuthAccountError(400, "密码需为6–128位，包含字母和数字", "INVALID_PASSWORD");
+    if (!passwordRecoveryTokenSchema.safeParse(recoveryToken).success) throw new AuthAccountError(403, "恢复凭据已失效，请重新验证手机号", "PASSWORD_RECOVERY_INVALID");
+    const tokenHash = hashPasswordRecoveryToken(recoveryToken);
+    // The ID only locates the proof; changePassword atomically verifies its full hash and account binding.
+    const userId = Number(recoveryToken.split(".")[0]);
+    try {
+      if (!await this.repository.changePassword(userId, await bcrypt.hash(newPassword, 12), { tokenHash })) {
+        throw new AuthAccountError(403, "恢复凭据已失效，请重新验证手机号", "PASSWORD_RECOVERY_INVALID");
+      }
+    } catch (error) {
+      if (error instanceof AuthAccountError) throw new AuthAccountError(403, "恢复凭据已失效，请重新验证手机号", "PASSWORD_RECOVERY_INVALID");
+      throw error;
+    }
+    return { success: true, message: "密码已重设，请使用新密码重新登录" };
   }
 
   async setPassword(userId: number, newPassword: string, reauthToken: string) {

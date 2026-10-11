@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import Database from "better-sqlite3";
@@ -6,6 +7,8 @@ import { SqliteAuthVerificationRepository } from "../src/modules/authVerificatio
 import { passwordlessMigration } from "../src/storage/passwordlessMigration.js";
 import { consumeAccountProofSqlite } from "../src/modules/authAccount/reauthProof.js";
 import { SqliteAuthAccountRepository } from "../src/modules/authAccount/sqliteRepository.js";
+import { AuthAccountService } from "../src/modules/authAccount/service.js";
+import { hashPasswordRecoveryToken } from "../src/services/authVerificationCrypto.js";
 import bcrypt from "bcryptjs";
 
 function database() {
@@ -41,6 +44,48 @@ function database() {
 }
 
 describe("auth verification module", () => {
+  test("recovery grants reject expiry, disabled accounts, phone/session changes and cross-purpose use atomically",async () => {
+    const db=database();const verification=new AuthVerificationService(new SqliteAuthVerificationRepository(db));
+    const account=new AuthAccountService(new SqliteAuthAccountRepository(db));
+    const phone="13800138991";
+    db.prepare("INSERT INTO users(username,phone,password_hash,phone_verified_at) VALUES('recover',?,NULL,CURRENT_TIMESTAMP)").run(phone);
+    const subject=await verification.findOrCreateSubject(phone);
+    let sequence=0;
+    const grant=async () => {
+      const id=`recovery-${++sequence}`;const token=`1.${randomBytes(32).toString("base64url")}`;const tokenHash=hashPasswordRecoveryToken(token);
+      const user=(await verification.reauthUser(1))!;const expiresAt=new Date(Date.now()+60_000).toISOString();
+      await verification.createChallenge({id,subjectId:subject.id,purpose:"password_recovery",outId:id,expiresAt,sourceIp:null,userAgent:null,reauthUserId:1,reauthSessionVersion:user.session_version});
+      assert.equal(await verification.beginVerification(id),true);
+      assert.equal(await verification.issueReauthGrant({challengeId:id,challengePurpose:"password_recovery",userId:1,purpose:"password_update",phone,sessionVersion:user.session_version,tokenHash,expiresAt}),true);
+      return {token,tokenHash};
+    };
+    const expired=await grant();db.prepare("UPDATE account_reauth_grants SET expires_at=datetime('now','-1 minute') WHERE token_hash=?").run(expired.tokenHash);
+    await assert.rejects(account.recoverPassword(expired.token,"NewPassword1"),/已失效/);
+    const disabled=await grant();db.prepare("UPDATE users SET is_disabled=1 WHERE id=1").run();
+    await assert.rejects(account.recoverPassword(disabled.token,"NewPassword1"),/已失效/);
+    db.prepare("UPDATE users SET is_disabled=0,session_version=session_version+1 WHERE id=1").run();
+    await assert.rejects(account.recoverPassword(disabled.token,"NewPassword1"),/已失效/);
+    const changedPhone=await grant();db.prepare("UPDATE users SET phone=NULL WHERE id=1").run();
+    await assert.rejects(account.recoverPassword(changedPhone.token,"NewPassword1"),/已失效/);
+    db.prepare("UPDATE users SET phone=? WHERE id=1").run(phone);
+    const valid=await grant();
+    const beforeReset=await new SqliteAuthAccountRepository(db).getCredentials(1);
+    await assert.rejects(account.recoverPassword(`2.${valid.token.split(".")[1]}`,"NewPassword1"),/已失效/);
+    for (const prefix of ["0", "-1", "1e0", "01", "9007199254740992"]) {
+      await assert.rejects(account.recoverPassword(`${prefix}.${valid.token.split(".")[1]}`,"NewPassword1"),/已失效/);
+    }
+    await assert.rejects(account.setPassword(1,"NewPassword1",valid.token),/重新验证/);
+    await assert.rejects(account.setPassword(1,"NewPassword1",`password-recovery:${valid.token}`),/重新验证/);
+    assert.throws(() => consumeAccountProofSqlite(db,2,"password_update",{tokenHash:valid.tokenHash}),/重新验证/);
+    assert.throws(() => consumeAccountProofSqlite(db,1,"account_delete",{tokenHash:valid.tokenHash}),/重新验证/);
+    const results=await Promise.allSettled([account.recoverPassword(valid.token,"NewPassword1"),account.recoverPassword(valid.token,"NewPassword1")]);
+    assert.equal(results.filter(value => value.status==="fulfilled").length,1);
+    assert.equal((await verification.reauthUser(1))?.session_version,3);
+    assert.equal(await new SqliteAuthAccountRepository(db).recordSuccessfulLogin(1,new Date().toISOString(),"127.0.0.1",{passwordHash:beforeReset!.password_hash ?? "",sessionVersion:2}),null);
+    assert.equal(bcrypt.compareSync("NewPassword1",(await new SqliteAuthAccountRepository(db).getCredentials(1))!.password_hash!),true);
+    db.close();
+  });
+
   test("nullable-password migration preserves existing hashes, foreign keys, indexes, triggers and ID sequence",() => {
     const db=new Database(":memory:");
     db.exec(`PRAGMA foreign_keys=ON;

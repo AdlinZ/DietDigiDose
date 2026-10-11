@@ -17,6 +17,15 @@ export const authApi = {
   verifySmsCode: <T>(challengeId: string, code: string) => requestJson<T>(publicFetch, "/api/v1/auth/sms/verify", {
     method: "POST", headers:securityHeaders, body: JSON.stringify({ challengeId, code, passwordlessRegistration:true }),
   }),
+  sendPasswordRecovery: (phone: string) => requestJson<{ challengeId: string; phoneMasked: string; resendAfter: number }>(publicFetch, "/api/v1/auth/password-recovery/send", {
+    method: "POST", body: JSON.stringify({ phone }),
+  }),
+  verifyPasswordRecovery: (challengeId: string, code: string) => requestJson<{ recoveryToken: string; expiresIn: number }>(publicFetch, "/api/v1/auth/password-recovery/verify", {
+    method: "POST", body: JSON.stringify({ challengeId, code }),
+  }),
+  resetPassword: (recoveryToken: string, newPassword: string) => requestJson<{ success: boolean }>(publicFetch, "/api/v1/auth/password-recovery/reset", {
+    method: "POST", body: JSON.stringify({ recoveryToken, newPassword }),
+  }),
   registerWithSms: <T>(registrationToken: string, username: string, password: string) => requestJson<T>(publicFetch, "/api/v1/auth/sms/register", {
     method: "POST", body: JSON.stringify({ registrationToken, username, password }),
   }),

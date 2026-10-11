@@ -144,7 +144,7 @@ export class SqliteAuthVerificationRepository implements AuthVerificationReposit
     const valid = this.database.prepare(`SELECT 1 FROM users u JOIN auth_verification_challenges c ON c.reauth_user_id=u.id
       WHERE u.id=? AND u.phone=? AND u.phone_verified_at IS NOT NULL AND u.session_version=? AND COALESCE(u.is_disabled,0)=0
       AND c.id=? AND c.purpose=? AND c.reauth_session_version=u.session_version AND c.status='verifying' AND datetime(c.expires_at)>datetime('now')`)
-      .get(input.userId,input.phone,input.sessionVersion,input.challengeId,input.purpose);
+      .get(input.userId,input.phone,input.sessionVersion,input.challengeId,input.challengePurpose ?? input.purpose);
     if (!valid) return false;
     this.database.prepare(`INSERT INTO account_reauth_grants(token_hash,user_id,purpose,phone,session_version,expires_at) VALUES(?,?,?,?,?,?)`)
       .run(input.tokenHash,input.userId,input.purpose,input.phone,input.sessionVersion,input.expiresAt);

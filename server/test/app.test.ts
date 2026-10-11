@@ -289,17 +289,20 @@ describe("API security baseline", () => {
   });
 
   test("worker task leases prevent concurrent owners and persist batch outcomes", async () => {
-    const runtime = await import("../src/modules/worker/index.js");
-    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-a", 60_000), true);
-    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), false);
-    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-a", 60_000), false);
+    const { WorkerRuntime } = await import("../src/modules/worker/service.js");
+    const { SqliteWorkerRepository } = await import("../src/modules/worker/sqliteRepository.js");
+    const workerRepository = new SqliteWorkerRepository(db);
+    const runtime = new WorkerRuntime(workerRepository);
+    assert.equal(await runtime.acquireLease("media-cleanup", "worker-a", 60_000), true);
+    assert.equal(await runtime.acquireLease("media-cleanup", "worker-b", 60_000), false);
+    assert.equal(await runtime.acquireLease("media-cleanup", "worker-a", 60_000), false);
     db.prepare("UPDATE worker_task_leases SET lease_expires_at = datetime('now', '-1 second') WHERE task_name = 'media-cleanup'").run();
-    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-b", 60_000), true);
-    assert.equal(await runtime.releaseWorkerTaskLease("media-cleanup", "worker-a"), false);
-    assert.equal(await runtime.acquireWorkerTaskLease("media-cleanup", "worker-c", 60_000), false);
-    assert.equal(await runtime.releaseWorkerTaskLease("media-cleanup", "worker-b"), true);
+    assert.equal(await runtime.acquireLease("media-cleanup", "worker-b", 60_000), true);
+    assert.equal(await runtime.releaseLease("media-cleanup", "worker-a"), false);
+    assert.equal(await runtime.acquireLease("media-cleanup", "worker-c", 60_000), false);
+    assert.equal(await runtime.releaseLease("media-cleanup", "worker-b"), true);
 
-    const completed = await runtime.runManagedWorkerTask({
+    const completed = await runtime.run({
       taskName: "media-cleanup",
       workerId: "worker-test",
       run: async () => ({ processed: 2, succeeded: 2, failed: 0, details: { source: "test" } }),
@@ -309,8 +312,6 @@ describe("API security baseline", () => {
       failed_count AS failed FROM worker_task_runs WHERE id = ?`).get(completed.runId) as JsonObject;
     assert.deepEqual(completedRow, { status: "completed", processed: 2, succeeded: 2, failed: 0 });
 
-    const { SqliteWorkerRepository } = await import("../src/modules/worker/sqliteRepository.js");
-    const workerRepository = new SqliteWorkerRepository(db);
     assert.equal(await workerRepository.acquireLease("media-cleanup", "stale-owner", 60_000), true);
     await workerRepository.createRun("stale-worker-result", "media-cleanup", "worker-test");
     assert.equal(await workerRepository.ownsLease("media-cleanup", "stale-owner"), true);
@@ -325,7 +326,7 @@ describe("API security baseline", () => {
     await workerRepository.failRun("stale-worker-result", 1, "lease lost");
     assert.equal(await workerRepository.releaseLease("media-cleanup", "new-owner"), true);
 
-    const partialFailure = await runtime.runManagedWorkerTask({
+    const partialFailure = await runtime.run({
       taskName: "media-cleanup",
       workerId: "worker-test",
       run: async () => ({ processed: 2, succeeded: 1, failed: 1 }),

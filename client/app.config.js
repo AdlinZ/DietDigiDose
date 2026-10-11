@@ -1,6 +1,7 @@
 /* global module, process, require */
 
 const release = require('../release.json');
+const { channelForProfile, parseDownloadOrigins } = require('./plugins/withApkUpdates');
 
 const appSlug = process.env.EXPO_PUBLIC_APP_SLUG || 'dietdigidose';
 const deploymentProfile = process.env.EXPO_PUBLIC_DEPLOYMENT_PROFILE || 'china';
@@ -92,6 +93,11 @@ module.exports = ({ config }) => ({
     favicon: './assets/images/favicon.png',
   },
   plugins: [
+    ['./plugins/withApkUpdates', {
+      channel: channelForProfile(easBuildProfile),
+      origins: parseDownloadOrigins(process.env.EXPO_PUBLIC_APK_DOWNLOAD_ORIGINS),
+      snapshot: release.snapshot,
+    }],
     '@siteed/audio-studio',
     [
       'expo-router',

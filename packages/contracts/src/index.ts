@@ -17,3 +17,4 @@ export * from "./healthProfile.ts";
 export * from "./account.ts";
 export * from "./onboarding.ts";
 export * from "./recipeExecution.ts";
+export * from "./appUpdates.ts";

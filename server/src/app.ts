@@ -13,6 +13,7 @@ import { recoverAgentRuntime } from "./services/agent/runtime.js";
 import { assertNoPublicServerSecrets, getProviderProfile } from "./providers/profiles.js";
 import { createSiteSettingsRouter } from "./routes/site-settings.js";
 import { observeOnboardingSaves } from "./modules/onboarding/observeSaves.js";
+import { createAppUpdatesRouter } from "./routes/app-updates.js";
 
 const staticAssetsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -85,6 +86,7 @@ export async function createApp() {
     supportContact: process.env.PRIVACY_SUPPORT_CONTACT?.trim() || "应用商店开发者联系方式",
   }));
   app.use("/api/v1/site-settings", createSiteSettingsRouter());
+  app.use("/api/v1/app-updates", createAppUpdatesRouter());
   app.use("/api/v1/auth", routes.auth);
   app.use("/api/v1/webhooks", routes.webhooks);
   app.use("/api/v1/inventory", routes.inventory);

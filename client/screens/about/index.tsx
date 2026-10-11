@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Image, ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Image, Platform, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { systemApi, type VersionInfo } from "@/services/api";
 import { APP_BUILD_TIME, APP_RELEASE_LABEL, formatBuildTime } from "@/utils/appVersion";
+import { useAppUpdate } from "@/components/AppUpdateProvider";
 
 function InfoRow({ label, value, last = false }: { label: string; value: string; last?: boolean }) {
   return (
@@ -17,6 +18,7 @@ function InfoRow({ label, value, last = false }: { label: string; value: string;
 
 export default function AboutScreen() {
   const router = useSafeRouter();
+  const appUpdate = useAppUpdate();
   const [serverInfo, setServerInfo] = useState<VersionInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -52,8 +54,14 @@ export default function AboutScreen() {
         <Text className="text-xs font-bold text-copy-muted mb-2 px-1">客户端</Text>
         <View className="bg-surface rounded-2xl border border-line overflow-hidden shadow-xs mb-5">
           <InfoRow label="应用版本" value={APP_RELEASE_LABEL} />
+          {appUpdate.installed && <InfoRow label="原生安装包" value={`${appUpdate.installed.version} (${appUpdate.installed.snapshot} · build ${appUpdate.installed.buildNumber} · ${appUpdate.installed.channel})`} />}
           <InfoRow label="客户端打包时间" value={formatBuildTime(APP_BUILD_TIME)} last />
         </View>
+
+        {Platform.OS === 'android' && <TouchableOpacity accessibilityRole="button" onPress={appUpdate.check} className="mb-5 rounded-2xl border border-line bg-surface px-4 py-4">
+          <Text className="text-sm font-bold text-ink">检查应用更新</Text>
+          <Text className="mt-1 text-xs text-copy-muted">查看当前渠道的新版本及更新说明</Text>
+        </TouchableOpacity>}
 
         <Text className="text-xs font-bold text-copy-muted mb-2 px-1">服务状态</Text>
         <View className="bg-surface rounded-2xl border border-line overflow-hidden shadow-xs">

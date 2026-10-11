@@ -45,6 +45,22 @@ CI 的 `stability` job 从同一提交连续运行两轮全量测试，并上传
 
 若安全版本改变模块格式而旧版上游消费者尚未兼容，可用 `patchedDependencies` 仅恢复模块互操作层；不得回退安全实现，并必须同时验证真实消费路径、客户端构建与生产依赖审计。
 
+### W41 新增告警修复（2026-10-07）
+
+10 月 7 日重新运行审计发现 5 项新增告警，旧提交的 CI 结果不能覆盖新披露的依赖问题。本轮通过现有 overrides 更新以下依赖及锁文件，没有新增补丁或审计例外：
+
+| 依赖 / 告警 | 本轮处理 |
+| --- | --- |
+| `proxy-addr` / [GHSA-jqcg-44mw-7w3h](https://github.com/advisories/GHSA-jqcg-44mw-7w3h) | 升级至 `2.0.8`，修复 IPv4 映射 IPv6 子网的代理信任判断 |
+| `shell-quote` / [GHSA-pqg4-j6r4-53mv](https://github.com/advisories/GHSA-pqg4-j6r4-53mv) | 升级至 `1.11.0`，修复注释 token 后换行的引用处理 |
+| `source-map-js` / [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) | 升级至 `1.2.2`，修复索引 source map 偏移导致的资源耗尽 |
+| `compression` / [GHSA-vc2v-76pw-4v95](https://github.com/advisories/GHSA-vc2v-76pw-4v95) | 升级至 `1.8.2`，修复响应提前关闭后的压缩流泄漏 |
+| `sprintf-js` / [GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c) | 仅将 `@istanbuljs/load-nyc-config@1.1.0>js-yaml` 升至 `4.3.2`，移除生产依赖中的 `argparse@1 → sprintf-js` 调用链 |
+
+NYC 消费者使用 `load()`，可兼容 YAML v4；开发工具 `depcheck` 仍使用 `safeLoad()`，因此保留它的 v3 依赖，不能全局跨主版本覆盖。`scripts/nyc-config-compatibility.test.mjs` 的 3 项测试覆盖真实 React Native/NYC 的 YAML 继承与错误处理、Babel 子进程插桩及排除规则、depcheck 的旧 API；已接入 `test:dependency-security`，因此完整测试和生产审计都会先运行。v4 不再接受旧的 JavaScript 专有 YAML tag，测试明确记录这一行为差异。dev 链仍含 `sprintf-js`，不能描述为从整个锁文件移除。
+
+更新后冻结安装、11 项依赖安全/兼容测试和 `audit:prod` 通过；审计仍报告 **4 high（4 ignored）**，均为既有精确例外，不能称作零漏洞。回滚必须同时处理 overrides、锁文件和兼容测试；回到旧依赖会重新触发这 5 项生产审计告警，不应作为可发布候选。
+
 ### node-forge 临时安全回补（2026-10-02）
 
 - `CVE-2026-85393` / [GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv)：RSA PKCS#1 v1.5 验签未拒绝嵌套 `DigestAlgorithm` 中的额外元素。当前 npm 最新版 `1.4.0` 仍受影响。

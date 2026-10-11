@@ -31,6 +31,8 @@ const MediaCleanup = lazy(() => import('./pages/MediaCleanup'));
 const VoicePacks = lazy(() => import('./pages/VoicePacks'));
 const SiteSettings = lazy(() => import('./pages/SiteSettings'));
 const Legal = lazy(() => import('./pages/Legal'));
+const Changelog = lazy(() => import('./pages/Changelog'));
+const Journal = lazy(() => import('./pages/Journal'));
 
 // Auth Guard
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -81,6 +83,8 @@ function App() {
       <Routes>
       {/* 面向公众的产品宣传官网主页 */}
       <Route path="/" element={<Landing />} />
+      <Route path="/changelog" element={<Changelog />} />
+      <Route path="/journal" element={<Journal />} />
       <Route path="/privacy" element={<Legal kind="privacy" />} />
       <Route path="/terms" element={<Legal kind="terms" />} />
 

@@ -7,19 +7,30 @@ import './Landing.css';
 
 const appUrl = 'https://dietdigidose.top/app/';
 const betaUrl = 'mailto:adlinzhang@gmail.com?subject=%E9%A3%9F%E5%85%89%E7%83%99%E8%AE%B0%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7';
-const navigation = [
-  ['#daily', '一餐的日常'],
-  ['#inside', '看看食光'],
-  ['#start', '开始使用'],
+
+interface NavItem {
+  href: string;
+  label: string;
+  isRoute?: boolean;
+}
+
+const navigation: NavItem[] = [
+  { href: '#daily', label: '一餐的日常' },
+  { href: '#inside', label: '看看食光' },
+  { href: '/journal', label: '食光手记', isRoute: true },
+  { href: '/changelog', label: '更新日志', isRoute: true },
+  { href: '#start', label: '开始使用' },
 ];
+
 const dailySteps = [
   { time: '买菜回来', title: '先记下，家里有什么。', description: '把买来的食材放进保鲜库，记好数量和存放方式。下次买菜前，先看看家里还剩什么。', note: '食材库存 · 采购清单' },
   { time: '准备晚饭', title: '用手边的食材，找一道想吃的菜。', description: '翻翻菜谱，看看原料和做法。缺的食材加入采购单，想做的菜留进烹饪队列。', note: '食谱查找 · 备料清单 · 烹饪队列' },
   { time: '吃过以后', title: '今天这一餐，也留个记录。', description: '做了什么、吃了多少，分别记清楚。以后回头看，知道自己这些天是怎样吃饭的。', note: '饮食记录 · 营养参考' },
 ];
+
 const productViews = [
-  { label: '备料清单', src: '/landing/recipe-preparation.png', alt: '真实备料清单：番茄、鸡蛋、小葱和调味料，包含用量与准备勾选项' },
-  { label: '食谱详情', src: '/landing/recipe-detail.png', alt: '真实食谱详情：番茄炒蛋、所需时间、营养估算与加入队列入口' },
+  { label: '备料清单', src: '/landing/recipe-preparation.png', alt: '真实备料清单：番茄、鸡蛋、小葱和调味料，包含用量与准备勾选项', caption: '网页版实截' },
+  { label: '食谱详情', src: '/landing/recipe-detail.webp', alt: 'Gemini 生成的番茄炒蛋食谱详情示意图', caption: 'Gemini 生成示意图，以实际界面为准' },
 ];
 
 const questions = [
@@ -56,25 +67,66 @@ export default function Landing() {
             <img src={logoUrl} alt="" width="38" height="38" />
             <span className="landing-brand">食光烙记<small>把日子过进一餐一饭</small></span>
           </Link>
-          <nav aria-label="主导航" className="hidden items-center gap-9 text-sm md:flex">
-            {navigation.map(([href, label]) => <a href={href} key={href}>{label}</a>)}
+          <nav aria-label="主导航" className="hidden items-center gap-6 text-sm lg:flex">
+            {navigation.map((item) =>
+              item.isRoute ? (
+                <Link to={item.href} key={item.href}>{item.label}</Link>
+              ) : (
+                <a href={item.href} key={item.href}>{item.label}</a>
+              )
+            )}
           </nav>
           <div className="flex items-center gap-4">
             <a href={appUrl} className="landing-header-entry">打开食光 <ArrowRight size={16} aria-hidden="true" /></a>
-            <button type="button" className="landing-menu-button md:hidden" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} aria-expanded={mobileMenuOpen} aria-controls="mobile-navigation" aria-label={mobileMenuOpen ? '关闭导航菜单' : '打开导航菜单'}>
+            <button
+              type="button"
+              className="landing-menu-button lg:hidden"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-navigation"
+              aria-label={mobileMenuOpen ? '关闭导航菜单' : '打开导航菜单'}
+            >
               {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
           </div>
         </div>
-        {mobileMenuOpen && <nav id="mobile-navigation" aria-label="手机导航" className="landing-container flex flex-col gap-1 pb-4 md:hidden">
-          {navigation.map(([href, label]) => <a className="py-3" href={href} key={href} onClick={() => setMobileMenuOpen(false)}>{label}</a>)}
-        </nav>}
+        {mobileMenuOpen && (
+          <nav id="mobile-navigation" aria-label="手机导航" className="landing-container flex flex-col gap-1 pb-4 lg:hidden">
+            {navigation.map((item) =>
+              item.isRoute ? (
+                <Link
+                  className="py-3"
+                  to={item.href}
+                  key={item.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  {item.label}
+                </Link>
+              ) : (
+                <a
+                  className="py-3"
+                  href={item.href}
+                  key={item.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  {item.label}
+                </a>
+              )
+            )}
+          </nav>
+        )}
       </header>
 
       <main id="main-content">
         <section className="landing-container landing-hero" aria-labelledby="hero-title">
           <div className="landing-hero-copy">
-            <p className="landing-eyebrow"><span />给认真吃饭的每一天</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="landing-eyebrow"><span />给认真吃饭的每一天</p>
+              <Link to="/changelog" className="landing-badge-link" aria-label="查看最新版本更新日志">
+                <span className="landing-badge-pulse" />
+                26w41a 内测版本 · 查看足迹 ↗
+              </Link>
+            </div>
             <h1 id="hero-title">把手边的食材，<br />做成<span>今天的一餐。</span></h1>
             <p className="landing-intro">记下买来的食材，找到能做的菜，<br className="hidden sm:block" />也留住每天吃过的饭。</p>
             <div className="mt-8 flex flex-wrap items-center gap-x-7 gap-y-5">
@@ -84,8 +136,8 @@ export default function Landing() {
             <p className="landing-access-note">内测进行中 · 可先浏览食谱，登录后保存个人记录</p>
           </div>
           <figure className="landing-dinner">
-            <div className="landing-photo-wrap"><img src="/landing/meal-bowl.png" alt="自然光下的洋葱肥牛饭，盛在陶碗里，旁边放着筷子" width="600" height="365" fetchPriority="high" /></div>
-            <figcaption><div><span className="landing-photo-label">餐桌一角</span><strong>洋葱肥牛饭</strong></div><p>一碗热饭，<br />把今天安顿好。</p></figcaption>
+            <div className="landing-photo-wrap"><img src="/landing/meal-bowl.webp" alt="自然光下的洋葱肥牛饭，盛在陶碗里，旁边放着筷子" width="600" height="365" fetchPriority="high" /></div>
+            <figcaption><div><span className="landing-photo-label">餐桌一角 · AI 示意图</span><strong>洋葱肥牛饭</strong></div><p>一碗热饭，<br />把今天安顿好。</p></figcaption>
           </figure>
         </section>
 
@@ -114,7 +166,7 @@ export default function Landing() {
               <a className="landing-screenshot-link" href={productView.src} target="_blank" rel="noreferrer" aria-label={`查看${productView.label}大图（在新标签页打开）`}>
                 <img src={productView.src} alt={productView.alt} width="390" height="844" loading="lazy" />
               </a>
-              <figcaption>网页版实截 · {productView.label}<br /><span>点击图片，查看大图 ↗</span></figcaption>
+              <figcaption>{productView.caption} · {productView.label}<br /><span>点击图片，查看大图 ↗</span></figcaption>
             </figure>
             <div className="landing-product-copy">
               <p className="landing-eyebrow">02 / 看看食光</p>
@@ -130,9 +182,42 @@ export default function Landing() {
           </div>
         </section>
 
+        <section id="journal" className="landing-container landing-journal" aria-labelledby="journal-title">
+          <div className="landing-section-heading">
+            <p className="landing-eyebrow">03 / 食光手记</p>
+            <h2 id="journal-title">把日子，<br />过进一餐一饭。</h2>
+            <p>做这款工具的初心、设计取舍与厨房随笔。<br />在安静的文字里，分享我们对生活与做饭的思考。</p>
+            <div className="mt-7">
+              <Link to="/journal" className="landing-text-link">
+                阅读全部食光手记 <ArrowRight size={16} aria-hidden="true" />
+              </Link>
+            </div>
+          </div>
+          <div className="landing-journal-cards">
+            <Link to="/journal?id=onion-in-the-fridge" className="landing-journal-card">
+              <span className="landing-journal-tag">产品初心</span>
+              <h3>从冰箱深处烂掉的半个洋葱说起</h3>
+              <p>为什么市面上有那么多菜谱软件，我们仍然想做一个以你手边食材为中心的工具？</p>
+              <div className="landing-journal-footer">
+                <span>4 分钟阅读</span>
+                <span className="landing-journal-more">阅读随笔 →</span>
+              </div>
+            </Link>
+            <Link to="/journal?id=honest-nutrition-estimates" className="landing-journal-card">
+              <span className="landing-journal-tag">设计与科学</span>
+              <h3>关于营养数据：我们为什么坚持“估算”</h3>
+              <p>拒绝虚假精确。在充满变量的日常厨房里，如何给出一份真正坦诚的营养参考？</p>
+              <div className="landing-journal-footer">
+                <span>5 分钟阅读</span>
+                <span className="landing-journal-more">阅读随笔 →</span>
+              </div>
+            </Link>
+          </div>
+        </section>
+
         <section id="start" className="landing-container landing-start" aria-labelledby="start-title">
           <div className="landing-section-heading">
-            <p className="landing-eyebrow">03 / 开始使用</p>
+            <p className="landing-eyebrow">04 / 开始使用</p>
             <h2 id="start-title">从下一顿饭，<br />试着用起来。</h2>
             <p>食光烙记正在内测。<br />欢迎来用，也欢迎告诉我们哪里还不顺手。</p>
             <div className="mt-7"><a href={appUrl} className="landing-button">打开网页版 <ArrowRight size={18} aria-hidden="true" /></a></div>
@@ -149,11 +234,18 @@ export default function Landing() {
         <div className="landing-container">
           <div className="flex flex-col justify-between gap-5 sm:flex-row">
             <p>© {new Date().getFullYear()} 食光烙记 · DietDigiDose</p>
-            <nav aria-label="页脚导航" className="flex flex-wrap gap-x-6 gap-y-3"><Link to="/privacy">隐私政策</Link><Link to="/terms">用户协议</Link><a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noreferrer">开源仓库 ↗</a><Link to="/login">管理后台</Link></nav>
+            <nav aria-label="页脚导航" className="flex flex-wrap gap-x-6 gap-y-3">
+              <Link to="/journal">食光手记</Link>
+              <Link to="/changelog">更新日志</Link>
+              <Link to="/privacy">隐私政策</Link>
+              <Link to="/terms">用户协议</Link>
+              <a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noreferrer">开源仓库 ↗</a>
+              <Link to="/login">管理后台</Link>
+            </nav>
           </div>
           <div className="mt-5 flex flex-wrap justify-between gap-3">
             {filing.enabled && filing.text ? (filing.url ? <a href={filing.url} target="_blank" rel="noreferrer">{filing.text}</a> : <span>{filing.text}</span>) : <span />}
-            <p>餐食摄影：<a href="https://github.com/Anduin2017/HowToCook" target="_blank" rel="noreferrer">HowToCook 社区</a> · The Unlicense</p>
+            <p>餐食与食谱详情示意图：Gemini 生成 · 备料清单为实际截图</p>
           </div>
         </div>
       </footer>

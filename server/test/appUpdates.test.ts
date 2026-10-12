@@ -79,6 +79,11 @@ test("publication pins the actual APK signing identity, native channel and snaps
   const signature = `Signer #1 certificate SHA-256 digest: ${certificate}\n`;
   const expected = { certificate, channel: "candidate", snapshot: "26w41a" };
   assert.doesNotThrow(() => validateApkPublication(xml, signature, expected));
+  const v2Signature = `Number of signers: 1\nV2 Signer: certificate SHA-256 digest: ${certificate}\n`;
+  assert.doesNotThrow(() => validateApkPublication(xml, v2Signature, expected));
+  assert.throws(() => validateApkPublication(xml, v2Signature, { ...expected, certificate: "b".repeat(64) }), /signer/);
+  assert.throws(() => validateApkPublication(xml, `${v2Signature}V2 Signer: certificate SHA-256 digest: ${certificate}\n`, expected), /signer/);
+  assert.throws(() => validateApkPublication(xml, `Source Stamp Signer certificate SHA-256 digest: ${certificate}\n`, expected), /signer/);
   assert.throws(() => validateApkPublication(xml, signature, { ...expected, channel: "production" }), /channel/);
   assert.throws(() => validateApkPublication(xml, signature, { ...expected, snapshot: "26w41b" }), /snapshot/);
   assert.throws(() => validateApkPublication(xml, signature, { ...expected, certificate: "b".repeat(64) }), /signer/);

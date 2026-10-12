@@ -1,6 +1,6 @@
 # 食光烙记（DietDigiDose）
 
-> **2026-10-11 打包推进：** 已将经过验证的 W41 代码按依赖安全、清理与异步保护、账号恢复、Android 更新分为四个提交（至 `76a48fac`），纳入 #248。当前等待候选 CI 与合并后构建，目标 `26w41a` 尚未预留；官网独立改动保留在工作区。以下旧 SHA 和未提交说明为各轮历史核对，最终构建结果另行登记。
+> **2026-10-12 状态：** 当前为 W42（10 月 12–18 日）。Android `26w41a / 264101` 已构建，服务端 `fbd9b1a4` 已部署并通过备份恢复、迁移与 HTTPS 烟测，详见[服务端更新记录](docs/server-update-2026-10-11.md)。官网页面与素材改动随本分支同步，尚未部署。真实短信、APK 下载源配置与双端真机验收仍待完成；下方明确标注的旧记录保留作历史。
 
 <p align="center">
   <img src="client/assets/logo.svg" alt="食光烙记 Logo" width="160" />
@@ -41,15 +41,15 @@
 
 ## 当前版本与完成度
 
-- **当前周：** `26w41`（上海时区 ISO 第 41 周，2026-10-05～10-11）
+- **当前周：** `26w42`（上海时区 ISO 第 42 周，2026-10-12～10-18）
 - **仓库版本元数据：** `1.0.6` / `26w36a` / build `263601`（不是最新构建产物）
-- **最近成功 Android 构建：** [`26w38a` / build `263801`](https://github.com/AdlinZ/DietDigiDose/actions/runs/35517119184)，源码 `818cdefe`
+- **最近成功 Android 构建：** [`26w41a` / build `264101`](https://github.com/AdlinZ/DietDigiDose/actions/runs/38143602557)，源码 `f4ba92c3`
 - **阶段：** 可信 Beta 收口
-- **最近更新：** 2026-10-11
+- **最近更新：** 2026-10-12
 
-主分支 `a22c6cb5` 已合并多餐共做、制作与复热审核，以及核心流程故障恢复和未知营养展示（#246、#247），[对应 CI](https://github.com/AdlinZ/DietDigiDose/actions/runs/37003624773) 全部通过。[草稿 PR #248](https://github.com/AdlinZ/DietDigiDose/pull/248) 补齐营养来源、数据导入和依赖安全处理，提交 `258d0dba` 的 [CI](https://github.com/AdlinZ/DietDigiDose/actions/runs/37284683370) 已通过，但尚未合并、部署或打包。CI 结果只覆盖对应提交。10 月 7 日另行完成当前工作区审阅，修复 5 项新增依赖告警，并通过本地测试、覆盖率、静态检查、三端构建和审计；修改尚未提交，统一候选和真实验收仍待完成。
+主分支 `f4ba92c3` 已合并 [PR #248](https://github.com/AdlinZ/DietDigiDose/pull/248)，包含营养来源、数据导入、依赖安全修复、手机恢复和 APK 更新实现。[main CI](https://github.com/AdlinZ/DietDigiDose/actions/runs/38143565538) 全部通过，`26w41a` 预览包已生成。此前分轮审阅及测试记录保留在 W41 文档；服务端已于 10 月 11 日更新，真实设备验收仍待完成。
 
-10 月 11 日已将 W41 的 **20 项未完成 Issue** 结转至 [W42 里程碑](https://github.com/AdlinZ/DietDigiDose/milestone/12)（10 月 12–18 日），W41 按周归档。范围包括：W40 结转 18 项，10 月 7 日新增 [#221 自助找回密码](https://github.com/AdlinZ/DietDigiDose/issues/221) 和 [#219 应用内更新](https://github.com/AdlinZ/DietDigiDose/issues/219)。两项本地代码已实现，仍待部署、真实短信与 Android 真机验收；Android 更新模块原生编译已通过。恢复一期支持已验证绑定手机，不支持邮箱；更新一期为完整 APK，OTA 留待二期，详见[实现与验收记录](docs/w41-account-recovery-and-app-updates.md)。Backlog 剩余 21 项待排期。[W40](https://github.com/AdlinZ/DietDigiDose/milestone/10) 保留 4 项已关闭 Issue 作为历史记录。官网、管理端、API、PostgreSQL 与 workers 已有公网运行记录，最近确认的部署仍是 `w39-818cdefe`（10 月 2 日）。独立环境与持久化验收、同候选完整恢复演练、同提交双端候选与真机闭环（#105、#106、#107）仍是三项 P0 门槛；排期不代表验收通过或承诺本周完成全部 20 项。
+10 月 11 日已将 W41 的 **20 项未完成 Issue** 结转至 [W42 里程碑](https://github.com/AdlinZ/DietDigiDose/milestone/12)（10 月 12–18 日），W41 按周归档。范围包括：W40 结转 18 项，10 月 7 日新增 [#221 自助找回密码](https://github.com/AdlinZ/DietDigiDose/issues/221) 和 [#219 应用内更新](https://github.com/AdlinZ/DietDigiDose/issues/219)。两项代码已合并并随 41a 打包，服务端已更新，仍待真实短信与 Android 真机验收；Android 更新模块原生编译已通过。恢复一期支持已验证绑定手机，不支持邮箱；更新一期为完整 APK，OTA 留待二期，详见[实现与验收记录](docs/w41-account-recovery-and-app-updates.md)。Backlog 剩余 21 项待排期。[W40](https://github.com/AdlinZ/DietDigiDose/milestone/10) 保留 4 项已关闭 Issue 作为历史记录。官网、管理端、API、PostgreSQL 与 workers 已有公网运行记录，最新服务端部署为 `w41-fbd9b1a4`（10 月 11 日），官网与 App 网页保持原版本。独立环境与持久化验收、同候选完整恢复演练、同提交双端候选与真机闭环（#105、#106、#107）仍是三项 P0 门槛；排期不代表验收通过或承诺本周完成全部 20 项。
 
 当前打包检查与下周安排见 [W42 进度与执行计划](docs/milestone-26w42-progress.md)、[开发与 Beta 收口清单](TODO.md) 与 [真机验收清单](docs/device-beta-checklist.md)。[W40 历史验收记录](docs/milestone-26w40-progress.md) 和 [历史候选验收记录](docs/release-candidate-26w37a.md) 保留既有证据及当时的版本号；仓库元数据仅在新打包前分配更新，文档更新不会生成候选包或递增快照。
 

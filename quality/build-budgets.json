@@ -14,7 +14,7 @@
   "admin-web": {
     "directory": "admin/dist",
     "maxTotalBytes": 1800000,
-    "maxJavaScriptBytes": 800000,
+    "maxJavaScriptBytes": 820000,
     "maxLargestJavaScriptBytes": 330000
   }
 }

@@ -29,6 +29,7 @@ import { APP_RELEASE_LABEL } from "@/utils/appVersion";
 import { formatStorageBytes, getTotalClearableCacheSize, purgeClearableCache, purgeUserPrivateStorage } from "@/utils/userStorage";
 import { Image as ExpoImage } from "expo-image";
 import { useAppThemeColors } from "@/hooks/useAppThemeColors";
+import { clearInventorySnapshots } from "@/services/offlineInventory";
 import { clearApiCacheScope, getApiCacheDiagnostics } from "@/services/api/cache";
 import {
   applyVoicePreference,
@@ -47,7 +48,7 @@ import {
 
 export default function SettingsScreen() {
   const router = useSafeRouter();
-  const { user, token, isAuthenticated, logout, updateProfile, deleteAccount } = useAuth();
+  const { user, token, isAuthenticated, logout, updateProfile, deleteAccount, sessionGeneration, isSessionCurrent } = useAuth();
   const authFetch = useAuthFetch();
   const { preference: themePreference, setPreference: setThemePreference } = useThemePreference();
   const colors = useAppThemeColors();
@@ -103,9 +104,10 @@ export default function SettingsScreen() {
   // Modal State
   const [calorieModalOpen, setCalorieModalOpen] = useState(false);
   const [calorieTarget, setCalorieTarget] = useState(
-    user?.daily_calories_target?.toString() || "2100"
+    user?.daily_calories_target?.toString() || ""
   );
   const [updatingCal, setUpdatingCal] = useState(false);
+  const [loadingCalorie, setLoadingCalorie] = useState(false);
 
   // Logout confirmation modal
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
@@ -117,7 +119,7 @@ export default function SettingsScreen() {
   const [deleteReauthToken, setDeleteReauthToken] = useState<string | null>(null);
   const [deleteWithSms, setDeleteWithSms] = useState(false);
   const needsDeleteSms = user?.hasPassword === false || deleteWithSms;
-  useEffect(() => { setDeletePassword("");setDeleteReauthToken(null);setDeleteWithSms(false);setDeleteModalOpen(false); },[user?.id]);
+  useEffect(() => { setCalorieModalOpen(false);setCalorieTarget("");setDeletePassword("");setDeleteReauthToken(null);setDeleteWithSms(false);setDeleteModalOpen(false); },[user?.id]);
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [aiDataBusy, setAIDataBusy] = useState(false);
   const [voiceState, setVoiceState] = useState<VoicePackState | null>(null);
@@ -241,6 +243,19 @@ export default function SettingsScreen() {
     }
   };
 
+  const openCalorieTarget = async () => {
+    if (!token || !user || loadingCalorie) return;
+    setLoadingCalorie(true);
+    try {
+      const fresh = await authApi.me<{ daily_calories_target?: number | null }>(token);
+      if (!isSessionCurrent(user.id, sessionGeneration)) return;
+      setCalorieTarget(fresh.daily_calories_target?.toString() || "");
+      setCalorieModalOpen(true);
+    } catch {
+      Alert.alert("暂时无法读取热量目标", "请联网读取当前目标后再编辑，避免覆盖已有设置。");
+    } finally { setLoadingCalorie(false); }
+  };
+
   const handleSaveCalorie = async () => {
     const val = parseInt(calorieTarget);
     if (isNaN(val) || val < 1000 || val > 5000) {
@@ -266,6 +281,7 @@ export default function SettingsScreen() {
         purgeVoiceAudioCache(),
         clearApiCacheScope("public"),
         clearApiCacheScope(user?.id),
+        clearInventorySnapshots(user?.id),
         ExpoImage.clearDiskCache(),
         ExpoImage.clearMemoryCache(),
       ]);
@@ -600,10 +616,9 @@ export default function SettingsScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => {
-                setCalorieTarget(user?.daily_calories_target?.toString() || "2100");
-                setCalorieModalOpen(true);
-              }}
+              accessibilityLabel="编辑每日热量目标"
+              disabled={loadingCalorie || !isAuthenticated}
+              onPress={() => void openCalorieTarget()}
               className="p-4 flex-row items-center justify-between active:bg-canvas/60 transition-colors"
             >
               <View className="flex-row items-center gap-3.5">
@@ -619,7 +634,7 @@ export default function SettingsScreen() {
                 <View className="bg-brand/10 px-2.5 py-1 rounded-full flex-row items-center gap-1">
                   <FontAwesome6 name="bolt" size={10} colorClassName="accent-brand" />
                   <Text className="text-xs font-extrabold text-brand">
-                    {user?.daily_calories_target || 2100} kcal
+                    {loadingCalorie ? "读取中" : user?.daily_calories_target === undefined ? "联网后查看" : user.daily_calories_target == null ? "未设置" : `${user.daily_calories_target} kcal`}
                   </Text>
                 </View>
                 <FontAwesome6 name="chevron-right" size={12} colorClassName="accent-copy-muted" />

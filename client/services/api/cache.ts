@@ -2,8 +2,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import type { ApiError, ApiFetch } from "./client";
 
-export const API_CACHE_SCHEMA_VERSION = 2;
+export const API_CACHE_SCHEMA_VERSION = 3;
 export const API_CACHE_STORAGE_PREFIX = `offline_cache_query_v${API_CACHE_SCHEMA_VERSION}:`;
+const QUERY_CACHE_KEY = /^offline_cache_query_v\d+:/;
 const MAX_PERSISTED_BYTES = 5 * 1024 * 1024;
 
 type CacheScope = "public" | `user:${number}`;
@@ -88,39 +89,64 @@ export function apiCachePolicy(path: string): ApiCachePolicy | null {
   if (/^\/api\/v1\/community\/posts(?:\?|$)/.test(path)) return null;
   if (/^\/api\/v1\/households\/\d+\/(?:dining-(?:preferences|members)|meals|inventory)(?:\/|\?|$)/.test(path)) return null;
   if (/^\/api\/v1\/(?:auth|ai|notifications)(?:\/|\?|$)/.test(path)) return null;
+  if (path === "/api/v1/shopping-list" || path === "/api/v1/kitchenware" || path === "/api/v1/kitchenware/catalog") return { ttlMs: 2 * 60_000, maxStaleMs: 86_400_000, persistent: true };
   if (/^\/api\/v1\/recipes\/\d+(?:\?|$)/.test(path)) return { ttlMs: 30 * 60_000, maxStaleMs: 7 * 86_400_000, persistent: true };
-  if (/^\/api\/v1\/(?:recipes|community)(?:\/|\?|$)/.test(path)) return { ttlMs: 10 * 60_000, maxStaleMs: 24 * 60 * 60_000, persistent: true };
-  if (/^\/api\/v1\/(?:inventory|diet-records|health-data)(?:\/|\?|$)/.test(path)) return { ttlMs: 60_000, maxStaleMs: 7 * 86_400_000, persistent: true };
+  if (/^\/api\/v1\/recipes(?:\?|$)/.test(path)) return { ttlMs: 10 * 60_000, maxStaleMs: 86_400_000, persistent: true };
+  if (/^\/api\/v1\/(?:recipes|community)(?:\/|\?|$)/.test(path)) return { ttlMs: 10 * 60_000, maxStaleMs: 24 * 60 * 60_000, persistent: false };
+  if (/^\/api\/v1\/(?:inventory|diet-records|health-data)(?:\/|\?|$)/.test(path)) return { ttlMs: 60_000, maxStaleMs: 7 * 86_400_000, persistent: false };
   if (/^\/api\/v1\/(?:kitchenware|shopping-list|cooking-queue|meal-plans|households|insights)(?:\/|\?|$)/.test(path)) {
-    return { ttlMs: 2 * 60_000, maxStaleMs: 24 * 60 * 60_000, persistent: true };
+    return { ttlMs: 2 * 60_000, maxStaleMs: 24 * 60 * 60_000, persistent: false };
   }
   return null;
 }
 
+/** Disk storage is opt-in by both endpoint and audience, even for caller-supplied policies. */
+function persistencePolicy(path: string, scope: CacheScope) {
+  const policy = apiCachePolicy(path);
+  if (!policy?.persistent) return null;
+  if (path.startsWith("/api/v1/recipes")) return scope === "public" ? policy : null;
+  if (path === "/api/v1/kitchenware/catalog") return policy;
+  return scope === "public" ? null : policy;
+}
+
 function isUsable(entry: CacheEntry, now: number) {
-  return entry.schemaVersion === API_CACHE_SCHEMA_VERSION && now <= entry.maxStaleAt;
+  return entry.schemaVersion === API_CACHE_SCHEMA_VERSION
+    && Number.isFinite(entry.fetchedAt) && entry.fetchedAt <= now
+    && Number.isFinite(entry.maxStaleAt) && now < entry.maxStaleAt;
+}
+
+function validPersistentEntry(raw: string, key: string, now: number): CacheEntry | null {
+  try {
+    const entry = JSON.parse(raw) as CacheEntry;
+    if (!entry || typeof entry.path !== "string" || typeof entry.scope !== "string"
+      || !/^(?:public|user:[1-9]\d*)$/.test(entry.scope)) return null;
+    const policy = persistencePolicy(entry.path, entry.scope);
+    if (!policy || !isUsable(entry, now) || entry.maxStaleAt > entry.fetchedAt + policy.maxStaleMs
+      || !Number.isFinite(entry.expiresAt) || entry.expiresAt > entry.maxStaleAt
+      || entry.logicalKey !== logicalKey(entry.scope, entry.path)
+      || key !== storageKey(entry.logicalKey, entry.scope)) return null;
+    return entry;
+  } catch { return null; }
 }
 
 async function readPersistent<T>(key: string, scope: CacheScope) {
   const epoch = scopeEpochs.get(scope) || 0;
   scopeEpochs.set(scope, epoch);
   await maintenance;
-  const raw = await AsyncStorage.getItem(storageKey(key, scope));
-  if ((scopeEpochs.get(scope) || 0) !== epoch) return null;
-  if (!raw) return null;
-  try {
-    const entry = JSON.parse(raw) as CacheEntry<T>;
-    if (entry.schemaVersion !== API_CACHE_SCHEMA_VERSION || entry.logicalKey !== key || entry.scope !== scope) {
-      await AsyncStorage.removeItem(storageKey(key, scope));
-      return null;
-    }
-    entry.lastAccessAt = Date.now();
-    memory.set(key, entry);
-    return entry;
-  } catch {
-    await AsyncStorage.removeItem(storageKey(key, scope));
+  const diskKey = storageKey(key, scope);
+  const raw = await AsyncStorage.getItem(diskKey);
+  if ((scopeEpochs.get(scope) || 0) !== epoch || !raw) return null;
+  const entry = validPersistentEntry(raw, diskKey, Date.now()) as CacheEntry<T> | null;
+  if (!entry || entry.logicalKey !== key || entry.scope !== scope) {
+    // Serialize removal with writers and avoid deleting a newer replacement.
+    await enqueueMaintenance(async () => {
+      if (await AsyncStorage.getItem(diskKey) === raw) await AsyncStorage.removeItem(diskKey);
+    });
     return null;
   }
+  entry.lastAccessAt = Date.now();
+  memory.set(key, entry);
+  return entry;
 }
 
 function enqueueMaintenance(task: () => Promise<void>) {
@@ -129,33 +155,41 @@ function enqueueMaintenance(task: () => Promise<void>) {
   return result;
 }
 
+/** Startup, foreground and active-app maintenance; no cache read is needed to expire disk rows. */
+export function maintainApiCache() {
+  return enqueueMaintenance(sweepPersistentEntries);
+}
+
+async function sweepPersistentEntries() {
+  const now = Date.now();
+  for (const [key, entry] of memory) if (!isUsable(entry, now)) memory.delete(key);
+  const keys = (await AsyncStorage.getAllKeys()).filter((key) => QUERY_CACHE_KEY.test(key));
+  const rows: Array<{ key: string; bytes: number; lastAccessAt: number; logicalKey: string }> = [];
+  const removals: string[] = [];
+  for (const [key, raw] of await AsyncStorage.multiGet(keys)) {
+    const entry = raw && key.startsWith(API_CACHE_STORAGE_PREFIX) ? validPersistentEntry(raw, key, now) : null;
+    if (!entry || !raw) { removals.push(key); continue; }
+    rows.push({ key, bytes: (key.length + raw.length) * 2, lastAccessAt: entry.lastAccessAt || entry.fetchedAt, logicalKey: entry.logicalKey });
+  }
+  let total = rows.reduce((sum, row) => sum + row.bytes, 0);
+  for (const row of rows.sort((a, b) => a.lastAccessAt - b.lastAccessAt)) {
+    if (total <= MAX_PERSISTED_BYTES) break;
+    total -= row.bytes;
+    removals.push(row.key);
+    memory.delete(row.logicalKey);
+    metrics.evictions += 1;
+  }
+  if (removals.length) await AsyncStorage.multiRemove(removals);
+  metrics.bytes = total;
+}
+
 function persistEntry(entry: CacheEntry) {
   const epoch = scopeEpochs.get(entry.scope) || 0;
-  // Pending snapshots must not recreate entries after a mutation or logout.
   void enqueueMaintenance(async () => {
-    if ((scopeEpochs.get(entry.scope) || 0) !== epoch) return;
+    if ((scopeEpochs.get(entry.scope) || 0) !== epoch || !persistencePolicy(entry.path, entry.scope)
+      || !isUsable(entry, Date.now())) return;
     await AsyncStorage.setItem(storageKey(entry.logicalKey, entry.scope), JSON.stringify(entry));
-    const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(API_CACHE_STORAGE_PREFIX));
-    const rows = (await AsyncStorage.multiGet(keys)).flatMap(([key, raw]) => {
-      if (!raw) return [];
-      try {
-        const value = JSON.parse(raw) as CacheEntry;
-        return [{ key, bytes: (key.length + raw.length) * 2, lastAccessAt: value.lastAccessAt || value.fetchedAt || 0, logicalKey: value.logicalKey }];
-      } catch {
-        return [{ key, bytes: (key.length + raw.length) * 2, lastAccessAt: 0, logicalKey: "" }];
-      }
-    });
-    let total = rows.reduce((sum, row) => sum + row.bytes, 0);
-    const evicted: string[] = [];
-    for (const row of rows.sort((a, b) => a.lastAccessAt - b.lastAccessAt)) {
-      if (total <= MAX_PERSISTED_BYTES) break;
-      total -= row.bytes;
-      evicted.push(row.key);
-      if (row.logicalKey) memory.delete(row.logicalKey);
-      metrics.evictions += 1;
-    }
-    if (evicted.length) await AsyncStorage.multiRemove(evicted);
-    metrics.bytes = total;
+    await sweepPersistentEntries();
   }).catch(() => undefined);
 }
 
@@ -174,24 +208,31 @@ function store<T>(key: string, path: string, scope: CacheScope, policy: ApiCache
     byteSize: JSON.stringify(data).length * 2,
   };
   memory.set(key, entry);
-  if (policy.persistent) persistEntry(entry);
+  if (policy.persistent && persistencePolicy(path, scope)) persistEntry(entry);
   return data;
 }
 
-async function refresh<T>(key: string, path: string, scope: CacheScope, policy: ApiCachePolicy, entry: CacheEntry<T> | null, loader: (etag?: string | null) => Promise<LoaderResult<T>>) {
+async function refresh<T>(key: string, path: string, scope: CacheScope, policy: ApiCachePolicy, entry: CacheEntry<T> | null, loader: (etag?: string | null) => Promise<LoaderResult<T>>, startedEpoch: number) {
   const existing = inFlight.get(key);
-  const startedEpoch = scopeEpochs.get(scope) || 0;
   if (existing?.epoch === startedEpoch) {
     metrics.coalescedRequests += 1;
     return existing.promise as Promise<T>;
   }
-  scopeEpochs.set(scope, startedEpoch);
   const request = (async () => {
     metrics.networkRequests += 1;
     try {
       const result = await loader(entry?.etag);
       const wasInvalidated = (scopeEpochs.get(scope) || 0) !== startedEpoch;
-      if (result.notModified && entry) return wasInvalidated ? entry.data : store(key, path, scope, policy, entry.data, entry.etag);
+      if (result.notModified) {
+        if (!entry || !isUsable(entry, Date.now())) throw new Error("Cached response expired during revalidation");
+        if (!wasInvalidated) {
+          // A 304 renews freshness, never the absolute lifetime of the retained body.
+          const renewed = { ...entry, expiresAt: Math.min(Date.now() + policy.ttlMs, entry.maxStaleAt) };
+          memory.set(key, renewed);
+          if (policy.persistent && persistencePolicy(path, scope)) persistEntry(renewed);
+        }
+        return entry.data;
+      }
       return wasInvalidated ? result.data as T : store(key, path, scope, policy, result.data as T, result.etag);
     } catch (error) {
       const status = (error as ApiError)?.status;
@@ -199,7 +240,7 @@ async function refresh<T>(key: string, path: string, scope: CacheScope, policy: 
       throw error;
     }
   })();
-  inFlight.set(key, { epoch: startedEpoch, promise: request });
+  if ((scopeEpochs.get(scope) || 0) === startedEpoch) inFlight.set(key, { epoch: startedEpoch, promise: request });
   void request.finally(() => {
     if (inFlight.get(key)?.promise === request) inFlight.delete(key);
   }).catch(() => undefined);
@@ -209,11 +250,14 @@ async function refresh<T>(key: string, path: string, scope: CacheScope, policy: 
 export async function cachedApiGet<T>(apiFetch: ApiFetch, path: string, policy: ApiCachePolicy, loader: (etag?: string | null) => Promise<LoaderResult<T>>) {
   const scope = getApiFetchScope(apiFetch);
   const key = logicalKey(scope, path);
-  const now = Date.now();
+  const startedEpoch = scopeEpochs.get(scope) || 0;
+  scopeEpochs.set(scope, startedEpoch);
+  let now = Date.now();
   let entry = memory.get(key) as CacheEntry<T> | undefined;
   if (entry && isUsable(entry, now)) metrics.memoryHits += 1;
-  if (!entry && policy.persistent) {
+  if (!entry && policy.persistent && persistencePolicy(path, scope)) {
     entry = await readPersistent<T>(key, scope) || undefined;
+    now = Date.now();
     if (entry && isUsable(entry, now)) metrics.persistentHits += 1;
   }
   if (entry && isUsable(entry, now)) {
@@ -221,11 +265,13 @@ export async function cachedApiGet<T>(apiFetch: ApiFetch, path: string, policy: 
     if (now <= entry.expiresAt) return entry.data;
     metrics.staleFallbacks += 1;
     metrics.revalidations += 1;
-    void refresh(key, path, scope, policy, entry, loader).catch(() => undefined);
+    void refresh(key, path, scope, policy, entry, loader, startedEpoch).catch(() => undefined);
     return entry.data;
   }
   metrics.misses += 1;
-  return refresh(key, path, scope, policy, entry || null, loader);
+  memory.delete(key);
+  // Expired bodies/ETags must not be revived by a 304 response.
+  return refresh(key, path, scope, policy, null, loader, startedEpoch);
 }
 
 function invalidationPrefixes(path: string) {
@@ -264,7 +310,7 @@ export async function invalidateApiCacheForMutation(apiFetch: ApiFetch, path: st
   const logicalKeys = [...memory.entries()].filter(([, entry]) => entry.scope === scope && prefixes.some((prefix) => entry.path.startsWith(prefix))).map(([key]) => key);
   logicalKeys.forEach((key) => memory.delete(key));
   await enqueueMaintenance(async () => {
-    const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(API_CACHE_STORAGE_PREFIX));
+    const keys = (await AsyncStorage.getAllKeys()).filter((key) => QUERY_CACHE_KEY.test(key));
     const rows = await AsyncStorage.multiGet(keys);
     const removals = rows.flatMap(([key, raw]) => {
       try {
@@ -284,7 +330,7 @@ export async function clearApiCacheScope(scopeOrUserId?: CacheScope | number | n
   else for (const knownScope of new Set([...scopeEpochs.keys(), ...[...memory.values()].map((entry) => entry.scope)])) scopeEpochs.set(knownScope, (scopeEpochs.get(knownScope) || 0) + 1);
   for (const [key, entry] of memory) if (!scope || entry.scope === scope) memory.delete(key);
   await enqueueMaintenance(async () => {
-    const keys = (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(API_CACHE_STORAGE_PREFIX));
+    const keys = (await AsyncStorage.getAllKeys()).filter((key) => QUERY_CACHE_KEY.test(key));
     if (!scope) {
       if (keys.length) await AsyncStorage.multiRemove(keys);
       metrics.bytes = 0;

@@ -1,11 +1,11 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState, type SetStateAction } from "react";
 
 import { inventoryApi, kitchenwareApi, recipesApi } from "@/services/api";
 import type { ApiFetch } from "@/services/api/client";
 import { appendUniqueItemsByKey } from "@/utils/pagination";
-import { getUserStorageKey } from "@/utils/userStorage";
+import { ApiError } from "@/services/api/client";
+import { beginInventorySnapshot, readInventorySnapshot, saveInventorySnapshot } from "@/services/offlineInventory";
 import { inventoryQueryKeys } from "./queryKeys";
 import type { InventoryItem, KitchenwareCatalogItem, KitchenwareItem, Recipe } from "./types";
 
@@ -13,8 +13,6 @@ type InventorySection = "inventory" | "recipes" | "kitchenware";
 type CachedResult<T> = { value: T; offlineMessage?: string };
 type RecipePage = { items: Recipe[]; total?: number; nextCursor: string | null; offlineMessage?: string };
 
-const OFFLINE_RECIPES_CACHE_KEY = "offline_cache_recipes";
-const OFFLINE_INVENTORY_CACHE_KEY = "offline_cache_inventory";
 const RECIPE_PAGE_SIZE = 24;
 
 export interface RecipeCatalogQuery {
@@ -31,10 +29,6 @@ function normalizeRecipeQuery(query: RecipeCatalogQuery): RecipeCatalogQuery {
     maxCookTime: query.maxCookTime && query.maxCookTime > 0 ? query.maxCookTime : undefined,
     scope: query.scope,
   };
-}
-
-function isDefaultRecipeQuery(query: RecipeCatalogQuery) {
-  return !query.category && !query.search && !query.maxCookTime && query.scope !== "personal";
 }
 
 export function buildRecipePageQuery(query: RecipeCatalogQuery, cursor?: string | null) {
@@ -56,7 +50,6 @@ function sameRecipeQuery(left: RecipeCatalogQuery, right: RecipeCatalogQuery) {
 
 export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, userId?: number | null) {
   const queryClient = useQueryClient();
-  const inventoryCacheKey = getUserStorageKey(OFFLINE_INVENTORY_CACHE_KEY, userId);
   const personalInventoryKey = useMemo(() => inventoryQueryKeys.personal(userId), [userId]);
   const [recipeQuery, setRecipeQuery] = useState<RecipeCatalogQuery>({});
 
@@ -66,16 +59,18 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
     queryKey: personalInventoryKey,
     enabled: isAuthenticated,
     queryFn: async (): Promise<CachedResult<InventoryItem[]>> => {
+      const ticket = beginInventorySnapshot(userId);
       try {
         const value = await inventoryApi.list(authFetch, true);
-        if (inventoryCacheKey) void AsyncStorage.setItem(inventoryCacheKey, JSON.stringify(value));
+        // A storage failure must not replace a successful network result.
+        await saveInventorySnapshot(ticket, value).catch(() => undefined);
         return { value };
       } catch (error) {
-        const cached = inventoryCacheKey ? await AsyncStorage.getItem(inventoryCacheKey) : null;
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) throw error;
+        const cached = await readInventorySnapshot(ticket).catch(() => null);
         if (!cached) throw error;
-        const parsed: unknown = JSON.parse(cached);
         return {
-          value: Array.isArray(parsed) ? parsed as InventoryItem[] : [],
+          value: cached,
           offlineMessage: "离线模式 · 已载入本地食材快照",
         };
       }
@@ -88,24 +83,11 @@ export function useInventoryData(authFetch: ApiFetch, isAuthenticated: boolean, 
     queryKey: inventoryQueryKeys.recipeCatalog(isAuthenticated ? userId : null, recipeQuery),
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }): Promise<RecipePage> => {
-      try {
-        const page = await recipesApi.listPage<Recipe>(
-          buildRecipePageQuery(recipeQuery, pageParam),
-          isAuthenticated ? authFetch : undefined,
-        );
-        const items = Array.isArray(page.items) ? page.items : [];
-        if (!pageParam && isDefaultRecipeQuery(recipeQuery)) {
-          void AsyncStorage.setItem(OFFLINE_RECIPES_CACHE_KEY, JSON.stringify(items));
-        }
-        return { ...page, items };
-      } catch (error) {
-        if (pageParam || !isDefaultRecipeQuery(recipeQuery)) throw error;
-        const cached = await AsyncStorage.getItem(OFFLINE_RECIPES_CACHE_KEY);
-        if (!cached) throw error;
-        const parsed: unknown = JSON.parse(cached);
-        const items = Array.isArray(parsed) ? parsed as Recipe[] : [];
-        return { items, total: items.length, nextCursor: null, offlineMessage: "离线模式 · 已载入本地历史食谱缓存" };
-      }
+      const page = await recipesApi.listPage<Recipe>(
+        buildRecipePageQuery(recipeQuery, pageParam),
+        isAuthenticated ? authFetch : undefined,
+      );
+      return { ...page, items: Array.isArray(page.items) ? page.items : [] };
     },
     getNextPageParam: (page) => page.nextCursor || undefined,
   });

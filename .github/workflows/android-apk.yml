@@ -203,6 +203,30 @@ jobs:
           cd artifact
           sha256sum *.apk > SHA256SUMS.txt
 
+      - name: Gate final signed APK security before distribution
+        working-directory: client/artifact
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS_DIR="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          APKANALYZER="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          EXPECTED_CERT_SHA256="7473251630e89fbad819b5193c07b857b3ac5b64244551c1bbad55460fbe9cd2"
+          if [ "$EAS_BUILD_PROFILE" = "preview" ]; then
+            EXPECTED_CERT_SHA256="$EXPECTED_PREVIEW_CERT_SHA256"
+          fi
+          APK_PATH="DietDigiDose-${PRODUCT_VERSION}-${RELEASE_SNAPSHOT}-build${EXPO_PUBLIC_ANDROID_VERSION_CODE}-${EAS_BUILD_PROFILE}-${{ github.sha }}.apk"
+          python3 ../../scripts/check-apk-security.py \
+            --apk "$APK_PATH" \
+            --report apk-security-report.json \
+            --source-sha "$SIGNED_SOURCE_SHA" \
+            --application-id "$EXPECTED_ANDROID_PACKAGE" \
+            --version-code "$EXPO_PUBLIC_ANDROID_VERSION_CODE" \
+            --version-name "$PRODUCT_VERSION" \
+            --certificate-sha256 "$EXPECTED_CERT_SHA256" \
+            --apkanalyzer "$APKANALYZER" \
+            --aapt2 "$BUILD_TOOLS_DIR/aapt2" \
+            --apksigner "$BUILD_TOOLS_DIR/apksigner"
+          sha256sum --check SHA256SUMS.txt
+
       - name: Upload APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

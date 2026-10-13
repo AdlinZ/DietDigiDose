@@ -93,6 +93,7 @@ module.exports = ({ config }) => ({
     favicon: './assets/images/favicon.png',
   },
   plugins: [
+    ['./plugins/withAndroidArtifactSecurity', { allowInsecureHttp }],
     ['./plugins/withApkUpdates', {
       channel: channelForProfile(easBuildProfile),
       origins: parseDownloadOrigins(process.env.EXPO_PUBLIC_APK_DOWNLOAD_ORIGINS),

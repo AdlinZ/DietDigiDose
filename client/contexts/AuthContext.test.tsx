@@ -1,5 +1,6 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
+import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { authApi } from "@/services/api";
 import { AUTH_USER_KEY, getStoredToken } from "@/utils/authStorage";
@@ -13,6 +14,7 @@ jest.mock("@/services/api", () => ({
 }));
 jest.mock("@/services/api/cache", () => ({
   clearApiCacheScope: jest.fn().mockResolvedValue(undefined), registerApiFetchScope: jest.fn(),
+  maintainApiCache: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock("@/utils/authStorage", () => ({
   AUTH_USER_KEY: "@auth_user", getStoredToken: jest.fn(),
@@ -51,6 +53,7 @@ async function loginAsB() {
 
 beforeEach(async () => {
   jest.clearAllMocks();
+  jest.spyOn(AppState, "addEventListener").mockReturnValue({ remove: jest.fn() });
   await AsyncStorage.clear();
   jest.mocked(getStoredToken).mockResolvedValue(null);
 });
@@ -81,7 +84,7 @@ it.each(["profile", "refresh"])("ignores a delayed %s response from the previous
   await act(async () => { resolveResponse({ ...userA, username: "A updated" }); await pending; });
   expect(auth.token).toBe("token-B");
   expect(auth.user).toEqual(userB);
-  expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual(userB);
+  expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual({ id: userB.id, username: userB.username });
 });
 
 it("ignores delayed startup verification after the session changes", async () => {
@@ -96,7 +99,7 @@ it("ignores delayed startup verification after the session changes", async () =>
   await act(async () => { resolveResponse({ ...userA, username: "A refreshed" }); });
   expect(auth.token).toBe("token-B");
   expect(auth.user).toEqual(userB);
-  expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual(userB);
+  expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual({ id: userB.id, username: userB.username });
 });
 
 it("checks the live login generation after screen teardown, account changes and provider teardown", async () => {
@@ -116,4 +119,73 @@ it("checks the live login generation after screen teardown, account changes and 
   expect(check(userB.id, secondGeneration)).toBe(true);
   act(() => tree.unmount());
   expect(check(userB.id, secondGeneration)).toBe(false);
+});
+
+
+it("migrates the legacy profile before an offline session is exposed", async () => {
+  const profile = { ...userA, bio: "private bio", email: "private@example.test", phone: "123", daily_calories_target: 1800, avatar_url: "data:image/private" };
+  await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(profile));
+  jest.mocked(getStoredToken).mockResolvedValue("token-A");
+  jest.mocked(authApi.me).mockRejectedValue(new Error("offline"));
+  await mount();
+  expect(auth.isAuthenticated).toBe(true);
+  expect(auth.user).toEqual(userA);
+  expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual({ id: 1, username: "A" });
+});
+
+it("refreshes the full profile online without persisting it", async () => {
+  const profile = { ...userA, bio: "private bio", daily_calories_target: 1800 };
+  await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify({ id: 1, username: "A" }));
+  jest.mocked(getStoredToken).mockResolvedValue("token-A");
+  jest.mocked(authApi.me).mockResolvedValue(profile);
+  await mount();
+  expect(auth.user).toEqual(profile);
+  expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual({ id: 1, username: "A" });
+});
+
+it("removes an orphaned legacy profile when there is no saved session", async () => {
+  await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify({ ...userA, bio: "private bio" }));
+  await mount();
+  expect(await AsyncStorage.getItem(AUTH_USER_KEY)).toBeNull();
+});
+
+it("does not let delayed startup identity migration overwrite a newer login", async () => {
+  let finish!: (value: string | null) => void;
+  jest.mocked(getStoredToken).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  await mount();
+  await loginAsB();
+  await act(async () => { finish(null); });
+  expect(auth.user).toEqual(userB);
+  expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual({ id: 2, username: "B" });
+});
+
+
+it("refreshes omitted profile fields when an offline session returns to foreground", async () => {
+  let notify!: (state: "active") => void;
+  const listener = jest.spyOn(AppState, "addEventListener").mockImplementation((_event, handler) => {
+    notify = handler;
+    return { remove: jest.fn() };
+  });
+  try {
+    await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify({ id: 1, username: "A" }));
+    jest.mocked(getStoredToken).mockResolvedValue("token-A");
+    jest.mocked(authApi.me).mockRejectedValueOnce(new Error("offline"));
+    await mount();
+    expect(auth.user).toEqual(userA);
+    const profile = { ...userA, bio: "online profile", daily_calories_target: 1800 };
+    jest.mocked(authApi.me).mockResolvedValue(profile);
+    await act(async () => { notify("active"); });
+    expect(auth.user).toEqual(profile);
+    expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual({ id: 1, username: "A" });
+  } finally { listener.mockRestore(); }
+});
+
+
+it("keeps SMS-only recovery/deletion metadata after offline restore without retaining contact or health fields", async () => {
+  await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify({ ...userA, hasPassword: false, phone_verified_at: "2026-09-20", phone: "+861234", daily_calories_target: 1600 }));
+  jest.mocked(getStoredToken).mockResolvedValue("token-A");
+  jest.mocked(authApi.me).mockRejectedValue(new Error("offline"));
+  await mount();
+  expect(auth.user).toEqual({ ...userA, hasPassword: false, phone_verified_at: "2026-09-20" });
+  expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual({ id: 1, username: "A", hasPassword: false, phone_verified_at: "2026-09-20" });
 });

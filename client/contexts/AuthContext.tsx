@@ -1,8 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, Platform } from 'react-native';
 import { activatePrivateStorage, invalidatePrivateStorage, purgeLegacyUnscopedPrivateStorage, purgeUserPrivateStorage } from '@/utils/userStorage';
 import { ApiError, authApi } from '@/services/api';
-import { clearApiCacheScope, registerApiFetchScope } from '@/services/api/cache';
+import { clearApiCacheScope, maintainApiCache, registerApiFetchScope } from '@/services/api/cache';
+import { clearInventorySnapshots, maintainInventorySnapshots } from '@/services/offlineInventory';
+import { restoredAuthIdentity, storedAuthIdentity } from '@/utils/authIdentity';
 import { AUTH_USER_KEY, getStoredToken, removeStoredToken, setStoredToken } from '@/utils/authStorage';
 import { AuthSessionCoordinator } from '@/utils/authSessionCoordinator';
 import { cancelAllLocalNotificationsForUser, cancelLegacyUnscopedLocalNotifications } from '@/utils/notifications';
@@ -80,13 +83,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         previousUser = null;
       }
       await stopVoiceOutput().catch(() => undefined);
-      if (previousUser?.id && previousUser.id !== data.user.id) {
+      if (previousUser?.id) {
         invalidatePrivateStorage(previousUser.id);
+        await clearApiCacheScope(previousUser.id).catch(() => undefined);
+        await clearInventorySnapshots(previousUser.id).catch(() => undefined);
+      }
+      if (previousUser?.id && previousUser.id !== data.user.id) {
         await purgeVoiceAudioCacheForUser(previousUser.id).catch(() => undefined);
         await purgeUserPrivateStorage(previousUser.id).catch(() => undefined);
       }
       await setStoredToken(data.token);
-      await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+      await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(storedAuthIdentity(data.user)));
       activatePrivateStorage(data.user.id);
       setToken(data.token);
       setUser(data.user);
@@ -108,6 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await purgeVoiceAudioCacheForUser(userId).catch(() => undefined);
       await cancelAllLocalNotificationsForUser(userId).catch(() => undefined);
       await clearApiCacheScope(userId).catch(() => undefined);
+      await clearInventorySnapshots(userId).catch(() => undefined);
       await purgeUserPrivateStorage(userId).catch(() => undefined);
       await Promise.all([removeStoredToken(), AsyncStorage.removeItem(AUTH_USER_KEY)]);
       setToken(null);
@@ -119,33 +127,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    // Load saved auth state with offline resilience
+    // Load saved auth state with offline resilience. A newer login wins over startup.
+    const startupGeneration = sessionCoordinator.current.currentGeneration();
     (async () => {
       try {
+        await Promise.all([maintainApiCache(), maintainInventorySnapshots()]);
         await cancelLegacyUnscopedLocalNotifications();
         await purgeLegacyUnscopedPrivateStorage();
         const savedToken = await getStoredToken();
         const savedUser = await AsyncStorage.getItem(AUTH_USER_KEY);
+        if (!savedToken && savedUser) {
+          await sessionCoordinator.current.updateIfCurrent(startupGeneration, () => AsyncStorage.removeItem(AUTH_USER_KEY));
+        }
         if (savedToken && savedUser) {
           let cachedUser: User;
           try {
-            cachedUser = JSON.parse(savedUser) as User;
+            cachedUser = restoredAuthIdentity(JSON.parse(savedUser));
           } catch {
-            await clearAuthState(sessionCoordinator.current.currentGeneration());
+            await clearAuthState(startupGeneration);
             return;
           }
-          const restoredGeneration = await sessionCoordinator.current.authenticate(async () => {
+          const restoredGeneration = startupGeneration;
+          const restored = await sessionCoordinator.current.updateIfCurrent(restoredGeneration, async () => {
+            // Rewrite legacy full profiles before exposing an offline session.
+            await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(storedAuthIdentity(cachedUser)));
             activatePrivateStorage(cachedUser.id);
             setToken(savedToken);
             setUser(cachedUser);
           });
+          if (!restored) return;
           setSessionGeneration(restoredGeneration);
 
           // Verify token asynchronously with backend
           try {
             const freshUser = await authApi.me<User>(savedToken);
             await sessionCoordinator.current.updateIfCurrent(restoredGeneration, async () => {
-              await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(freshUser));
+              await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(storedAuthIdentity(freshUser)));
               setUser(freshUser);
             });
           } catch (error) {
@@ -160,7 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
       } catch (e) {
-        await clearAuthState(sessionCoordinator.current.currentGeneration());
+        await clearAuthState(startupGeneration);
       } finally {
         setIsLoading(false);
       }
@@ -251,7 +268,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const updatedUser = { ...user, ...data } as User;
       const applied = await sessionCoordinator.current.updateIfCurrent(sessionGeneration, async () => {
-        await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(updatedUser));
+        await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(storedAuthIdentity(updatedUser)));
         setUser(updatedUser);
       });
       if (!applied) return { success: false, error: '登录账号已变化，请重新打开资料页面' };
@@ -270,7 +287,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const data = await authApi.me<User>(token);
       await sessionCoordinator.current.updateIfCurrent(sessionGeneration, async () => {
-        await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(data));
+        await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(storedAuthIdentity(data)));
         setUser(data);
       });
     } catch (e) {
@@ -280,6 +297,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Ignore
     }
   }, [token, logout, sessionGeneration]);
+
+  useEffect(() => {
+    if (!token) return;
+    const refresh = () => { void refreshUser(); };
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') refresh(); });
+    const onVisibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    if (Platform.OS === 'web' && typeof window !== 'undefined') window.addEventListener('online', refresh);
+    if (Platform.OS === 'web' && typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      subscription.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') window.removeEventListener('online', refresh);
+      if (Platform.OS === 'web' && typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [refreshUser, token]);
 
   const deleteAccount = useCallback(async (proof: string | AccountDeletionProof) => {
     if (!token || !user) return { success: false, error: '请先登录' };

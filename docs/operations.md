@@ -152,7 +152,15 @@ pnpm -w audit:prod
 
 ## 监控与事件处置
 
-服务端日志为单行 JSON，使用 requestId 串联请求与错误。配置 `ERROR_MONITOR_WEBHOOK_URL` 后，未捕获服务端错误会以 3 秒超时投递到监控端。AI 调用可记录模型、Token、耗时、估算费用和失败原因，但不得记录 API 密钥或完整敏感上下文。AI 单价通过 `AI_INPUT_COST_PER_MILLION_USD` 和 `AI_OUTPUT_COST_PER_MILLION_USD` 配置。
+服务端日志为单行 JSON，使用服务端生成的 UUID `requestId` 串联响应头、错误响应、请求日志与错误事件；客户端传入的 `X-Request-Id` 不被复用。排查时请使用响应头 `X-Request-Id`。
+
+通用 HTTP 异常事件 `api.unhandled_error` 只含时间、级别、事件名、服务端 requestId、固定方法名、代码声明的 router 挂载模板、Express 声明的路由模板、`INTERNAL_ERROR`、白名单诊断码与 `reportingLocations`。`router` 是应用注册路由时显式传入的挂载模板（例如 `/api/v1/inventory`），不从请求推导，保证不同子系统的 `/` 可区分；未标记的顶层路由使用 `[root]`。`route` 为当前 router 内的模板（例如 `/records/:id`），不拼接可能带实参的挂载路径；尚未匹配路由或非字符串模板时为 `[unmatched]`。`http.request` 同样使用 `route` 替代原来的原始 `path` 字段，日志查询需相应更新。
+
+不读取或发送未知异常的 message、stack、cause、嵌套对象，也不包含请求 URL、查询、正文或认证头。未知诊断码为 `UNHANDLED_EXCEPTION`，不是依靠字符串正则脱敏。`reportingLocations` 是运行时新采集的**报告边界**代码位置，仅含项目相对文件、行列号，不是原始抛错堆栈；这是为避免伪造堆栈文本夹带隐私而保留的明确诊断限制。
+
+配置 `ERROR_MONITOR_WEBHOOK_URL` 后，控制台与监控端复用同一条序列化事件，以 3 秒超时投递且不跟随重定向。网络错误、超时、非成功状态只记录关联 requestId 与固定 `ERROR_MONITOR_DELIVERY_FAILED`，不读取或记录远端正文、状态文本、URL 或错误对象。未配置时仅写控制台。
+
+此边界针对通用 HTTP 异常与请求关联信息，不代表业务专用日志、worker 或 AI 持久化诊断已完成全面审计。AI 调用可记录模型、Token 用量、耗时、估算费用和失败原因，但不得记录 API 密钥或完整敏感上下文。既有 AI 管理端诊断见 #21；AI 单价通过 `AI_INPUT_COST_PER_MILLION_USD` 和 `AI_OUTPUT_COST_PER_MILLION_USD` 配置。
 
 注册、登录、库存录入和完成烹饪会写入仅含 HMAC 匿名标识与事件名的漏斗事件，不附带登录标识、IP、食材、健康数据或 AI 文本。管理员可通过 `GET /api/v1/admin/funnel?days=30` 查看 1～90 天的聚合事件数与匿名用户数。
 

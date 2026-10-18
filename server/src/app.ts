@@ -1,11 +1,11 @@
-import express from "express";
+import express, { type RequestHandler } from "express";
 import cors from "cors";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CommunityError } from "./modules/community/errors.js";
 import { initializeApplicationRuntime } from "./composition/runtime.js";
 import { errorHandler, notFoundHandler, sendError } from "./utils/http.js";
-import { requestContext } from "./middleware/requestContext.js";
+import { requestContext, routerContext } from "./middleware/requestContext.js";
 import { errorEnvelope } from "./middleware/errorEnvelope.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { SERVER_BUILD_TIME, SERVER_VERSION } from "./version.js";
@@ -85,33 +85,36 @@ export async function createApp() {
     conversationRetentionDays: Math.max(1, Number(process.env.AI_CONVERSATION_RETENTION_DAYS) || 90),
     supportContact: process.env.PRIVACY_SUPPORT_CONTACT?.trim() || "应用商店开发者联系方式",
   }));
-  app.use("/api/v1/site-settings", createSiteSettingsRouter());
-  app.use("/api/v1/app-updates", createAppUpdatesRouter());
-  app.use("/api/v1/auth", routes.auth);
-  app.use("/api/v1/webhooks", routes.webhooks);
-  app.use("/api/v1/inventory", routes.inventory);
-  app.use("/api/v1/diet-records", routes.dietRecords);
-  app.use("/api/v1/health-data", routes.healthData);
-  app.use("/api/v1/onboarding", routes.onboarding);
-  app.use("/api/v1/recipes", routes.recipes);
-  app.use("/api/v1/foods", routes.foods);
-  app.use("/api/v1/community", routes.community);
-  app.use("/api/v1/admin", routes.admin);
-  app.use("/api/v1/ai/realtime-voice", routes.realtimeVoice);
-  app.use("/api/v1/ai/voice-packs", routes.voicePacks);
-  app.use("/api/v1/ai", routes.ai);
-  app.use("/api/v1/ai", routes.agentRuns);
-  app.use("/api/v1/shopping-list", routes.shopping);
-  app.use("/api/v1/cooking-queue", routes.cookingQueue);
-  app.use("/api/v1/meal-plans", routes.mealPlans);
-  app.use("/api/v1/insights", routes.insights);
-  app.use("/api/v1/recommendations", routes.recommendations);
-  app.use("/api/v1/plan-maintenance", routes.planMaintenance);
-  app.use("/api/v1/kitchenware", routes.kitchenware);
-  app.use("/api/v1/notifications", routes.notifications);
-  app.use("/api/v1/media", routes.media);
-  app.use("/api/v1/households", routes.households);
-  app.use("/api/v1/feedback", routes.feedback);
+  const mountRouter = (template: string, router: RequestHandler) => {
+    app.use(template, routerContext(template), router);
+  };
+  mountRouter("/api/v1/site-settings", createSiteSettingsRouter());
+  mountRouter("/api/v1/app-updates", createAppUpdatesRouter());
+  mountRouter("/api/v1/auth", routes.auth);
+  mountRouter("/api/v1/webhooks", routes.webhooks);
+  mountRouter("/api/v1/inventory", routes.inventory);
+  mountRouter("/api/v1/diet-records", routes.dietRecords);
+  mountRouter("/api/v1/health-data", routes.healthData);
+  mountRouter("/api/v1/onboarding", routes.onboarding);
+  mountRouter("/api/v1/recipes", routes.recipes);
+  mountRouter("/api/v1/foods", routes.foods);
+  mountRouter("/api/v1/community", routes.community);
+  mountRouter("/api/v1/admin", routes.admin);
+  mountRouter("/api/v1/ai/realtime-voice", routes.realtimeVoice);
+  mountRouter("/api/v1/ai/voice-packs", routes.voicePacks);
+  mountRouter("/api/v1/ai", routes.ai);
+  mountRouter("/api/v1/ai", routes.agentRuns);
+  mountRouter("/api/v1/shopping-list", routes.shopping);
+  mountRouter("/api/v1/cooking-queue", routes.cookingQueue);
+  mountRouter("/api/v1/meal-plans", routes.mealPlans);
+  mountRouter("/api/v1/insights", routes.insights);
+  mountRouter("/api/v1/recommendations", routes.recommendations);
+  mountRouter("/api/v1/plan-maintenance", routes.planMaintenance);
+  mountRouter("/api/v1/kitchenware", routes.kitchenware);
+  mountRouter("/api/v1/notifications", routes.notifications);
+  mountRouter("/api/v1/media", routes.media);
+  mountRouter("/api/v1/households", routes.households);
+  mountRouter("/api/v1/feedback", routes.feedback);
 
   app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (error instanceof SyntaxError && "body" in error) {

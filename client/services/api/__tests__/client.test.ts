@@ -47,7 +47,7 @@ describe("API client", () => {
     let version = 1;
     const apiFetch: ApiFetch = jest.fn(async () => jsonResponse({ version }));
     registerApiFetchScope(apiFetch, 1403);
-    await requestJson(apiFetch, "/api/v1/inventory");
+    await requestJson(apiFetch, "/api/v1/shopping-list");
     await new Promise(resolve => setTimeout(resolve, 0));
     const [key] = await AsyncStorage.getAllKeys();
     const snapshot = await AsyncStorage.getItem(key);
@@ -57,14 +57,14 @@ describe("API client", () => {
     const originalGetItem = getItem.getMockImplementation()!;
     getItem.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
     try {
-      const reading = requestJson(apiFetch, "/api/v1/inventory");
+      const reading = requestJson(apiFetch, "/api/v1/shopping-list");
       await new Promise(resolve => setTimeout(resolve, 0));
       version = 2;
-      if (action === "write") await invalidateApiCacheForMutation(apiFetch, "/api/v1/inventory/1");
+      if (action === "write") await invalidateApiCacheForMutation(apiFetch, "/api/v1/shopping-list/1");
       else await clearApiCacheScope(action === "logout" ? 1403 : undefined);
       finishRead(snapshot);
       await expect(reading).resolves.toEqual({ version: 2 });
-      await expect(requestJson(apiFetch, "/api/v1/inventory")).resolves.toEqual({ version: 2 });
+      await expect(requestJson(apiFetch, "/api/v1/shopping-list")).resolves.toEqual({ version: 2 });
       await new Promise(resolve => setTimeout(resolve, 0));
     } finally {
       getItem.mockImplementation(originalGetItem);
@@ -133,8 +133,9 @@ describe("API client", () => {
       await expect(requestJson(fetchA, path)).resolves.toEqual({ version: 2 });
       await expect(requestJson(fetchB, path)).resolves.toEqual({ version: 1 });
     }
-    expect(fetchA).toHaveBeenCalledTimes(affected.length * 2 + 2);
-    expect(fetchB).toHaveBeenCalledTimes(affected.length + 1);
+    const memoryOnly = affected.filter(path => !apiCachePolicy(path)?.persistent).length;
+    expect(fetchA).toHaveBeenCalledTimes(affected.length * 2 + 2 + memoryOnly);
+    expect(fetchB).toHaveBeenCalledTimes(affected.length + 1 + memoryOnly);
   });
 
   it.each([
@@ -241,8 +242,8 @@ describe("API client", () => {
     });
     registerApiFetchScope(apiFetch, 101);
 
-    const first = requestJson<{ value: number }>(apiFetch, "/api/v1/inventory");
-    const second = requestJson<{ value: number }>(apiFetch, "/api/v1/inventory");
+    const first = requestJson<{ value: number }>(apiFetch, "/api/v1/shopping-list");
+    const second = requestJson<{ value: number }>(apiFetch, "/api/v1/shopping-list");
     await new Promise((resolve) => setTimeout(resolve, 0));
     resolveResponse?.(jsonResponse({ value: 1 }));
     await expect(Promise.all([first, second])).resolves.toEqual([{ value: 1 }, { value: 1 }]);
@@ -250,7 +251,7 @@ describe("API client", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     resetApiCacheForTests();
-    await expect(requestJson<{ value: number }>(apiFetch, "/api/v1/inventory")).resolves.toEqual({ value: 1 });
+    await expect(requestJson<{ value: number }>(apiFetch, "/api/v1/shopping-list")).resolves.toEqual({ value: 1 });
     expect(calls).toBe(1);
     expect(getApiCacheDiagnostics().persistentHits).toBe(1);
   });
@@ -262,15 +263,15 @@ describe("API client", () => {
     registerApiFetchScope(secondFetch, 202);
 
     await expect(Promise.all([
-      requestJson(firstFetch, "/api/v1/inventory"),
-      requestJson(secondFetch, "/api/v1/inventory"),
+      requestJson(firstFetch, "/api/v1/shopping-list"),
+      requestJson(secondFetch, "/api/v1/shopping-list"),
     ])).resolves.toEqual([{ owner: "first" }, { owner: "second" }]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await clearApiCacheScope(201);
     resetApiCacheForTests();
 
-    await requestJson(firstFetch, "/api/v1/inventory");
-    await requestJson(secondFetch, "/api/v1/inventory");
+    await requestJson(firstFetch, "/api/v1/shopping-list");
+    await requestJson(secondFetch, "/api/v1/shopping-list");
     expect(firstFetch).toHaveBeenCalledTimes(2);
     expect(secondFetch).toHaveBeenCalledTimes(1);
   });

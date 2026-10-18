@@ -4,12 +4,13 @@ import { TextInput, TouchableOpacity, Text } from "react-native";
 const mockRequest = jest.fn();
 const mockLogout = jest.fn(async () => undefined);
 const mockReplace = jest.fn();
-let mockUser: {id:number;hasPassword?:boolean;phone_verified_at?:string} = {id:1};
+let mockUser: {id:number;hasPassword?:boolean;phone_verified_at?:string|null} = {id:1};
 jest.mock("@/components/Screen", () => ({ Screen: ({ children }: { children: React.ReactNode }) => children }));
 jest.mock("@/contexts/AuthContext", () => ({ useAuth: () => ({ user: mockUser, logout: mockLogout, sessionGeneration: 4 }), useAuthFetch: () => jest.fn() }));
 jest.mock("@/components/AccountSmsVerification",() => ({AccountSmsVerification:() => null}));
 jest.mock("@/hooks/useSafeRouter", () => ({ useSafeRouter: () => ({ replace: mockReplace, back: jest.fn() }), useSafeSearchParams: () => ({}) }));
 jest.mock("@/services/api/client", () => ({ requestJson: (...args: unknown[]) => mockRequest(...args) }));
+import { restoredAuthIdentity } from "@/utils/authIdentity";
 import PasswordScreen from "./index";
 beforeEach(() => {jest.clearAllMocks();mockUser={id:1};});
 test("mismatch never sends credentials; successful change revokes the captured session", async () => {
@@ -34,7 +35,7 @@ test("mismatch never sends credentials; successful change revokes the captured s
 });
 
 test("a passwordless account verifies its bound phone and sets its first password without an old password",async () => {
-  mockUser={id:2,hasPassword:false,phone_verified_at:"2026-09-20"};
+  mockUser=restoredAuthIdentity({id:2,username:"A",hasPassword:false,phone_verified_at:"2026-09-20",phone:"+861234",daily_calories_target:1600});
   let tree!:renderer.ReactTestRenderer;
   await act(async () => {tree=renderer.create(<PasswordScreen />);});
   const inputs=tree.root.findAllByType(TextInput);

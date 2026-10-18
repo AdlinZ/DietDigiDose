@@ -22,6 +22,10 @@ export function getPrivateStorageGeneration(userId: number) {
   return privateStorageGenerations.get(userId) ?? 0;
 }
 
+export function isPrivateStorageCurrent(userId: number, generation: number) {
+  return !invalidatedPrivateStorage.has(userId) && generation === getPrivateStorageGeneration(userId);
+}
+
 export function invalidatePrivateStorage(userId?: number | null) {
   if (userId) {
     privateStorageGenerations.set(userId, getPrivateStorageGeneration(userId) + 1);

@@ -58,8 +58,9 @@ export async function checkAppUpdate(installed: InstalledApp, signal?: AbortSign
 
 export function downloadAllowed(update: AppUpdateRelease, installed: InstalledApp) {
   const url = new URL(update.url);
+  const origin = url.origin.toLowerCase();
   return url.protocol === 'https:' && !url.username && !url.password && !url.hash
-    && installed.downloadOrigins.includes(url.origin.toLowerCase());
+    && installed.downloadOrigins.some((allowed) => allowed.trim().toLowerCase() === origin);
 }
 
 export function sameUpdate(first: AppUpdateRelease, second: AppUpdateRelease | null) {

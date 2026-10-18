@@ -56,6 +56,7 @@ test('checks send only native identity with no cached response; failures are not
 
 test('download origins must be explicitly compiled into the installed package', () => {
   expect(downloadAllowed(release, installed)).toBe(true);
+  expect(downloadAllowed(release, { ...installed, downloadOrigins: ['HTTPS://DOWNLOADS.EXAMPLE.COM'] })).toBe(true);
   expect(downloadAllowed(release, { ...installed, downloadOrigins: [] })).toBe(false);
   for (const url of ['http://downloads.example.com/app.apk', 'https://downloads.example.com.evil/app.apk', 'https://evil.example.com/app.apk', 'https://user:pass@downloads.example.com/app.apk', 'https://downloads.example.com/app.apk#x']) {
     expect(downloadAllowed({ ...release, url }, installed)).toBe(false);

@@ -71,6 +71,13 @@ test("Android composer follows its own measured window and keeps controls outsid
     layout();
     show(510);
     expect(frame().props.style.marginBottom).toBe(290);
+    // Before onLayout fires on a fresh modal open, window height fallback lifts the frame above the keyboard
+    act(() => button("取消评论").props.onPress());
+    act(() => button("发布评论").props.onPress());
+    act(() => tree.root.findAllByType(Modal)[0].props.onShow());
+    show(1000);
+    expect(frame().props.style.marginBottom).toBe(334);
+    expect(frame().props.style.maxHeight).toBe(1334 - 334 - 24);
   } finally {
     if (tree) act(() => tree.unmount());
     jest.restoreAllMocks();

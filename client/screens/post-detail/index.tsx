@@ -95,7 +95,7 @@ const getPostImages = (post: Post): string[] => {
 export default function PostDetailScreen() {
   const router = useSafeRouter();
   const insets = useSafeAreaInsets();
-  const { width: viewportWidth } = useWindowDimensions();
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
   const params = useSafeSearchParams<{
     id?: number | string;
     postData?: Post | string;
@@ -129,8 +129,9 @@ export default function PostDetailScreen() {
   const [mentionUsers, setMentionUsers] = useState<MentionUser[]>([]);
   const [keyboardTop, setKeyboardTop] = useState<number | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
+  const effectiveViewportHeight = composerHeight > 0 ? composerHeight : viewportHeight;
   const keyboardInset = keyboardTop === null ? 0
-    : calculateKeyboardInset(composerHeight, keyboardTop);
+    : calculateKeyboardInset(effectiveViewportHeight, keyboardTop);
   const commentInputRef = useRef<TextInput>(null);
 
   const fetchPostDetail = useCallback(async () => {
@@ -172,6 +173,7 @@ export default function PostDetailScreen() {
   useEffect(() => {
     if (!isCommentComposerVisible) {
       setKeyboardTop(null);
+      setComposerHeight(0);
       return;
     }
 
@@ -360,6 +362,8 @@ export default function PostDetailScreen() {
     setIsCommentComposerVisible(false);
     setIsEmojiPickerVisible(false);
     setIsMentionPickerVisible(false);
+    setComposerHeight(0);
+    setKeyboardTop(null);
     Keyboard.dismiss();
   };
 
@@ -885,8 +889,8 @@ export default function PostDetailScreen() {
               className="bg-surface rounded-t-[28px] px-5 pt-4 shadow-2xl"
               style={{
                 marginBottom: keyboardInset,
-                maxHeight: composerHeight > 0
-                  ? Math.max(0, composerHeight - keyboardInset - insets.top) : undefined,
+                maxHeight: effectiveViewportHeight > 0
+                  ? Math.max(0, effectiveViewportHeight - keyboardInset - insets.top) : undefined,
                 paddingBottom: keyboardInset > 0 ? 14 : Math.max(insets.bottom, 14),
               }}
             >

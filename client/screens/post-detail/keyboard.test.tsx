@@ -1,6 +1,6 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
-import { Keyboard, Modal, Platform, ScrollView, View, type KeyboardEvent } from "react-native";
+import { Dimensions, Keyboard, Modal, Platform, ScrollView, View, type KeyboardEvent } from "react-native";
 
 const mockFetch = jest.fn();
 const mockRouter = { setParams: jest.fn(), push: jest.fn(), back: jest.fn() };
@@ -71,6 +71,17 @@ test("Android composer follows its own measured window and keeps controls outsid
     layout();
     show(510);
     expect(frame().props.style.marginBottom).toBe(290);
+    // Before onLayout fires on a fresh modal open, screen height fallback lifts the frame above the keyboard even if the activity window was resized
+    act(() => button("取消评论").props.onPress());
+    jest.spyOn(Dimensions, "get").mockImplementation((type) => {
+      if (type === "screen") return { width: 400, height: 800, scale: 1, fontScale: 1 };
+      return { width: 400, height: 510, scale: 1, fontScale: 1 };
+    });
+    act(() => button("发布评论").props.onPress());
+    act(() => tree.root.findAllByType(Modal)[0].props.onShow());
+    show(510);
+    expect(frame().props.style.marginBottom).toBe(290);
+    expect(frame().props.style.maxHeight).toBe(800 - 290 - 24);
   } finally {
     if (tree) act(() => tree.unmount());
     jest.restoreAllMocks();

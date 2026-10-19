@@ -61,7 +61,7 @@ class ApkUpdatesModule : Module() {
         val target = URL(url)
         val origin = "https://${target.host.lowercase()}${if (target.port != -1 && target.port != 443) ":${target.port}" else ""}"
         check(target.protocol == "https" && target.userInfo == null && target.ref == null &&
-          setting("origins").split(',').contains(origin)) { "安装包下载来源未授权" }
+          setting("origins").split(',').map { it.trim().lowercase() }.contains(origin)) { "安装包下载来源未授权" }
         check(directory.usableSpace > size + 32L * 1024 * 1024) { "存储空间不足，请释放空间后重试" }
         val request = target.openConnection() as HttpURLConnection
         connection = request

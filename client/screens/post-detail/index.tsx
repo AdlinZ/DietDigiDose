@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   TextInput,
   Alert,
+  Dimensions,
   Keyboard,
   Modal,
   Platform,
@@ -95,7 +96,7 @@ const getPostImages = (post: Post): string[] => {
 export default function PostDetailScreen() {
   const router = useSafeRouter();
   const insets = useSafeAreaInsets();
-  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const { width: viewportWidth } = useWindowDimensions();
   const params = useSafeSearchParams<{
     id?: number | string;
     postData?: Post | string;
@@ -129,7 +130,18 @@ export default function PostDetailScreen() {
   const [mentionUsers, setMentionUsers] = useState<MentionUser[]>([]);
   const [keyboardTop, setKeyboardTop] = useState<number | null>(null);
   const [composerHeight, setComposerHeight] = useState(0);
-  const effectiveViewportHeight = composerHeight > 0 ? composerHeight : viewportHeight;
+  const [, setDimensionsRevision] = useState(0);
+
+  useEffect(() => {
+    const subscription = Dimensions.addEventListener("change", () => {
+      setDimensionsRevision((r) => r + 1);
+    });
+    return () => subscription?.remove();
+  }, []);
+
+  const effectiveViewportHeight = composerHeight > 0
+    ? composerHeight
+    : (Dimensions.get("screen")?.height ?? 0);
   const keyboardInset = keyboardTop === null ? 0
     : calculateKeyboardInset(effectiveViewportHeight, keyboardTop);
   const commentInputRef = useRef<TextInput>(null);

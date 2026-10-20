@@ -1,6 +1,6 @@
 import { runtimePolicySchema } from "../modules/aiRuntime/policy.js";
 import { recipeMinutesSchema } from "../utils/recipeMinutes.js";
-import { kitchenwareAttributesSchema } from "@dietdigidose/contracts";
+import { accountPasswordSchema, kitchenwareAttributesSchema } from "@dietdigidose/contracts";
 import { householdDiningPlanSchema, mealProductionSchema, kitchenPreferencesSchema } from "@dietdigidose/contracts";
 import { z } from "zod";
 import { inventoryConsumptionItemSchema } from "@dietdigidose/contracts";
@@ -33,11 +33,7 @@ export const mediaImageUploadSchema = z.object({
 export const registerSchema = z.object({
   identifier: trimmedString(1, 254, "邮箱或手机号"),
   username: trimmedString(2, 30, "用户名"),
-  password: z.string()
-    .min(6, "密码长度不能少于 6 位")
-    .max(128, "密码不能超过 128 位")
-    .regex(/[A-Za-z]/, "密码必须包含字母")
-    .regex(/\d/, "密码必须包含数字"),
+  password: accountPasswordSchema,
 }).strict();
 
 export const loginSchema = z.object({
@@ -50,11 +46,7 @@ export const loginSchema = z.object({
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
-  newPassword: z.string()
-    .min(6, "新密码长度不能少于 6 位")
-    .max(128, "新密码不能超过 128 位")
-    .regex(/[A-Za-z]/, "新密码必须包含字母")
-    .regex(/\d/, "新密码必须包含数字"),
+  newPassword: accountPasswordSchema,
 }).strict();
 
 export const deleteAccountSchema = z.object({
@@ -640,11 +632,7 @@ export const adminUserLevelRuleSchema = z.object({
 });
 export const adminUserCredentialsSchema = z.object({
   identifier: z.string().trim().min(1, "邮箱或手机号不能为空").max(254, "邮箱或手机号不能超过 254 个字符").optional(),
-  newPassword: z.string()
-    .min(6, "新密码长度不能少于 6 位")
-    .max(128, "新密码不能超过 128 位")
-    .regex(/[A-Za-z]/, "新密码必须包含字母")
-    .regex(/\d/, "新密码必须包含数字")
+  newPassword: accountPasswordSchema
     .optional(),
 }).strict().refine((value) => value.identifier !== undefined || value.newPassword !== undefined, "至少提供一个需要更新的字段");
 export const adminKitchenwareStatusSchema = z.object({

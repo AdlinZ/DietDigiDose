@@ -11,6 +11,20 @@ import { validateCommunity, importCommunity } from './import-community-content.m
 const sha = raw => createHash('sha256').update(raw).digest('hex');
 export function loadSystemPackage(root) {
   const manifest = JSON.parse(readFileSync(resolve(root, 'manifest.json')));
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) ||
+      !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)) {
+    throw new Error('Invalid package manifest');
+  }
+  // Every independently consumed payload must be covered before reading it.
+  // Nutrition payloads are also verified against their nested manifest by loadRelease.
+  for (const path of ['data/runtime-input.json', 'data/community.json', 'data/nutrition/manifest.json']) {
+    if (!Object.hasOwn(manifest.files, path)) throw new Error('Missing required package member: ' + path);
+  }
+  for (const [path, checksum] of Object.entries(manifest.files)) {
+    if (typeof checksum !== 'string' || !/^[a-f0-9]{64}$/.test(checksum)) {
+      throw new Error('Invalid package checksum: ' + path);
+    }
+  }
   for (const [path, checksum] of Object.entries(manifest.files)) {
     if (path.includes('..') || path.startsWith('/') || path.includes('\\')) throw new Error('Invalid package path');
     if (sha(readFileSync(resolve(root, path))) !== checksum) throw new Error('Package checksum mismatch: ' + path);

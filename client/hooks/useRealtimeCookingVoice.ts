@@ -9,6 +9,8 @@ import { useAuthFetch } from "@/contexts/AuthContext";
 import { ApiError, aiApi, realtimeVoiceApi, waitForAgentRun, type RealtimeVoiceSession } from "@/services/api";
 import { heartbeatWithVersionRecovery, RealtimeVoiceSessionUpdater } from "@/services/realtimeVoiceSessionUpdater";
 
+import { isVoiceOutputBlockingCapture } from "@/services/voiceCaptureGate";
+
 type Options = {
   recipeId: number;
   currentStep: number;
@@ -88,7 +90,7 @@ export function useRealtimeCookingVoice(options: Options) {
   const nativeTurnIdRef = useRef("");
   const nativeSequenceRef = useRef(0);
   const nativePartialSentLengthRef = useRef(0);
-  const nativePartialInFlightRef = useRef(false);
+  const nativePartialInFlightRef = useRef<symbol | null>(null);
   const mutedRef = useRef(false);
   const muteTransitionRef = useRef(false);
   const [session, setSession] = useState<RealtimeVoiceSession | null>(null);
@@ -167,7 +169,23 @@ export function useRealtimeCookingVoice(options: Options) {
     }
   }, [authFetch, pollAnswer]);
 
+  // Communication audio focus is not proof of AEC or an isolated headset route.
+  // Until a recorder exposes verified echo isolation, native input is half-duplex.
+  const nativeCaptureBlocked = useCallback(() => {
+    if (stateRef.current !== "processing" && !isVoiceOutputBlockingCapture()) return false;
+    if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
+    nativeSilenceTimerRef.current = null;
+    nativeSpeakingRef.current = false;
+    nativeChunksRef.current = [];
+    nativePreRollRef.current = [];
+    nativeTurnIdRef.current = "";
+    nativePartialSentLengthRef.current = 0;
+    nativePartialInFlightRef.current = null;
+    return true;
+  }, []);
+
   const flushNativeUtterance = useCallback(async () => {
+    if (nativeCaptureBlocked()) return;
     if (nativeTranscribingRef.current || !nativeChunksRef.current.length) return;
     const chunks = nativeChunksRef.current.splice(0);
     const turnId = nativeTurnIdRef.current || Crypto.randomUUID();
@@ -214,10 +232,10 @@ export function useRealtimeCookingVoice(options: Options) {
     } finally {
       if (nativeTranscribingRef.current === transcription) nativeTranscribingRef.current = null;
     }
-  }, [authFetch, submitTurn]);
+  }, [authFetch, nativeCaptureBlocked, submitTurn]);
 
   const handleNativeAudio = useCallback(async (event: AudioDataEvent) => {
-    if (!activeRef.current || mutedRef.current || typeof event.data !== "string") return;
+    if (!activeRef.current || mutedRef.current || nativeCaptureBlocked() || typeof event.data !== "string") return;
     nativePreRollRef.current.push(event.data);
     nativePreRollRef.current = nativePreRollRef.current.slice(-3);
     if (nativeSpeakingRef.current) {
@@ -226,25 +244,32 @@ export function useRealtimeCookingVoice(options: Options) {
       const currentSession = sessionRef.current;
       if (shouldSendPartial && currentSession && !nativePartialInFlightRef.current && nativeTurnIdRef.current) {
         const chunks = [...nativeChunksRef.current];
+        const lifecycle = lifecycleRef.current;
+        const generation = responseGeneration.current;
         const turnId = nativeTurnIdRef.current;
         const sequence = nativeSequenceRef.current + 1;
         nativeSequenceRef.current = sequence;
         nativePartialSentLengthRef.current = chunks.length;
-        nativePartialInFlightRef.current = true;
+        const partialRequest = Symbol("native-partial");
+        nativePartialInFlightRef.current = partialRequest;
         void realtimeVoiceApi.audioChunk(authFetch, currentSession.id, {
           turnId, sequence, audioBase64: pcm16WavBase64(chunks), mimeType: "audio/wav", final: false,
         }).then((result) => {
-          if (turnId === nativeTurnIdRef.current && result.transcript.trim()) {
+          if (lifecycleRef.current === lifecycle && responseGeneration.current === generation
+            && activeRef.current && !mutedRef.current && !nativeCaptureBlocked()
+            && turnId === nativeTurnIdRef.current && result.transcript.trim()) {
             optionsRef.current.onTranscript(result.transcript.trim(), false);
           }
-        }).catch(() => undefined).finally(() => { nativePartialInFlightRef.current = false; });
+        }).catch(() => undefined).finally(() => {
+          if (nativePartialInFlightRef.current === partialRequest) nativePartialInFlightRef.current = null;
+        });
       }
     }
     if (nativeChunksRef.current.length > 160) void flushNativeUtterance();
-  }, [authFetch, flushNativeUtterance]);
+  }, [authFetch, flushNativeUtterance, nativeCaptureBlocked]);
 
   const handleNativeAnalysis = useCallback(async (event: AudioAnalysis) => {
-    if (!activeRef.current || mutedRef.current) return;
+    if (!activeRef.current || mutedRef.current || nativeCaptureBlocked()) return;
     const speaking = event.dataPoints.some((point) => !point.silent && point.rms >= 0.018);
     if (speaking) {
       if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
@@ -256,11 +281,6 @@ export function useRealtimeCookingVoice(options: Options) {
         nativeTurnIdRef.current = Crypto.randomUUID();
         nativeSequenceRef.current = 0;
         nativePartialSentLengthRef.current = 0;
-        if (stateRef.current === "processing") {
-          interruptedRef.current = true;
-          responseGeneration.current += 1;
-          optionsRef.current.onBargeIn();
-        }
       }
       setState("listening");
       return;
@@ -271,7 +291,7 @@ export function useRealtimeCookingVoice(options: Options) {
         void flushNativeUtterance();
       }, 650);
     }
-  }, [flushNativeUtterance]);
+  }, [flushNativeUtterance, nativeCaptureBlocked]);
 
   const updateSession = useCallback((input: { muted?: boolean; reconnect?: boolean }) => (
     sessionUpdaterRef.current!.enqueue((current) => heartbeatWithVersionRecovery(current, input, {
@@ -308,7 +328,7 @@ export function useRealtimeCookingVoice(options: Options) {
       nativeTurnIdRef.current = "";
       nativeSequenceRef.current = 0;
       nativePartialSentLengthRef.current = 0;
-      nativePartialInFlightRef.current = false;
+      nativePartialInFlightRef.current = null;
       nativeTranscribingRef.current = null;
       if (Platform.OS !== "web") await stopNativeRecording().catch(() => undefined);
       if (current) await realtimeVoiceApi.close(authFetch, current.id).catch(() => undefined);

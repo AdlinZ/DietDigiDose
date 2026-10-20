@@ -22,3 +22,24 @@ test("leaves questions, examples, unknowns and negated corrections for manual re
   }
   expect(summarizeMealPreferences("今天做今晚和明天午饭").preferences.usual_meals).toBeUndefined();
 });
+
+test("summarizes every supported kitchen preference without inventing health restrictions", () => {
+  const result = summarizeMealPreferences("两个人，20分钟，不吃辣，预算30元，做饭新手，偶尔外食，平时吃午餐和晚餐，在公司吃，需要带饭，不能冷藏，没有微波炉，花生过敏");
+  expect(result.preferences).toEqual({ servings: 2, meal_time_minutes: 20, avoid_spicy: true,
+    budget_per_meal: 30, cooking_level: "beginner", eating_out_frequency: "sometimes",
+    usual_meals: ["lunch", "dinner"], eating_location: "work", carry_meals: true,
+    refrigeration_available: false, reheating_available: false });
+  expect(result.labels).toHaveLength(11);
+});
+test("keeps ambiguous, negated and hypothetical new settings for manual review", () => {
+  for (const text of ["不是做饭新手", "比如预算30元", "如果偶尔外食", "预算100001元", "做饭新手，做饭熟练", "很少外食，经常外食"]) {
+    expect(summarizeMealPreferences(text).preferences).toEqual({});
+  }
+});
+
+
+test("an explicit spicy preference can replace an earlier avoidance without guessing from silence", () => {
+  expect(summarizeMealPreferences("我可以吃辣").preferences).toEqual({ avoid_spicy: false });
+  expect(summarizeMealPreferences("我可以吃辣吗").preferences).toEqual({});
+  expect(summarizeMealPreferences("不是能吃辣").preferences).toEqual({});
+});

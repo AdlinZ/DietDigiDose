@@ -6,7 +6,7 @@ import { describeStoredMediaUrls } from "../../services/mediaStorage.js";
 import { AuthAccountError } from "./errors.js";
 import type { AuthAccountRepository } from "./repository.js";
 import type { ProfileInput, Row } from "./types.js";
-import { accountPasswordSchema, passwordRecoveryTokenSchema, type AccountDeletionProof } from "@dietdigidose/contracts";
+import { ACCOUNT_PASSWORD_REQUIREMENTS, accountPasswordSchema, passwordRecoveryTokenSchema, type AccountDeletionProof } from "@dietdigidose/contracts";
 import { hashPasswordRecoveryToken, hashRegistrationToken } from "../../services/authVerificationCrypto.js";
 import type { AccountMutationProof } from "./reauthProof.js";
 
@@ -52,6 +52,7 @@ export class AuthAccountService {
     const parsed = parseIdentifier(identifier);
     if (!parsed.value) throw new AuthAccountError(400, "请输入有效的邮箱或手机号", "INVALID_IDENTIFIER");
     if (parsed.value.phone) throw new AuthAccountError(400, "手机号注册必须先完成短信验证", "PHONE_VERIFICATION_REQUIRED");
+    if (!accountPasswordSchema.safeParse(password).success) throw new AuthAccountError(400, ACCOUNT_PASSWORD_REQUIREMENTS, "INVALID_PASSWORD");
     const result = await this.repository.createUser({ ...parsed.value, username, passwordHash: await bcrypt.hash(password, 10) });
     if (result.status === "identifier_exists") throw new AuthAccountError(409, "该邮箱或手机号已注册", "IDENTIFIER_EXISTS");
     if (result.status === "username_exists") throw new AuthAccountError(409, "该用户名已被使用", "USERNAME_EXISTS");
@@ -90,8 +91,7 @@ export class AuthAccountService {
 
   async changePassword(userId: number, currentPassword: unknown, newPassword: unknown, ipAddress?: string, userAgent?: string) {
     if (!currentPassword || !newPassword) throw new AuthAccountError(400, "当前密码和新密码不能为空");
-    if (typeof newPassword !== "string" || newPassword.length < 6) throw new AuthAccountError(400, "新密码长度不能少于 6 位");
-    if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) throw new AuthAccountError(400, "新密码必须同时包含字母和数字");
+    if (typeof newPassword !== "string" || !accountPasswordSchema.safeParse(newPassword).success) throw new AuthAccountError(400, ACCOUNT_PASSWORD_REQUIREMENTS, "INVALID_PASSWORD");
     const user = await this.repository.getCredentials(userId);
     if (!user?.password_hash || !bcrypt.compareSync(String(currentPassword), user.password_hash)) throw new AuthAccountError(400, "当前密码不正确");
     if (bcrypt.compareSync(newPassword, user.password_hash)) throw new AuthAccountError(400, "新密码不能与当前密码相同");
@@ -103,7 +103,7 @@ export class AuthAccountService {
   }
 
   async recoverPassword(recoveryToken: string, newPassword: string) {
-    if (!accountPasswordSchema.safeParse(newPassword).success) throw new AuthAccountError(400, "密码需为6–128位，包含字母和数字", "INVALID_PASSWORD");
+    if (typeof newPassword !== "string" || !accountPasswordSchema.safeParse(newPassword).success) throw new AuthAccountError(400, ACCOUNT_PASSWORD_REQUIREMENTS, "INVALID_PASSWORD");
     if (!passwordRecoveryTokenSchema.safeParse(recoveryToken).success) throw new AuthAccountError(403, "恢复凭据已失效，请重新验证手机号", "PASSWORD_RECOVERY_INVALID");
     const tokenHash = hashPasswordRecoveryToken(recoveryToken);
     // The ID only locates the proof; changePassword atomically verifies its full hash and account binding.
@@ -120,7 +120,7 @@ export class AuthAccountService {
   }
 
   async setPassword(userId: number, newPassword: string, reauthToken: string) {
-    if (!accountPasswordSchema.safeParse(newPassword).success) throw new AuthAccountError(400, "密码需为6–128位，包含字母和数字", "INVALID_PASSWORD");
+    if (typeof newPassword !== "string" || !accountPasswordSchema.safeParse(newPassword).success) throw new AuthAccountError(400, ACCOUNT_PASSWORD_REQUIREMENTS, "INVALID_PASSWORD");
     const changed = await this.repository.changePassword(userId, await bcrypt.hash(newPassword, 12), { tokenHash: hashRegistrationToken(reauthToken) });
     if (!changed) throw new AuthAccountError(404, "用户不存在", "USER_NOT_FOUND");
     return { success: true, message: "密码已设置，请重新登录" };

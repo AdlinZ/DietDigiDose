@@ -4,6 +4,7 @@ import renderer, { act } from "react-test-renderer";
 import { Audio } from "expo-av";
 
 import { aiApi, realtimeVoiceApi, type RealtimeVoiceSession } from "@/services/api";
+import { beginVoiceOutput } from "@/services/voiceCaptureGate";
 import { useRealtimeCookingVoice } from "./useRealtimeCookingVoice";
 
 const mockStartNativeRecording = jest.fn();
@@ -93,6 +94,89 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
 
   afterEach(async () => {
     await act(async () => { tree.unmount(); });
+  });
+
+  it("discards speaker output and its pre-roll without RMS interruption or ASR", async () => {
+    jest.useFakeTimers();
+    const finishOutput = beginVoiceOutput(true);
+    try {
+      await act(async () => { await voice.start(); });
+      const recorder = mockStartNativeRecording.mock.calls[0][0];
+      await act(async () => {
+        await recorder.onAudioStream({ data: "AAAA" });
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.8 }] });
+        await recorder.onAudioStream({ data: "AAAA" });
+        jest.advanceTimersByTime(300);
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: true, rms: 0 }] });
+        jest.advanceTimersByTime(650);
+      });
+      expect(options.onBargeIn).not.toHaveBeenCalled();
+      expect(realtimeVoiceApi.audioChunk).not.toHaveBeenCalled();
+      expect(realtimeVoiceApi.turn).not.toHaveBeenCalled();
+      // Explicit mute/stop must remain available even when output is active.
+      await act(async () => { await voice.toggleMute(); });
+      expect(options.onStopOutput).toHaveBeenCalled();
+      expect(voice.muted).toBe(true);
+      await act(async () => { await voice.toggleMute(); await voice.stop(); });
+      expect(voice.state).toBe("off");
+    } finally { finishOutput(); jest.setSystemTime(0); beginVoiceOutput(true)(); jest.useRealTimers(); }
+  });
+
+  it("resumes clean native capture after output ends and ignores stale recorder callbacks", async () => {
+    jest.useFakeTimers();
+    try {
+      jest.mocked(realtimeVoiceApi.audioChunk).mockResolvedValue({ transcript: "下一步" } as never);
+      jest.mocked(realtimeVoiceApi.turn).mockResolvedValue({ intent: "control", action: { action: "NEXT_STEP" } } as never);
+      await act(async () => { await voice.start(); });
+      const oldRecorder = mockStartNativeRecording.mock.calls[0][0];
+      await act(async () => { await voice.stop(); await voice.start(); });
+      const recorder = mockStartNativeRecording.mock.calls[1][0];
+      const finish = beginVoiceOutput(true);
+      await act(async () => { await recorder.onAudioStream({ data: "AAAA" }); });
+      finish();
+      jest.advanceTimersByTime(301);
+      await act(async () => {
+        await oldRecorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.8 }] });
+        await oldRecorder.onAudioStream({ data: "AAAA" });
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.1 }] });
+        await recorder.onAudioStream({ data: "AAAA" });
+        await recorder.onAudioStream({ data: "AAAA" });
+        jest.advanceTimersByTime(300);
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: true, rms: 0 }] });
+        jest.advanceTimersByTime(650);
+      });
+      expect(realtimeVoiceApi.audioChunk).toHaveBeenCalledTimes(1);
+      expect(realtimeVoiceApi.turn).toHaveBeenCalledTimes(1);
+      expect(options.onBargeIn).not.toHaveBeenCalled();
+    } finally { await act(async () => { await voice.stop(); }); jest.setSystemTime(0); beginVoiceOutput(true)(); jest.useRealTimers(); }
+  });
+
+  it("does not cancel a processing turn on unverified native RMS input", async () => {
+    jest.useFakeTimers();
+    try {
+      let resolve!: (value: never) => void;
+      jest.mocked(realtimeVoiceApi.audioChunk).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+      jest.mocked(realtimeVoiceApi.turn).mockResolvedValue({ intent: "control", action: { action: "NEXT_STEP" } } as never);
+      await act(async () => { await voice.start(); });
+      const recorder = mockStartNativeRecording.mock.calls[0][0];
+      await act(async () => {
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.1 }] });
+        await recorder.onAudioStream({ data: "AAAA" });
+        await recorder.onAudioStream({ data: "AAAA" });
+        jest.advanceTimersByTime(300);
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: true, rms: 0 }] });
+        jest.advanceTimersByTime(650);
+      });
+      expect(voice.state).toBe("processing");
+      await act(async () => {
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.8 }] });
+        await recorder.onAudioStream({ data: "AAAA" });
+        resolve({ transcript: "下一步" } as never);
+      });
+      expect(options.onBargeIn).not.toHaveBeenCalled();
+      expect(options.onControl).toHaveBeenCalledWith("NEXT_STEP", 0);
+      expect(voice.state).toBe("listening");
+    } finally { await act(async () => { await voice.stop(); }); jest.useRealTimers(); }
   });
 
   it("closes the remote session and resets local state when microphone permission is denied", async () => {
@@ -185,7 +269,7 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
       expect(aiApi.transcribe).not.toHaveBeenCalled();
       expect(realtimeVoiceApi.turn).not.toHaveBeenCalled();
       expect(voice.state).toBe("muted");
-    } finally { await act(async () => { await voice.stop(); }); jest.useRealTimers(); }
+    } finally { await act(async () => { await voice.stop(); }); jest.setSystemTime(0); beginVoiceOutput(true)(); jest.useRealTimers(); }
   });
 
   it("ignores recorder interruption callbacks from a closed session", async () => {

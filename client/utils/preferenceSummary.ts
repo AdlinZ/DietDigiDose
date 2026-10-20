@@ -19,6 +19,9 @@ export function summarizeMealPreferences(text: string): { preferences: KitchenPr
   if (/不吃辣|不要辣|不能吃辣/.test(text) && !/(?:不是|没有说|没说).{0,4}(?:不吃辣|不要辣|不能吃辣)/.test(text)) {
     preferences.avoid_spicy = true; labels.push("不吃辣");
   }
+  if (!preferences.avoid_spicy && /可以吃辣|能吃辣|吃辣没问题/.test(text)) {
+    preferences.avoid_spicy = false; labels.push("可以吃辣");
+  }
   const meals = [
     ["breakfast", "早餐"], ["lunch", "午饭"], ["dinner", "晚饭"], ["snack", "加餐"],
   ] as const;
@@ -45,5 +48,23 @@ export function summarizeMealPreferences(text: string): { preferences: KitchenPr
       labels.push(negative ? condition.negative : condition.positive);
     }
   }
+  const budget = text.match(/(?:每餐|一餐)?预算(?:是|为|控制在|不超过)?\s*(\d+(?:\.\d{1,2})?)\s*元/);
+  if (budget && Number(budget[1]) <= 100_000 && !/(?:不设|没有|取消)预算/.test(text)) {
+    preferences.budget_per_meal = Number(budget[1]); labels.push(`每餐预算 ${Number(budget[1])} 元`);
+  }
+  const levels = [
+    ["beginner", /(?:做饭|厨艺|烹饪)(?:水平)?是?(?:新手|初学)|不会做饭/, "做饭新手"],
+    ["intermediate", /(?:做饭|厨艺|烹饪)(?:水平)?是?(?:一般|中等|熟练)/, "做饭熟练"],
+    ["advanced", /(?:做饭|厨艺|烹饪)(?:水平)?是?(?:进阶|高级)/, "做饭进阶"],
+  ] as const;
+  const level = levels.filter(([, pattern]) => pattern.test(text));
+  if (level.length === 1) { preferences.cooking_level = level[0][0]; labels.push(level[0][2]); }
+  const frequencies = [
+    ["rarely", /很少(?:外食|在外面吃)|很少吃外卖/, "很少外食"],
+    ["sometimes", /偶尔(?:外食|在外面吃)|偶尔吃外卖/, "偶尔外食"],
+    ["often", /经常(?:外食|在外面吃)|经常吃外卖/, "经常外食"],
+  ] as const;
+  const frequency = frequencies.filter(([, pattern]) => pattern.test(text));
+  if (frequency.length === 1) { preferences.eating_out_frequency = frequency[0][0]; labels.push(frequency[0][2]); }
   return { preferences, labels };
 }

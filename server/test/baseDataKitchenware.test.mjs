@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import pg from 'pg';
 import { repairBaseDataKitchenware } from '../scripts/base-data-kitchenware.mjs';
 import { importConcept } from '../scripts/import-concept-runtime.mjs';
 import { importRelease, loadRelease, validateRelease } from '../scripts/import-nutrition-enrichment.mjs';
-import { importSystem } from '../scripts/import-system-data.mjs';
+import { importSystem, loadSystemPackage } from '../scripts/import-system-data.mjs';
 
 async function createConceptTables(db) {
     await db.query(`CREATE TEMP TABLE base_data_runtime_ids(collection text,logical_id text,target_table text,target_id text,
@@ -214,6 +214,40 @@ test('nutrition releases validate the known additions mode and exact summary cou
     const bad = structuredClone(additions);
     change(bad);
     assert.throws(() => validateRelease(bad));
+  }
+});
+
+test('system package rejects missing mandatory checksums and malformed manifests before consuming payloads', () => {
+  const archive = fileURLToPath(new URL('../../datasets/releases/system-data-2026-09-15.2.zip',import.meta.url));
+  const folder = mkdtempSync(join(tmpdir(),'dietdigidose-system-integrity-'));
+  try {
+    execFileSync('python3',['-c','import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])',archive,folder]);
+    const packagePath = join(folder,'system-data-2026-09-15.2');
+    const manifestPath = join(packagePath,'manifest.json');
+    const original = JSON.parse(readFileSync(manifestPath));
+    assert.equal(loadSystemPackage(packagePath).baseline.methods.length,389);
+    for (const path of ['data/runtime-input.json','data/community.json','data/nutrition/manifest.json']) {
+      const incomplete = structuredClone(original);
+      delete incomplete.files[path];
+      writeFileSync(manifestPath,JSON.stringify(incomplete));
+      assert.throws(() => loadSystemPackage(packagePath),/Missing required package member/);
+    }
+    for (const invalid of [null,[],{}, {...original,files:null}, {...original,files:[]}, {...original,files:'invalid'}]) {
+      writeFileSync(manifestPath,JSON.stringify(invalid));
+      assert.throws(() => loadSystemPackage(packagePath),/Invalid package manifest/);
+    }
+    for (const checksum of [null,123,{},'a'.repeat(63),'g'.repeat(64),'A'.repeat(64)]) {
+      const invalid = structuredClone(original);
+      invalid.files['data/community.json'] = checksum;
+      writeFileSync(manifestPath,JSON.stringify(invalid));
+      assert.throws(() => loadSystemPackage(packagePath),/Invalid package checksum/);
+    }
+    writeFileSync(manifestPath,JSON.stringify(original));
+    const communityPath = join(packagePath,'data/community.json');
+    writeFileSync(communityPath,readFileSync(communityPath,'utf8') + '\n');
+    assert.throws(() => loadSystemPackage(packagePath),/Package checksum mismatch: data\/community.json/);
+  } finally {
+    rmSync(folder,{recursive:true,force:true});
   }
 });
 

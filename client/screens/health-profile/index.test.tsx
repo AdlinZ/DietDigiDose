@@ -119,3 +119,18 @@ test("successful remote save remains successful when local draft cleanup fails",
   expect(mockPatch).toHaveBeenLastCalledWith(mockFetch, { version: 2, age: 29 });
   act(() => tree.unmount());
 });
+
+
+test("voice preference confirmation keeps the budget input consistent and never edits unrelated safety data", async () => {
+  mockParams = { section: "kitchen" };
+  const tree = await renderScreen();
+  const kitchen = { budget_per_meal: 30, cooking_level: "beginner", eating_out_frequency: "sometimes", refrigeration_available: false };
+  await act(async () => { tree.root.findByType("VoiceInput" as never).props.onApply(kitchen, false); });
+  expect(input(tree, "每餐预算").props.value).toBe("");
+  await act(async () => { tree.root.findByType("VoiceInput" as never).props.onApply(kitchen, true); });
+  expect(input(tree, "每餐预算").props.value).toBe("30");
+  await act(async () => { input(tree, "每餐预算").props.onChangeText("40"); });
+  await act(async () => { press(tree, "保存本组资料"); });
+  expect(mockPatch).toHaveBeenCalledWith(mockFetch, { version: 1, kitchen_constraints: { ...kitchen, budget_per_meal: 40 } });
+  act(() => tree.unmount());
+});

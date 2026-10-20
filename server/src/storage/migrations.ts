@@ -2428,7 +2428,15 @@ UPDATE prepared_meal_allocations AS target SET status='conflict' WHERE EXISTS (
 
 // Keep independently developed feature migrations ordered with the historical chain.
 migrations.push(healthProfileMigration, passwordlessMigration, onboardingMigration, manualDietRequestMigration,
-  { version: 88, name: "reviewed_recipe_execution", up(database) { addColumn(database, "recipes", "execution_json", "TEXT"); } });
+  { version: 88, name: "reviewed_recipe_execution", up(database) { addColumn(database, "recipes", "execution_json", "TEXT"); } },
+  { version: 89, name: "community_post_bookmarks", up(database) {
+    database.exec(`CREATE TABLE community_post_bookmarks (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      post_id INTEGER NOT NULL REFERENCES community_posts(id) ON DELETE CASCADE,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(user_id,post_id)
+    ); CREATE INDEX idx_community_post_bookmarks_post ON community_post_bookmarks(post_id);`);
+  } });
 
 export function runMigrations(database: Database.Database) {
   database.exec(`

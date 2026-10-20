@@ -32,6 +32,7 @@ function repository(overrides: Partial<CommunityRepository> = {}): CommunityRepo
     resolveShare: async () => null,
     createPost: async () => ({ kind: "linked_recipe_not_public" }),
     toggleJoin: async () => ({ kind: "not_found" }),
+    setPostBookmark: async () => ({ kind: "not_found" }),
     togglePostLike: async () => ({ kind: "not_found" }),
     comments: async () => [],
     createComment: async () => null,
@@ -77,8 +78,8 @@ describe("community module", () => {
   test("normalizes SQLite and PostgreSQL feed values and emits a stable latest cursor", async () => {
     const service = new CommunityService(repository({
       listPosts: async () => [
-        { id: 2, user_id: 8, content: "高蛋白早餐搭配分享", created_at: "2026-09-01T08:00:00.000Z", image_urls: ["/a.jpg"], is_liked: true, is_joined: false, author_is_followed: true, author_is_expert: false, actual_comment_count: "2" },
-        { id: 1, user_id: 9, content: "全麦燕麦早餐搭配分享", created_at: "2026-08-31T08:00:00.000Z", image_urls: JSON.stringify(["/b.jpg"]), is_liked: 0, is_joined: 1, author_is_followed: 0, author_is_expert: 1, actual_comment_count: 3 },
+        { id: 2, user_id: 8, content: "高蛋白早餐搭配分享", created_at: "2026-09-01T08:00:00.000Z", image_urls: ["/a.jpg"], is_liked: true, is_bookmarked: true, is_joined: false, author_is_followed: true, author_is_expert: false, actual_comment_count: "2" },
+        { id: 1, user_id: 9, content: "全麦燕麦早餐搭配分享", created_at: "2026-08-31T08:00:00.000Z", image_urls: JSON.stringify(["/b.jpg"]), is_liked: 0, is_bookmarked: 0, is_joined: 1, author_is_followed: 0, author_is_expert: 1, actual_comment_count: 3 },
       ],
     }));
     const result = await service.posts(null, { pageSize: "1", sort: "latest" });
@@ -88,6 +89,7 @@ describe("community module", () => {
     assert.deepEqual(result.body.items[0].image_urls, ["/a.jpg"]);
     assert.equal(result.body.items[0].comment_count, 2);
     assert.equal(result.body.items[0].is_liked, true);
+    assert.equal(result.body.items[0].is_bookmarked, true);
     assert.equal(typeof result.body.nextCursor, "string");
   });
 

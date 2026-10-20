@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "../..");
-const contractPath = "packages/contracts/openapi/inventory.v1.json";
+const contractName = process.argv[2] || "inventory";
+if (!["inventory", "community"].includes(contractName)) throw new Error("Unknown contract");
+const contractPath = `packages/contracts/openapi/${contractName}.v1.json`;
 const current = JSON.parse(readFileSync(resolve(repositoryRoot, contractPath), "utf8"));
 const baseName = process.env.CONTRACT_BASE_REF || process.env.GITHUB_BASE_REF || "main";
 const candidates = [`origin/${baseName}`, baseName];
@@ -25,7 +27,7 @@ for (const candidate of candidates) {
 }
 
 if (!baseline) {
-  console.log("No inventory OpenAPI baseline exists yet; compatibility check starts after this pilot merges.");
+  console.log(`No ${contractName} OpenAPI baseline exists yet; this artifact establishes the baseline.`);
   process.exit(0);
 }
 
@@ -85,7 +87,7 @@ for (const [name, schema] of Object.entries(baseline.components?.schemas || {}))
 }
 
 if (breaking.length) {
-  console.error(`Breaking inventory API changes detected:\n- ${breaking.join("\n- ")}`);
+  console.error(`Breaking ${contractName} API changes detected:\n- ${breaking.join("\n- ")}`);
   process.exit(1);
 }
-console.log("Inventory OpenAPI is backward compatible with the base branch.");
+console.log(`${contractName} OpenAPI is backward compatible with the base branch.`);

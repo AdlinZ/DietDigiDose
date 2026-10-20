@@ -18,7 +18,7 @@ function serializePost(post: Row | null): (Row & CommunityRecommendationPost) | 
   linked_recipe_title:title,linked_recipe_image_url:image,linked_recipe_cook_time:cookTime,linked_recipe_difficulty:difficulty,
   linked_recipe_calories:calories,...value}=post; let images:string[]=[]; try { const parsed=typeof post.image_urls==="string"?JSON.parse(post.image_urls):post.image_urls;
     if(Array.isArray(parsed))images=parsed.filter((item):item is string=>typeof item==="string"); } catch { images=[]; } if(!images.length&&post.image_url)images=[post.image_url];
-  return { ...value,id:Number(post.id),image_url:post.image_url||images[0]||null,image_urls:images,is_liked:Boolean(post.is_liked),is_joined:Boolean(post.is_joined),
+  return { ...value,id:Number(post.id),image_url:post.image_url||images[0]||null,image_urls:images,is_liked:Boolean(post.is_liked),is_bookmarked:Boolean(post.is_bookmarked),is_joined:Boolean(post.is_joined),
     author_is_followed:Boolean(post.author_is_followed),author_is_expert:Boolean(post.author_is_expert),comment_count:Number(actual??post.comment_count)||0,
     linked_recipe:linkedId?{ id:Number(linkedId),title:String(title),image_url:image?String(image):null,cook_time:Number(cookTime)||0,
       difficulty:String(difficulty||"难度未知"),calories:Number(calories)||0 }:null,linked_recipe_unavailable:Boolean(post.linked_recipe_id&&!linkedId) }; }
@@ -80,6 +80,11 @@ export class CommunityService {
     if(result.kind==="linked_recipe_not_public")throw new CommunityError(400,"关联菜谱不存在、尚未公开或需要复核","LINKED_RECIPE_NOT_PUBLIC"); return serializePost(result.post); }
   async toggleJoin(userId:number,postId:number) { const result=await this.repository.toggleJoin(userId,postId,Date.now()); if(result.kind==="not_found")throw new CommunityError(404,"活动不存在");
     if(result.kind==="ended")throw new CommunityError(400,"活动已结束"); return { is_joined:result.active,participant_count:result.count }; }
+  async setPostBookmark(userId: number, postId: number, bookmarked: boolean) {
+    const result = await this.repository.setPostBookmark(userId, postId, bookmarked);
+    if (result.kind === "not_found") throw new CommunityError(404, "帖子不存在");
+    return { bookmarked: result.bookmarked };
+  }
   async togglePostLike(userId:number,postId:number) { const result=await this.repository.togglePostLike(userId,postId); if(result.kind==="not_found")throw new CommunityError(404,"帖子不存在"); return { likes_count:result.count,is_liked:result.active }; }
   async comments(userId:number|null,postId:number) { return (await this.repository.comments(userId,postId)).map(publicComment); }
   async createComment(user:AuthUser,postId:number,body:Row) { const content=String(body.content||"").trim(),image=typeof body.image_url==="string"?body.image_url:null;

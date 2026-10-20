@@ -2435,6 +2435,21 @@ try {
   if (eventResult.kind !== "created") throw new Error("PostgreSQL community event was not created");
   const eventId = Number(eventResult.post.id);
 
+  const bookmarkResults = await Promise.all(Array.from({ length: 4 }, () => communityRepository.setPostBookmark(successorUserId, questionId, true)));
+  assert(bookmarkResults.every((result) => result.kind === "updated" && result.bookmarked));
+  assert.equal(Number((await pool.query("SELECT COUNT(*) AS count FROM community_post_bookmarks WHERE user_id=$1 AND post_id=$2", [successorUserId, questionId])).rows[0].count), 1);
+  assert.equal((await communityService.post(successorUserId, questionId)).is_bookmarked, true);
+  assert.equal((await communityService.post(user.id, questionId)).is_bookmarked, false);
+  assert.equal((await communityService.post(null, questionId)).is_bookmarked, false);
+  const opposingBookmarks = await Promise.all([
+    communityRepository.setPostBookmark(successorUserId, questionId, false),
+    communityRepository.setPostBookmark(successorUserId, questionId, true),
+  ]);
+  assert(opposingBookmarks.every((result) => result.kind === "updated"));
+  for (let i = 0; i < 2; i++) assert.deepEqual(await communityRepository.setPostBookmark(successorUserId, questionId, false), { kind: "updated", bookmarked: false });
+  assert.equal((await communityService.post(successorUserId, questionId)).is_bookmarked, false);
+  assert.deepEqual(await communityRepository.setPostBookmark(successorUserId, -1, true), { kind: "not_found" });
+
   const likeResults = await Promise.all([
     communityRepository.togglePostLike(successorUserId, questionId),
     communityRepository.togglePostLike(successorUserId, questionId),
@@ -2500,6 +2515,8 @@ try {
   assert.equal(moderatedQuestion?.accepted_comment_id,null);
   assert.equal(Number(moderatedQuestion?.comment_count),0);
   assert.equal(await adminCommunityRepository.softDeletePost(eventId,moderationContext),true);
+  assert.deepEqual(await communityRepository.setPostBookmark(successorUserId, eventId, true), { kind: "not_found" });
+  assert.deepEqual(await communityRepository.setPostBookmark(successorUserId, eventId, false), { kind: "not_found" });
   const deletedCommunityPosts=await adminCommunityRepository.listPosts({status:"deleted",cursorId:null,limit:null});
   assert(deletedCommunityPosts.some((post)=>Number(post.id)===eventId));
   const moderationAudits=await pool.query(`SELECT action,details_json FROM admin_audit_logs WHERE admin_user_id=$1

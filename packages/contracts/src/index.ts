@@ -18,3 +18,5 @@ export * from "./account.ts";
 export * from "./onboarding.ts";
 export * from "./recipeExecution.ts";
 export * from "./appUpdates.ts";
+export { communityBookmarkResponseSchema, createCommunityOpenApiDocument } from "./community.ts";
+export type { CommunityBookmarkResponse } from "./community.ts";

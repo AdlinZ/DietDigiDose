@@ -145,6 +145,15 @@ export function createCommunityRouter(service: CommunityService) {
     catch (error) { handle(error, res, next); }
   });
 
+  for (const method of ["put", "delete"] as const) {
+    router[method]("/posts/:id/bookmark", authMiddleware, async (req: AuthRequest, res, next) => {
+      try {
+        const user = await authenticated(service, req, res);
+        if (user) res.json(await service.setPostBookmark(user.id, Number(req.params.id), method === "put"));
+      } catch (error) { handle(error, res, next); }
+    });
+  }
+
   router.post("/posts/:id/like", authMiddleware, async (req: AuthRequest, res, next) => {
     try { const user = await authenticated(service, req, res); if (user) res.json(await service.togglePostLike(user.id, Number(req.params.id))); }
     catch (error) { handle(error, res, next); }

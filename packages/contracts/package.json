@@ -16,7 +16,7 @@
     "test": "tsx --test test/*.test.ts",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "openapi:check": "tsx scripts/generate-openapi.ts --check",
-    "openapi:compat": "node scripts/check-openapi-compatibility.mjs",
+    "openapi:compat": "node scripts/check-openapi-compatibility.mjs && node scripts/check-openapi-compatibility.mjs community",
     "check": "pnpm typecheck && pnpm test && pnpm openapi:check && pnpm openapi:compat"
   },
   "dependencies": {

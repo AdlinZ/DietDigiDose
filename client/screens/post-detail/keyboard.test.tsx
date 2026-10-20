@@ -3,8 +3,10 @@ import renderer, { act } from "react-test-renderer";
 import { Dimensions, Keyboard, Modal, Platform, ScrollView, View, type KeyboardEvent } from "react-native";
 
 const mockFetch = jest.fn();
+const mockPost = jest.fn(async () => ({ id: 1, user_id: 1, username: "食友", content: "正文", likes_count: 0, created_at: "2026-10-01T00:00:00Z" }));
 const mockRouter = { setParams: jest.fn(), push: jest.fn(), back: jest.fn() };
 const mockParams = { id: 1 };
+jest.mock("expo-router", () => ({ useFocusEffect: (callback: () => void) => require("react").useEffect(callback, [callback]) }));
 jest.mock("@/hooks/useSafeRouter", () => ({ useSafeRouter: () => mockRouter, useSafeSearchParams: () => mockParams }));
 jest.mock("@/contexts/AuthContext", () => ({
   useAuth: () => ({ isAuthenticated: true, user: { id: 1 } }), useAuthFetch: () => mockFetch,
@@ -14,7 +16,7 @@ jest.mock("@/components/ThemedFontAwesome6", () => () => null);
 jest.mock("@/components/LinkedRecipeCard", () => ({ LinkedRecipeCard: () => null }));
 jest.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }) }));
 jest.mock("@/services/api", () => ({ communityApi: {
-  post: async () => ({ id: 1, user_id: 1, username: "食友", content: "正文", likes_count: 0, created_at: "2026-10-01T00:00:00Z" }),
+  post: (...args: unknown[]) => mockPost(),
   comments: async () => [],
 }, mediaApi: {} }));
 import PostDetailScreen from "./index";
@@ -87,4 +89,20 @@ test("Android composer follows its own measured window and keeps controls outsid
     jest.restoreAllMocks();
     Platform.OS = originalOS;
   }
+});
+
+test.each([[404, "帖子未找到或已被删除"], [0, "帖子加载失败，请稍后重试"]])("distinguishes unavailable posts from load failures (%s)", async (status, message) => {
+  mockPost.mockRejectedValueOnce(Object.assign(new Error("request failed"), { status }));
+  const consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
+  let tree!: renderer.ReactTestRenderer;
+  try {
+    await act(async () => { tree = renderer.create(<PostDetailScreen />); });
+    expect(JSON.stringify(tree.toJSON())).toContain(message);
+    const retry = tree.root.findAll(node => node.props.accessibilityLabel === "重新加载帖子" && typeof node.props.onPress === "function");
+    expect(retry.length > 0).toBe(status !== 404);
+    if (status !== 404) {
+      await act(async () => { retry[0].props.onPress(); });
+      expect(JSON.stringify(tree.toJSON())).toContain("正文");
+    }
+  } finally { act(() => tree.unmount()); consoleError.mockRestore(); }
 });

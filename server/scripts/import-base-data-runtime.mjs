@@ -112,7 +112,7 @@ try {
     if (mapping.has(`posts:${r.id}`)) continue;
     const user = (await db.query('SELECT * FROM users WHERE id=$1', [id('accounts', r.author_id)])).rows[0];
     const created = await insert('community_posts', { user_id: user.id, username: user.username, nickname: user.nickname,
-      content: r.content, category: r.category, linked_recipe_id: id('recipes', r.recipe_id),
+      content: r.content, category: r.category, linked_recipe_id: r.recipe_id == null ? null : id('recipes', r.recipe_id),
       likes_count: 0, views_count: 0, is_demo: true });
     await map('posts', r.id, 'community_posts', created.id);
   }

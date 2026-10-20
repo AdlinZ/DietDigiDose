@@ -13,6 +13,30 @@ jest.mock("@/services/api/client", () => ({ requestJson: (...args: unknown[]) =>
 import { restoredAuthIdentity } from "@/utils/authIdentity";
 import PasswordScreen from "./index";
 beforeEach(() => {jest.clearAllMocks();mockUser={id:1};});
+test("rejects a multibyte new password above 72 bytes without rejecting a legacy current password", async () => {
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<PasswordScreen />); });
+  const inputs = tree.root.findAllByType(TextInput);
+  const legacy = "Old1" + "a".repeat(80);
+  const tooLong = "Aa1" + "界".repeat(24);
+  act(() => {
+    inputs[0].props.onChangeText(legacy);
+    inputs[1].props.onChangeText(tooLong);
+    inputs[2].props.onChangeText(tooLong);
+  });
+  const submit = () => tree.root.findAllByType(TouchableOpacity).find(item => item.findAllByType(Text).some(text => text.props.children === "修改密码并重新登录"))!.props.onPress();
+  await act(async () => { submit(); });
+  expect(mockRequest).not.toHaveBeenCalled();
+  expect(JSON.stringify(tree.toJSON())).toContain("72字节");
+  const boundary = "Aa1" + "界".repeat(23);
+  act(() => { inputs[1].props.onChangeText(boundary); inputs[2].props.onChangeText(boundary); });
+  mockRequest.mockResolvedValueOnce({ success: true });
+  await act(async () => { submit(); });
+  expect(mockRequest).toHaveBeenCalledWith(expect.anything(), "/api/v1/auth/change-password", {
+    method: "POST", body: JSON.stringify({ currentPassword: legacy, newPassword: boundary }),
+  });
+  act(() => tree.unmount());
+});
 test("mismatch never sends credentials; successful change revokes the captured session", async () => {
   let tree!: renderer.ReactTestRenderer;
   await act(async () => { tree = renderer.create(<PasswordScreen />); });

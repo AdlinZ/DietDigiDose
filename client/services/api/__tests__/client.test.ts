@@ -1,7 +1,7 @@
 jest.mock("@react-native-async-storage/async-storage", () =>
   require("@react-native-async-storage/async-storage/jest/async-storage-mock"));
 
-import { requestJson, type ApiFetch } from "../client";
+import { ApiError, ApiTransportError, requestJson, type ApiFetch } from "../client";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { z } from "zod";
 import {
@@ -25,6 +25,65 @@ describe("API client", () => {
   beforeEach(async () => {
     resetApiCacheForTests();
     await AsyncStorage.clear();
+  });
+
+  it("types fetch transport errors without treating HTTP or schema failures as offline", async () => {
+    await expect(requestJson(async () => { throw new TypeError("Network request failed"); }, "/voice"))
+      .rejects.toBeInstanceOf(ApiTransportError);
+    for (const status of [401, 403, 404, 409, 410, 503]) {
+      await expect(requestJson(async () => jsonResponse({ error: "server error" }, status), "/voice"))
+        .rejects.toBeInstanceOf(ApiError);
+    }
+    await expect(requestJson(async () => jsonResponse({}), "/voice", {}, z.object({ id: z.string() })))
+      .rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+    const error = new Error("authentication cleanup failed");
+    await expect(requestJson(async () => { throw error; }, "/voice")).rejects.toBe(error);
+  });
+
+  it("distinguishes request timeout from caller cancellation", async () => {
+    jest.useFakeTimers();
+    const apiFetch: ApiFetch = async (_url, init) => new Promise((_resolve, reject) => {
+      init!.signal!.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    });
+    try {
+      const timeout = requestJson(apiFetch, "/voice", { timeoutMs: 100 });
+      const check = expect(timeout).rejects.toBeInstanceOf(ApiTransportError);
+      jest.advanceTimersByTime(100);
+      await check;
+      const caller = new AbortController();
+      const cancelled = requestJson(apiFetch, "/voice", { signal: caller.signal });
+      const checkCancel = expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+      caller.abort();
+      await checkCancel;
+    } finally { jest.useRealTimers(); }
+  });
+
+  it("detects body transport failure after headers while preserving malformed JSON and HTTP errors", async () => {
+    const brokenBody = (error: Error, status = 200): Response => ({
+      ...jsonResponse({}, status), json: async () => { throw error; },
+    });
+    await expect(requestJson(async () => brokenBody(new TypeError("connection lost")), "/voice"))
+      .rejects.toBeInstanceOf(ApiTransportError);
+    await expect(requestJson(async () => brokenBody(new SyntaxError("invalid JSON")), "/voice", {}, z.object({ id: z.string() })))
+      .rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+    await expect(requestJson(async () => brokenBody(new TypeError("connection lost"), 503), "/voice"))
+      .rejects.toMatchObject({ status: 503, name: "ApiError" });
+  });
+
+  it("detects timeout during body read after headers", async () => {
+    jest.useFakeTimers();
+    try {
+      const apiFetch: ApiFetch = async (_url, init) => ({
+        ...jsonResponse({}), json: async () => new Promise((_resolve, reject) => {
+          init!.signal!.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        }),
+      });
+      const request = requestJson(apiFetch, "/voice", { timeoutMs: 100 });
+      const check = expect(request).rejects.toBeInstanceOf(ApiTransportError);
+      await Promise.resolve();
+      jest.advanceTimersByTime(100);
+      await check;
+    } finally { jest.useRealTimers(); }
   });
 
   it.each(["write", "logout", "clear-all"])("drains queued persistent snapshots before %s finishes", async action => {

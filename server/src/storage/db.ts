@@ -1,3 +1,4 @@
+import { isPasswordWithinByteLimit } from "@dietdigidose/contracts";
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
@@ -1160,6 +1161,7 @@ function ensureAdminUser() {
     if (process.env.NODE_ENV === 'production' && (!configuredInitialPassword || configuredInitialPassword.length < 12)) {
       throw new Error('首次部署必须设置长度至少为 12 位的 ADMIN_INITIAL_PASSWORD');
     }
+    if (configuredInitialPassword && !isPasswordWithinByteLimit(configuredInitialPassword)) throw new Error("ADMIN_INITIAL_PASSWORD 的 UTF-8 编码不能超过72字节");
     const bootstrapPassword = configuredInitialPassword || crypto.randomBytes(18).toString('base64url');
     const hash = bcrypt.hashSync(bootstrapPassword, bcrypt.genSaltSync(10));
     db.prepare(`
@@ -1181,6 +1183,7 @@ function seedDefaultData() {
   if (configuredDemoPassword && configuredDemoPassword.length < 12) {
     throw new Error('DEMO_USER_PASSWORD 长度至少为 12 位');
   }
+  if (configuredDemoPassword && !isPasswordWithinByteLimit(configuredDemoPassword)) throw new Error("DEMO_USER_PASSWORD 的 UTF-8 编码不能超过72字节");
   const seedPassword = configuredDemoPassword || crypto.randomBytes(24).toString('base64url');
   const ensureUser = (seedKey: string, username: string, avatar: string | null, bio: string) => {
     let u = db.prepare('SELECT id FROM users WHERE username = ? OR nickname = ?').get(username, seedKey) as { id: number } | undefined;
@@ -1272,6 +1275,7 @@ function seedDefaultData() {
       throw new Error('首次部署必须设置长度至少为 12 位的 ADMIN_INITIAL_PASSWORD');
     }
 
+    if (configuredInitialPassword && !isPasswordWithinByteLimit(configuredInitialPassword)) throw new Error("ADMIN_INITIAL_PASSWORD 的 UTF-8 编码不能超过72字节");
     const bootstrapPassword = configuredInitialPassword || crypto.randomBytes(18).toString('base64url');
     const salt = bcrypt.genSaltSync(10);
     const hash = bcrypt.hashSync(bootstrapPassword, salt);

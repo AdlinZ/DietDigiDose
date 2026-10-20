@@ -6,6 +6,7 @@ import { useSafeRouter, useSafeSearchParams } from '@/hooks/useSafeRouter';
 import { validateAuthReturnTo } from '@/utils/authReturnTo';
 import FontAwesome6 from '@/components/ThemedFontAwesome6';
 import { useCSSVariable } from 'uniwind';
+import { accountPasswordSchema, ACCOUNT_PASSWORD_REQUIREMENTS } from '@dietdigidose/contracts';
 
 export default function RegisterScreen() {
   const [identifier, setIdentifier] = useState('');
@@ -46,8 +47,8 @@ export default function RegisterScreen() {
       setError('请输入有效的邮箱；手机号请在登录页使用验证码注册');
       return;
     }
-    if (password.length < 6 || !/[a-z]/i.test(password) || !/\d/.test(password)) {
-      setError('密码至少6位，并同时包含字母和数字');
+    if (!accountPasswordSchema.safeParse(password).success) {
+      setError(ACCOUNT_PASSWORD_REQUIREMENTS);
       return;
     }
     if (password !== confirmPassword) {
@@ -168,6 +169,7 @@ export default function RegisterScreen() {
                 autoComplete="new-password"
                 textContentType="newPassword"
                 accessibilityLabel="密码"
+                maxLength={128}
               />
               <TouchableOpacity
                 onPress={() => setShowPassword((value) => !value)}
@@ -191,9 +193,11 @@ export default function RegisterScreen() {
                 autoComplete="new-password"
                 textContentType="newPassword"
                 accessibilityLabel="确认密码"
+                maxLength={128}
               />
             </View>
 
+          <Text className="mx-5 mt-3 text-sm text-copy-muted">{ACCOUNT_PASSWORD_REQUIREMENTS}。</Text>
           {error ? (
             <View className="mx-3 mt-3 flex-row items-center rounded-2xl bg-danger-soft px-4 py-2.5" accessibilityRole="alert">
               <FontAwesome6 name="circle-exclamation" size={14} color={critical} style={{ marginRight: 6 }} />

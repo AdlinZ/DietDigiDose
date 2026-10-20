@@ -15,6 +15,7 @@ import {
   voicePreferenceStorageKey,
   VOICE_PREFERENCE_STORAGE_PREFIX,
 } from "@/services/voicePreferenceScope";
+import { beginVoiceOutput } from "@/services/voiceCaptureGate";
 import { KeyedSerialQueue } from "@/services/voiceOutputQueue";
 import { ScopedTaskCoordinator } from "@/services/scopedTaskCoordinator";
 import { loadVoiceOnnxRuntime } from "@/services/voiceOnnxRuntime";
@@ -527,7 +528,12 @@ async function cachedAudio(
 async function playUri(uri: string, generation: number) {
   if (generation !== playbackGeneration) return;
   if (activeSound) await activeSound.unloadAsync().catch(() => undefined);
+  if (generation !== playbackGeneration) return;
   const created = await Audio.Sound.createAsync({ uri }, { shouldPlay: true });
+  if (generation !== playbackGeneration) {
+    await created.sound.unloadAsync().catch(() => undefined);
+    return;
+  }
   activeSound = created.sound;
   await new Promise<void>((resolve) => {
     let settled = false;
@@ -592,22 +598,29 @@ async function speakWithGeneration(apiFetch: ApiFetch, text: string,
 }
 
 let streamGeneration = 0;
+let captureStreamId: string | null = null;
 const streamQueue = new KeyedSerialQueue<VoiceSource>();
 
 export async function speakWithVoiceFallback(apiFetch: ApiFetch, text: string, options: { userId?: number; sensitive?: boolean } = {}): Promise<VoiceSource> {
+  captureStreamId = null;
+  const finishOutput = beginVoiceOutput(true);
   streamQueue.cancel();
   const generation = ++playbackGeneration;
   streamGeneration = generation;
-  await stopActiveSoundOnly();
-  return speakWithGeneration(apiFetch, text, options, generation);
+  try {
+    await stopActiveSoundOnly();
+    return await speakWithGeneration(apiFetch, text, options, generation);
+  } finally { finishOutput(); }
 }
 
 export function enqueueVoiceOutput(apiFetch: ApiFetch, text: string,
   options: { streamId: string; userId?: number; sensitive?: boolean }): Promise<VoiceSource | null> {
+  const finishOutput = beginVoiceOutput(captureStreamId !== options.streamId);
+  captureStreamId = options.streamId;
   return streamQueue.enqueue(options.streamId, async () => {
     streamGeneration = ++playbackGeneration;
     await stopActiveSoundOnly();
-  }, () => speakWithGeneration(apiFetch, text, options, streamGeneration));
+  }, () => speakWithGeneration(apiFetch, text, options, streamGeneration)).finally(finishOutput);
 }
 
 async function stopActiveSoundOnly() {
@@ -620,9 +633,11 @@ async function stopActiveSoundOnly() {
 }
 
 export async function stopVoiceOutput() {
+  captureStreamId = null;
+  const finishOutput = beginVoiceOutput(true);
   streamQueue.cancel();
   playbackGeneration += 1;
-  await stopActiveSoundOnly();
+  try { await stopActiveSoundOnly(); } finally { finishOutput(); }
 }
 
 export async function purgeVoiceAudioCache() {

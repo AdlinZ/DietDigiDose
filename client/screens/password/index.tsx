@@ -5,6 +5,7 @@ import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import { requestJson } from "@/services/api/client";
 import { AccountSmsVerification } from "@/components/AccountSmsVerification";
+import { accountPasswordSchema, ACCOUNT_PASSWORD_REQUIREMENTS } from "@dietdigidose/contracts";
 
 export default function PasswordScreen() {
   const { user } = useAuth();
@@ -28,7 +29,7 @@ function PasswordForm() {
   const submit = async () => {
     if (sending.current) return;
     if (useSms ? !reauthToken : !currentPassword) return setError(useSms ? "请先通过绑定手机验证身份" : "请输入当前密码");
-    if (newPassword.length < 6 || newPassword.length > 128 || !/[a-z]/i.test(newPassword) || !/\d/.test(newPassword)) return setError("新密码需为 6–128 位，同时包含字母和数字");
+    if (!accountPasswordSchema.safeParse(newPassword).success) return setError(ACCOUNT_PASSWORD_REQUIREMENTS);
     if (newPassword !== confirm) return setError("两次输入的新密码不一致");
     sending.current = true; setBusy(true); setError("");
     try {
@@ -48,7 +49,7 @@ function PasswordForm() {
       <Text className="text-copy-muted">未验证邮箱不能用于证明账号归属。请提供账号与问题说明，不要发送密码、验证码或健康资料。人工核验完成前不会修改账号。</Text>
       <TouchableOpacity accessibilityRole="button" onPress={() => router.replace("/login")}><Text className="text-brand">返回登录</Text></TouchableOpacity>
     </View> : <>
-      <Text className="text-copy-muted">修改成功后，所有旧登录会话将失效。新密码需为 6–128 位，包含字母和数字。</Text>
+      <Text className="text-copy-muted">修改成功后，所有旧登录会话将失效。{ACCOUNT_PASSWORD_REQUIREMENTS}。</Text>
       {user.hasPassword !== false && !!user.phone_verified_at && <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={() => {setUseSms((value) => !value);setCurrent("");setError("");setReauthToken(null);}}><Text className="text-brand">{useSms ? "使用当前密码验证" : "忘记当前密码？通过手机验证"}</Text></TouchableOpacity>}
       {useSms ? <AccountSmsVerification purpose="password_update" onVerified={setReauthToken} disabled={busy} /> : <TextInput accessibilityLabel="当前密码" placeholder="当前密码" value={currentPassword} onChangeText={setCurrent} secureTextEntry autoComplete="current-password" autoCapitalize="none" autoCorrect={false} maxLength={128} editable={!busy} className="rounded-xl border border-line bg-surface p-4 text-ink" />}
       {([["新密码", newPassword, setNew], ["确认新密码", confirm, setConfirm]] as const).map(([label, value, onChange]) => <TextInput key={label} accessibilityLabel={label} placeholder={label} value={value} onChangeText={onChange} secureTextEntry autoComplete="new-password" autoCapitalize="none" autoCorrect={false} maxLength={128} editable={!busy} className="rounded-xl border border-line bg-surface p-4 text-ink" />)}

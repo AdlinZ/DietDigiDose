@@ -1,6 +1,6 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
-import { Modal, Text, TouchableOpacity } from "react-native";
+import { Modal, Platform, Text, TouchableOpacity } from "react-native";
 import type { Recipe } from "@/services/api";
 
 const mockRouter = { back: jest.fn(), push: jest.fn(), replace: jest.fn(), setParams: jest.fn() };
@@ -61,8 +61,9 @@ jest.mock("@/hooks/useVoiceRecorder", () => ({
   useVoiceRecorder: () => ({ isRecording: false, startRecording: jest.fn(), stopRecording: jest.fn() }),
 }));
 
+const mockRealtimeVoice = jest.fn();
 jest.mock("@/hooks/useRealtimeCookingVoice", () => ({
-  useRealtimeCookingVoice: () => ({ isConnected: false, isSpeaking: false, error: null }),
+  useRealtimeCookingVoice: (...args: unknown[]) => mockRealtimeVoice(...args),
 }));
 
 const mockSetTimerSeconds = jest.fn();
@@ -130,6 +131,7 @@ const sampleRecipe: Recipe = {
 
 describe("CookingModeScreen", () => {
   let tree: renderer.ReactTestRenderer | null = null;
+  const originalPlatform = Platform.OS;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -137,9 +139,11 @@ describe("CookingModeScreen", () => {
     mockUser = { id: 1, username: "测试大厨" };
     mockRecipeDetail.mockResolvedValue(sampleRecipe);
     mockQueueList.mockResolvedValue([]);
+    mockRealtimeVoice.mockReturnValue({ active: false, supported: false });
   });
 
   afterEach(() => {
+    Platform.OS = originalPlatform;
     if (tree) {
       act(() => {
         tree!.unmount();
@@ -236,6 +240,40 @@ describe("CookingModeScreen", () => {
       actionBtn!.props.onPress();
     });
     expect(mockSetIsTimerRunning).toHaveBeenCalled();
+  });
+
+  test.each(["ios", "android", "web"] as const)("shows truthful continuous voice guidance on %s", async (platform) => {
+    Platform.OS = platform;
+    mockRealtimeVoice.mockReturnValue({ active: true, supported: true, muted: false, state: "listening", stop: jest.fn() });
+    await act(async () => {
+      tree = renderer.create(<CookingModeScreen />);
+    });
+    act(() => {
+      mockRealtimeVoice.mock.calls.at(-1)![0].onTranscript("继续计时", true);
+    });
+    const text = extractText(tree!.root);
+    if (platform === "web") {
+      expect(text).toContain("连续语音已开启，可直接说话或插话");
+      expect(text).not.toContain("请等回复结束后再说话");
+    } else {
+      expect(text).toContain("连续语音已开启，请等回复结束后再说话");
+      expect(text).not.toContain("可直接说话或插话");
+    }
+  });
+
+  test.each([
+    [true, "listening", "持续监听已静音，点麦克风恢复"],
+    [false, "reconnecting", "连接较弱，正在恢复连续语音..."],
+  ])("prioritizes mute and reconnect status over voice capability guidance", async (muted, state, expected) => {
+    mockRealtimeVoice.mockReturnValue({ active: true, supported: true, muted, state, stop: jest.fn() });
+    await act(async () => {
+      tree = renderer.create(<CookingModeScreen />);
+    });
+    act(() => {
+      mockRealtimeVoice.mock.calls.at(-1)![0].onTranscript("下一步", true);
+    });
+    expect(extractText(tree!.root)).toContain(expected);
+    expect(extractText(tree!.root)).not.toContain("连续语音已开启");
   });
 
   test("displays error when recipeId is invalid", async () => {

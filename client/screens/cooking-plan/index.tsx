@@ -1,6 +1,6 @@
 import { ReheatingDevicePicker } from "@/components/ReheatingDevicePicker";
 import { CookingSchedulePanel } from "@/components/CookingSchedulePanel";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { Screen } from "@/components/Screen";
@@ -11,7 +11,7 @@ import { healthApi } from "@/services/api/health";
 import { OnboardingProgressCard } from "@/components/OnboardingProgressCard";
 import { recommendationsApi } from "@/services/api/recommendations";
 import { toLocalDateKey, addLocalDays } from "@/utils/date";
-import { cookingPlanDraftSchema, type CookingPlanDraft } from "@dietdigidose/contracts";
+import { cookingPlanDraftSchema, kitchenPreferencesSchema, type KitchenPreferences, type CookingPlanDraft } from "@dietdigidose/contracts";
 import * as Crypto from "expo-crypto";
 import { mealPlansApi } from "@/services/api/mealPlans";
 
@@ -22,7 +22,13 @@ export default function CookingPlanScreen() {
 
 function CookingPlanForm() {
   const router = useSafeRouter();
-  const { planId, onboarding, initialServings, initialMinutes, initialAvoidSpicy, sourceMode } = useSafeSearchParams<{ planId?: string; onboarding?: boolean; initialServings?: number; initialMinutes?: number; initialAvoidSpicy?: boolean; sourceMode?: string }>();
+  const { planId, onboarding, initialServings, initialMinutes, initialAvoidSpicy, initialPreferences, sourceMode } = useSafeSearchParams<{ planId?: string; onboarding?: boolean; initialServings?: number; initialMinutes?: number; initialAvoidSpicy?: boolean; initialPreferences?: KitchenPreferences; sourceMode?: string }>();
+  // Router decoding may allocate a fresh nested object on every render.
+  const initialPreferencesKey = JSON.stringify(initialPreferences ?? {});
+  const initialKitchenPreferences = useMemo(() => {
+    const parsed = kitchenPreferencesSchema.safeParse(JSON.parse(initialPreferencesKey));
+    return parsed.success ? parsed.data : {};
+  }, [initialPreferencesKey]);
   const saveId = useRef(Crypto.randomUUID());
   const persistedPlan = useRef<{ id: string; version: number } | null>(null);
   const [saved, setSaved] = useState(false);
@@ -38,6 +44,7 @@ function CookingPlanForm() {
   const [date, setDate] = useState(toLocalDateKey());
   const [servings, setServings] = useState(String(initialServings ?? 1));
   const [minutes, setMinutes] = useState(initialMinutes == null ? "" : String(initialMinutes));
+  const [temporaryPreferences, setTemporaryPreferences] = useState<KitchenPreferences>(initialKitchenPreferences);
   const [temporaryAvoidSpicy,setTemporaryAvoidSpicy] = useState<boolean | undefined>(initialAvoidSpicy ?? undefined);
   const [reheatingDeviceIds, setReheatingDeviceIds] = useState<number[]>();
   const [includeLunch, setIncludeLunch] = useState(!onboarding);
@@ -55,6 +62,7 @@ function CookingPlanForm() {
       return () => { requestSequence.current += 1; };
     }
     setReheatingDeviceIds(undefined);
+    setTemporaryPreferences(initialKitchenPreferences);
     setTemporaryAvoidSpicy(initialAvoidSpicy ?? undefined);
     setResult(null); setError(""); setLoading(false); setSaved(false); setSaving(false); setReplacement(null); setActivated(false);
     persistedPlan.current = null;
@@ -70,6 +78,7 @@ function CookingPlanForm() {
         if (plan.archived) throw new Error("此方案已归档");
         loadedContext.current = context;
         persistedPlan.current = { id: plan.id, version: plan.version };
+        setTemporaryPreferences(draft.effectivePreferences);
         setTemporaryAvoidSpicy(draft.effectivePreferences.avoid_spicy ?? undefined);
         setReheatingDeviceIds(draft.reheatingDeviceIds);
         setResult(draft); setSaved(true); setActivated(plan.status !== "draft");
@@ -82,7 +91,7 @@ function CookingPlanForm() {
       }).finally(() => { if (account.current === owner && requestSequence.current === sequence) setLoading(false); });
     } else { loadedContext.current = context; }
     return () => { requestSequence.current += 1; };
-  }, [user?.id, planId, authFetch, initialAvoidSpicy]));
+  }, [user?.id, planId, authFetch, initialAvoidSpicy, initialKitchenPreferences]));
   const invalidateDraft = () => {
     setReplacement(null);
     setSaved(false); setSaving(false);
@@ -109,7 +118,7 @@ function CookingPlanForm() {
         meals: [{ id: "dinner", date, mealType: "dinner", servings: Number(servings) },
           ...(includeLunch ? [{ id: "lunch", date: nextDate, mealType: "lunch" as const, servings: Number(servings) }] : [])],
         excludedPreparedMealIds: [],
-        preferences: { ...(reheatingDeviceIds?.length ? { reheating_available: true } : {}), ...(minutes.trim() ? { meal_time_minutes: Number(minutes) } : {}),...(temporaryAvoidSpicy === undefined ? {} : { avoid_spicy: temporaryAvoidSpicy }) },
+        preferences: { ...temporaryPreferences, servings: Number(servings), ...(reheatingDeviceIds?.length ? { reheating_available: true } : {}), meal_time_minutes: minutes.trim() ? Number(minutes) : undefined,...(temporaryAvoidSpicy === undefined ? {} : { avoid_spicy: temporaryAvoidSpicy }) },
       });
       if (account.current === owner && requestSequence.current === sequence) setResult(draft);
     } catch (e) { if (account.current === owner && requestSequence.current === sequence) setError(e instanceof Error ? e.message : "方案计算失败"); }

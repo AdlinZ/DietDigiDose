@@ -95,3 +95,57 @@ describe("auth account module", () => {
     assert.deepEqual(receivedObjects,[{ backend:"local",path:"/media/uploads/community/9/2026-09-01/photo.png" }]);
   });
 });
+
+test("rejects truncating new passwords before writes while retaining legacy login", async () => {
+  const prefix = "Aa1" + "x".repeat(69);
+  const legacyPassword = prefix + "old";
+  const legacyHash = bcrypt.hashSync(legacyPassword, 4);
+  // Reproduction using synthetic data only: bcrypt cannot distinguish these suffixes.
+  assert.equal(bcrypt.compareSync(prefix + "new", legacyHash), true);
+  let writes = 0;
+  const service = new AuthAccountService(repository({
+    createUser: async () => { writes++; throw new Error("must not write"); },
+    changePassword: async () => { writes++; return true; },
+    findLoginUser: async () => ({id:8,username:"legacy",password_hash:legacyHash,session_version:1,is_disabled:false,role:"user"}),
+    getCredentials: async () => ({password_hash:legacyHash,role:"user"}),
+  }));
+  for (const invalid of [prefix + "new", "Aa1" + "界".repeat(24)]) {
+    await assert.rejects(service.register("test@example.com", "tester", invalid), /72/);
+    await assert.rejects(service.changePassword(8, legacyPassword, invalid), /72/);
+    await assert.rejects(service.setPassword(8, invalid, "synthetic-reauth-token"), /72/);
+    await assert.rejects(service.recoverPassword("8." + "a".repeat(43), invalid), /72/);
+  }
+  assert.equal(writes, 0);
+  assert.ok((await service.login("test@example.com", legacyPassword, "127.0.0.1")).token);
+  assert.equal(writes, 0, "login must not silently migrate legacy hashes");
+});
+
+test("invalid recovery password leaves proof usable for a valid byte-boundary reset", async () => {
+  let consumed = false;
+  let storedHash = bcrypt.hashSync("OldRecovery1", 4);
+  const service = new AuthAccountService(repository({
+    changePassword: async (_id, hash) => {
+      if (consumed) return false;
+      consumed = true; storedHash = hash; return true;
+    },
+  }));
+  const recoveryToken = "8." + "a".repeat(43);
+  const newPassword = "Aa1" + "界".repeat(23);
+  await assert.rejects(service.recoverPassword(recoveryToken, newPassword + "x"), /72/);
+  assert.equal(consumed, false);
+  assert.equal((await service.recoverPassword(recoveryToken, newPassword)).success, true);
+  assert.equal(bcrypt.compareSync(newPassword, storedHash), true);
+  assert.equal(bcrypt.compareSync("OldRecovery1", storedHash), false);
+  await assert.rejects(service.recoverPassword(recoveryToken, "AnotherPassword1"), /恢复凭据已失效/);
+});
+
+test("HTTP password schemas bound new writes but not legacy password proofs", async () => {
+  const { registerSchema, changePasswordSchema, adminUserCredentialsSchema, loginSchema, deleteAccountSchema } = await import("../src/validation/schemas.js");
+  const longPassword = "Aa1" + "x".repeat(70);
+  assert.equal(registerSchema.safeParse({identifier:"test@example.com",username:"tester",password:longPassword}).success, false);
+  assert.equal(changePasswordSchema.safeParse({currentPassword:"OldPassword1",newPassword:longPassword}).success, false);
+  assert.equal(adminUserCredentialsSchema.safeParse({newPassword:longPassword}).success, false);
+  assert.equal(loginSchema.safeParse({identifier:"test@example.com",password:longPassword}).success, true);
+  assert.equal(changePasswordSchema.safeParse({currentPassword:longPassword,newPassword:"NewPassword1"}).success, true);
+  assert.equal(deleteAccountSchema.safeParse({password:longPassword,confirmation:"DELETE"}).success, true);
+});

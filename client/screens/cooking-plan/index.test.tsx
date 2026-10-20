@@ -5,6 +5,7 @@ import type { CookingPlanDraft } from "@dietdigidose/contracts";
 
 const mockRouter = { back: jest.fn(), push: jest.fn(), replace: jest.fn(), setParams: jest.fn() };
 let mockParams: Record<string, unknown> = {};
+let mockFreshParams = false;
 let mockUser: { id: number; username: string } | null = { id: 1, username: "测试用户" };
 const mockAuthFetch = jest.fn();
 
@@ -45,7 +46,7 @@ jest.mock("@/contexts/AuthContext", () => ({
 
 jest.mock("@/hooks/useSafeRouter", () => ({
   useSafeRouter: () => mockRouter,
-  useSafeSearchParams: () => mockParams,
+  useSafeSearchParams: () => mockFreshParams ? JSON.parse(JSON.stringify(mockParams)) : mockParams,
 }));
 
 jest.mock("@/hooks/useHealthSummary", () => ({
@@ -140,6 +141,7 @@ describe("CookingPlanScreen", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockParams = {};
+    mockFreshParams = false;
     mockUser = { id: 1, username: "测试用户" };
     mockCookingPlan.mockResolvedValue(sampleDraft);
     mockSaveDraft.mockResolvedValue({
@@ -172,6 +174,37 @@ describe("CookingPlanScreen", () => {
 
   const extractText = (node: renderer.ReactTestInstance) =>
     node.findAllByType(Text).map((t) => React.Children.toArray(t.props.children).join("")).join(" ");
+
+  test("preserves all once-only voice conditions in calculation without updating the profile", async () => {
+    const preferences = { eating_location: "work", carry_meals: true, refrigeration_available: false, reheating_available: false, usual_meals: ["lunch"], budget_per_meal: 30 };
+    mockParams = { initialPreferences: preferences, initialServings: 2, initialMinutes: 20, onboarding: true };
+    await act(async () => { tree = renderer.create(<CookingPlanScreen />); });
+    await act(async () => { tree!.root.findAllByType(TouchableOpacity).find(btn => extractText(btn).includes("按当前库存重新计算"))!.props.onPress(); });
+    expect(mockCookingPlan.mock.calls[0][1].preferences).toEqual({ ...preferences, servings: 2, meal_time_minutes: 20 });
+    expect(mockPatchProfile).not.toHaveBeenCalled();
+  });
+
+  test("clearing the minutes field does not revive a voice time override", async () => {
+    mockParams = { initialPreferences: { meal_time_minutes: 20 }, initialMinutes: 20, onboarding: true };
+    await act(async () => { tree = renderer.create(<CookingPlanScreen />); });
+    await act(async () => { tree!.root.findAllByType(TextInput).find(node => node.props.accessibilityLabel === "本次时间上限")!.props.onChangeText(""); });
+    await act(async () => { tree!.root.findAllByType(TouchableOpacity).find(btn => extractText(btn).includes("按当前库存重新计算"))!.props.onPress(); });
+    expect(mockCookingPlan.mock.calls[0][1].preferences.meal_time_minutes).toBeUndefined();
+    expect(mockPatchProfile).not.toHaveBeenCalled();
+  });
+
+  test("freshly decoded route preferences do not invalidate an in-flight calculation", async () => {
+    mockFreshParams = true;
+    mockParams = { initialPreferences: { refrigeration_available: false }, onboarding: true };
+    let resolve!: (draft: CookingPlanDraft) => void;
+    mockCookingPlan.mockReturnValueOnce(new Promise<CookingPlanDraft>(done => { resolve = done; }));
+    await act(async () => { tree = renderer.create(<CookingPlanScreen />); });
+    await act(async () => { tree!.root.findAllByType(TouchableOpacity).find(btn => extractText(btn).includes("按当前库存重新计算"))!.props.onPress(); });
+    expect(mockCookingPlan).toHaveBeenCalledTimes(1);
+    await act(async () => { resolve(sampleDraft); });
+    expect(extractText(tree!.root)).toContain("方案草案 · 还需核对");
+    expect(extractText(tree!.root)).toContain("经典番茄炒蛋");
+  });
 
   test("renders initial cooking plan form controls", async () => {
     await act(async () => {

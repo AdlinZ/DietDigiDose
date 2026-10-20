@@ -106,6 +106,7 @@ import {
   speakWithVoiceFallback,
   stopVoiceOutput,
 } from "./voicePackManager";
+import { isVoiceOutputBlockingCapture } from "./voiceCaptureGate";
 import { voicePreferenceStorageKey } from "./voicePreferenceScope";
 
 function deferred<T>() {
@@ -129,6 +130,21 @@ describe("voice audio cache account lifecycle", () => {
     mockFiles.clear();
     mockWriteHook = null;
     jest.clearAllMocks();
+  });
+
+  it("keeps capture blocked when an old synthesis finishes after replacement", async () => {
+    const old = deferred<{ audioBase64: string; mimeType: string }>();
+    const current = deferred<{ audioBase64: string; mimeType: string }>();
+    mockSynthesize.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    const first = speakWithVoiceFallback(jest.fn(), "旧回答", { userId: 101 });
+    await waitForCall(mockSynthesize);
+    const second = speakWithVoiceFallback(jest.fn(), "新回答", { userId: 101 });
+    await waitForCall(mockSynthesize, 2);
+    old.resolve({ audioBase64: "AQID", mimeType: "audio/mpeg" });
+    await first;
+    expect(isVoiceOutputBlockingCapture()).toBe(true);
+    current.resolve({ audioBase64: "AQID", mimeType: "audio/mpeg" });
+    await second;
   });
 
   it("does not cache a sensitive server response that completes after logout", async () => {

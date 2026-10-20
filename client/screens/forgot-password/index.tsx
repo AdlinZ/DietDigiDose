@@ -3,7 +3,7 @@ import { ScrollView, Text, TextInput, TouchableOpacity, View } from "react-nativ
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { authApi } from "@/services/api";
-import { accountPasswordSchema } from "@dietdigidose/contracts";
+import { accountPasswordSchema, ACCOUNT_PASSWORD_REQUIREMENTS } from "@dietdigidose/contracts";
 
 export default function ForgotPasswordScreen() {
   const router = useSafeRouter();
@@ -32,7 +32,7 @@ export default function ForgotPasswordScreen() {
     if (action === "verify" && !/^\d{6}$/.test(code)) return setError("请输入 6 位验证码");
     if (action === "reset") {
       if (!grant || Date.now() >= grant.expiresAt) { setGrant(null); return setError("身份验证已过期，请重新获取验证码"); }
-      if (!accountPasswordSchema.safeParse(password).success) return setError("新密码需为 6–128 位，包含字母和数字");
+      if (!accountPasswordSchema.safeParse(password).success) return setError(ACCOUNT_PASSWORD_REQUIREMENTS);
       if (password !== confirmation) return setError("两次输入的新密码不一致");
     }
     pending.current = true; setBusy(true); setError("");
@@ -71,7 +71,7 @@ export default function ForgotPasswordScreen() {
           <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={restart}><Text className="text-brand">更换手机号</Text></TouchableOpacity>
         </> : null}
       </> : <>
-        <Text className="text-copy-muted">身份已验证，请在 5 分钟内设置新密码。密码需为 6–128 位，包含字母和数字。</Text>
+        <Text className="text-copy-muted">身份已验证，请在 5 分钟内设置新密码。{ACCOUNT_PASSWORD_REQUIREMENTS}。</Text>
         {([["新密码", password, setPassword], ["确认新密码", confirmation, setConfirmation]] as const).map(([label, value, onChangeText]) => <TextInput key={label} accessibilityLabel={label} placeholder={label} value={value} onChangeText={onChangeText} editable={!busy} secureTextEntry autoComplete="new-password" autoCapitalize="none" autoCorrect={false} maxLength={128} className="rounded-xl border border-line bg-surface p-4 text-ink" />)}
         <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={restart}><Text className="text-brand">重新验证</Text></TouchableOpacity>
       </>}

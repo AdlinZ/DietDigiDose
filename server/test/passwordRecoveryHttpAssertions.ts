@@ -27,6 +27,10 @@ export async function verifyPasswordRecoveryHttp(api: Api, db: Database.Database
   }
   assert.equal((await post("/password",{reauthToken:recoveryToken,newPassword:"CrossPurpose1"},oldLogin.body.token)).status,403);
   assert.equal((await post("/password-recovery/reset",{recoveryToken,newPassword:"short"})).status,400);
+  // Invalid new passwords must be rejected before consuming the valid one-time grant.
+  for (const newPassword of ["Aa1" + "x".repeat(70), "Aa1" + "界".repeat(24)]) {
+    assert.equal((await post("/password-recovery/reset",{recoveryToken,newPassword})).status,400);
+  }
   const resets=await Promise.all([post("/password-recovery/reset",{recoveryToken,newPassword:"NewRecovery2"}),post("/password-recovery/reset",{recoveryToken,newPassword:"NewRecovery2"})]);
   assert.deepEqual(resets.map(value => value.status).sort(),[200,403]);
   assert.equal((await post("/password-recovery/verify",{challengeId:sent.body.challengeId,code:"123456"})).status,409);

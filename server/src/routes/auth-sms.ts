@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
-import { ACCOUNT_SECURITY_CAPABILITY, reauthSendSchema, reauthVerifySchema, passwordRecoverySendSchema, passwordRecoveryVerifySchema, type ReauthPurpose } from "@dietdigidose/contracts";
+import { ACCOUNT_PASSWORD_REQUIREMENTS, accountPasswordSchema, ACCOUNT_SECURITY_CAPABILITY, reauthSendSchema, reauthVerifySchema, passwordRecoverySendSchema, passwordRecoveryVerifySchema, type ReauthPurpose } from "@dietdigidose/contracts";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import type { ReauthUser } from "../modules/authVerification/types.js";
 import bcrypt from "bcryptjs";
@@ -384,8 +384,8 @@ router.post("/register", async (req, res) => {
   const password = typeof req.body?.password === "string" ? req.body.password : "";
   if (registrationToken.length < 32) return sendError(res, 400, "注册凭证无效", "INVALID_REGISTRATION_TOKEN");
   if (username.length < 2 || username.length > 30) return sendError(res, 400, "用户名长度应为 2 至 30 位", "INVALID_USERNAME");
-  if (password.length < 6 || password.length > 128 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
-    return sendError(res, 400, "备用密码至少 6 位，且必须包含字母和数字", "INVALID_PASSWORD");
+  if (!accountPasswordSchema.safeParse(password).success) {
+    return sendError(res, 400, ACCOUNT_PASSWORD_REQUIREMENTS, "INVALID_PASSWORD");
   }
 
   const tokenHash = hashRegistrationToken(registrationToken);

@@ -3,7 +3,7 @@ import { useFocusEffect } from "expo-router";
 import { ActivityIndicator, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { z } from "zod";
 import * as Crypto from "expo-crypto";
-import type { OnboardingState, OnboardingTask, OnboardingUpdate } from "@dietdigidose/contracts";
+import { kitchenPreferencesSchema, type OnboardingState, type OnboardingTask, type OnboardingUpdate } from "@dietdigidose/contracts";
 import { Screen } from "@/components/Screen";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { PreferenceVoiceInput } from "@/components/PreferenceVoiceInput";
@@ -21,6 +21,7 @@ const draftSchema = z.object({
   safety: z.enum(["unknown", "none", "provided"]).nullable().default(null),
   allergy: z.string().default(""), severity: z.enum(["mild", "moderate", "severe"]).nullable().default(null),
   restrictions: z.array(z.string()).default([]), persistent: z.boolean().default(false),
+  kitchen: kitchenPreferencesSchema.default({}),
   avoidSpicy: z.boolean().nullable().default(null), source: z.enum(["inventory", "shopping"]).default("inventory"),
 });
 const emptyDraft = draftSchema.parse({});
@@ -127,7 +128,12 @@ function OnboardingForm() {
       changes.dietary_restrictions = [...new Set([...(profile.dietary_restrictions ?? []), ...draft.value.restrictions])];
       changes.safety_status = "provided";
     } else if (draft.value.safety === "none" && profile.safety_status !== "provided") changes.safety_status = "none";
-    if (draft.value.persistent) changes.kitchen_constraints = { servings, meal_time_minutes: minutes, ...(draft.value.avoidSpicy === null ? {} : { avoid_spicy: draft.value.avoidSpicy }) };
+    // Editable scalar fields are authoritative, including clearing a prior voice value.
+    const kitchenPreferences = { ...draft.value.kitchen };
+    delete kitchenPreferences.servings;
+    delete kitchenPreferences.meal_time_minutes;
+    delete kitchenPreferences.avoid_spicy;
+    if (draft.value.persistent) changes.kitchen_constraints = { ...kitchenPreferences, ...(draft.value.servings ? { servings } : {}), ...(draft.value.minutes ? { meal_time_minutes: minutes } : {}), ...(draft.value.avoidSpicy === null ? {} : { avoid_spicy: draft.value.avoidSpicy }) };
     if (Object.keys(changes).length) {
       if (!profile.version) throw new Error("服务端需要升级后才能安全更新资料");
       const saved = await healthApi.patchProfile<HealthProfile>(authFetch, { version: profile.version, ...changes });
@@ -137,7 +143,7 @@ function OnboardingForm() {
     const state = await updateProgress({ version: server.version, status: "in_progress", step: "task" });
     if (!active.current) return;
     setServer(state);
-    router.push("/cooking-plan", { onboarding: true, initialServings: servings, initialMinutes: minutes, initialAvoidSpicy: draft.value.avoidSpicy, sourceMode: draft.value.source });
+    router.push("/cooking-plan", { onboarding: true, initialServings: servings, initialMinutes: minutes, initialAvoidSpicy: draft.value.avoidSpicy, initialPreferences: draft.value.kitchen, sourceMode: draft.value.source });
   });
   if (loading || !draft.ready) return <Screen><View className="flex-1 items-center justify-center"><ActivityIndicator /></View></Screen>;
   return <Screen safeAreaEdges={["top", "bottom"]} className="bg-background"><ScrollView keyboardShouldPersistTaps="handled" contentContainerClassName="p-6 gap-5 mx-auto w-full max-w-2xl">
@@ -151,10 +157,10 @@ function OnboardingForm() {
       {tasks.map(task => <TouchableOpacity accessibilityRole="button" disabled={busy} key={task.id} onPress={() => choose(task.id)} className="min-h-24 flex-row items-center gap-4 rounded-3xl border border-line bg-surface p-5"><View className="h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft"><FontAwesome6 name={task.icon} size={23} colorClassName="accent-brand" /></View><View className="flex-1 gap-1"><Text className="text-lg font-bold text-ink">{task.title}</Text><Text className="leading-5 text-copy-muted">{task.detail}</Text></View><Text className="text-xl text-brand">›</Text></TouchableOpacity>)}
     </> : <>
       <TouchableOpacity disabled={busy} onPress={() => setPage("tasks")}><Text className="text-brand">‹ 换一件事</Text></TouchableOpacity>
-      <PreferenceVoiceInput onApply={(value, persistent) => change({ servings: value.servings == null ? draft.value.servings : String(value.servings), minutes: value.meal_time_minutes == null ? draft.value.minutes : String(value.meal_time_minutes), avoidSpicy: value.avoid_spicy ?? draft.value.avoidSpicy, persistent })} />
+      <PreferenceVoiceInput onApply={(value, persistent) => change({ kitchen: value, servings: value.servings == null ? "" : String(value.servings), minutes: value.meal_time_minutes == null ? "" : String(value.meal_time_minutes), avoidSpicy: value.avoid_spicy ?? null, persistent })} />
       <View className="gap-3 rounded-2xl bg-surface p-4"><Text className="font-bold text-ink">几个人吃？</Text><View className="flex-row gap-2">{[1, 2, 3, 4].map(value => <Option key={value} label={`${value} 人`} selected={draft.value.servings === String(value)} onPress={() => change({ servings: String(value) })} />)}</View><TextInput accessibilityLabel="就餐人数" value={draft.value.servings} onChangeText={servings => change({ servings })} keyboardType="number-pad" placeholder={`本次建议：${profile?.kitchen_constraints?.servings || 1} 人`} className="rounded-xl border border-line p-3 text-ink" />
         <Text className="font-bold text-ink">有多少做饭时间？</Text><View className="flex-row gap-2">{[15, 20, 30, 45].map(value => <Option key={value} label={`${value} 分钟`} selected={draft.value.minutes === String(value)} onPress={() => change({ minutes: String(value) })} />)}</View><TextInput accessibilityLabel="做饭分钟数" value={draft.value.minutes} onChangeText={minutes => change({ minutes })} keyboardType="number-pad" placeholder={`本次建议：${profile?.kitchen_constraints?.meal_time_minutes || 30} 分钟`} className="rounded-xl border border-line p-3 text-ink" />
-        <Option label={draft.value.persistent ? "✓ 保存人数和时间为常用设置" : "仅本次使用；点此保存为常用设置"} selected={draft.value.persistent} onPress={() => change({ persistent: !draft.value.persistent })} />
+        <Option label={draft.value.persistent ? "✓ 保存本次确认的厨房偏好为常用设置" : "仅本次使用；点此保存为常用设置"} selected={draft.value.persistent} onPress={() => change({ persistent: !draft.value.persistent })} />
       </View>
       <View className="gap-3 rounded-2xl bg-surface p-4"><Text className="font-bold text-ink">有没有饮食限制？</Text>{profile?.safety_status === "provided" ? <Text className="text-brand">沿用档案中已保存的过敏和饮食限制。</Text> : <View className="flex-row flex-wrap gap-2">{([["provided", "有过敏或限制"], ["none", "确认没有"], ["unknown", "稍后填写"]] as const).map(([value, label]) => <Option key={value} label={label} selected={(draft.value.safety ?? (profile?.safety_status === "none" ? "none" : null)) === value} onPress={() => change({ safety: value })} />)}</View>}
         {draft.value.safety === "provided" ? <><TextInput accessibilityLabel="过敏食物" placeholder="过敏食物（可选，请逐项明确）" value={draft.value.allergy} onChangeText={allergy => change({ allergy })} className="rounded-xl border border-line p-3 text-ink" />{draft.value.allergy.trim() ? <View className="flex-row gap-2">{([["mild", "轻度"], ["moderate", "中度"], ["severe", "重度"]] as const).map(([value,label]) => <Option key={value} label={label} selected={draft.value.severity === value} onPress={() => change({ severity: value })} />)}</View> : null}<View className="flex-row flex-wrap gap-2">{["蛋奶素", "纯素", "不吃猪肉", "清真"].map(value => <Option key={value} label={value} selected={draft.value.restrictions.includes(value)} onPress={() => change({ restrictions: draft.value.restrictions.includes(value) ? draft.value.restrictions.filter(item => item !== value) : [...draft.value.restrictions, value] })} />)}</View></> : null}

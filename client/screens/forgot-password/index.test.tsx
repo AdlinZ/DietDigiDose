@@ -28,6 +28,11 @@ test("recovery verifies the phone, validates confirmation and clears secrets aft
   act(() => input(tree, "恢复验证码", "123456"));
   await act(async () => { press(tree, "验证身份"); });
   expect(mockVerify).toHaveBeenCalledWith("challenge", "123456");
+  const tooLong = "Aa1" + "界".repeat(24);
+  act(() => { input(tree, "新密码", tooLong); input(tree, "确认新密码", tooLong); });
+  await act(async () => { press(tree, "重设密码"); });
+  expect(mockReset).not.toHaveBeenCalled();
+  expect(JSON.stringify(tree.toJSON())).toContain("72字节");
   act(() => { input(tree, "新密码", "NewPass123"); input(tree, "确认新密码", "WrongPass1"); });
   await act(async () => { press(tree, "重设密码"); });
   expect(mockReset).not.toHaveBeenCalled();

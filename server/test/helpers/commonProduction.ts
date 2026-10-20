@@ -115,15 +115,44 @@ export async function verifyCommonProduction(plans: MealPlansRepository, diet: D
   if (legacyReplay.kind === "completed") assert.equal((legacyReplay.value.prepared_meal as PreparedMeal).id, made.id);
   assert.equal((await queueService.complete(queueId, userId, started.version)).status, "completed");
   const second = made.allocations![0];
-  const eaten = await diet.applyMealEvent(userId, made.id, { idempotency_key: randomUUID(), version: 1, type: "eat", servings: 0.5, recorded_at: "2099-09-11", allocation_id: second.id, allocation_version: 1 });
+  const eating = { idempotency_key: randomUUID(), version: 1, type: "eat" as const, servings: 0.5, recorded_at: "2099-09-11", allocation_id: second.id, allocation_version: 1 };
+  const beforeEating = await diet.listPreparedMeals(userId);
+  const beforeEatingRecords = await query("SELECT id FROM diet_records WHERE user_id=? ORDER BY id", [userId]);
+  // Physical leftovers from another target are not available to this meal.
+  await assert.rejects(diet.applyMealEvent(userId, made.id, { ...eating, servings: 1.5 }), { code: "MEAL_ALLOCATION_INSUFFICIENT" });
+  await assert.rejects(diet.applyMealEvent(userId, made.id, { ...eating, allocation_id: null, allocation_version: undefined }), { code: "MEAL_ALLOCATION_INSUFFICIENT" });
+  assert.deepEqual(await diet.listPreparedMeals(userId), beforeEating);
+  assert.deepEqual(await query("SELECT id FROM diet_records WHERE user_id=? ORDER BY id", [userId]), beforeEatingRecords);
+  const eaten = await diet.applyMealEvent(userId, made.id, eating);
   assert.equal((eaten.diet_record as Record<string, unknown>).amount, "0.5份");
   assert.equal((eaten.diet_record as Record<string, unknown>).recorded_at, "2099-09-11");
   const meal = eaten.prepared_meal as PreparedMeal;
   assert.equal(meal.remaining_servings, 1.5);
-  const discarded = await diet.applyMealEvent(userId, made.id, { idempotency_key: randomUUID(), version: meal.version, type: "discard", servings: 0.5, allocation_id: second.id, allocation_version: 2 });
+  const discarding = { idempotency_key: randomUUID(), version: meal.version, type: "discard" as const, servings: 0.5, allocation_id: second.id, allocation_version: 2 };
+  const discarded = await diet.applyMealEvent(userId, made.id, discarding);
   assert.equal(discarded.diet_record, null);
   const final = (await diet.listPreparedMeals(userId)).find(row => row.id === made.id)!;
   assert.equal(final.remaining_servings, 1);
   assert.equal(final.allocations!.find(row => row.targetMealId === "meal-12")!.remainingServings, 1);
+  const recordsAfterDiscard = await query("SELECT id FROM diet_records WHERE user_id=? ORDER BY id", [userId]);
+  assert.equal(recordsAfterDiscard.length, beforeEatingRecords.length + 1, "discard never creates intake");
+  assert.equal((await diet.applyMealEvent(userId, made.id, eating)).repeated, true, "retry remains safe after a later discard");
+  assert.equal((await diet.applyMealEvent(userId, made.id, discarding)).repeated, true);
+  for (const changed of [{ ...eating, servings: 0.25 }, { ...discarding, type: "eat" as const }]) {
+    await assert.rejects(diet.applyMealEvent(userId, made.id, changed), { code: "PREPARED_MEAL_KEY_CONFLICT" });
+  }
+  assert.deepEqual((await diet.listPreparedMeals(userId)).find(row => row.id === made.id), final);
+  assert.deepEqual(await query("SELECT id FROM diet_records WHERE user_id=? ORDER BY id", [userId]), recordsAfterDiscard);
+  const last = final.allocations!.find(row => row.targetMealId === "meal-12")!;
+  const finished = await diet.applyMealEvent(userId, made.id, { idempotency_key: randomUUID(), version: final.version,
+    type: "eat", servings: 1, recorded_at: "2099-09-12", allocation_id: last.id, allocation_version: last.version });
+  const settled = finished.prepared_meal as PreparedMeal;
+  assert.equal(settled.remaining_servings, 0);
+  assert(settled.allocations!.every(row => row.status === "settled" && row.remainingServings === 0));
+  const recordsAfterSettlement = await query("SELECT id FROM diet_records WHERE user_id=? ORDER BY id", [userId]);
+  await assert.rejects(diet.applyMealEvent(userId, made.id, { idempotency_key: randomUUID(), version: settled.version,
+    type: "discard", servings: 0.1 }), { code: "PREPARED_MEAL_INSUFFICIENT" });
+  assert.deepEqual(await query("SELECT id FROM diet_records WHERE user_id=? ORDER BY id", [userId]), recordsAfterSettlement);
+  assert.equal((await diet.listPreparedMeals(userId)).find(row => row.id === made.id)?.remaining_servings, 0);
   assert.equal(Number((await query("SELECT quantity_value FROM inventory_items WHERE id=?", [stockId]))[0].quantity_value), 3);
 }

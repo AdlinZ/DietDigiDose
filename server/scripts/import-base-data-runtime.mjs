@@ -56,6 +56,7 @@ try {
     }
     const password = process.env[r.password_env];
     if (!password || password.length < 16) throw new Error(`Provide a strong password through ${r.password_env}`);
+    if (Buffer.byteLength(password, "utf8") > 72) throw new Error(`${r.password_env} must not exceed 72 UTF-8 bytes`);
     const created = await insert('users', { username: r.username, nickname: r.nickname, role: r.role,
       email: r.is_demo ? `${r.username}@demo.dietdigidose.invalid` : null,
       password_hash: await bcrypt.hash(password, 12), must_change_password: true, is_demo: r.is_demo });

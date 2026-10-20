@@ -4,19 +4,23 @@ import { Modal, Platform, Text, TouchableOpacity } from "react-native";
 import type { Recipe } from "@/services/api";
 
 const mockRouter = { back: jest.fn(), push: jest.fn(), replace: jest.fn(), setParams: jest.fn() };
-let mockParams: { recipeId?: string; queueItemId?: string } = { recipeId: "10" };
+let mockParams: { recipeId?: string; queueItemId?: string; queueVersion?: number } = { recipeId: "10" };
 let mockUser: { id: number; username: string } | null = { id: 1, username: "测试大厨" };
+
+let mockSessionGeneration = 1;
 
 const mockRecipeDetail = jest.fn();
 const mockQueueList = jest.fn();
 const mockVoiceCommand = jest.fn();
+const mockWaitForAgentRun = jest.fn();
+const mockVoiceRecorder = jest.fn();
 
 jest.mock("@/services/api", () => ({
   recipesApi: { detail: (id: number) => mockRecipeDetail(id) },
   cookingQueueApi: { list: () => mockQueueList() },
   aiApi: { voiceCommand: (...args: unknown[]) => mockVoiceCommand(...args) },
   inventoryApi: { list: async () => [] },
-  waitForAgentRun: jest.fn(),
+  waitForAgentRun: (...args: unknown[]) => mockWaitForAgentRun(...args),
   ApiError: class extends Error {},
 }));
 
@@ -27,7 +31,7 @@ jest.mock("@/services/api/client", () => ({
 const mockAuthFetch = jest.fn();
 
 jest.mock("@/contexts/AuthContext", () => ({
-  useAuth: () => ({ user: mockUser, isAuthenticated: Boolean(mockUser) }),
+  useAuth: () => ({ user: mockUser, sessionGeneration: mockSessionGeneration, isAuthenticated: Boolean(mockUser) }),
   useAuthFetch: () => mockAuthFetch,
 }));
 
@@ -58,7 +62,10 @@ jest.mock("expo-haptics", () => ({
 }));
 
 jest.mock("@/hooks/useVoiceRecorder", () => ({
-  useVoiceRecorder: () => ({ isRecording: false, startRecording: jest.fn(), stopRecording: jest.fn() }),
+  useVoiceRecorder: (options: unknown) => {
+    mockVoiceRecorder(options);
+    return { isRecording: false, startRecording: jest.fn(), stopRecording: jest.fn() };
+  },
 }));
 
 const mockRealtimeVoice = jest.fn();
@@ -110,6 +117,7 @@ jest.mock("expo-notifications", () => ({
 }));
 
 import CookingModeScreen from "./index";
+import { speakWithVoiceFallback, stopVoiceOutput } from "@/services/voicePackManager";
 
 const sampleRecipe: Recipe = {
   id: 10,
@@ -137,6 +145,7 @@ describe("CookingModeScreen", () => {
     jest.clearAllMocks();
     mockParams = { recipeId: "10" };
     mockUser = { id: 1, username: "测试大厨" };
+    mockSessionGeneration = 1;
     mockRecipeDetail.mockResolvedValue(sampleRecipe);
     mockQueueList.mockResolvedValue([]);
     mockRealtimeVoice.mockReturnValue({ active: false, supported: false });
@@ -274,6 +283,89 @@ describe("CookingModeScreen", () => {
     });
     expect(extractText(tree!.root)).toContain(expected);
     expect(extractText(tree!.root)).not.toContain("连续语音已开启");
+  });
+
+  const deferred = () => {
+    let resolve!: (value: any) => void;
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<any>((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+
+  test.each(["account", "session", "recipe", "queue", "version", "unmount"].flatMap((change) => ["TOGGLE_TIMER", "NEXT_STEP"].map((action) => [change, action])))("discards pending direct control after %s changes (%s)", async (change, action) => {
+    const pending = deferred();
+    mockVoiceCommand.mockReturnValue(pending.promise);
+    await act(async () => { tree = renderer.create(<CookingModeScreen />); });
+    const originalScope = mockVoiceRecorder.mock.calls.at(-1)![0].scopeKey;
+    act(() => { mockVoiceRecorder.mock.calls.at(-1)![0].onSpeechFinal("开始计时"); });
+    await act(async () => {
+      if (change === "session") mockSessionGeneration += 1;
+      if (change === "account") mockUser = { id: 2, username: "另一位" };
+      if (change === "recipe") mockParams = { recipeId: "11" };
+      if (change === "queue") mockParams = { recipeId: "10", queueItemId: "queue-new" };
+      if (change === "version") mockParams = { recipeId: "10", queueVersion: 2 };
+      if (change === "unmount") { tree!.unmount(); tree = null; }
+      else tree!.update(<CookingModeScreen />);
+    });
+    if (tree) expect(mockVoiceRecorder.mock.calls.at(-1)![0].scopeKey).not.toBe(originalScope);
+    expect(stopVoiceOutput).toHaveBeenCalled();
+    jest.mocked(speakWithVoiceFallback).mockClear();
+    await act(async () => { pending.resolve({ type: "CONTROL", action }); });
+    expect(mockSetIsTimerRunning).not.toHaveBeenCalled();
+    expect(speakWithVoiceFallback).not.toHaveBeenCalled();
+    if (tree) {
+      expect(extractText(tree.root)).not.toMatch(/已为您开启倒计时|已为您切换至下一步/);
+      expect(extractText(tree.root)).not.toContain("2/3 步");
+    }
+  });
+
+  test.each(["scope", "session", "unmount", "newer request"])("discards pending agent answer after %s", async (change) => {
+    const pending = deferred();
+    mockVoiceCommand.mockResolvedValue({ type: "ANSWER", run: { id: "old-run", status: "pending" } });
+    mockWaitForAgentRun.mockReturnValue(pending.promise);
+    await act(async () => { tree = renderer.create(<CookingModeScreen />); });
+    await act(async () => { mockVoiceRecorder.mock.calls.at(-1)![0].onSpeechFinal("怎么切菜"); });
+    expect(mockWaitForAgentRun).toHaveBeenCalled();
+    await act(async () => {
+      if (change === "unmount") { tree!.unmount(); tree = null; }
+      else if (change === "session") { mockSessionGeneration += 1; tree!.update(<CookingModeScreen />); }
+      else if (change === "scope") { mockParams = { recipeId: "11" }; tree!.update(<CookingModeScreen />); }
+      else {
+        mockVoiceCommand.mockResolvedValue({ type: "ANSWER", answerText: "新的回答" });
+        mockVoiceRecorder.mock.calls.at(-1)![0].onSpeechFinal("新问题");
+      }
+    });
+    jest.mocked(speakWithVoiceFallback).mockClear();
+    await act(async () => { pending.resolve({ id: "old-run", status: "completed", reply: "过期回答" }); });
+    expect(speakWithVoiceFallback).not.toHaveBeenCalled();
+    if (tree) expect(extractText(tree.root)).not.toContain("过期回答");
+    if (change === "newer request") expect(extractText(tree!.root)).toContain("新的回答");
+  });
+
+  test("drops stale errors and old recorder callbacks after a scope change", async () => {
+    const pending = deferred();
+    mockVoiceCommand.mockReturnValue(pending.promise);
+    await act(async () => { tree = renderer.create(<CookingModeScreen />); });
+    const oldRecorder = mockVoiceRecorder.mock.calls.at(-1)![0];
+    act(() => { oldRecorder.onSpeechFinal("旧问题"); });
+    await act(async () => { mockUser = null; tree!.update(<CookingModeScreen />); });
+    await act(async () => {
+      oldRecorder.onSpeechResult("旧识别");
+      oldRecorder.onSpeechFinal("旧识别");
+      oldRecorder.onSpeechEmpty();
+      pending.reject(new Error("旧错误"));
+    });
+    expect(mockVoiceCommand).toHaveBeenCalledTimes(1);
+    expect(extractText(tree!.root)).not.toMatch(/旧识别|旧错误|未能清晰识别/);
+  });
+
+  test("current direct controls still update the timer and speak", async () => {
+    mockVoiceCommand.mockResolvedValue({ type: "CONTROL", action: "TOGGLE_TIMER" });
+    await act(async () => { tree = renderer.create(<CookingModeScreen />); });
+    await act(async () => { mockVoiceRecorder.mock.calls.at(-1)![0].onSpeechFinal("开始计时"); });
+    expect(mockSetIsTimerRunning).toHaveBeenCalledTimes(1);
+    expect(extractText(tree!.root)).toContain("已为您开启倒计时");
+    expect(speakWithVoiceFallback).toHaveBeenCalledWith(mockAuthFetch, "已为您开启倒计时", expect.anything());
   });
 
   test("displays error when recipeId is invalid", async () => {

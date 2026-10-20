@@ -6,7 +6,7 @@ import type { CookingQueueItem } from "@/services/api/cookingQueue";
 import * as Crypto from "expo-crypto";
 import { useCookingCompletion } from "@/hooks/useCookingCompletion";
 import { MealProductionFields } from "@/components/MealProductionFields";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -68,9 +68,17 @@ export default function CookingModeScreen() {
 
   const router = useSafeRouter();
   const authFetch = useAuthFetch();
-  const { user } = useAuth();
+  const { user, sessionGeneration } = useAuth();
   const completion = useCookingCompletion(user?.id, authFetch);
-  const [cookingChatSessionId] = useState(() => `cooking-${Date.now()}`);
+  const voiceScopeKey = JSON.stringify([user?.id ?? null, sessionGeneration, recipeId, queueItemId ?? null, queueVersion ?? null, fromQueue ?? false]);
+  const voiceScope = useMemo(() => ({ key: voiceScopeKey, sessionId: `cooking-${Crypto.randomUUID()}` }), [voiceScopeKey]);
+  const currentVoiceScope = useRef(voiceScope);
+  currentVoiceScope.current = voiceScope;
+  const voiceMounted = useRef(false);
+  const voiceGeneration = useRef(0);
+  const cookingChatSessionId = voiceScope.sessionId;
+  const isVoiceScopeCurrent = useCallback(() => voiceMounted.current && currentVoiceScope.current === voiceScope, [voiceScope]);
+  const [loadedVoiceScopeKey, setLoadedVoiceScopeKey] = useState<string | null>(null);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [queueContext, setQueueContext] = useState<CookingQueueItem | null>(null);
   const [recipeLoading, setRecipeLoading] = useState(true);
@@ -126,13 +134,26 @@ export default function CookingModeScreen() {
 
   const voiceHudTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => { void stopVoiceOutput(); }, []);
+  useEffect(() => {
+    voiceMounted.current = true;
+    setVoiceHudState({ visible: false, type: "listening" });
+    setVoiceConversation([]);
+    setVoiceSource(null);
+    return () => {
+      voiceMounted.current = false;
+      voiceGeneration.current += 1;
+      if (voiceHudTimerRef.current) clearTimeout(voiceHudTimerRef.current);
+      voiceHudTimerRef.current = null;
+      void stopVoiceOutput();
+    };
+  }, [voiceScope]);
 
   const speak = useCallback((text: string, sensitive = false) => {
+    if (!isVoiceScopeCurrent()) return;
     void speakWithVoiceFallback(authFetch, text, { userId: user?.id, sensitive })
-      .then(setVoiceSource)
-      .catch(() => setVoiceSource("system"));
-  }, [authFetch, user?.id]);
+      .then((source) => { if (isVoiceScopeCurrent()) setVoiceSource(source); })
+      .catch(() => { if (isVoiceScopeCurrent()) setVoiceSource("system"); });
+  }, [authFetch, user?.id, isVoiceScopeCurrent]);
 
   useEffect(() => {
     void prewarmVoicePack(user?.id);
@@ -241,6 +262,7 @@ export default function CookingModeScreen() {
     }
     let active = true;
     setRecipeLoading(true);
+    setCurrentStep(0);
     setRecipeError("");
     void Promise.all([recipesApi.detail(id), queueItemId ? cookingQueueApi.list(authFetch) : Promise.resolve([])]).then(([latestRecipe, queue]) => {
       if (!active) return;
@@ -255,6 +277,7 @@ export default function CookingModeScreen() {
         completed: false,
       }));
       if (!parsedSteps.length || !latestRecipe.ingredients?.length) throw new Error("菜谱步骤或食材不完整");
+      setLoadedVoiceScopeKey(voiceScopeKey);
       setRecipe(latestRecipe);
       setCookingSteps(parsedSteps);
       setIngredients(
@@ -272,17 +295,19 @@ export default function CookingModeScreen() {
       setRecipeError(error instanceof Error ? error.message : "菜谱读取失败");
     }).finally(() => { if (active) setRecipeLoading(false); });
     return () => { active = false; };
-  }, [recipeId, queueItemId, authFetch]);
+  }, [recipeId, queueItemId, authFetch, voiceScopeKey]);
 
   // Speech preferences never mutate the task timer.
   useEffect(() => {
-    if (autoSpeechEnabled && cookingSteps[currentStep]) speakStep(cookingSteps[currentStep].text, currentStep);
-  }, [currentStep, autoSpeechEnabled, cookingSteps, speakStep]);
+    if (loadedVoiceScopeKey === voiceScopeKey && autoSpeechEnabled && cookingSteps[currentStep]) speakStep(cookingSteps[currentStep].text, currentStep);
+  }, [currentStep, autoSpeechEnabled, cookingSteps, speakStep, loadedVoiceScopeKey, voiceScopeKey]);
 
   // 🎙️ Execute Direct Voice Command from HUD
   const executeDirectVoiceCommand = async (commandText: string) => {
     const text = commandText.trim();
-    if (!text) return;
+    if (!text || !isVoiceScopeCurrent() || recipeLoading || loadedVoiceScopeKey !== voiceScopeKey) return;
+    const generation = ++voiceGeneration.current;
+    const isCurrent = () => isVoiceScopeCurrent() && voiceGeneration.current === generation;
 
     if (voiceHudTimerRef.current) clearTimeout(voiceHudTimerRef.current);
     setVoiceHudState({
@@ -305,6 +330,7 @@ export default function CookingModeScreen() {
         }
       );
 
+      if (!isCurrent()) return;
       if (data.type === "CONTROL") {
         let actionDoneText = "已完成语音控制";
         if (data.action === "NEXT_STEP") {
@@ -334,6 +360,7 @@ export default function CookingModeScreen() {
         speak(actionDoneText);
       } else {
         const completedRun = data.run ? await waitForAgentRun(authFetch, data.run) : undefined;
+        if (!isCurrent()) return;
         const reply = completedRun?.reply || data.answerText || completedRun?.error?.message || "已为您提供下厨解答";
         setVoiceConversation((previous) => [
           ...previous,
@@ -351,9 +378,11 @@ export default function CookingModeScreen() {
 
       // Keep the floating answer available while the user is cooking, then dismiss it.
       voiceHudTimerRef.current = setTimeout(() => {
+        if (!isCurrent()) return;
         setVoiceHudState((prev) => ({ ...prev, visible: false }));
       }, data.type === "CONTROL" ? 4000 : 30000);
     } catch (error) {
+      if (!isCurrent()) return;
       setVoiceHudState({
         visible: true,
         type: "result",
@@ -370,8 +399,9 @@ export default function CookingModeScreen() {
     toggleRecording: toggleVoiceRecording,
     stopRecording: stopVoiceRecording,
   } = useVoiceRecorder({
+    scopeKey: voiceScopeKey,
     onSpeechResult: (recognizedText) => {
-      if (recognizedText) {
+      if (isVoiceScopeCurrent() && recognizedText) {
         setVoiceHudState({
           visible: true,
           type: "listening",
@@ -385,6 +415,7 @@ export default function CookingModeScreen() {
       }
     },
     onSpeechEmpty: () => {
+      if (!isVoiceScopeCurrent()) return;
       setVoiceHudState({
         visible: true,
         type: "result",

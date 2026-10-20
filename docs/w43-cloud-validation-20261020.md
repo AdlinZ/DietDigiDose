@@ -92,3 +92,51 @@ Issue 保持开放。任何完成判定必须逐项对应真实验收条件，�
 语音方向纠正：做饭页已有手机端 ONNX TTS 优先、服务端 TTS 次之、系统朗读兜底；前文关于服务端整段 MP3 的说明仅指该降级路径，不代表唯一朗读路径。ASR 仍为服务器转写，是否需端侧识别待用户确认。本轮没有改动语音供应商选择。
 
 服务器和隔离验收环境工作按用户要求暂停，等 Mac；所有新增内容仅本地提交，不推送、不部署、不创建 PR，不据此关闭 W43。
+
+## 最新本地语音隔离验证（2026-10-21，上海时区）
+
+本节为追加记录，不覆盖前述历史结果。验证于 2026-10-20 16:16 UTC 开始（上海时间 10 月 21 日 00:16），基线为 `22e30b03dbc5ac9e5e4b0b1b31a92a0059f89bb0`，包含下述四个未提交文件的已审阅修改，不是该干净基线 SHA 的测试结果。未安装软件、调用外部供应商、推送远端、创建 PR、部署或分配新包号。
+
+### 独立历史记录：22e30b0 的前一轮 TTS 修复
+
+`../ddd-runtime/TTS-VALIDATION.md` 记录在 2026-10-20 10:28:55 UTC，以 `5fb5084` 为 HEAD 的未提交树上执行的 TTS 生命周期/ASR 隔离验证；该批修改随后形成 `22e30b0`。当时客户端为 **104 套 / 593 项通过**，`pnpm test:client`、`pnpm lint:client`、`pnpm build:client`、`pnpm quality:build-budgets` 均退出 0，前后客户端源码摘要一致。该记录不能替代本节新增差异的验证，也不是原生包或真机证据；当时未重新运行服务端测试/构建。
+
+### 本次新增差异与冻结范围
+
+- `client/hooks/useVoiceRecorder.ts` 及测试：按每次启动/会话世代隔离迟到权限、转写及停止回调；原生 recorder 单例串行持有至停止和 audio mode 恢复完成，覆盖跨挂载竞争、准备/启动失败与取消；Web 流和音频资源异常清理。
+- `client/screens/cooking-mode/index.tsx` 及测试：按账号、登录世代、菜谱与队列上下文隔离录音、TTS、AI 响应和会话；失效响应不执行控制、不污染新页面；新范围数据未加载前不朗读旧步骤。
+- 基线差异为上述四文件，555 行新增、64 行删除。验证期间未修改应用源码或测试配置。
+- 前后 SHA-256 清单覆盖 `client server admin packages scripts deploy` 下全部 1,867 个已跟踪文件。清单摘要：`90cc5da73aeb21325b5c6c088507bc8a0eb94a49a158cc3d19df9efea53c0afd`。验证文档为事后追加，不计入源码清单。
+
+### 精确命令和结果
+
+工作目录为仓库根目录，使用已有隔离运行时：
+
+```sh
+source /workspace/scratch/a7d363cc0426/ddd-runtime/activate.sh
+export NODE_NO_WARNINGS=1
+# Node v22.23.2 / pnpm 10.18.0
+pnpm test:client
+pnpm lint:client
+pnpm --dir client exec tsc --noEmit
+pnpm build:client
+pnpm quality:build-budgets
+pnpm test:stability
+```
+
+- 前五条验证命令均退出 0：客户端 **104 套 / 627 项**，无失败；lint 包含 TypeScript 和 ESLint，另外独立执行一次 `tsc --noEmit`；Web export 成功。
+- 构建预算通过：本次新生成 client Web 87 文件，总计 6,134,578 字节，JavaScript 4,326,442 字节，最大 JS 1,234,918 字节。预算工具同时检查已有 server/admin 构建目录，本次未重建这两者，不能称三端最新构建通过。
+- **正式 `pnpm test:stability` 已实际执行，但退出 1，未通过。** 两次默认 attempt 均在服务端 `tsx` CLI 建立 `/tmp/tsx-1000/*.pipe` 时遇到 `listen EPERM`，不是应用断言失败。每次在此之前，依赖安全 11、staging-smoke 测试 4、release 11、upstream-security-watch 5 均通过，客户端均为 104 套 / 627 项通过。admin 在此包装链中未执行。`staging-smoke` 是本地测试，不是访问实际 staging。
+- 正式脚本及权限未修改、未提升或绕过；下列已有替代入口独立验证，不冒充正式 stability 成功：
+
+```sh
+(cd server && node --import tsx --test --test-concurrency=1 test/**/*.test.ts)
+pnpm test:admin
+```
+
+- 两条独立替代检查均退出 0：服务端 624 项，622 通过、2 项 PostgreSQL 条件跳过、0 失败；admin 12 文件 / 32 项通过。本次没有启动 PostgreSQL 实例，历史专项结果仍仅属于历史记录。
+- 完成后重新生成 `sources-after.sha256`，与 `sources-before.sha256` 字节一致，`sha256sum -c`、`cmp` 和 `git diff --check` 均通过。测试代码与产品源码保持冻结。
+
+本次日志保存在本地 `../ddd-runtime/final-voice-20261021/`：`results.txt`（精确命令/退出码）、`base-head.txt`、`diff-stat.txt`、`sources-before.sha256`、`sources-after.sha256`、`sources-check.log`、`pnpm-test-client.log`、`pnpm-lint-client.log`、`pnpm---dir-client-exec-tsc---noEmit.log`、`pnpm-build-client.log`、`pnpm-quality-build-budgets.log`、`pnpm-test-stability.log`、`official-test-stability.json`、`server-node-import-tsx.log`、`pnpm-test-admin.log`。日志不是远端 CI 附件，不包含真实供应商验收。
+
+本地提交仅用于保存已审阅的四文件修复与本记录，不是发布批准。正式 stability 环境阻塞仍在；供应商、真实麦克风、原生签名包、双端设备和服务器/隔离验收的原有外部门槛均未完成。W43 milestone 仍不能据本次本地测试宣布完成或 release ready。

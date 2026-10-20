@@ -1092,7 +1092,7 @@ export default function CookingModeScreen() {
               />
               <Text className="text-xs font-black text-brand-strong tracking-wide">
                 {realtimeVoice.active
-                  ? realtimeVoice.muted ? "持续监听已静音，点麦克风恢复" : realtimeVoice.state === "reconnecting" ? "连接较弱，正在恢复连续语音..." : "连续语音已开启，可直接说话或插话"
+                  ? realtimeVoice.muted ? "持续监听已静音，点麦克风恢复" : realtimeVoice.state === "reconnecting" ? "连接较弱，正在恢复连续语音..." : Platform.OS === "web" ? "连续语音已开启，可直接说话或插话" : "连续语音已开启，请等回复结束后再说话"
                   : isVoiceRecording
                   ? "正在录制本轮语音，请说话..."
                   : isVoiceTranscribing || voiceHudState.type === "processing"

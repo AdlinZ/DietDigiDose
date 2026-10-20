@@ -94,6 +94,40 @@ describe("realtime voice module", () => {
     assert.equal(runs, 0);
   });
 
+  test("keeps timer continuation distinct from explicit next-step commands", async () => {
+    const { repository, state } = fakeRepository(); let runs = 0;
+    const subject = service(repository, { startRun: async () => { runs += 1; return { run: { id: "unexpected", status: "queued" } }; } });
+    const cases = [
+      ["继续计时", "START_TIMER"], ["继续倒计时", "START_TIMER"],
+      ["开始倒计时", "START_TIMER"], ["暂停计时", "PAUSE_TIMER"],
+      ["继续下一步", "NEXT_STEP"], ["继续", "NEXT_STEP"],
+      ["下一步", "NEXT_STEP"], [" 请帮我继续下一步吧。 ", "NEXT_STEP"],
+      ["上一步", "PREV_STEP"], ["增加5分钟", "ADD_TIMER"],
+    ];
+    for (const [transcript, action] of cases) {
+      const result = await subject.turn(42, state.session.id,
+        { turnId: transcript, transcript, currentStep: 1, timerSeconds: 30 });
+      assert.equal(result.intent, "control", transcript);
+      assert.equal(result.action?.action, action, transcript);
+    }
+    assert.equal(runs, 0);
+  });
+
+  test("answers questions mentioning next steps or continuation instead of advancing", async () => {
+    const { repository, state } = fakeRepository(); let runs = 0;
+    const subject = service(repository, { startRun: async () => {
+      runs += 1; return { run: { id: `question-${runs}`, status: "queued" } };
+    } });
+    for (const transcript of ["下一步是什么？", "为什么要继续翻炒？", "继续下一步之前要加盐吗？",
+      "现在可以继续吗", "不要继续", "下一步需要什么食材", "继续？"]) {
+      const result = await subject.turn(42, state.session.id,
+        { turnId: transcript, transcript, currentStep: 1, timerSeconds: 30 });
+      assert.equal(result.intent, "question", transcript);
+      assert.equal(result.action, undefined, transcript);
+    }
+    assert.equal(runs, 7);
+  });
+
   test("streams completed answers, cancels barge-ins, and cancels pending work on close", async () => {
     const { repository, state } = fakeRepository(); const cancelled: string[] = [];
     const subject = service(repository, {

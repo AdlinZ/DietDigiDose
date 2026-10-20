@@ -16,3 +16,14 @@ describe("admin users module",()=>{
   test("protects the acting administrator and maps missing writes",async()=>{const s=new AdminUsersService(repo());await assert.rejects(()=>s.role(1,1,"user",ctx),/不能取消/);await assert.rejects(()=>s.status(1,1,true,ctx),/不能停用/);await assert.rejects(()=>s.expert(9,true,ctx),/未找到/);});
   test("reads defaults and atomically saves a complete level rule",async()=>{let saved:unknown;const s=new AdminUsersService(repo({saveLevelRule:async rule=>{saved=rule;}}));const rule=await s.levelRule();assert.equal(rule.levels[0]?.requiredXp,0);
     assert.deepEqual(await s.saveLevelRule(rule,ctx),{success:true,rule});assert.deepEqual(saved,rule);});});
+
+test("admin reset rejects overlong UTF-8 passwords before changing credentials", async () => {
+  let writes = 0;
+  const service = new AdminUsersService(repo({updateCredentials: async () => {
+    writes++; return {kind:"updated",user:{id:7}};
+  }}));
+  for (const newPassword of ["Aa1" + "x".repeat(70), "Aa1" + "界".repeat(24)]) {
+    await assert.rejects(service.credentials(7, {newPassword}, ctx), /72/);
+  }
+  assert.equal(writes, 0);
+});

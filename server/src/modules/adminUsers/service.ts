@@ -1,3 +1,4 @@
+import { accountPasswordSchema, ACCOUNT_PASSWORD_REQUIREMENTS } from "@dietdigidose/contracts";
 import bcrypt from "bcryptjs";
 import {decodeCursor,encodeCursor} from "../../utils/cursor.js";
 import {levelFrom,levelRuleFrom,type UserLevelRule} from "../community/level.js";
@@ -27,6 +28,7 @@ export class AdminUsersService {
   async credentials(userId:number,body:Row,context:AuditContext){let emailValue:string|null=null,phoneValue:string|null=null,updated=false;
     if(body.identifier!==undefined){const value=String(body.identifier).trim().toLowerCase();if(email.test(value))emailValue=value;else if(phone.test(value))phoneValue=value;
       else throw new AdminUsersError(400,"账号必须是有效的邮箱或中国大陆手机号");updated=true;}
+    if (body.newPassword !== undefined && !accountPasswordSchema.safeParse(body.newPassword).success) throw new AdminUsersError(400, ACCOUNT_PASSWORD_REQUIREMENTS, "INVALID_PASSWORD");
     const reset=body.newPassword!==undefined,passwordHash=reset?await bcrypt.hash(String(body.newPassword),12):null;
     const result=await this.repository.updateCredentials(userId,{email:emailValue,phone:phoneValue,identifierUpdated:updated,passwordHash,passwordReset:reset},context);
     if(result.kind==="not_found")throw new AdminUsersError(404,"未找到该用户");if(result.kind==="admin")throw new AdminUsersError(403,"管理员账号请通过修改密码页自行维护");

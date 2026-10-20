@@ -21,10 +21,14 @@ function timestamp(value: string) {
 }
 
 function deterministicIntent(text: string) {
-  if (/下一步|继续(?:下一步)?/.test(text)) return { intent: "control", action: "NEXT_STEP" };
   if (/上一步|返回上一步/.test(text)) return { intent: "control", action: "PREV_STEP" };
   if (/暂停.*(?:计时|倒计时)|停一下计时/.test(text)) return { intent: "control", action: "PAUSE_TIMER" };
-  if (/开始.*(?:计时|倒计时)|继续计时/.test(text)) return { intent: "control", action: "START_TIMER" };
+  if (/开始.*(?:计时|倒计时)|继续(?:倒)?计时/.test(text)) return { intent: "control", action: "START_TIMER" };
+  // Only explicit navigation commands advance the recipe, not questions that
+  // mention “下一步” or “继续”. Specific timer commands above take priority.
+  const command = text.trim().replace(/[，。！!,.\s]+$/u, "");
+  if (/^(?:请|请帮我|帮我)?\s*(?:下一步|继续(?:下一步)?)(?:吧)?$/u.test(command))
+    return { intent: "control", action: "NEXT_STEP" };
   const add = /(?:增加|加)(\d{1,2})(?:分钟|分)/.exec(text);
   if (add) return { intent: "control", action: "ADD_TIMER", seconds: Number(add[1]) * 60 };
   const writeVerb = /保存|记录|添加|新增|创建|制定|生成|修改|更新|删除|扣减|清空|打卡|完成/;

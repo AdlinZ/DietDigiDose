@@ -39,6 +39,7 @@ export async function verifyAccountSecurityHttp(api: Api, db: Database.Database)
     const rollbackVerify=await request("/sms/verify",{challengeId:rollbackSent.body.challengeId,code:"123456",passwordlessRegistration:true});
     assert.equal(rollbackVerify.status,200);assert.equal(rollbackVerify.body.status,"registration_required");
     assert.equal(db.prepare("SELECT id FROM users WHERE phone='13900419003'").get(),undefined);
+    assert.equal((await request("/sms/register",{registrationToken:rollbackVerify.body.registrationToken,username:"回滚兼容用户",password:"Aa1" + "界".repeat(24)})).status,400);
     const legacyRegistration=await request("/sms/register",{registrationToken:rollbackVerify.body.registrationToken,username:"回滚兼容用户",password:"LegacyPass123"});
     assert.equal(legacyRegistration.status,201);assert.equal(legacyRegistration.body.user.hasPassword,true);
     assert.equal((await request("/account",{password:"LegacyPass123",confirmation:"DELETE"},legacyRegistration.body.token,"DELETE")).status,200);
@@ -51,6 +52,7 @@ export async function verifyAccountSecurityHttp(api: Api, db: Database.Database)
     assert.equal(existingLogin.status,200);assert.equal(existingLogin.body.isNewUser,false);assert.equal(existingLogin.body.user.hasPassword,false);
     const passwordProof=await proof(account.token,"password_update");
     assert.equal((await request("/account",{reauthToken:passwordProof,confirmation:"DELETE"},account.token,"DELETE")).status,403);
+    assert.equal((await request("/password",{reauthToken:passwordProof,newPassword:"Aa1" + "x".repeat(70)},account.token)).status,400);
     const password=await request("/password",{reauthToken:passwordProof,newPassword:"NewPassword123"},account.token);assert.equal(password.status,200);
     assert.equal((await api("/api/v1/auth/me",{token:account.token,headers})).response.status,401);
     const login=await request("/login",{identifier:"13900419001",password:"NewPassword123"});assert.equal(login.status,200);assert.equal(login.body.user.hasPassword,true);

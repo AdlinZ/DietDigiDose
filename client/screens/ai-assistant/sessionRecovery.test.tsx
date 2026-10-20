@@ -212,3 +212,49 @@ test.each([
   expect(mockWait).not.toHaveBeenCalled();
   expect(mockSpeak).not.toHaveBeenCalled();
 });
+
+test.each(["conversation", "account", "generation", "logout"])("clears completed voice replay and stops output on %s change", async change => {
+  mockChat.mockResolvedValue(response());
+  mockWait.mockResolvedValue({ ...response().run, status: "completed", reply: "旧会话私有回答" });
+  await mount();
+  await act(async () => { mockVoice.onSpeechFinal("给我一个菜谱"); });
+  expect(mockSpeak).toHaveBeenCalledWith("旧会话私有回答");
+  expect(tree.root.findAll(node => node.props.children === "重播回答").length).toBeGreaterThan(0);
+  mockStop.mockClear();
+  if (change === "conversation") await act(async () => { select(tree, "B"); });
+  else {
+    if (change === "account") mockOwner.userId = 2;
+    if (change === "generation") mockOwner.generation += 1;
+    if (change === "logout") mockOwner.active = false;
+    await act(async () => { tree.update(<AIAssistantScreen />); });
+  }
+  expect(mockStop).toHaveBeenCalled();
+  expect(tree.root.findAll(node => node.props.children === "重播回答")).toHaveLength(0);
+});
+
+test("a voice result completed after a conversation switch cannot restore replay", async () => {
+  const pending = deferred<AgentResponse["run"]>();
+  mockChat.mockResolvedValue(response()); mockWait.mockReturnValue(pending.promise);
+  await mount(); await act(async () => { mockVoice.onSpeechFinal("给我一个菜谱"); });
+  await act(async () => { select(tree, "B"); });
+  await act(async () => { pending.resolve({ ...response().run, status: "completed", reply: "迟到的旧回答" }); });
+  expect(mockSpeak).not.toHaveBeenCalled();
+  expect(tree.root.findAll(node => node.props.children === "重播回答")).toHaveLength(0);
+});
+
+
+test.each(["conversation", "account", "logout"])("ignores retained ASR callbacks after %s change", async change => {
+  await mount();
+  const oldVoice = mockVoice;
+  if (change === "conversation") await act(async () => { select(tree, "B"); });
+  else {
+    if (change === "account") mockOwner.userId = 2;
+    else mockOwner.active = false;
+    await act(async () => { tree.update(<AIAssistantScreen />); });
+  }
+  await act(async () => { oldVoice.onSpeechFinal("来自旧账号录音的识别结果"); });
+  expect(mockChat).not.toHaveBeenCalled();
+  expect(mockWait).not.toHaveBeenCalled();
+  expect(mockSpeak).not.toHaveBeenCalled();
+  expect(tree.root.findAll(node => node.props.children === "重播回答")).toHaveLength(0);
+});

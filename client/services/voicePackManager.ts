@@ -38,7 +38,8 @@ const LEGACY_STATE_KEY = "voice-pack-state-v1";
 const DEVICE_STATE_KEY = "voice-pack-device-state-v2";
 const CACHE_INDEX_KEY = "voice-audio-cache-index-v1";
 const MAX_AUDIO_CACHE_BYTES = 80 * 1024 * 1024;
-const VOICE_CACHE_SCHEMA = 2;
+// Source-less cache entries cannot safely distinguish local WAV from server audio.
+const VOICE_CACHE_SCHEMA = 3;
 
 export type VoiceSource = "local" | "server" | "system";
 export type VoicePreference = "automatic" | "system-only";
@@ -423,7 +424,7 @@ export async function prefetchVoiceText(text: string, userId?: number) {
   const state = await getVoicePackState(userId);
   if (state.preference === "system-only" || !state.installed || state.benchmark?.passed === false || Platform.OS === "web") return false;
   try {
-    await cachedAudio(normalized, userId, false, async () => ({ bytes: await synthesizeLocal(normalized, userId), extension: "wav" }));
+    await cachedAudio(normalized, userId, false, "local", async () => ({ bytes: await synthesizeLocal(normalized, userId), extension: "wav" }));
     return true;
   } catch {
     return false;
@@ -455,6 +456,7 @@ async function cachedAudio(
   text: string,
   userId: number | undefined,
   sensitive: boolean,
+  source: "local" | "server",
   producer: () => Promise<{ bytes: Uint8Array; extension: string }>,
   task = audioCacheTasks.begin(voiceCacheScope(userId, sensitive)),
 ) {
@@ -468,7 +470,7 @@ async function cachedAudio(
       ? `${state.selectedVoiceId}@${state.selectedVersion}`
       : "server";
   const key = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,
-    JSON.stringify({ schema: VOICE_CACHE_SCHEMA, voice: voiceKey, text, rate: 1, style: "default", format: "audio", scope }));
+    JSON.stringify({ schema: VOICE_CACHE_SCHEMA, source, voice: voiceKey, text, rate: 1, style: "default", format: "audio", scope }));
   const cached = await audioCacheTasks.commit(task, async () => {
     const index = await cacheIndex();
     const existing = index[key];
@@ -559,7 +561,7 @@ async function speakWithGeneration(apiFetch: ApiFetch, text: string,
     try {
       for (const sentence of sentences(text)) {
         if (generation !== playbackGeneration) return "local";
-        const uri = await cachedAudio(sentence, options.userId, Boolean(options.sensitive), async () => ({ bytes: await synthesizeLocal(sentence, options.userId), extension: "wav" }), cacheTask);
+        const uri = await cachedAudio(sentence, options.userId, Boolean(options.sensitive), "local", async () => ({ bytes: await synthesizeLocal(sentence, options.userId), extension: "wav" }), cacheTask);
         await playUri(uri, generation);
       }
       return "local";
@@ -571,15 +573,20 @@ async function speakWithGeneration(apiFetch: ApiFetch, text: string,
   if (state.preference !== "system-only") {
     try {
       if (generation !== playbackGeneration || !audioCacheTasks.isCurrent(cacheTask)) return "server";
-      const response = await voicePackApi.synthesize(apiFetch, text, state.selectedVoiceId && state.selectedVersion
-        ? { voiceId: state.selectedVoiceId, version: state.selectedVersion }
-        : undefined);
-      if (generation !== playbackGeneration || !audioCacheTasks.isCurrent(cacheTask)) return "server";
+      const synthesizeServer = async () => {
+        if (generation !== playbackGeneration || !audioCacheTasks.isCurrent(cacheTask)) throw new VoiceCacheTaskCancelledError();
+        const response = await voicePackApi.synthesize(apiFetch, text, state.selectedVoiceId && state.selectedVersion
+          ? { voiceId: state.selectedVoiceId, version: state.selectedVersion }
+          : undefined);
+        if (generation !== playbackGeneration || !audioCacheTasks.isCurrent(cacheTask)) throw new VoiceCacheTaskCancelledError();
+        return response;
+      };
       const uri = Platform.OS === "web"
-        ? `data:${response.mimeType || "audio/mpeg"};base64,${response.audioBase64}`
-        : await cachedAudio(text, options.userId, Boolean(options.sensitive), async () => ({
-          bytes: Base64.toUint8Array(response.audioBase64), extension: "mp3",
-        }), cacheTask);
+        ? await synthesizeServer().then((response) => `data:${response.mimeType || "audio/mpeg"};base64,${response.audioBase64}`)
+        : await cachedAudio(text, options.userId, Boolean(options.sensitive), "server", async () => {
+          const response = await synthesizeServer();
+          return { bytes: Base64.toUint8Array(response.audioBase64), extension: "mp3" };
+        }, cacheTask);
       await playUri(uri, generation);
       return "server";
     } catch (error) {

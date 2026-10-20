@@ -6,6 +6,8 @@ import { useAuthFetch } from "@/contexts/AuthContext";
 import { aiApi, waitForAgentRun } from "@/services/api";
 
 interface VoiceRecorderOptions {
+  /** Discard recordings and pending transcription when the owning conversation changes. */
+  scopeKey?: string;
   /** 识别中的临时文本，用于更新 UI。 */
   onSpeechResult?: (text: string) => void;
   /** 一轮录音完成后的最终文本。无论自动停顿或手动结束，都只触发一次。 */
@@ -14,7 +16,7 @@ interface VoiceRecorderOptions {
   onSpeechEmpty?: () => void;
 }
 
-export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty }: VoiceRecorderOptions = {}) {
+export function useVoiceRecorder({ scopeKey, onSpeechResult, onSpeechFinal, onSpeechEmpty }: VoiceRecorderOptions = {}) {
   const authFetch = useAuthFetch();
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -27,8 +29,14 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
   const cleanupAudioRef = useRef<(() => void) | null>(null);
   const nativeRecordingRef = useRef<Audio.Recording | null>(null);
   const disposed = useRef(false);
+  const currentScope = useRef(scopeKey);
+  currentScope.current = scopeKey;
+  const isCurrent = useCallback(() => !disposed.current && currentScope.current === scopeKey, [scopeKey]);
   useEffect(() => {
     disposed.current = false;
+    setIsRecording(false);
+    setIsTranscribing(false);
+    setStatusText("");
     return () => {
       disposed.current = true;
       const recorder = mediaRecorderRef.current;
@@ -41,37 +49,39 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
       const native = nativeRecordingRef.current; nativeRecordingRef.current = null;
       if (native) void native.stopAndUnloadAsync().catch(() => undefined);
     };
-  }, []);
+  }, [scopeKey]);
 
   const emitFinalTranscript = useCallback((text?: string) => {
     const transcript = (text ?? transcriptRef.current).trim();
-    if (disposed.current || !transcript || submittedRef.current) return false;
+    if (!isCurrent() || !transcript || submittedRef.current) return false;
     submittedRef.current = true;
     onSpeechFinal?.(transcript);
     return true;
-  }, [onSpeechFinal]);
+  }, [isCurrent, onSpeechFinal]);
 
   const emitEmptySpeech = useCallback(() => {
-    if (disposed.current || submittedRef.current || emptyNotifiedRef.current) return;
+    if (!isCurrent() || submittedRef.current || emptyNotifiedRef.current) return;
     emptyNotifiedRef.current = true;
     onSpeechEmpty?.();
-  }, [onSpeechEmpty]);
+  }, [isCurrent, onSpeechEmpty]);
 
   const transcribeNativeRecording = useCallback(async (recording: Audio.Recording) => {
     setIsTranscribing(true);
     setStatusText("正在识别语音...");
     try {
       await recording.stopAndUnloadAsync();
+      if (!isCurrent()) return;
       const uri = recording.getURI();
       if (!uri) throw new Error("录音文件不可用");
       const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
-      if (disposed.current) return;
+      if (!isCurrent()) return;
       const response = await aiApi.transcribe<{
         text?: string;
         run: { id: string; status: string; transcript?: string; error?: { message?: string } };
       }>(authFetch, base64, "audio/m4a");
+      if (!isCurrent()) return;
       const run = await waitForAgentRun(authFetch, response.run);
-      if (disposed.current) return;
+      if (!isCurrent()) return;
       const transcript = (response.text || run.transcript || "").trim();
       if (transcript) {
         transcriptRef.current = transcript;
@@ -79,16 +89,19 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
       }
       if (!emitFinalTranscript(transcript)) emitEmptySpeech();
     } catch (error) {
+      if (!isCurrent()) return;
       console.error("[Native Transcribe Error]", error);
       emitEmptySpeech();
     } finally {
-      nativeRecordingRef.current = null;
-      setIsTranscribing(false);
-      setIsRecording(false);
-      setStatusText("");
-      void Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+      if (isCurrent()) {
+        nativeRecordingRef.current = null;
+        setIsTranscribing(false);
+        setIsRecording(false);
+        setStatusText("");
+        void Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+      }
     }
-  }, [authFetch, emitEmptySpeech, emitFinalTranscript, onSpeechResult]);
+  }, [authFetch, emitEmptySpeech, emitFinalTranscript, isCurrent, onSpeechResult]);
 
   const stopRecording = useCallback(() => {
     if (nativeRecordingRef.current) {
@@ -109,6 +122,7 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
   }, [transcribeNativeRecording]);
 
   const startRecording = useCallback(async () => {
+    if (!isCurrent()) return;
     setStatusText("正在倾听，请说话...");
     setIsRecording(true);
     transcriptRef.current = "";
@@ -118,6 +132,7 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
     if (Platform.OS !== "web") {
       try {
         const permission = await Audio.requestPermissionsAsync();
+        if (!isCurrent()) return;
         if (!permission.granted) {
           setIsRecording(false);
           setStatusText("");
@@ -137,11 +152,13 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
           playsInSilentModeIOS: true,
           shouldDuckAndroid: true,
         });
+        if (!isCurrent()) return;
         const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-        if (disposed.current) { await recording.stopAndUnloadAsync(); return; }
+        if (!isCurrent()) { await recording.stopAndUnloadAsync(); return; }
         nativeRecordingRef.current = recording;
         return;
       } catch (error) {
+        if (!isCurrent()) return;
         console.error("[Native Recording Start Error]", error);
         setIsRecording(false);
         setStatusText("");
@@ -161,15 +178,17 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
     ) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (disposed.current) { stream.getTracks().forEach(track => track.stop()); return; }
+        if (!isCurrent()) { stream.getTracks().forEach(track => track.stop()); return; }
         const mediaRecorder = new MediaRecorder(stream);
         audioChunksRef.current = [];
 
         mediaRecorder.ondataavailable = (event) => {
+          if (!isCurrent()) return;
           if (event.data.size > 0) audioChunksRef.current.push(event.data);
         };
 
         mediaRecorder.onstop = async () => {
+          if (!isCurrent()) return;
           cleanupAudioRef.current?.();
           cleanupAudioRef.current = null;
           const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
@@ -179,12 +198,13 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
           const reader = new FileReader();
           reader.readAsDataURL(audioBlob);
           reader.onloadend = async () => {
-            if (disposed.current) return;
+            if (!isCurrent()) return;
             const base64data = (reader.result as string) || "";
             try {
               const res = await aiApi.transcribe<{ text?: string; run: { id: string; status: string; transcript?: string; error?: { message?: string } } }>(authFetch, base64data, "audio/webm");
+              if (!isCurrent()) return;
               const run = await waitForAgentRun(authFetch, res.run);
-              if (disposed.current) return;
+              if (!isCurrent()) return;
               const transcript = res.text || run.transcript || "";
               if (transcript && onSpeechResult) {
                 transcriptRef.current = transcript;
@@ -192,12 +212,15 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
               }
               if (!emitFinalTranscript(transcript)) emitEmptySpeech();
             } catch (err) {
+              if (!isCurrent()) return;
               console.error("[Transcribe Error]", err);
               emitEmptySpeech();
             } finally {
-              setIsTranscribing(false);
-              setIsRecording(false);
-              setStatusText("");
+              if (isCurrent()) {
+                setIsTranscribing(false);
+                setIsRecording(false);
+                setStatusText("");
+              }
             }
           };
         };
@@ -235,6 +258,7 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
           void audioContext.close();
         };
       } catch (err) {
+        if (!isCurrent()) return;
         console.error("[getUserMedia Error]", err);
         alert("无法获取麦克风权限，请在浏览器地址栏允许麦克风权限");
         setIsRecording(false);
@@ -245,7 +269,7 @@ export function useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty 
       setIsRecording(false);
       setStatusText("");
     }
-  }, [authFetch, emitEmptySpeech, emitFinalTranscript, onSpeechResult]);
+  }, [authFetch, emitEmptySpeech, emitFinalTranscript, isCurrent, onSpeechResult]);
 
   const toggleRecording = useCallback(() => {
     if (isRecording) {

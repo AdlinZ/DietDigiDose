@@ -237,6 +237,13 @@ export default function AIAssistantScreen() {
   // --- TTS 语音播报 ---
   const { speak, stop: stopTTS, isSpeaking, error: ttsError } = useTTS();
 
+  useEffect(() => {
+    stopTTS();
+    setLastAIReplyText("");
+    setCurrentRecognizedText("");
+    setVoiceState("idle");
+  }, [scope, stopTTS]);
+
   // 同步 TTS 的 isSpeaking 到 voiceState
   useEffect(() => {
     if (!isSpeaking && voiceState === "speaking") {
@@ -246,7 +253,7 @@ export default function AIAssistantScreen() {
 
   // --- 语音管线：ASR → LLM → TTS ---
   const handleVoiceQuery = useCallback(async (userText: string) => {
-    if (!userText.trim() || !chatReady) return;
+    if (!userText.trim() || !chatReady || scopeRef.current !== scope) return;
     const voiceScope = scopeRef.current;
     const waitingTasks = messagesRef.current.filter((message) => message.agentRun?.run.status === "awaiting_input");
     if (waitingTasks.length > 1) { setSendError("当前有多个待补充任务，请取消多余任务后再回复。"); return; }
@@ -307,17 +314,21 @@ export default function AIAssistantScreen() {
       setVoiceState("completed");
     }
     finally { releaseRequest(); }
-  }, [chatReady, setMessages, requestGate, authFetch, currentSessionId, speak, stopTTS, voiceTTSEnabled]);
+  }, [chatReady, setMessages, requestGate, authFetch, currentSessionId, scope, speak, stopTTS, voiceTTSEnabled]);
 
   const { isRecording, toggleRecording, stopRecording } = useVoiceRecorder({
+    scopeKey: scope,
     onSpeechResult: (recognizedText) => {
+      if (scopeRef.current !== scope) return;
       setCurrentRecognizedText(recognizedText);
     },
     onSpeechFinal: (recognizedText) => {
+      if (scopeRef.current !== scope) return;
       setCurrentRecognizedText(recognizedText);
       void handleVoiceQuery(recognizedText);
     },
     onSpeechEmpty: () => {
+      if (scopeRef.current !== scope) return;
       setCurrentRecognizedText("");
       setVoiceState("completed");
       setMessages((prev) => [...prev, {

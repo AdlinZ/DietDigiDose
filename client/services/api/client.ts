@@ -25,6 +25,14 @@ export class ApiError extends Error {
   }
 }
 
+// Only fetch transport failures are classified here, never HTTP/provider errors.
+export class ApiTransportError extends Error {
+  constructor(message: string, readonly cause: unknown) {
+    super(message);
+    this.name = "ApiTransportError";
+  }
+}
+
 export const apiUrl = (path: string) => {
   if (/^https?:\/\//.test(path)) return path;
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -110,7 +118,8 @@ async function executeJsonRequestWithMetadata<T>(
 ): Promise<{ data?: T; etag?: string | null; notModified?: boolean }> {
   const { timeoutMs = 15_000, ...requestOptions } = options;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   const callerSignal = requestOptions.signal;
   const abortFromCaller = () => controller.abort();
   if (callerSignal?.aborted) {
@@ -123,13 +132,29 @@ async function executeJsonRequestWithMetadata<T>(
   if (etag && !headers.has("If-None-Match")) headers.set("If-None-Match", etag);
 
   try {
-    const response = await apiFetch(apiUrl(path), {
-      ...requestOptions,
-      headers,
-      signal: controller.signal,
-    });
+    let response: Response;
+    try {
+      response = await apiFetch(apiUrl(path), {
+        ...requestOptions,
+        headers,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (!callerSignal?.aborted && (timedOut || error instanceof TypeError)) {
+        throw new ApiTransportError(timedOut ? "网络请求超时" : "网络连接不可用", error);
+      }
+      throw error;
+    }
     if (response.status === 304) return { notModified: true, etag };
-    const body = await response.json().catch(() => null) as T | Record<string, unknown> | null;
+    const body = await response.json().catch((error: unknown) => {
+      if (callerSignal?.aborted) throw error;
+      // A successful header response does not mean its body reached the client.
+      // Keep known HTTP failures as ApiError, and malformed JSON as schema failure.
+      if (response.ok && (timedOut || error instanceof TypeError)) {
+        throw new ApiTransportError(timedOut ? "网络请求超时" : "网络连接不可用", error);
+      }
+      return null;
+    }) as T | Record<string, unknown> | null;
     if (!response.ok) {
       const errorBody = body && typeof body === "object" && !Array.isArray(body)
         ? body as Record<string, unknown>

@@ -1,9 +1,10 @@
 import React from "react";
 import { AppState, Platform } from "react-native";
 import renderer, { act } from "react-test-renderer";
+import * as Network from "expo-network";
 import { Audio } from "expo-av";
 
-import { aiApi, realtimeVoiceApi, type RealtimeVoiceSession } from "@/services/api";
+import { ApiError, ApiTransportError, aiApi, realtimeVoiceApi, type RealtimeVoiceSession } from "@/services/api";
 import { beginVoiceOutput } from "@/services/voiceCaptureGate";
 import { useRealtimeCookingVoice } from "./useRealtimeCookingVoice";
 
@@ -22,6 +23,9 @@ jest.mock("@siteed/audio-studio", () => ({
     resumeRecording: mockResumeNativeRecording,
   }),
 }));
+jest.mock("expo-network", () => ({
+  addNetworkStateListener: jest.fn(), getNetworkStateAsync: jest.fn(),
+}));
 jest.mock("expo-av", () => ({ Audio: { requestPermissionsAsync: jest.fn() } }));
 jest.mock("expo-crypto", () => ({ randomUUID: () => "00000000-0000-4000-8000-000000000001" }));
 jest.mock("@/services/api", () => {
@@ -34,6 +38,7 @@ jest.mock("@/services/api", () => {
   }
   return {
     ApiError,
+    ApiTransportError: class ApiTransportError extends Error {},
     aiApi: { transcribe: jest.fn() },
     waitForAgentRun: jest.fn(),
     realtimeVoiceApi: {
@@ -78,6 +83,10 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
   beforeEach(async () => {
     Object.defineProperty(Platform, "OS", { value: "android", configurable: true });
     jest.clearAllMocks();
+    window.addEventListener = jest.fn();
+    window.removeEventListener = jest.fn();
+    jest.mocked(Network.addNetworkStateListener).mockReturnValue({ remove: jest.fn() });
+    jest.mocked(Network.getNetworkStateAsync).mockResolvedValue({ isConnected: true });
     jest.spyOn(AppState, "addEventListener").mockReturnValue({ remove: jest.fn() });
     mockPauseNativeRecording.mockResolvedValue(undefined);
     mockResumeNativeRecording.mockResolvedValue(undefined);
@@ -375,6 +384,207 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
     await act(async () => { await voice.toggleMute(); });
     expect(recording).toBe(false);
     expect(voice.muted).toBe(true);
+  });
+
+  function networkChange(network: Network.NetworkState) {
+    const listener = jest.mocked(Network.addNetworkStateListener).mock.calls.at(-1)![0];
+    listener(network);
+  }
+
+  async function utterance() {
+    const recorder = mockStartNativeRecording.mock.calls.at(-1)![0];
+    await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.1 }] });
+    await recorder.onAudioStream({ data: "AAAA" });
+    await recorder.onAudioStream({ data: "AAAA" });
+    jest.advanceTimersByTime(300);
+    await recorder.onAudioAnalysis({ dataPoints: [{ silent: true, rms: 0 }] });
+    jest.advanceTimersByTime(650);
+  }
+
+  it("stops locally on a transport heartbeat failure before best-effort close settles", async () => {
+    jest.useFakeTimers();
+    try {
+      jest.mocked(realtimeVoiceApi.heartbeat).mockRejectedValueOnce(new ApiTransportError("offline", null));
+      jest.mocked(realtimeVoiceApi.close).mockReturnValueOnce(new Promise(() => { /* Remote close may remain unavailable. */ }));
+      await act(async () => { await voice.start(); });
+      await act(async () => { jest.advanceTimersByTime(20_000); });
+      expect(mockStopNativeRecording).toHaveBeenCalledTimes(1);
+      expect(options.onStopOutput).toHaveBeenCalledTimes(1);
+      expect(voice.active).toBe(false);
+      expect(voice.session).toBeNull();
+      await act(async () => { networkChange({ isConnected: true }); jest.advanceTimersByTime(60_000); await voice.stop(); });
+      expect(mockStartNativeRecording).toHaveBeenCalledTimes(1);
+      expect(mockStopNativeRecording).toHaveBeenCalledTimes(1);
+      expect(realtimeVoiceApi.close).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it.each([401, 403, 404, 410])("stops on invalid session HTTP %s without claiming network loss", async status => {
+    jest.useFakeTimers();
+    try {
+      jest.mocked(realtimeVoiceApi.heartbeat).mockRejectedValueOnce(new ApiError("expired", status));
+      await act(async () => { await voice.start(); });
+      await act(async () => { jest.advanceTimersByTime(20_000); });
+      expect(voice.active).toBe(false);
+      expect(options.onError).toHaveBeenCalledWith(expect.stringContaining("会话已失效"));
+    } finally { jest.useRealTimers(); }
+  });
+
+  it.each([503, 409, 0])("does not classify HTTP/schema error %s as offline", async status => {
+    jest.useFakeTimers();
+    try {
+      jest.mocked(realtimeVoiceApi.heartbeat).mockRejectedValueOnce(new ApiError("provider or schema failure", status));
+      await act(async () => { await voice.start(); });
+      await act(async () => { jest.advanceTimersByTime(20_000); });
+      expect(voice.state).toBe("listening");
+      expect(mockStopNativeRecording).not.toHaveBeenCalled();
+      expect(options.onError).toHaveBeenCalledWith("provider or schema failure");
+    } finally { await act(async () => { await voice.stop(); }); jest.useRealTimers(); }
+  });
+
+  it.each(["resolve", "reject"])("discards pending ASR on network loss (%s), never uploading fallback audio", async result => {
+    jest.useFakeTimers();
+    try {
+      let resolve!: (value: never) => void;
+      let reject!: (error: Error) => void;
+      jest.mocked(realtimeVoiceApi.audioChunk).mockReturnValueOnce(new Promise((done, fail) => { resolve = done; reject = fail; }));
+      await act(async () => { await voice.start(); });
+      await act(utterance);
+      await act(async () => { networkChange({ isInternetReachable: false }); });
+      await act(async () => { if (result === "resolve") resolve({ transcript: "下一步" } as never); else reject(new Error("offline")); });
+      expect(options.onTranscript).not.toHaveBeenCalled();
+      expect(realtimeVoiceApi.turn).not.toHaveBeenCalled();
+      expect(aiApi.transcribe).not.toHaveBeenCalled();
+      expect(voice.active).toBe(false);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it("halts on ASR transport failure instead of trying fallback", async () => {
+    jest.useFakeTimers();
+    try {
+      jest.mocked(realtimeVoiceApi.audioChunk).mockRejectedValueOnce(new ApiTransportError("offline", null));
+      await act(async () => { await voice.start(); });
+      await act(utterance);
+      expect(aiApi.transcribe).not.toHaveBeenCalled();
+      expect(mockStopNativeRecording).toHaveBeenCalledTimes(1);
+      expect(voice.active).toBe(false);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it("ignores unknown reachability but cancels startup on explicit offline and allows only manual restart", async () => {
+    let resolve!: (value: never) => void;
+    jest.mocked(Audio.requestPermissionsAsync).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = voice.start(); });
+    await act(async () => { networkChange({}); });
+    expect(voice.state).toBe("connecting");
+    await act(async () => { networkChange({ isConnected: false }); });
+    await act(async () => { resolve({ granted: true } as never); expect(await pending).toBe(false); networkChange({ isConnected: true }); });
+    expect(mockStartNativeRecording).not.toHaveBeenCalled();
+    await act(async () => { expect(await voice.start()).toBe(true); });
+    expect(mockStartNativeRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["turn", "events"])("discards pending %s responses and stops output on network loss", async phase => {
+    jest.useFakeTimers();
+    try {
+      let resolve!: (value: never) => void;
+      jest.mocked(realtimeVoiceApi.audioChunk).mockResolvedValue({ transcript: "下一步" } as never);
+      jest.mocked(realtimeVoiceApi.turn).mockResolvedValue({ intent: "answer", turnId: "turn" } as never);
+      jest.mocked(realtimeVoiceApi[phase as "turn" | "events"]).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+      await act(async () => { await voice.start(); });
+      await act(utterance);
+      await act(async () => { networkChange({ isConnected: false }); });
+      await act(async () => { resolve((phase === "turn"
+        ? { intent: "control", action: { action: "NEXT_STEP" } }
+        : { events: [{ sequence: 1, type: "response.text.delta", payload: { turnId: "turn", delta: "text" } }, { sequence: 2, type: "response.completed", payload: { turnId: "turn", text: "text" } }] }) as never); });
+      expect(options.onControl).not.toHaveBeenCalled();
+      expect(options.onAnswerDelta).not.toHaveBeenCalled();
+      expect(options.onAnswer).not.toHaveBeenCalled();
+      expect(options.onStopOutput).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it("never restarts Web recognition after a network error or offline event", async () => {
+    Object.defineProperty(Platform, "OS", { value: "web", configurable: true });
+    const start = jest.fn(); const abort = jest.fn();
+    const recognitions: any[] = [];
+    Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: class {
+      constructor() { recognitions.push(this); }
+      start = start; abort = abort;
+    } });
+    jest.useFakeTimers();
+    try {
+      await act(async () => { tree.unmount(); tree = renderer.create(<Harness onUpdate={value => { voice = value; }} />); });
+      await act(async () => { await voice.start(); });
+      await act(async () => { recognitions.at(-1).onerror({ error: "network" }); recognitions.at(-1).onend();  jest.advanceTimersByTime(1000); });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(abort).toHaveBeenCalledTimes(1);
+      await act(async () => { await voice.start(); (jest.mocked(window.addEventListener).mock.calls.find(([event]) => event === "offline")![1] as () => void)(); recognitions.at(-1).onend(); jest.advanceTimersByTime(1000); });
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(abort).toHaveBeenCalledTimes(2);
+      expect(voice.active).toBe(false);
+    } finally { Reflect.deleteProperty(window, "SpeechRecognition"); jest.useRealTimers(); }
+  });
+
+  it("discards partial ASR and buffered audio, with no stale flush after a manual restart", async () => {
+    jest.useFakeTimers();
+    try {
+      let resolve!: (value: never) => void;
+      jest.mocked(realtimeVoiceApi.audioChunk).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+      await act(async () => { await voice.start(); });
+      const recorder = mockStartNativeRecording.mock.calls.at(-1)![0];
+      await act(async () => {
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: false, rms: 0.1 }] });
+        for (let i = 0; i < 10; i++) await recorder.onAudioStream({ data: "AAAA" });
+        await recorder.onAudioAnalysis({ dataPoints: [{ silent: true, rms: 0 }] });
+        networkChange({ isConnected: false });
+      });
+      await act(async () => { await voice.start(); resolve({ transcript: "stale" } as never); jest.advanceTimersByTime(1000); });
+      expect(options.onTranscript).not.toHaveBeenCalled();
+      expect(realtimeVoiceApi.audioChunk).toHaveBeenCalledTimes(1);
+      expect(realtimeVoiceApi.turn).not.toHaveBeenCalled();
+      expect(voice.state).toBe("listening");
+    } finally { await act(async () => { await voice.stop(); }); jest.useRealTimers(); }
+  });
+
+  it("warns if native stop fails rather than claiming the microphone is closed", async () => {
+    await act(async () => { await voice.start(); });
+    mockStopNativeRecording.mockRejectedValueOnce(new Error("stop failed"));
+    await act(async () => { networkChange({ isConnected: false }); });
+    expect(options.onError).toHaveBeenCalledWith(expect.stringContaining("无法确认麦克风已关闭"));
+    expect(voice.active).toBe(false);
+    expect(realtimeVoiceApi.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("unsubscribes from network changes on unmount", async () => {
+    const subscription = jest.mocked(Network.addNetworkStateListener).mock.results.at(-1)!.value;
+    await act(async () => { tree.unmount(); });
+    expect(subscription.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes a pending native resume against manual restart after offline", async () => {
+    let recording = false;
+    let resolveResume!: () => void;
+    mockStartNativeRecording.mockImplementation(async () => { recording = true; });
+    mockStopNativeRecording.mockImplementation(async () => { recording = false; });
+    mockPauseNativeRecording.mockImplementation(async () => { recording = false; });
+    mockResumeNativeRecording.mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { resolveResume = resolve; });
+      recording = true;
+    });
+    await act(async () => { await voice.start(); await voice.toggleMute(); });
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = voice.toggleMute(); });
+    await act(async () => { networkChange({ isConnected: false }); });
+    await act(async () => { expect(await voice.start()).toBe(false); });
+    expect(recording).toBe(false);
+    await act(async () => { resolveResume(); await pending; });
+    expect(recording).toBe(false);
+    await act(async () => { expect(await voice.start()).toBe(true); });
+    expect(recording).toBe(true);
+    expect(voice.state).toBe("listening");
+    expect(mockStartNativeRecording).toHaveBeenCalledTimes(2);
   });
 
 });

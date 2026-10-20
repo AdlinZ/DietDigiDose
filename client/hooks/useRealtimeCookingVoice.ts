@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
+import * as Network from "expo-network";
 import * as Crypto from "expo-crypto";
 import { Audio } from "expo-av";
 import { useAudioRecorder, type AudioDataEvent, type AudioAnalysis } from "@siteed/audio-studio";
 import { Base64 } from "js-base64";
 
 import { useAuthFetch } from "@/contexts/AuthContext";
-import { ApiError, aiApi, realtimeVoiceApi, waitForAgentRun, type RealtimeVoiceSession } from "@/services/api";
+import { ApiError, ApiTransportError, aiApi, realtimeVoiceApi, waitForAgentRun, type RealtimeVoiceSession } from "@/services/api";
 import { heartbeatWithVersionRecovery, RealtimeVoiceSessionUpdater } from "@/services/realtimeVoiceSessionUpdater";
 
 import { isVoiceOutputBlockingCapture } from "@/services/voiceCaptureGate";
@@ -108,6 +109,61 @@ export function useRealtimeCookingVoice(options: Options) {
   useEffect(() => { optionsRef.current = options; }, [options]);
   useEffect(() => { stateRef.current = state; }, [state]);
 
+  const stop = useCallback(async () => {
+    if (stoppingRef.current || (!activeRef.current && !startingRef.current && !sessionRef.current)) return;
+    stoppingRef.current += 1;
+    try {
+      lifecycleRef.current += 1;
+      const current = sessionRef.current;
+      sessionRef.current = null;
+      setSession(null);
+      setState("off");
+      activeRef.current = false;
+      mutedRef.current = false;
+      interruptedRef.current = false;
+      optionsRef.current.onStopOutput();
+      responseGeneration.current += 1;
+      sessionUpdaterRef.current!.invalidate();
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+      try { recognitionRef.current?.abort(); } catch {}
+      recognitionRef.current = null;
+      if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
+      nativeSilenceTimerRef.current = null;
+      nativeSpeakingRef.current = false;
+      nativeChunksRef.current = [];
+      nativePreRollRef.current = [];
+      nativeTurnIdRef.current = "";
+      nativeSequenceRef.current = 0;
+      nativePartialSentLengthRef.current = 0;
+      nativePartialInFlightRef.current = null;
+      nativeTranscribingRef.current = null;
+      if (Platform.OS !== "web") await stopNativeRecording().catch(() => {
+        optionsRef.current.onError("无法确认麦克风已关闭，请退出语音页面并检查系统麦克风指示灯");
+      });
+      if (current) void realtimeVoiceApi.close(authFetch, current.id).catch(() => undefined);
+    } finally { stoppingRef.current -= 1; }
+  }, [authFetch, stopNativeRecording]);
+
+  const interruptConnection = useCallback((message = "网络连接中断，已停止持续监听，请联网后手动开启") => {
+    if (!activeRef.current && !startingRef.current) return;
+    void stop(); // Local invalidation and recorder stop happen before any close request.
+    setState("fallback");
+    optionsRef.current.onError(message);
+  }, [stop]);
+
+  const handleConnectionError = useCallback((error: unknown) => {
+    if (error instanceof ApiTransportError) {
+      interruptConnection();
+      return true;
+    }
+    if (error instanceof ApiError && [401, 403, 404, 410].includes(error.status)) {
+      interruptConnection("实时语音会话已失效，已停止持续监听，请重新开启");
+      return true;
+    }
+    return false;
+  }, [interruptConnection]);
+
   const pollAnswer = useCallback(async (sessionId: string, turnId: string, generation: number) => {
     let after = 0;
     let combined = "";
@@ -164,10 +220,11 @@ export function useRealtimeCookingVoice(options: Options) {
       }
     } catch (error) {
       if (!activeRef.current || mutedRef.current || responseGeneration.current !== generation) return;
+      if (handleConnectionError(error)) return;
       optionsRef.current.onError(error instanceof Error ? error.message : "实时语音处理失败");
       if (activeRef.current && !mutedRef.current) setState("listening");
     }
-  }, [authFetch, pollAnswer]);
+  }, [authFetch, handleConnectionError, pollAnswer]);
 
   // Communication audio focus is not proof of AEC or an isolated headset route.
   // Until a recorder exposes verified echo isolation, native input is half-duplex.
@@ -209,8 +266,8 @@ export function useRealtimeCookingVoice(options: Options) {
           turnId, sequence, audioBase64: pcm16WavBase64(chunks), mimeType: "audio/wav", final: true,
         });
         transcript = partial.transcript.trim();
-      } catch {
-        if (!isCurrent()) return;
+      } catch (error) {
+        if (!isCurrent() || handleConnectionError(error)) return;
         const result = await aiApi.transcribe<{
           transcript?: string;
           text?: string;
@@ -227,12 +284,13 @@ export function useRealtimeCookingVoice(options: Options) {
       await submitTurn(transcript);
     } catch (error) {
       if (!isCurrent()) return;
+      if (handleConnectionError(error)) return;
       optionsRef.current.onError(error instanceof Error ? error.message : "连续语音转写失败");
       if (activeRef.current && !mutedRef.current) setState("listening");
     } finally {
       if (nativeTranscribingRef.current === transcription) nativeTranscribingRef.current = null;
     }
-  }, [authFetch, nativeCaptureBlocked, submitTurn]);
+  }, [authFetch, handleConnectionError, nativeCaptureBlocked, submitTurn]);
 
   const handleNativeAudio = useCallback(async (event: AudioDataEvent) => {
     if (!activeRef.current || mutedRef.current || nativeCaptureBlocked() || typeof event.data !== "string") return;
@@ -260,13 +318,17 @@ export function useRealtimeCookingVoice(options: Options) {
             && turnId === nativeTurnIdRef.current && result.transcript.trim()) {
             optionsRef.current.onTranscript(result.transcript.trim(), false);
           }
-        }).catch(() => undefined).finally(() => {
+        }).catch((error) => {
+          if (lifecycleRef.current === lifecycle && responseGeneration.current === generation && activeRef.current) {
+            handleConnectionError(error);
+          }
+        }).finally(() => {
           if (nativePartialInFlightRef.current === partialRequest) nativePartialInFlightRef.current = null;
         });
       }
     }
     if (nativeChunksRef.current.length > 160) void flushNativeUtterance();
-  }, [authFetch, flushNativeUtterance, nativeCaptureBlocked]);
+  }, [authFetch, flushNativeUtterance, handleConnectionError, nativeCaptureBlocked]);
 
   const handleNativeAnalysis = useCallback(async (event: AudioAnalysis) => {
     if (!activeRef.current || mutedRef.current || nativeCaptureBlocked()) return;
@@ -302,38 +364,6 @@ export function useRealtimeCookingVoice(options: Options) {
       isVersionConflict: (error) => error instanceof ApiError && error.code === "REALTIME_VOICE_VERSION_CONFLICT",
     }))
   ), [authFetch]);
-
-  const stop = useCallback(async () => {
-    stoppingRef.current += 1;
-    try {
-      lifecycleRef.current += 1;
-      const current = sessionRef.current;
-      sessionRef.current = null;
-      setSession(null);
-      setState("off");
-      activeRef.current = false;
-      mutedRef.current = false;
-      optionsRef.current.onStopOutput();
-      responseGeneration.current += 1;
-      sessionUpdaterRef.current!.invalidate();
-      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-      heartbeatRef.current = null;
-      try { recognitionRef.current?.abort(); } catch {}
-      recognitionRef.current = null;
-      if (nativeSilenceTimerRef.current) clearTimeout(nativeSilenceTimerRef.current);
-      nativeSilenceTimerRef.current = null;
-      nativeSpeakingRef.current = false;
-      nativeChunksRef.current = [];
-      nativePreRollRef.current = [];
-      nativeTurnIdRef.current = "";
-      nativeSequenceRef.current = 0;
-      nativePartialSentLengthRef.current = 0;
-      nativePartialInFlightRef.current = null;
-      nativeTranscribingRef.current = null;
-      if (Platform.OS !== "web") await stopNativeRecording().catch(() => undefined);
-      if (current) await realtimeVoiceApi.close(authFetch, current.id).catch(() => undefined);
-    } finally { stoppingRef.current -= 1; }
-  }, [authFetch, stopNativeRecording]);
 
   const toggleMute = useCallback(async () => {
     const sessionId = sessionRef.current?.id;
@@ -372,6 +402,7 @@ export function useRealtimeCookingVoice(options: Options) {
       return nextMuted;
     } catch (error) {
       if (stillActive()) {
+        if (handleConnectionError(error)) return false;
         mutedRef.current = true;
         setState("muted");
         // A failed resume can leave a partially started recorder behind.
@@ -386,10 +417,10 @@ export function useRealtimeCookingVoice(options: Options) {
     } finally {
       muteTransitionRef.current = false;
     }
-  }, [pauseNativeRecording, resumeNativeRecording, stopNativeRecording, stop, updateSession]);
+  }, [handleConnectionError, pauseNativeRecording, resumeNativeRecording, stopNativeRecording, stop, updateSession]);
 
   const start = useCallback(async () => {
-    if (startingRef.current || stoppingRef.current || activeRef.current) return false;
+    if (startingRef.current || stoppingRef.current || muteTransitionRef.current || activeRef.current) return false;
     const RecognitionConstructor = recognitionConstructor();
     const native = Platform.OS === "android" || Platform.OS === "ios";
     if ((!RecognitionConstructor && !native) || !Number.isInteger(optionsRef.current.recipeId) || optionsRef.current.recipeId <= 0) {
@@ -401,6 +432,14 @@ export function useRealtimeCookingVoice(options: Options) {
     const lifecycle = ++lifecycleRef.current;
     const isCurrent = () => lifecycleRef.current === lifecycle;
     try {
+      const network = Platform.OS === "web"
+        ? { isConnected: typeof navigator === "undefined" ? undefined : navigator.onLine }
+        : await Network.getNetworkStateAsync().catch(() => ({} as Network.NetworkState));
+      if (!isCurrent()) return false;
+      if (network.isConnected === false || ("isInternetReachable" in network && network.isInternetReachable === false)) {
+        interruptConnection();
+        return false;
+      }
       const created = await realtimeVoiceApi.create(authFetch, {
         recipeId: optionsRef.current.recipeId,
         platform: Platform.OS,
@@ -448,7 +487,8 @@ export function useRealtimeCookingVoice(options: Options) {
           if (["not-allowed", "service-not-allowed", "audio-capture"].includes(event?.error)) {
             void stop();
             optionsRef.current.onError("麦克风权限或设备不可用，已停止持续监听");
-          } else setState("reconnecting");
+          } else if (event?.error === "network") interruptConnection();
+          else setState("reconnecting");
         };
         recognition.onend = () => {
           if (!isCurrent() || !activeRef.current || mutedRef.current) return;
@@ -486,8 +526,11 @@ export function useRealtimeCookingVoice(options: Options) {
       }
       heartbeatRef.current = setInterval(() => {
         if (!sessionRef.current) return;
-        void updateSession({ muted: mutedRef.current, reconnect: false }).catch(() => {
-          if (isCurrent() && activeRef.current && !mutedRef.current) setState("reconnecting");
+        void updateSession({ muted: mutedRef.current, reconnect: false }).catch((error) => {
+          if (!isCurrent() || !activeRef.current) return;
+          if (!handleConnectionError(error)) {
+            optionsRef.current.onError(error instanceof Error ? error.message : "实时语音状态同步失败");
+          }
         });
       }, 20_000);
       return true;
@@ -500,7 +543,20 @@ export function useRealtimeCookingVoice(options: Options) {
     } finally {
       startingRef.current = false;
     }
-  }, [authFetch, handleNativeAnalysis, handleNativeAudio, startNativeRecording, stopNativeRecording, stop, submitTurn, updateSession]);
+  }, [authFetch, handleConnectionError, handleNativeAnalysis, handleNativeAudio, interruptConnection, startNativeRecording, stopNativeRecording, stop, submitTurn, updateSession]);
+
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      const onOffline = () => interruptConnection();
+      window.addEventListener("offline", onOffline);
+      return () => window.removeEventListener("offline", onOffline);
+    }
+    const subscription = Network.addNetworkStateListener((network) => {
+      // Unknown reachability is not evidence of disconnection.
+      if (network.isConnected === false || network.isInternetReachable === false) interruptConnection();
+    });
+    return () => subscription.remove();
+  }, [interruptConnection]);
 
   useEffect(() => () => { void stop(); }, [stop]);
   useEffect(() => {

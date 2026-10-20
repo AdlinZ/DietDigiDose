@@ -5,6 +5,7 @@ import type { AcceptResult, CreatePostInput, JoinResult, LevelSource, PostListIn
 function selectPosts(userId:number|null) { const viewer=userId??-1; return `SELECT p.*,COALESCE(u.username,'食友'||p.user_id) AS username,
   COALESCE(u.is_verified_expert,0) AS author_is_expert,(SELECT COUNT(*) FROM community_comments cc WHERE cc.post_id=p.id) AS actual_comment_count,
   EXISTS(SELECT 1 FROM community_post_likes l WHERE l.post_id=p.id AND l.user_id=${viewer}) AS is_liked,
+  EXISTS(SELECT 1 FROM community_post_bookmarks b WHERE b.post_id=p.id AND b.user_id=${viewer}) AS is_bookmarked,
   (SELECT COUNT(*) FROM community_event_participants ep WHERE ep.post_id=p.id) AS participant_count,
   EXISTS(SELECT 1 FROM community_event_participants ep WHERE ep.post_id=p.id AND ep.user_id=${viewer}) AS is_joined,
   EXISTS(SELECT 1 FROM user_follows uf WHERE uf.follower_id=${viewer} AND uf.following_id=p.user_id) AS author_is_followed,
@@ -54,7 +55,7 @@ export class SqliteCommunityRepository implements CommunityRepository {
     if(input.latestCursor){filters.push("(p.created_at<? OR (p.created_at=? AND p.id<?))");values.push(input.latestCursor.createdAt,input.latestCursor.createdAt,input.latestCursor.id);}
     if(input.snapshotMaxId!==undefined){filters.push("p.id<=?");values.push(input.snapshotMaxId);} return this.database.prepare(`${selectPosts(input.userId)} WHERE ${filters.join(" AND ")}
       ORDER BY p.created_at DESC,p.id DESC LIMIT ? OFFSET ?`).all(...values,input.limit,input.offset) as Row[]; }
-  async viewPost(userId:number|null,postId:number) { return this.database.transaction(()=>{ const post=this.database.prepare(`${selectPosts(userId)} WHERE p.id=? AND p.deleted_at IS NULL`).get(postId) as Row|undefined;
+  async viewPost(userId:number|null,postId:number): Promise<Row | null> { return this.database.transaction(()=>{ const post=this.database.prepare(`${selectPosts(userId)} WHERE p.id=? AND p.deleted_at IS NULL`).get(postId) as Row|undefined;
     if(!post)return null; this.database.prepare("UPDATE community_posts SET views_count=COALESCE(views_count,0)+1 WHERE id=?").run(postId); return {...post,views_count:Number(post.views_count||0)+1}; })(); }
   async share(postId:number,userId:number|null,codes:string[],expiresAt:string):Promise<ShareResult|"not_found"> { return this.database.transaction(()=>{
     if(!this.database.prepare("SELECT 1 FROM community_posts WHERE id=? AND deleted_at IS NULL").get(postId))return "not_found" as const;
@@ -80,7 +81,11 @@ export class SqliteCommunityRepository implements CommunityRepository {
     else this.database.prepare("INSERT INTO community_event_participants (post_id,user_id) VALUES (?,?)").run(postId,userId);
     const count=Number((this.database.prepare("SELECT COUNT(*) AS count FROM community_event_participants WHERE post_id=?").get(postId) as any).count);
     return {kind:"updated" as const,active:!exists,count}; })(); }
-  async togglePostLike(userId:number,postId:number) { return this.toggleLike("post",userId,postId); }
+  async setPostBookmark(userId: number, postId: number, bookmarked: boolean) {
+    const result = this.updateReaction("bookmark", userId, postId, bookmarked);
+    return result.kind === "not_found" ? result : { kind: "updated" as const, bookmarked: result.active };
+  }
+  async togglePostLike(userId:number,postId:number) { return this.updateReaction("post",userId,postId); }
   async comments(userId:number|null,postId:number) { return this.database.prepare(`SELECT c.*,COALESCE(u.is_verified_expert,0) AS is_expert_answer,
     CASE WHEN p.accepted_comment_id=c.id THEN 1 ELSE 0 END AS is_accepted,EXISTS(SELECT 1 FROM community_comment_likes l WHERE l.comment_id=c.id AND l.user_id=?) AS is_liked
     FROM community_comments c JOIN community_posts p ON p.id=c.post_id LEFT JOIN users u ON u.id=c.user_id WHERE c.post_id=? AND p.deleted_at IS NULL
@@ -95,17 +100,30 @@ export class SqliteCommunityRepository implements CommunityRepository {
     if(post.user_id!==userId)return {kind:"forbidden" as const}; if(!this.database.prepare("SELECT 1 FROM community_comments WHERE id=? AND post_id=?").get(commentId,postId))return {kind:"comment_not_found" as const};
     const accepted=post.accepted_comment_id===commentId?null:commentId; this.database.prepare("UPDATE community_posts SET accepted_comment_id=?,question_status=? WHERE id=?")
       .run(accepted,accepted?"resolved":"open",postId); return {kind:"updated" as const,acceptedCommentId:accepted}; })(); }
-  async toggleCommentLike(userId:number,commentId:number) { return this.toggleLike("comment",userId,commentId); }
+  async toggleCommentLike(userId:number,commentId:number) { return this.updateReaction("comment",userId,commentId); }
   async recommendationSource(userId:number|null) { if(!userId)return {health:null,likedPosts:[]}; const health=(this.database.prepare(`SELECT health_goal,dietary_preference,allergies_json,
     dietary_restrictions_json,disliked_foods FROM user_health_profiles WHERE user_id=?`).get(userId) as Row|undefined)||null;
     const likedPosts=this.database.prepare(`SELECT p.user_id,p.content FROM community_post_likes l JOIN community_posts p ON p.id=l.post_id WHERE l.user_id=?
       AND p.deleted_at IS NULL ORDER BY l.created_at DESC LIMIT 80`).all(userId) as Array<{user_id:number;content:string}>; return {health,likedPosts}; }
-  private toggleLike(kind:"post"|"comment",userId:number,id:number):ToggleResult { return this.database.transaction((): ToggleResult=>{ const table=kind==="post"?"community_posts":"community_comments";
-    const likeTable=kind==="post"?"community_post_likes":"community_comment_likes",column=kind==="post"?"post_id":"comment_id";
-    const existsTarget=kind==="post"?this.database.prepare("SELECT 1 FROM community_posts WHERE id=? AND deleted_at IS NULL").get(id)
-      :this.database.prepare(`SELECT 1 FROM community_comments c JOIN community_posts p ON p.id=c.post_id WHERE c.id=? AND p.deleted_at IS NULL`).get(id);
-    if(!existsTarget)return {kind:"not_found"}; const liked=Boolean(this.database.prepare(`SELECT 1 FROM ${likeTable} WHERE ${column}=? AND user_id=?`).get(id,userId));
-    if(liked)this.database.prepare(`DELETE FROM ${likeTable} WHERE ${column}=? AND user_id=?`).run(id,userId); else this.database.prepare(`INSERT INTO ${likeTable} (${column},user_id) VALUES (?,?)`).run(id,userId);
-    this.database.prepare(`UPDATE ${table} SET likes_count=MAX(COALESCE(likes_count,0)+?,0) WHERE id=?`).run(liked?-1:1,id); const count=Number((this.database.prepare(`SELECT likes_count AS count FROM ${table} WHERE id=?`).get(id) as any).count);
-    return {kind:"updated",active:!liked,count}; })(); }
+  /** Write a post/comment relationship transactionally. Bookmarks use desired state, never a toggle or like counter. */
+  private updateReaction(kind: "post" | "comment" | "bookmark", userId: number, id: number, desired?: boolean): ToggleResult {
+    return this.database.transaction((): ToggleResult => {
+      const table = kind === "comment" ? "community_comments" : "community_posts";
+      const relationTable = kind === "bookmark" ? "community_post_bookmarks" : kind === "post" ? "community_post_likes" : "community_comment_likes";
+      const column = kind === "comment" ? "comment_id" : "post_id";
+      const existsTarget = kind !== "comment" ? this.database.prepare("SELECT 1 FROM community_posts WHERE id=? AND deleted_at IS NULL").get(id)
+        : this.database.prepare(`SELECT 1 FROM community_comments c JOIN community_posts p ON p.id=c.post_id WHERE c.id=? AND p.deleted_at IS NULL`).get(id);
+      if (!existsTarget) return { kind: "not_found" };
+      const current = Boolean(this.database.prepare(`SELECT 1 FROM ${relationTable} WHERE ${column}=? AND user_id=?`).get(id, userId));
+      const active = desired ?? !current;
+      if (current !== active) {
+        if (!active) this.database.prepare(`DELETE FROM ${relationTable} WHERE ${column}=? AND user_id=?`).run(id, userId);
+        else this.database.prepare(`INSERT INTO ${relationTable} (${column},user_id) VALUES (?,?)`).run(id, userId);
+      }
+      if (kind === "bookmark") return { kind: "updated", active, count: 0 };
+      this.database.prepare(`UPDATE ${table} SET likes_count=MAX(COALESCE(likes_count,0)+?,0) WHERE id=?`).run(current ? -1 : 1, id);
+      const count = Number((this.database.prepare(`SELECT likes_count AS count FROM ${table} WHERE id=?`).get(id) as any).count);
+      return { kind: "updated", active, count };
+    })();
+  }
 }

@@ -16,6 +16,7 @@ function postSelect(viewerParameter: number) {
     COALESCE(u.is_verified_expert,FALSE) AS author_is_expert,
     (SELECT COUNT(*)::int FROM community_comments cc WHERE cc.post_id=p.id) AS actual_comment_count,
     EXISTS(SELECT 1 FROM community_post_likes l WHERE l.post_id=p.id AND l.user_id=$${viewerParameter}) AS is_liked,
+    EXISTS(SELECT 1 FROM community_post_bookmarks b WHERE b.post_id=p.id AND b.user_id=$${viewerParameter}) AS is_bookmarked,
     (SELECT COUNT(*)::int FROM community_event_participants ep WHERE ep.post_id=p.id) AS participant_count,
     EXISTS(SELECT 1 FROM community_event_participants ep WHERE ep.post_id=p.id AND ep.user_id=$${viewerParameter}) AS is_joined,
     EXISTS(SELECT 1 FROM user_follows uf WHERE uf.follower_id=$${viewerParameter} AND uf.following_id=p.user_id) AS author_is_followed,
@@ -189,6 +190,19 @@ export class PostgresCommunityRepository implements CommunityRepository {
       else await client.query("INSERT INTO community_event_participants (post_id,user_id) VALUES ($1,$2)", [postId, userId]);
       const count = Number((await client.query("SELECT COUNT(*) AS count FROM community_event_participants WHERE post_id=$1", [postId])).rows[0].count);
       return { kind: "updated", active: !exists, count };
+    });
+  }
+
+  async setPostBookmark(userId: number, postId: number, bookmarked: boolean) {
+    return this.tx(async (client) => {
+      // Row lock orders opposing requests and prevents saving a concurrently removed post.
+      if (!(await client.query("SELECT 1 FROM community_posts WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", [postId])).rowCount) {
+        return { kind: "not_found" as const };
+      }
+      if (bookmarked) await client.query(`INSERT INTO community_post_bookmarks (user_id,post_id) VALUES ($1,$2)
+        ON CONFLICT (user_id,post_id) DO NOTHING`, [userId, postId]);
+      else await client.query("DELETE FROM community_post_bookmarks WHERE user_id=$1 AND post_id=$2", [userId, postId]);
+      return { kind: "updated" as const, bookmarked };
     });
   }
 

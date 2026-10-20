@@ -66,6 +66,7 @@ export type CommunityPost = {
   created_at: string;
   category?: string;
   is_liked?: boolean;
+  is_bookmarked?: boolean;
   linked_recipe?: import("@/components/LinkedRecipeCard").LinkedRecipeSummary | null;
   linked_recipe_unavailable?: boolean;
 };

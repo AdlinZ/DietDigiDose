@@ -1,10 +1,10 @@
 {
   "version": 1,
   "generatedFrom": "SQLite schema after initDatabase() and all schema_migrations",
-  "sourceSchemaSha256": "eecfbd382b00048fd1a1d2a7b83e61d49fa9488bb6f34299276a502947d4e069",
-  "tableCount": 119,
-  "indexCount": 172,
-  "foreignKeyCount": 190,
+  "sourceSchemaSha256": "8d12af56fdd6f98efa1a6513d41506d57d7c397580cfd179a8ff4d418b34f45a",
+  "tableCount": 120,
+  "indexCount": 173,
+  "foreignKeyCount": 192,
   "tables": [
     {
       "name": "account_reauth_grants",
@@ -1819,6 +1819,53 @@
           "postgresType": "timestamp with time zone",
           "transform": "SQLite UTC datetime -> timestamptz",
           "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "community_post_bookmarks",
+      "autoIncrement": false,
+      "primaryKey": [
+        "user_id",
+        "post_id"
+      ],
+      "foreignKeys": [
+        {
+          "column": "post_id",
+          "referencedTable": "community_posts",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        },
+        {
+          "column": "user_id",
+          "referencedTable": "users",
+          "referencedColumn": "id",
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      ],
+      "columns": [
+        {
+          "name": "user_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "post_id",
+          "sqliteType": "INTEGER",
+          "postgresType": "integer",
+          "transform": "identity",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "sqliteType": "DATETIME",
+          "postgresType": "timestamp with time zone",
+          "transform": "SQLite UTC datetime -> timestamptz",
+          "nullable": false
         }
       ]
     },

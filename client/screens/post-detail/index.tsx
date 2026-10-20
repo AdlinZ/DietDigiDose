@@ -1,3 +1,5 @@
+import { useFocusEffect } from "expo-router";
+import { usePostBookmark } from "./usePostBookmark";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
@@ -42,6 +44,7 @@ interface Post {
   views_count?: number;
   comment_count?: number;
   is_liked?: boolean;
+  is_bookmarked?: boolean;
   event_start_at?: string | null;
   event_end_at?: string | null;
   participant_count?: number;
@@ -104,14 +107,22 @@ export default function PostDetailScreen() {
     commentId?: number | string;
     published?: boolean | string;
   }>();
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, sessionGeneration } = useAuth();
   const authFetch = useAuthFetch();
 
   const [post, setPost] = useState<Post | null>(null);
   const [loading, setLoading] = useState(true);
+  const [detailError, setDetailError] = useState<"unavailable" | "load" | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followPending, setFollowPending] = useState(false);
-  const [isCollected, setIsCollected] = useState(false);
+  const detailScope = `${sessionGeneration}:${user?.id}:${params.id}`;
+  const detailScopeRef = useRef(detailScope);
+  detailScopeRef.current = detailScope;
+  const detailRequest = useRef(0);
+  const bookmarkWriteGeneration = useRef(0);
+  const [bookmarkReadGeneration, setBookmarkReadGeneration] = useState(-1);
+  const [detailRevision, setDetailRevision] = useState(0);
+  const [loadedScope, setLoadedScope] = useState<string | null>(null);
 
   // 评论列表
   const [comments, setComments] = useState<CommentItem[]>([]);
@@ -152,25 +163,41 @@ export default function PostDetailScreen() {
       return;
     }
 
+    const request = ++detailRequest.current;
+    const readGeneration = bookmarkWriteGeneration.current;
+    const current = () => detailScopeRef.current === detailScope && detailRequest.current === request;
     try {
       setLoading(true);
+      setDetailError(null);
       const [data, commentsData] = await Promise.all([
         communityApi.post<Post>(Number(params.id), authFetch),
         communityApi.comments<CommentItem>(Number(params.id), authFetch),
       ]);
+      if (!current()) return;
+      setBookmarkReadGeneration(readGeneration);
+      setDetailRevision(request);
+      setLoadedScope(detailScope);
       setPost(data);
       setIsFollowing(Boolean(data.author_is_followed));
       setComments(commentsData);
     } catch (e) {
+      if (current()) {
+        setPost(null); setLoadedScope(null); setComments([]);
+        setDetailError(typeof e === "object" && e !== null && "status" in e && e.status === 404 ? "unavailable" : "load");
+      }
       console.error(e);
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
-  }, [params.id, authFetch]);
+  }, [params.id, authFetch, detailScope]);
 
-  useEffect(() => {
-    fetchPostDetail();
-  }, [fetchPostDetail]);
+  useFocusEffect(useCallback(() => {
+    void fetchPostDetail();
+    return () => { detailRequest.current += 1; };
+  }, [fetchPostDetail]));
+
+  const bookmark = usePostBookmark(Number(params.id) || undefined,
+    loadedScope === detailScope ? post?.is_bookmarked : undefined, fetchPostDetail, detailRevision, { readGeneration: bookmarkReadGeneration, writeGeneration: bookmarkWriteGeneration });
 
   useEffect(() => {
     if (params.published === true || params.published === "true") {
@@ -474,7 +501,10 @@ export default function PostDetailScreen() {
       <Screen safeAreaEdges={["top"]}>
         <View className="flex-1 justify-center items-center p-6">
           <FontAwesome6 name="triangle-exclamation" size={40} colorClassName="accent-copy-muted" />
-          <Text className="text-base text-ink font-bold mt-4">帖子未找到或已被删除</Text>
+          <Text className="text-base text-ink font-bold mt-4">{detailError === "load" ? "帖子加载失败，请稍后重试" : "帖子未找到或已被删除"}</Text>
+          {detailError === "load" && <TouchableOpacity accessibilityLabel="重新加载帖子" onPress={() => void fetchPostDetail()} className="mt-4 px-5 py-2 rounded-full bg-brand">
+            <Text className="text-white font-bold">重试</Text>
+          </TouchableOpacity>}
           <TouchableOpacity
             onPress={() => router.back()}
             className="mt-6 bg-brand-fill px-6 py-2.5 rounded-full"
@@ -855,21 +885,26 @@ export default function PostDetailScreen() {
 
           {/* 收藏按钮 */}
           <TouchableOpacity
+            accessibilityLabel={bookmark.bookmarked ? "取消收藏帖子" : "收藏帖子"}
+            accessibilityState={{ selected: bookmark.bookmarked, busy: bookmark.pending, disabled: isAuthenticated && (!bookmark.known || bookmark.pending || loading) }}
+            disabled={isAuthenticated && (!bookmark.known || bookmark.pending || loading)}
             onPress={() => {
               if (!isAuthenticated) {
                 promptForLogin("登录后收藏", "登录后即可收藏这篇分享。", "collect");
                 return;
               }
-              setIsCollected(!isCollected);
+              void bookmark.setBookmark().catch(() => {
+                Alert.alert("收藏状态未确认", "请求未能确认完成，已尝试重新读取。请检查当前收藏状态后重试。");
+              });
             }}
             className="px-2 py-1.5"
           >
-            <FontAwesome6
+            {bookmark.pending ? <ActivityIndicator size="small" /> : <FontAwesome6
               name="bookmark"
               size={17}
-              colorClassName={isCollected ? "accent-highlight" : "accent-copy-muted"}
-              solid={isCollected}
-            />
+              colorClassName={bookmark.bookmarked ? "accent-highlight" : "accent-copy-muted"}
+              solid={bookmark.bookmarked}
+            />}
           </TouchableOpacity>
         </View>
 

@@ -19,6 +19,7 @@ export interface CommunityRepository {
   resolveShare(code: string): Promise<Row | null>;
   createPost(input: CreatePostInput): Promise<CreatePostResult>;
   toggleJoin(userId: number, postId: number, now: number): Promise<JoinResult>;
+  setPostBookmark(userId: number, postId: number, bookmarked: boolean): Promise<{ kind: "not_found" } | { kind: "updated"; bookmarked: boolean }>;
   togglePostLike(userId: number, postId: number): Promise<ToggleResult>;
   comments(userId: number | null, postId: number): Promise<Row[]>;
   createComment(userId: number, postId: number, username: string, avatarUrl: string | null, content: string, imageUrl: string | null): Promise<Row | null>;

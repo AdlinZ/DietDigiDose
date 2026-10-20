@@ -41,8 +41,8 @@ describe("useVoiceRecorder", () => {
   const onSpeechFinal = jest.fn();
   const onSpeechEmpty = jest.fn();
 
-  function TestComponent() {
-    const value = useVoiceRecorder({ onSpeechResult, onSpeechFinal, onSpeechEmpty });
+  function TestComponent({ scopeKey }: { scopeKey?: string } = {}) {
+    const value = useVoiceRecorder({ scopeKey, onSpeechResult, onSpeechFinal, onSpeechEmpty });
     React.useLayoutEffect(() => {
       recorderHook = value;
     });
@@ -230,4 +230,24 @@ describe("useVoiceRecorder", () => {
     expect(mockRecording.stopAndUnloadAsync).toHaveBeenCalled();
     expect(onSpeechFinal).not.toHaveBeenCalled();
   });
+  test.each(["conversation-B", "account-B", "logged-out"])("discards pending native ASR after scope becomes %s", async nextScope => {
+    (Audio.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
+    (Audio.setAudioModeAsync as jest.Mock).mockResolvedValue(undefined);
+    const recording = { stopAndUnloadAsync: jest.fn().mockResolvedValue(undefined), getURI: () => "file:///old.m4a" };
+    (Audio.Recording.createAsync as jest.Mock).mockResolvedValue({ recording });
+    (FileSystem.readAsStringAsync as jest.Mock).mockResolvedValue("audio");
+    let resolve!: (value: unknown) => void;
+    (aiApi.transcribe as jest.Mock).mockReturnValue(new Promise(done => { resolve = done; }));
+    await act(async () => { tree = renderer.create(<TestComponent scopeKey="account-A:conversation-A" />); });
+    await act(async () => { await recorderHook.startRecording(); recorderHook.stopRecording(); });
+    expect(aiApi.transcribe).toHaveBeenCalledTimes(1);
+    await act(async () => { tree!.update(<TestComponent scopeKey={nextScope} />); });
+    await act(async () => { resolve({ text: "旧账号秘密", run: { id: "old", status: "completed" } }); });
+    expect(waitForAgentRun).not.toHaveBeenCalled();
+    expect(onSpeechResult).not.toHaveBeenCalled();
+    expect(onSpeechFinal).not.toHaveBeenCalled();
+    expect(onSpeechEmpty).not.toHaveBeenCalled();
+    expect(recorderHook.isTranscribing).toBe(false);
+  });
+
 });

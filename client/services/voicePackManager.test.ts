@@ -99,8 +99,13 @@ jest.mock("@/services/api/ai", () => ({
   voicePackApi: { synthesize: (...args: unknown[]) => mockSynthesize(...args) },
 }));
 
+import { Audio } from "expo-av";
+import * as Crypto from "expo-crypto";
+import * as Speech from "expo-speech";
+
 import {
   getVoicePackState,
+  prefetchVoiceText,
   purgeVoiceAudioCache,
   purgeVoiceAudioCacheForUser,
   speakWithVoiceFallback,
@@ -240,6 +245,104 @@ describe("voice audio cache account lifecycle", () => {
     const index = JSON.parse(mockStorage.get("voice-audio-cache-index-v1") || "{}") as Record<string, { userScope: string }>;
     expect(Object.values(index).map((row) => row.userScope)).toEqual(["user:202"]);
   });
+
+  it("does not reuse cached server fallback as local audio when local inference recovers", async () => {
+    selectLocalVoice();
+    mockRun.mockRejectedValueOnce(new Error("Local runtime temporarily unavailable"))
+      .mockResolvedValueOnce({ audio: { data: new Float32Array(24_000) } });
+    mockSynthesize.mockResolvedValueOnce({ audioBase64: "AQID", mimeType: "audio/mpeg" });
+
+    expect(await speakWithVoiceFallback(jest.fn(), "同一句话", { userId: 101 })).toBe("server");
+    expect(await speakWithVoiceFallback(jest.fn(), "同一句话", { userId: 101 })).toBe("local");
+
+    expect(mockRun).toHaveBeenCalledTimes(2);
+    expect(mockSynthesize).toHaveBeenCalledTimes(1);
+    const played = jest.mocked(Audio.Sound.createAsync).mock.calls.map(([source]) => source);
+    expect(played).toEqual([{ uri: expect.stringMatching(/\.mp3$/) }, { uri: expect.stringMatching(/\.wav$/) }]);
+  });
+
+  it("reuses server cache without another API request and isolates sensitive accounts", async () => {
+    mockSynthesize.mockResolvedValue({ audioBase64: "AQID", mimeType: "audio/mpeg" });
+    const apiFetch = jest.fn();
+    const options = { userId: 101, sensitive: true };
+    expect(await speakWithVoiceFallback(apiFetch, "同一句私人语音", options)).toBe("server");
+    expect(await speakWithVoiceFallback(apiFetch, "同一句私人语音", options)).toBe("server");
+    expect(mockSynthesize).toHaveBeenCalledTimes(1);
+    const firstUri = jest.mocked(Audio.Sound.createAsync).mock.calls[0][0];
+    expect(jest.mocked(Audio.Sound.createAsync).mock.calls[1][0]).toEqual(firstUri);
+
+    await speakWithVoiceFallback(apiFetch, "同一句私人语音", { userId: 202, sensitive: true });
+    expect(mockSynthesize).toHaveBeenCalledTimes(2);
+    expect(jest.mocked(Audio.Sound.createAsync).mock.calls[2][0]).not.toEqual(firstUri);
+    const index = JSON.parse(mockStorage.get("voice-audio-cache-index-v1") || "{}");
+    expect(Object.values(index).map((row: any) => row.userScope).sort()).toEqual(["user:101", "user:202"]);
+  });
+
+  it("ignores ambiguous schema 2 entries instead of attributing them to local", async () => {
+    selectLocalVoice();
+    const key = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, JSON.stringify({
+      schema: 2, voice: "local-test@1.0.0", text: "旧缓存", rate: 1, style: "default", format: "audio", scope: "public",
+    }));
+    const uri = "file:///cache/voice-output-v1/ambiguous.mp3";
+    mockFiles.add(uri);
+    mockStorage.set("voice-audio-cache-index-v1", JSON.stringify({ [key]: {
+      uri, bytes: 3, accessedAt: Date.now(), sensitive: false, userScope: "public", voiceKey: "local-test@1.0.0",
+    } }));
+    mockRun.mockResolvedValueOnce({ audio: { data: new Float32Array(24_000) } });
+    expect(await speakWithVoiceFallback(jest.fn(), "旧缓存", { userId: 101 })).toBe("local");
+    expect(mockRun).toHaveBeenCalledTimes(1);
+    expect(Audio.Sound.createAsync).toHaveBeenCalledWith({ uri: expect.stringMatching(/\.wav$/) }, { shouldPlay: true });
+    expect(mockSynthesize).not.toHaveBeenCalled();
+  });
+
+  it("shares local prefetch with local playback without server requests", async () => {
+    selectLocalVoice();
+    mockRun.mockResolvedValueOnce({ audio: { data: new Float32Array(24_000) } });
+    expect(await prefetchVoiceText("预读语音", 101)).toBe(true);
+    expect(await speakWithVoiceFallback(jest.fn(), "预读语音", { userId: 101 })).toBe("local");
+    expect(mockRun).toHaveBeenCalledTimes(1);
+    expect(mockSynthesize).not.toHaveBeenCalled();
+  });
+
+  it("honors system-only even when server audio is cached", async () => {
+    mockSynthesize.mockResolvedValueOnce({ audioBase64: "AQID", mimeType: "audio/mpeg" });
+    await speakWithVoiceFallback(jest.fn(), "系统偏好", { userId: 101 });
+    mockStorage.set(voicePreferenceStorageKey(101), JSON.stringify({ preference: "system-only" }));
+    jest.clearAllMocks();
+    expect(await speakWithVoiceFallback(jest.fn(), "系统偏好", { userId: 101 })).toBe("system");
+    expect(Speech.speak).toHaveBeenCalledTimes(1);
+    expect(mockSynthesize).not.toHaveBeenCalled();
+    expect(Audio.Sound.createAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps selected voice versions separate and passes selection to server synthesis", async () => {
+    mockSynthesize.mockResolvedValue({ audioBase64: "AQID", mimeType: "audio/mpeg" });
+    const apiFetch = jest.fn();
+    for (const version of ["1.0.0", "2.0.0"]) {
+      mockStorage.set(voicePreferenceStorageKey(101), JSON.stringify({
+        selectedVoiceId: "cloud-test", selectedVersion: version, preference: "automatic", version: 1,
+      }));
+      await speakWithVoiceFallback(apiFetch, "指定音色", { userId: 101 });
+      expect(mockSynthesize).toHaveBeenLastCalledWith(apiFetch, "指定音色", { voiceId: "cloud-test", version });
+    }
+    expect(mockSynthesize).toHaveBeenCalledTimes(2);
+    expect(jest.mocked(Audio.Sound.createAsync).mock.calls[0][0])
+      .not.toEqual(jest.mocked(Audio.Sound.createAsync).mock.calls[1][0]);
+  });
+
+  it("does not write, play or system-fallback a server result after playback cancellation", async () => {
+    const response = deferred<{ audioBase64: string; mimeType: string }>();
+    mockSynthesize.mockReturnValueOnce(response.promise);
+    const speech = speakWithVoiceFallback(jest.fn(), "已取消语音", { userId: 101 });
+    await waitForCall(mockSynthesize);
+    await stopVoiceOutput();
+    response.resolve({ audioBase64: "AQID", mimeType: "audio/mpeg" });
+    await speech;
+    expect(mockWriteAsStringAsync).not.toHaveBeenCalled();
+    expect(Audio.Sound.createAsync).not.toHaveBeenCalled();
+    expect(Speech.speak).not.toHaveBeenCalled();
+  });
+
 });
 
 const localManifest = {
@@ -260,3 +363,12 @@ const localManifest = {
     textProcessor: { type: "character-v1" },
   },
 };
+
+function selectLocalVoice() {
+  mockStorage.set("voice-pack-device-state-v2", JSON.stringify({
+    installedPacks: [localManifest], benchmarks: {}, pausedDownload: null,
+  }));
+  mockStorage.set(voicePreferenceStorageKey(101), JSON.stringify({
+    selectedVoiceId: "local-test", selectedVersion: "1.0.0", preference: "automatic", version: 1,
+  }));
+}

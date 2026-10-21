@@ -5,6 +5,7 @@ import { useQueryState } from '../hooks/useQueryState';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { Search, User, ShieldAlert, X, BadgeCheck, Users as UsersIcon, Mail, Phone, Lock, Sparkles, UserX, UserCheck, HeartPulse, ShieldCheck, Pill, CookingPot, Target, Activity, RefreshCw } from 'lucide-react';
 import api from '../services/api';
+import { createLatestRequest } from '../utils/latestRequest';
 import { cn } from '../utils/cn';
 import { getAvatarUrl } from '../utils/avatar';
 
@@ -94,7 +95,8 @@ export default function Users() {
   const [healthProfileDetail, setHealthProfileDetail] = useState<AdminHealthProfileResponse | null>(null);
   const [healthProfileLoading, setHealthProfileLoading] = useState(false);
   const [healthProfileError, setHealthProfileError] = useState('');
-  const healthProfileRequestSequence = useRef(0);
+  const healthProfileRequests = useRef(createLatestRequest());
+  useEffect(() => () => healthProfileRequests.current.cancel(), []);
 
   const [confirmRoleModal, setConfirmRoleModal] = useState<{
     userId: number;
@@ -170,31 +172,41 @@ export default function Users() {
   };
 
   const fetchHealthProfileDetail = async (userId: number) => {
-    const requestSequence = ++healthProfileRequestSequence.current;
+    const request = healthProfileRequests.current.begin();
     try {
       setHealthProfileLoading(true);
       setHealthProfileError('');
-      const response = await api.get(`/admin/users/${userId}/health-profile`);
-      if (requestSequence !== healthProfileRequestSequence.current) return;
+      const response = await api.get(`/admin/users/${userId}/health-profile`, { signal: request.signal });
+      if (!request.isLatest()) return;
       const detail = response.data as AdminHealthProfileResponse;
-      if (detail.user_id !== userId) return;
+      if (detail.user_id !== userId) throw new Error('Health profile identity mismatch');
       setHealthProfileDetail(detail);
     } catch (error) {
-      if (requestSequence !== healthProfileRequestSequence.current) return;
+      if (!request.isLatest()) return;
       const message = (error as { response?: { data?: { error?: string } } }).response?.data?.error;
       setHealthProfileDetail(null);
       setHealthProfileError(message || '健康与饮食档案加载失败');
     } finally {
-      if (requestSequence === healthProfileRequestSequence.current) setHealthProfileLoading(false);
+      if (request.isLatest()) setHealthProfileLoading(false);
     }
   };
 
-  const openUserDetail = (user: UserData) => {
-    setSelectedUser(user);
+  const resetHealthProfile = () => {
+    healthProfileRequests.current.cancel();
     setHealthProfileDetail(null);
     setHealthProfileError('');
+    setHealthProfileLoading(false);
+  };
+
+  const closeUserDetail = () => {
+    resetHealthProfile();
+    setSelectedUser(null);
+  };
+
+  const openUserDetail = (user: UserData) => {
+    resetHealthProfile();
+    setSelectedUser(user);
     setDetailTab('basic');
-    healthProfileRequestSequence.current++;
     setCredentialIdentifier(user.email || user.phone || user.username);
     setResetPassword('');
     setCredentialsMessage('');
@@ -493,14 +505,14 @@ export default function Users() {
 
       {/* User Detail Side Panel */}
       {selectedUser && (
-        <DialogFrame onClose={()=>setSelectedUser(null)} dirty={Boolean(xpDelta || xpReason || resetPassword || credentialIdentifier !== (selectedUser.email || selectedUser.phone || selectedUser.username))} busy={credentialsSaving || xpSaving} className="fixed inset-0 z-50 flex items-center justify-center sm:justify-end bg-black/40 backdrop-blur-sm p-4 sm:p-0">
+        <DialogFrame onClose={closeUserDetail} dirty={Boolean(xpDelta || xpReason || resetPassword || credentialIdentifier !== (selectedUser.email || selectedUser.phone || selectedUser.username))} busy={credentialsSaving || xpSaving} className="fixed inset-0 z-50 flex items-center justify-center sm:justify-end bg-black/40 backdrop-blur-sm p-4 sm:p-0">
           <div
             className="bg-white w-full sm:w-[480px] sm:h-screen sm:rounded-none rounded-3xl p-5 sm:p-6 shadow-xl overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <button aria-label="关闭"
               type="button"
-              onClick={() => setSelectedUser(null)}
+              onClick={closeUserDetail}
               className="absolute right-5 top-5 p-2 rounded-full hover:bg-background-alt text-text-muted transition-colors"
             >
               <X className="w-5 h-5" />

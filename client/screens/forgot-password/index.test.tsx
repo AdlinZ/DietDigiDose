@@ -69,3 +69,32 @@ test("supplier failure stays retryable and unsupported email has a concrete manu
   expect(JSON.stringify(tree.toJSON())).toContain("60 秒后获取");
   act(() => tree.unmount());
 });
+
+test("recovery deadline survives rerenders and phone changes, blocking duplicate and early sends", async () => {
+  jest.useFakeTimers(); jest.setSystemTime(100000);
+  let resolve!: (value: unknown) => void;
+  mockSend.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<ForgotPasswordScreen />); });
+  act(() => input(tree, "绑定手机号", "13800138000"));
+  act(() => { press(tree, "获取恢复验证码"); press(tree, "获取恢复验证码"); });
+  expect(mockSend).toHaveBeenCalledTimes(1);
+  await act(async () => { resolve({ challengeId: "challenge", resendAfter: 45 }); });
+  await act(async () => { press(tree, "45 秒后重发"); });
+  expect(mockSend).toHaveBeenCalledTimes(1);
+  act(() => { press(tree, "更换手机号"); input(tree, "绑定手机号", "13900139000"); });
+  await act(async () => { press(tree, "45 秒后获取"); });
+  expect(mockSend).toHaveBeenCalledTimes(1);
+  jest.setSystemTime(150000);
+  act(() => jest.advanceTimersByTime(1000));
+  mockSend.mockRejectedValueOnce(new Error("retry failed"));
+  await act(async () => { press(tree, "获取恢复验证码"); });
+  expect(mockSend).toHaveBeenCalledTimes(2);
+  expect(JSON.stringify(tree.toJSON())).toContain("获取恢复验证码");
+  mockSend.mockResolvedValueOnce({ challengeId: "retry", resendAfter: 20 });
+  await act(async () => { press(tree, "获取恢复验证码"); });
+  expect(mockSend).toHaveBeenLastCalledWith("13900139000");
+  expect(JSON.stringify(tree.toJSON())).toContain("20 秒后重发");
+  act(() => tree.unmount());
+  jest.useRealTimers();
+});

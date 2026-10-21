@@ -6,6 +6,7 @@ import { useCSSVariable } from 'uniwind';
 import { Screen } from '@/components/Screen';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSafeRouter, useSafeSearchParams } from '@/hooks/useSafeRouter';
+import { useResendCooldown } from '@/hooks/useResendCooldown';
 import { validateAuthReturnTo } from '@/utils/authReturnTo';
 
 const REMEMBERED_IDENTIFIER_KEY = '@remembered_login_identifier';
@@ -18,7 +19,9 @@ export default function LoginScreen() {
   const [code, setCode] = useState('');
   const [challengeId, setChallengeId] = useState('');
   const [phoneMasked, setPhoneMasked] = useState('');
-  const [countdown, setCountdown] = useState(0);
+  const { countdown, start: startCooldown, reset: resetCooldown, isCoolingDown } = useResendCooldown();
+  const sendingCode = useRef(false);
+  const active = useRef(true);
   const [rememberIdentifier, setRememberIdentifier] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -37,10 +40,9 @@ export default function LoginScreen() {
   }, []);
 
   useEffect(() => {
-    if (countdown <= 0) return;
-    const timer = setInterval(() => setCountdown((current) => Math.max(0, current - 1)), 1000);
-    return () => clearInterval(timer);
-  }, [countdown]);
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   const changeMode = (next: 'sms' | 'password') => {
     setMode(next);
@@ -66,16 +68,25 @@ export default function LoginScreen() {
   const handleSendCode = async () => {
     const normalized = phone.replace(/[\s-]/g, '').replace(/^\+?86/, '');
     if (!/^1[3-9]\d{9}$/.test(normalized)) return setError('请输入有效的中国大陆手机号');
+    if (sendingCode.current || loading || isCoolingDown()) return;
+    sendingCode.current = true;
     setLoading(true);
     setError('');
-    const result = await sendSmsCode(normalized);
-    setLoading(false);
-    if (!result.success || !result.challengeId) return setError(result.error || '验证码发送失败');
-    setPhone(normalized);
-    setChallengeId(result.challengeId);
-    setPhoneMasked(result.phoneMasked || normalized.replace(/^(\d{3})\d{4}(\d{4})$/, '$1****$2'));
-    setCountdown(result.resendAfter || 60);
-    setCode('');
+    try {
+      const result = await sendSmsCode(normalized);
+      if (!active.current) return;
+      if (!result.success || !result.challengeId) return setError(result.error || '验证码发送失败');
+      setPhone(normalized);
+      setChallengeId(result.challengeId);
+      setPhoneMasked(result.phoneMasked || normalized.replace(/^(\d{3})\d{4}(\d{4})$/, '$1****$2'));
+      startCooldown(result.resendAfter || 60);
+      setCode('');
+    } catch (err) {
+      if (active.current) setError(err instanceof Error ? err.message : '验证码发送失败');
+    } finally {
+      sendingCode.current = false;
+      if (active.current) setLoading(false);
+    }
   };
 
   const handleVerifyCode = async () => {
@@ -91,10 +102,11 @@ export default function LoginScreen() {
   };
 
   const switchPhone = () => {
+    if (sendingCode.current || loading) return;
     setChallengeId('');
     setCode('');
     setPhoneMasked('');
-    setCountdown(0);
+    resetCooldown();
     setError('');
   };
 
@@ -157,7 +169,7 @@ export default function LoginScreen() {
                   maxLength={15}
                   accessibilityLabel="手机号"
                 />
-                {challengeId ? <TouchableOpacity onPress={switchPhone}><Text className="text-body font-bold text-brand">更换</Text></TouchableOpacity> : null}
+                {challengeId ? <TouchableOpacity onPress={switchPhone} disabled={loading}><Text className="text-body font-bold text-brand">更换</Text></TouchableOpacity> : null}
               </View>
               {challengeId ? (
                 <>

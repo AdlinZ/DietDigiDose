@@ -5,6 +5,7 @@ import { useRemoteSection } from '../hooks/useRemoteSection';
 import { Section } from '../components/admin/Section';
 import { EmptyState } from '../components/admin/ListPrimitives';
 import { StatusBadge } from '../components/admin/StatusBadge';
+import { failureRunStatuses, waitingRunStatuses } from './dashboardRunStatuses';
 import { adminLink } from '../navigation/adminNavigation';
 interface Task { id: number | string; title: string; note: string }
 interface Queue { items: Task[]; total?: number }
@@ -71,7 +72,8 @@ export default function Dashboard() {
       </nav>
     </section>
     <div><h2 className="admin-section-title"><ClipboardList size={21} aria-hidden="true" />待处理事项</h2><div className="admin-section-grid">{queues.map(queue=><QueueSection key={queue.title} queue={queue}/>)}</div></div>
-    <Section title="运行异常 · 近 7 天" icon={<Activity size={19} />} state={runs}><div className="admin-metrics">{[{status:'failed',label:'失败任务'},{status:'expired',label:'已过期任务'},{status:'awaiting_input',label:'等待用户输入'},{status:'awaiting_approval',label:'等待用户确认'}].map(item=><Link key={item.status} to={adminLink('/admin/agent-runs',{range:'7d',status:item.status}).to} className="admin-metric"><span>{item.label}</span><strong>{counts[item.status] ?? 0}</strong><small>查看记录 →</small></Link>)}</div><p className="admin-muted mt-4">等待用户输入与确认的任务，需要由用户在应用中继续处理。</p></Section>
+    <Section title="运行异常 · 近 7 天" icon={<Activity size={19} />} state={runs}><div className="admin-metrics">{failureRunStatuses.map(item=><Link key={item.status} to={adminLink('/admin/agent-runs',{range:'7d',status:item.status}).to} className="admin-metric"><span>{item.label}</span><strong>{counts[item.status] ?? 0}</strong><small>排查异常 →</small></Link>)}</div></Section>
+    <Section title="等待用户继续 · 近 7 天" icon={<Users size={19} />} state={runs}><div className="admin-metrics">{waitingRunStatuses.map(item=><Link key={item.status} to={adminLink('/admin/agent-runs',{range:'7d',status:item.status}).to} className="admin-metric"><span>{item.label}</span><strong>{counts[item.status] ?? 0}</strong><small>查看记录 →</small></Link>)}</div><p className="admin-muted mt-4">这些任务不是运行失败，需要由用户在应用中补充输入或确认后继续。</p></Section>
     <Section title="最近管理操作" icon={<ShieldCheck size={19} />} state={audit} action={<Link to={adminLink('/admin/security').to}>查看全部 →</Link>}>{audit.data?.items.length ? <ul className="admin-task-list">{audit.data.items.slice(0,5).map(item=><li key={item.id}><div className="admin-task-row"><span className="admin-task-text"><strong>{item.summary}</strong><small>{item.adminName} · {new Date(item.createdAt).toLocaleString('zh-CN')}</small></span><StatusBadge>已记录</StatusBadge></div></li>)}</ul>:<EmptyState>暂无管理操作记录。</EmptyState>}</Section>
   </div>;
 }

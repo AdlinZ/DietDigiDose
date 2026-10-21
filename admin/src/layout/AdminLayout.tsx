@@ -8,7 +8,7 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import api from '../services/api';
 import { logoUrl } from '../assets';
-import { adminGroups, adminLocation, workbench } from '../navigation/adminNavigation';
+import { adminGroups, adminLocation, adminParentPath, isAdminGroupOpen, workbench } from '../navigation/adminNavigation';
 import { DialogFrame } from '../components/admin/DialogFrame';
 import './admin.css';
 
@@ -49,9 +49,14 @@ export default function AdminLayout() {
   const location = useLocation();
   const mainScrollRef = useRef<HTMLElement>(null);
   const [adminName, setAdminName] = useState('管理员');
-  const [openGroups, setOpenGroups] = useState(savedGroups);
+  const [openGroups, setOpenGroups] = useState(() => {
+    const group = adminLocation(location.pathname).group;
+    return { ...savedGroups(), ...(group ? { [group.id]: true } : {}) };
+  });
+  const [technicalOpen, setTechnicalOpen] = useState(() => !!adminLocation(location.pathname).group?.technical);
   const [mobileOpen, setMobileOpen] = useState(false);
   const current = adminLocation(location.pathname);
+  const wasTechnical = useRef(!!current.group?.technical);
 
   useEffect(() => {
     document.title = (current.page?.label || '管理控制台') + '｜食光烙记';
@@ -74,11 +79,16 @@ export default function AdminLayout() {
   useEffect(() => { setMobileOpen(false); }, [location.pathname]);
   useEffect(() => {
     if (current.group) setOpenGroups(old => ({ ...old, [current.group!.id]: true }));
+    const technical = !!current.group?.technical;
+    // Respect a manual collapse while moving between technical pages. A fresh
+    // entry from daily management should still reveal the active destination.
+    if (technical && !wasTechnical.current) setTechnicalOpen(true);
+    wasTechnical.current = technical;
   }, [current.group, location.pathname]);
   useLayoutEffect(() => { mainScrollRef.current?.scrollTo(0, 0); }, [location.pathname]);
 
   const toggleGroup = (id: string) => setOpenGroups(old => {
-    const next = { ...old, [id]: !old[id] };
+    const next = { ...old, [id]: !isAdminGroupOpen(adminGroups.find(group => group.id === id)!, old) };
     try { localStorage.setItem('admin.nav.groups', JSON.stringify(next)); }
     catch { /* Navigation remains usable without storage. */ }
     return next;
@@ -97,25 +107,30 @@ export default function AdminLayout() {
       <NavLink to={workbench.path} end className={({ isActive }) => 'admin-nav-link' + (isActive ? ' is-active' : '')}>
         <LayoutDashboard aria-hidden="true" />{workbench.label}
       </NavLink>
-      {adminGroups.map(group => (
+      <p className="px-3 pt-4 pb-2 text-xs text-text-muted">日常管理</p>
+      {adminGroups.map(group => <div key={group.id}>
+        {group.id === 'ai' && <button type="button" className="admin-nav-link w-full" aria-expanded={technicalOpen} onClick={() => setTechnicalOpen(open => !open)}>
+          <Settings aria-hidden="true" /><span>技术管理</span><ChevronDown size={16} aria-hidden="true" className={technicalOpen ? 'rotate-180' : ''} />
+        </button>}
+        {(!group.technical || technicalOpen) && (
         <div key={group.id} className={'admin-nav-group' + (current.group?.id === group.id ? ' is-current' : '')}>
-          <button type="button" aria-expanded={!!openGroups[group.id]} onClick={() => toggleGroup(group.id)}>
+          <button type="button" aria-expanded={isAdminGroupOpen(group, openGroups)} onClick={() => toggleGroup(group.id)}>
             <group.icon aria-hidden="true" />
             <span>{group.label}</span>
-            <ChevronDown size={16} aria-hidden="true" className={openGroups[group.id] ? 'rotate-180' : ''} />
+            <ChevronDown size={16} aria-hidden="true" className={isAdminGroupOpen(group, openGroups) ? 'rotate-180' : ''} />
           </button>
-          {openGroups[group.id] && (
+          {isAdminGroupOpen(group, openGroups) && (
             <div className="admin-nav-children">
               {group.pages.map(page => {
                 const Icon = pageIcons[page.path] || group.icon;
-                return <NavLink key={page.path} to={page.path} end className={({ isActive }) => 'admin-nav-link' + (isActive ? ' is-active' : '')}>
+                return <Link key={page.path} to={page.path} aria-current={adminParentPath(location.pathname) === page.path ? 'page' : undefined} className={'admin-nav-link' + (adminParentPath(location.pathname) === page.path ? ' is-active' : '')}>
                   <Icon aria-hidden="true" /><span>{page.label}</span>
-                </NavLink>;
+                </Link>;
               })}
             </div>
           )}
         </div>
-      ))}
+      )}</div>)}
     </nav>
     <footer className="admin-sidebar-footer">
       <div className="admin-profile">

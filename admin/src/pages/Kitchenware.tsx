@@ -38,7 +38,7 @@ function formatDate(value: string | null) {
 
 export default function Kitchenware() {
   const [capabilityItem, setCapabilityItem] = useState<KitchenwareCatalogItem | null>(null);
-  const [activeTab, setActiveTab] = useQueryState<'catalog' | 'assets'>('tab', 'catalog', ["catalog", "assets"]);
+  const [activeTab] = useQueryState<'catalog' | 'assets'>('tab', 'catalog', ["catalog", "assets"]);
   const [items, setItems] = useState<KitchenwareItem[]>([]);
   const [catalog, setCatalog] = useState<KitchenwareCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -216,11 +216,6 @@ export default function Kitchenware() {
             <UserRound className="h-6 w-6" />
           </div>
         </div>
-      </div>
-
-      <div className="flex w-fit rounded-xl bg-white p-1 shadow-sm">
-        <button type="button" onClick={() => setActiveTab('catalog')} className={`rounded-lg px-4 py-2 text-xs font-medium transition-colors ${activeTab === 'catalog' ? 'bg-primary text-white' : 'text-text-muted hover:text-text-main'}`}>官方标准库 ({catalog.length})</button>
-        <button type="button" onClick={() => setActiveTab('assets')} className={`rounded-lg px-4 py-2 text-xs font-medium transition-colors ${activeTab === 'assets' ? 'bg-primary text-white' : 'text-text-muted hover:text-text-main'}`}>用户厨具资产 ({items.length})</button>
       </div>
 
       {activeTab === 'assets' ? (

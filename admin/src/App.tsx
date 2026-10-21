@@ -3,6 +3,7 @@ import React, { lazy, Suspense, useEffect, useState } from 'react';
 import api from './services/api';
 import { adminLoginPath, classifyAdminSession } from './services/adminSession';
 
+const AdminWorkflowLayout = lazy(() => import('./layout/AdminWorkflowLayout'));
 const AdminLayout = lazy(() => import('./layout/AdminLayout'));
 const Landing = lazy(() => import('./pages/Landing'));
 const Login = lazy(() => import('./pages/Login'));
@@ -108,27 +109,35 @@ function App() {
           </ProtectedRoute>
         }
       >
+        <Route element={<AdminWorkflowLayout workflow="kitchenware" />}>
+          <Route path="kitchenware" element={<Kitchenware />} />
+          <Route path="kitchenware-mapping-reviews" element={<KitchenwareMappingReviews />} />
+        </Route>
+        <Route element={<AdminWorkflowLayout workflow="growth" />}>
+          <Route path="users" element={<Users />} />
+          <Route path="user-level-rule" element={<UserLevelRule />} />
+        </Route>
+        <Route element={<AdminWorkflowLayout workflow="configuration" />}>
+          <Route path="ai-config" element={<AIConfig />} />
+          <Route path="voice-packs" element={<VoicePacks />} />
+        </Route>
+        <Route element={<AdminWorkflowLayout workflow="diagnostics" />}>
+          <Route path="ai-conversations" element={<AIConversations />} />
+          <Route path="agent-runs" element={<AgentRuns />} />
+        </Route>
         <Route index element={<Dashboard />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="security-audit" element={<Navigate to="/admin/security" replace />} />
         <Route path="*" element={<AdminNotFound />} />
-        <Route path="kitchenware-mapping-reviews" element={<KitchenwareMappingReviews />} />
         <Route path="core-loops" element={<CoreLoops />} />
-        <Route path="users" element={<Users />} />
-        <Route path="user-level-rule" element={<UserLevelRule />} />
         <Route path="ingredients" element={<Ingredients />} />
-        <Route path="kitchenware" element={<Kitchenware />} />
         <Route path="recipes" element={<Recipes />} />
         <Route path="community" element={<Community />} />
-        <Route path="ai-config" element={<AIConfig />} />
         <Route path="ai-usage" element={<AIUsage />} />
-        <Route path="ai-conversations" element={<AIConversations />} />
-        <Route path="agent-runs" element={<AgentRuns />} />
         <Route path="security" element={<SecurityAudit />} />
         <Route path="feedback" element={<Feedback />} />
         <Route path="notifications" element={<Notifications />} />
         <Route path="media-cleanup" element={<MediaCleanup />} />
-        <Route path="voice-packs" element={<VoicePacks />} />
         <Route path="site-settings" element={<SiteSettings />} />
         <Route path="auth-services/sms" element={<AuthServiceSms />} />
         <Route path="auth-services/captcha" element={<AuthServicePlaceholder />} />

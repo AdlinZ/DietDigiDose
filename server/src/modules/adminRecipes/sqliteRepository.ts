@@ -1,3 +1,4 @@
+import { adminRecipeUpdateColumns, adminRecipeExpectedValues } from "./updateSnapshot.js";
 import type Database from "better-sqlite3";
 import type { AdminRecipesRepository } from "./repository.js";
 import type {
@@ -58,13 +59,14 @@ export class SqliteAdminRecipesRepository implements AdminRecipesRepository {
     })();
   }
 
-  async update(recipeId: number, input: AdminRecipeWrite, context: AuditContext) {
+  async update(recipeId: number, input: AdminRecipeWrite, context: AuditContext, expected: Row) {
     return this.database.transaction(() => {
       const result = this.database.prepare(`UPDATE recipes SET title=?, description=?, image_url=?, cook_time=?, difficulty=?,
         calories=?, protein=?, carbs=?, fat=?, category=?, tags=?, steps_json=?, ingredients_json=?, canonical_key=?,
         source_content_hash=?, serving_size=?, prep_time=?, cuisine=?, meal_types_json=?, required_kitchenware_json=?,
         optional_kitchenware_json=?, source_url=?, data_license=?, source_revision=?, source_attribution=?, updated_at=CURRENT_TIMESTAMP
-        WHERE id=? AND deleted_at IS NULL`).run(...this.writeValues(input), ...this.metadataValues(input), recipeId);
+        WHERE id=? AND deleted_at IS NULL AND ${adminRecipeUpdateColumns.map(column => `${column} IS ?`).join(" AND ")}`)
+        .run(...this.writeValues(input), ...this.metadataValues(input), recipeId, ...adminRecipeExpectedValues(expected));
       if (!result.changes) return false;
       this.replaceRequirements(recipeId, input.requirements);
       this.upsertDuplicates(recipeId, input.duplicates);

@@ -1,3 +1,4 @@
+import { inventorySavedEvidenceSchema } from "./inventoryScan.ts";
 import { z } from "zod";
 import { apiErrorSchema } from "./common.ts";
 import {
@@ -32,6 +33,7 @@ const schemas = {
   InventoryConsumptionRequest: inventoryConsumptionSchema,
   InventoryConsumptionResponse: inventoryConsumptionResponseSchema,
   InventoryHistoryResponse: inventoryHistoryResponseSchema,
+  InventorySavedEvidence: inventorySavedEvidenceSchema,
   InventoryDeleteResponse: inventoryDeleteResponseSchema,
 };
 
@@ -75,6 +77,10 @@ export function createInventoryOpenApiDocument() {
       },
       "/api/v1/inventory/consume": {
         post: { operationId: "consumeInventory", requestBody: requestBody("InventoryConsumptionRequest"), responses: { "200": response("Repeated consumption", "InventoryConsumptionResponse"), "201": response("Applied consumption", "InventoryConsumptionResponse"), ...errors } },
+      },
+      "/api/v1/inventory/{id}/evidence": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }],
+        get: { operationId: "getInventoryEvidence", responses: { "200": response("Saved field evidence", "InventorySavedEvidence"), "401": errors["401"], "404": response("Inventory item not found", "ApiError") } },
       },
       "/api/v1/inventory/{id}/history": {
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }],

@@ -464,6 +464,54 @@
         }
       }
     },
+    "/api/v1/inventory/{id}/evidence": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getInventoryEvidence",
+        "responses": {
+          "200": {
+            "description": "Saved field evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventorySavedEvidence"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Inventory item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inventory/{id}/history": {
       "parameters": [
         {
@@ -2647,6 +2695,162 @@
           ],
           "additionalProperties": false
         }
+      },
+      "InventorySavedEvidence": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "item_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "inventory_version": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "field_evidence": {
+            "type": "object",
+            "properties": {
+              "food_name": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "known",
+                      "estimated",
+                      "unknown"
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "recognition",
+                      "barcode",
+                      "rule",
+                      "unknown"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "status",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "quantity": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "known",
+                      "estimated",
+                      "unknown"
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "recognition",
+                      "barcode",
+                      "rule",
+                      "unknown"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "status",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "storage_location": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "known",
+                      "estimated",
+                      "unknown"
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "recognition",
+                      "barcode",
+                      "rule",
+                      "unknown"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "status",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "expiration_date": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "known",
+                      "estimated",
+                      "unknown"
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "recognition",
+                      "barcode",
+                      "rule",
+                      "unknown"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "status",
+                  "source"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "item_id",
+          "inventory_version",
+          "field_evidence"
+        ],
+        "additionalProperties": false
       },
       "InventoryDeleteResponse": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

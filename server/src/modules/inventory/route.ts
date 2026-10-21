@@ -56,6 +56,8 @@ export function createInventoryRouter(service: InventoryService) {
     return res.status(response.repeated ? 200 : 201).json(response);
   }));
 
+  router.get("/:id/evidence", handle(async (req, res) => res.set("Cache-Control", "no-store").json(await service.evidence(req.userId!, Number(req.params.id)))));
+
   router.get("/:id/history", handle(async (req, res) => {
     return res.json(await service.history(req.userId!, Number(req.params.id)));
   }));

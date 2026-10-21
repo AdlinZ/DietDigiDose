@@ -4,6 +4,7 @@ import type { AuthRequest } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
 import { positiveIntegerParam } from "../../middleware/validateParam.js";
 import { adminRecipeQualitySchema, adminRecipeRejectSchema, recipeSubmissionSchema } from "../../validation/schemas.js";
+import { adminRecipeUpdateSchema } from "./schema.js";
 import { AdminRecipesError } from "./errors.js";
 import type { AdminRecipesService } from "./service.js";
 
@@ -20,7 +21,7 @@ export function createAdminRecipesRouter(service: AdminRecipesService) {
   router.post("/recipes", validateBody(recipeSubmissionSchema), (req: AuthRequest, res, next) => {
     void service.create(req.userId!, req.body, context(req)).then((value) => res.json(value)).catch((error) => handle(error, res, next));
   });
-  router.put("/recipes/:id", validateBody(recipeSubmissionSchema), (req: AuthRequest, res, next) => {
+  router.put("/recipes/:id", validateBody(adminRecipeUpdateSchema), (req: AuthRequest, res, next) => {
     void service.update(req.userId!, Number(req.params.id), req.body, context(req)).then((value) => res.json(value)).catch((error) => handle(error, res, next));
   });
   router.put("/recipes/:id/kitchenware", (req: AuthRequest, res, next) => {

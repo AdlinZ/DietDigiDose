@@ -21,6 +21,7 @@ export interface InventoryRepository {
   undoScan(userId: number, jobId: string): Promise<{ undone: number; repeated: boolean }>;
   undoneScanItemIds(userId: number, jobId: string): Promise<number[]>;
   savedScanItems(userId: number, jobId: string): Promise<Map<string, InventoryItem>>;
+  evidence(userId: number, itemId: number): Promise<import("@dietdigidose/contracts").InventorySavedEvidence | null>;
   list(userId: number): Promise<InventoryItem[]>;
   findOwned(userId: number, itemId: number): Promise<InventoryItem | null>;
   create(userId: number, input: InventoryCreateData): Promise<InventoryItem>;

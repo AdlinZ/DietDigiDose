@@ -1,3 +1,4 @@
+import { SavedInventoryEvidence } from "./SavedInventoryEvidence";
 import { useKitchenwareAttributesForm } from "./useKitchenwareAttributesForm";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -2378,6 +2379,7 @@ export default function InventoryScreen() {
               <ManualInventoryEntry saveIntake={input => inventoryMutations.bulkIntake.mutateAsync(input)} onSaved={() => setModalVisible(false)} onPhoto={source => void selectFoodPhoto(source)} photoUrl={imageUrl} bottomInset={insets.bottom} />
             ) : (
               <InventoryEntryForm
+                evidencePanel={modalVisible && editingItem && !activeHousehold && user?.id && token ? <SavedInventoryEvidence key={`${user.id}:${editingItem.id}:${token}`} itemId={editingItem.id} version={editingItem.version} accountScope={`${user.id}:${token}`} authFetch={authFetch} /> : undefined}
                 editingItem={editingItem}
                 foodName={foodName}
                 category={category}

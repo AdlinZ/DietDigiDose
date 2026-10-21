@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { ActivityIndicator, Image, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 import { SmartDateInput } from "@/components/SmartDateInput";
@@ -9,6 +10,7 @@ const INVENTORY_ENTRY_CATEGORIES = ["蔬菜", "肉食", "水果", "乳制品", "
 
 export function InventoryEntryForm({
   editingItem,
+  evidencePanel,
   foodName,
   category,
   categoryMenuOpen,
@@ -34,6 +36,7 @@ export function InventoryEntryForm({
   onSave,
 }: {
   editingItem: InventoryItem | null;
+  evidencePanel?: ReactNode;
   foodName: string;
   category: string;
   categoryMenuOpen: boolean;
@@ -62,6 +65,7 @@ export function InventoryEntryForm({
     <>
       <ScrollView pointerEvents={locked || saving ? "none" : "auto"} className="flex-1" showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 16 }}>
         <View className="w-full max-w-[720px] self-center px-5 pb-4 pt-4">
+          {evidencePanel}
           <View className="rounded-[24px] border border-line bg-surface p-4 shadow-xs">
             <View className="mb-2 flex-row items-center justify-between">
               <Text className="text-xs font-black text-ink">食材名称 <Text className="text-critical">*</Text></Text>

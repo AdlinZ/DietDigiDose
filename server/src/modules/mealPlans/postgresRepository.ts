@@ -1,3 +1,6 @@
+import type { ActiveMealChangePreviewInput } from "@dietdigidose/contracts";
+import { readPostgresReplacementSnapshot } from "./postgresReplacementSnapshot.js";
+import { prepareReplacement, replacementRequiresValidation, assertReplacementValidation, replacementPatchRequest, type ReplacementContext } from "./replacementSnapshot.js";
 import { preparePersonalShopping, personalShoppingClientId } from "./personalShopping.js";
 import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import { recipeExecutionProof } from "../recipes/planExecution.js";
@@ -40,6 +43,17 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
   private readonly pool: Pool;
 
   constructor(pool: Pool) { this.pool = pool; }
+
+  private async prepareChange(userId: number, planId: string, itemId: string, request: ActiveMealChangePreviewInput) {
+    const snapshot = await this.transaction(async client => {
+      await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      return readPostgresReplacementSnapshot(client,userId,request);
+    });
+    return { request, prepared: await prepareReplacement(snapshot,userId,planId,itemId,request) } satisfies ReplacementContext;
+  }
+  async previewChange(userId: number, planId: string, itemId: string, request: ActiveMealChangePreviewInput) {
+    return (await this.prepareChange(userId,planId,itemId,request)).prepared?.preview ?? null;
+  }
 
   async activateDraft(userId: number, id: string, version: number) {
     return this.transaction(async client => {
@@ -183,10 +197,11 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     }
   }
 
-  private async changeFacts(client: PoolClient, item: Row, userId: number) {
-    const queue = item.queue_item_id ? (await client.query("SELECT id,version,status FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL FOR UPDATE", [item.queue_item_id,userId])).rows[0] as Row | undefined : undefined;
-    const purchases = (await client.query("SELECT id,version,checked FROM shopping_list_items WHERE user_id=$1 AND client_id LIKE $2 ORDER BY id FOR UPDATE", [userId,`meal-plan:${item.id}:%`])).rows as Row[];
-    const sharedPurchases = (await client.query("SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=$1 ORDER BY id FOR UPDATE",[item.id])).rows as Row[];
+  private async changeFacts(client: PoolClient, item: Row, userId: number, lock = true) {
+    const suffix = lock ? " FOR UPDATE" : "";
+    const queue = item.queue_item_id ? (await client.query(`SELECT id,version,status FROM cooking_queue_items WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL${suffix}`, [item.queue_item_id,userId])).rows[0] as Row | undefined : undefined;
+    const purchases = (await client.query(`SELECT id,version,checked FROM shopping_list_items WHERE user_id=$1 AND client_id LIKE $2 ORDER BY id${suffix}`, [userId,`meal-plan:${item.id}:%`])).rows as Row[];
+    const sharedPurchases = (await client.query(`SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=$1 ORDER BY id${suffix}`,[item.id])).rows as Row[];
     purchases.push(...sharedPurchases.map(row => ({ ...row,id: `household:${row.id}` })));
     return { decision: mealChangeDecision(item,queue,purchases), snapshot: mealChangeSnapshot(item,queue,purchases) };
   }
@@ -207,12 +222,24 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
   }
 
   async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
-    return this.transaction(client => this.updateItemWithClient(client,userId,planId,itemId,input,source,reason));
+    const validation = input.validationFingerprint ? await this.prepareChange(userId,planId,itemId,replacementPatchRequest(input)) : undefined;
+    return this.transaction(client => this.updateItemWithClient(client,userId,planId,itemId,input,source,reason,validation));
   }
 
   /** Uses the caller's transaction; changes and acknowledgement must commit together. */
-  async updateItemWithClient(client: PoolClient, userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
+  async updateItemWithClient(client: PoolClient, userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排", validation?: ReplacementContext) {
       await lockMealPlanning(client,userId);
+      if (validation) {
+        // Successful noops/replayed proposals do not contend for unrelated stock locks.
+        const prior = await this.getItem(client,planId,itemId,userId);
+        if (prior) {
+          if (Number(prior.version) === input.version && isMealChangeNoop(prior,input)) return { kind: "updated" as const,value: formatMealPlanItem(prior) };
+          const priorFacts = await this.changeFacts(client,prior,userId,false);
+          const repeated = (await client.query("SELECT * FROM meal_plan_changes WHERE user_id=$1 AND fingerprint=$2",[userId,mealChangeFingerprint(itemId,priorFacts.snapshot,input)])).rows[0];
+          if (repeated) return { kind: "updated" as const,value: { ...formatMealPlanItem(prior),change: formatMealChange(repeated) } };
+        }
+        validation.actual = await readPostgresReplacementSnapshot(client,userId,validation.request,true);
+      }
       const item = await this.getItem(client,planId,itemId,userId,true);
       if (!item) return { kind: "not_found" as const };
       const facts = await this.changeFacts(client,item,userId);
@@ -227,11 +254,17 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
         throw new InventoryQuantityError("DINING_REVIEW_REQUIRED","更换共餐菜谱前，请重新核对所有参与成员的限制并提交共餐安排");
       const dining = input.dining === undefined ? parseJson<import("@dietdigidose/contracts").HouseholdDiningPlan | null>(item.dining_json,null) : input.dining;
       if (dining) await validatePostgresDiningPlan(client,userId,input.recipeId === undefined ? item.recipe_id : input.recipeId,dining);
+      if (source === "maintenance" && facts.decision === "apply" && replacementRequiresValidation(item,input)) {
+        facts.decision = "suggest";
+        reason += "；需先预览当前整套餐单，未自动应用";
+      }
+      if (input.validationFingerprint && replacementRequiresValidation(item,input))
+        assertReplacementValidation(validation?.prepared,validation?.actual,input.validationFingerprint);
       const proposal = { ...input, title: String(replacement?.title || item.recipe_title || item.title) };
       const id = randomUUID();
       let next = formatMealPlanItem(item);
       if (facts.decision === "apply") {
-        const applied = await this.applyItemChange(client,userId,planId,itemId,input);
+        const applied = await this.applyItemChange(client,userId,planId,itemId,input,validation);
         if (applied.kind !== "updated") return applied;
         next = applied.value;
       }
@@ -242,9 +275,19 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       return { kind: "updated" as const, value: { ...next, change: formatMealChange(changed.rows[0]) } };
   }
 
-  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {
+  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore", validationFingerprint?: string) {
+    const saved = validationFingerprint && action !== "reject" ? (await this.pool.query("SELECT item_id FROM meal_plan_changes WHERE id=$1 AND user_id=$2 AND plan_id=$3",[changeId,userId,planId])).rows[0] as Row | undefined : undefined;
+    const validation: ReplacementContext | undefined = saved && action !== "reject" ? await this.prepareChange(userId,planId,String(saved.item_id),{ changeId,action }) : undefined;
     return this.transaction(async client => {
       await lockMealPlanning(client,userId);
+      if (validation) {
+        const prior = (await client.query("SELECT * FROM meal_plan_changes WHERE id=$1 AND user_id=$2 AND plan_id=$3",[changeId,userId,planId])).rows[0];
+        if (prior && ((action === "accept" && prior.status === "applied") || (action === "restore" && prior.status === "reverted"))) {
+          const item = await this.getItem(client,planId,String(prior.item_id),userId);
+          return item ? { kind: "updated" as const,value: formatMealPlanItem(item) } : { kind: "not_found" as const };
+        }
+        validation.actual = await readPostgresReplacementSnapshot(client,userId,validation.request,true);
+      }
       const change = (await client.query("SELECT * FROM meal_plan_changes WHERE id=$1 AND user_id=$2 AND plan_id=$3 FOR UPDATE", [changeId,userId,planId])).rows[0] as Row | undefined;
       if (!change) return { kind: "not_found" as const };
       const item = await this.getItem(client,planId,String(change.item_id),userId,true);
@@ -261,7 +304,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       const unchangedFacts = { ...facts.snapshot,version:before.version,input:before.input,title:before.title };
       if (facts.decision === "keep" || Number(item.version) !== expectedVersion || !isDeepStrictEqual(unchangedFacts,before)) return { kind: "protected" as const };
       const patch = action === "restore" ? before.input : parseJson<MealPlanItemUpdateInput>(change.after_json, { version: expectedVersion });
-      const result = await this.applyItemChange(client,userId,planId,String(item.id),{ ...patch,version:expectedVersion });
+      const result = await this.applyItemChange(client,userId,planId,String(item.id),{ ...patch,version:expectedVersion,validationFingerprint },validation);
       if (result.kind !== "updated") return result;
       if (action === "restore") await client.query("UPDATE meal_plan_changes SET status='reverted',after_json=after_json || jsonb_build_object('restoredVersion',$1::integer,'restoredAt',CURRENT_TIMESTAMP) WHERE id=$2",[result.value.version,changeId]);
       else await client.query("UPDATE meal_plan_changes SET status='applied',after_version=$1,applied_at=CURRENT_TIMESTAMP WHERE id=$2",[result.value.version,changeId]);
@@ -269,7 +312,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     });
   }
 
-  private async applyItemChange(client: PoolClient, userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
+  private async applyItemChange(client: PoolClient, userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, validation?: ReplacementContext) {
     const current = await this.getItem(client, planId, itemId, userId);
     if (!current) return { kind: "not_found" as const };
     if (current.dining_json && input.dining === undefined && input.recipeId !== undefined && input.recipeId !== current.recipe_id)
@@ -283,8 +326,18 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       replacement = selected.rows[0] as Row | undefined;
       if (!replacement) return { kind: "recipe_not_available" as const };
     }
-    const allocation = replacement ? replacementAllocation(current,replacement) : undefined;
+    const needsValidation = replacementRequiresValidation(current,input);
+    if (needsValidation) assertReplacementValidation(validation?.prepared,validation?.actual,input.validationFingerprint);
+    const allocation = needsValidation ? validation!.prepared!.result.allocation : replacement ? replacementAllocation(current,replacement) : undefined;
     if (allocation === null) return { kind: "protected" as const };
+    if (needsValidation && allocation?.constraints) {
+      const prior = (allocation.constraints as Row).executionValidationByItem as Record<string, unknown> | undefined;
+      (allocation.constraints as Row).executionValidationByItem = { ...prior,[itemId]: {
+        status: "change_verified", itemVersion: input.version + 1, fingerprint: validation!.prepared!.preview.fingerprint,
+        checkedDate: validation!.prepared!.today, scope: validation!.prepared!.preview.scope,
+        checks: validation!.prepared!.preview.checks,
+      } };
+    }
     const changed = await client.query(`UPDATE meal_plan_items SET planned_date = $1, meal_type = $2, recipe_id = $3, title = $4,
       ingredients_json = $5::jsonb, steps_json = $6::jsonb, calories = $7, protein = $8, carbs = $9, fat = $10, status = $11,
       queue_item_id = CASE WHEN $12::boolean THEN NULL ELSE queue_item_id END, dining_json = $17::jsonb,
@@ -485,6 +538,8 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       return result;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (error && typeof error === "object" && "code" in error && error.code === "55P03")
+        throw new InventoryQuantityError("MEAL_PLAN_PREVIEW_CHANGED", "餐单或库存正在更新，请重新预览；原安排已保留");
       if (serializable && error && typeof error === "object" && "code" in error && error.code === "40001")
         throw new InventoryQuantityError("DINING_SUPPLY_CHANGED","家庭数据正在变化，请重试原提交；若仍冲突请重新预览净采购调整");
       throw error;

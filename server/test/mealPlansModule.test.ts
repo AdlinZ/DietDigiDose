@@ -21,6 +21,7 @@ const view = formatMealPlan({
 
 function fakeRepository(overrides: Partial<MealPlansRepository> = {}): MealPlansRepository {
   return {
+    previewChange: async () => null,
     listChanges: async () => [],
     reviewChange: async () => ({ kind: "updated", value: formatMealPlanItem(item) }),
     confirmItem: async () => ({ kind: "updated", value: formatMealPlanItem(item) }),

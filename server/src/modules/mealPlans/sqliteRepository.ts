@@ -1,3 +1,6 @@
+import type { ActiveMealChangePreviewInput } from "@dietdigidose/contracts";
+import { readSqliteReplacementSnapshot } from "./sqliteReplacementSnapshot.js";
+import { prepareReplacement, replacementRequiresValidation, assertReplacementValidation, replacementPatchRequest, type ReplacementContext } from "./replacementSnapshot.js";
 import { preparePersonalShopping, personalShoppingClientId } from "./personalShopping.js";
 import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import { recipeExecutionProof } from "../recipes/planExecution.js";
@@ -37,6 +40,15 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   private readonly database: Database.Database;
 
   constructor(database: Database.Database) { this.database = database; }
+
+  private readonly readRows = (sql: string, parameters: unknown[]): Row[] => this.database.prepare(sql).all(...parameters) as Row[];
+  private async prepareChange(userId: number, planId: string, itemId: string, request: ActiveMealChangePreviewInput) {
+    const snapshot = this.database.transaction(() => readSqliteReplacementSnapshot(this.readRows,userId,request))();
+    return { request, prepared: await prepareReplacement(snapshot,userId,planId,itemId,request) } satisfies ReplacementContext;
+  }
+  async previewChange(userId: number, planId: string, itemId: string, request: ActiveMealChangePreviewInput) {
+    return (await this.prepareChange(userId,planId,itemId,request)).prepared?.preview ?? null;
+  }
 
   async activateDraft(userId: number, id: string, version: number) {
     return this.database.transaction(() => {
@@ -152,7 +164,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   }
 
   assertPlanEditInTransaction(userId: number, planId: string, edit: PlanMetadataEdit) {
-    const items = this.database.prepare("SELECT * FROM meal_plan_items WHERE plan_id=? AND user_id=? AND deleted_at IS NULL ORDER BY id").all(planId,userId) as Row[];
+    const items = this.readRows("SELECT * FROM meal_plan_items WHERE plan_id=? AND user_id=? AND deleted_at IS NULL ORDER BY id",[planId,userId]);
     for (const item of items) {
       const facts = this.changeFacts(item,userId);
       if (!planMetadataPreservesItem(item,facts.decision,edit)) throw new InventoryQuantityError("MEAL_PLAN_PROTECTED", "餐单包含已确认、已采购或已进入制作的安排，或日期将排除已有餐次；请先逐餐审阅调整，原安排已保留");
@@ -161,8 +173,8 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
 
   private changeFacts(item: Row, userId: number) {
     const queue = item.queue_item_id ? this.database.prepare("SELECT id,version,status FROM cooking_queue_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(item.queue_item_id, userId) as Row | undefined : undefined;
-    const purchases = this.database.prepare("SELECT id,version,checked FROM shopping_list_items WHERE user_id=? AND client_id LIKE ? ORDER BY id").all(userId, `meal-plan:${item.id}:%`) as Row[];
-    const sharedPurchases = this.database.prepare("SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=? ORDER BY id").all(item.id) as Row[];
+    const purchases = this.readRows("SELECT id,version,checked FROM shopping_list_items WHERE user_id=? AND client_id LIKE ? ORDER BY id",[userId, `meal-plan:${item.id}:%`]);
+    const sharedPurchases = this.readRows("SELECT id,version,(checked OR transferred_at IS NOT NULL) AS checked FROM household_shopping_items WHERE source_plan_item_id=? ORDER BY id",[item.id]);
     purchases.push(...sharedPurchases.map(row => ({ ...row,id: `household:${row.id}` })));
     return { decision: mealChangeDecision(item, queue, purchases), snapshot: mealChangeSnapshot(item, queue, purchases) };
   }
@@ -178,15 +190,16 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   }
 
   async listChanges(userId: number, planId: string) {
-    return (this.database.prepare("SELECT * FROM meal_plan_changes WHERE user_id=? AND plan_id=? ORDER BY created_at DESC,id DESC").all(userId, planId) as Row[]).map(formatMealChange);
+    return (this.readRows("SELECT * FROM meal_plan_changes WHERE user_id=? AND plan_id=? ORDER BY created_at DESC,id DESC",[userId,planId])).map(formatMealChange);
   }
 
   async updateItem(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
-    return this.updateItemInTransaction(userId,planId,itemId,input,source,reason);
+    const validation = input.validationFingerprint ? await this.prepareChange(userId,planId,itemId,replacementPatchRequest(input)) : undefined;
+    return this.updateItemInTransaction(userId,planId,itemId,input,source,reason,validation);
   }
 
   /** Synchronous so maintenance can atomically commit a whole batch and its acknowledgement. */
-  updateItemInTransaction(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排") {
+  updateItemInTransaction(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, source = "manual", reason = "调整餐次安排", validation?: ReplacementContext) {
     return this.database.transaction(() => {
       const item = this.getItem(planId, itemId, userId);
       if (!item) return { kind: "not_found" as const };
@@ -202,11 +215,17 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
         throw new InventoryQuantityError("DINING_REVIEW_REQUIRED","更换共餐菜谱前，请重新核对所有参与成员的限制并提交共餐安排");
       const dining = input.dining === undefined ? parseJson<import("@dietdigidose/contracts").HouseholdDiningPlan | null>(item.dining_json,null) : input.dining;
       if (dining) validateSqliteDiningPlan(this.database,userId,input.recipeId === undefined ? item.recipe_id : input.recipeId,dining);
+      if (source === "maintenance" && facts.decision === "apply" && replacementRequiresValidation(item,input)) {
+        facts.decision = "suggest";
+        reason += "；需先预览当前整套餐单，未自动应用";
+      }
+      if (input.validationFingerprint && replacementRequiresValidation(item,input))
+        assertReplacementValidation(validation?.prepared,validation ? readSqliteReplacementSnapshot(this.readRows,userId,validation.request) : undefined,input.validationFingerprint);
       const proposal = { ...input, title: String(replacement?.title || item.recipe_title || item.title) };
       const id = randomUUID();
       let next = formatMealPlanItem(item);
       if (facts.decision === "apply") {
-        const applied = this.applyItemChange(userId, planId, itemId, input);
+        const applied = this.applyItemChange(userId, planId, itemId, input, validation);
         if (applied.kind !== "updated") return applied;
         next = applied.value;
       }
@@ -218,7 +237,9 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
     })();
   }
 
-  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {
+  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore", validationFingerprint?: string) {
+    const saved = validationFingerprint && action !== "reject" ? this.readRows("SELECT item_id FROM meal_plan_changes WHERE id=? AND user_id=? AND plan_id=?",[changeId,userId,planId])[0] : undefined;
+    const validation = saved && action !== "reject" ? await this.prepareChange(userId,planId,String(saved.item_id),{ changeId,action }) : undefined;
     return this.database.transaction(() => {
       const change = this.database.prepare("SELECT * FROM meal_plan_changes WHERE id=? AND user_id=? AND plan_id=?").get(changeId,userId,planId) as Row | undefined;
       if (!change) return { kind: "not_found" as const };
@@ -236,7 +257,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       const unchangedFacts = { ...facts.snapshot, version: before.version, input: before.input,title: before.title };
       if (facts.decision === "keep" || Number(item.version) !== expectedVersion || !isDeepStrictEqual(unchangedFacts,before)) return { kind: "protected" as const };
       const patch = action === "restore" ? before.input : parseJson<MealPlanItemUpdateInput>(change.after_json, { version: expectedVersion });
-      const result = this.applyItemChange(userId,planId,String(item.id),{ ...patch, version: expectedVersion });
+      const result = this.applyItemChange(userId,planId,String(item.id),{ ...patch, version: expectedVersion,validationFingerprint },validation);
       if (result.kind !== "updated") return result;
       if (action === "restore") this.database.prepare("UPDATE meal_plan_changes SET status='reverted',after_json=json_set(after_json,'$.restoredVersion',?,'$.restoredAt',CURRENT_TIMESTAMP) WHERE id=?").run(result.value.version,changeId);
       else this.database.prepare("UPDATE meal_plan_changes SET status='applied',after_version=?,applied_at=CURRENT_TIMESTAMP WHERE id=?").run(result.value.version,changeId);
@@ -244,7 +265,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
     })();
   }
 
-  private applyItemChange(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput) {
+  private applyItemChange(userId: number, planId: string, itemId: string, input: MealPlanItemUpdateInput, validation?: ReplacementContext) {
     const current = this.getItem(planId, itemId, userId);
     if (!current) return { kind: "not_found" as const };
     if (current.dining_json && input.dining === undefined && input.recipeId !== undefined && input.recipeId !== current.recipe_id)
@@ -257,8 +278,18 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
         FROM recipes WHERE id = ? AND status = 'approved' AND deleted_at IS NULL`).get(input.recipeId) as Row | undefined;
       if (!replacement) return { kind: "recipe_not_available" as const };
     }
-    const allocation = replacement ? replacementAllocation(current,replacement) : undefined;
+    const needsValidation = replacementRequiresValidation(current,input);
+    if (needsValidation) assertReplacementValidation(validation?.prepared, validation ? readSqliteReplacementSnapshot(this.readRows,userId,validation.request) : undefined,input.validationFingerprint);
+    const allocation = needsValidation ? validation!.prepared!.result.allocation : replacement ? replacementAllocation(current,replacement) : undefined;
     if (allocation === null) return { kind: "protected" as const };
+    if (needsValidation && allocation?.constraints) {
+      const prior = (allocation.constraints as Row).executionValidationByItem as Record<string, unknown> | undefined;
+      (allocation.constraints as Row).executionValidationByItem = { ...prior,[itemId]: {
+        status: "change_verified", itemVersion: input.version + 1, fingerprint: validation!.prepared!.preview.fingerprint,
+        checkedDate: validation!.prepared!.today, scope: validation!.prepared!.preview.scope,
+        checks: validation!.prepared!.preview.checks,
+      } };
+    }
     const changed = this.database.prepare(`UPDATE meal_plan_items SET planned_date = ?, meal_type = ?, recipe_id = ?, title = ?,
       ingredients_json = ?, steps_json = ?, calories = ?, protein = ?, carbs = ?, fat = ?, status = ?,
       queue_item_id = CASE WHEN ? THEN NULL ELSE queue_item_id END, dining_json = ?,

@@ -1,3 +1,4 @@
+import type { ActiveMealChangePreviewInput, ActiveMealChangePreview } from "@dietdigidose/contracts";
 import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@dietdigidose/contracts";
 import type {
   ExecutionRepositoryResult, MealPlanCompleteInput, MealPlanExecutionInput, MealPlanItemUpdateInput,
@@ -5,8 +6,9 @@ import type {
 } from "./types.js";
 
 export interface MealPlansRepository {
+  previewChange(userId: number, planId: string, itemId: string, input: ActiveMealChangePreviewInput): Promise<ActiveMealChangePreview | null>;
   listChanges(userId: number, planId: string): Promise<Record<string, unknown>[]>;
-  reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore"): Promise<MutationResult<MealPlanItemView>>;
+  reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore", validationFingerprint?: string): Promise<MutationResult<MealPlanItemView>>;
   confirmItem(userId: number, planId: string, itemId: string, version: number): Promise<MutationResult<MealPlanItemView>>;
   activateDraft(userId: number, id: string, version: number): Promise<MutationResult<{ plan: MealPlanView; repeated: boolean }>>;
   updateDraft(userId: number, id: string, input: UpdateCookingPlanDraftInput): Promise<MutationResult<{ plan: MealPlanView; repeated: boolean }>>;

@@ -983,3 +983,21 @@ PostgreSQL集成演练进一步覆盖完整应用模式：在源API注册两个�
 - 服务端全量480项测试通过；共享双数据库断言覆盖并发重放、延后结束恢复、持久化不做饭偏好阻止旧快照预留、发送中反馈与晚到回执。认证HTTP覆盖401/404/400/409与成功重放。三端静态校验、架构检查、72文件SQL边界及 git diff --check 通过。
 - PostgreSQL17独立空库 issue179_feedback_20260912a 的完整迁移、仓库、备份恢复与HTTP运行时集成退出0。本批无schema变更、无客户端增量。
 - 用户明确要求“把当前的任务做完就收尾了”，本次范围止于反馈事务/API/回归，不再展开客户端反馈按钮或其他issue。#179及原全部issue目标尚未全部完成；未部署、合并或关闭issue。提交同步结果以最终回复为准。
+
+### 已激活个人餐单局部变更：当前态预览与确认
+
+新增 `POST /api/v1/meal-plans/:id/items/:itemId/change-preview`，请求为 `{patch}` 或 `{changeId,action:"accept"|"restore"}`。预览返回输入 fingerprint、计划/餐次版本、结构化 blocked/pending/info、原料覆盖和排程摘要。PATCH 与 review 的实际新增制作承诺须提交 `validationFingerprint`；服务端重新计算，并在写事务内重新读取相同证据后比较，不信任客户端 canApply。用户确认原餐的 confirmed_at 不能代替验证。
+
+计算来源为当前 meal_plan_items、executionItems、当前库存证据、限制/厨具治理及持久化待吃分配。旧草案仅提供制作模式/日期/预算，不还原旧餐次。仅改目标菜谱/日期/餐型，其他执行项保留；已完成/跳过不重复分配生原料。日期窗固定为当前计划 start_date/end_date，预留同窗其他 active 计划的有效承诺，不预留窗外所有未来餐。此范围比现有个人采购的 current_plan 更广，不能将本预览说成采购清单或全局库存预留。
+
+纯跳过仅释放承诺，预览解释该动作，不要求新制作证据；从 skipped 恢复则必须重新验证。拒绝建议、无变化、已终态 review 重放及既有执行幂等流程保留。共餐、缺必要执行证据的旧计划、相关待吃分配尚无法核实的变更明确阻断/待核对，原安排不修改。不会将旧 executionNeedsRevalidation 布尔变为整计划禁令；成功变更保存按餐次 executionValidationByItem 的提交时摘要，不声称将来的库存一直有效。
+
+维护任务暂只保留需再验证的 pending 建议，附“需先预览当前整套餐单，未自动应用”，不绕过手动门禁。尚未将整个维护计算器迁移到新验证器。
+
+SQLite 在原写事务中比较快照与修改餐次/约束/历史；PG 在 meal-planning 锁之后、输入行锁之前读取受保护快照，父行、输入行与治理锁采用 NOWAIT，55P03 先完整 rollback 再映射为重预览冲突。幂等 preflight 不取库存锁；preflight 的 changeFacts 为只读。新增 PG 覆盖为 mock 协议断言，不等同真实数据库并发验收。无数据库 schema/迁移改动。
+
+前端新增预览弹层，支持取消、错误重验、阻断状态、重复点击和旧响应隔离；换菜、日期/餐型变化、恢复跳过、接受/恢复建议接入。完整时间/容量或存放依据未知不允许“仍然确认”变成通过。没有价格或医学营养保证，也未完成真实浏览器视觉验收。
+
+验证记录：新增当前态纯计算与双库仓储/协议测试；真 SQLite 覆盖 1.5 份跨产量换菜 150g→75g→150g、复合补丁字段顺序、preview 后与确认事务前输入变化的零写拒绝、纯跳过/恢复与终态重放。服务端 unit 490 通过、1 条原有跳过；完整 HTTP app 133/133；契约 16/16；server/contracts 类型、客户端针对集和类型/目标 ESLint、架构边界与 SQLite 冻结边界通过。PG 仅协议测试，未宣称实库并发已验证；未 push、提交或部署。
+
+正式 stability 在本云环境使用 Node 22.23.2 / pnpm 10.18.0、未修改 `run-test-stability.mjs` 执行两轮，两轮均失败，不能记为通过。失败发生于 `deploy/staging-smoke.test.mjs:25`：子进程 stderr 中的环境 UNDICI-EHPA 警告出现在 JSON 前，两个 failed-login cleanup 用例解析时报 SyntaxError，后续总门禁未执行完成。未改测试/脚本屏蔽该失败；既往 Mac stability 不作为本次新代码证据。

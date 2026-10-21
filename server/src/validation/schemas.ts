@@ -490,13 +490,14 @@ export const mealPlanVersionSchema = z.object({
 }).strict();
 
 export const mealPlanItemUpdateSchema = z.object({
+  validationFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   dining: householdDiningPlanSchema.nullable().optional(),
   version: z.number().int().positive(),
   plannedDate: isoDate.optional(),
   mealType: trimmedString(1, 30, "餐次").optional(),
   recipeId: z.number().int().positive().nullable().optional(),
   status: z.enum(["planned", "skipped"]).optional(),
-}).strict().refine((value) => Object.keys(value).some((key) => key !== "version"), "至少提供一个需要更新的字段");
+}).strict().refine((value) => Object.keys(value).some((key) => key !== "version" && key !== "validationFingerprint"), "至少提供一个需要更新的字段");
 
 const mealPlanExecutionBaseSchema = z.object({
   version: z.number().int().positive(),

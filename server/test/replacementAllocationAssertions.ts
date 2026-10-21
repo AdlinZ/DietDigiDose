@@ -1,18 +1,19 @@
 import assert from "node:assert/strict";
 import type { MealPlansRepository } from "../src/modules/mealPlans/repository.js";
 
+/** Legacy portion captures prove neither the current recipe nor a whole-plan schedule. */
 export async function verifyPortionReplacement(repository: MealPlansRepository, userId: number, originalId: number, replacementId: number,
   allocation: () => Promise<{ recipeId: number; demands: { amount_value: number }[] }>) {
-  const changed = await repository.updateItem(userId,"portion-plan","portion-meal",{ version: 1,recipeId: replacementId });
-  assert.equal(changed.kind,"updated"); if (changed.kind !== "updated") assert.fail("replacement failed");
-  assert.deepEqual(changed.value.ingredients,[{ name: "大米",amount: "75g" }]);
-  assert.equal(changed.value.plannedServings,1.5);
-  assert.equal((await allocation()).recipeId,replacementId);
-  assert.equal((await allocation()).demands[0].amount_value,75);
-  const changeId = String((changed.value.change as { id: string }).id);
-  const restored = await repository.reviewChange(userId,"portion-plan",changeId,"restore");
-  assert.equal(restored.kind,"updated"); if (restored.kind !== "updated") assert.fail("restore failed");
-  assert.deepEqual(restored.value.ingredients,[{ name: "大米",amount: "150g" }]);
-  assert.equal((await allocation()).recipeId,originalId);
-  assert.equal((await allocation()).demands[0].amount_value,150);
+  const before = await repository.find(userId,"portion-plan",false);
+  const captured = structuredClone(await allocation());
+  assert.equal(captured.recipeId,originalId);
+  const input = { version: 1,recipeId: replacementId };
+  await assert.rejects(repository.updateItem(userId,"portion-plan","portion-meal",input), { code: "MEAL_PLAN_PREVIEW_REQUIRED" });
+  const preview = await repository.previewChange(userId,"portion-plan","portion-meal",{ patch: input });
+  assert(preview); assert.equal(preview.canApply,false);
+  assert(preview.checks.some(check => ["execution_missing","execution_review_missing","production_configuration_missing"].includes(check.code) && check.severity !== "info"));
+  await assert.rejects(repository.updateItem(userId,"portion-plan","portion-meal",{ ...input,validationFingerprint: preview.fingerprint }), { code: "MEAL_PLAN_REVALIDATION_BLOCKED" });
+  assert.deepEqual(await repository.find(userId,"portion-plan",false),before,"blocked legacy replacement leaves the whole plan unchanged");
+  assert.deepEqual(await allocation(),captured,"captured original portions cannot be silently recalculated or replaced");
+  assert.deepEqual(await repository.listChanges(userId,"portion-plan"),[],"a rejected change creates no applied history to restore");
 }

@@ -1,3 +1,6 @@
+import { executionFixture } from "./helpers/recipeExecution.js";
+import { executionRecipeKey } from "../src/modules/recipes/execution.js";
+import { recipeExecutionProof } from "../src/modules/recipes/planExecution.js";
 import { verifyDiningPlanChanges, verifyHouseholdPlanProduction, verifyHouseholdPlanPreview, verifyHouseholdDining, verifyHouseholdProduction, verifyHouseholdEating, verifyHouseholdCorrections, verifyHouseholdReservations } from "./householdDiningAssertions.js";
 import { verifyWeeklyRoll } from "./weeklyRollAssertions.js";
 import { verifyPreparedMealPrecision } from "./helpers/preparedMealPrecision.js";
@@ -1857,16 +1860,22 @@ describe("user data isolation", () => {
       method: "PATCH", token: first.token,
       body: JSON.stringify({ version: plan.items[0].version, plannedDate: "2026-08-28", mealType: "午餐" }),
     });
-    assert.equal(moved.response.status, 200);
-    assert.equal((moved.body as JsonObject).plannedDate, "2026-08-28");
+    assert.equal(moved.response.status, 409);
+    assert.equal((moved.body as JsonObject).code, "MEAL_PLAN_PREVIEW_REQUIRED");
+    const movePreview = await api(`/api/v1/meal-plans/${planId}/items/${itemId}/change-preview`, {
+      method: "POST", token: first.token, body: JSON.stringify({ patch: { version: plan.items[0].version,plannedDate: "2026-08-28",mealType: "午餐" } }),
+    });
+    assert.equal(movePreview.response.status,200);
+    assert.equal((movePreview.body as JsonObject).canApply,false);
+    assert.equal((db.prepare("SELECT planned_date FROM meal_plan_items WHERE id=?").get(itemId) as JsonObject).planned_date,"2026-08-27");
     const stale = await api(`/api/v1/meal-plans/${planId}/items/${itemId}`, {
       method: "PATCH", token: first.token,
-      body: JSON.stringify({ version: plan.items[0].version, mealType: "早餐" }),
+      body: JSON.stringify({ version: plan.items[0].version + 1, mealType: "早餐" }),
     });
     assert.equal(stale.response.status, 409);
     assert.equal((stale.body as JsonObject).code, "MEAL_PLAN_VERSION_CONFLICT");
 
-    const movedItem = moved.body as JsonObject;
+    const movedItem = plan.items[0] as JsonObject;
     const shoppingPayload = { version: movedItem.version, idempotencyKey: "meal-plan-shopping-integration-0001" };
     const shopping = await api(`/api/v1/meal-plans/${planId}/items/${itemId}/shopping`, {
       method: "POST", token: first.token, body: JSON.stringify(shoppingPayload),
@@ -4307,9 +4316,28 @@ test("meal plan change reviews protect confirmation, purchases and cooking with 
   const itemId = "19500000-0000-4000-8000-000000000002";
   db.prepare("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES(?,?,?,'2026-09-12','2026-09-18','active')").run(planId,account.user.id,"保护计划");
   db.prepare("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title) VALUES(?,?,?,'2026-09-12','午餐','计划饭')").run(itemId,planId,account.user.id);
+  const recipeId = Number(db.prepare("INSERT INTO recipes(title,status,quality_status,serving_size,prep_time,cook_time,ingredients_json,steps_json) VALUES('审阅测试餐','approved','trusted',2,5,10,?,?)").run(JSON.stringify([{ name: "审阅测试米",amount: "100g" }]),JSON.stringify(["准备","烹饪","收尾"])).lastInsertRowid);
+  const recipe = db.prepare("SELECT * FROM recipes WHERE id=?").get(recipeId) as JsonObject;
+  const execution = { recipeKey: executionRecipeKey(recipe),reviewedBy: account.user.id,reviewedAt: "2026-09-11T00:00:00Z",profile: { ...executionFixture,handling: { storage: "fresh_only",maxHoldHours: 0,coldServingAllowed: true,carryAllowed: false,sourceUrl: "https://example.invalid/test",reference: "合成固定存放测试依据",instructions: "仅用于自动化测试，不代表实际食品安全保证" } } };
+  db.prepare("UPDATE recipes SET execution_json=? WHERE id=?").run(JSON.stringify(execution),recipeId);
+  recipe.execution_json = execution;
+  db.prepare("UPDATE meal_plan_items SET recipe_id=?,ingredients_json=?,steps_json=? WHERE id=?").run(recipeId,recipe.ingredients_json,recipe.steps_json,itemId);
+  const constraints = { currentCookingDraft: { productionDate: "2026-09-12",time: { budgetMinutes: 60 } },executionItems: { [itemId]: { recipeId,title: recipe.title,targetMealId: itemId,servings: 2,recipeYield: 2,demands: [{ food_name: "审阅测试米",amount_value: 100,unit: "g" }] } },executionRecipeKeys: { [itemId]: recipeExecutionProof(recipe) } };
+  db.prepare("UPDATE meal_plans SET constraints_json=? WHERE id=?").run(JSON.stringify(constraints),planId);
+  db.prepare("INSERT INTO inventory_items(user_id,food_name,category,quantity,quantity_value,quantity_unit,expiration_date) VALUES(?,'审阅测试米','主食','300g',300,'g','2099-01-01')").run(account.user.id);
+  db.prepare("INSERT INTO kitchenware_items(user_id,name,category,catalog_id,attributes_json) VALUES(?,'测试锅','锅具',1,?)").run(account.user.id,JSON.stringify({ capacityMl: 1000 }));
   const path = `/api/v1/meal-plans/${planId}/items/${itemId}`;
-  const patch = (input: JsonObject) => api(path,{ token: account.token,method: "PATCH",body: JSON.stringify(input) });
-  const review = (id: string, action: string) => api(`/api/v1/meal-plans/${planId}/changes/${id}/review`,{ token: account.token,method: "POST",body: JSON.stringify({ action }) });
+  const patch = async (input: JsonObject) => {
+    const preview = await api(`${path}/change-preview`,{ token: account.token,method: "POST",body: JSON.stringify({ patch: input }) });
+    const value = preview.body as JsonObject;
+    if (input.version === 1) assert.equal(value.canApply,true,JSON.stringify(value));
+    return api(path,{ token: account.token,method: "PATCH",body: JSON.stringify({ ...input,...(value.canApply ? { validationFingerprint: value.fingerprint } : {}) }) });
+  };
+  const review = async (id: string, action: string) => {
+    const preview = action === "reject" ? null : await api(`${path}/change-preview`,{ token: account.token,method: "POST",body: JSON.stringify({ changeId: id,action }) });
+    const value = preview?.body as JsonObject | undefined;
+    return api(`/api/v1/meal-plans/${planId}/changes/${id}/review`,{ token: account.token,method: "POST",body: JSON.stringify({ action,...(value?.canApply ? { validationFingerprint: value.fingerprint } : {}) }) });
+  };
   const first = await patch({ version: 1, mealType: "晚餐" });
   assert.equal(first.response.status,200);
   assert.equal((first.body as JsonObject).change.status,"applied");
@@ -4352,6 +4380,9 @@ test("meal plan change reviews protect confirmation, purchases and cooking with 
   const { SqliteAgentOperationsRepository } = await import("../src/modules/agentOperations/sqliteRepository.js");
   await assert.rejects(new SqliteAgentOperationsRepository(db).undoActions(account.user.id,runId), /原安排已保留/);
   assert.equal((db.prepare("SELECT deleted_at FROM meal_plans WHERE id=?").get(planId) as JsonObject).deleted_at,null);
+
+  // The synthetic governed recipe must not enter later users' recommendation candidate pools.
+  db.prepare("UPDATE recipes SET deleted_at=CURRENT_TIMESTAMP WHERE id=?").run(recipeId);
 
 });
 

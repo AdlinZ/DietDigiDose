@@ -1,3 +1,5 @@
+import { preparePersonalShopping, personalShoppingClientId } from "./personalShopping.js";
+import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import { recipeExecutionProof } from "../recipes/planExecution.js";
 import { assertPostgresPlanExecution } from "../recipes/postgresRepository.js";
 import { commonProduction } from "./commonProduction.js";
@@ -21,7 +23,7 @@ import { formatPreparedMeal, prepareProduction } from "../dietRecords/preparedMe
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { currentDateKey, currentTimeKey } from "../../utils/date.js";
-import { formatMealPlan, formatMealPlanItem, ingredient, normalizedName, parseJson, queueMealType, type Row } from "./formatters.js";
+import { formatMealPlan, formatMealPlanItem, parseJson, queueMealType, type Row } from "./formatters.js";
 import type { MealPlansRepository } from "./repository.js";
 import type { MealPlanCompleteInput, MealPlanExecutionInput, MealPlanItemUpdateInput, MealPlanUpdateInput } from "./types.js";
 
@@ -341,28 +343,24 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       }
       if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
       if (input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","这餐已不是共餐安排，请重新核对");
-      const ingredients = parseJson<unknown[]>(item.ingredients_json, []).map(ingredient)
-        .filter((entry): entry is { name: string; amount: string } => Boolean(entry?.name));
-      const stock = (await client.query(`SELECT food_name FROM inventory_items
-        WHERE user_id = $1 AND is_available = TRUE AND deleted_at IS NULL`, [userId])).rows
-        .map((row) => normalizedName(String(row.food_name)));
-      const shopping = (await client.query(`SELECT name FROM shopping_list_items
-        WHERE user_id = $1 AND checked = FALSE AND deleted_at IS NULL`, [userId])).rows
-        .map((row) => normalizedName(String(row.name)));
-      const missing = ingredients.filter((entry) => {
-        const name = normalizedName(entry.name);
-        return name && !stock.some((owned) => owned.includes(name) || name.includes(owned))
-          && !shopping.some((saved) => saved.includes(name) || name.includes(saved));
-      });
+      const plan = (await client.query("SELECT status FROM meal_plans WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",[planId,userId])).rows[0];
+      if (!plan || plan.status !== "active" || ["completed","skipped"].includes(String(item.status))) return { kind: "version_conflict" as const };
+      const stock = (await client.query(`SELECT inventory_items.*, (SELECT metadata_json FROM inventory_change_logs e
+        WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id
+        AND e.metadata_json->'field_evidence'->>'quantity' IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence
+        FROM inventory_items WHERE user_id=$1 AND is_available=TRUE AND deleted_at IS NULL
+        ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END,expiration_date,id`,[userId])).rows as Row[];
+      const shopping = (await client.query("SELECT * FROM shopping_list_items WHERE user_id=$1 AND checked=FALSE AND deleted_at IS NULL",[userId])).rows as Row[];
+      const meals = (await client.query(`${itemSelect} WHERE i.plan_id=$1 AND i.user_id=$2 AND i.deleted_at IS NULL`,[planId,userId])).rows as Row[];
+      const result = preparePersonalShopping(itemId,meals,stock.map(row => ({ ...row,quantity_evidence_status: quantityEvidenceStatus(row.quantity_evidence,row.version) })),shopping,currentDateKey());
       const itemIds: string[] = [];
-      for (const entry of missing) {
+      for (const [index,entry] of result.missing.entries()) {
         const id = randomUUID();
-        const inserted = await client.query(`INSERT INTO shopping_list_items (id, user_id, client_id, name, amount, category)
-          VALUES ($1, $2, $3, $4, $5, '餐单') ON CONFLICT (user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING RETURNING id`,
-        [id, userId, `meal-plan:${itemId}:${normalizedName(entry.name)}`.slice(0, 120), entry.name.slice(0, 120), entry.amount.slice(0, 80)]);
-        if (inserted.rowCount === 1) itemIds.push(id);
+        await client.query(`INSERT INTO shopping_list_items (id,user_id,client_id,name,amount,category) VALUES ($1,$2,$3,$4,$5,'餐单')`,
+          [id,userId,personalShoppingClientId(itemId,input.idempotencyKey,index),entry.name.slice(0,120),entry.amount.slice(0,80)]);
+        itemIds.push(id);
       }
-      const value = { added: itemIds.length, itemIds, repeated: false };
+      const value = { added: itemIds.length,itemIds,repeated: false,scope: "current_plan",coverage: result.coverage,reviewItems: result.reviewItems };
       await this.saveExecution(client, userId, input.idempotencyKey, "shopping", itemId, value);
       return { kind: "completed" as const, value };
     },Boolean(input.householdNetFingerprint));

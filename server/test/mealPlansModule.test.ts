@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { MealPlansError } from "../src/modules/mealPlans/errors.js";
-import { formatMealPlan, formatMealPlanItem } from "../src/modules/mealPlans/formatters.js";
+import { formatMealPlan, formatMealPlanItem, type Row } from "../src/modules/mealPlans/formatters.js";
 import type { MealPlansRepository } from "../src/modules/mealPlans/repository.js";
 import { MealPlansService } from "../src/modules/mealPlans/service.js";
 
@@ -167,3 +167,114 @@ for (const driver of ["sqlite", "postgres"] as const) {
     } finally { database.close(); }
   });
 }
+
+import { preparePersonalShopping, personalShoppingClientId } from "../src/modules/mealPlans/personalShopping.js";
+const shoppingMeal = (id = "a", amount = "4枚", date = "2099-01-01") => ({ id,planned_date: date,meal_type: "午餐",status: "planned",ingredients_json: [{ name: "鸡蛋",amount }] });
+const shoppingStock = (quantity = 1, extra = {}) => ({ id: 1,food_name: "鸡蛋",quantity_value: quantity,quantity_unit: "piece",expiration_date: "2099-02-01",version: 1,...extra });
+const personal = (meals = [shoppingMeal()], stock = [shoppingStock()], shopping: Record<string,unknown>[] = [], id = "a") => preparePersonalShopping(id,meals,stock,shopping,"2099-01-01");
+
+test("personal shopping calculates exact shortages without consuming stock", () => {
+  const stock = [shoppingStock()];
+  assert.deepEqual(personal(undefined,stock).missing,[{ name: "鸡蛋",amount: "3个" }]);
+  assert.equal(stock[0].quantity_value,1);
+  assert.equal(personal(undefined,[shoppingStock(4)]).coverage,"covered");
+  assert.deepEqual(personal([shoppingMeal("a","1kg")],[shoppingStock(500,{ quantity_unit: "g" })]).missing,[{ name: "鸡蛋",amount: "0.5kg" }]);
+});
+
+test("personal shopping shares a stable current-plan budget and ignores terminal/shared meals", () => {
+  const meals = [shoppingMeal("b"),shoppingMeal("a")];
+  assert.equal(personal(meals,[shoppingStock(4)],[],"a").coverage,"covered");
+  assert.equal(personal(meals,[shoppingStock(4)],[],"b").missing[0].amount,"4个");
+  assert.deepEqual(personal([...meals].reverse(),[shoppingStock(4)],[],"b"),personal(meals,[shoppingStock(4)],[],"b"));
+  for (const extra of [{ status: "completed" },{ status: "skipped" },{ dining_json: {} },{ prepared_only: true }]) {
+    assert.equal(personal([{ ...shoppingMeal("0"),...extra },shoppingMeal()],[shoppingStock(4)]).coverage,"covered");
+  }
+});
+
+test("personal shopping treats uncertainty, expiry and manual intentions conservatively", () => {
+  for (const extra of [{ quantity_unit: "box" },{ quantity_value: null },{ quantity_evidence_status: "estimated" },{ expiration_date: "" }]) {
+    const result = personal(undefined,[shoppingStock(1,extra)]);
+    assert.equal(result.coverage,"needs_review"); assert.equal(result.missing.length,0);
+  }
+  assert.equal(personal([shoppingMeal("a","适量")]).coverage,"needs_review");
+  assert.equal(personal([shoppingMeal(),shoppingMeal("z","适量")],[shoppingStock(8)]).coverage,"needs_review");
+  assert.equal(personal(undefined,[shoppingStock(8,{ expiration_date: "2098-12-31" })]).missing[0].amount,"4个");
+  assert.equal(personal([shoppingMeal("a","4枚","2099-01-03")],[shoppingStock(8,{ expiration_date: "2099-01-02" })]).missing[0].amount,"4个");
+  assert.equal(personal(undefined,[shoppingStock(4,{ expiration_date: "2099-01-01" })]).coverage,"covered");
+  const handwritten = [{ id: "manual",name: "鸡蛋",amount: "一盒",checked: false }];
+  const original = JSON.stringify(handwritten);
+  assert.equal(personal(undefined,undefined,handwritten).coverage,"needs_review");
+  assert.equal(JSON.stringify(handwritten),original);
+  for (const extra of [{ checked: true },{ deleted_at: "2099-01-01" }]) assert.equal(personal(undefined,undefined,[{ ...handwritten[0],...extra }]).missing.length,1);
+});
+
+test("personal shopping source IDs preserve associations but allow new requests after purchase/deletion", () => {
+  const itemId = "22222222-2222-4222-8222-222222222222";
+  const first = personalShoppingClientId(itemId,"request-a",0);
+  assert(first.startsWith(`meal-plan:${itemId}:`)); assert(first.length <= 120);
+  assert.equal(first,personalShoppingClientId(itemId,"request-a",0));
+  assert.notEqual(first,personalShoppingClientId(itemId,"request-b",0));
+  assert.notEqual(first,personalShoppingClientId(itemId,"request-a",1));
+});
+
+test("SQLite personal shopping preserves old rows, retries, and only budgets the current plan", async () => {
+  const database = new Database(":memory:");
+  database.exec(`
+    CREATE TABLE meal_plans(id TEXT,user_id INTEGER,status TEXT,deleted_at TEXT,constraints_json TEXT);
+    CREATE TABLE meal_plan_items(id TEXT,plan_id TEXT,user_id INTEGER,recipe_id INTEGER,queue_item_id TEXT,planned_date TEXT,meal_type TEXT,status TEXT,version INTEGER,ingredients_json TEXT,dining_json TEXT,deleted_at TEXT);
+    CREATE TABLE recipes(id INTEGER,title TEXT,image_url TEXT,cook_time INTEGER,difficulty TEXT,status TEXT,deleted_at TEXT);
+    CREATE TABLE cooking_queue_items(id TEXT,user_id INTEGER,recipe_snapshot_json TEXT);
+    CREATE TABLE household_meal_batches(id TEXT,plan_item_id TEXT,created_by_user_id INTEGER,household_id INTEGER);
+    CREATE TABLE inventory_items(id INTEGER,user_id INTEGER,food_name TEXT,quantity_value REAL,quantity_unit TEXT,expiration_date TEXT,batch_code TEXT,version INTEGER,is_available INTEGER,deleted_at TEXT);
+    CREATE TABLE inventory_change_logs(id INTEGER,inventory_item_id INTEGER,user_id INTEGER,metadata_json TEXT);
+    CREATE TABLE shopping_list_items(id TEXT,user_id INTEGER,client_id TEXT,name TEXT,amount TEXT,category TEXT,checked INTEGER DEFAULT 0,deleted_at TEXT);
+    CREATE UNIQUE INDEX shopping_client ON shopping_list_items(user_id,client_id) WHERE client_id IS NOT NULL;
+    CREATE TABLE meal_plan_execution_requests(user_id INTEGER,idempotency_key TEXT,action TEXT,meal_plan_item_id TEXT,result_json TEXT);
+    INSERT INTO meal_plans VALUES ('p',7,'active',NULL,'{}'),('other',7,'active',NULL,'{}');
+    INSERT INTO meal_plan_items VALUES ('a','p',7,NULL,NULL,'2099-01-01','午餐','planned',1,'[{"name":"鸡蛋","amount":"4枚"}]',NULL,NULL),('z','other',7,NULL,NULL,'2099-01-01','早餐','planned',1,'[{"name":"鸡蛋","amount":"100枚"}]',NULL,NULL);
+    INSERT INTO inventory_items VALUES (1,7,'鸡蛋',1,'piece','2099-02-01',NULL,1,1,NULL);
+  `);
+  try {
+    const repository = new SqliteMealPlansRepository(database);
+    const input = { version: 1,idempotencyKey: "shopping-original" };
+    const first = await repository.addShopping(7,"p","a",input);
+    assert.equal(first.kind,"completed");
+    if (first.kind !== "completed") return;
+    assert.equal(first.value.coverage,"shortfall");
+    assert.equal((database.prepare("SELECT amount FROM shopping_list_items").get() as Row).amount,"3个");
+    assert.equal((await repository.addShopping(7,"p","a",input)).kind,"completed");
+    assert.equal((database.prepare("SELECT COUNT(*) AS n FROM shopping_list_items").get() as Row).n,1);
+    const duplicate = await repository.addShopping(7,"p","a",{ ...input,idempotencyKey: "shopping-second" });
+    assert.equal(duplicate.kind === "completed" && duplicate.value.coverage,"needs_review");
+    database.prepare("UPDATE shopping_list_items SET checked=1").run();
+    await repository.addShopping(7,"p","a",{ ...input,idempotencyKey: "shopping-third" });
+    database.prepare("UPDATE shopping_list_items SET deleted_at='2099-01-01' WHERE checked=0").run();
+    await repository.addShopping(7,"p","a",{ ...input,idempotencyKey: "shopping-fourth" });
+    assert.equal((database.prepare("SELECT COUNT(*) AS n FROM shopping_list_items").get() as Row).n,3);
+    assert.equal((database.prepare("SELECT quantity_value FROM inventory_items").get() as Row).quantity_value,1);
+    assert.equal((database.prepare("SELECT COUNT(*) AS n FROM inventory_change_logs").get() as Row).n,0);
+  } finally { database.close(); }
+});
+
+test("PostgreSQL protocol uses current-plan quantities and transaction-local supply reads", async () => {
+  const meal = { ...shoppingMeal(),version: 1 };
+  const inserts: unknown[][] = [];
+  const client = { release() {}, async query(sql: string, values: unknown[] = []) {
+    if (/^(BEGIN|COMMIT|ROLLBACK)|pg_advisory_xact_lock/.test(sql)) return { rows: [] };
+    if (sql.includes("FROM meal_plan_execution_requests")) return { rows: [] };
+    if (sql.includes("FROM meal_plan_items")) {
+      if (!sql.includes("WHERE i.id")) { assert.match(sql,/i.plan_id=\$1 AND i.user_id=\$2/); assert.deepEqual(values,["p",7]); }
+      return { rows: [meal] };
+    }
+    if (sql.includes("SELECT status FROM meal_plans")) return { rows: [{ status: "active" }] };
+    if (sql.includes("FROM inventory_items")) return { rows: [shoppingStock()] };
+    if (sql.includes("SELECT * FROM shopping_list_items")) return { rows: [] };
+    if (sql.includes("INSERT INTO shopping_list_items")) { inserts.push(values); return { rows: [],rowCount: 1 }; }
+    if (sql.includes("INSERT INTO meal_plan_execution_requests")) return { rows: [],rowCount: 1 };
+    throw new Error(`Unexpected PostgreSQL fixture query: ${sql}`);
+  } };
+  const repository = new PostgresMealPlansRepository({ connect: async () => client } as unknown as Pool);
+  const result = await repository.addShopping(7,"p","a",{ version: 1,idempotencyKey: "pg-quantity" });
+  assert.equal(result.kind === "completed" && (result.value as Row).coverage,"shortfall");
+  assert.equal(inserts.length,1); assert.equal(inserts[0][4],"3个");
+});

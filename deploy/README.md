@@ -70,3 +70,7 @@ pnpm --dir server db:postgres:restore /secure-backups/dietdigidose/candidate-001
 随后启动指向恢复库的隔离 API，验证 health 中 `databaseDriver=postgresql`、登录、库存读取、管理统计、媒体引用、核心汇总和用户隔离。`durationMs` 是归档恢复与表数校验耗时，不包含应用启动和业务验收；实际 RTO 需记录从故障到服务恢复的完整时长。RPO 依据故障时间与 manifest 的 `snapshotAt` 计算，并记录期间可接受的数据损失。恢复失败继续使用原库；成功后才单独安排服务切换，切换前保留原配置和数据库安全副本。媒体对象需独立备份，数据库 archive 只保存引用。
 
 旧版 SQLite 文件的最终迁移与回滚步骤仍见 [`docs/postgresql-migration.md`](../docs/postgresql-migration.md)；`database-backup.js` 只用于该旧版迁移窗口，不是 PostgreSQL 日常备份工具。
+
+### Smoke report output
+
+`node deploy/staging-smoke.mjs` writes one JSON report to stdout after the smoke run, on either success or failure. Save/parse stdout rather than stderr. Failed smoke checks still exit with code 1; stderr retains the failure and cleanup diagnostics plus any Node/runtime warnings. Invalid startup configuration exits nonzero with diagnostics on stderr and no JSON report. Earlier versions wrote failed-run JSON to stderr; consumers must now read stdout for both outcomes.

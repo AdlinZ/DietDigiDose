@@ -109,3 +109,61 @@ test("common production requires an explicit boolean and old queue requests stay
   assert.equal(mealPlanQueueSchema.parse({ ...input, combineSameRecipe: true }).combineSameRecipe, true);
   assert.equal(mealPlanQueueSchema.safeParse({ ...input, combineSameRecipe: "true" }).success, false);
 });
+
+import Database from "better-sqlite3";
+import type { Pool } from "pg";
+import { SqliteMealPlansRepository } from "../src/modules/mealPlans/sqliteRepository.js";
+import { PostgresMealPlansRepository } from "../src/modules/mealPlans/postgresRepository.js";
+
+for (const driver of ["sqlite", "postgres"] as const) {
+  test(`${driver} meal-plan replay binds keys to the action and item before returning a result`, async () => {
+    const rows = [
+      { action: "shopping", meal_plan_item_id: "meal-a", result_json: { added: 1, itemIds: ["shopping-a"], repeated: false } },
+      { action: "queue", meal_plan_item_id: "meal-a", result_json: { queueItemId: "queue-a", combineSameRecipe: false, repeated: false } },
+      { action: "complete", meal_plan_item_id: "meal-a", result_json: { dietRecordId: 42, repeated: false } },
+    ];
+    const database = new Database(":memory:");
+    database.exec("CREATE TABLE meal_plan_execution_requests (user_id INTEGER, idempotency_key TEXT, action TEXT, meal_plan_item_id TEXT, result_json TEXT)");
+    for (const row of rows) database.prepare("INSERT INTO meal_plan_execution_requests VALUES (?, ?, ?, ?, ?)")
+      .run(7, `original-${row.action}`, row.action, row.meal_plan_item_id, JSON.stringify(row.result_json));
+    const statements: string[] = [];
+    // PostgreSQL protocol fixture only; this is not a live database integration test.
+    const client = {
+      query: async (sql: string, values?: unknown[]) => {
+        statements.push(sql);
+        if (sql.includes("FROM meal_plan_execution_requests")) {
+          assert.match(sql, /SELECT action, meal_plan_item_id, result_json/);
+          assert.equal(values?.[0], 7);
+          return { rows: rows.filter(row => `original-${row.action}` === values?.[1]) };
+        }
+        assert(/^(BEGIN|COMMIT|ROLLBACK)|pg_advisory_xact_lock/.test(sql), `Unexpected state access: ${sql}`);
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const repository = driver === "sqlite" ? new SqliteMealPlansRepository(database)
+      : new PostgresMealPlansRepository({ connect: async () => client } as unknown as Pool);
+    const methods = { shopping: repository.addShopping.bind(repository), queue: repository.enqueue.bind(repository), complete: repository.complete.bind(repository) };
+    try {
+      for (const row of rows) {
+        const action = row.action as keyof typeof methods;
+        // No meal row is present: committed retries must not consult today's item/version.
+        for (const version of [1, 999]) {
+          const result = await methods[action](7, "plan-a", "meal-a", { version, idempotencyKey: `original-${action}` });
+          assert.equal(result.kind, "completed");
+          if (result.kind === "completed") assert.deepEqual(result.value, { ...row.result_json, repeated: true });
+        }
+        await assert.rejects(methods[action](7, "plan-b", "meal-b", { version: 1, idempotencyKey: `original-${action}` }), { code: "MEAL_PLAN_KEY_CONFLICT" });
+        for (const other of Object.keys(methods) as Array<keyof typeof methods>) {
+          if (other === action) continue;
+          await assert.rejects(methods[other](7, "plan-a", "meal-a", { version: 1, idempotencyKey: `original-${action}` }), { code: "MEAL_PLAN_KEY_CONFLICT" });
+        }
+      }
+      await assert.rejects(repository.enqueue(7, "plan-a", "meal-a", { version: 1, idempotencyKey: "original-queue", combineSameRecipe: true }), { code: "MEAL_SOURCE_CONFLICT" });
+      await assert.rejects(repository.addShopping(7, "plan-a", "meal-a", { version: 1, idempotencyKey: "original-shopping", householdRecipeFingerprint: "a".repeat(64),
+        householdTotalDemand: {} as NonNullable<Parameters<MealPlansRepository["addShopping"]>[3]["householdTotalDemand"]> }), { code: "DINING_PLAN_CHANGED" });
+      assert.equal((database.prepare("SELECT COUNT(*) AS n FROM meal_plan_execution_requests").get() as { n: number }).n, 3);
+      if (driver === "postgres") assert.equal(statements.filter(sql => sql === "ROLLBACK").length, 11);
+    } finally { database.close(); }
+  });
+}

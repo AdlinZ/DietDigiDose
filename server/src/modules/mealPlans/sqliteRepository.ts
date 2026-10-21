@@ -279,7 +279,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   async addShopping(userId: number, planId: string, itemId: string, input: MealPlanExecutionInput) {
     return this.database.transaction(() => {
       if (input.householdNetFingerprint && !input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","净采购需关联已保存的共餐安排");
-      const repeated = this.repeated(userId, input.idempotencyKey);
+      const repeated = this.repeated(userId, input.idempotencyKey, "shopping", itemId);
       if (repeated) {
         if ((input.householdTotalDemand ? (input.householdNetFingerprint ? "net_demand" : "total_demand") : undefined)!==repeated.mode || input.householdNetFingerprint!==repeated.sourceNetFingerprint || (input.householdTotalDemand && (!isDeepStrictEqual(input.householdTotalDemand,repeated.sourceDining) || input.householdRecipeFingerprint!==repeated.sourceRecipeFingerprint)))
           throw new InventoryQuantityError("DINING_PLAN_CHANGED","此采购编号已用于另一份需求，请重新核对原提交");
@@ -341,7 +341,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
   async enqueue(userId: number, planId: string, itemId: string, input: MealPlanExecutionInput) {
     try {
       return this.database.transaction(() => {
-        const repeated = this.repeated(userId, input.idempotencyKey);
+        const repeated = this.repeated(userId, input.idempotencyKey, "queue", itemId);
         if (repeated) {
           if ((repeated.combineSameRecipe ?? false) !== (input.combineSameRecipe ?? false)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "该提交编号已用于另一种制作安排，请刷新后重试");
           return { kind: "completed" as const, value: repeated };
@@ -411,7 +411,7 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
     }
     try {
       return this.database.transaction(() => {
-        const repeated = this.repeated(userId, input.idempotencyKey);
+        const repeated = this.repeated(userId, input.idempotencyKey, "complete", itemId);
         if (repeated) return { kind: "completed" as const, value: repeated };
         const item = this.getItem(planId, itemId, userId);
         if (!item) return { kind: "not_found" as const };
@@ -467,9 +467,12 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       .all(planId, userId) as Row[];
   }
   private formatPlan(row: Row, userId: number) { return formatMealPlan(row, this.getItems(String(row.id), userId).map(formatMealPlanItem)); }
-  private repeated(userId: number, key: string) {
-    const row = this.database.prepare("SELECT result_json FROM meal_plan_execution_requests WHERE user_id = ? AND idempotency_key = ?")
-      .get(userId, key) as { result_json: string } | undefined;
+  private repeated(userId: number, key: string, action: string, itemId: string) {
+    const row = this.database.prepare("SELECT action, meal_plan_item_id, result_json FROM meal_plan_execution_requests WHERE user_id = ? AND idempotency_key = ?")
+      .get(userId, key) as { action: string; meal_plan_item_id: string; result_json: string } | undefined;
+    if (row && (row.action !== action || row.meal_plan_item_id !== itemId)) {
+      throw new InventoryQuantityError("MEAL_PLAN_KEY_CONFLICT", "此提交编号已用于其他餐次或操作，请核对原提交后重试");
+    }
     return row ? { ...JSON.parse(row.result_json), repeated: true } : null;
   }
   private saveExecution(userId: number, key: string, action: string, itemId: string, result: unknown) {

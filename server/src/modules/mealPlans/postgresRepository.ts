@@ -306,7 +306,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
       await lockMealPlanning(client,userId);
       await this.lockExecution(client, userId, input.idempotencyKey);
       if (input.householdNetFingerprint && !input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","净采购需关联已保存的共餐安排");
-      const repeated = await this.repeated(client, userId, input.idempotencyKey);
+      const repeated = await this.repeated(client, userId, input.idempotencyKey, "shopping", itemId);
       if (repeated) {
         if ((input.householdTotalDemand ? (input.householdNetFingerprint ? "net_demand" : "total_demand") : undefined)!==repeated.mode || input.householdNetFingerprint!==repeated.sourceNetFingerprint || (input.householdTotalDemand && (!isDeepStrictEqual(input.householdTotalDemand,repeated.sourceDining) || input.householdRecipeFingerprint!==repeated.sourceRecipeFingerprint)))
           throw new InventoryQuantityError("DINING_PLAN_CHANGED","此采购编号已用于另一份需求，请重新核对原提交");
@@ -372,7 +372,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     return this.transaction(async (client) => {
       await lockMealPlanning(client,userId);
       await this.lockExecution(client, userId, input.idempotencyKey);
-      const repeated = await this.repeated(client, userId, input.idempotencyKey);
+      const repeated = await this.repeated(client, userId, input.idempotencyKey, "queue", itemId);
       if (repeated) {
         if ((repeated.combineSameRecipe ?? false) !== (input.combineSameRecipe ?? false)) throw new InventoryQuantityError("MEAL_SOURCE_CONFLICT", "该提交编号已用于另一种制作安排，请刷新后重试");
         return { kind: "completed" as const, value: repeated };
@@ -441,7 +441,7 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     return this.transaction(async (client) => {
       await lockMealPlanning(client,userId);
       await this.lockExecution(client, userId, input.idempotencyKey);
-      const repeated = await this.repeated(client, userId, input.idempotencyKey);
+      const repeated = await this.repeated(client, userId, input.idempotencyKey, "complete", itemId);
       if (repeated) return { kind: "completed" as const, value: repeated };
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`prepared-meals:${userId}`]);
       const item = await this.getItem(client, planId, itemId, userId, true);
@@ -520,9 +520,13 @@ export class PostgresMealPlansRepository implements MealPlansRepository {
     return client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`meal-plan:${userId}:${key}`]);
   }
 
-  private async repeated(client: PoolClient, userId: number, key: string): Promise<import("./types.js").ExecutionResult | null> {
-    const result = await client.query("SELECT result_json FROM meal_plan_execution_requests WHERE user_id = $1 AND idempotency_key = $2", [userId, key]);
-    return result.rows[0] ? { ...(result.rows[0].result_json as Record<string, unknown>), repeated: true } : null;
+  private async repeated(client: PoolClient, userId: number, key: string, action: string, itemId: string): Promise<import("./types.js").ExecutionResult | null> {
+    const result = await client.query("SELECT action, meal_plan_item_id, result_json FROM meal_plan_execution_requests WHERE user_id = $1 AND idempotency_key = $2", [userId, key]);
+    const row = result.rows[0];
+    if (row && (row.action !== action || row.meal_plan_item_id !== itemId)) {
+      throw new InventoryQuantityError("MEAL_PLAN_KEY_CONFLICT", "此提交编号已用于其他餐次或操作，请核对原提交后重试");
+    }
+    return row ? { ...(row.result_json as Record<string, unknown>), repeated: true } : null;
   }
 
   private saveExecution(client: PoolClient, userId: number, key: string, action: string, itemId: string, result: unknown) {

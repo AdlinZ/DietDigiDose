@@ -29,6 +29,7 @@ export function InventoryEntryForm({
   onQuantityChange,
   onStorageLocationChange,
   onExpirationDateChange,
+  onEstimatedExpirationDateChange = onExpirationDateChange,
   onSelectPhoto,
   onRemovePhoto,
   onRequestAiRecipe,
@@ -55,6 +56,7 @@ export function InventoryEntryForm({
   onQuantityChange: (value: string) => void;
   onStorageLocationChange: (value: StorageLocation) => void;
   onExpirationDateChange: (value: string) => void;
+  onEstimatedExpirationDateChange?: (value: string) => void;
   onSelectPhoto: (source: "camera" | "library") => void;
   onRemovePhoto: () => void;
   onRequestAiRecipe: (item: InventoryItem) => void;
@@ -170,7 +172,7 @@ export function InventoryEntryForm({
                     const date = dateKeyAfterDays(days);
                     const selected = expirationDate === date;
                     return (
-                      <TouchableOpacity key={label} onPress={() => onExpirationDateChange(date)} className={`flex-1 items-center rounded-xl border py-2 ${selected ? "border-brand bg-brand-fill" : "border-line bg-canvas"}`}>
+                      <TouchableOpacity key={label} onPress={() => onEstimatedExpirationDateChange(date)} className={`flex-1 items-center rounded-xl border py-2 ${selected ? "border-brand bg-brand-fill" : "border-line bg-canvas"}`}>
                         <Text className={`text-[11px] font-bold ${selected ? "text-white" : "text-copy-muted"}`}>{label}</Text>
                       </TouchableOpacity>
                     );

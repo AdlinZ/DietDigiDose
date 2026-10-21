@@ -71,3 +71,53 @@ test("a failed local clear after confirmed saving retains the same retry identit
   await act(async () => { mockForm.onSave(); });
   expect(mockSave.mock.calls[1][0]).toEqual(saved); expect(mockDone).toHaveBeenCalledTimes(1); act(() => tree.unmount());
 });
+
+test("explicit manual fields carry user evidence through draft restoration and submission", async () => {
+  const first = await render();
+  await act(async () => { mockForm.onFoodNameChange("番茄"); mockForm.onQuantityChange("500g"); mockForm.onStorageLocationChange("冷藏"); mockForm.onExpirationDateChange("2026-11-01"); });
+  act(() => first.unmount());
+  const tree = await render();
+  await act(async () => { mockForm.onSave(); });
+  expect(mockSave.mock.calls[0][0].items[0].field_evidence).toEqual({
+    food_name: { status: "known", source: "user" }, quantity: { status: "known", source: "user" },
+    storage_location: { status: "known", source: "user" }, expiration_date: { status: "known", source: "user" },
+  });
+  act(() => tree.unmount());
+});
+
+test("untouched default storage is not confirmed and suggestions replace old location confirmation with a rule", async () => {
+  const tree = await render();
+  await act(async () => { mockForm.onFoodNameChange("番茄"); });
+  const entry = JSON.parse(mockStorage.get("@inventory_manual_draft_v1:user:1")!).entries[0];
+  expect(entry.fieldEvidence?.storage_location).toBeUndefined();
+  await act(async () => { mockForm.onStorageLocationChange("冷藏"); mockForm.onApplySuggestion("番茄"); mockForm.onSave(); });
+  expect(mockSave.mock.calls[0][0].items[0].field_evidence).toMatchObject({ food_name: { status: "known", source: "user" }, storage_location: { status: "estimated", source: "rule" } });
+  act(() => tree.unmount());
+});
+
+test("quick dates remain estimates and a later absolute selection is user evidence", async () => {
+  const tree = await render();
+  await act(async () => { mockForm.onFoodNameChange("番茄"); mockForm.onEstimatedExpirationDateChange("2026-11-01"); });
+  expect(JSON.parse(mockStorage.get("@inventory_manual_draft_v1:user:1")!).entries[0].fieldEvidence.expiration_date).toEqual({ status: "estimated", source: "rule" });
+  await act(async () => { mockForm.onExpirationDateChange("2026-11-01"); mockForm.onSave(); });
+  expect(mockSave.mock.calls[0][0].items[0].field_evidence.expiration_date).toEqual({ status: "known", source: "user" });
+  act(() => tree.unmount());
+});
+
+test.each(["", "大概500g", "0g", "500"])("quantity edit %p clears old evidence without creating operational unknown", async quantity => {
+  const tree = await render();
+  await act(async () => { mockForm.onFoodNameChange("番茄"); mockForm.onQuantityChange("500g"); });
+  expect(JSON.parse(mockStorage.get("@inventory_manual_draft_v1:user:1")!).entries[0].fieldEvidence.quantity).toEqual({ status: "known", source: "user" });
+  await act(async () => { mockForm.onQuantityChange(quantity); mockForm.onSave(); });
+  const item = mockSave.mock.calls[0][0].items[0];
+  expect(item.field_evidence.quantity).toBeUndefined(); expect(item.quantity_value).toBeNull();
+  act(() => tree.unmount());
+});
+
+test("legacy structured quantity and defaults are restored without inventing evidence", async () => {
+  mockStorage.set("@inventory_manual_draft_v1:user:1", JSON.stringify({entries:[{foodName:"番茄",quantity:"500g",category:"蔬菜",storageLocation:"冷藏",expirationDate:"2026-11-01",imageUrl:""}],pending:null}));
+  const tree = await render(); await act(async () => { mockForm.onSave(); });
+  const item = mockSave.mock.calls[0][0].items[0];
+  expect(item.quantity_value).toBe(500); expect(item.field_evidence).toBeUndefined();
+  act(() => tree.unmount());
+});

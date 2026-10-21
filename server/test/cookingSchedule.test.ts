@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { cookingScheduleSchema, recipeExecutionProfileSchema, recipeHandlingSchema } from "@dietdigidose/contracts";
+import { QuantityDecimal } from "@dietdigidose/contracts/quantity-decimal";
 import { scheduleCooking } from "../src/modules/recommendations/schedule.js";
 
 import { executionFixture as profile } from "./helpers/recipeExecution.js";
@@ -155,4 +156,60 @@ test("prepared reheating rereads actual recipe and version and shares same-day h
   assert.equal(weekly.slots[0].state, "unresolved", "over-budget prepared heating must not become a feasible weekly allocation");
   assert.equal(weekly.draft?.meals[0].allocations.length, 0); assert.equal(weekly.draft?.meals[0].cookServings, 2);
   cookingPlanDraftSchema.parse(weekly.draft);
+});
+
+
+const fractionalProfile = { ...profile, tasks: profile.tasks.map(task => ({ ...task, minutes: 1 })) };
+function fractionalSchedule(servings: number, capacity: number, tasks = fractionalProfile.tasks) {
+  return scheduleCooking([{ ...entry, servings, recipe: { ...recipe, execution_profile: { ...fractionalProfile, tasks } } }],
+    [{ ...device, attributes_json: { capacityMl: capacity * 500 } }]);
+}
+
+test("fractional batches preserve exact servings without phantom batches or rounded-away tails", () => {
+  for (const [servings, capacity, expected] of [
+    [30, 0.6, Array(50).fill(0.6)], [4.2, 0.6, Array(7).fill(0.6)], [2.1, 0.3, Array(7).fill(0.3)], [0.07, 0.01, Array(7).fill(0.01)],
+    [4.3, 0.6, [...Array(7).fill(0.6), 0.1]], [4.200001, 0.6, [...Array(7).fill(0.6), 0.000001]],
+    [4.200000000000001, 0.6, [...Array(7).fill(0.6), 1e-15]], [0.5999999, 0.6, [0.599999, 0.0000009]],
+  ] as Array<[number, number, number[]]>) {
+    const schedule = cookingScheduleSchema.parse(fractionalSchedule(servings, capacity));
+    assert.equal(schedule.complete, true);
+    assert.deepEqual(schedule.batches.map(batch => batch.servings), expected);
+    assert(schedule.batches.every(batch => batch.servings > 0 && batch.servings <= capacity));
+    assert.equal(schedule.batches.reduce((sum, batch) => sum.add(QuantityDecimal.from(batch.servings)), QuantityDecimal.from(0))
+      .compare(QuantityDecimal.from(servings)), 0);
+    assert.equal(schedule.elapsedMinutes, expected.length * 3);
+    assert.equal(schedule.sequentialMinutes, expected.length * 3);
+  }
+});
+
+test("exact batching respects both global ceilings without partial batches", () => {
+  const atLimit = cookingScheduleSchema.parse(fractionalSchedule(0.001, 0.000002));
+  assert.equal(atLimit.complete, true); assert.equal(atLimit.batches.length, 500);
+  for (const servings of [0.001001, 30]) {
+    const over = cookingScheduleSchema.parse(fractionalSchedule(servings, 0.000002));
+    assert.equal(over.complete, false); assert.equal(over.batches.length, 0); assert.equal(over.tasks.length, 0);
+  }
+  const tasks = Array.from({ length: 20 }, (_, index) => ({ ...fractionalProfile.tasks[index === 0 ? 0 : index === 19 ? 2 : 1],
+    id: `task${index}`, dependsOn: index ? [`task${index - 1}`] : [] }));
+  const full = fractionalSchedule(0.001, 0.000004, tasks);
+  assert.equal(full.complete, true); assert.equal(full.tasks.length, 5000);
+  const overflow = scheduleCooking([
+    { ...entry, servings: 0.001, recipe: { ...recipe, execution_profile: { ...fractionalProfile, tasks } } }, { ...entry, servings: 0.000004 },
+  ], [{ ...device, attributes_json: { capacityMl: 0.002 } }]);
+  assert.equal(overflow.complete, false); assert.equal(overflow.batches.length, 250); assert.equal(overflow.tasks.length, 5000);
+});
+
+test("fractional cooking survives meal-time and cooking-draft contract validation", async () => {
+  const { mealTime } = await import("../src/modules/recommendations/plan.js");
+  const { cookingPlanDraftSchema } = await import("@dietdigidose/contracts");
+  const servings = 4.2;
+  const cooking = [{ targetMealId: "dinner", recipeId: 1, title: recipe.title, servings, recipeYield: 2,
+    demands: [{ food_name: "番茄", amount_value: servings, unit: "piece" as const }] }];
+  const context = { productionDate: "2099-01-01", effectivePreferences: {}, meals: [{ id: "dinner", date: "2099-01-01",
+    mealType: "dinner" as const, servings, preparedServings: 0, cookServings: servings, allocations: [] }] };
+  const candidates = [{ recipeId: 1, recipe: { ...recipe, execution_profile: fractionalProfile } }] as Parameters<typeof mealTime>[1];
+  const time = mealTime(cooking, candidates, [{ ...device, attributes_json: { capacityMl: 300 } }], 21, context);
+  assert.equal(time.schedule?.elapsedMinutes, 21); assert.equal(time.incomplete, false); assert.equal(time.exceedsBudget, false);
+  cookingPlanDraftSchema.parse({ ...context, status: "requires_validation", totalCookServings: servings, cooking,
+    unresolved: [], ingredientBudget: [], time, checksPending: [], excludedPreparedMealIds: [] });
 });

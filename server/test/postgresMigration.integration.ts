@@ -17,7 +17,10 @@ import { PlanMaintenanceService } from "../src/modules/planMaintenance/service.j
 import type { SaveCookingPlanDraftInput } from "@dietdigidose/contracts";
 import assert from "node:assert/strict";
 import { verifyPreparedMealPrecision } from "./helpers/preparedMealPrecision.js";
-import { currentDateKey } from "../src/utils/date.js";
+import { currentDateKey, dateKeyAfterDays } from "../src/utils/date.js";
+import { executionRecipeKey } from "../src/modules/recipes/execution.js";
+import { recipeExecutionProof } from "../src/modules/recipes/planExecution.js";
+import { executionFixture } from "./helpers/recipeExecution.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1412,43 +1415,93 @@ try {
 
   const protectedPlanId = "19500000-0000-4000-8000-000000000001";
   const protectedItemId = "19500000-0000-4000-8000-000000000002";
-  await pool.query("INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status) VALUES($1,$2,'PG保护计划','2026-09-12','2026-09-18','active')", [protectedPlanId,user.id]);
-  await pool.query("INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title) VALUES($1,$2,$3,'2026-09-12','午餐','PG饭')", [protectedItemId,protectedPlanId,user.id]);
-  const autoChange = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 1,mealType: "晚餐" },"worker","规则调整");
+  const replacementDate = new Date();
+  const replacementToday = currentDateKey(replacementDate);
+  const replacementTomorrow = dateKeyAfterDays(1, replacementDate);
+  const replacementWeekEnd = dateKeyAfterDays(6, replacementDate);
+  // Keep these reviewed fixtures independent from earlier legacy commitments and health profiles.
+  const seedReviewedMeal = async (planId: string, itemId: string, title: string, foodName: string, amount: number, weekly = false) => {
+    const ownerId = Number((await pool.query("INSERT INTO users(username,password_hash) VALUES($1,'unused-test-hash') RETURNING id", [randomUUID()])).rows[0].id);
+    const recipe = (await pool.query(`INSERT INTO recipes(title,status,quality_status,serving_size,cook_time,prep_time,ingredients_json,steps_json)
+      VALUES($1,'approved','trusted',2,10,5,$2::jsonb,$3::jsonb) RETURNING *`,
+      [title, JSON.stringify([{ name: foodName, amount: `${amount}g` }]), JSON.stringify(["准备", "煮熟", "收尾"])])).rows[0];
+    const execution = { recipeKey: executionRecipeKey(recipe), reviewedBy: user.id, reviewedAt: replacementDate.toISOString(),
+      profile: { ...executionFixture, handling: { storage: "fresh_only", maxHoldHours: 0, coldServingAllowed: true, carryAllowed: false,
+        sourceUrl: "https://example.invalid/review", reference: "合成测试存放依据", instructions: "仅用于自动测试，不代表真实食品安全保证" } } };
+    await pool.query("UPDATE recipes SET execution_json=$1::jsonb WHERE id=$2", [JSON.stringify(execution), recipe.id]);
+    const constraints = {
+      executionItems: { [itemId]: { targetMealId: `target-${itemId}`, recipeId: Number(recipe.id), title, servings: 2, recipeYield: 2,
+        demands: [{ food_name: foodName, amount_value: amount, unit: "g" }] } },
+      executionRecipeKeys: { [itemId]: recipeExecutionProof({ ...recipe, execution_json: execution }) },
+      currentCookingDraft: { productionDate: replacementToday, ...(weekly ? { planningMode: "weekly" } : {}), time: { budgetMinutes: 60 } },
+    };
+    await pool.query(`INSERT INTO meal_plans(id,user_id,title,start_date,end_date,status,constraints_json)
+      VALUES($1,$2,$3,$4,$5,'active',$6::jsonb)`, [planId,ownerId,title,replacementToday,replacementWeekEnd,JSON.stringify(constraints)]);
+    await pool.query(`INSERT INTO meal_plan_items(id,plan_id,user_id,planned_date,meal_type,title,recipe_id,ingredients_json,steps_json)
+      VALUES($1,$2,$3,$4,'午餐',$5,$6,$7::jsonb,$8::jsonb)`,
+      [itemId,planId,ownerId,replacementToday,title,recipe.id,JSON.stringify(recipe.ingredients_json),JSON.stringify(recipe.steps_json)]);
+    const stockId = Number((await pool.query(`INSERT INTO inventory_items(user_id,food_name,category,quantity,quantity_value,quantity_unit,is_available,expiration_date)
+      VALUES($1,$2,'其他',$3,$4,'g',TRUE,$5) RETURNING id`, [ownerId,foodName,`${amount * 3}g`,amount * 3,replacementWeekEnd])).rows[0].id);
+    await pool.query("INSERT INTO kitchenware_items(user_id,name,category,catalog_id,attributes_json) VALUES($1,'测试锅','锅具',1,$2::jsonb)", [ownerId,JSON.stringify({ capacityMl: 1000 })]);
+    await pool.query("INSERT INTO user_health_profiles(user_id,kitchen_constraints_json) VALUES($1,$2::jsonb)", [ownerId,JSON.stringify({ meal_time_minutes: 60 })]);
+    return { ownerId, stockId, recipeId: Number(recipe.id) };
+  };
+  const { ownerId: protectedUserId, stockId: protectedStockId, recipeId: protectedRecipeId } = await seedReviewedMeal(protectedPlanId,protectedItemId,"PG保护计划","米",100);
+  const protectedState = async () => ({
+    plan: (await pool.query("SELECT * FROM meal_plans WHERE id=$1",[protectedPlanId])).rows,
+    items: (await pool.query("SELECT * FROM meal_plan_items WHERE plan_id=$1 ORDER BY id",[protectedPlanId])).rows,
+    changes: (await pool.query("SELECT * FROM meal_plan_changes WHERE plan_id=$1 ORDER BY id",[protectedPlanId])).rows,
+  });
+  const initialProtectedState = await protectedState();
+  await assert.rejects(mealPlanRepository.updateItem(protectedUserId,protectedPlanId,protectedItemId,{ version: 1,mealType: "晚餐" },"worker","规则调整"), { code: "MEAL_PLAN_PREVIEW_REQUIRED" });
+  assert.deepEqual(await protectedState(),initialProtectedState);
+  const stalePreview = await mealPlanRepository.previewChange(protectedUserId,protectedPlanId,protectedItemId,{ patch: { version: 1,mealType: "晚餐" } });
+  assert.equal(stalePreview?.canApply,true,JSON.stringify(stalePreview?.checks));
+  await pool.query("UPDATE inventory_items SET quantity_value=quantity_value-1,version=version+1 WHERE id=$1",[protectedStockId]);
+  const staleProtectedState = await protectedState();
+  await assert.rejects(mealPlanRepository.updateItem(protectedUserId,protectedPlanId,protectedItemId,{ version: 1,mealType: "晚餐",validationFingerprint: stalePreview!.fingerprint },"worker","规则调整"), { code: "MEAL_PLAN_PREVIEW_CHANGED" });
+  assert.deepEqual(await protectedState(),staleProtectedState);
+  const autoPreview = await mealPlanRepository.previewChange(protectedUserId,protectedPlanId,protectedItemId,{ patch: { version: 1,mealType: "晚餐" } });
+  assert.equal(autoPreview?.canApply,true,JSON.stringify(autoPreview?.checks));
+  const autoChange = await mealPlanRepository.updateItem(protectedUserId,protectedPlanId,protectedItemId,{ version: 1,mealType: "晚餐",validationFingerprint: autoPreview!.fingerprint },"worker","规则调整");
   assert.equal(autoChange.kind,"updated");
   if (autoChange.kind !== "updated") throw new Error("auto change failed");
   assert.equal((autoChange.value.change as Record<string,unknown>).status,"applied");
   const autoId = String((autoChange.value.change as Record<string,unknown>).id);
-  assert.equal((await mealPlanRepository.reviewChange(user.id,protectedPlanId,autoId,"restore")).kind,"updated");
-  await mealPlanRepository.confirmItem(user.id,protectedPlanId,protectedItemId,3);
-  const suggestion = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 4,mealType: "早餐" },"worker","条件变化");
+  const restorePreview = await mealPlanRepository.previewChange(protectedUserId,protectedPlanId,protectedItemId,{ changeId: autoId,action: "restore" });
+  assert.equal(restorePreview?.canApply,true,JSON.stringify(restorePreview?.checks));
+  assert.equal((await mealPlanRepository.reviewChange(protectedUserId,protectedPlanId,autoId,"restore",restorePreview!.fingerprint)).kind,"updated");
+  await mealPlanRepository.confirmItem(protectedUserId,protectedPlanId,protectedItemId,3);
+  const suggestion = await mealPlanRepository.updateItem(protectedUserId,protectedPlanId,protectedItemId,{ version: 4,mealType: "早餐" },"worker","条件变化");
   if (suggestion.kind !== "updated") throw new Error("suggestion failed");
   assert.equal((suggestion.value.change as Record<string,unknown>).status,"pending");
   const changeId = String((suggestion.value.change as Record<string,unknown>).id);
-  const reviews = await Promise.all([mealPlanRepository.reviewChange(user.id,protectedPlanId,changeId,"accept"),mealPlanRepository.reviewChange(user.id,protectedPlanId,changeId,"accept")]);
+  const acceptPreview = await mealPlanRepository.previewChange(protectedUserId,protectedPlanId,protectedItemId,{ changeId,action: "accept" });
+  assert.equal(acceptPreview?.canApply,true,JSON.stringify(acceptPreview?.checks));
+  const reviews = await Promise.all([mealPlanRepository.reviewChange(protectedUserId,protectedPlanId,changeId,"accept",acceptPreview!.fingerprint),mealPlanRepository.reviewChange(protectedUserId,protectedPlanId,changeId,"accept",acceptPreview!.fingerprint)]);
   assert.deepEqual(reviews.map(result => result.kind),["updated","updated"]);
   assert.equal((await pool.query("SELECT version FROM meal_plan_items WHERE id=$1",[protectedItemId])).rows[0].version,5);
-  await pool.query("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('pg-protection-purchase',$1,$2,'米',TRUE)",[user.id,`meal-plan:${protectedItemId}:米`]);
-  assert.equal((await mealPlanRepository.reviewChange(user.id,protectedPlanId,changeId,"restore")).kind,"protected");
-  const rejectedSuggestion = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,mealType: "晚餐" });
+  await pool.query("INSERT INTO shopping_list_items(id,user_id,client_id,name,checked) VALUES('pg-protection-purchase',$1,$2,'米',TRUE)",[protectedUserId,`meal-plan:${protectedItemId}:米`]);
+  assert.equal((await mealPlanRepository.reviewChange(protectedUserId,protectedPlanId,changeId,"restore")).kind,"protected");
+  const rejectedSuggestion = await mealPlanRepository.updateItem(protectedUserId,protectedPlanId,protectedItemId,{ version: 5,mealType: "晚餐" });
   if (rejectedSuggestion.kind !== "updated") throw new Error("suggestion failed");
   const rejectedId = String((rejectedSuggestion.value.change as Record<string,unknown>).id);
-  await mealPlanRepository.reviewChange(user.id,protectedPlanId,rejectedId,"reject");
-  const replayRejected = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,mealType: "晚餐" });
+  await mealPlanRepository.reviewChange(protectedUserId,protectedPlanId,rejectedId,"reject");
+  const replayRejected = await mealPlanRepository.updateItem(protectedUserId,protectedPlanId,protectedItemId,{ version: 5,mealType: "晚餐" });
   if (replayRejected.kind !== "updated") throw new Error("replay failed");
   assert.equal((replayRejected.value.change as Record<string,unknown>).status,"rejected");
   await pool.query("UPDATE meal_plan_items SET status='cooking' WHERE id=$1",[protectedItemId]);
-  const blockedChange = await mealPlanRepository.updateItem(user.id,protectedPlanId,protectedItemId,{ version: 5,plannedDate: "2026-09-13" });
+  const blockedChange = await mealPlanRepository.updateItem(protectedUserId,protectedPlanId,protectedItemId,{ version: 5,plannedDate: replacementTomorrow });
   if (blockedChange.kind !== "updated") throw new Error("blocked result missing");
   assert.equal((blockedChange.value.change as Record<string,unknown>).status,"blocked");
-  assert.equal((await mealPlanRepository.updatePlan(user.id,protectedPlanId,{ version: 1,title: "安全改标题" })).kind,"updated");
-  await assert.rejects(mealPlanRepository.updatePlan(user.id,protectedPlanId,{ version: 2,startDate: "2026-09-13" }),/原安排已保留/);
-  await assert.rejects(mealPlanRepository.removePlan(user.id,protectedPlanId,2),/原安排已保留/);
+  assert.equal((await mealPlanRepository.updatePlan(protectedUserId,protectedPlanId,{ version: 1,title: "安全改标题" })).kind,"updated");
+  await assert.rejects(mealPlanRepository.updatePlan(protectedUserId,protectedPlanId,{ version: 2,startDate: replacementTomorrow }),/原安排已保留/);
+  await assert.rejects(mealPlanRepository.removePlan(protectedUserId,protectedPlanId,2),/原安排已保留/);
   const protectedRunId = "19500000-0000-4000-8000-000000000003";
-  await pool.query("INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id) VALUES($1,$2,'guard','text','assistant','running','{}',$1)",[protectedRunId,user.id]);
+  await pool.query("INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id) VALUES($1,$2,'guard','text','assistant','running','{}',$1)",[protectedRunId,protectedUserId]);
   await pool.query("UPDATE meal_plans SET version=1,created_by_run_id=$1 WHERE id=$2",[protectedRunId,protectedPlanId]);
-  await pool.query("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,result_json,idempotency_key,executed_at) VALUES('195-action',$1,$2,'create_meal_plan','high','executed','{}',$3::jsonb,'195-undo-key',CURRENT_TIMESTAMP)",[protectedRunId,user.id,JSON.stringify({ planId: protectedPlanId })]);
-  await assert.rejects(new PostgresAgentOperationsRepository(pool).undoActions(user.id,protectedRunId),/原安排已保留/);
+  await pool.query("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,result_json,idempotency_key,executed_at) VALUES('195-action',$1,$2,'create_meal_plan','high','executed','{}',$3::jsonb,'195-undo-key',CURRENT_TIMESTAMP)",[protectedRunId,protectedUserId,JSON.stringify({ planId: protectedPlanId })]);
+  await assert.rejects(new PostgresAgentOperationsRepository(pool).undoActions(protectedUserId,protectedRunId),/原安排已保留/);
 
 
   const savedDraftInput: SaveCookingPlanDraftInput = {
@@ -1538,31 +1591,27 @@ try {
 
   const mealPlanId = "77777777-7777-4777-8777-777777777777";
   const mealPlanItemId = "88888888-8888-4888-8888-888888888888";
-  await pool.query(`INSERT INTO meal_plans
-    (id, user_id, title, start_date, end_date, status, source, constraints_json)
-    VALUES ($1, $2, 'Postgres 并发餐单', '2026-09-01', '2026-09-07', 'active', 'manual', '{"servings":2}'::jsonb)`,
-  [mealPlanId, user.id]);
-  await pool.query(`INSERT INTO meal_plan_items
-    (id, plan_id, user_id, planned_date, meal_type, title, recipe_id, ingredients_json, steps_json,
-     calories, protein, carbs, fat)
-    VALUES ($1, $2, $3, '2026-09-03', '晚餐', 'Postgres 餐单料理', $4,
-      '[{"name":"Postgres 餐单专用姜","amount":"10g"}]'::jsonb, '["烹饪"]'::jsonb, 260, 15, 20, 12)`,
-  [mealPlanItemId, mealPlanId, user.id, Number(queueRecipe.id)]);
+  const { ownerId: mealPlanUserId, stockId: mealPlanStockId, recipeId: mealPlanRecipeId } = await seedReviewedMeal(mealPlanId,mealPlanItemId,"Postgres 餐单料理","Postgres 餐单专用姜",10,true);
+  await pool.query("UPDATE meal_plan_items SET meal_type='晚餐',calories=260,protein=15,carbs=20,fat=12 WHERE id=$1",[mealPlanItemId]);
   assert.equal((await mealPlanRepository.list(user.id + 1, false)).length, 0);
-  const initialMealPlan = await mealPlanRepository.find(user.id, mealPlanId, false);
+  const initialMealPlan = await mealPlanRepository.find(mealPlanUserId, mealPlanId, false);
   assert.equal(initialMealPlan?.items instanceof Array, true);
-  const updatedMealPlanItem = await mealPlanRepository.updateItem(user.id, mealPlanId, mealPlanItemId, {
-    version: 1, plannedDate: "2026-09-04",
+  const datePreview = await mealPlanRepository.previewChange(mealPlanUserId,mealPlanId,mealPlanItemId,{ patch: { version: 1,plannedDate: replacementTomorrow } });
+  assert.equal(datePreview?.canApply,true,JSON.stringify(datePreview?.checks));
+  const updatedMealPlanItem = await mealPlanRepository.updateItem(mealPlanUserId, mealPlanId, mealPlanItemId, {
+    version: 1, plannedDate: replacementTomorrow, validationFingerprint: datePreview!.fingerprint,
   });
   assert.equal(updatedMealPlanItem.kind, "updated");
-  assert.equal((await mealPlanRepository.updateItem(user.id, mealPlanId, mealPlanItemId, {
-    version: 1, plannedDate: "2026-09-05",
+  assert.equal((await mealPlanRepository.updateItem(mealPlanUserId, mealPlanId, mealPlanItemId, {
+    version: 1, plannedDate: dateKeyAfterDays(2,replacementDate),
   })).kind, "version_conflict");
+  // Stock can change after date validation; retain the original missing-ingredient shopping coverage.
+  await pool.query("UPDATE inventory_items SET is_available=FALSE,version=version+1 WHERE id=$1",[mealPlanStockId]);
   const shoppingResults = await Promise.all([
-    mealPlanRepository.addShopping(user.id, mealPlanId, mealPlanItemId, {
+    mealPlanRepository.addShopping(mealPlanUserId, mealPlanId, mealPlanItemId, {
       version: 2, idempotencyKey: "postgres-meal-plan-shopping-0001",
     }),
-    mealPlanRepository.addShopping(user.id, mealPlanId, mealPlanItemId, {
+    mealPlanRepository.addShopping(mealPlanUserId, mealPlanId, mealPlanItemId, {
       version: 2, idempotencyKey: "postgres-meal-plan-shopping-0001",
     }),
   ]);
@@ -1572,12 +1621,12 @@ try {
   });
   assert.deepEqual(shoppingValues.map((result) => result.repeated).sort(), [false, true]);
   assert.equal((await pool.query(`SELECT COUNT(*)::integer AS count FROM shopping_list_items
-    WHERE user_id = $1 AND client_id LIKE $2`, [user.id, `meal-plan:${mealPlanItemId}:%`])).rows[0]?.count, 1);
+    WHERE user_id = $1 AND client_id LIKE $2`, [mealPlanUserId, `meal-plan:${mealPlanItemId}:%`])).rows[0]?.count, 1);
   const mealQueueResults = await Promise.all([
-    mealPlanRepository.enqueue(user.id, mealPlanId, mealPlanItemId, {
+    mealPlanRepository.enqueue(mealPlanUserId, mealPlanId, mealPlanItemId, {
       version: 2, idempotencyKey: "postgres-meal-plan-queue-0001",
     }),
-    mealPlanRepository.enqueue(user.id, mealPlanId, mealPlanItemId, {
+    mealPlanRepository.enqueue(mealPlanUserId, mealPlanId, mealPlanItemId, {
       version: 2, idempotencyKey: "postgres-meal-plan-queue-0001",
     }),
   ]);
@@ -1588,10 +1637,10 @@ try {
   assert.deepEqual(mealQueueValues.map((result) => result.repeated).sort(), [false, true]);
   assert.equal(mealQueueValues[0]!.queueItemId, mealQueueValues[1]!.queueItemId);
   const mealCompletionResults = await Promise.all([
-    mealPlanRepository.complete(user.id, mealPlanId, mealPlanItemId, {
+    mealPlanRepository.complete(mealPlanUserId, mealPlanId, mealPlanItemId, {
       version: 3, idempotencyKey: "postgres-meal-plan-complete-0001",
     }),
-    mealPlanRepository.complete(user.id, mealPlanId, mealPlanItemId, {
+    mealPlanRepository.complete(mealPlanUserId, mealPlanId, mealPlanItemId, {
       version: 3, idempotencyKey: "postgres-meal-plan-complete-0001",
     }),
   ]);
@@ -1601,12 +1650,14 @@ try {
   });
   assert.deepEqual(mealCompletionValues.map((result) => result.repeated).sort(), [false, true]);
   assert.equal(mealCompletionValues[0]!.dietRecordId, mealCompletionValues[1]!.dietRecordId);
-  const updatedMealPlan = await mealPlanRepository.updatePlan(user.id, mealPlanId, { version: 1, title: "Postgres 已更新餐单" });
+  const updatedMealPlan = await mealPlanRepository.updatePlan(mealPlanUserId, mealPlanId, { version: 1, title: "Postgres 已更新餐单" });
   assert.equal(updatedMealPlan.kind, "updated");
   assert.equal((await mealPlanRepository.removePlan(user.id + 1, mealPlanId, 2)), "not_found");
-  assert.equal((await mealPlanRepository.removePlan(user.id, mealPlanId, 2)), "removed");
-  assert.equal(await mealPlanRepository.find(user.id, mealPlanId, false), null);
-  assert.equal((await mealPlanRepository.find(user.id, mealPlanId, true))?.archived, true);
+  assert.equal((await mealPlanRepository.removePlan(mealPlanUserId, mealPlanId, 2)), "removed");
+  assert.equal(await mealPlanRepository.find(mealPlanUserId, mealPlanId, false), null);
+  assert.equal((await mealPlanRepository.find(mealPlanUserId, mealPlanId, true))?.archived, true);
+  // Recipe candidates are global: retire this fixture after its lifecycle assertions without removing referenced rows.
+  await pool.query("UPDATE recipes SET deleted_at=CURRENT_TIMESTAMP WHERE id=$1",[mealPlanRecipeId]);
 
   const voicePacksRepository = new PostgresVoicePacksRepository(pool);
   const voicePacksService = new VoicePacksService(voicePacksRepository);
@@ -1765,14 +1816,16 @@ try {
 
   const recommendationsRepository = new PostgresRecommendationsRepository(pool);
   const recommendationsService = new RecommendationsService(recommendationsRepository, kitchenwareService);
-  const weeklyState = await recommendationsRepository.planningState(user.id,"2026-09-12","2026-09-18");
+  const weeklyState = await recommendationsRepository.planningState(protectedUserId,replacementToday,replacementWeekEnd);
   assert(weeklyState.items.some(item => item.id === protectedItemId));
-  assert.equal((await recommendationsRepository.planningState(-1,"2026-09-12","2026-09-18")).items.length,0);
-  const stockBeforeWeekly = await recommendationsRepository.inventory(user.id);
-  const weeklyPreview = await recommendationsService.weeklyPlan(user.id,{ startDate: "2026-09-12",mealTypes: ["breakfast","lunch","dinner"] });
+  assert.equal((await recommendationsRepository.planningState(-1,replacementToday,replacementWeekEnd)).items.length,0);
+  const stockBeforeWeekly = await recommendationsRepository.inventory(protectedUserId);
+  const weeklyPreview = await recommendationsService.weeklyPlan(protectedUserId,{ startDate: replacementToday,mealTypes: ["breakfast","lunch","dinner"] });
   assert.equal(weeklyPreview.slots.length,21);
   assert(weeklyPreview.slots.some(slot => slot.preservedItemIds.includes(protectedItemId)));
-  assert.deepEqual(await recommendationsRepository.inventory(user.id),stockBeforeWeekly);
+  assert.deepEqual(await recommendationsRepository.inventory(protectedUserId),stockBeforeWeekly);
+  // Its last catalogue-dependent assertion is complete; do not affect unrelated recommendation ranking.
+  await pool.query("UPDATE recipes SET deleted_at=CURRENT_TIMESTAMP WHERE id=$1",[protectedRecipeId]);
   const recommendationPage = await recommendationsService.page(user.id, {
     surface: "home", matchStatus: "all", pageSize: 1,
   });
@@ -1904,7 +1957,9 @@ try {
   await pool.query("INSERT INTO user_health_profiles(user_id) VALUES($1) ON CONFLICT(user_id) DO NOTHING",[user.id]);
   const previousKitchen = (await pool.query("SELECT kitchen_constraints_json FROM user_health_profiles WHERE user_id=$1",[user.id])).rows[0].kitchen_constraints_json;
   await pool.query("UPDATE user_health_profiles SET kitchen_constraints_json=kitchen_constraints_json || '{\"servings\":2}'::jsonb WHERE user_id=$1",[user.id]);
-  await pool.query("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,before_json,result_json,idempotency_key,executed_at) VALUES('dialogue-evidence-action',$1,$2,'update_kitchen_preferences','high','executed','{}','{\"servings\":1}','{\"scope\":\"persistent\",\"kitchenPreferences\":{\"servings\":2}}','dialogue-evidence-action',CURRENT_TIMESTAMP)",[protectedRunId,user.id]);
+  const dialogueEvidenceRunId = "postgres-dialogue-evidence-run";
+  await pool.query("INSERT INTO agent_runs(id,user_id,session_id,modality,source,status,input_json,checkpoint_thread_id) VALUES($1,$2,$1,'text','assistant','running','{}',$1)",[dialogueEvidenceRunId,user.id]);
+  await pool.query("INSERT INTO agent_actions(id,run_id,user_id,action_type,risk_level,status,payload_json,before_json,result_json,idempotency_key,executed_at) VALUES('dialogue-evidence-action',$1,$2,'update_kitchen_preferences','high','executed','{}','{\"servings\":1}','{\"scope\":\"persistent\",\"kitchenPreferences\":{\"servings\":2}}','dialogue-evidence-action',CURRENT_TIMESTAMP)",[dialogueEvidenceRunId,user.id]);
   assert((await recommendationsService.learningState(user.id)).observations.some(fact => fact.id === "preference-statement:dialogue-evidence-action" && fact.valid));
   await pool.query("UPDATE user_health_profiles SET kitchen_constraints_json=kitchen_constraints_json || '{\"servings\":3}'::jsonb WHERE user_id=$1",[user.id]);
   assert((await recommendationsService.learningState(user.id)).observations.some(fact => fact.id === "preference-statement:dialogue-evidence-action" && !fact.valid));
@@ -1918,7 +1973,8 @@ try {
   }
   assert(outcomeFacts.some(fact => fact.kind === "inventory" && fact.valid));
   assert(outcomeFacts.some(fact => fact.kind === "inventory" && !fact.valid));
-  assert(outcomeFacts.some(fact => fact.kind === "plan_change" && !fact.valid));
+  const protectedOutcomes = (await recommendationsService.learningState(protectedUserId)).observations;
+  assert(protectedOutcomes.some(fact => fact.kind === "plan_change" && !fact.valid));
   assert(outcomeFacts.some(fact => fact.correctionId && !fact.valid));
   assert.equal(new Set(outcomeFacts.map(fact => fact.id)).size,outcomeFacts.length);
   assert.deepEqual(await recommendationsRepository.preferenceOutcomes(-1),{ production: [],events: [],inventory: [],changes: [],statements: [] });

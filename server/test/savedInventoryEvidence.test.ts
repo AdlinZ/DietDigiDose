@@ -130,3 +130,28 @@ test("evidence item and bounded history share a SQLite snapshot during a concurr
     writer.close();
   }
 });
+
+test("manual user evidence round-trips creation while legacy absent quantity keeps identical FEFO deductions", async () => {
+  const { inventoryBulkIntakeSchema } = await import("@dietdigidose/contracts");
+  const { buildFefoConsumptionPreviewFromCandidates } = await import("../src/services/inventoryQuantity.js");
+  const repository = new SqliteInventoryRepository(db);
+  const user = Number(db.prepare("INSERT INTO users(username,password_hash) VALUES('manual-evidence','unused')").run().lastInsertRowid);
+  const explicit = { status: "known", source: "user" };
+  const outcomes = [];
+  for (const attested of [false,true]) {
+    const field_evidence = attested ? {food_name:explicit,quantity:explicit,storage_location:explicit,expiration_date:explicit} : undefined;
+    const input = inventoryBulkIntakeSchema.parse({idempotency_key:`manual-evidence-${attested}`,source:"manual",items:[{food_name:attested?"米":"面",quantity:"500g",quantity_value:500,quantity_unit:"g",category:"其他",storage_location:"冷藏",expiration_date:"2099-11-01",confirmed:true,source:"manual",field_evidence}]});
+    const stock = (await repository.bulkIntake(user,input)).items[0];
+    const evidence = (await repository.evidence(user,stock.id))!.field_evidence;
+    for (const field of ["food_name","quantity","storage_location","expiration_date"] as const) {
+      assert.equal(evidence[field]?.status,attested?"known":"unknown");
+      if(attested) assert.equal(evidence[field]?.source,"user");
+    }
+    const candidates = (await repository.listPreviewCandidates(user)).filter(row=>row.id===stock.id);
+    const preview = buildFefoConsumptionPreviewFromCandidates(candidates,[{food_name:stock.food_name,amount_value:200,unit:"g"}])[0];
+    outcomes.push({covered:preview.fully_covered,deductions:preview.deductions.map(d=>[d.amount_value,d.unit])});
+    const remaining = (await repository.consume(user,{idempotency_key:`manual-consume-${attested}`,source:"manual",items:[{item_id:stock.id,version:stock.version,mode:"amount",amount_value:200,unit:"g"}]})).items[0];
+    assert.equal(remaining.quantity_value,300);
+  }
+  assert.deepEqual(outcomes,[{covered:true,deductions:[[200,"g"]]},{covered:true,deductions:[[200,"g"]]}]);
+});

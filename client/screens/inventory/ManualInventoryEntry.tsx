@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { getPrivateStorageGeneration } from "@/utils/userStorage";
 import { inferIngredientDefaults, searchCommonIngredients } from "@/utils/ingredientRules";
 import { InventoryEntryForm } from "./InventoryEntryForm";
-import { blankIntakeEntry, buildIntake, type IntakeDraft, type IntakeEntry } from "./intakeEntry";
+import { blankIntakeEntry, buildIntake, changeManualEntry, type IntakeDraft, type IntakeEntry } from "./intakeEntry";
 import { useIntakeDraft } from "./useIntakeDraft";
 
 type Props = { saveIntake: (input: InventoryBulkIntakeInput) => Promise<unknown>; onSaved: () => void; onPhoto: (source: "camera" | "library") => void; photoUrl: string; bottomInset: number };
@@ -20,9 +20,9 @@ function AccountEntry({ userId, saveIntake, onSaved, onPhoto, photoUrl, bottomIn
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
   const sending = useRef(false); const photo = useRef(photoUrl);
   const entry = draft.value.entries[0] ?? blankIntakeEntry;
-  const change = (fields: Partial<IntakeEntry>) => {
+  const change = (fields: Partial<IntakeEntry>, source: "user" | "rule" = "user") => {
     if (!draft.ready || draft.valueRef.current.pending) return;
-    void draft.save({ entries: [{ ...draft.valueRef.current.entries[0], ...fields }], pending: null }).catch(() => undefined);
+    void draft.save({ entries: [changeManualEntry(draft.valueRef.current.entries[0] ?? blankIntakeEntry, fields, source)], pending: null }).catch(() => undefined);
   };
   useEffect(() => { if (photoUrl !== photo.current && draft.ready) { photo.current = photoUrl; change({ imageUrl: photoUrl }); } }, [photoUrl, draft.ready]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async () => {
@@ -49,8 +49,8 @@ function AccountEntry({ userId, saveIntake, onSaved, onPhoto, photoUrl, bottomIn
   return <>
     <View className="px-5 pt-3"><Text className="text-copy-muted">{draft.value.pending ? "上次保存结果待确认。再次保存会核验同一请求，不会重复添加。" : "填写内容已按账号留在本机。数量和日期不确定时可以留空。"}</Text>{error || draft.error ? <Text accessibilityRole="alert" className="mt-2 text-critical">{error || draft.error}</Text> : null}</View>
     <InventoryEntryForm editingItem={null} {...entry} categoryMenuOpen={categoryMenuOpen} suggestions={draft.value.pending ? [] : searchCommonIngredients(entry.foodName).map(item => ({ name: item.name, category: item.category }))} saving={busy} locked={!!draft.value.pending} bottomInset={bottomInset}
-      onFoodNameChange={foodName => change({ foodName })} onApplySuggestion={foodName => { const defaults = inferIngredientDefaults(foodName); change({ foodName, category: defaults.category, storageLocation: defaults.storageLocation }); }}
+      onFoodNameChange={foodName => change({ foodName })} onApplySuggestion={foodName => { const defaults = inferIngredientDefaults(foodName); change({ foodName, category: defaults.category, storageLocation: defaults.storageLocation }, "rule"); }}
       onToggleCategoryMenu={() => setCategoryMenuOpen(value => !value)} onCategoryChange={category => { change({ category }); setCategoryMenuOpen(false); }} onQuantityChange={quantity => change({ quantity })}
-      onStorageLocationChange={storageLocation => change({ storageLocation })} onExpirationDateChange={expirationDate => change({ expirationDate })} onSelectPhoto={onPhoto} onRemovePhoto={() => change({ imageUrl: "" })} onRequestAiRecipe={() => undefined} onDelete={() => undefined} onSave={() => void save()} />
+      onStorageLocationChange={storageLocation => change({ storageLocation })} onExpirationDateChange={expirationDate => change({ expirationDate })} onEstimatedExpirationDateChange={expirationDate => change({ expirationDate }, "rule")} onSelectPhoto={onPhoto} onRemovePhoto={() => change({ imageUrl: "" })} onRequestAiRecipe={() => undefined} onDelete={() => undefined} onSave={() => void save()} />
   </>;
 }

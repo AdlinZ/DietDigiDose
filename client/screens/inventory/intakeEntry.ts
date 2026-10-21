@@ -1,12 +1,20 @@
-import { inventoryBulkIntakeSchema, type InventoryBulkIntakeData } from "@dietdigidose/contracts";
+import { inventoryBulkIntakeSchema, inventoryFieldEvidenceSchema, type InventoryBulkIntakeData } from "@dietdigidose/contracts";
 import { z } from "zod";
 import { parseStructuredQuantity } from "@/utils/structuredQuantity";
+import { parseDateKey } from "@/utils/date";
 import type { DetectedFood, StorageLocation } from "./types";
 import { inferIngredientDefaults, inferCategoryByName } from "@/utils/ingredientRules";
 
+// Drafts retain structured provenance only, never free-text evidence notes.
+const draftFieldEvidence = inventoryFieldEvidenceSchema.shape.food_name.unwrap().omit({ note: true });
+const draftEvidenceSchema = z.object({
+  food_name: draftFieldEvidence.optional(), quantity: draftFieldEvidence.optional(),
+  storage_location: draftFieldEvidence.optional(), expiration_date: draftFieldEvidence.optional(),
+}).strict();
 export const intakeEntrySchema = z.object({
   foodName: z.string().max(100), quantity: z.string().max(40), category: z.string().max(40),
   storageLocation: z.enum(["冷藏", "冷冻", "常温"]), expirationDate: z.string().max(10), imageUrl: z.string(),
+  fieldEvidence: draftEvidenceSchema.optional(),
 });
 export type IntakeEntry = z.infer<typeof intakeEntrySchema>;
 export const blankIntakeEntry: IntakeEntry = { foodName: "", quantity: "", category: "其他", storageLocation: "冷藏", expirationDate: "", imageUrl: "" };
@@ -20,11 +28,33 @@ export function quantityFields(value: string) {
   return { quantity: quantity || "数量未知", quantity_value: parsed?.amount ?? null, quantity_unit: parsed?.unit ?? null };
 }
 
+/** Record actual edits; untouched defaults and old drafts remain unattested. */
+export function changeManualEntry(entry: IntakeEntry, fields: Partial<IntakeEntry>, source: "user" | "rule" = "user"): IntakeEntry {
+  const fieldEvidence = { ...entry.fieldEvidence };
+  const evidence = { status: source === "user" ? "known" as const : "estimated" as const, source };
+  if (fields.foodName !== undefined) {
+    delete fieldEvidence.food_name;
+    if (fields.foodName.trim()) fieldEvidence.food_name = { status: "known", source: "user" };
+  }
+  if (fields.quantity !== undefined) {
+    // Absence is operationally different from unknown/estimated quantity evidence.
+    delete fieldEvidence.quantity;
+    if (source === "user" && quantityFields(fields.quantity).quantity_value != null) fieldEvidence.quantity = evidence;
+  }
+  if (fields.storageLocation !== undefined) fieldEvidence.storage_location = evidence;
+  if (fields.expirationDate !== undefined) {
+    delete fieldEvidence.expiration_date;
+    if (parseDateKey(fields.expirationDate.trim())) fieldEvidence.expiration_date = evidence;
+  }
+  return { ...entry, ...fields, fieldEvidence };
+}
+
 export function buildIntake(entries: IntakeEntry[], requestKey: string): InventoryBulkIntakeData {
   return inventoryBulkIntakeSchema.parse({ idempotency_key: requestKey, source: "manual", items: entries.map(entry => ({
     food_name: entry.foodName.trim(), category: entry.category || "其他", ...quantityFields(entry.quantity),
     expiration_date: entry.expirationDate.trim(), storage_location: entry.storageLocation,
     image_url: entry.imageUrl || null, confirmed: true, source: "manual",
+    ...(entry.fieldEvidence ? { field_evidence: entry.fieldEvidence } : {}),
   })) });
 }
 

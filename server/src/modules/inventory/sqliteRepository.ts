@@ -43,6 +43,22 @@ export class SqliteInventoryRepository implements InventoryRepository {
     this.database = database;
   }
 
+  /** Keep ownership checks shared; history and post-consumption reads also include tombstones. */
+  private findOwnedRow(userId: number, itemId: number, options: { includeDeleted?: boolean } = {}) {
+    return this.database.prepare(`
+      SELECT * FROM inventory_items
+      WHERE id = ? AND user_id = ? AND (? = 1 OR deleted_at IS NULL)
+    `).get(itemId, userId, options.includeDeleted ? 1 : 0) as Record<string, unknown> | undefined;
+  }
+
+  /** Evidence replay uses the same bounded, oldest-first window for reads and edits. */
+  private evidenceHistory(userId: number, itemId: number) {
+    return this.database.prepare(`
+      SELECT action, metadata_json, quantity_after, quantity_unit FROM inventory_change_logs
+      WHERE inventory_item_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?
+    `).all(itemId, userId, SAVED_EVIDENCE_LOG_LIMIT).reverse() as Array<Record<string, unknown>>;
+  }
+
   async recordFunnelEvent(eventName: string, actorHash: string) {
     this.database.prepare("INSERT INTO funnel_events (event_name,actor_hash) VALUES (?,?)").run(eventName, actorHash);
   }
@@ -74,18 +90,15 @@ export class SqliteInventoryRepository implements InventoryRepository {
 
   async evidence(userId: number, itemId: number) {
     return this.database.transaction(() => {
-      const item = this.database.prepare("SELECT * FROM inventory_items WHERE id=? AND user_id=? AND deleted_at IS NULL").get(itemId, userId) as Record<string, unknown> | undefined;
+      const item = this.findOwnedRow(userId, itemId);
       if (!item) return null;
-      const logs = this.database.prepare("SELECT action, metadata_json, quantity_after, quantity_unit FROM inventory_change_logs WHERE inventory_item_id=? AND user_id=? ORDER BY id DESC LIMIT ?").all(itemId, userId, SAVED_EVIDENCE_LOG_LIMIT).reverse() as Array<Record<string, unknown>>;
+      const logs = this.evidenceHistory(userId, itemId);
       return { item_id: itemId, inventory_version: Number(item.version), field_evidence: savedInventoryEvidence(item, logs) };
     })();
   }
 
   async findOwned(userId: number, itemId: number) {
-    const row = this.database.prepare(`
-      SELECT * FROM inventory_items
-      WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-    `).get(itemId, userId) as Record<string, unknown> | undefined;
+    const row = this.findOwnedRow(userId, itemId);
     return row ? formatInventoryItem(row) : null;
   }
 
@@ -256,7 +269,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
         metadata,
       });
       const items = input.items.map((item) => formatInventoryItem(
-        this.database.prepare("SELECT * FROM inventory_items WHERE id = ? AND user_id = ?").get(item.item_id, userId) as Record<string, unknown>,
+        this.findOwnedRow(userId, item.item_id, { includeDeleted: true }) as Record<string, unknown>,
       ));
       const response = inventoryConsumptionResponseSchema.parse({ changes, items, repeated: false });
       this.database.prepare(`
@@ -268,7 +281,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
   }
 
   async history(userId: number, itemId: number) {
-    const owned = this.database.prepare("SELECT id FROM inventory_items WHERE id = ? AND user_id = ?").get(itemId, userId);
+    const owned = this.findOwnedRow(userId, itemId, { includeDeleted: true });
     if (!owned) return null;
     const rows = this.database.prepare(`
       SELECT id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, metadata_json, created_at
@@ -347,7 +360,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
             ? null
             : Number(updated.quantity_value) - Number(current.quantity_value),
           `manual-update:${itemId}:${expectedVersion}`,
-          JSON.stringify(editedInventoryEvidence(current, updated, this.database.prepare("SELECT action, metadata_json, quantity_after, quantity_unit FROM inventory_change_logs WHERE inventory_item_id=? AND user_id=? ORDER BY id DESC LIMIT ?").all(itemId, userId, SAVED_EVIDENCE_LOG_LIMIT).reverse() as Array<Record<string, unknown>>, source, nextQuantityEvidence(current.quantity_evidence, expectedVersion, updated.version,
+          JSON.stringify(editedInventoryEvidence(current, updated, this.evidenceHistory(userId, itemId), source, nextQuantityEvidence(current.quantity_evidence, expectedVersion, updated.version,
             current.quantity_value !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit
               ? source === "manual" ? "manual" : "unverified" : "preserve",
             updated.quantity_value != null && updated.quantity_unit != null))),

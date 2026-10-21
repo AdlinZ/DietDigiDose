@@ -6,7 +6,7 @@ import { DetailPanel } from '../components/admin/DetailPanel';
 import { StatusBadge } from '../components/admin/StatusBadge';
 import { DialogFrame } from '../components/admin/DialogFrame';
 import { useQueryState } from '../hooks/useQueryState';
-import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useMemo, useRef, useLayoutEffect } from 'react';
 import {
   Minus,
   Pencil,
@@ -139,6 +139,14 @@ export default function Recipes() {
     }
   }, [activeCategory, qualityStatus, reviewStatus, searchQuery, sourceFilter]);
 
+  // Async mutations must refresh the committed query, not their starting filter.
+  const currentRefresh = useRef<typeof fetchRecipes | null>(null);
+  useLayoutEffect(() => {
+    currentRefresh.current = fetchRecipes;
+    return () => { currentRefresh.current = null; };
+  }, [fetchRecipes]);
+  const refreshCurrentRecipes = () => currentRefresh.current?.();
+
   useEffect(() => {
     const requestCounter = requestId;
     void fetchRecipes();
@@ -149,18 +157,18 @@ export default function Recipes() {
     if (!window.confirm('确定要将这个食谱移入回收站吗？之后可在“安全审计”中恢复。')) return;
     try {
       await api.delete(`/admin/recipes/${id}`);
-      fetchRecipes();
+      refreshCurrentRecipes();
     } catch {
-      alert('删除失败');
+      if (currentRefresh.current) alert('删除失败');
     }
   };
 
   const handleApprove = async (id: number) => {
     try {
       await api.post(`/admin/recipes/${id}/approve`);
-      await fetchRecipes();
+      await refreshCurrentRecipes();
     } catch (error: any) {
-      alert(error.response?.data?.error || '审核失败');
+      if (currentRefresh.current) alert(error.response?.data?.error || '审核失败');
     }
   };
 
@@ -169,9 +177,9 @@ export default function Recipes() {
     if (!reason) return;
     try {
       await api.post(`/admin/recipes/${id}/reject`, { reason });
-      await fetchRecipes();
+      await refreshCurrentRecipes();
     } catch (error: any) {
-      alert(error.response?.data?.error || '驳回失败');
+      if (currentRefresh.current) alert(error.response?.data?.error || '驳回失败');
     }
   };
 
@@ -185,9 +193,9 @@ export default function Recipes() {
     if (!reason) return;
     try {
       await api.put(`/admin/recipes/${recipe.id}/quality`, { status, reason });
-      await fetchRecipes();
+      await refreshCurrentRecipes();
     } catch (error: any) {
-      alert(error.response?.data?.error || '质量审核失败');
+      if (currentRefresh.current) alert(error.response?.data?.error || '质量审核失败');
     }
   };
 
@@ -250,12 +258,13 @@ export default function Recipes() {
         await api.post('/admin/recipes', payload);
       }
 
+      if (!currentRefresh.current) return;
       setShowModal(false);
-      fetchRecipes();
+      refreshCurrentRecipes();
     } catch (err: any) {
-      alert('保存失败: ' + (err.response?.data?.error || err.message));
+      if (currentRefresh.current) alert('保存失败: ' + (err.response?.data?.error || err.message));
     } finally {
-      setSubmitting(false);
+      if (currentRefresh.current) setSubmitting(false);
     }
   };
 

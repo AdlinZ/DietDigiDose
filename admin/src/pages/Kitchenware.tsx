@@ -1,7 +1,7 @@
 import { DialogFrame } from '../components/admin/DialogFrame';
 import { useQueryState } from '../hooks/useQueryState';
 import KitchenwareCapabilities from "./KitchenwareCapabilities";
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef, useLayoutEffect } from 'react';
 import { CookingPot, Pencil, PlusCircle, RefreshCw, Search, Trash2, UserRound, Wrench, X } from 'lucide-react';
 import api from '../services/api';
 
@@ -46,6 +46,9 @@ export default function Kitchenware() {
   const [category, setCategory] = useQueryState<string>('category', '全部', ["全部", "小家电", "烹饪锅具", "刀具餐具", "烘焙工具", "其他"]);
   const [status, setStatus] = useQueryState<string>('status', '全部', statuses);
   const [message, setMessage] = useState('');
+  const pendingSave = useRef<symbol | null>(null);
+  const [savingCatalog, setSavingCatalog] = useState(false);
+  const [catalogSaveError, setCatalogSaveError] = useState('');
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const [editingCatalogItem, setEditingCatalogItem] = useState<KitchenwareCatalogItem | null>(null);
   const [catalogForm, setCatalogForm] = useState({ name: '', category: '其他', aliases: '', cookingMethods: '', careNote: '' });
@@ -81,6 +84,13 @@ export default function Kitchenware() {
       setLoading(false);
     }
   }, [category, search]);
+
+  const currentCatalogRefresh = useRef<typeof fetchCatalog | null>(null);
+  useLayoutEffect(() => {
+    currentCatalogRefresh.current = fetchCatalog;
+    return () => { currentCatalogRefresh.current = null; };
+  }, [fetchCatalog]);
+  useLayoutEffect(() => () => { pendingSave.current = null; }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -118,7 +128,11 @@ export default function Kitchenware() {
     }
   };
 
+  const closeCatalogModal = () => { if (!pendingSave.current) setCatalogModalOpen(false); };
+
   const openCatalogModal = (item?: KitchenwareCatalogItem) => {
+    if (pendingSave.current) return;
+    setCatalogSaveError('');
     setEditingCatalogItem(item || null);
     setCatalogForm({
       name: item?.name || '',
@@ -132,6 +146,11 @@ export default function Kitchenware() {
 
   const saveCatalogItem = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (pendingSave.current) return;
+    const owner = Symbol();
+    pendingSave.current = owner;
+    setSavingCatalog(true);
+    setCatalogSaveError('');
     try {
       const payload = {
         name: catalogForm.name.trim(),
@@ -142,10 +161,16 @@ export default function Kitchenware() {
       };
       if (editingCatalogItem) await api.put(`/admin/kitchenware/catalog/${editingCatalogItem.id}`, payload);
       else await api.post('/admin/kitchenware/catalog', payload);
+      if (pendingSave.current !== owner) return;
       setCatalogModalOpen(false);
-      fetchCatalog();
+      void currentCatalogRefresh.current?.();
     } catch (error: any) {
-      setMessage(error.response?.data?.error || '保存官方厨具失败');
+      if (pendingSave.current === owner) setCatalogSaveError(error.response?.data?.error || '保存官方厨具失败');
+    } finally {
+      if (pendingSave.current === owner) {
+        pendingSave.current = null;
+        setSavingCatalog(false);
+      }
     }
   };
 
@@ -398,7 +423,7 @@ export default function Kitchenware() {
       )}
 
       {capabilityItem && <KitchenwareCapabilities key={capabilityItem.id} item={capabilityItem} onClose={() => setCapabilityItem(null)} />}
-      {catalogModalOpen ? <DialogFrame onClose={()=>setCatalogModalOpen(false)} busy={false} className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"><form onSubmit={saveCatalogItem} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-lg font-semibold text-text-main">{editingCatalogItem ? '编辑官方厨具' : '新增官方厨具'}</h2><button aria-label="关闭" type="button" onClick={() => setCatalogModalOpen(false)} className="text-text-muted"><X /></button></div><div className="space-y-4"><label className="block text-sm text-text-main">名称<input required value={catalogForm.name} onChange={(event) => setCatalogForm({ ...catalogForm, name: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">分类<select value={catalogForm.category} onChange={(event) => setCatalogForm({ ...catalogForm, category: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 outline-none focus:border-primary">{categories.slice(1).map((item) => <option key={item}>{item}</option>)}</select></label><label className="block text-sm text-text-main">别名（用顿号或逗号分隔）<input value={catalogForm.aliases} onChange={(event) => setCatalogForm({ ...catalogForm, aliases: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">烹饪方式（用顿号或逗号分隔）<input value={catalogForm.cookingMethods} onChange={(event) => setCatalogForm({ ...catalogForm, cookingMethods: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">保养提示<textarea value={catalogForm.careNote} onChange={(event) => setCatalogForm({ ...catalogForm, careNote: event.target.value })} className="mt-1.5 min-h-20 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label></div><div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setCatalogModalOpen(false)} className="rounded-xl px-4 py-2.5 text-sm text-text-muted">取消</button><button type="submit" className="rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-white">保存</button></div></form></DialogFrame> : null}
+      {catalogModalOpen ? <DialogFrame onClose={closeCatalogModal} busy={savingCatalog} className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"><form onSubmit={saveCatalogItem} className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl"><div className="mb-5 flex items-center justify-between"><h2 className="text-lg font-semibold text-text-main">{editingCatalogItem ? '编辑官方厨具' : '新增官方厨具'}</h2><button aria-label="关闭" type="button" disabled={savingCatalog} onClick={closeCatalogModal} className="text-text-muted"><X /></button></div><fieldset disabled={savingCatalog} className="space-y-4"><label className="block text-sm text-text-main">名称<input required value={catalogForm.name} onChange={(event) => setCatalogForm({ ...catalogForm, name: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">分类<select value={catalogForm.category} onChange={(event) => setCatalogForm({ ...catalogForm, category: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 outline-none focus:border-primary">{categories.slice(1).map((item) => <option key={item}>{item}</option>)}</select></label><label className="block text-sm text-text-main">别名（用顿号或逗号分隔）<input value={catalogForm.aliases} onChange={(event) => setCatalogForm({ ...catalogForm, aliases: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">烹饪方式（用顿号或逗号分隔）<input value={catalogForm.cookingMethods} onChange={(event) => setCatalogForm({ ...catalogForm, cookingMethods: event.target.value })} className="mt-1.5 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label><label className="block text-sm text-text-main">保养提示<textarea value={catalogForm.careNote} onChange={(event) => setCatalogForm({ ...catalogForm, careNote: event.target.value })} className="mt-1.5 min-h-20 w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none focus:border-primary" /></label></fieldset>{catalogSaveError && <p role="alert" className="mt-4 text-sm text-red-600">{catalogSaveError}</p>}<div className="mt-6 flex justify-end gap-3"><button type="button" disabled={savingCatalog} onClick={closeCatalogModal} className="rounded-xl px-4 py-2.5 text-sm text-text-muted">取消</button><button type="submit" disabled={savingCatalog} className="rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-white">保存</button></div></form></DialogFrame> : null}
     </div>
   );
 }

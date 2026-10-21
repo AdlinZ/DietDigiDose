@@ -74,8 +74,8 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
   let voice!: ReturnType<typeof useRealtimeCookingVoice>;
   let tree!: renderer.ReactTestRenderer;
 
-  function Harness({ onUpdate }: { onUpdate: (value: ReturnType<typeof useRealtimeCookingVoice>) => void }) {
-    const value = useRealtimeCookingVoice(options);
+  function Harness({ onUpdate, focused = true, scopeKey = "A" }: { onUpdate: (value: ReturnType<typeof useRealtimeCookingVoice>) => void; focused?: boolean; scopeKey?: string }) {
+    const value = useRealtimeCookingVoice({ ...options, focused, scopeKey });
     React.useEffect(() => onUpdate(value), [onUpdate, value]);
     return null;
   }
@@ -103,6 +103,88 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
 
   afterEach(async () => {
     await act(async () => { tree.unmount(); });
+  });
+
+  it.each(["blur", "account"])("invalidates a late native start on %s and requires explicit restart", async reason => {
+    let resolve!: () => void;
+    mockStartNativeRecording.mockReturnValueOnce(new Promise<void>(done => { resolve = done; }));
+    let starting!: Promise<boolean>;
+    await act(async () => { starting = voice.start(); });
+    expect(mockStartNativeRecording).toHaveBeenCalledTimes(1);
+    const callback = (value: ReturnType<typeof useRealtimeCookingVoice>) => { voice = value; };
+    await act(async () => { tree.update(<Harness focused={reason !== "blur"} scopeKey={reason === "account" ? "B" : "A"} onUpdate={callback} />); });
+    await act(async () => { resolve(); await starting; });
+    expect(voice.active).toBe(false);
+    expect(mockStopNativeRecording).toHaveBeenCalled();
+    expect(realtimeVoiceApi.close).toHaveBeenCalledWith(mockAuthFetch, createdSession.id);
+    await act(async () => { tree.update(<Harness onUpdate={callback} />); });
+    expect(mockStartNativeRecording).toHaveBeenCalledTimes(1);
+    expect(options.onTranscript).not.toHaveBeenCalled();
+    expect(options.onControl).not.toHaveBeenCalled();
+  });
+
+  it.each(["start", "failed start", "resume"])("holds the singleton lease across unmount and late %s cleanup", async stage => {
+    let hardwareOwner = "none";
+    let releaseOperation!: () => void;
+    let rejectOperation!: (error: Error) => void;
+    let releaseCleanup!: () => void;
+    const operation = new Promise<void>((resolve, reject) => { releaseOperation = resolve; rejectOperation = reject; });
+    const cleanup = new Promise<void>(resolve => { releaseCleanup = resolve; });
+    mockStartNativeRecording.mockImplementation(async () => { hardwareOwner = "new"; });
+    mockStopNativeRecording.mockImplementation(async () => { hardwareOwner = "none"; });
+    mockStopNativeRecording.mockImplementationOnce(async () => { await cleanup; hardwareOwner = "none"; });
+    if (stage === "resume") {
+      await act(async () => { await voice.start(); await voice.toggleMute(); });
+      mockResumeNativeRecording.mockImplementationOnce(async () => { await operation; hardwareOwner = "old"; });
+    } else {
+      mockStartNativeRecording.mockImplementationOnce(async () => { await operation; hardwareOwner = "old"; });
+    }
+    let oldOperation!: Promise<boolean>;
+    await act(async () => { oldOperation = stage === "resume" ? voice.toggleMute() : voice.start(); });
+    await act(async () => { tree.unmount(); });
+    await act(async () => { tree = renderer.create(<Harness onUpdate={value => { voice = value; }} />); });
+    let newStart!: Promise<boolean>;
+    await act(async () => { newStart = voice.start(); });
+    expect(mockStartNativeRecording).toHaveBeenCalledTimes(1);
+    expect(mockStopNativeRecording).not.toHaveBeenCalled();
+    await act(async () => {
+      if (stage === "failed start") rejectOperation(new Error("failed start"));
+      else releaseOperation();
+    });
+    expect(mockStopNativeRecording).toHaveBeenCalledTimes(1);
+    expect(mockStartNativeRecording).toHaveBeenCalledTimes(1);
+    await act(async () => { releaseCleanup(); await oldOperation; expect(await newStart).toBe(true); });
+    expect(hardwareOwner).toBe("new");
+    expect(mockStartNativeRecording).toHaveBeenCalledTimes(2);
+    expect(mockStopNativeRecording).toHaveBeenCalledTimes(1);
+    expect(voice.state).toBe("listening");
+  });
+
+  it("does not deliver a late hardware-stop error to a new account", async () => {
+    let reject!: (error: Error) => void;
+    mockStopNativeRecording.mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail; }));
+    await act(async () => { await voice.start(); });
+    let stopping!: Promise<void>;
+    await act(async () => { stopping = voice.stop(); });
+    await act(async () => { tree.update(<Harness scopeKey="B" onUpdate={value => { voice = value; }} />); });
+    await act(async () => { reject(new Error("old hardware error")); await stopping; });
+    expect(options.onError).not.toHaveBeenCalled();
+  });
+
+  it("a cancelled FIFO waiter never stops or starts the singleton", async () => {
+    await act(async () => { await voice.start(); });
+    const owner = voice;
+    let waiter!: ReturnType<typeof useRealtimeCookingVoice>;
+    let waiterTree!: renderer.ReactTestRenderer;
+    await act(async () => { waiterTree = renderer.create(<Harness onUpdate={value => { waiter = value; }} />); });
+    let waiting!: Promise<boolean>;
+    await act(async () => { waiting = waiter.start(); });
+    await act(async () => { waiterTree.unmount(); });
+    expect(mockStartNativeRecording).toHaveBeenCalledTimes(1);
+    expect(mockStopNativeRecording).not.toHaveBeenCalled();
+    await act(async () => { await owner.stop(); expect(await waiting).toBe(false); });
+    expect(mockStopNativeRecording).toHaveBeenCalledTimes(1);
+    expect(mockStartNativeRecording).toHaveBeenCalledTimes(1);
   });
 
   it("discards speaker output and its pre-roll without RMS interruption or ASR", async () => {
@@ -196,7 +278,7 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
 
     expect(started).toBe(false);
     expect(realtimeVoiceApi.close).toHaveBeenCalledWith(expect.any(Function), createdSession.id);
-    expect(mockStopNativeRecording).toHaveBeenCalled();
+    expect(mockStopNativeRecording).not.toHaveBeenCalled();
     expect(voice.session).toBeNull();
     expect(voice.active).toBe(false);
     expect(voice.state).toBe("fallback");
@@ -235,8 +317,9 @@ describe("useRealtimeCookingVoice startup cleanup", () => {
     mockStopNativeRecording.mockImplementation(async () => { recording = false; });
     let pending!: Promise<boolean>;
     await act(async () => { pending = voice.start(); });
-    await act(async () => { await voice.stop(); });
-    await act(async () => { release(); expect(await pending).toBe(false); });
+    let stopping!: Promise<void>;
+    await act(async () => { stopping = voice.stop(); });
+    await act(async () => { release(); expect(await pending).toBe(false); await stopping; });
     expect(recording).toBe(false);
     expect(voice.state).toBe("off");
   });

@@ -1,5 +1,6 @@
+import { useIsFocused } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Modal, Text, TextInput, TouchableOpacity, View } from "react-native";
 import type { KitchenPreferences } from "@dietdigidose/contracts";
 import { useAuth } from "@/contexts/AuthContext";
@@ -9,26 +10,36 @@ import { AI_DATA_CONSENT_STORAGE_KEY, getPrivateStorageGeneration, getUserStorag
 import { summarizeMealPreferences } from "@/utils/preferenceSummary";
 
 export function PreferenceVoiceInput({ onApply }: { onApply: (value: KitchenPreferences, persistent: boolean) => void }) {
-  const { user } = useAuth(); const router = useSafeRouter();
+  const focused = useIsFocused();
+  const { user, sessionGeneration } = useAuth(); const router = useSafeRouter();
   const [text, setText] = useState(""); const [error, setError] = useState("");
   const [consent, setConsent] = useState(false); const [persistent, setPersistent] = useState(false);
-  const owner = useRef(user?.id);
-  useLayoutEffect(() => { owner.current = user?.id; return () => { owner.current = undefined; }; }, [user?.id]);
+  const scopeKey = JSON.stringify([user?.id ?? null, sessionGeneration]);
+  const scope = useMemo(() => ({}), [scopeKey, focused]);
+  const owner = useRef<object | undefined>(scope);
+  useLayoutEffect(() => { owner.current = scope; return () => { owner.current = undefined; }; }, [scope]);
+  const [previousScopeKey, setPreviousScopeKey] = useState(scopeKey);
+  if (previousScopeKey !== scopeKey) {
+    setPreviousScopeKey(scopeKey);
+    setText(""); setError(""); setConsent(false); setPersistent(false);
+  }
   const { isRecording, isTranscribing, statusText, toggleRecording } = useVoiceRecorder({
+    focused,
+    scopeKey,
     onSpeechFinal: value => { setText(value); setError(""); },
     onSpeechEmpty: () => setError("暂未识别出内容，可以重新录音或直接输入"),
   });
   const summary = summarizeMealPreferences(text);
   const record = async () => {
     if (isRecording) { toggleRecording(); return; }
-    if (!user) return;
+    if (!user || !focused) return;
     const id = user.id;
     try {
       const accepted = await AsyncStorage.getItem(getUserStorageKey(AI_DATA_CONSENT_STORAGE_KEY, id)!);
-      if (owner.current !== id) return;
+      if (owner.current !== scope) return;
       if (accepted !== "accepted") { setConsent(true); return; }
       toggleRecording();
-    } catch { setError("无法读取语音授权，请使用文字输入"); }
+    } catch { if (owner.current !== scope) return; setError("无法读取语音授权，请使用文字输入"); }
   };
   return <View className="gap-3 rounded-2xl border border-line bg-surface p-4">
     <Text className="font-bold text-ink">也可以说一句话</Text>
@@ -50,7 +61,7 @@ export function PreferenceVoiceInput({ onApply }: { onApply: (value: KitchenPref
         <Text className="leading-6 text-ink">录音会发送给配置的 AI 服务进行文字识别。识别后先展示摘要，未经确认不会修改你的资料。</Text>
         <TouchableOpacity onPress={() => { setConsent(false); router.push("/legal"); }}><Text className="text-brand">查看隐私说明</Text></TouchableOpacity>
         <TouchableOpacity onPress={() => setConsent(false)} className="p-3"><Text className="text-center text-ink">暂不使用</Text></TouchableOpacity>
-        <TouchableOpacity className="rounded-xl bg-brand-fill p-3" onPress={() => { if (!user) return; const id = user.id; void writeUserPrivateStorage(AI_DATA_CONSENT_STORAGE_KEY, id, getPrivateStorageGeneration(id), "accepted").then(saved => { if (saved && owner.current === id) { setConsent(false); toggleRecording(); } }).catch(() => { setConsent(false); setError("授权未保存，请重试或使用文字输入"); }); }}><Text className="text-center font-bold text-white">同意并开始录音</Text></TouchableOpacity>
+        <TouchableOpacity className="rounded-xl bg-brand-fill p-3" onPress={() => { if (!user || !focused) return; const id = user.id; void writeUserPrivateStorage(AI_DATA_CONSENT_STORAGE_KEY, id, getPrivateStorageGeneration(id), "accepted").then(saved => { if (saved && owner.current === scope) { setConsent(false); toggleRecording(); } }).catch(() => { if (owner.current !== scope) return; setConsent(false); setError("授权未保存，请重试或使用文字输入"); }); }}><Text className="text-center font-bold text-white">同意并开始录音</Text></TouchableOpacity>
       </View></View>
     </Modal>
   </View>;

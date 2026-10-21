@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 import * as Network from "expo-network";
 import * as Crypto from "expo-crypto";
@@ -13,6 +13,8 @@ import { heartbeatWithVersionRecovery, RealtimeVoiceSessionUpdater } from "@/ser
 import { isVoiceOutputBlockingCapture } from "@/services/voiceCaptureGate";
 
 type Options = {
+  focused?: boolean;
+  scopeKey?: string;
   recipeId: number;
   currentStep: number;
   timerSeconds: number;
@@ -64,6 +66,39 @@ function pcm16WavBase64(chunks: string[], sampleRate = 16_000) {
   return Base64.fromUint8Array(output);
 }
 
+// audio-studio's controls target a platform singleton. A lease must outlive
+// pending start/resume operations, including when the owning hook unmounts.
+let audioStudioQueue: Promise<void> = Promise.resolve();
+async function acquireAudioStudio(stopHardware: () => Promise<unknown>) {
+  const previous = audioStudioQueue;
+  let release!: () => void;
+  audioStudioQueue = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  let operations: Promise<unknown> = Promise.resolve();
+  let stopping: Promise<void> | undefined;
+  let touched = false;
+  return {
+    run(operation: () => Promise<unknown>) {
+      if (stopping) return Promise.resolve();
+      const result = operations.then(async () => {
+        if (stopping) return;
+        touched = true;
+        await operation();
+      });
+      operations = result.catch(() => undefined);
+      return result;
+    },
+    stop() {
+      if (!stopping) stopping = operations.then(async () => {
+        try { if (touched) await stopHardware(); }
+        finally { release(); }
+      });
+      return stopping;
+    },
+  };
+}
+type AudioStudioLease = Awaited<ReturnType<typeof acquireAudioStudio>>;
+
 export function useRealtimeCookingVoice(options: Options) {
   const authFetch = useAuthFetch();
   const {
@@ -72,7 +107,12 @@ export function useRealtimeCookingVoice(options: Options) {
     pauseRecording: pauseNativeRecording,
     resumeRecording: resumeNativeRecording,
   } = useAudioRecorder();
+  const ownership = useMemo(() => ({ scopeKey: options.scopeKey, focused: options.focused }), [options.scopeKey, options.focused]);
+  const ownerRef = useRef(ownership);
+  const mountedRef = useRef(false);
   const optionsRef = useRef(options);
+  const foregroundRef = useRef(AppState.currentState !== "background" && AppState.currentState !== "inactive");
+  const nativeLeaseRef = useRef<AudioStudioLease | null>(null);
   const recognitionRef = useRef<Recognition | null>(null);
   const sessionRef = useRef<RealtimeVoiceSession | null>(null);
   const activeRef = useRef(false);
@@ -106,12 +146,13 @@ export function useRealtimeCookingVoice(options: Options) {
     });
   }
 
-  useEffect(() => { optionsRef.current = options; }, [options]);
+  useLayoutEffect(() => { optionsRef.current = options; }, [options]);
   useEffect(() => { stateRef.current = state; }, [state]);
 
   const stop = useCallback(async () => {
     if (stoppingRef.current || (!activeRef.current && !startingRef.current && !sessionRef.current)) return;
     stoppingRef.current += 1;
+    const stopOwner = ownerRef.current;
     try {
       lifecycleRef.current += 1;
       const current = sessionRef.current;
@@ -138,12 +179,15 @@ export function useRealtimeCookingVoice(options: Options) {
       nativePartialSentLengthRef.current = 0;
       nativePartialInFlightRef.current = null;
       nativeTranscribingRef.current = null;
-      if (Platform.OS !== "web") await stopNativeRecording().catch(() => {
+      const nativeLease = nativeLeaseRef.current;
+      nativeLeaseRef.current = null;
+      if (nativeLease) await nativeLease.stop().catch(() => {
+        if (!mountedRef.current || ownerRef.current !== stopOwner) return;
         optionsRef.current.onError("无法确认麦克风已关闭，请退出语音页面并检查系统麦克风指示灯");
       });
       if (current) void realtimeVoiceApi.close(authFetch, current.id).catch(() => undefined);
     } finally { stoppingRef.current -= 1; }
-  }, [authFetch, stopNativeRecording]);
+  }, [authFetch]);
 
   const interruptConnection = useCallback((message = "网络连接中断，已停止持续监听，请联网后手动开启") => {
     if (!activeRef.current && !startingRef.current) return;
@@ -366,6 +410,7 @@ export function useRealtimeCookingVoice(options: Options) {
   ), [authFetch]);
 
   const toggleMute = useCallback(async () => {
+    const nativeLease = nativeLeaseRef.current;
     const sessionId = sessionRef.current?.id;
     if (!sessionId || !activeRef.current || muteTransitionRef.current) return mutedRef.current;
     muteTransitionRef.current = true;
@@ -385,15 +430,15 @@ export function useRealtimeCookingVoice(options: Options) {
         nativePreRollRef.current = [];
         nativeTurnIdRef.current = "";
         if (Platform.OS === "web") recognitionRef.current?.abort();
-        else await pauseNativeRecording();
+        else await nativeLease?.run(pauseNativeRecording);
       }
       const updated = await updateSession({ muted: nextMuted, reconnect: false });
       if (!updated || !stillActive()) return mutedRef.current;
       if (!nextMuted) {
         if (Platform.OS === "web") recognitionRef.current?.start();
-        else await resumeNativeRecording();
+        else await nativeLease?.run(resumeNativeRecording);
         if (!stillActive()) {
-          if (Platform.OS !== "web") await stopNativeRecording().catch(() => undefined);
+          if (nativeLease) await nativeLease.stop().catch(() => undefined);
           return mutedRef.current;
         }
         mutedRef.current = false;
@@ -408,7 +453,7 @@ export function useRealtimeCookingVoice(options: Options) {
         // A failed resume can leave a partially started recorder behind.
         try {
           if (Platform.OS === "web") recognitionRef.current?.abort();
-          else await pauseNativeRecording();
+          else await nativeLease?.run(pauseNativeRecording);
         } catch { await stop(); }
         if (stillActive()) void updateSession({ muted: true, reconnect: false }).catch(() => undefined);
         optionsRef.current.onError(error instanceof Error ? error.message : "静音状态同步失败，请重试");
@@ -417,10 +462,10 @@ export function useRealtimeCookingVoice(options: Options) {
     } finally {
       muteTransitionRef.current = false;
     }
-  }, [handleConnectionError, pauseNativeRecording, resumeNativeRecording, stopNativeRecording, stop, updateSession]);
+  }, [handleConnectionError, pauseNativeRecording, resumeNativeRecording, stop, updateSession]);
 
   const start = useCallback(async () => {
-    if (startingRef.current || stoppingRef.current || muteTransitionRef.current || activeRef.current) return false;
+    if (!mountedRef.current || ownerRef.current !== ownership || optionsRef.current.focused === false || !foregroundRef.current || (Platform.OS === "web" && typeof document !== "undefined" && document.hidden) || startingRef.current || stoppingRef.current || muteTransitionRef.current || activeRef.current) return false;
     const RecognitionConstructor = recognitionConstructor();
     const native = Platform.OS === "android" || Platform.OS === "ios";
     if ((!RecognitionConstructor && !native) || !Number.isInteger(optionsRef.current.recipeId) || optionsRef.current.recipeId <= 0) {
@@ -504,7 +549,10 @@ export function useRealtimeCookingVoice(options: Options) {
         const permission = await Audio.requestPermissionsAsync();
         if (!isCurrent()) return false;
         if (!permission.granted) throw new Error("未获得麦克风权限，已保留文字和按轮录音");
-        await startNativeRecording({
+        const nativeLease = await acquireAudioStudio(stopNativeRecording);
+        if (!isCurrent()) { await nativeLease.stop(); return false; }
+        nativeLeaseRef.current = nativeLease;
+        await nativeLease.run(() => startNativeRecording({
           sampleRate: 16_000, channels: 1, encoding: "pcm_16bit", interval: 100,
           enableProcessing: true, keepFullAnalysis: false, intervalAnalysis: 100,
           segmentDurationMs: 100, features: { rms: true }, output: { primary: { enabled: false } },
@@ -514,12 +562,13 @@ export function useRealtimeCookingVoice(options: Options) {
           onRecordingInterrupted: () => {
             if (isCurrent() && activeRef.current) {
               optionsRef.current.onError("录音被系统中断，已停止持续监听");
-              void stop().then(() => setState("fallback"));
+              void stop();
+              setState("fallback");
             }
           },
-        });
+        }));
         if (!isCurrent()) {
-          await stopNativeRecording().catch(() => undefined);
+          await nativeLease.stop().catch(() => undefined);
           return false;
         }
         setState("listening");
@@ -537,13 +586,14 @@ export function useRealtimeCookingVoice(options: Options) {
     } catch (error) {
       if (!isCurrent()) return false;
       await stop();
+      if (!mountedRef.current || ownerRef.current !== ownership || !foregroundRef.current) return false;
       setState("fallback");
       optionsRef.current.onError(error instanceof Error ? error.message : "实时通道不可用，已切换按轮录音");
       return false;
     } finally {
       startingRef.current = false;
     }
-  }, [authFetch, handleConnectionError, handleNativeAnalysis, handleNativeAudio, interruptConnection, startNativeRecording, stopNativeRecording, stop, submitTurn, updateSession]);
+  }, [authFetch, handleConnectionError, handleNativeAnalysis, handleNativeAudio, interruptConnection, startNativeRecording, stopNativeRecording, stop, submitTurn, updateSession, ownership]);
 
   useEffect(() => {
     if (Platform.OS === "web") {
@@ -558,9 +608,14 @@ export function useRealtimeCookingVoice(options: Options) {
     return () => subscription.remove();
   }, [interruptConnection]);
 
-  useEffect(() => () => { void stop(); }, [stop]);
+  useLayoutEffect(() => {
+    ownerRef.current = ownership;
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; void stop(); };
+  }, [stop, ownership]);
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (next) => {
+      foregroundRef.current = next === "active";
       if (next !== "active" && (activeRef.current || startingRef.current)) void stop();
     });
     return () => subscription.remove();
@@ -568,12 +623,15 @@ export function useRealtimeCookingVoice(options: Options) {
   useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
     const onHidden = () => { if (document.hidden) void stop(); };
-    const onPageHide = () => { void stop(); };
+    const onPageHide = () => { foregroundRef.current = false; void stop(); };
+    const onPageShow = () => { foregroundRef.current = true; };
     document.addEventListener("visibilitychange", onHidden);
     window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("pageshow", onPageShow);
     return () => {
       document.removeEventListener("visibilitychange", onHidden);
       window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("pageshow", onPageShow);
     };
   }, [stop]);
 

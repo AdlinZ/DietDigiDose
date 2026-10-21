@@ -1,3 +1,4 @@
+import { useIsFocused } from "@react-navigation/native";
 import { combineInventoryDeductions, ingredientConsumptionRequests, inventoryPreviewWarnings } from "@/utils/inventoryConsumptions";
 import { KitchenwareSafetyHints } from "@/screens/cooking-mode/KitchenwareSafetyHints";
 import { useCookingTimer } from "@/hooks/useCookingTimer";
@@ -6,7 +7,7 @@ import type { CookingQueueItem } from "@/services/api/cookingQueue";
 import * as Crypto from "expo-crypto";
 import { useCookingCompletion } from "@/hooks/useCookingCompletion";
 import { MealProductionFields } from "@/components/MealProductionFields";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -58,6 +59,7 @@ type CookingAgentRun = {
 };
 
 export default function CookingModeScreen() {
+  const focused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { recipeId, fromQueue, queueItemId, queueVersion } = useSafeSearchParams<{
     recipeId: number;
@@ -71,9 +73,9 @@ export default function CookingModeScreen() {
   const { user, sessionGeneration } = useAuth();
   const completion = useCookingCompletion(user?.id, authFetch);
   const voiceScopeKey = JSON.stringify([user?.id ?? null, sessionGeneration, recipeId, queueItemId ?? null, queueVersion ?? null, fromQueue ?? false]);
-  const voiceScope = useMemo(() => ({ key: voiceScopeKey, sessionId: `cooking-${Crypto.randomUUID()}` }), [voiceScopeKey]);
+  const voiceScope = useMemo(() => ({ key: voiceScopeKey, sessionId: `cooking-${Crypto.randomUUID()}` }), [voiceScopeKey, focused]);
   const currentVoiceScope = useRef(voiceScope);
-  currentVoiceScope.current = voiceScope;
+  useLayoutEffect(() => { currentVoiceScope.current = voiceScope; }, [voiceScope]);
   const voiceMounted = useRef(false);
   const voiceGeneration = useRef(0);
   const cookingChatSessionId = voiceScope.sessionId;
@@ -398,7 +400,16 @@ export default function CookingModeScreen() {
     isTranscribing: isVoiceTranscribing,
     toggleRecording: toggleVoiceRecording,
     stopRecording: stopVoiceRecording,
+    discardRecording: discardVoiceRecording,
   } = useVoiceRecorder({
+    focused,
+    onDiscard: () => {
+      voiceGeneration.current += 1;
+      setVoiceHudState({ visible: false, type: "listening" });
+      if (voiceHudTimerRef.current) clearTimeout(voiceHudTimerRef.current);
+      voiceHudTimerRef.current = null;
+      void stopVoiceOutput();
+    },
     scopeKey: voiceScopeKey,
     onSpeechResult: (recognizedText) => {
       if (isVoiceScopeCurrent() && recognizedText) {
@@ -425,6 +436,8 @@ export default function CookingModeScreen() {
   });
 
   const realtimeVoice = useRealtimeCookingVoice({
+    focused,
+    scopeKey: voiceScopeKey,
     recipeId: Number(recipeId) || 0,
     currentStep,
     timerSeconds,
@@ -812,7 +825,7 @@ export default function CookingModeScreen() {
           onPress={() => {
             const doExit = () => {
               void realtimeVoice.stop();
-              stopVoiceRecording();
+              discardVoiceRecording();
               void stopVoiceOutput();
               if (router.canGoBack()) {
                 router.back();

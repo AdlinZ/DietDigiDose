@@ -1,3 +1,4 @@
+import { useIsFocused } from "@react-navigation/native";
 import { createRequestGate } from "./requestGate";
 import { agentMessageText, mergeTaskResponse } from "./taskState";
 import { useChatSessions } from "./useChatSessions";
@@ -126,6 +127,7 @@ function buildChatHistory(messages: Message[], userText: string): ChatHistoryMes
 
 export default function AIAssistantScreen() {
   const router = useSafeRouter();
+  const focused = useIsFocused();
   const insets = useSafeAreaInsets();
   const {
     prompt,
@@ -251,10 +253,14 @@ export default function AIAssistantScreen() {
     }
   }, [isSpeaking, voiceState]);
 
+  const voiceGeneration = useRef(0);
+
   // --- 语音管线：ASR → LLM → TTS ---
   const handleVoiceQuery = useCallback(async (userText: string) => {
     if (!userText.trim() || !chatReady || scopeRef.current !== scope) return;
     const voiceScope = scopeRef.current;
+    const generation = voiceGeneration.current;
+    const isVoiceCurrent = () => scopeRef.current === voiceScope && voiceGeneration.current === generation;
     const waitingTasks = messagesRef.current.filter((message) => message.agentRun?.run.status === "awaiting_input");
     if (waitingTasks.length > 1) { setSendError("当前有多个待补充任务，请取消多余任务后再回复。"); return; }
     const releaseRequest = requestGate.acquire(voiceScope);
@@ -287,11 +293,11 @@ export default function AIAssistantScreen() {
           ...(sessionId ? { sessionId } : {}),
         });
       setMessages((prev) => prev.map((message) => message.id === messageId ? mergeTaskResponse(message, res) : message));
-      if (scopeRef.current !== voiceScope) return;
+      if (!isVoiceCurrent()) return;
       releaseRequest();
       // The task card is already live; this wait only controls when TTS starts.
       const completedRun = await waitForAgentRun(authFetch, res.run);
-      if (scopeRef.current !== voiceScope) return;
+      if (!isVoiceCurrent()) return;
       const replyText = agentMessageText(completedRun, completedRun.reply || res.reply);
 
       setLastAIReplyText(replyText);
@@ -309,7 +315,7 @@ export default function AIAssistantScreen() {
           : "AI 对话请求失败，请稍后重试";
       setMessages((prev) => prev.map((item) => item.id === messageId && !item.agentRun
         ? { ...item, text: message, status: "failed" } : item));
-      if (scopeRef.current !== voiceScope) return;
+      if (!isVoiceCurrent()) return;
       console.error("Voice pipeline error:", err);
       setVoiceState("completed");
     }
@@ -317,6 +323,13 @@ export default function AIAssistantScreen() {
   }, [chatReady, setMessages, requestGate, authFetch, currentSessionId, scope, speak, stopTTS, voiceTTSEnabled]);
 
   const { isRecording, toggleRecording, stopRecording } = useVoiceRecorder({
+    focused,
+    onDiscard: () => {
+      voiceGeneration.current += 1;
+      stopTTS();
+      setVoiceState("idle");
+      setCurrentRecognizedText("");
+    },
     scopeKey: scope,
     onSpeechResult: (recognizedText) => {
       if (scopeRef.current !== scope) return;

@@ -1901,6 +1901,36 @@ describe("user data isolation", () => {
     assert.equal((completedRetry.body as JsonObject).dietRecordId, (completed.body as JsonObject).dietRecordId);
     assert.equal((db.prepare("SELECT COUNT(*) AS count FROM diet_records WHERE id = ? AND user_id = ?").get((completed.body as JsonObject).dietRecordId, first.user.id) as { count: number }).count, 1);
 
+    // Replays remain valid after later state transitions, but a key cannot name another action or meal.
+    const executionKeys = {
+      shopping: shoppingPayload.idempotencyKey,
+      queue: "meal-plan-queue-integration-0001",
+      complete: "meal-plan-complete-integration-0001",
+    };
+    const beforeReplay = db.prepare("SELECT * FROM meal_plan_items WHERE id = ?").get(itemId);
+    for (const [action, idempotencyKey] of Object.entries(executionKeys)) {
+      const replay = await api(`/api/v1/meal-plans/${planId}/items/${itemId}/${action}`, {
+        method: "POST", token: first.token, body: JSON.stringify({ version: movedItem.version, idempotencyKey }),
+      });
+      assert.equal(replay.response.status, 200);
+      assert.equal((replay.body as JsonObject).repeated, true);
+      for (const targetAction of Object.keys(executionKeys)) {
+        if (targetAction === action) continue;
+        const conflict = await api(`/api/v1/meal-plans/${planId}/items/${itemId}/${targetAction}`, {
+          method: "POST", token: first.token, body: JSON.stringify({ version: movedItem.version, idempotencyKey }),
+        });
+        assert.equal(conflict.response.status, 409);
+        assert.equal((conflict.body as JsonObject).code, "MEAL_PLAN_KEY_CONFLICT");
+      }
+      const wrongItem = await api(`/api/v1/meal-plans/${planId}/items/${randomUUID()}/${action}`, {
+        method: "POST", token: first.token, body: JSON.stringify({ version: 1, idempotencyKey }),
+      });
+      assert.equal(wrongItem.response.status, 409);
+      assert.equal((wrongItem.body as JsonObject).code, "MEAL_PLAN_KEY_CONFLICT");
+    }
+    assert.deepEqual(db.prepare("SELECT * FROM meal_plan_items WHERE id = ?").get(itemId), beforeReplay);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM meal_plan_execution_requests WHERE user_id = ? AND meal_plan_item_id = ?").get(first.user.id, itemId) as { n: number }).n, 3);
+
     const deleted = await api(`/api/v1/meal-plans/${planId}`, {
       method: "DELETE", token: first.token, body: JSON.stringify({ version: (afterQueue.body as JsonObject).version }),
     });

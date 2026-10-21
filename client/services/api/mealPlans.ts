@@ -81,7 +81,7 @@ export const mealPlansApi = {
   updateItem: (apiFetch: ApiFetch, planId: string, itemId: string, input: unknown) =>
     requestJson<MealPlanItem>(apiFetch, itemPath(planId, itemId), { method: "PATCH", body: JSON.stringify(input) }),
   addShopping: (apiFetch: ApiFetch, planId: string, itemId: string, input: unknown) =>
-    requestJson<{ added: number; itemIds: string[]; repeated: boolean }>(apiFetch, `${itemPath(planId, itemId)}/shopping`, { method: "POST", body: JSON.stringify(input) }),
+    requestJson<{ added: number; itemIds: string[]; repeated: boolean; scope?: "current_plan"; coverage?: "covered" | "shortfall" | "needs_review"; reviewItems?: Array<{ name: string; reason: string; itemIds?: string[] }> }>(apiFetch, `${itemPath(planId, itemId)}/shopping`, { method: "POST", body: JSON.stringify(input) }),
   addQueue: (apiFetch: ApiFetch, planId: string, itemId: string, input: unknown) =>
     requestJson<{ queueItemId: string; added: boolean; repeated: boolean }>(apiFetch, `${itemPath(planId, itemId)}/queue`, { method: "POST", body: JSON.stringify(input) }),
   complete: (apiFetch: ApiFetch, planId: string, itemId: string, input: unknown) =>

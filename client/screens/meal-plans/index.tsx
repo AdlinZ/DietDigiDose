@@ -1,7 +1,8 @@
+import { createShoppingRequestKeys, personalShoppingMessage } from "./shoppingRequest";
 
 import { MealPlanChanges } from "@/components/MealPlanChanges";
 import { MealProductionFields } from "@/components/MealProductionFields";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 
@@ -35,7 +36,8 @@ function executionKey(action: string, item: MealPlanItem) {
 
 export default function MealPlansScreen() {
   const router = useSafeRouter();
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, user } = useAuth();
+  const shoppingRequestKeys = useRef(createShoppingRequestKeys());
   const authFetch = useAuthFetch();
   const [changeRevision, setChangeRevision] = useState(0);
   const [plans, setPlans] = useState<MealPlan[]>([]);
@@ -123,13 +125,16 @@ export default function MealPlansScreen() {
   const addShopping = async (item: MealPlanItem) => {
     if (!selectedPlan || savingAction) return;
     if (item.dining) { router.push({ pathname: "/household-dining",params: { planItem: { planId: selectedPlan.id,itemId: item.id,version: item.version } } }); return; }
+    const account = String(user?.id ?? "anonymous");
+    const requestKey = shoppingRequestKeys.current.get(account,item.id,item.version);
     setSavingAction(`shopping:${item.id}`);
     try {
       const result = await mealPlansApi.addShopping(authFetch, selectedPlan.id, item.id, {
         version: item.version,
-        idempotencyKey: executionKey("shopping", item),
+        idempotencyKey: requestKey,
       });
-      Alert.alert("采购清单已同步", result.added ? `已加入 ${result.added} 个缺失食材` : "库存或采购清单已覆盖所需食材", [
+      shoppingRequestKeys.current.complete(account,item.id,item.version,requestKey);
+      Alert.alert("本餐单库存核算", personalShoppingMessage(result), [
         { text: "留在餐单" },
         { text: "查看采购", onPress: () => router.push("/shopping-list") },
       ]);

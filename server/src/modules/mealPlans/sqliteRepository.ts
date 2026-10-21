@@ -1,3 +1,5 @@
+import { preparePersonalShopping, personalShoppingClientId } from "./personalShopping.js";
+import { quantityEvidenceStatus } from "../inventory/evidence.js";
 import { recipeExecutionProof } from "../recipes/planExecution.js";
 import { assertSqlitePlanExecution } from "../recipes/sqliteRepository.js";
 import { commonProduction } from "./commonProduction.js";
@@ -19,7 +21,7 @@ import { prepareProduction } from "../dietRecords/preparedMeals.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { currentDateKey, currentTimeKey } from "../../utils/date.js";
-import { formatMealPlan, formatMealPlanItem, ingredient, normalizedName, parseJson, queueMealType, type Row } from "./formatters.js";
+import { formatMealPlan, formatMealPlanItem, parseJson, queueMealType, type Row } from "./formatters.js";
 import type { MealPlansRepository } from "./repository.js";
 import type { MealPlanCompleteInput, MealPlanExecutionInput, MealPlanItemUpdateInput, MealPlanUpdateInput } from "./types.js";
 
@@ -314,25 +316,22 @@ export class SqliteMealPlansRepository implements MealPlansRepository {
       }
       if (Number(item.version) !== input.version) return { kind: "version_conflict" as const };
       if (input.householdTotalDemand) throw new InventoryQuantityError("DINING_PLAN_CHANGED","这餐已不是共餐安排，请重新核对");
-      const ingredients = parseJson<unknown[]>(item.ingredients_json, []).map(ingredient)
-        .filter((entry): entry is { name: string; amount: string } => Boolean(entry?.name));
-      const stock = (this.database.prepare(`SELECT food_name FROM inventory_items
-        WHERE user_id = ? AND is_available = 1 AND deleted_at IS NULL`).all(userId) as Array<{ food_name: string }>).map((row) => normalizedName(row.food_name));
-      const shopping = (this.database.prepare(`SELECT name FROM shopping_list_items
-        WHERE user_id = ? AND checked = 0 AND deleted_at IS NULL`).all(userId) as Array<{ name: string }>).map((row) => normalizedName(row.name));
-      const missing = ingredients.filter((entry) => {
-        const name = normalizedName(entry.name);
-        return name && !stock.some((owned) => owned.includes(name) || name.includes(owned))
-          && !shopping.some((saved) => saved.includes(name) || name.includes(saved));
-      });
-      const insert = this.database.prepare(`INSERT INTO shopping_list_items (id, user_id, client_id, name, amount, category)
-        VALUES (?, ?, ?, ?, ?, '餐单')`);
-      const itemIds = missing.map((entry) => {
+      const plan = this.getPlan(planId,userId,false);
+      if (!plan || plan.status !== "active" || ["completed","skipped"].includes(String(item.status))) return { kind: "version_conflict" as const };
+      const stock = this.database.prepare(`SELECT inventory_items.*, (SELECT metadata_json FROM inventory_change_logs e
+        WHERE e.inventory_item_id=inventory_items.id AND e.user_id=inventory_items.user_id
+        AND json_extract(e.metadata_json,'$.field_evidence.quantity.status') IS NOT NULL ORDER BY e.id DESC LIMIT 1) AS quantity_evidence
+        FROM inventory_items WHERE user_id=? AND is_available=1 AND deleted_at IS NULL
+        ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END,expiration_date,id`).all(userId) as Row[];
+      const shopping = this.database.prepare("SELECT * FROM shopping_list_items WHERE user_id=? AND checked=0 AND deleted_at IS NULL").all(userId) as Row[];
+      const result = preparePersonalShopping(itemId,this.getItems(planId,userId),stock.map(row => ({ ...row,quantity_evidence_status: quantityEvidenceStatus(row.quantity_evidence,row.version) })),shopping,currentDateKey());
+      const insert = this.database.prepare(`INSERT INTO shopping_list_items (id,user_id,client_id,name,amount,category) VALUES (?,?,?,?,?,'餐单')`);
+      const itemIds = result.missing.map((entry,index) => {
         const id = randomUUID();
-        insert.run(id, userId, `meal-plan:${itemId}:${normalizedName(entry.name)}`.slice(0, 120), entry.name.slice(0, 120), entry.amount.slice(0, 80));
+        insert.run(id,userId,personalShoppingClientId(itemId,input.idempotencyKey,index),entry.name.slice(0,120),entry.amount.slice(0,80));
         return id;
       });
-      const value = { added: itemIds.length, itemIds, repeated: false };
+      const value = { added: itemIds.length,itemIds,repeated: false,scope: "current_plan",coverage: result.coverage,reviewItems: result.reviewItems };
       this.saveExecution(userId, input.idempotencyKey, "shopping", itemId, value);
       return { kind: "completed" as const, value };
     })();

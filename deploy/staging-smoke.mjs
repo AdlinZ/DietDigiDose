@@ -112,6 +112,10 @@ try {
       cleanup.error = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
     }
   }
-  console.error(JSON.stringify({ success: false, baseUrl, checks,cleanup, error: error instanceof Error ? error.message : String(error) }, null, 2));
+  const message = error instanceof Error ? error.message : String(error);
+  // stdout is the machine-readable report; stderr remains diagnostic-only.
+  console.log(JSON.stringify({ success: false, baseUrl, checks,cleanup, error: message }, null, 2));
+  console.error(`Staging smoke failed: ${message}`);
+  if (cleanup.error) console.error(`Staging smoke cleanup failed: ${cleanup.error}`);
   process.exitCode = 1;
 }

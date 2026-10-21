@@ -1,3 +1,4 @@
+import { adminRecipeUpdateColumns, adminRecipeJsonColumns, adminRecipeExpectedValues } from "./updateSnapshot.js";
 import type { Pool, PoolClient } from "pg";
 import type { AdminRecipesRepository } from "./repository.js";
 import type {
@@ -59,15 +60,16 @@ export class PostgresAdminRecipesRepository implements AdminRecipesRepository {
     });
   }
 
-  async update(recipeId: number, input: AdminRecipeWrite, context: AuditContext) {
+  async update(recipeId: number, input: AdminRecipeWrite, context: AuditContext, expected: Row) {
     return this.tx(async (client) => {
       const result = await client.query(`UPDATE recipes SET title=$1, description=$2, image_url=$3, cook_time=$4,
         difficulty=$5, calories=$6, protein=$7, carbs=$8, fat=$9, category=$10, tags=$11::jsonb,
         steps_json=$12::jsonb, ingredients_json=$13::jsonb, canonical_key=$14, source_content_hash=$15,
         serving_size=$16, prep_time=$17, cuisine=$18, meal_types_json=$19::jsonb, required_kitchenware_json=$20::jsonb,
         optional_kitchenware_json=$21::jsonb, source_url=$22, data_license=$23, source_revision=$24,
-        source_attribution=$25, updated_at=CURRENT_TIMESTAMP WHERE id=$26 AND deleted_at IS NULL`,
-      [...this.writeValues(input), ...this.metadataValues(input), recipeId]);
+        source_attribution=$25, updated_at=CURRENT_TIMESTAMP WHERE id=$26 AND deleted_at IS NULL
+        AND ${adminRecipeUpdateColumns.map((column, index) => `${column} IS NOT DISTINCT FROM $${27 + index}${adminRecipeJsonColumns.has(column) ? "::jsonb" : ""}`).join(" AND ")}`,
+      [...this.writeValues(input), ...this.metadataValues(input), recipeId, ...adminRecipeExpectedValues(expected, true)]);
       if (result.rowCount !== 1) return false;
       await this.replaceRequirements(client, recipeId, input.requirements);
       await this.upsertDuplicates(client, recipeId, input.duplicates);
@@ -76,7 +78,7 @@ export class PostgresAdminRecipesRepository implements AdminRecipesRepository {
     });
   }
 
-  async find(recipeId: number) { return ((await this.pool.query("SELECT * FROM recipes WHERE id=$1 AND deleted_at IS NULL", [recipeId])).rows[0] as Row | undefined) || null; }
+  async find(recipeId: number) { return ((await this.pool.query(`SELECT *, ${[...adminRecipeJsonColumns].map(column => `${column}::text AS __update_${column}`).join(", ")} FROM recipes WHERE id=$1 AND deleted_at IS NULL`, [recipeId])).rows[0] as Row | undefined) || null; }
 
   async replaceKitchenware(recipeId: number, required: unknown[], optional: unknown[], requirements: RequirementWrite[], event: AdminAudit) {
     return this.tx(async (client) => {

@@ -1,3 +1,4 @@
+import { savedInventoryEvidence, editedInventoryEvidence, SAVED_EVIDENCE_LOG_LIMIT } from "./savedEvidence.js";
 import { appendPostgresMaintenanceEvent } from "../planMaintenance/postgresEventWriter.js";
 import { InventoryDomainError } from "./errors.js";
 import { quantityEvidenceStatus, nextQuantityEvidence } from "./evidence.js";
@@ -165,6 +166,14 @@ export class PostgresInventoryRepository implements InventoryRepository {
       ORDER BY CASE WHEN expiration_date = '' THEN 1 ELSE 0 END, expiration_date ASC
     `, [userId]);
     return inventoryListResponseSchema.parse(result.rows.map(formatInventoryItem));
+  }
+
+  async evidence(userId: number, itemId: number) {
+    const result = await this.pool.query(`SELECT i.*, COALESCE((SELECT jsonb_agg(jsonb_build_object('action', e.action, 'metadata_json', e.metadata_json, 'quantity_after', e.quantity_after, 'quantity_unit', e.quantity_unit) ORDER BY e.id)
+      FROM (SELECT action, metadata_json, quantity_after, quantity_unit, id FROM inventory_change_logs WHERE inventory_item_id=i.id AND user_id=i.user_id ORDER BY id DESC LIMIT $3) e), '[]'::jsonb) AS evidence_logs
+      FROM inventory_items i WHERE i.id=$1 AND i.user_id=$2 AND i.deleted_at IS NULL`, [itemId, userId, SAVED_EVIDENCE_LOG_LIMIT]);
+    const item = result.rows[0];
+    return item ? { item_id: itemId, inventory_version: Number(item.version), field_evidence: savedInventoryEvidence(item, item.evidence_logs) } : null;
   }
 
   async findOwned(userId: number, itemId: number) {
@@ -370,7 +379,7 @@ export class PostgresInventoryRepository implements InventoryRepository {
     if (!updatedResult.rows[0]) return { kind: "conflict" } as const;
     const updated = formatInventoryItem(updatedResult.rows[0]);
     const currentQuantity = current.quantity_value == null ? null : Number(current.quantity_value);
-    if (currentQuantity !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit || Boolean(current.is_available) !== updated.is_available || current.quantity_evidence != null) {
+    {
       await client.query(`
         INSERT INTO inventory_change_logs
           (user_id, inventory_item_id, action, source, quantity_before, quantity_after, quantity_unit, delta_value, idempotency_key, metadata_json)
@@ -380,10 +389,10 @@ export class PostgresInventoryRepository implements InventoryRepository {
         userId, itemId, current.quantity_value, updated.quantity_value, updated.quantity_unit,
         current.quantity_value == null || updated.quantity_value == null ? null : Number(updated.quantity_value) - Number(current.quantity_value),
         `manual-update:${itemId}:${expectedVersion}`, source,
-        JSON.stringify(nextQuantityEvidence(current.quantity_evidence, expectedVersion, updated.version,
+        JSON.stringify(editedInventoryEvidence(current, updated, (await client.query("SELECT action, metadata_json, quantity_after, quantity_unit FROM inventory_change_logs WHERE inventory_item_id=$1 AND user_id=$2 ORDER BY id DESC LIMIT $3", [itemId, userId, SAVED_EVIDENCE_LOG_LIMIT])).rows.reverse(), source, nextQuantityEvidence(current.quantity_evidence, expectedVersion, updated.version,
           currentQuantity !== updated.quantity_value || current.quantity_unit !== updated.quantity_unit
             ? source === "manual" ? "manual" : "unverified" : "preserve",
-          updated.quantity_value != null && updated.quantity_unit != null)),
+          updated.quantity_value != null && updated.quantity_unit != null))),
       ]);
     }
     await appendPostgresMaintenanceEvent(client, { userId,kind: "inventory_changed",sourceId: `update:${itemId}:${updated.version}`,subjectId: String(itemId),

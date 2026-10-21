@@ -74,7 +74,7 @@ function publicationIssues(input: AdminRecipeWrite) {
   const issues: string[] = [];
   if (!input.title) issues.push("missing_title");
   if (!input.dataLicense) issues.push("missing_license");
-  if (!Number.isInteger(input.servingSize) || input.servingSize <= 0) issues.push("missing_serving_size");
+  if (!Number.isInteger(input.servingSize) || (input.servingSize ?? 0) <= 0) issues.push("missing_serving_size");
   if ((input.prepTime ?? 0) + input.cookTime <= 0) issues.push("missing_time");
   if (!input.ingredients.length) issues.push("missing_ingredients");
   if (input.steps.length < 2) issues.push("missing_steps");
@@ -112,7 +112,9 @@ export class AdminRecipesService {
       cursorId: cursorMode ? cursorId : null, limit: cursorMode ? pageSize + 1 : null,
     });
     const hasMore = cursorMode && result.rows.length > pageSize;
-    const items = cursorMode ? result.rows.slice(0, pageSize) : result.rows;
+    const items = (cursorMode ? result.rows.slice(0, pageSize) : result.rows).map((row): Row & { diagnostics: { publicationIssues: string[] } } => ({ ...row,
+      diagnostics: { publicationIssues: publicationIssues(this.writeFromStored(row)) },
+    }));
     if (!cursorMode) return items;
     return { items, total: result.summary.total, summary: result.summary,
       nextCursor: hasMore ? encodeCursor({ v: 1, id: Number(items.at(-1)!.id) }) : null };
@@ -127,11 +129,13 @@ export class AdminRecipesService {
   }
 
   async update(adminUserId: number, recipeId: number, body: Row, context: AuditContext) {
-    const input = await this.write(body);
+    const existing = await this.repository.find(recipeId);
+    if (!existing) throw new AdminRecipesError(404, "食谱未找到");
+    const input = await this.write(body, existing);
     const issues = publicationIssues(input);
     if (issues.length) throw new AdminRecipesError(400, "食谱发布质量校验未通过", undefined, { issues });
     input.duplicates = this.duplicates(input, await this.repository.duplicateSources(recipeId));
-    if (!await this.repository.update(recipeId, input, { ...context, adminUserId })) throw new AdminRecipesError(404, "食谱未找到");
+    if (!await this.repository.update(recipeId, input, { ...context, adminUserId }, existing)) throw new AdminRecipesError(409, "食谱已改变，请重新读取后保存", "RECIPE_UPDATE_CONFLICT");
     return { success: true };
   }
 
@@ -240,7 +244,37 @@ export class AdminRecipesService {
     return { success: true, message: "食谱已移入回收站" };
   }
 
-  private async write(body: Row): Promise<AdminRecipeWrite> {
+  private async write(body: Row, existing?: Row): Promise<AdminRecipeWrite> {
+    // The editor does not send provenance fields. Omission is not permission to
+    // replace imported attribution, serving size, or source evidence with defaults.
+    const supplied = body;
+    if (existing) body = { ...existing,
+      steps: existing.steps_json, ingredients: existing.ingredients_json,
+      required_kitchenware: existing.required_kitchenware_json,
+      optional_kitchenware: existing.optional_kitchenware_json,
+      meal_types: existing.meal_types_json, ...body };
+    if (supplied.steps_json !== undefined && supplied.steps === undefined) body.steps = supplied.steps_json;
+    if (supplied.ingredients_json !== undefined && supplied.ingredients === undefined) body.ingredients = supplied.ingredients_json;
+    const metadata = (key: string, fallback: string): string | null => {
+      const value = body[key];
+      if (!existing) return String(value || fallback);
+      if (existing && supplied[key] === undefined) return value == null ? null : String(value);
+      if (value === undefined) return existing ? null : fallback;
+      if (value === null) return null;
+      if (typeof value !== "string") throw new AdminRecipesError(400, `${key} 必须为文本或 null`);
+      return value.trim();
+    };
+    const servingSize = body.serving_size === undefined ? (existing ? null : 2) : body.serving_size;
+    if (existing && supplied.serving_size !== undefined &&
+      (!["number", "string"].includes(typeof supplied.serving_size) || !Number.isInteger(Number(supplied.serving_size)) || Number(supplied.serving_size) <= 0 || Number(supplied.serving_size) > 2_147_483_647)) {
+      throw new AdminRecipesError(400, "份数必须为正整数");
+    }
+    const sourceUrl = metadata("source_url", "");
+    if (existing && supplied.source_url != null && sourceUrl) {
+      try { const url = new URL(sourceUrl); if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error(); }
+      catch { throw new AdminRecipesError(400, "来源链接必须为不含登录信息的 HTTP 或 HTTPS 地址"); }
+    }
+    const nutrient = (key: string) => existing && supplied[key] === undefined && existing[key] == null ? null : Number(body[key]) || 0;
     const steps = parseArray(body.steps ?? body.steps_json);
     const ingredients = parseArray(body.ingredients ?? body.ingredients_json);
     const explicitRequired = parseArray(body.required_kitchenware);
@@ -249,15 +283,15 @@ export class AdminRecipesService {
     const title = String(body.title || "").trim();
     return {
       title, description: String(body.description || "").trim(), imageUrl: body.image_url ? String(body.image_url) : null,
-      cookTime: recipeMinutesSchema.parse(body.cook_time) ?? 0, difficulty: String(body.difficulty || "简单"), calories: Number(body.calories) || 0,
-      protein: Number(body.protein) || 0, carbs: Number(body.carbs) || 0, fat: Number(body.fat) || 0,
+      cookTime: recipeMinutesSchema.parse(body.cook_time) ?? 0, difficulty: String(body.difficulty || "简单"), calories: nutrient("calories"),
+      protein: nutrient("protein"), carbs: nutrient("carbs"), fat: nutrient("fat"),
       category: String(body.category || "其他"), tags: parseArray(body.tags), steps, ingredients,
-      canonicalKey: normalizeContentTerm(title), sourceContentHash: fingerprint(title, ingredients, steps),
-      servingSize: Number(body.serving_size) || 2, prepTime: recipeMinutesSchema.parse(body.prep_time),
+      canonicalKey: normalizeContentTerm(title), sourceContentHash: existing ? (existing.source_content_hash as string | null) ?? null : fingerprint(title, ingredients, steps),
+      servingSize: existing ? (servingSize == null ? null : Number(servingSize)) : Number(body.serving_size) || 2, prepTime: recipeMinutesSchema.parse(body.prep_time),
       cuisine: body.cuisine ? String(body.cuisine) : null, mealTypes: parseArray(body.meal_types), requiredKitchenware,
-      optionalKitchenware, sourceUrl: body.source_url ? String(body.source_url) : null,
-      dataLicense: String(body.data_license || "DietDigiDose-Original"), sourceRevision: String(body.source_revision || "manual-v1"),
-      sourceAttribution: String(body.source_attribution || "DietDigiDose 编辑团队"),
+      optionalKitchenware, sourceUrl: existing ? sourceUrl : sourceUrl || null,
+      dataLicense: metadata("data_license", "DietDigiDose-Original"), sourceRevision: metadata("source_revision", "manual-v1"),
+      sourceAttribution: metadata("source_attribution", "DietDigiDose 编辑团队"),
       requirements: await this.requirements(requiredKitchenware, optionalKitchenware), duplicates: [],
     };
   }

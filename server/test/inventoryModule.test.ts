@@ -25,6 +25,7 @@ const item: InventoryItem = {
 function fakeRepository(overrides: Partial<InventoryRepository> = {}): InventoryRepository {
   return {
     recordFunnelEvent: async () => undefined,
+    evidence: async () => null,
     list: async () => [item],
     findOwned: async () => item,
     create: async () => item,

@@ -1,4 +1,5 @@
 import { PageHeader } from '../components/admin/PageHeader';
+import { RecipeProvenancePanel, type RecipeProvenance } from './RecipeProvenancePanel';
 import { RecipeExecutionEditor } from './RecipeExecutionEditor';
 import { FilterBar } from '../components/admin/ListPrimitives';
 import { DetailPanel } from '../components/admin/DetailPanel';
@@ -16,9 +17,9 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { cn } from '../utils/cn';
-import { parseRecipeArray, qualityIssueText, recipeStatusText } from './recipeReviewModel';
+import { parseRecipeArray, qualityIssueText, recipeStatusText, recipeNutritionPayload } from './recipeReviewModel';
 
-type Recipe = {
+type Recipe = RecipeProvenance & {
   id: number;
   title: string;
   category: string;
@@ -39,7 +40,7 @@ type Recipe = {
   author_username?: string;
   reject_reason?: string;
   quality_status?: 'trusted' | 'estimated' | 'needs_review';
-  nutrition_basis?: 'source' | 'ingredient_estimate' | 'category_fallback';
+  nutrition_basis?: string | null;
   quality_issues_json?: string | string[];
   quality_review_reason?: string;
 };
@@ -204,10 +205,10 @@ export default function Recipes() {
     setFormData({
       title: recipe.title || '',
       category: recipe.category || '减脂餐',
-      calories: recipe.calories ? String(recipe.calories) : '',
-      protein: recipe.protein ? String(recipe.protein) : '',
-      carbs: recipe.carbs ? String(recipe.carbs) : '',
-      fat: recipe.fat ? String(recipe.fat) : '',
+      calories: recipe.calories == null ? '' : String(recipe.calories),
+      protein: recipe.protein == null ? '' : String(recipe.protein),
+      carbs: recipe.carbs == null ? '' : String(recipe.carbs),
+      fat: recipe.fat == null ? '' : String(recipe.fat),
       cook_time: recipe.cook_time ? String(recipe.cook_time).replace(/\s*分钟$/, '') : '',
       prep_time: recipe.prep_time == null ? '' : String(recipe.prep_time),
       difficulty: recipe.difficulty || '简单',
@@ -231,10 +232,7 @@ export default function Recipes() {
       const payload = {
         title: formData.title.trim(),
         category: formData.category,
-        calories: Number(formData.calories) || 0,
-        protein: Number(formData.protein) || 0,
-        carbs: Number(formData.carbs) || 0,
-        fat: Number(formData.fat) || 0,
+        ...recipeNutritionPayload(formData, editingId !== null),
         cook_time: formData.cook_time,
         prep_time: formData.prep_time,
         difficulty: formData.difficulty,
@@ -379,6 +377,7 @@ export default function Recipes() {
           <div><h3 className="font-semibold mb-2">营养质量</h3><StatusBadge tone={selectedRecipe.quality_status==='needs_review'?'warning':'neutral'}>{selectedRecipe.quality_status==='trusted'?'可信':selectedRecipe.quality_status==='estimated'?'营养估算':'待复核'}</StatusBadge><p className="mt-2">{selectedRecipe.quality_review_reason || '暂无质量审核说明'}</p><p className="admin-muted mt-2">热量 {selectedRecipe.calories} kcal · 蛋白质 {selectedRecipe.protein ?? '—'} g · 碳水 {selectedRecipe.carbs ?? '—'} g · 脂肪 {selectedRecipe.fat ?? '—'} g</p></div>
           <section><h3 className="font-semibold mb-2">原料</h3><ul className="space-y-2">{(recipeDetailArray(selectedRecipe.ingredients_json) as Ingredient[]).map((item,index)=><li key={index}>{item.name} · {item.amount}</li>)}</ul></section>
           <section><h3 className="font-semibold mb-2">做法</h3><ol className="list-decimal pl-5 space-y-3">{(recipeDetailArray(selectedRecipe.steps_json) as string[]).map((item,index)=><li key={index}>{item}</li>)}</ol></section>
+          <RecipeProvenancePanel recipe={selectedRecipe} />
           <RecipeExecutionEditor key={selectedRecipe.id} recipeId={selectedRecipe.id} />
           <button className="admin-button" onClick={()=>{handleOpenEdit(selectedRecipe);setSelectedRecipe(null);}}>编辑食谱</button>
         </div>

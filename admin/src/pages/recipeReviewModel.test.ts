@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { parseRecipeArray, qualityIssueText, recipeStatusText } from './recipeReviewModel';
+import { parseRecipeArray, qualityIssueText, recipeStatusText, recipeNutritionPayload } from './recipeReviewModel';
 
 describe('recipe review database formats', () => {
+  it('does not turn blank imported nutrition into zero on edit', () => {
+    const blank = { calories: '', protein: '', carbs: '', fat: '' };
+    expect(recipeNutritionPayload(blank, true)).toEqual({});
+    expect(recipeNutritionPayload({ ...blank, calories: '0', protein: '12' }, true)).toEqual({ calories: 0, protein: 12 });
+    expect(recipeNutritionPayload(blank, false)).toEqual({ calories: 0, protein: 0, carbs: 0, fat: 0 });
+  });
   it.each([
     ['nutrition_unknown', 'cooking_not_reviewed'],
     JSON.stringify(['nutrition_unknown', 'cooking_not_reviewed']),

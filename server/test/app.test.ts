@@ -680,6 +680,22 @@ describe("API security baseline", () => {
     });
     assert.equal(clearPreparation.response.status, 200);
     assert.equal((db.prepare("SELECT prep_time FROM recipes WHERE id=?").get(recipeId) as JsonObject).prep_time, null);
+    db.prepare(`UPDATE recipes SET source='wikibooks_zh', serving_size=4, prep_time=5,
+      source_url='https://example.org/import', data_license='CC-BY-SA-4.0', source_revision='fixture-v1',
+      source_attribution='合成原作者', source_content_hash='import-hash' WHERE id=?`).run(recipeId);
+    const metadataFields = "serving_size,prep_time,source_url,data_license,source_revision,source_attribution,source_content_hash";
+    const imported = db.prepare(`SELECT ${metadataFields} FROM recipes WHERE id=?`).get(recipeId);
+    const titleOnly = await api(`/api/v1/admin/recipes/${recipeId}`, {
+      method: "PUT", token: adminToken, body: JSON.stringify({ title: "导入食谱仅改名称" }),
+    });
+    assert.equal(titleOnly.response.status, 200);
+    assert.deepEqual(db.prepare(`SELECT ${metadataFields} FROM recipes WHERE id=?`).get(recipeId), imported);
+    const clearSource = await api(`/api/v1/admin/recipes/${recipeId}`, {
+      method: "PUT", token: adminToken, body: JSON.stringify({ source_url: null, source_revision: null, source_attribution: null }),
+    });
+    assert.equal(clearSource.response.status, 200);
+    assert.deepEqual(db.prepare("SELECT source_url,source_revision,source_attribution FROM recipes WHERE id=?").get(recipeId),
+      { source_url: null, source_revision: null, source_attribution: null });
     db.prepare("DELETE FROM recipes WHERE id = ?").run(recipeId);
   });
 

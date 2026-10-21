@@ -311,6 +311,10 @@ try {
 
   const inventoryRepository = new PostgresInventoryRepository(pool);
   const inventoryService = new InventoryService(inventoryRepository);
+  await (await import("./helpers/savedInventoryEvidence.js")).verifySavedInventoryEvidence(inventoryRepository, user.id, -1, async (id, mode) => {
+    if (mode === "gap") { await pool.query("DELETE FROM inventory_change_logs WHERE inventory_item_id=$1 AND id NOT IN (SELECT MAX(id) FROM inventory_change_logs WHERE inventory_item_id=$1)", [id]); return; }
+    await pool.query("UPDATE inventory_change_logs SET metadata_json='[null]'::jsonb WHERE inventory_item_id=$1", [id]);
+  });
   const funnelBefore = await pool.query(`SELECT event_name,COUNT(*)::int AS count FROM funnel_events
     WHERE event_name IN ('inventory_added','cooking_completed') GROUP BY event_name`);
   const initialFunnelCounts = new Map(funnelBefore.rows.map((row) => [String(row.event_name), Number(row.count)]));
@@ -2309,6 +2313,11 @@ try {
   await adminRecipesService.update(user.id, firstAdminRecipe.id, { ...adminRecipeBody, prep_time: null }, adminContext);
   assert.equal((await pool.query("SELECT prep_time FROM recipes WHERE id=$1", [firstAdminRecipe.id])).rows[0].prep_time, null);
   const adminCoverage = await adminRecipesService.coverage();
+  const { verifyAdminRecipeMetadata } = await import("./helpers/adminRecipeMetadata.js");
+  await verifyAdminRecipeMetadata(adminRecipesService, user.id, async (sql, values = []) => {
+    let index = 0;
+    return (await pool.query(sql.replace(/\?/g, () => `$${++index}`), values)).rows;
+  }, adminRecipesRepository);
   assert(adminCoverage.byCategory.some((row) => row.value === "晚餐"));
   await adminRecipesService.reviewQuality(user.id, firstAdminRecipe.id, "needs_review", "PostgreSQL 集成复核", adminContext);
   assert.equal((await pool.query("SELECT quality_status FROM recipes WHERE id=$1", [firstAdminRecipe.id])).rows[0]?.quality_status, "needs_review");

@@ -2,6 +2,7 @@ import { currentDateKey } from "../../utils/date.js";
 import { getAgentRunRow, toAgentRunSummary } from "../../services/agent/repository.js";
 import { classifyScanAcceptance } from "./scanAcceptance.js";
 import {
+  inventorySavedEvidenceSchema,
   inventoryBulkIntakeResponseSchema,
   inventoryConsumptionPreviewResponseSchema,
   inventoryConsumptionResponseSchema,
@@ -103,6 +104,12 @@ export class InventoryService {
       }
       throw error;
     }
+  }
+
+  async evidence(userId: number, itemId: number) {
+    const result = await this.repository.evidence(userId, itemId);
+    if (!result) throw new InventoryDomainError("INVENTORY_NOT_FOUND", "食材不存在或无权查看");
+    return inventorySavedEvidenceSchema.parse(result);
   }
 
   async history(userId: number, itemId: number) {

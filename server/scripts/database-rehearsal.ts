@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +8,7 @@ import Database from "better-sqlite3";
 import { createDatabaseBackup, inspectDatabase, restoreDatabaseBackup } from "./database-backup.js";
 
 type Check = { name: string; durationMs: number; details?: Record<string, unknown> };
-type ServerHandle = { baseUrl: string; process: ChildProcessWithoutNullStreams; logs: string[]; stop: () => Promise<void> };
+type ServerHandle = { baseUrl: string; process: ChildProcess; logs: string[]; stop: () => Promise<void> };
 
 const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const onePixelPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -204,6 +204,9 @@ async function runCoreJourney(baseUrl: string, label: string, adminInitialPasswo
     body: JSON.stringify({ content: `数据库演练媒体引用 ${label}`, image_urls: [uploadedPath], category: "寻味" }),
   });
   addCheck("community.post", post, { postId: post.body.id });
+  const bookmark = await request(baseUrl, `/api/v1/community/posts/${post.body.id}/bookmark`, { method: "PUT", token });
+  if (bookmark.body.bookmarked !== true) throw new Error(`${label}: bookmark creation failed`);
+  addCheck("community.bookmark", bookmark);
 
   const second = await request(baseUrl, "/api/v1/auth/register", {
     method: "POST",
@@ -270,6 +273,10 @@ async function verifyRecoveredJourney(baseUrl: string, label: string, journey: A
   checks.push({ name: `${label}.diet-records`, durationMs: diet.durationMs });
   const post = await request(baseUrl, `/api/v1/community/posts/${journey.postId}`);
   if (!post.body.image_urls?.includes(journey.mediaPath)) throw new Error(`${label}: restored media reference missing`);
+  const bookmarked = await request(baseUrl, `/api/v1/community/posts/${journey.postId}`, { token: login.body.token });
+  const isolatedBookmark = await request(baseUrl, `/api/v1/community/posts/${journey.postId}`, { token: secondLogin.body.token });
+  if (bookmarked.body.is_bookmarked !== true || isolatedBookmark.body.is_bookmarked !== false) throw new Error(`${label}: restored bookmark or account isolation is incorrect`);
+  checks.push({ name: `${label}.community.bookmark`, durationMs: bookmarked.durationMs + isolatedBookmark.durationMs, details: { persisted: true, isolated: true } });
   checks.push({ name: `${label}.media-reference`, durationMs: post.durationMs });
   const adminLogin = await request(baseUrl, "/api/v1/auth/login", {
     method: "POST",
@@ -281,6 +288,140 @@ async function verifyRecoveredJourney(baseUrl: string, label: string, journey: A
     throw new Error(`${label}: restored admin summary is inconsistent`);
   }
   checks.push({ name: `${label}.admin.stats`, durationMs: stats.durationMs, details: { users: stats.body.users, inventory: stats.body.inventory } });
+}
+
+// Test/rehearsal helper only, never a production downgrade path.
+export function rollbackPreviousCandidateFixture(legacyDatabase: Database.Database, previousVersion: number) {
+  const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
+    .all(previousVersion) as Array<{ version: number }>;
+  const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 31 }, (_, index) => 59 + index).includes(migration.version));
+  if (unsupportedVersions.length) {
+    throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
+  }
+  for (const migration of newerVersions) {
+    if (migration.version === 89) {
+      // Only discard the empty bookmark table in our synthetic drill fixture.
+      const bookmarks = legacyDatabase.prepare("SELECT COUNT(*) n FROM community_post_bookmarks").get() as { n: number };
+      if (bookmarks.n) throw new Error("Cannot downgrade fixture containing community bookmarks");
+      legacyDatabase.exec("DROP TABLE community_post_bookmarks");
+    }
+    if (migration.version === 88) {
+      // This reversal is limited to the fresh, unreviewed drill fixture.
+      const reviewed = legacyDatabase.prepare("SELECT COUNT(*) n FROM recipes WHERE execution_json IS NOT NULL").get() as { n: number };
+      if (reviewed.n) throw new Error("Cannot downgrade fixture containing reviewed execution evidence");
+      legacyDatabase.exec("ALTER TABLE recipes DROP COLUMN execution_json");
+    }
+    if (migration.version === 87) legacyDatabase.exec("DROP TABLE diet_record_create_requests");
+    if (migration.version === 86) legacyDatabase.exec("DROP TABLE onboarding_event_receipts; DROP TABLE user_onboarding;");
+    if (migration.version === 85) {
+      // Only reconstruct the empty drill fixture. Never downgrade real accounts:
+      // passwordless users must retain login and account management support.
+      const passwordless = legacyDatabase.prepare("SELECT COUNT(*) n FROM users WHERE password_hash IS NULL").get() as { n: number };
+      if (passwordless.n) throw new Error("Cannot downgrade fixture containing passwordless accounts");
+      legacyDatabase.exec(`DROP TABLE account_reauth_grants;
+        ALTER TABLE auth_verification_challenges DROP COLUMN reauth_user_id;
+        ALTER TABLE auth_verification_challenges DROP COLUMN reauth_session_version;`);
+      const { sql } = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").get() as { sql: string };
+      const restored = sql.replace(/\bpassword_hash\s+TEXT\b/i, "password_hash TEXT NOT NULL")
+        .replace(/^(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?)["`\[]?users["`\]]?/i, "$1users_rollback85");
+      const artifacts = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='users' AND type IN ('index','trigger') AND sql IS NOT NULL").all() as Array<{ sql: string }>;
+      const sequence = legacyDatabase.prepare("SELECT seq FROM sqlite_sequence WHERE name='users'").get() as { seq: number } | undefined;
+      legacyDatabase.transaction(() => {
+        legacyDatabase.exec(restored);
+        legacyDatabase.exec(`INSERT INTO users_rollback85 SELECT * FROM users;
+          DROP TABLE users; ALTER TABLE users_rollback85 RENAME TO users;`);
+        for (const artifact of artifacts) legacyDatabase.exec(artifact.sql);
+        if (sequence) legacyDatabase.prepare("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='users'").run(sequence.seq);
+      })();
+    }
+    if (migration.version === 84) legacyDatabase.exec(`
+      ALTER TABLE user_health_profiles DROP COLUMN profile_version;
+      ALTER TABLE user_health_profiles DROP COLUMN nutrition_target_source;
+      ALTER TABLE user_health_profiles DROP COLUMN nutrition_target_legacy_json;
+      ALTER TABLE user_health_profiles DROP COLUMN nutrition_target_version;
+      ALTER TABLE user_health_profiles DROP COLUMN safety_status;
+    `);
+    if (migration.version === 83) legacyDatabase.exec(`
+      DROP TABLE feedback_messages;
+      DROP INDEX idx_feedback_request;
+      DROP INDEX idx_feedback_status;
+      ALTER TABLE user_notification_inbox DROP COLUMN feedback_id;
+      ALTER TABLE user_feedback DROP COLUMN request_key;
+      ALTER TABLE user_feedback DROP COLUMN version;
+      ALTER TABLE user_feedback DROP COLUMN updated_at;
+      UPDATE user_feedback SET status = 'open' WHERE status = 'received';
+    `);
+    if (migration.version === 82) legacyDatabase.exec("DROP TABLE prepared_meal_allocations");
+    if (migration.version === 81) {
+      // Only this freshly bootstrapped drill fixture is downgraded. A real rc.7
+      // database can contain NULL nutrition and must never use this reversal.
+      const unknown = legacyDatabase.prepare("SELECT COUNT(*) n FROM ingredients_library WHERE calories_100g IS NULL").get() as { n: number };
+      if (unknown.n) throw new Error("Cannot downgrade fixture with unknown ingredient nutrition");
+      const { sql } = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ingredients_library'").get() as { sql: string };
+      const restored = sql.replace(/\bcalories_100g\s+REAL\b/i, "calories_100g REAL NOT NULL")
+        .replace(/^(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?)["`\[]?ingredients_library["`\]]?/i, "$1ingredients_library_rollback81");
+      if (restored === sql) throw new Error("Unexpected fixture ingredient schema");
+      const artifacts = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='ingredients_library' AND type IN ('index','trigger') AND sql IS NOT NULL").all() as Array<{ sql: string }>;
+      const sequence = legacyDatabase.prepare("SELECT seq FROM sqlite_sequence WHERE name='ingredients_library'").get() as { seq: number } | undefined;
+      legacyDatabase.transaction(() => {
+        legacyDatabase.exec(`DROP TRIGGER base_data_recipe_cooking_guard_insert;
+          DROP TRIGGER base_data_recipe_cooking_guard_update;
+          DROP TRIGGER base_data_prepared_guard_insert;
+          DROP TRIGGER base_data_prepared_guard_update;
+          DROP TABLE base_data_runtime_ids;`);
+        legacyDatabase.exec(restored);
+        legacyDatabase.exec(`INSERT INTO ingredients_library_rollback81 SELECT * FROM ingredients_library;
+          DROP TABLE ingredients_library;
+          ALTER TABLE ingredients_library_rollback81 RENAME TO ingredients_library;`);
+        for (const artifact of artifacts) legacyDatabase.exec(artifact.sql);
+        if (sequence) legacyDatabase.prepare("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='ingredients_library'").run(sequence.seq);
+        legacyDatabase.exec(`ALTER TABLE ingredients_library DROP COLUMN nutrition_status;
+          ALTER TABLE recipes DROP COLUMN automatic_inventory_write_allowed;`);
+        for (const table of ["recipes", "ingredients_library", "kitchenware_catalog"]) legacyDatabase.exec(`ALTER TABLE ${table} DROP COLUMN base_data_payload`);
+        for (const table of ["users", "community_posts", "community_comments", "inventory_items", "recipe_favorites"]) legacyDatabase.exec(`ALTER TABLE ${table} DROP COLUMN is_demo`);
+      })();
+    }
+    if (migration.version === 80) legacyDatabase.exec("DROP TABLE proactive_intervention_scan_cursor;");
+    if (migration.version === 79) legacyDatabase.exec("DROP TABLE proactive_intervention_outcomes; DROP TABLE proactive_intervention_actions; DROP TABLE proactive_interventions; DROP TABLE proactive_intervention_preferences;");
+    if (migration.version === 78) legacyDatabase.exec("DROP TABLE core_loop_actor_classifications; DROP TABLE core_loop_metric_settings;");
+    // These destructive reversals apply only to this newly created, empty drill
+    // fixture. They are deliberately not exposed as a production downgrade.
+    if (migration.version === 77) legacyDatabase.exec(`
+      DROP INDEX idx_household_shopping_plan_demand;
+      ALTER TABLE household_shopping_items DROP COLUMN source_plan_item_id;
+      ALTER TABLE household_shopping_items DROP COLUMN source_demand_key;
+      ALTER TABLE household_shopping_items DROP COLUMN source_generated_version;
+    `);
+    if (migration.version === 76) legacyDatabase.exec("ALTER TABLE meal_plan_items DROP COLUMN dining_json; ALTER TABLE household_meal_batches DROP COLUMN dining_json;");
+    if (migration.version === 75) legacyDatabase.exec("DROP INDEX idx_household_meal_batches_plan; ALTER TABLE household_meal_batches DROP COLUMN plan_item_id;");
+    if (migration.version === 74) legacyDatabase.exec("DROP TABLE household_meal_reservations; ALTER TABLE household_meal_events DROP COLUMN reserved_servings_used;");
+    if (migration.version === 73) legacyDatabase.exec("DROP TABLE household_meal_intake_corrections;");
+    if (migration.version === 72) legacyDatabase.exec("DROP TABLE household_meal_events;");
+    if (migration.version === 71) legacyDatabase.exec("DROP TABLE household_meal_batches;");
+    if (migration.version === 70) legacyDatabase.exec(`
+      ALTER TABLE household_members DROP COLUMN dining_shared;
+      ALTER TABLE household_members DROP COLUMN dining_preferences_json;
+      ALTER TABLE household_members DROP COLUMN dining_version;
+    `);
+    if (migration.version === 69) legacyDatabase.exec("DROP TABLE plan_maintenance_job_events; DROP TABLE plan_maintenance_jobs;");
+    if (migration.version === 68) legacyDatabase.exec("DROP TABLE plan_maintenance_events;");
+    if (migration.version === 67) legacyDatabase.exec("DROP TABLE plan_maintenance_settings;");
+    if (migration.version === 66) legacyDatabase.exec("ALTER TABLE prepared_meals DROP COLUMN reported_cooking_minutes;");
+    if (migration.version === 65) legacyDatabase.exec("DROP TABLE recommendation_learning_settings;");
+    if (migration.version === 64) legacyDatabase.exec("DROP TABLE meal_plan_changes; ALTER TABLE meal_plan_items DROP COLUMN confirmed_at;");
+    if (migration.version === 63) legacyDatabase.exec("DROP TABLE prepared_meal_intake_corrections;");
+    if (migration.version === 62) legacyDatabase.exec(`
+      DROP INDEX idx_cooking_queue_active_plan_item;
+      DROP INDEX idx_cooking_queue_active_recipe;
+      ALTER TABLE cooking_queue_items DROP COLUMN source_plan_item_id;
+      CREATE UNIQUE INDEX idx_cooking_queue_active_recipe ON cooking_queue_items(user_id,recipe_id)
+        WHERE deleted_at IS NULL AND status IN ('waiting','preparing','ready','cooking');
+    `);
+    if (migration.version === 61) legacyDatabase.exec("ALTER TABLE prepared_meals DROP COLUMN is_reserved");
+    if (migration.version === 60) legacyDatabase.exec("DROP TABLE prepared_meal_events; DROP TABLE prepared_meals;");
+    if (migration.version === 59) legacyDatabase.exec("DROP TABLE IF EXISTS worker_task_runs; DROP TABLE IF EXISTS worker_task_leases;");
+    legacyDatabase.prepare("DELETE FROM schema_migrations WHERE version = ?").run(migration.version);
+  }
 }
 
 async function main() {
@@ -316,132 +457,11 @@ async function main() {
     await activeServer.stop();
     activeServer = null;
     const legacyDatabase = new Database(legacyPath);
-    const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
-      .all(previousVersion) as Array<{ version: number }>;
-    const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 30 }, (_, index) => 59 + index).includes(migration.version));
-    if (unsupportedVersions.length) {
+    try {
+      rollbackPreviousCandidateFixture(legacyDatabase, previousVersion);
+    } finally {
       legacyDatabase.close();
-      throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
     }
-    for (const migration of newerVersions) {
-      if (migration.version === 88) {
-        // This reversal is limited to the fresh, unreviewed drill fixture.
-        const reviewed = legacyDatabase.prepare("SELECT COUNT(*) n FROM recipes WHERE execution_json IS NOT NULL").get() as { n: number };
-        if (reviewed.n) throw new Error("Cannot downgrade fixture containing reviewed execution evidence");
-        legacyDatabase.exec("ALTER TABLE recipes DROP COLUMN execution_json");
-      }
-      if (migration.version === 87) legacyDatabase.exec("DROP TABLE diet_record_create_requests");
-      if (migration.version === 86) legacyDatabase.exec("DROP TABLE onboarding_event_receipts; DROP TABLE user_onboarding;");
-      if (migration.version === 85) {
-        // Only reconstruct the empty drill fixture. Never downgrade real accounts:
-        // passwordless users must retain login and account management support.
-        const passwordless = legacyDatabase.prepare("SELECT COUNT(*) n FROM users WHERE password_hash IS NULL").get() as { n: number };
-        if (passwordless.n) throw new Error("Cannot downgrade fixture containing passwordless accounts");
-        legacyDatabase.exec(`DROP TABLE account_reauth_grants;
-          ALTER TABLE auth_verification_challenges DROP COLUMN reauth_user_id;
-          ALTER TABLE auth_verification_challenges DROP COLUMN reauth_session_version;`);
-        const { sql } = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").get() as { sql: string };
-        const restored = sql.replace(/\bpassword_hash\s+TEXT\b/i, "password_hash TEXT NOT NULL")
-          .replace(/^(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?)["`\[]?users["`\]]?/i, "$1users_rollback85");
-        const artifacts = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='users' AND type IN ('index','trigger') AND sql IS NOT NULL").all() as Array<{ sql: string }>;
-        const sequence = legacyDatabase.prepare("SELECT seq FROM sqlite_sequence WHERE name='users'").get() as { seq: number } | undefined;
-        legacyDatabase.transaction(() => {
-          legacyDatabase.exec(restored);
-          legacyDatabase.exec(`INSERT INTO users_rollback85 SELECT * FROM users;
-            DROP TABLE users; ALTER TABLE users_rollback85 RENAME TO users;`);
-          for (const artifact of artifacts) legacyDatabase.exec(artifact.sql);
-          if (sequence) legacyDatabase.prepare("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='users'").run(sequence.seq);
-        })();
-      }
-      if (migration.version === 84) legacyDatabase.exec(`
-        ALTER TABLE user_health_profiles DROP COLUMN profile_version;
-        ALTER TABLE user_health_profiles DROP COLUMN nutrition_target_source;
-        ALTER TABLE user_health_profiles DROP COLUMN nutrition_target_legacy_json;
-        ALTER TABLE user_health_profiles DROP COLUMN nutrition_target_version;
-        ALTER TABLE user_health_profiles DROP COLUMN safety_status;
-      `);
-      if (migration.version === 83) legacyDatabase.exec(`
-        DROP TABLE feedback_messages;
-        DROP INDEX idx_feedback_request;
-        DROP INDEX idx_feedback_status;
-        ALTER TABLE user_notification_inbox DROP COLUMN feedback_id;
-        ALTER TABLE user_feedback DROP COLUMN request_key;
-        ALTER TABLE user_feedback DROP COLUMN version;
-        ALTER TABLE user_feedback DROP COLUMN updated_at;
-        UPDATE user_feedback SET status = 'open' WHERE status = 'received';
-      `);
-      if (migration.version === 82) legacyDatabase.exec("DROP TABLE prepared_meal_allocations");
-      if (migration.version === 81) {
-        // Only this freshly bootstrapped drill fixture is downgraded. A real rc.7
-        // database can contain NULL nutrition and must never use this reversal.
-        const unknown = legacyDatabase.prepare("SELECT COUNT(*) n FROM ingredients_library WHERE calories_100g IS NULL").get() as { n: number };
-        if (unknown.n) throw new Error("Cannot downgrade fixture with unknown ingredient nutrition");
-        const { sql } = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ingredients_library'").get() as { sql: string };
-        const restored = sql.replace(/\bcalories_100g\s+REAL\b/i, "calories_100g REAL NOT NULL")
-          .replace(/^(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?)["`\[]?ingredients_library["`\]]?/i, "$1ingredients_library_rollback81");
-        if (restored === sql) throw new Error("Unexpected fixture ingredient schema");
-        const artifacts = legacyDatabase.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='ingredients_library' AND type IN ('index','trigger') AND sql IS NOT NULL").all() as Array<{ sql: string }>;
-        const sequence = legacyDatabase.prepare("SELECT seq FROM sqlite_sequence WHERE name='ingredients_library'").get() as { seq: number } | undefined;
-        legacyDatabase.transaction(() => {
-          legacyDatabase.exec(`DROP TRIGGER base_data_recipe_cooking_guard_insert;
-            DROP TRIGGER base_data_recipe_cooking_guard_update;
-            DROP TRIGGER base_data_prepared_guard_insert;
-            DROP TRIGGER base_data_prepared_guard_update;
-            DROP TABLE base_data_runtime_ids;`);
-          legacyDatabase.exec(restored);
-          legacyDatabase.exec(`INSERT INTO ingredients_library_rollback81 SELECT * FROM ingredients_library;
-            DROP TABLE ingredients_library;
-            ALTER TABLE ingredients_library_rollback81 RENAME TO ingredients_library;`);
-          for (const artifact of artifacts) legacyDatabase.exec(artifact.sql);
-          if (sequence) legacyDatabase.prepare("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='ingredients_library'").run(sequence.seq);
-          legacyDatabase.exec(`ALTER TABLE ingredients_library DROP COLUMN nutrition_status;
-            ALTER TABLE recipes DROP COLUMN automatic_inventory_write_allowed;`);
-          for (const table of ["recipes", "ingredients_library", "kitchenware_catalog"]) legacyDatabase.exec(`ALTER TABLE ${table} DROP COLUMN base_data_payload`);
-          for (const table of ["users", "community_posts", "community_comments", "inventory_items", "recipe_favorites"]) legacyDatabase.exec(`ALTER TABLE ${table} DROP COLUMN is_demo`);
-        })();
-      }
-      if (migration.version === 80) legacyDatabase.exec("DROP TABLE proactive_intervention_scan_cursor;");
-      if (migration.version === 79) legacyDatabase.exec("DROP TABLE proactive_intervention_outcomes; DROP TABLE proactive_intervention_actions; DROP TABLE proactive_interventions; DROP TABLE proactive_intervention_preferences;");
-      if (migration.version === 78) legacyDatabase.exec("DROP TABLE core_loop_actor_classifications; DROP TABLE core_loop_metric_settings;");
-      // These destructive reversals apply only to this newly created, empty drill
-      // fixture. They are deliberately not exposed as a production downgrade.
-      if (migration.version === 77) legacyDatabase.exec(`
-        DROP INDEX idx_household_shopping_plan_demand;
-        ALTER TABLE household_shopping_items DROP COLUMN source_plan_item_id;
-        ALTER TABLE household_shopping_items DROP COLUMN source_demand_key;
-        ALTER TABLE household_shopping_items DROP COLUMN source_generated_version;
-      `);
-      if (migration.version === 76) legacyDatabase.exec("ALTER TABLE meal_plan_items DROP COLUMN dining_json; ALTER TABLE household_meal_batches DROP COLUMN dining_json;");
-      if (migration.version === 75) legacyDatabase.exec("DROP INDEX idx_household_meal_batches_plan; ALTER TABLE household_meal_batches DROP COLUMN plan_item_id;");
-      if (migration.version === 74) legacyDatabase.exec("DROP TABLE household_meal_reservations; ALTER TABLE household_meal_events DROP COLUMN reserved_servings_used;");
-      if (migration.version === 73) legacyDatabase.exec("DROP TABLE household_meal_intake_corrections;");
-      if (migration.version === 72) legacyDatabase.exec("DROP TABLE household_meal_events;");
-      if (migration.version === 71) legacyDatabase.exec("DROP TABLE household_meal_batches;");
-      if (migration.version === 70) legacyDatabase.exec(`
-        ALTER TABLE household_members DROP COLUMN dining_shared;
-        ALTER TABLE household_members DROP COLUMN dining_preferences_json;
-        ALTER TABLE household_members DROP COLUMN dining_version;
-      `);
-      if (migration.version === 69) legacyDatabase.exec("DROP TABLE plan_maintenance_job_events; DROP TABLE plan_maintenance_jobs;");
-      if (migration.version === 68) legacyDatabase.exec("DROP TABLE plan_maintenance_events;");
-      if (migration.version === 67) legacyDatabase.exec("DROP TABLE plan_maintenance_settings;");
-      if (migration.version === 66) legacyDatabase.exec("ALTER TABLE prepared_meals DROP COLUMN reported_cooking_minutes;");
-      if (migration.version === 65) legacyDatabase.exec("DROP TABLE recommendation_learning_settings;");
-      if (migration.version === 64) legacyDatabase.exec("DROP TABLE meal_plan_changes; ALTER TABLE meal_plan_items DROP COLUMN confirmed_at;");
-      if (migration.version === 63) legacyDatabase.exec("DROP TABLE prepared_meal_intake_corrections;");
-      if (migration.version === 62) legacyDatabase.exec(`
-        DROP INDEX idx_cooking_queue_active_plan_item;
-        DROP INDEX idx_cooking_queue_active_recipe;
-        ALTER TABLE cooking_queue_items DROP COLUMN source_plan_item_id;
-        CREATE UNIQUE INDEX idx_cooking_queue_active_recipe ON cooking_queue_items(user_id,recipe_id)
-          WHERE deleted_at IS NULL AND status IN ('waiting','preparing','ready','cooking');
-      `);
-      if (migration.version === 61) legacyDatabase.exec("ALTER TABLE prepared_meals DROP COLUMN is_reserved");
-      if (migration.version === 60) legacyDatabase.exec("DROP TABLE prepared_meal_events; DROP TABLE prepared_meals;");
-      if (migration.version === 59) legacyDatabase.exec("DROP TABLE IF EXISTS worker_task_runs; DROP TABLE IF EXISTS worker_task_leases;");
-      legacyDatabase.prepare("DELETE FROM schema_migrations WHERE version = ?").run(migration.version);
-    }
-    legacyDatabase.close();
     const legacyBefore = await inspectDatabase(legacyPath);
     if (legacyBefore.migrationVersion !== previousVersion) throw new Error(`previous candidate fixture stopped at migration ${legacyBefore.migrationVersion}`);
     activeServer = await startServer(legacyPath, path.join(drillRoot, "legacy-media"), adminInitialPassword);

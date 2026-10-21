@@ -22,6 +22,8 @@ try {
     bundle: true,
     splitting: true,
     minifySyntax: true,
+    // Compact formatting only; retain identifiers and esbuild's legal comments.
+    minifyWhitespace: true,
     platform: 'node',
     format: 'esm',
     outdir: 'dist',

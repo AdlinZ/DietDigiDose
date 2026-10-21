@@ -141,6 +141,10 @@ export const SmartDateInput = ({
             type: mode === 'time' ? 'time' : 'date',
             value: displayString || '',
             onChange: (e: any) => {
+              if (e.target.value === '') {
+                onChange('');
+                return;
+              }
               if (e.target.value) {
                 const d = dayjs(e.target.value);
                 if (d.isValid()) {

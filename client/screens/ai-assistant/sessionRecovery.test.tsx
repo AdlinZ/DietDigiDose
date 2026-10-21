@@ -1,3 +1,4 @@
+jest.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
 import React from "react";
 import renderer, { act } from "react-test-renderer";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -15,7 +16,7 @@ const mockStop = jest.fn();
 const mockFetch = jest.fn();
 let mockOwner = { userId: 1, generation: 1, active: true };
 let mockCheck: (userId: number, generation: number) => boolean;
-let mockVoice: { onSpeechFinal: (text: string) => void };
+let mockVoice: { onSpeechFinal: (text: string) => void; onDiscard: () => void };
 let mockUuid = 0;
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), setParams: jest.fn(), canGoBack: () => true };
 const mockParams = {};
@@ -257,4 +258,16 @@ test.each(["conversation", "account", "logout"])("ignores retained ASR callbacks
   expect(mockWait).not.toHaveBeenCalled();
   expect(mockSpeak).not.toHaveBeenCalled();
   expect(tree.root.findAll(node => node.props.children === "重播回答")).toHaveLength(0);
+});
+
+
+test("foreground cancellation suppresses late voice TTS without losing the submitted task", async () => {
+  const pending = deferred<AgentResponse>(); mockChat.mockReturnValue(pending.promise);
+  await mount();
+  await act(async () => { mockVoice.onSpeechFinal("给我一个菜谱"); });
+  act(() => { mockVoice.onDiscard(); });
+  await act(async () => { pending.resolve(response()); });
+  expect(mockWait).not.toHaveBeenCalled();
+  expect(mockSpeak).not.toHaveBeenCalled();
+  expect(visibleMessages(tree).some(item => item.agentRun?.run.id === "run-A")).toBe(true);
 });

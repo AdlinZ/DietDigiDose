@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { Alert, Linking, Platform } from "react-native";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
+import { Alert, AppState, Linking, Platform } from "react-native";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
 import { useAuthFetch } from "@/contexts/AuthContext";
@@ -33,6 +33,10 @@ type NativeRecording = { recording: Audio.Recording; stop: () => Promise<void> }
 interface VoiceRecorderOptions {
   /** Discard recordings and pending transcription when the owning conversation changes. */
   scopeKey?: string;
+  /** Whether the owning route is focused; refocusing never resumes capture. */
+  focused?: boolean;
+  /** Invalidate downstream voice work when capture ownership is lost. */
+  onDiscard?: () => void;
   /** 识别中的临时文本，用于更新 UI。 */
   onSpeechResult?: (text: string) => void;
   /** 一轮录音完成后的最终文本。无论自动停顿或手动结束，都只触发一次。 */
@@ -41,7 +45,7 @@ interface VoiceRecorderOptions {
   onSpeechEmpty?: () => void;
 }
 
-export function useVoiceRecorder({ scopeKey, onSpeechResult, onSpeechFinal, onSpeechEmpty }: VoiceRecorderOptions = {}) {
+export function useVoiceRecorder({ scopeKey, focused = true, onDiscard, onSpeechResult, onSpeechFinal, onSpeechEmpty }: VoiceRecorderOptions = {}) {
   const authFetch = useAuthFetch();
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -53,33 +57,70 @@ export function useVoiceRecorder({ scopeKey, onSpeechResult, onSpeechFinal, onSp
   const cleanupAudioRef = useRef<(() => void) | null>(null);
   const nativeRecordingRef = useRef<NativeRecording | null>(null);
   const disposed = useRef(false);
-  const scope = useMemo(() => ({ key: scopeKey }), [scopeKey]);
+  const scope = useMemo(() => ({ key: scopeKey }), [scopeKey, focused]);
   const currentScope = useRef(scope);
-  currentScope.current = scope;
   // A scope may return to the same key; each recording attempt must still expire.
   const generation = useRef(0);
   const pendingStart = useRef<number | null>(null);
   const isCurrent = useCallback(() => !disposed.current && currentScope.current === scope, [scope]);
-  useEffect(() => {
+  const onDiscardRef = useRef(onDiscard);
+  useLayoutEffect(() => { onDiscardRef.current = onDiscard; }, [onDiscard]);
+  const foreground = useRef(AppState.currentState !== "background" && AppState.currentState !== "inactive");
+  const discardCapture = useCallback(() => {
+    generation.current += 1;
+    pendingStart.current = null;
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    if (recorder) {
+      recorder.onstop = null;
+      recorder.ondataavailable = null;
+      try { if (recorder.state !== "inactive") recorder.stop(); } catch {}
+    }
+    cleanupAudioRef.current?.(); cleanupAudioRef.current = null;
+    const native = nativeRecordingRef.current; nativeRecordingRef.current = null;
+    if (native) void native.stop().catch(() => undefined);
+    onDiscardRef.current?.();
+  }, []);
+  const discardRecording = useCallback(() => {
+    if (!isCurrent()) return;
+    discardCapture();
+    setIsRecording(false);
+    setIsTranscribing(false);
+    setStatusText("");
+  }, [discardCapture, isCurrent]);
+  useLayoutEffect(() => {
+    currentScope.current = scope;
     disposed.current = false;
     setIsRecording(false);
     setIsTranscribing(false);
     setStatusText("");
     return () => {
       disposed.current = true;
-      generation.current += 1;
-      pendingStart.current = null;
-      const recorder = mediaRecorderRef.current;
-      if (recorder) {
-        recorder.onstop = null;
-        if (recorder.state !== "inactive") recorder.stop();
-        mediaRecorderRef.current = null;
-      }
-      cleanupAudioRef.current?.(); cleanupAudioRef.current = null;
-      const native = nativeRecordingRef.current; nativeRecordingRef.current = null;
-      if (native) void native.stop().catch(() => undefined);
+      discardCapture();
     };
-  }, [scopeKey]);
+  }, [scope, discardCapture]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", next => {
+      foreground.current = next === "active";
+      if (!foreground.current) discardRecording();
+    });
+    const onHidden = () => { if (document.hidden) discardRecording(); };
+    const onPageHide = () => { foreground.current = false; discardRecording(); };
+    const onPageShow = () => { foreground.current = true; };
+    if (Platform.OS === "web" && typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onHidden);
+      window.addEventListener("pagehide", onPageHide);
+      window.addEventListener("pageshow", onPageShow);
+    }
+    return () => {
+      subscription.remove();
+      if (Platform.OS === "web" && typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onHidden);
+        window.removeEventListener("pagehide", onPageHide);
+        window.removeEventListener("pageshow", onPageShow);
+      }
+    };
+  }, [discardRecording]);
 
   const emitFinalTranscript = useCallback((text?: string) => {
     const transcript = (text ?? transcriptRef.current).trim();
@@ -158,7 +199,7 @@ export function useVoiceRecorder({ scopeKey, onSpeechResult, onSpeechFinal, onSp
   }, [isCurrent, transcribeNativeRecording]);
 
   const startRecording = useCallback(async () => {
-    if (!isCurrent() || pendingStart.current !== null || nativeRecordingRef.current || mediaRecorderRef.current) return;
+    if (!isCurrent() || !focused || !foreground.current || (Platform.OS === "web" && typeof document !== "undefined" && document.hidden) || pendingStart.current !== null || nativeRecordingRef.current || mediaRecorderRef.current) return;
     const session = ++generation.current;
     pendingStart.current = session;
     const isSessionCurrent = () => isCurrent() && generation.current === session;
@@ -344,7 +385,7 @@ export function useVoiceRecorder({ scopeKey, onSpeechResult, onSpeechFinal, onSp
       setIsRecording(false);
       setStatusText("");
     }
-  }, [authFetch, emitEmptySpeech, emitFinalTranscript, isCurrent, onSpeechResult]);
+  }, [authFetch, emitEmptySpeech, emitFinalTranscript, focused, isCurrent, onSpeechResult]);
 
   const toggleRecording = useCallback(() => {
     if (isRecording) {
@@ -360,6 +401,7 @@ export function useVoiceRecorder({ scopeKey, onSpeechResult, onSpeechFinal, onSp
     statusText,
     startRecording,
     stopRecording,
+    discardRecording,
     toggleRecording,
   };
 }

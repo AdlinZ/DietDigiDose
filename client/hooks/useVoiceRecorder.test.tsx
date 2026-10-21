@@ -1,6 +1,6 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
-import { Alert, Linking, Platform } from "react-native";
+import { Alert, AppState, Linking, Platform } from "react-native";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
 import { aiApi, waitForAgentRun } from "@/services/api";
@@ -49,8 +49,8 @@ describe("useVoiceRecorder", () => {
   const onSpeechFinal = jest.fn();
   const onSpeechEmpty = jest.fn();
 
-  function TestComponent({ scopeKey }: { scopeKey?: string } = {}) {
-    const value = useVoiceRecorder({ scopeKey, onSpeechResult, onSpeechFinal, onSpeechEmpty });
+  function TestComponent({ scopeKey, focused }: { scopeKey?: string; focused?: boolean } = {}) {
+    const value = useVoiceRecorder({ scopeKey, focused, onSpeechResult, onSpeechFinal, onSpeechEmpty });
     React.useLayoutEffect(() => {
       recorderHook = value;
     });
@@ -63,6 +63,7 @@ describe("useVoiceRecorder", () => {
     jest.clearAllMocks();
     mockStartRecording.mockReset().mockResolvedValue(undefined);
     Platform.OS = "ios";
+    jest.spyOn(AppState, "addEventListener").mockReturnValue({ remove: jest.fn() });
     jest.spyOn(Alert, "alert").mockImplementation(jest.fn());
     jest.spyOn(Linking, "openSettings").mockResolvedValue(undefined as never);
     jest.spyOn(console, "error").mockImplementation(jest.fn());
@@ -463,7 +464,7 @@ describe("useVoiceRecorder", () => {
     expect(onSpeechEmpty).not.toHaveBeenCalled();
   });
 
-  test("stop while web microphone permission is pending releases the late stream", async () => {
+  test.each(["stop", "discard", "blur", "background"])("%s while web microphone permission is pending releases the late stream", async reason => {
     Platform.OS = "web";
     const pending = deferred<any>();
     const stop = jest.fn();
@@ -473,7 +474,12 @@ describe("useVoiceRecorder", () => {
       await act(async () => { tree = renderer.create(<TestComponent />); });
       let start!: Promise<void>;
       await act(async () => { start = recorderHook.startRecording(); });
-      act(() => { recorderHook.stopRecording(); });
+      act(() => {
+        if (reason === "blur") tree!.update(<TestComponent focused={false} />);
+        else if (reason === "background") jest.mocked(AppState.addEventListener).mock.calls.at(-1)![1]("background");
+        else if (reason === "discard") recorderHook.discardRecording();
+        else recorderHook.stopRecording();
+      });
       await act(async () => { pending.resolve({ getTracks: () => [{ stop }] }); await start; });
       expect(stop).toHaveBeenCalledTimes(1);
       expect(aiApi.transcribe).not.toHaveBeenCalled();
@@ -485,13 +491,18 @@ describe("useVoiceRecorder", () => {
     }
   });
 
-  test.each([false, true])("web callbacks cannot affect a newer session (setup failure: %s)", async setupFailure => {
+  test.each(["stop", "setup failure", "hidden", "pagehide", "blur"])("web callbacks cannot affect a newer session (%s)", async reason => {
+    const setupFailure = reason === "setup failure";
     Platform.OS = "web";
     const oldStop = jest.fn();
     const newStop = jest.fn();
     const close = jest.fn().mockResolvedValue(undefined);
     const recordings: any[] = [];
+    const listeners = new Map<string, () => void>();
     const globals: Record<string, unknown> = {
+      document: { hidden: false, addEventListener: (name: string, callback: () => void) => listeners.set(name, callback), removeEventListener: (name: string) => listeners.delete(name) },
+      addEventListener: (name: string, callback: () => void) => listeners.set(name, callback),
+      removeEventListener: (name: string) => listeners.delete(name),
       navigator: { mediaDevices: { getUserMedia: jest.fn()
         .mockResolvedValueOnce({ getTracks: () => [{ stop: oldStop }] })
         .mockResolvedValueOnce({ getTracks: () => [{ stop: newStop }] }) } },
@@ -522,7 +533,18 @@ describe("useVoiceRecorder", () => {
       await act(async () => { await recorderHook.startRecording(); });
       const staleOnStop = recordings[0].onstop;
       const staleOnData = recordings[0].ondataavailable;
-      if (!setupFailure) act(() => { recorderHook.stopRecording(); });
+      if (!setupFailure) act(() => {
+        if (reason === "blur") tree!.update(<TestComponent focused={false} />);
+        else if (reason === "hidden") {
+          Object.defineProperty(document, "hidden", { configurable: true, value: true });
+          listeners.get("visibilitychange")!();
+          Object.defineProperty(document, "hidden", { configurable: true, value: false });
+        } else if (reason === "pagehide") {
+          listeners.get("pagehide")!();
+          listeners.get("pageshow")!();
+        } else recorderHook.stopRecording();
+      });
+      if (reason === "blur") act(() => { tree!.update(<TestComponent focused />); });
       expect(oldStop).toHaveBeenCalledTimes(1);
       expect(close).toHaveBeenCalledTimes(1);
       await act(async () => { await recorderHook.startRecording(); });
@@ -541,6 +563,74 @@ describe("useVoiceRecorder", () => {
         else Reflect.deleteProperty(globalThis, key);
       }
     }
+  });
+
+  test.each(["background", "blur", "discard"])("discards capture without ASR on %s, and never resumes automatically", async reason => {
+    const recording = { stopAndUnloadAsync: jest.fn().mockResolvedValue(undefined), getURI: jest.fn() };
+    jest.mocked(Audio.requestPermissionsAsync).mockResolvedValue({ granted: true } as never);
+    jest.mocked(Audio.setAudioModeAsync).mockResolvedValue(undefined);
+    mockPrepareRecording.mockResolvedValue({ recording });
+    await act(async () => { tree = renderer.create(<TestComponent focused />); });
+    await act(async () => { await recorderHook.startRecording(); });
+    await act(async () => {
+      if (reason === "background") jest.mocked(AppState.addEventListener).mock.calls.at(-1)![1]("background");
+      else if (reason === "blur") tree!.update(<TestComponent focused={false} />);
+      else recorderHook.discardRecording();
+    });
+    await act(async () => { recorderHook.discardRecording(); recorderHook.discardRecording(); });
+    expect(recording.stopAndUnloadAsync).toHaveBeenCalledTimes(1);
+    expect(aiApi.transcribe).not.toHaveBeenCalled();
+    expect(recorderHook.isRecording).toBe(false);
+    await act(async () => {
+      if (reason === "background") jest.mocked(AppState.addEventListener).mock.calls.at(-1)![1]("active");
+      if (reason === "blur") tree!.update(<TestComponent focused />);
+    });
+    expect(mockPrepareRecording).toHaveBeenCalledTimes(1);
+    expect(onSpeechFinal).not.toHaveBeenCalled();
+  });
+
+  test.each(["permissions", "start", "transcription"])("route blur invalidates late native %s while mounted", async stage => {
+    const pending = deferred<any>();
+    const recording = { stopAndUnloadAsync: jest.fn().mockResolvedValue(undefined), getURI: () => "old.m4a" };
+    jest.mocked(Audio.requestPermissionsAsync).mockResolvedValue({ granted: true } as never);
+    jest.mocked(Audio.setAudioModeAsync).mockResolvedValue(undefined);
+    mockPrepareRecording.mockResolvedValue({ recording });
+    jest.mocked(FileSystem.readAsStringAsync).mockResolvedValue("audio");
+    const operation = stage === "permissions" ? Audio.requestPermissionsAsync : stage === "start" ? mockStartRecording : aiApi.transcribe;
+    jest.mocked(operation).mockReturnValueOnce(pending.promise);
+    await act(async () => { tree = renderer.create(<TestComponent focused />); });
+    let start!: Promise<void>;
+    await act(async () => { start = recorderHook.startRecording(); });
+    if (stage === "transcription") await act(async () => { await start; recorderHook.stopRecording(); });
+    await act(async () => { tree!.update(<TestComponent focused={false} />); });
+    await act(async () => { await recorderHook.startRecording(); });
+    await act(async () => { tree!.update(<TestComponent focused />); });
+    await act(async () => { pending.resolve(stage === "permissions" ? { granted: true } : { text: "stale", run: { id: "old", status: "completed" } }); await start; });
+    expect(onSpeechResult).not.toHaveBeenCalled();
+    expect(onSpeechFinal).not.toHaveBeenCalled();
+    expect(onSpeechEmpty).not.toHaveBeenCalled();
+    expect(recorderHook.isRecording).toBe(false);
+    expect(recorderHook.isTranscribing).toBe(false);
+    if (stage !== "permissions") expect(recording.stopAndUnloadAsync).toHaveBeenCalledTimes(1);
+    else expect(mockPrepareRecording).not.toHaveBeenCalled();
+  });
+
+  test("StrictMode replay and refocus require fresh controls and a manual restart", async () => {
+    const recording = { stopAndUnloadAsync: jest.fn().mockResolvedValue(undefined), getURI: jest.fn() };
+    jest.mocked(Audio.requestPermissionsAsync).mockResolvedValue({ granted: true } as never);
+    jest.mocked(Audio.setAudioModeAsync).mockResolvedValue(undefined);
+    mockPrepareRecording.mockResolvedValue({ recording });
+    await act(async () => { tree = renderer.create(<React.StrictMode><TestComponent focused /></React.StrictMode>); });
+    await act(async () => { await recorderHook.startRecording(); });
+    const stale = recorderHook;
+    await act(async () => { tree!.update(<React.StrictMode><TestComponent focused={false} /></React.StrictMode>); });
+    await act(async () => { tree!.update(<React.StrictMode><TestComponent focused /></React.StrictMode>); });
+    await act(async () => { await stale.startRecording(); stale.stopRecording(); });
+    expect(mockPrepareRecording).toHaveBeenCalledTimes(1);
+    expect(recording.stopAndUnloadAsync).toHaveBeenCalledTimes(1);
+    await act(async () => { await recorderHook.startRecording(); });
+    expect(mockPrepareRecording).toHaveBeenCalledTimes(2);
+    expect(recorderHook.isRecording).toBe(true);
   });
 
 });

@@ -1,3 +1,5 @@
+let mockFocused = true;
+jest.mock("@react-navigation/native", () => ({ useIsFocused: () => mockFocused }));
 import React from "react";
 import renderer, { act } from "react-test-renderer";
 import { Modal, Platform, Text, TouchableOpacity } from "react-native";
@@ -142,6 +144,7 @@ describe("CookingModeScreen", () => {
   const originalPlatform = Platform.OS;
 
   beforeEach(() => {
+    mockFocused = true;
     jest.clearAllMocks();
     mockParams = { recipeId: "10" };
     mockUser = { id: 1, username: "测试大厨" };
@@ -292,13 +295,15 @@ describe("CookingModeScreen", () => {
     return { promise, resolve, reject };
   };
 
-  test.each(["account", "session", "recipe", "queue", "version", "unmount"].flatMap((change) => ["TOGGLE_TIMER", "NEXT_STEP"].map((action) => [change, action])))("discards pending direct control after %s changes (%s)", async (change, action) => {
+  test.each(["account", "session", "recipe", "queue", "version", "unmount", "blur", "background"].flatMap((change) => ["TOGGLE_TIMER", "NEXT_STEP"].map((action) => [change, action])))("discards pending direct control after %s changes (%s)", async (change, action) => {
     const pending = deferred();
     mockVoiceCommand.mockReturnValue(pending.promise);
     await act(async () => { tree = renderer.create(<CookingModeScreen />); });
     const originalScope = mockVoiceRecorder.mock.calls.at(-1)![0].scopeKey;
     act(() => { mockVoiceRecorder.mock.calls.at(-1)![0].onSpeechFinal("开始计时"); });
     await act(async () => {
+      if (change === "blur") mockFocused = false;
+      if (change === "background") mockVoiceRecorder.mock.calls.at(-1)![0].onDiscard();
       if (change === "session") mockSessionGeneration += 1;
       if (change === "account") mockUser = { id: 2, username: "另一位" };
       if (change === "recipe") mockParams = { recipeId: "11" };
@@ -307,7 +312,7 @@ describe("CookingModeScreen", () => {
       if (change === "unmount") { tree!.unmount(); tree = null; }
       else tree!.update(<CookingModeScreen />);
     });
-    if (tree) expect(mockVoiceRecorder.mock.calls.at(-1)![0].scopeKey).not.toBe(originalScope);
+    if (tree && !["blur", "background"].includes(change)) expect(mockVoiceRecorder.mock.calls.at(-1)![0].scopeKey).not.toBe(originalScope);
     expect(stopVoiceOutput).toHaveBeenCalled();
     jest.mocked(speakWithVoiceFallback).mockClear();
     await act(async () => { pending.resolve({ type: "CONTROL", action }); });

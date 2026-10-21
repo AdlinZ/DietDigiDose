@@ -94,14 +94,15 @@ export async function verifyMaintenanceQueue(harness: {
   assert.equal(applied.kind,"completed");
   assert.deepEqual((await harness.jobResult(fresh.id))?.diagnostics,{ ruleVersion: "test-rule",inputFingerprint: captured.fingerprint,fromDate: "2026-09-12",modelCalls: 0,cost: 0,assessments: [],checks: ["核对复热"] });
   if (applied.kind !== "completed") assert.fail("expected completion");
-  assert.deepEqual(applied.changes.map(item => (item.change as { status: string }).status),["applied","pending","blocked","pending"]);
-  assert.deepEqual(await harness.mealState("maintenance-mutable"),{ version: 2,plannedDate: "2026-09-13" });
+  assert.deepEqual(applied.changes.map(item => (item.change as { status: string }).status),["pending","pending","blocked","pending"]);
+  assert.deepEqual(await harness.mealState("maintenance-mutable"),{ version: 1,plannedDate: "2026-09-12" });
+  assert.match(String((applied.changes[0].change as { reason: string }).reason),/需先预览当前整套餐单，未自动应用/);
   for (const kind of ["confirmed","cooking","purchased","untouched"]) assert.deepEqual(await harness.mealState(`maintenance-${kind}`),{ version: 1,plannedDate: "2026-09-12" });
   assert.equal(await harness.unprocessed(),3);
   assert.equal(await harness.changeCount(),4);
   const history = await harness.settings.runs(harness.users[0]);
   const summary = history.find(row => row.id === fresh.id)!;
-  assert.deepEqual([summary.applied,summary.suggested,summary.kept],[1,2,1]);
+  assert.deepEqual([summary.applied,summary.suggested,summary.kept],[0,3,1]);
   assert.deepEqual(summary.checks,["核对复热"]);
   assert.equal(summary.status,"completed");
   assert.equal((await harness.settings.runs(harness.users[1])).some(row => row.id === fresh.id),false);

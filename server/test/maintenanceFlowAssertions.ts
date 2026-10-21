@@ -27,7 +27,12 @@ export async function verifyMaintenanceFlow(repository: MaintenanceQueueReposito
   const after = (await query("SELECT * FROM meal_plan_items WHERE id='flow-fixed'"))[0];
   assert.deepEqual(after,before);
   const target = (await query("SELECT recipe_id,version FROM meal_plan_items WHERE id='flow-target'"))[0];
-  assert.equal(Number(target.recipe_id),alternative); assert.equal(Number(target.version),2);
+  assert.equal(Number(target.recipe_id),original); assert.equal(Number(target.version),1);
+  const proposal = (await query("SELECT status,reason,after_json,applied_at FROM meal_plan_changes WHERE plan_id='flow-plan'"))[0];
+  assert.equal(proposal.status,"pending"); assert.match(String(proposal.reason),/需先预览当前整套餐单，未自动应用/);
+  const next = typeof proposal.after_json === "string" ? JSON.parse(proposal.after_json) : proposal.after_json as Row;
+  assert.equal(Number(next.recipeId),alternative,"the candidate is retained as a suggestion, not silently applied");
+  assert.equal(proposal.applied_at,null);
   assert.equal(Number((await query("SELECT COUNT(*) AS count FROM meal_plan_changes WHERE plan_id='flow-plan'"))[0].count),1);
   assert.ok((await query("SELECT processed_at FROM plan_maintenance_events WHERE id='flow-event'"))[0].processed_at);
   assert.equal(await repository.enqueueEvents(now()),0);

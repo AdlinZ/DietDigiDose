@@ -1,3 +1,4 @@
+import type { ActiveMealChangePreviewInput } from "@dietdigidose/contracts";
 import type { SaveCookingPlanDraftInput, UpdateCookingPlanDraftInput } from "@dietdigidose/contracts";
 import { MealPlansError } from "./errors.js";
 import type { MealPlansRepository } from "./repository.js";
@@ -8,6 +9,11 @@ export class MealPlansService {
 
   constructor(repository: MealPlansRepository) { this.repository = repository; }
 
+  async previewChange(userId: number, planId: string, itemId: string, input: ActiveMealChangePreviewInput) {
+    const preview = await this.repository.previewChange(userId, planId, itemId, input);
+    if (!preview) throw new MealPlansError(404, "餐次或变更不存在", "MEAL_PLAN_ITEM_NOT_FOUND");
+    return preview;
+  }
   async activateDraft(userId: number, id: string, version: number) {
     const result = await this.repository.activateDraft(userId, id, version);
     if (result.kind === "not_found") throw new MealPlansError(404, "草案不存在", "MEAL_PLAN_NOT_FOUND");
@@ -51,8 +57,8 @@ export class MealPlansService {
     if (result.kind !== "updated") throw new MealPlansError(409, "餐次已变化，请刷新后确认", "MEAL_PLAN_VERSION_CONFLICT");
     return result.value;
   }
-  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore") {
-    const result = await this.repository.reviewChange(userId,planId,changeId,action);
+  async reviewChange(userId: number, planId: string, changeId: string, action: "accept" | "reject" | "restore", validationFingerprint?: string) {
+    const result = await this.repository.reviewChange(userId,planId,changeId,action,validationFingerprint);
     if (result.kind === "protected") throw new MealPlansError(409,"新菜谱缺少可换算的份量或原料用量，请先核对","MEAL_PLAN_QUANTITY_UNKNOWN");
     if (result.kind === "not_found") throw new MealPlansError(404, "变更或餐次不存在", "MEAL_PLAN_CHANGE_NOT_FOUND");
     if (result.kind !== "updated") throw new MealPlansError(409, "餐次、采购或制作状态已变化，无法应用旧建议；原安排已保留", "MEAL_PLAN_CHANGE_CONFLICT");

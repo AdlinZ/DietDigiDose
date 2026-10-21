@@ -1,8 +1,9 @@
 import { createShoppingRequestKeys, personalShoppingMessage } from "./shoppingRequest";
 
+import { MealPlanChangePreview } from "@/components/MealPlanChangePreview";
 import { MealPlanChanges } from "@/components/MealPlanChanges";
 import { MealProductionFields } from "@/components/MealProductionFields";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Modal, ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 
@@ -10,7 +11,7 @@ import FontAwesome6 from "@/components/ThemedFontAwesome6";
 import { Screen } from "@/components/Screen";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
-import { mealPlansApi, recipesApi, type MealPlan, type MealPlanItem, type Recipe } from "@/services/api";
+import { mealPlansApi, recipesApi, type MealPlan, type MealPlanItem, type Recipe, type MealPlanItemPatch, type MealPlanChangePreviewInput } from "@/services/api";
 import { addLocalDays, parseDateKey, toLocalDateKey } from "@/utils/date";
 import { buildMealPlanProduction } from "@/screens/meal-plans/production";
 
@@ -35,6 +36,18 @@ function executionKey(action: string, item: MealPlanItem) {
 }
 
 export default function MealPlansScreen() {
+  const { user, isAuthenticated } = useAuth();
+  // A keyed session resets all private state before rendering another account.
+  return <MealPlansSession key={`${isAuthenticated}:${user?.id ?? "anonymous"}`} />;
+}
+
+function MealPlansSession() {
+  const activeSession = useRef(true);
+  const listRequest = useRef(0);
+  useLayoutEffect(() => {
+    activeSession.current = true;
+    return () => { activeSession.current = false; listRequest.current++; };
+  }, []);
   const router = useSafeRouter();
   const { isAuthenticated, isLoading: authLoading, user } = useAuth();
   const shoppingRequestKeys = useRef(createShoppingRequestKeys());
@@ -57,8 +70,12 @@ export default function MealPlansScreen() {
   }, [detailItem?.id]);
   const [replacementRecipes, setReplacementRecipes] = useState<Recipe[]>([]);
   const [replacementOpen, setReplacementOpen] = useState(false);
+  const updateBusy = useRef(false);
+  const [proposal, setProposal] = useState<{ planId: string; itemId: string; title: string; input: MealPlanChangePreviewInput; patch: MealPlanItemPatch } | null>(null);
 
   const load = useCallback(async () => {
+    if (!activeSession.current) return;
+    const request = ++listRequest.current;
     if (!isAuthenticated) {
       setPlans([]);
       setLoading(false);
@@ -66,6 +83,7 @@ export default function MealPlansScreen() {
     }
     try {
       const next = await mealPlansApi.list(authFetch, true);
+      if (!activeSession.current || request !== listRequest.current) return;
       setPlans(next);
       setSelectedPlanId((current) => {
         if (current && next.some((plan) => plan.id === current && !plan.archived)) return current;
@@ -75,9 +93,10 @@ export default function MealPlansScreen() {
           || null;
       });
     } catch (error) {
+      if (!activeSession.current || request !== listRequest.current) return;
       Alert.alert("餐单加载失败", error instanceof Error ? error.message : "请稍后重试");
     } finally {
-      setLoading(false);
+      if (activeSession.current && request === listRequest.current) setLoading(false);
     }
   }, [authFetch, isAuthenticated]);
 
@@ -85,7 +104,7 @@ export default function MealPlansScreen() {
 
   const selectedPlan = plans.find((plan) => plan.id === selectedPlanId) || null;
   useEffect(() => {
-    if (!selectedPlan || selectedPlan.archived) return;
+    if (!activeSession.current || !selectedPlan || selectedPlan.archived) return;
     if (selectedDate < selectedPlan.startDate || selectedDate > selectedPlan.endDate) setSelectedDate(selectedPlan.startDate);
   }, [selectedDate, selectedPlan]);
 
@@ -95,35 +114,46 @@ export default function MealPlansScreen() {
   }, [selectedDate, viewDays]);
 
   const replaceItem = (next: MealPlanItem) => {
+    if (!activeSession.current) return;
     setPlans((current) => current.map((plan) => plan.id === next.planId
       ? { ...plan, items: plan.items.map((item) => item.id === next.id ? next : item) }
       : plan));
     setDetailItem(next);
   };
 
-  const updateItem = async (input: Record<string, unknown>) => {
-    if (!selectedPlan || !detailItem || savingAction) return;
-    setSavingAction("update");
-    try {
-      const next = await mealPlansApi.updateItem(authFetch, selectedPlan.id, detailItem.id, { version: detailItem.version, ...input });
-      replaceItem(next);
-      setChangeRevision(value => value + 1);
-      if (next.change?.status === "pending") {
-        setDetailItem(null);
-        Alert.alert("变更建议已保存", "这餐已确认或已购买，请在安排变更中审阅后接受。");
-      } else if (next.change?.status === "blocked") {
-        Alert.alert("原安排已保留", "这餐已进入烹饪队列、开始制作或完成，不能直接调整。");
-      } else if (next.change?.status === "applied" && typeof input.plannedDate === "string") setSelectedDate(input.plannedDate);
-    } catch (error) {
+  const saveItem = async (planId: string, itemId: string, patch: MealPlanItemPatch, validationFingerprint?: string) => {
+    if (!activeSession.current) return;
+    const next = await mealPlansApi.updateItem(authFetch, planId, itemId, { ...patch, ...(validationFingerprint ? { validationFingerprint } : {}) });
+    if (!activeSession.current) return;
+    replaceItem(next);
+    setChangeRevision(value => value + 1);
+    if (next.change?.status === "pending") {
+      setDetailItem(null);
+      Alert.alert("变更建议已保存", "这餐已确认或已购买，请在安排变更中审阅后接受。");
+    } else if (next.change?.status === "blocked") {
+      Alert.alert("原安排已保留", "这餐已进入烹饪队列、开始制作或完成，不能直接调整。");
+    } else if (next.change?.status === "applied" && patch.plannedDate) setSelectedDate(patch.plannedDate);
+  };
+
+  const updateItem = async (input: Omit<MealPlanItemPatch, "version">, title?: string) => {
+    if (!activeSession.current || !selectedPlan || !detailItem || savingAction || updateBusy.current || proposal) return;
+    const patch = { ...input, version: detailItem.version };
+    const needsPreview = input.recipeId !== undefined || input.plannedDate !== undefined || input.mealType !== undefined || (detailItem.status === "skipped" && input.status === "planned") || Boolean(input.dining);
+    if (needsPreview) {
+      setProposal({ planId: selectedPlan.id, itemId: detailItem.id, title: title || `${detailItem.title} · ${input.plannedDate || input.mealType || "恢复餐次安排"}`, patch, input: { patch } });
+      return;
+    }
+    updateBusy.current = true; setSavingAction("update");
+    try { await saveItem(selectedPlan.id, detailItem.id, patch); }
+    catch (error) {
+      if (!activeSession.current) return;
       Alert.alert("修改失败", error instanceof Error ? error.message : "请刷新后重试");
       await load();
-    } finally {
-      setSavingAction(null);
-    }
+    } finally { if (activeSession.current) { updateBusy.current = false; setSavingAction(null); } }
   };
 
   const addShopping = async (item: MealPlanItem) => {
-    if (!selectedPlan || savingAction) return;
+    if (!activeSession.current || !selectedPlan || savingAction) return;
     if (item.dining) { router.push({ pathname: "/household-dining",params: { planItem: { planId: selectedPlan.id,itemId: item.id,version: item.version } } }); return; }
     const account = String(user?.id ?? "anonymous");
     const requestKey = shoppingRequestKeys.current.get(account,item.id,item.version);
@@ -133,20 +163,22 @@ export default function MealPlansScreen() {
         version: item.version,
         idempotencyKey: requestKey,
       });
+      if (!activeSession.current) return;
       shoppingRequestKeys.current.complete(account,item.id,item.version,requestKey);
       Alert.alert("本餐单库存核算", personalShoppingMessage(result), [
         { text: "留在餐单" },
         { text: "查看采购", onPress: () => router.push("/shopping-list") },
       ]);
     } catch (error) {
+      if (!activeSession.current) return;
       Alert.alert("同步失败", error instanceof Error ? error.message : "请稍后重试");
     } finally {
-      setSavingAction(null);
+      if (activeSession.current) setSavingAction(null);
     }
   };
 
   const addQueue = async (item: MealPlanItem, start = false, combineSameRecipe?: boolean) => {
-    if (!selectedPlan || savingAction) return;
+    if (!activeSession.current || !selectedPlan || savingAction) return;
     if (!item.recipeId || !item.recipeAvailable) {
       Alert.alert("菜谱不可执行", "请先为这个餐次替换一份可用菜谱");
       return;
@@ -168,22 +200,25 @@ export default function MealPlansScreen() {
         idempotencyKey: executionKey("queue", item),
         combineSameRecipe: combineSameRecipe ?? false,
       });
+      if (!activeSession.current) return;
       await load();
+      if (!activeSession.current) return;
       if (start) router.push("/cooking-queue");
       else Alert.alert("已加入烹饪队列", "可在队列中继续备料或开始烹饪", [
         { text: "知道了" },
         { text: "查看队列", onPress: () => router.push("/cooking-queue") },
       ]);
     } catch (error) {
+      if (!activeSession.current) return;
       Alert.alert("加入失败", error instanceof Error ? error.message : "请刷新后重试");
       await load();
     } finally {
-      setSavingAction(null);
+      if (activeSession.current) setSavingAction(null);
     }
   };
 
   const complete = async (item: MealPlanItem) => {
-    if (!selectedPlan || savingAction || item.status === "completed") return;
+    if (!activeSession.current || !selectedPlan || savingAction || item.status === "completed") return;
     if (!withoutStock) { Alert.alert("先确认原料", "使用库存食材时请从烹饪入口确认扣减；此处只保存未使用库存原料的制作。"); return; }
     setSavingAction(`complete:${item.id}`);
     try {
@@ -192,26 +227,32 @@ export default function MealPlansScreen() {
         idempotencyKey: executionKey("complete", item),
         production: buildMealPlanProduction(item, produced, eaten),
       });
+      if (!activeSession.current) return;
       await load();
+      if (!activeSession.current) return;
       setDetailItem(null);
       Alert.alert("餐次已完成", "制作已保存，剩余份量留待吃；只有实际食用计入摄入", [
         { text: "完成" },
         { text: "查看待吃餐", onPress: () => router.push("/prepared-meals") },
       ]);
     } catch (error) {
+      if (!activeSession.current) return;
       Alert.alert("记录失败", error instanceof Error ? error.message : "请刷新后重试");
       await load();
     } finally {
-      setSavingAction(null);
+      if (activeSession.current) setSavingAction(null);
     }
   };
 
   const openReplacements = async () => {
+    if (!activeSession.current) return;
     setReplacementOpen(true);
     if (replacementRecipes.length) return;
     try {
-      setReplacementRecipes((await recipesApi.list<Recipe>("?limit=30")).slice(0, 20));
+      const recipes = await recipesApi.list<Recipe>("?limit=30");
+      if (activeSession.current) setReplacementRecipes(recipes.slice(0, 20));
     } catch (error) {
+      if (!activeSession.current) return;
       Alert.alert("菜谱加载失败", error instanceof Error ? error.message : "请稍后重试");
       setReplacementOpen(false);
     }
@@ -355,7 +396,11 @@ export default function MealPlansScreen() {
         )}
       </ScrollView>
 
-      <Modal visible={Boolean(detailItem)} transparent animationType="slide" onRequestClose={() => setDetailItem(null)}>
+      {proposal ? <MealPlanChangePreview planId={proposal.planId} itemId={proposal.itemId} input={proposal.input} title={proposal.title} onCancel={() => setProposal(null)} onApply={async fingerprint => {
+        await saveItem(proposal.planId, proposal.itemId, proposal.patch, fingerprint);
+        if (activeSession.current) setProposal(null);
+      }} /> : null}
+      <Modal visible={Boolean(detailItem) && !proposal} transparent animationType="slide" onRequestClose={() => setDetailItem(null)}>
         <View className="flex-1 justify-end bg-black/40">
           {detailItem ? (
             <View className="max-h-[88%] rounded-t-[32px] bg-canvas px-5 pb-8 pt-5">
@@ -370,11 +415,11 @@ export default function MealPlansScreen() {
                   setDetailItem(null); router.push({ pathname: "/household-dining",params: { planItem } });
                 }}><Text className="font-bold text-brand">预览这餐的家庭共餐需求</Text></TouchableOpacity>
                 <TouchableOpacity disabled={Boolean(detailItem.confirmedAt) || Boolean(savingAction)} className="rounded-2xl bg-brand-soft p-3 mb-3" onPress={async () => {
-                  if (!selectedPlan || savingAction) return;
+                  if (!activeSession.current || !selectedPlan || savingAction) return;
                   setSavingAction("confirm");
-                  try { replaceItem(await mealPlansApi.confirmItem(authFetch,selectedPlan.id,detailItem.id,detailItem.version)); setChangeRevision(value => value + 1); }
-                  catch (reason) { Alert.alert("确认失败",reason instanceof Error ? reason.message : "请刷新后重试"); }
-                  finally { setSavingAction(null); }
+                  try { const next = await mealPlansApi.confirmItem(authFetch,selectedPlan.id,detailItem.id,detailItem.version); if (activeSession.current) { replaceItem(next); setChangeRevision(value => value + 1); } }
+                  catch (reason) { if (activeSession.current) Alert.alert("确认失败",reason instanceof Error ? reason.message : "请刷新后重试"); }
+                  finally { if (activeSession.current) setSavingAction(null); }
                 }}><Text className="font-bold text-brand">{detailItem.confirmedAt ? "已确认 · 自动调整需先审阅" : "确认这餐安排"}</Text></TouchableOpacity>
                 <View className="flex-row gap-2">
                   {MEAL_TYPES.map((mealType) => <TouchableOpacity key={mealType} onPress={() => void updateItem({ mealType })} className={`rounded-xl px-3 py-2 ${detailItem.mealType === mealType ? "bg-brand-fill" : "bg-background-secondary"}`}><Text className={`text-[10px] font-black ${detailItem.mealType === mealType ? "text-white" : "text-copy-muted"}`}>{mealType}</Text></TouchableOpacity>)}
@@ -390,6 +435,7 @@ export default function MealPlansScreen() {
                 </View>
                 <View className="mt-4"><Text className="text-xs font-black text-ink">食材</Text>{detailItem.ingredients.map((item, index) => <Text key={`${item.name}-${index}`} className="mt-2 text-xs text-copy-muted">• {item.name} {item.amount}</Text>)}</View>
                 <View className="mt-4"><Text className="text-xs font-black text-ink">步骤</Text>{detailItem.steps.map((step, index) => <Text key={index} className="mt-2 text-xs leading-5 text-copy-muted">{index + 1}. {typeof step === "string" ? step : JSON.stringify(step)}</Text>)}</View>
+                {detailItem.status === "planned" || detailItem.status === "skipped" ? <TouchableOpacity disabled={Boolean(savingAction)} onPress={() => void updateItem({ status: detailItem.status === "skipped" ? "planned" : "skipped" })} className="mt-4 rounded-2xl bg-background-secondary p-3"><Text className="font-bold text-brand">{detailItem.status === "skipped" ? "恢复这餐安排" : "跳过这餐"}</Text></TouchableOpacity> : null}
                 <TouchableOpacity onPress={() => void openReplacements()} className="mt-5 items-center rounded-2xl border border-brand py-3"><Text className="text-xs font-black text-brand">替换这道菜</Text></TouchableOpacity>
                 <View className="mt-3 flex-row gap-2">
                   <TouchableOpacity onPress={() => void addShopping(detailItem)} className="flex-1 items-center rounded-2xl bg-warm-soft py-3"><Text className="text-xs font-black text-warm">生成缺失采购</Text></TouchableOpacity>
@@ -415,7 +461,7 @@ export default function MealPlansScreen() {
           <View className="max-h-[75%] w-full rounded-3xl bg-canvas p-5">
             <View className="flex-row items-center justify-between"><Text className="text-lg font-black text-ink">选择替换菜谱</Text><TouchableOpacity onPress={() => setReplacementOpen(false)}><FontAwesome6 name="xmark" size={16} colorClassName="accent-copy-muted" /></TouchableOpacity></View>
             <ScrollView className="mt-4">
-              {replacementRecipes.map((recipe) => <TouchableOpacity key={recipe.id} onPress={() => { setReplacementOpen(false); void updateItem({ recipeId: recipe.id }); }} className="mb-2 rounded-2xl border border-line bg-surface p-4"><Text className="font-black text-ink">{recipe.title}</Text><Text className="mt-1 text-[10px] text-copy-muted">{recipe.calories} kcal · {recipe.cook_time} 分钟 · {recipe.difficulty}</Text></TouchableOpacity>)}
+              {replacementRecipes.map((recipe) => <TouchableOpacity key={recipe.id} onPress={() => { setReplacementOpen(false); void updateItem({ recipeId: recipe.id }, `${detailItem?.title || "原菜谱"} → ${recipe.title}`); }} className="mb-2 rounded-2xl border border-line bg-surface p-4"><Text className="font-black text-ink">{recipe.title}</Text><Text className="mt-1 text-[10px] text-copy-muted">{recipe.calories} kcal · {recipe.cook_time} 分钟 · {recipe.difficulty}</Text></TouchableOpacity>)}
             </ScrollView>
           </View>
         </View>

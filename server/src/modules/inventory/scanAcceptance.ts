@@ -17,8 +17,9 @@ export function classifyScanAcceptance(jobId: string, rawItems: unknown, existin
     if (/[?？或、/]|可能|疑似|不确定/.test(item.foodName)) reasons.push("名称存在歧义");
     if (counts.get(name)! > 1 || existing.has(name)) reasons.push("可能与其他批次重叠");
     // An explicit count or measure is required; a model's default “适量” is never sufficient.
-    if (!/^(?:\d+(?:\.\d+)?|半)\s*(?:g|kg|ml|l|克|千克|毫升|升|个|枚|只|袋|盒|瓶|罐|份)$/i.test(item.quantity)
-      || /^0(?:\.0+)?\s*\D/.test(item.quantity)) reasons.push("数量需要确认");
+    const quantityMatch = /^(\d+(?:\.\d+)?|半)\s*(?:g|kg|ml|l|克|千克|毫升|升|个|枚|只|袋|盒|瓶|罐|份)$/i.exec(item.quantity);
+    const quantityValue = quantityMatch?.[1] === "半" ? 0.5 : Number(quantityMatch?.[1]);
+    if (!Number.isFinite(quantityValue) || quantityValue <= 0) reasons.push("数量需要确认");
     if (!item.suggestedStorageLocation) reasons.push("存放位置未知");
     return { ...item, sourceItemId: `${jobId}:${index}`, acceptance: reasons.length ? "review" as const : "automatic" as const,
       acceptanceRule: SCAN_ACCEPTANCE_RULE, reasons };

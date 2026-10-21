@@ -8,7 +8,6 @@ import {
   ViewStyle,
   FlatList,
   SectionList,
-  Modal,
 } from 'react-native';
 import { withUniwind, useCSSVariable, useUniwind } from 'uniwind';
 import { useSafeAreaInsets, Edge } from 'react-native-safe-area-context';
@@ -50,7 +49,7 @@ import {
  * ## 4. 滚动列表/表单
  * - 场景：长内容，需要键盘避让。
  * - 用法：`<Screen>{children}</Screen>`
- * - 行为：若子树不包含 ScrollView/FlatList/SectionList，则外层自动使用 ScrollView，
+ * - 行为：若 View/Fragment 布局中不包含垂直滚动容器，则外层自动使用 ScrollView，
  *        自动处理键盘遮挡，底部安全区会自动加在内容末尾。
  */
 interface ScreenProps {
@@ -86,6 +85,31 @@ type KeyboardAwareProps = {
   contentInsetBehaviorIOS: 'automatic' | 'never';
 };
 
+type NativeRefBinding = {
+  ref: React.Ref<unknown>;
+  instance: unknown;
+  cleanup?: () => void;
+};
+
+// innerRef is a legacy callback API. Bridge native-handle changes and React 19
+// callback cleanup explicitly, including a replacement under the same React key.
+const updateNativeRef = (binding: NativeRefBinding, instance: unknown) => {
+  if (binding.instance === instance) return;
+  if (binding.instance !== null) {
+    if (binding.cleanup) binding.cleanup();
+    else if (typeof binding.ref === 'function') binding.ref(null);
+    else if (binding.ref) binding.ref.current = null;
+  }
+  binding.cleanup = undefined;
+  binding.instance = instance;
+  if (instance !== null) {
+    if (typeof binding.ref === 'function') {
+      const cleanup = binding.ref(instance);
+      if (typeof cleanup === 'function') binding.cleanup = cleanup;
+    } else if (binding.ref) binding.ref.current = instance;
+  }
+};
+
 const KeyboardAwareScrollable = ({
   element,
   extraPadding,
@@ -93,17 +117,36 @@ const KeyboardAwareScrollable = ({
 }: KeyboardAwareProps) => {
   // 获取原始组件的 props
   const childAttrs = ((element as React.ReactElement).props ?? {}) as Record<string, unknown>;
-  const originStyle = childAttrs['contentContainerStyle'];
-  const styleArray = Array.isArray(originStyle) ? originStyle : originStyle ? [originStyle] : [];
-  const merged = Object.assign({}, ...styleArray);
-  const currentPB = typeof merged.paddingBottom === 'number' ? merged.paddingBottom : 0;
+  const merged = StyleSheet.flatten(childAttrs['contentContainerStyle'] as ViewStyle) ?? {};
+  const bottomPadding = merged.paddingBottom ?? merged.paddingVertical ?? merged.padding;
+  const currentPB = typeof bottomPadding === 'number' ? bottomPadding : 0;
 
   // 合并 paddingBottom (安全区 + 额外留白)
-  const enhancedContentStyle = [{ ...merged, paddingBottom: currentPB + extraPadding }];
+  // The library reads .paddingBottom directly on Android before adding keyboard space.
+  const enhancedContentStyle = { ...merged, paddingBottom: currentPB + extraPadding };
+
+  // Preserve the native scroll handle, not the keyboard-aware HOC instance.
+  const { ref, ...scrollProps } = childAttrs;
+  const nativeRef = React.useRef<unknown>(null);
+  const bindingRef = React.useRef<NativeRefBinding | null>(null);
+  const setNativeRef = React.useCallback((instance: unknown) => {
+    nativeRef.current = instance;
+    if (bindingRef.current) updateNativeRef(bindingRef.current, instance);
+  }, []);
+  React.useLayoutEffect(() => {
+    const binding: NativeRefBinding = { ref: ref as React.Ref<unknown>, instance: null };
+    bindingRef.current = binding;
+    updateNativeRef(binding, nativeRef.current);
+    return () => {
+      updateNativeRef(binding, null);
+      bindingRef.current = null;
+    };
+  }, [ref]);
 
   // 基础配置 props，用于传递给 KeyboardAware 组件
   const commonProps = {
-    ...childAttrs,
+    ...scrollProps,
+    innerRef: setNativeRef,
     contentContainerStyle: enhancedContentStyle,
     keyboardShouldPersistTaps: childAttrs['keyboardShouldPersistTaps'] ?? 'handled',
     keyboardDismissMode: childAttrs['keyboardDismissMode'] ?? 'on-drag',
@@ -141,6 +184,24 @@ const KeyboardAwareScrollable = ({
   });
 };
 
+// Detection and replacement share these boundaries. Opaque components (including
+// Modal) own their layout; replacing their children can violate their contracts.
+const isLayoutContainer = (element: React.ReactElement<any, any>) =>
+  element.type === View || element.type === React.Fragment;
+
+const isNativeScrollable = (element: React.ReactElement<any, any>) =>
+  element.type === ScrollView || element.type === FlatList || element.type === SectionList;
+
+const hasVerticalScrollable = (nodes: React.ReactNode): boolean => {
+  if (Array.isArray(nodes)) return nodes.some(hasVerticalScrollable);
+  if (!React.isValidElement(nodes)) return false;
+  const element = nodes as React.ReactElement<any, any>;
+  const isKeyboardAware = element.type === KeyboardAwareScrollView
+    || element.type === KeyboardAwareFlatList || element.type === KeyboardAwareSectionList;
+  if (isNativeScrollable(element) || isKeyboardAware) return element.props.horizontal !== true;
+  return isLayoutContainer(element) && hasVerticalScrollable(element.props.children);
+};
+
 const RawScreen = ({
   children,
   backgroundColor,
@@ -163,30 +224,7 @@ const RawScreen = ({
     return () => { s1.remove(); s2.remove(); };
   }, []);
 
-  // 自动检测：若子树中包含 ScrollView/FlatList/SectionList，则认为页面自身处理滚动
-  const isNodeScrollable = (node: React.ReactNode): boolean => {
-    const isScrollableElement = (el: unknown): boolean => {
-      if (!React.isValidElement(el)) return false;
-      const element = el as React.ReactElement<any, any>;
-      const t = element.type;
-      // 不递归检查 Modal 内容，避免将弹窗内的 ScrollView 误判为页面已具备垂直滚动
-      if (t === Modal) return false;
-      const props = element.props as Record<string, unknown> | undefined;
-      // 仅识别“垂直”滚动容器；横向滚动不视为页面已处理垂直滚动
-      // eslint-disable-next-line react/prop-types
-      const isHorizontal = !!(props && props.horizontal === true);
-      if ((t === ScrollView || t === FlatList || t === SectionList) && !isHorizontal) return true;
-      const c: React.ReactNode | undefined = props && 'children' in props
-        ? (props.children as React.ReactNode)
-        : undefined;
-      if (Array.isArray(c)) return c.some(isScrollableElement);
-      return c ? isScrollableElement(c) : false;
-    };
-    if (Array.isArray(node)) return node.some(isScrollableElement);
-    return isScrollableElement(node);
-  };
-
-  const childIsNativeScrollable = isNodeScrollable(children);
+  const childIsNativeScrollable = hasVerticalScrollable(children);
 
   // 说明：避免双重补白
   // KeyboardAwareScrollView 内部会自动处理键盘高度。
@@ -234,41 +272,27 @@ const RawScreen = ({
       : {}),
   } : {};
 
-  // 3. 若子元素自身包含滚动容器，给该滚动容器单独添加键盘避让，不影响其余固定元素（如底部栏）
+  // Traverse layout-only ancestors, never custom components, portals or scroll content.
   const wrapScrollableWithKeyboardAvoid = (nodes: React.ReactNode): React.ReactNode => {
-    const isVerticalScrollable = (el: React.ReactElement<any, any>): boolean => {
-      const t = el.type;
-      const elementProps = ((el as React.ReactElement).props ?? {}) as Record<string, unknown>;
-      const isHorizontal = !!elementProps.horizontal;
-      return (t === ScrollView || t === FlatList || t === SectionList) && !isHorizontal;
-    };
-
-    const wrapIfNeeded = (el: React.ReactElement<any, any>, idx?: number): React.ReactElement => {
-      if (isVerticalScrollable(el)) {
-        return (
-          <KeyboardAwareScrollable
-            key={el.key ?? idx}
-            element={el}
-            extraPadding={keyboardShown ? 0 : (hasBottom ? insets.bottom : 0)}
-            contentInsetBehaviorIOS={contentInsetBehaviorIOS}
-          />
-        );
-      }
-      return el;
-    };
-
-    if (Array.isArray(nodes)) {
-      return nodes.map((n, idx) => {
-        if (React.isValidElement(n)) {
-          return wrapIfNeeded(n as React.ReactElement<any, any>, idx);
-        }
-        return n;
+    if (Array.isArray(nodes)) return nodes.map(wrapScrollableWithKeyboardAvoid);
+    if (!React.isValidElement(nodes)) return nodes;
+    const element = nodes as React.ReactElement<any, any>;
+    if (isNativeScrollable(element) && element.props.horizontal !== true) {
+      return (
+        <KeyboardAwareScrollable
+          key={element.key}
+          element={element}
+          extraPadding={keyboardShown ? 0 : (hasBottom ? insets.bottom : 0)}
+          contentInsetBehaviorIOS={contentInsetBehaviorIOS}
+        />
+      );
+    }
+    if (isLayoutContainer(element)) {
+      return React.cloneElement(element, {
+        children: wrapScrollableWithKeyboardAvoid(element.props.children),
       });
     }
-    if (React.isValidElement(nodes)) {
-      return wrapIfNeeded(nodes as React.ReactElement<any, any>, 0);
-    }
-    return nodes;
+    return element;
   };
 
   return (

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
+import { useResendCooldown } from "@/hooks/useResendCooldown";
 import { authApi } from "@/services/api";
 import { accountPasswordSchema, ACCOUNT_PASSWORD_REQUIREMENTS } from "@dietdigidose/contracts";
 
@@ -13,20 +14,15 @@ export default function ForgotPasswordScreen() {
   const [grant, setGrant] = useState<{ token: string; expiresAt: number } | null>(null);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
-  const [countdown, setCountdown] = useState(0);
+  const { countdown, start: startCooldown, isCoolingDown } = useResendCooldown();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [complete, setComplete] = useState(false);
   const pending = useRef(false);
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
-  useEffect(() => {
-    if (countdown <= 0) return;
-    const timer = setTimeout(() => setCountdown((value) => Math.max(0, value - 1)), 1000);
-    return () => clearTimeout(timer);
-  }, [countdown]);
   const perform = async (action: "send" | "verify" | "reset") => {
-    if (pending.current) return;
+    if (pending.current || (action === "send" && isCoolingDown())) return;
     const normalized = phone.replace(/[\s-]/g, "").replace(/^\+?86/, "");
     if (action === "send" && !/^1[3-9]\d{9}$/.test(normalized)) return setError("请输入已绑定的中国大陆手机号");
     if (action === "verify" && !/^\d{6}$/.test(code)) return setError("请输入 6 位验证码");
@@ -40,7 +36,7 @@ export default function ForgotPasswordScreen() {
       if (action === "send") {
         const result = await authApi.sendPasswordRecovery(normalized);
         if (!active.current) return;
-        setPhone(normalized); setChallenge(result.challengeId); setCountdown(result.resendAfter); setCode(""); setGrant(null);
+        setPhone(normalized); setChallenge(result.challengeId); startCooldown(result.resendAfter); setCode(""); setGrant(null);
       } else if (action === "verify") {
         const result = await authApi.verifyPasswordRecovery(challengeId, code);
         if (!active.current) return;

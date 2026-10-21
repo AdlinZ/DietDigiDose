@@ -37,9 +37,10 @@ import {
   getPrivateStorageGeneration,
 } from "@/utils/userStorage";
 import { dateKeyAfterDays } from "@/utils/date";
-import { daysUntilDateKey, getExpirationBadgeConfig, getInventoryStatus } from "@/utils/inventory";
+import { daysUntilDateKey, getExpirationBadgeConfig, getInventoryStatus, formatInventoryQuantity } from "@/utils/inventory";
 import { aiApi, authApi, cookingQueueApi, foodsApi, healthApi, householdApi, insightsApi, recommendationsApi, recipesApi, shoppingListApi, type Household, type HouseholdActivityLog, type HouseholdInventoryItem, type RecipeRecommendationItem, type RecipeRecommendationPage } from "@/services/api";
 import type { DetectedFood, InventoryItem, KitchenwareCatalogItem, KitchenwareItem, Recipe, StorageLocation } from "./types";
+import { buildInventoryStorageGroups } from "./storageGroups";
 import { inferFoodCategory, MAX_AI_IMAGE_BASE64_LENGTH, mergeDetectedFoods, normalizeDetectedFoods } from "./scan";
 import { useInventoryData } from "./useInventoryData";
 import { useInventoryMutations } from "./useInventoryMutations";
@@ -1644,7 +1645,7 @@ export default function InventoryScreen() {
                         className="flex-row"
                         contentContainerStyle={{ gap: 8 }}
                       >
-                      {["全部", "冷藏库", "冷冻库", "常温库", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((cat) => {
+                      {["全部", "冷藏库", "冷冻库", "常温库", "位置待确认", "蔬菜", "肉食", "水果", "乳制品", "粮油干货"].map((cat) => {
                         const cleanCat = cat.split(" ")[0];
                         const isActive = activeInventoryCategory === cleanCat;
                         return (
@@ -1688,48 +1689,15 @@ export default function InventoryScreen() {
                     </View>
                   ) : (
                     <View>
-                      {[
-                        {
-                          key: "冷藏",
-                          title: "冷藏保鲜仓",
-                          subtitle: "4°C · 智能保鲜中",
-                          icon: "snowflake",
-                          iconColorClass: "accent-brand",
-                          iconBg: "bg-brand-soft",
-                          folderBg: "bg-surface border-brand",
-                          items: filteredItems.filter((i) => (i.storage_location || "冷藏") === "冷藏"),
-                        },
-                        {
-                          key: "冷冻",
-                          title: "冷冻冰封仓",
-                          subtitle: "-18°C · 深度锁鲜中",
-                          icon: "snowflake",
-                          iconColorClass: "accent-info",
-                          iconBg: "bg-info-soft",
-                          folderBg: "bg-surface border-info/30",
-                          items: filteredItems.filter((i) => i.storage_location === "冷冻"),
-                        },
-                        {
-                          key: "常温",
-                          title: "常温阴凉仓",
-                          subtitle: "20°C · 阴凉储存",
-                          icon: "box-open",
-                          iconColorClass: "accent-warm",
-                          iconBg: "bg-warm-soft",
-                          folderBg: "bg-surface border-line",
-                          items: filteredItems.filter(
-                            (i) => i.storage_location === "常温" || !["冷藏", "冷冻"].includes(i.storage_location)
-                          ),
-                        },
-                      ].map((group) => {
+                      {buildInventoryStorageGroups(filteredItems).map((group) => {
                         // 若过滤了特定分类，允许无食材的大文件夹隐藏
-                        if (group.items.length === 0 && activeInventoryCategory !== "全部") return null;
+                        if (group.items.length === 0 && (activeInventoryCategory !== "全部" || group.key === "位置待确认")) return null;
 
                         return (
                           <View
                             key={group.key}
                             ref={(node) => {
-                              storageFolderRefs.current[group.key as StorageLocation] = node;
+                              if (group.key !== "位置待确认") storageFolderRefs.current[group.key as StorageLocation] = node;
                             }}
                             className={`mb-4 rounded-[26px] border p-4 ${group.folderBg}`}
                           >
@@ -1751,7 +1719,7 @@ export default function InventoryScreen() {
                                     {group.items.length} 项
                                   </Text>
                                 </View>
-                                <TouchableOpacity
+                                {group.key !== "位置待确认" && <TouchableOpacity
                                   onPress={() => {
                                     setStorageLocation(group.key);
                                     openAddModal();
@@ -1760,7 +1728,7 @@ export default function InventoryScreen() {
                                   className="h-9 w-9 items-center justify-center rounded-full bg-brand-fill active:opacity-80"
                                 >
                                   <FontAwesome6 name="plus" size={11} colorClassName="accent-on-brand" />
-                                </TouchableOpacity>
+                                </TouchableOpacity>}
                               </View>
                             </View>
 
@@ -1809,7 +1777,7 @@ export default function InventoryScreen() {
                                           }
                                           openEditModal(item);
                                         }}
-                                        accessibilityLabel={`${item.food_name}，${item.quantity}，${badge.label}`}
+                                        accessibilityLabel={`${item.food_name}，${formatInventoryQuantity(item.quantity)}，${badge.label}`}
                                         className="w-full items-start"
                                       >
                                         <View className="w-full flex-row items-start justify-between">
@@ -1836,7 +1804,7 @@ export default function InventoryScreen() {
                                         </Text>
                                         <View className="mt-2 flex-row items-center gap-1.5">
                                           <FontAwesome6 name="weight-scale" size={9} colorClassName="accent-copy-muted" />
-                                          <Text className="text-[11px] font-semibold text-copy-muted">{item.quantity}</Text>
+                                          <Text className="text-[11px] font-semibold text-copy-muted">{formatInventoryQuantity(item.quantity)}</Text>
                                         </View>
                                       </TouchableOpacity>
                                     </Animated.View>
@@ -1844,7 +1812,7 @@ export default function InventoryScreen() {
                                 })}
 
                                 {/* 结尾智能 + 入库网格槽位 (类似于手机大文件夹里的 + 按钮) */}
-                                <TouchableOpacity
+                                {group.key !== "位置待确认" && <TouchableOpacity
                                   onPress={() => {
                                     setStorageLocation(group.key);
                                     openAddModal();
@@ -1857,7 +1825,7 @@ export default function InventoryScreen() {
                                   </View>
                                   <Text className="text-[11px] font-black text-copy-muted">存入{group.key}</Text>
                                   <Text className="mt-1 text-[9px] text-copy-muted">拍照或手动录入</Text>
-                                </TouchableOpacity>
+                                </TouchableOpacity>}
                               </View>
                             )}
                           </View>

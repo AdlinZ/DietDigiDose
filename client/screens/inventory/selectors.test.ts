@@ -1,5 +1,6 @@
 import { analyzeRecipeInventoryMatch, filterAndRankRecipes, filterInventoryItems, filterKitchenware } from "./selectors";
 import type { InventoryItem, KitchenwareItem, Recipe } from "./types";
+import { buildInventoryStorageGroups } from "./storageGroups";
 import { dateKeyAfterDays } from "@/utils/date";
 
 const inventory = [
@@ -13,9 +14,10 @@ const recipes = [
   { id: 3, title: "慢炖红烧肉", description: "猪肉大火慢炖", image_url: "", cook_time: 60, difficulty: "中等", calories: 600, protein: 25, carbs: 10, fat: 40, category: "大菜", tags: [] },
 ] satisfies Recipe[];
 
-test("filters inventory by storage and treats unknown locations as room temperature", () => {
+test("filters inventory by storage without treating unknown locations as room temperature", () => {
   expect(filterInventoryItems(inventory, "冷藏库").map((item) => item.id)).toEqual([1]);
-  expect(filterInventoryItems(inventory, "常温库").map((item) => item.id)).toEqual([2]);
+  expect(filterInventoryItems(inventory, "常温库")).toEqual([]);
+  expect(filterInventoryItems(inventory, "位置待确认").map((item) => item.id)).toEqual([2]);
 });
 
 test("ranks recipes by matching inventory foods and prioritizes expiring items", () => {
@@ -78,4 +80,18 @@ test("filters kitchenware by category", () => {
   const items = [{ id: 1, name: "炒锅", category: "锅具", status: "良好", image_url: null }] satisfies KitchenwareItem[];
   expect(filterKitchenware(items, "锅具")).toEqual(items);
   expect(filterKitchenware(items, "刀具")).toEqual([]);
+});
+
+test("storage filters partition explicit and unknown locations without loss or duplicates", () => {
+  const locations = ["冷藏", "冷冻", "常温", "", null, undefined, "未知", "柜子"];
+  const items = locations.map((storage_location, index) => ({ ...inventory[0], id: index, storage_location })) as InventoryItem[];
+  const groups = ["冷藏库", "冷冻库", "常温库", "位置待确认"].map(category => filterInventoryItems(items, category));
+  expect(groups.map(group => group.map(item => item.id))).toEqual([[0], [1], [2], [3, 4, 5, 6, 7]]);
+  const displayGroups = buildInventoryStorageGroups(items);
+  expect(displayGroups.map(group => group.items)).toEqual(groups);
+  expect(displayGroups.map(group => group.key)).toEqual(["冷藏", "冷冻", "常温", "位置待确认"]);
+  expect(displayGroups.map(group => group.subtitle).join(" ")).not.toMatch(/°C|保鲜中|锁鲜中/);
+  expect(groups.flat()).toHaveLength(items.length);
+  expect(new Set(groups.flat().map(item => item.id)).size).toBe(items.length);
+  expect(items.map(item => item.storage_location)).toEqual(locations);
 });

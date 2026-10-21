@@ -1,6 +1,6 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
-import { Text } from "react-native";
+import { Animated, Text } from "react-native";
 import HomeScreen from "./index";
 
 const mockAuthFetch = jest.fn();
@@ -51,6 +51,33 @@ test.each([
     expect(labels).toContain("蛋白质未知");
   } finally {
     if (tree) act(() => tree.unmount());
+    jest.useRealTimers();
+  }
+});
+
+test("home counts unconfirmed locations once and shows unknown latest-stock quantity", async () => {
+  jest.useFakeTimers();
+  const locations = ["", "冷藏", "冷冻", "常温", null, undefined, "未知", "柜子"];
+  mockInventory.push(...locations.map((storage_location, id) => ({ id, food_name: `食材${id}`, storage_location, quantity: "" })));
+  const animation = jest.spyOn(Animated, "parallel").mockImplementation(() => ({
+    start: callback => callback?.({ finished: true }), stop: jest.fn(), reset: jest.fn(),
+  }));
+  let tree!: renderer.ReactTestRenderer;
+  const labels = () => tree.root.findAllByType(Text).map(node =>
+    React.Children.toArray(node.props.children).filter(child => typeof child === "string" || typeof child === "number").join(""));
+  try {
+    await act(async () => { tree = renderer.create(<HomeScreen />); });
+    expect(labels()).toContain("冷藏 1 · 冷冻 1 · 常温 1 · 位置待确认 5");
+    expect(labels()).toContain("当前共 8 种食材，随时可以开始配餐");
+    expect(labels()).toContain("位置待确认");
+    await act(async () => { jest.advanceTimersByTime(4200); });
+    expect(labels()).toContain("位置待确认 · 数量未知，已加入你的保鲜库");
+    expect(labels().join(" ")).not.toContain("1份");
+    expect(mockInventory.map(item => (item as { storage_location?: string | null }).storage_location)).toEqual(locations);
+  } finally {
+    if (tree) act(() => tree.unmount());
+    mockInventory.length = 0;
+    animation.mockRestore();
     jest.useRealTimers();
   }
 });

@@ -23,7 +23,7 @@ import { RecipeCover } from "@/components/RecipeCover";
 import { toLocalDateKey } from "@/utils/date";
 import { getUserStorageKey, SHOPPING_LIST_STORAGE_KEY } from "@/utils/userStorage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { daysUntilDateKey } from "@/utils/inventory";
+import { daysUntilDateKey, groupInventoryByStorage, getInventoryStorageDisplay, formatInventoryQuantity } from "@/utils/inventory";
 import { aiApi, cookingQueueApi, recommendationsApi, recipesApi, type RecipeRecommendationItem, type RecipeRecommendationPage } from "@/services/api";
 import type { InventoryHighlight, RankedRecipe, RecommendationCard, Recipe } from "./types";
 import { formatRecommendationMetric, getRecommendationPeriod } from "./recommendations";
@@ -127,30 +127,26 @@ function HomeContent() {
   const priorityExpiryDays = priorityInventoryItem
     ? Math.max(0, daysUntilDateKey(priorityInventoryItem.expiration_date) ?? 0)
     : null;
-  const storageCounts = {
-    refrigerated: inventoryItems.filter((item) => (item.storage_location || "冷藏") === "冷藏").length,
-    frozen: inventoryItems.filter((item) => item.storage_location === "冷冻").length,
-    roomTemperature: inventoryItems.filter((item) => item.storage_location === "常温").length,
-  };
+  const storageGroups = groupInventoryByStorage(inventoryItems);
   const inventoryHighlights: InventoryHighlight[] = [
     ...(priorityInventoryItem ? [{
       eyebrow: "今日优先消耗",
       title: priorityInventoryItem.food_name,
-      description: `剩余 ${priorityInventoryItem.quantity} · ${priorityExpiryDays === 0 ? "今天到期" : `还剩 ${priorityExpiryDays} 天`}`,
+      description: `剩余 ${formatInventoryQuantity(priorityInventoryItem.quantity)} · ${priorityExpiryDays === 0 ? "今天到期" : `还剩 ${priorityExpiryDays} 天`}`,
       icon: "carrot" as const,
       tone: "amber" as const,
-      prompt: `我的【${priorityInventoryItem.food_name}】还剩${priorityInventoryItem.quantity}，${priorityExpiryDays === 0 ? "今天到期" : `还剩${priorityExpiryDays}天到期`}。请优先用它做一份简单健康的消耗餐。`,
+      prompt: `我的【${priorityInventoryItem.food_name}】还剩${formatInventoryQuantity(priorityInventoryItem.quantity)}，${priorityExpiryDays === 0 ? "今天到期" : `还剩${priorityExpiryDays}天到期`}。请优先用它做一份简单健康的消耗餐。`,
     }] : []),
     ...(inventoryItems.length > 0 ? [{
       eyebrow: "库存分布",
-      title: `冷藏 ${storageCounts.refrigerated} · 冷冻 ${storageCounts.frozen} · 常温 ${storageCounts.roomTemperature}`,
+      title: `冷藏 ${storageGroups.冷藏.length} · 冷冻 ${storageGroups.冷冻.length} · 常温 ${storageGroups.常温.length} · 位置待确认 ${storageGroups.位置待确认.length}`,
       description: `当前共 ${inventoryItems.length} 种食材，随时可以开始配餐`,
       icon: "boxes-stacked" as const,
       tone: "green" as const,
     }, {
       eyebrow: "最新备货",
       title: inventoryItems[0]?.food_name || "食材已更新",
-      description: `${inventoryItems[0]?.storage_location || "冷藏"} · ${inventoryItems[0]?.quantity || "1份"}，已加入你的保鲜库`,
+      description: `${getInventoryStorageDisplay(inventoryItems[0]?.storage_location)} · ${formatInventoryQuantity(inventoryItems[0]?.quantity)}，已加入你的保鲜库`,
       icon: "basket-shopping" as const,
       tone: "green" as const,
     }] : [{
@@ -1005,7 +1001,7 @@ function HomeContent() {
                 </View>
                 <View className="flex-1">
                   <Text className={`text-[10px] font-black ${activeInventoryCard.tone === "amber" ? "text-warm" : "text-brand"}`}>{activeInventoryCard.eyebrow}</Text>
-                  <Text className="mt-0.5 text-sm font-black text-ink" numberOfLines={1}>{activeInventoryCard.title}</Text>
+                  <Text className="mt-0.5 text-sm font-black text-ink" numberOfLines={2}>{activeInventoryCard.title}</Text>
                   <Text className="mt-0.5 text-[11px] text-copy-muted" numberOfLines={1}>{activeInventoryCard.description}</Text>
                 </View>
                 <View className={`w-8 h-8 rounded-xl items-center justify-center ${activeInventoryCard.tone === "amber" ? "bg-warm-fill" : "bg-brand-fill"}`}>
@@ -1018,9 +1014,10 @@ function HomeContent() {
               <Text className="mb-2 text-[10px] font-bold text-copy-muted">按存放方式查看</Text>
               <View className="flex-row gap-2">
                 {[
-                  { label: "冷藏", count: storageCounts.refrigerated },
-                  { label: "冷冻", count: storageCounts.frozen },
-                  { label: "常温", count: storageCounts.roomTemperature },
+                  { label: "冷藏", count: storageGroups.冷藏.length },
+                  { label: "冷冻", count: storageGroups.冷冻.length },
+                  { label: "常温", count: storageGroups.常温.length },
+                  { label: "位置待确认", count: storageGroups.位置待确认.length },
                 ].map((storage) => (
                   <TouchableOpacity
                     key={storage.label}

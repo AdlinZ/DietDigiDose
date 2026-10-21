@@ -1,11 +1,12 @@
-import type { InventoryItem, KitchenwareItem, Recipe, StorageLocation } from "./types";
-import { daysUntilDateKey } from "@/utils/inventory";
+import type { InventoryItem, KitchenwareItem, Recipe } from "./types";
+import { daysUntilDateKey, getInventoryStorageDisplay, type InventoryStorageDisplay } from "@/utils/inventory";
 import { findRecipeAllergyRisks, type HealthProfile } from "@/utils/healthProfile";
 
-const STORAGE_FILTERS: Record<string, StorageLocation> = {
+const STORAGE_FILTERS: Record<string, InventoryStorageDisplay> = {
   冷藏库: "冷藏",
   冷冻库: "冷冻",
   常温库: "常温",
+  位置待确认: "位置待确认",
 };
 
 export function filterInventoryItems(items: InventoryItem[], category: string) {
@@ -13,12 +14,7 @@ export function filterInventoryItems(items: InventoryItem[], category: string) {
   if (category === "家庭共享") return items.filter((item) => item.scope === "shared");
   const storageFilter = STORAGE_FILTERS[category];
   if (storageFilter) {
-    return items.filter((item) => {
-      const location = (["冷藏", "冷冻", "常温"].includes(item.storage_location)
-        ? item.storage_location
-        : "常温") as StorageLocation;
-      return location === storageFilter;
-    });
+    return items.filter((item) => getInventoryStorageDisplay(item.storage_location) === storageFilter);
   }
   return items.filter((item) => item.category === category);
 }

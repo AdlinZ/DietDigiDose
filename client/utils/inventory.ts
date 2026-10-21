@@ -57,3 +57,20 @@ export function getExpirationBadgeConfig(status: InventoryStatus): BadgeConfig {
   }
   return { label: "日期未知", badgeBg: "bg-gray-100", textColor: "text-gray-400", level: 5 };
 }
+
+// Display classification only: never replace the original stored location.
+export type InventoryStorageDisplay = "冷藏" | "冷冻" | "常温" | "位置待确认";
+
+export function getInventoryStorageDisplay(location: string | null | undefined): InventoryStorageDisplay {
+  return location === "冷藏" || location === "冷冻" || location === "常温" ? location : "位置待确认";
+}
+
+export function groupInventoryByStorage<T extends { storage_location?: string | null }>(items: T[]) {
+  const groups: Record<InventoryStorageDisplay, T[]> = { 冷藏: [], 冷冻: [], 常温: [], 位置待确认: [] };
+  for (const item of items) groups[getInventoryStorageDisplay(item.storage_location)].push(item);
+  return groups;
+}
+
+export function formatInventoryQuantity(quantity: string | null | undefined): string {
+  return quantity?.trim() || "数量未知";
+}

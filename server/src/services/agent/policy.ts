@@ -236,6 +236,15 @@ export function validateAgentActions(actions: unknown[], ctx: UserContext): Agen
     if (action.actionType === "record_diet_meal" && action.payload.recordedAt === undefined && ctx.clock) {
       action.payload.recordedAt = ctx.clock.local_date;
     }
+    if (ctx.clock && action.actionType === "record_prepared_meal_event" && action.payload.type === "eat" && action.payload.recorded_at === undefined) {
+      action.payload = { ...action.payload, recorded_at: ctx.clock.local_date };
+    }
+    if (ctx.clock && action.actionType === "produce_meal") {
+      const production = action.payload.production as Record<string, unknown>;
+      if (Number(production.eaten_servings) > 0 && production.eaten_at === undefined) {
+        action.payload = { ...action.payload, production: { ...production, eaten_at: ctx.clock.local_date } };
+      }
+    }
     if (action.riskLevel === "forbidden") throw new Error(`禁止的 Agent 操作：${action.actionType}`);
     if (!["create_meal_plan", "update_meal_plan", "add_shopping_items", "update_shopping_item", "submit_recipe"].includes(action.actionType)) continue;
     const conflict = findCandidateSafetyConflict(action.payload, ctx);

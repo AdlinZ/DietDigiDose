@@ -1,8 +1,8 @@
 # Preview 签名验证
 
-## 当前构建证据
+## 2026-09-12 构建证据（历史）
 
-2026-09-12读取GitHub Actions成功运行日志，当前HTTPS preview已替代旧preview-http：
+2026-09-12 读取 GitHub Actions 成功运行日志，当时 HTTPS preview 已替代旧 preview-http：
 
 | 运行 | 提交 | 日志中的profile及包名 | APK签名SHA-256 |
 | --- | --- | --- | --- |
@@ -11,7 +11,7 @@
 
 两次`apksigner verify --verbose --print-certs`输出一致，且不同于工作流锁定的release摘要`7473251630e89fbad819b5193c07b857b3ac5b64244551c1bbad55460fbe9cd2`。这些是历史构建日志证据，不是当前开发分支的候选包验证，也不是设备覆盖安装证明。
 
-`android-preview` Environment中已存在preview keystore、密码、alias四项Secret和摘要变量。验收只读取配置名称，不导出私钥或密码。
+当时核对的 `android-preview` Environment 中已存在preview keystore、密码、alias四项Secret和摘要变量。验收只读取配置名称，不导出私钥或密码。
 
 ## 构建门槛
 
@@ -25,10 +25,12 @@
 
 `pnpm test:release`包含公开测试证书的规则回归。测试证书不是实际preview证书，仓库不含对应私钥，其有效期不代表真实签名有效期。
 
-## 尚缺的验收
+## 后续每个候选仍需提供的验收证据
+
+以下是验收要求，不代表最新候选已完成或未完成；实际结果见[状态导航](status.md)。
 
 - 在实际preview证书上运行新增有效期检查并保留构建输出。
 - 真机上不卸载、不清数据安装下一版，核对账户和本地数据保持。
 - iOS/Android同提交candidate产物与完整真机核心闭环。
 
-本机检查时`adb`不在PATH，`xcrun devicectl`不可用；尚未获取可执行真机验收的设备入口。没有为本次校验触发构建、分配快照编号或改变签名Secret。
+2026-09-12 本机检查时 `adb`不在PATH，`xcrun devicectl`不可用；尚未获取可执行真机验收的设备入口。没有为本次校验触发构建、分配快照编号或改变签名Secret。

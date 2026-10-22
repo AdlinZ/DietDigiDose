@@ -1,32 +1,25 @@
-# React + TypeScript + Vite
+# 食光烙记官网与管理端
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+本目录包含产品官网与管理后台，使用 React、Vite、Tailwind CSS 和 Oxlint。它是 pnpm workspace 的一部分，不是独立 Vite 模板。
 
-Currently, two official plugins are available:
+## 本地开发
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+先按[根 README](../README.md)配置工具链并在仓库根目录完成安装。以下命令均从仓库根目录执行：
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+pnpm dev:server
+# 另开终端
+pnpm dev:admin
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+开发入口默认是 http://localhost:5173；Vite 将 `/api` 代理到 http://localhost:9090，配置见 [vite.config.ts](vite.config.ts)。管理权限由前后端共同校验，不应通过修改前端绕过。
+
+## 检查与构建
+
+```bash
+pnpm lint:admin
+pnpm test:admin
+pnpm build:admin
+```
+
+上述根目录命令以[根 package.json](../package.json) 为准，静态构建输出到 `admin/dist/`。页面组织、样式隔离、发布与回滚步骤见[管理后台维护与验收](../docs/admin-console.md)。部署证据见[状态导航](../docs/status.md)，本地构建成功不代表已发布。

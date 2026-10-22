@@ -29,11 +29,17 @@ pnpm dev
 ```bash
 pnpm -w validate:toolchain
 pnpm -w quality:test-quarantine
+pnpm -w docs:check
+pnpm -w test:docs
 pnpm -w lint:all
 pnpm -w test:all
 ```
 
 根据改动范围补充覆盖率、客户端、服务端或管理端构建，以及 Android 真机或 Web 手动验证。测试分层、覆盖率、产物预算和 flaky 隔离规则见 [docs/testing.md](docs/testing.md)；不得通过未登记的 skip 或只重跑失败 job 来获取绿色门禁。涉及数据库、认证、隐私、安全或发布流程时，必须在 PR 中说明风险和回滚方案。
+
+## 文档维护
+
+README 的工具链区块来自 `.nvmrc` 与 `package.json`，修改源配置后运行 `pnpm -w docs:generate`，不要直接手改生成区块。动态任务、构建与部署证据从 [docs/status.md](docs/status.md) 进入；有日期的周报保留为历史，不按周改写旧结论。
 
 ## Issue 与敏感信息
 

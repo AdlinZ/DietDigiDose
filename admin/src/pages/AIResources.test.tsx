@@ -152,3 +152,15 @@ it('edits Search without a model, retains Fetch disabled and does not claim Agen
 it('recognizes real HTTP conflict codes without exposing response bodies', async () => {
   await mount(); await change('连接名称', 'Renamed'); put.mockRejectedValue({ response: { status: 409, data: { code: 'AI_RESOURCE_CONFLICT', error: 'not-for-display' } } }); await submit(); expect(host.textContent).toContain('配置版本冲突'); expect(host.textContent).not.toContain('not-for-display'); await submit(); expect(put).toHaveBeenCalledTimes(1);
 });
+
+it.each(['connection', 'tool'])('never reuses a removed saved %s ID with credential keep', async kind => {
+  const data = fixture();
+  data.resources.push(kind === 'connection'
+    ? { id: 'provider-1', name: 'Old', kind: 'connection', protocol: 'openai-compatible', baseUrl: 'https://old.invalid', models: [{ id: 'old', capabilities: ['chat'] }] }
+    : { id: 'web-1', name: 'Old', kind: 'tool', protocol: 'deepseek-tools', baseUrl: 'https://api.deepseek.com', tools: ['search'] });
+  get.mockResolvedValue({ data }); await mount();
+  const card = [...host.querySelectorAll('article')].at(-1)!;
+  await act(async () => [...card.querySelectorAll('button')].find(b => b.textContent === '移除连接')!.click());
+  await click(kind === 'connection' ? '新增连接' : '新增搜索工具资源');
+  expect([...host.querySelectorAll('article')].at(-1)!.querySelector('small')!.textContent).toBe(kind === 'connection' ? 'provider-2' : 'web-2');
+});

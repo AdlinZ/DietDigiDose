@@ -187,8 +187,8 @@ export function createAdminAIConfigRouter() {
 
   router.post("/ai-config/test", validateBody(adminAIConfigTestSchema), async (req, res) => {
     try {
-      const { apiKey, baseUrl, model } = req.body;
-      const result = await testAIConnection({ apiKey, baseUrl, model });
+      const { apiKey, baseUrl, model, service } = req.body;
+      const result = await testAIConnection({ apiKey, baseUrl, model, service });
       res.json({ success: true, reply: result.reply, latencyMs: result.latencyMs });
     } catch (error) {
       console.error("[Admin AI Connection Test Error]", error instanceof Error ? error.message : error);

@@ -87,11 +87,11 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
       <fieldset disabled={saving || loading || needsReload}>
         {page === 'providers' ? <>
           <button type="button" className="admin-button" onClick={() => {
-            let i = 1; while (draft.resources.some(r => r.id === `web-${i}`)) i++;
+            let i = 1; while ([...saved.resources, ...draft.resources].some(r => r.id === `web-${i}`)) i++;
             setDraft({ ...draft, resources: [...draft.resources, { id: `web-${i}`, name: '', kind: 'tool', protocol: 'deepseek-tools', baseUrl: 'https://api.deepseek.com', tools: ['search'], credential: { action: 'keep' } }] });
           }}>新增搜索工具资源</button>
           <Section title="连接与模型目录" action={<button type="button" className="admin-button" onClick={() => {
-            let i = 1; while (draft.resources.some(r => r.id === `provider-${i}`)) i++;
+            let i = 1; while ([...saved.resources, ...draft.resources].some(r => r.id === `provider-${i}`)) i++;
             setDraft({ ...draft, resources: [...draft.resources, { id: `provider-${i}`, name: '', kind: 'connection', protocol: 'openai-compatible', baseUrl: '', models: [{ id: '', capabilities: ['chat'] }], credential: { action: 'keep' } }] });
           }}>新增连接</button>}>
             {draft.resources.map((r, index) => <article className="ai-resource-card" key={r.id}>

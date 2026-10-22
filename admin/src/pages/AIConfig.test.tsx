@@ -5,7 +5,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import AIConfig from './AIConfig';
 import api from '../services/api';
 import { legacyTextFields, legacyConfigPatch } from '../services/legacyAIConfig';
-vi.mock('../services/api', () => ({ default: { get: vi.fn(), put: vi.fn() } }));
+vi.mock('../services/api', () => ({ default: { get: vi.fn(), put: vi.fn(), post: vi.fn() } }));
 let host: HTMLDivElement, root: Root;
 const get = vi.mocked(api.get), put = vi.mocked(api.put);
 const policy = { main: { thinking: 'default', maxTokens: 3000, timeoutMs: 60000, retries: 0 }, planner: { thinking: 'default', maxTokens: 3000, timeoutMs: 60000, retries: 0 }, vision: { thinking: 'default', maxTokens: 3000, timeoutMs: 60000, retries: 0 }, asr: { thinking: 'default', maxTokens: 3000, timeoutMs: 60000, retries: 0 }, deadlineMs: 180000, maxModelCalls: 12, maxToolCalls: 6 };
@@ -68,4 +68,13 @@ it('replacement cancels clearing and cannot be silently discarded', async () => 
   expect(checkbox.checked).toBe(false); expect(checkbox.disabled).toBe(true);
   await act(async () => saveButton().click()); expect(put.mock.calls[0][1]).toEqual({ apiKey: 'demo-rotation' });
   expect(legacyConfigPatch({}, {}, { apiKey: 'demo-rotation' }, ['apiKey'])).toEqual({ apiKey: 'demo-rotation' });
+});
+
+it('tests complete effective bindings without mixing raw fields or unsaved keys', async () => {
+  vi.mocked(api.post).mockResolvedValue({ data: { success: true, reply: 'OK' } });
+  await mount();
+  for (const [label, service] of [['测试当前生效对话连接', 'chat'], ['测试当前识图连接', 'vision'], ['测试当前转写连接', 'asr']]) {
+    await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent?.includes(label))!.click());
+    expect(api.post).toHaveBeenLastCalledWith('/admin/ai-config/test', { service });
+  }
 });

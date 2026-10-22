@@ -544,11 +544,14 @@ export async function chatCompletion(
  * 真实连通性测试 (不使用 getFallbackResponse 降级，严格抛出真实 API 错误)
  */
 export async function testAIConnection(overrideConfig?: {
+  service?: "chat" | "vision" | "asr";
   apiKey?: string;
   baseUrl?: string;
   model?: string;
 }): Promise<{ reply: string; latencyMs: number }> {
-  const currentConfig = await getAIConfig();
+  const config = await getAIConfig();
+  const currentConfig = overrideConfig?.service ? config[overrideConfig.service] : config;
+  if (overrideConfig?.service) overrideConfig = undefined;
   const apiKey = (overrideConfig?.apiKey || currentConfig.apiKey).trim();
   const baseUrl = (overrideConfig?.baseUrl || currentConfig.baseUrl).replace(/\/$/, "").trim();
   const model = (overrideConfig?.model || currentConfig.model).trim();

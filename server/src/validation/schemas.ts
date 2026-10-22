@@ -721,6 +721,7 @@ export const adminAIConfigSchema = z.object({
   systemPrompt: z.string().trim().max(12_000, "人设提示词不能超过 12000 个字符").refine(value => !value || value.length >= 20, "人设提示词至少需要 20 个字符，或留空恢复默认").optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个需要更新的字段");
 export const adminAIConfigTestSchema = z.object({
+  service: z.enum(["chat", "vision", "asr"]).optional(),
   apiKey: z.string().trim().max(1000).optional(),
   baseUrl: optionalUrlSchema,
   model: z.string().trim().min(1).max(200).optional(),

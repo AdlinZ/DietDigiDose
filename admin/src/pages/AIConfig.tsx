@@ -180,28 +180,9 @@ export default function AIConfig() {
       setTesting(true);
       setTestResult(null);
 
-      let testKey = apiKey;
-      let testUrl = baseUrl;
-      let testModel = model;
-
-      if (targetService === "chat" && enablePerServiceProviders) {
-        if (chatApiKey.trim()) testKey = chatApiKey.trim();
-        if (chatBaseUrl.trim()) testUrl = chatBaseUrl.trim();
-        testModel = model;
-      } else if (targetService === "vision" && enablePerServiceProviders) {
-        if (visionApiKey.trim()) testKey = visionApiKey.trim();
-        if (visionBaseUrl.trim()) testUrl = visionBaseUrl.trim();
-        testModel = visionModel;
-      } else if (targetService === "asr" && enablePerServiceProviders) {
-        if (asrApiKey.trim()) testKey = asrApiKey.trim();
-        if (asrBaseUrl.trim()) testUrl = asrBaseUrl.trim();
-        testModel = asrModel;
-      }
-
+      // Resolve the complete saved binding atomically on the server; raw edits are only for PATCH.
       const { data } = await api.post("/admin/ai-config/test", {
-        apiKey: testKey,
-        baseUrl: testUrl,
-        model: testModel,
+        service: targetService === 'global' ? 'chat' : targetService,
       });
 
       if (data.success) {
@@ -561,7 +542,7 @@ export default function AIConfig() {
               className="px-4 py-2 rounded-xl border border-primary text-primary hover:bg-green-50 font-bold text-xs flex items-center gap-1.5 transition-colors active:scale-95 disabled:opacity-50"
             >
               {testing ? <RefreshCw className="animate-spin" size={14} /> : <Zap size={14} />}
-              测试对话服务连通性
+              测试当前生效对话连接
             </button>
             {enablePerServiceProviders && (
               <>
@@ -571,7 +552,7 @@ export default function AIConfig() {
                   disabled={testing}
                   className="px-4 py-2 rounded-xl border border-secondary text-secondary hover:bg-emerald-50 font-bold text-xs flex items-center gap-1.5 transition-colors active:scale-95 disabled:opacity-50"
                 >
-                  <Zap size={14} /> 测试识图服务
+                  <Zap size={14} /> 测试当前识图连接
                 </button>
                 <button
                   type="button"
@@ -579,7 +560,7 @@ export default function AIConfig() {
                   disabled={testing}
                   className="px-4 py-2 rounded-xl border border-orange-500 text-orange-500 hover:bg-orange-50 font-bold text-xs flex items-center gap-1.5 transition-colors active:scale-95 disabled:opacity-50"
                 >
-                  <Zap size={14} /> 测试语音识别
+                  <Zap size={14} /> 测试当前转写连接
                 </button>
               </>
             )}

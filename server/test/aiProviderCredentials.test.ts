@@ -64,3 +64,20 @@ test("independent chat binding does not mix its model with the legacy connection
     assert.deepEqual(calls, [{ url: "https://legacy.invalid/v1/chat/completions", key: "Bearer legacy-fixture-secret", model: "legacy-model" }]);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("saved service tests select its complete binding and refuse cleared credentials", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; key: string | null; model: string }> = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), key: new Headers(init?.headers).get("Authorization"), model: JSON.parse(String(init?.body)).model });
+    return new Response(JSON.stringify({ choices: [{ message: { content: "fixture" } }] }));
+  };
+  try {
+    configure("vision-fixture-secret");
+    await testAIConnection({ service: "vision", baseUrl: "https://wrong.invalid", apiKey: "wrong-key", model: "wrong-model" });
+    assert.deepEqual(calls, [{ url: "https://vision-isolated.invalid/v1/chat/completions", key: "Bearer vision-fixture-secret", model: "vision-model" }]);
+    configure("");
+    await assert.rejects(testAIConnection({ service: "vision" }), /API Key/);
+    assert.equal(calls.length, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});

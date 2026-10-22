@@ -44,6 +44,7 @@ import {
   EXPIRING_STOCK_ALERT_IDS_KEY,
   NOTIFICATION_SCHEDULE_IDS_KEY,
   cancelAllLocalNotificationsForUser,
+  cancelLegacyUnscopedLocalNotifications,
   getNextExpiringAlertDate,
   scheduleExpiringStockAlerts,
   syncLocalNotificationSchedules,
@@ -61,6 +62,31 @@ describe("user-scoped local notifications", () => {
     jest.mocked(Notifications.getPermissionsAsync).mockResolvedValue({ status: "granted" } as Notifications.NotificationPermissionsStatus);
     let id = 0;
     jest.mocked(Notifications.scheduleNotificationAsync).mockImplementation(async () => `scheduled-${++id}`);
+  });
+
+  it("keeps failed legacy IDs for retry without rejecting authentication cleanup", async () => {
+    mockStorage.set(NOTIFICATION_SCHEDULE_IDS_KEY, JSON.stringify(["legacy"]));
+    jest.mocked(Notifications.cancelScheduledNotificationAsync).mockRejectedValueOnce(new Error("native unavailable"));
+    await expect(cancelLegacyUnscopedLocalNotifications()).resolves.toBeUndefined();
+    expect(JSON.parse(mockStorage.get(NOTIFICATION_SCHEDULE_IDS_KEY)!)).toEqual(["legacy"]);
+    await cancelLegacyUnscopedLocalNotifications();
+    expect(mockStorage.has(NOTIFICATION_SCHEDULE_IDS_KEY)).toBe(false);
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for known routine IDs to cancel even when native enumeration fails", async () => {
+    const key = getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 101)!;
+    mockStorage.set(key, JSON.stringify(["known"]));
+    jest.mocked(Notifications.getAllScheduledNotificationsAsync).mockRejectedValue(new Error("enumeration unavailable"));
+    let release!: () => void;
+    jest.mocked(Notifications.cancelScheduledNotificationAsync).mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    let completed = false;
+    const cleanup = cancelAllLocalNotificationsForUser(101).then(() => { completed = true; });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("known");
+    expect(completed).toBe(false);
+    release(); await cleanup;
+    expect(mockStorage.has(key)).toBe(false);
   });
 
   it("stores routine schedule ids under the current account only", async () => {
@@ -252,4 +278,29 @@ describe("weekly routine compatibility", () => {
     await syncLocalNotificationSchedules(preferences, 101);
     expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
   });
+  it("waits for every cooking timer cancellation even when one fails", async () => {
+    jest.mocked(Notifications.getAllScheduledNotificationsAsync).mockResolvedValue([
+      { identifier: "failed-timer", content: { data: { type: "cooking_timer", userId: 101 } } },
+      { identifier: "slow-timer", content: { data: { type: "cooking_timer", userId: 101 } } },
+    ] as Notifications.NotificationRequest[]);
+    let release!: () => void;
+    let started!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    jest.mocked(Notifications.cancelScheduledNotificationAsync).mockImplementation(id => {
+      if (id === "failed-timer") return Promise.reject(new Error("cancel failed"));
+      if (id === "slow-timer") {
+        started();
+        return new Promise<void>(resolve => { release = resolve; });
+      }
+      return Promise.resolve();
+    });
+    let settled = false;
+    const cleanup = cancelAllLocalNotificationsForUser(101).catch(error => { settled = true; return error; });
+    await waiting;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    release();
+    expect(await cleanup).toEqual(expect.objectContaining({ message: expect.stringContaining("取消失败") }));
+  });
+
 });

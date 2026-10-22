@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import Database from 'better-sqlite3';
+import { SqliteAgentOperationsRepository } from '../src/modules/agentOperations/sqliteRepository.js';
+import { validateAgentActions } from '../src/services/agent/policy.js';
+import { buildUserContext, buildAIPromptMessages } from '../src/services/contextBuilder.js';
+import { configureAiContextService } from '../src/modules/aiContext/runtime.js';
+import { AiContextService } from '../src/modules/aiContext/service.js';
+import type { RecommendationsService } from '../src/modules/recommendations/service.js';
+import { configureRecommendationsService } from '../src/modules/recommendations/runtime.js';
+test('diet proposals retain their context date when approved after Shanghai midnight', async t => {
+  t.mock.timers.enable({apis:['Date'], now: new Date('2026-12-31T15:59:59Z')});
+  configureAiContextService(new AiContextService({load: async () => ({user:null,inventory:[],kitchenware:[],todayDiet:[],latestHealth:null,healthProfile:null,personaPrompt:''})}));
+  configureRecommendationsService({compute:async()=>({results:[]})} as unknown as RecommendationsService);
+  const before = await buildUserContext(1);
+  assert.equal(before.clock!.local_date, '2026-12-31');
+  for (const recordedAt of [undefined, '今天', 'today']) {
+    const [action] = validateAgentActions([{actionType:'record_diet_meal',summary:'记录今天晚餐',payload:{foodName:'米饭',mealType:'晚餐',amount:'1份',recordedAt}}],before);
+    assert.equal(action.payload.recordedAt,'2026-12-31');
+    t.mock.timers.setTime(new Date('2026-12-31T16:00:01Z').getTime());
+    const after = await buildUserContext(1);
+    assert.equal(after.clock!.local_date,'2027-01-01');
+    assert.equal(validateAgentActions([{ actionType: action.actionType, summary: action.summary, payload: action.payload }], after)[0].payload.recordedAt, '2026-12-31');
+    assert.equal(JSON.parse(buildAIPromptMessages(before).at(-1)!.content.split('\n')[1]).local_date,'2026-12-31');
+    const db = new Database(':memory:'); t.after(()=>db.close());
+    db.exec(`CREATE TABLE agent_runs(id TEXT,user_id INTEGER,status TEXT);
+      CREATE TABLE agent_actions(id TEXT,run_id TEXT,user_id INTEGER,action_type TEXT,status TEXT,before_json TEXT,result_json TEXT,executed_at TEXT,undone_at TEXT,updated_at TEXT);
+      CREATE TABLE diet_records(id INTEGER PRIMARY KEY,user_id INTEGER,meal_type TEXT,food_name TEXT,amount TEXT,calories INTEGER,protein REAL,carbs REAL,fat REAL,recorded_at TEXT,recorded_time TEXT);
+      INSERT INTO agent_runs VALUES('run',1,'running');
+      INSERT INTO agent_actions(id,run_id,user_id,action_type,status) VALUES('action','run',1,'record_diet_meal','awaiting_approval');`);
+    await new SqliteAgentOperationsRepository(db).executeActions(1,'run',[{...action,id:'action'}]);
+    const row = db.prepare('SELECT recorded_at,recorded_time FROM diet_records').get() as { recorded_at: string; recorded_time: string | null };
+    assert.equal(row.recorded_at,'2026-12-31');
+    assert.equal(row.recorded_time,null);
+  }
+  const explicit = {actionType:'record_diet_meal',summary:'补录',payload:{foodName:'米饭',mealType:'晚餐',amount:'1份',recordedAt:'2026-12-30',recordedTime:'18:30'}};
+  assert.equal(validateAgentActions([explicit], before)[0].payload.recordedAt, '2026-12-30');
+  assert.equal(validateAgentActions([explicit], before)[0].payload.recordedTime, '18:30');
+  const legacy = {...before, clock:undefined};
+  assert.equal(validateAgentActions([{...explicit,payload:{...explicit.payload,recordedAt:'今天'}}], legacy)[0].payload.recordedAt, undefined);
+});

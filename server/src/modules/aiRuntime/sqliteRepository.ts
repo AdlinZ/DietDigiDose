@@ -22,17 +22,20 @@ export class SqliteAIRuntimeRepository implements AIRuntimeRepository {
     this.writeSettings(entries);
   }
 
-  async compareAndSaveSetting(key: string, previous: string | null, value: string) {
-    return this.writeSettings([{ key, value }], { key, previous });
+  async compareAndSaveSetting(key: string, previous: string | null, value: string | null, expected: Record<string, string | null> = {}, entries: Array<{ key: string; value: string }> = []) {
+    return this.writeSettings([...entries, ...(value === null ? [] : [{ key, value }])], { ...expected, [key]: previous });
   }
 
-  private writeSettings(entries: Array<{ key: string; value: string }>, expected?: { key: string; previous: string | null }) {
+  private writeSettings(entries: Array<{ key: string; value: string }>, expected?: Record<string, string | null>) {
     const statement = this.database.prepare(`INSERT INTO system_settings (key, value, updated_at)
       VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`);
     // Acquire the write lock before reading the expected value. Legacy batch
     // writes and resource CAS share the same atomic repository write boundary.
     return this.database.transaction(() => {
-      if (expected && (this.readSettings([expected.key])[expected.key] ?? null) !== expected.previous) return false;
+      if (expected) {
+        const current = this.readSettings(Object.keys(expected));
+        if (Object.entries(expected).some(([key, value]) => (current[key] ?? null) !== value)) return false;
+      }
       for (const entry of entries) statement.run(entry.key, entry.value);
       return true;
     }).immediate();

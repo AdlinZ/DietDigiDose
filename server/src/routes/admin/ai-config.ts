@@ -128,7 +128,7 @@ export function createAdminAIConfigRouter() {
       const add = (key: string, value: string | undefined) => {
         if (value !== undefined) entries.push({ key, value: value.trim() });
       };
-      if (typeof apiKey === "string" && apiKey.trim()) add("AI_API_KEY", apiKey);
+      add("AI_API_KEY", apiKey);
       add("AI_BASE_URL", baseUrl); add("AI_MODEL", model); add("AI_VISION_MODEL", visionModel); add("AI_ASR_MODEL", asrModel);
       add("AI_SUPERVISOR_MODEL", supervisorModel); add("AI_NUTRITION_MODEL", nutritionModel);
       add("AI_RECIPE_MODEL", recipeModel); add("AI_OPERATIONS_MODEL", operationsModel);
@@ -139,8 +139,8 @@ export function createAdminAIConfigRouter() {
       }
       add("AI_VISION_API_KEY", visionApiKey); add("AI_VISION_BASE_URL", visionBaseUrl);
       add("AI_ASR_API_KEY", asrApiKey); add("AI_ASR_BASE_URL", asrBaseUrl); add("AI_SYSTEM_PROMPT", systemPrompt);
+      const current = await aiRuntimeService().settings();
       {
-        const current = await aiRuntimeService().settings();
         const merged = { ...current, ...Object.fromEntries(entries.map((entry) => [entry.key, entry.value])) };
         const effective = await aiRuntimeService().config(merged);
         const policy = req.body.runtimePolicy || await aiRuntimeService().runtimePolicy();
@@ -148,11 +148,12 @@ export function createAdminAIConfigRouter() {
           const agent = await aiRuntimeService().agentConfig(role, merged);
           thinkingParameters(agent.baseUrl, agent.model, role === "NUTRITION" ? policy.planner : policy.main);
         }
+        thinkingParameters(effective.chat.baseUrl, effective.chat.model, policy.main);
         thinkingParameters(effective.vision.baseUrl, effective.vision.model, policy.vision);
         if (policy.asr.thinking !== "default") throw new Error("语音转写不支持思考策略，请选择提供商默认");
         entries.push({ key: "AI_RUNTIME_POLICY", value: JSON.stringify(policy) });
       }
-      await aiRuntimeService().saveSettings(entries);
+      await aiRuntimeService().saveValidatedSettings(entries, current);
 
       if (req.userId) {
         await auditAdminAction(req, {
@@ -176,7 +177,8 @@ export function createAdminAIConfigRouter() {
       }
       res.json({ success: true, message: "AI 配置更新成功" });
     } catch (error) {
-      res.status(400).json({ error: error instanceof Error && /思考|参数/.test(error.message) ? error.message : "更新 AI 配置失败，请检查模型与策略配置" });
+      if (error instanceof AIResourceConflictError) res.status(409).json({ code: "AI_RESOURCE_CONFLICT", error: "配置版本已变更，请重新读取" });
+      else res.status(400).json({ error: error instanceof Error && /思考|参数/.test(error.message) ? error.message : "更新 AI 配置失败，请检查模型与策略配置" });
     }
   });
 

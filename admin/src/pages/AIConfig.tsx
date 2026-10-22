@@ -88,6 +88,8 @@ export default function AIConfig() {
   // UI 状态
   const initial = useRef<Record<string, unknown>>({});
   const saveBusy = useRef(false);
+  const [clearKeys, setClearKeys] = useState<string[]>([]);
+  const [storedKeys, setStoredKeys] = useState<Record<string, boolean>>({});
   const [needsReload, setNeedsReload] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -115,8 +117,9 @@ export default function AIConfig() {
       setSystemPrompt(fields.systemPrompt); setIsSystemPromptCustomized(!!fields.systemPrompt);
       setRuntimePolicy(data.runtimePolicy);
       const keys = data.credentialState;
-      setHasApiKey(!!keys.global); setHasChatApiKey(!!keys.chat); setHasVisionApiKey(!!keys.vision); setHasAsrApiKey(!!keys.asr);
-      setMaskedKey(keys.global ? '********' : ''); setChatMaskedKey(keys.chat ? '********' : '');
+      setStoredKeys({ apiKey: keys.global, chatApiKey: keys.chat, visionApiKey: keys.vision, asrApiKey: keys.asr }); setClearKeys([]);
+      setHasApiKey(!!data.hasApiKey); setHasChatApiKey(!!keys.chat); setHasVisionApiKey(!!keys.vision); setHasAsrApiKey(!!keys.asr);
+      setMaskedKey(data.hasApiKey ? '********' : ''); setChatMaskedKey(keys.chat ? '********' : '');
       setVisionMaskedKey(keys.vision ? '********' : ''); setAsrMaskedKey(keys.asr ? '********' : '');
       setEnablePerServiceProviders(!!(keys.chat || keys.vision || keys.asr || fields.chatBaseUrl || fields.visionBaseUrl || fields.asrBaseUrl));
       setLoadError(false); setNeedsReload(false);
@@ -148,8 +151,9 @@ export default function AIConfig() {
     if (saveBusy.current || loadError || needsReload) return;
     const patch = legacyConfigPatch({ baseUrl, model, chatModel: model, visionModel, asrModel,
       supervisorModel, nutritionModel, recipeModel, operationsModel, chatBaseUrl, visionBaseUrl, asrBaseUrl,
-      systemPrompt, runtimePolicy }, initial.current, { apiKey, chatApiKey, visionApiKey, asrApiKey });
+      systemPrompt, runtimePolicy }, initial.current, { apiKey, chatApiKey, visionApiKey, asrApiKey }, clearKeys);
     if (!Object.keys(patch).length) { setStatusMsg('没有需要保存的修改。'); return; }
+    if (clearKeys.length && !window.confirm("确定清除所选数据库密钥覆盖？已有全局或环境凭据仍按旧配置规则回退。")) return;
     saveBusy.current = true;
     try {
       setSaving(true);
@@ -577,6 +581,12 @@ export default function AIConfig() {
             )}
           </div>
 
+          <fieldset disabled={saving} className="text-xs space-y-2">
+            <legend>清除已存密钥覆盖（保存后生效）</legend>
+            <p>空输入保持不变。清除数据库覆盖后，仍按旧配置规则回退到全局或环境凭据。</p>
+            {([['apiKey', '全局'], ['chatApiKey', '对话'], ['visionApiKey', '识图'], ['asrApiKey', '转写']] as const).map(([key, label]) =>
+              <label key={key}><input type="checkbox" disabled={!storedKeys[key]} checked={clearKeys.includes(key)} onChange={event => setClearKeys(current => event.target.checked ? [...current, key] : current.filter(item => item !== key))} />清除{label}密钥覆盖</label>)}
+          </fieldset>
           <button
             type="button"
             onClick={handleSave}

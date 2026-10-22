@@ -38,6 +38,13 @@ try {
   let saved = (await service.settings())[RESOURCE_SETTING_KEY];
   assert.notEqual(saved, initial);
   assert.equal(JSON.parse(saved).revision, 1);
+  assert.equal(await repository.compareAndSaveSetting(RESOURCE_SETTING_KEY, "stale", null, {}, [{ key: "AI_MODEL", value: "wrong" }]), false);
+  const snapshot = await service.settings();
+  await service.saveValidatedSettings([{ key: "AI_MODEL", value: "temporary-model" }], snapshot);
+  await assert.rejects(service.saveValidatedSettings([{ key: "AI_MODEL", value: "stale-model" }], snapshot), /版本/);
+  assert.equal(await repository.compareAndSaveSetting(RESOURCE_SETTING_KEY, saved, "{}", { ...snapshot, AI_MODEL: "legacy-model" }), false);
+  assert.equal((await service.settings())[RESOURCE_SETTING_KEY], saved);
+  await service.saveSettings([{ key: "AI_MODEL", value: "legacy-model" }]);
   const restarted = new AIRuntimeService(new PostgresAIRuntimeRepository(pool), { AI_API_KEY: "pg-environment-fixture" });
   await restarted.migrateResources();
   assert.deepEqual(await restarted.config(), before);

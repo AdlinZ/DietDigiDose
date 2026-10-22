@@ -34,3 +34,14 @@ it('fails closed if the raw editable interface is absent', async () => {
 it('allowlists patches and keeps blank credentials omitted', () => {
   expect(legacyConfigPatch({ model: '', badField: 'secret' }, { model: 'old' }, { apiKey: ' ', chatApiKey: 'demo-replacement', unrelated: 'secret' })).toEqual({ model: '', chatApiKey: 'demo-replacement' });
 });
+
+it('offers explicit confirmed key clearing without displaying environment secrets', async () => {
+  get.mockResolvedValue({ data: { ...data, hasApiKey: true, credentialState: { ...data.credentialState, global: false } } });
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  put.mockResolvedValue({ data: {} }); await mount();
+  expect(host.querySelector<HTMLInputElement>('input[type=password]')!.placeholder).toContain('保持不变');
+  const checkbox = [...host.querySelectorAll('label')].find(l => l.textContent === '清除对话密钥覆盖')!.querySelector('input')!;
+  await act(async () => checkbox.click()); await act(async () => saveButton().click()); expect(put).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true); await act(async () => saveButton().click());
+  expect(put.mock.calls[0][1]).toEqual({ chatApiKey: '' }); confirm.mockRestore();
+});

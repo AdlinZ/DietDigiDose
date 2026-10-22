@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Response } from "express";
 import { authMiddleware, type AuthRequest } from "../../middleware/auth.js";
 import { sharedRateLimit } from "../../middleware/sharedRateLimit.js";
-import { getChatConfig } from "../../services/aiService.js";
+import { aiRuntimeService } from "../aiRuntime/runtime.js";
 import { fetchWithTimeout } from "../../utils/fetchWithTimeout.js";
 import { sendError } from "../../utils/http.js";
 import { safeHttpsUrl } from "./manifest.js";
@@ -26,7 +26,7 @@ export function createVoicePacksRouter(service: VoicePacksService) {
       const selected = voiceId ? await service.findPublished(voiceId, version) : null;
       if (voiceId && !selected) return sendError(res, 400, "音色未发布或已撤销", "VOICE_PACK_NOT_AVAILABLE");
       const configuredBase = String(process.env.TTS_BASE_URL || "").trim().replace(/\/$/, ""); const configuredKey = String(process.env.TTS_API_KEY || "").trim();
-      const chat = await getChatConfig(); const baseUrl = configuredBase || chat.baseUrl; const apiKey = configuredKey || chat.apiKey;
+      const chat = await aiRuntimeService().legacyChatConfig(); const baseUrl = configuredBase || chat.baseUrl; const apiKey = configuredKey || chat.apiKey;
       if (!apiKey || !safeHttpsUrl(baseUrl)) return sendError(res, 503, "云端语音暂不可用", "TTS_NOT_CONFIGURED");
       const response = await fetchWithTimeout(`${baseUrl}/audio/speech`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ model: process.env.TTS_MODEL || "gpt-4o-mini-tts", voice: selected?.provider_voice || process.env.TTS_VOICE || "alloy", input: text, response_format: "mp3" }) }, 30_000);

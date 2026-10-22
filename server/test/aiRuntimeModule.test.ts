@@ -71,6 +71,11 @@ describe("AI runtime module", () => {
         adapter.compareAndSaveSetting("config", "first", "winner"),
         adapter.compareAndSaveSetting("config", "first", "loser"),
       ]), [true, false]);
+      await adapter.saveSettings([{ key: "role", value: "A" }]);
+      assert.equal(await adapter.compareAndSaveSetting("config", "winner", "new", { role: "B" }), false);
+      assert.equal(await adapter.compareAndSaveSetting("config", "winner", "winner", { role: "A", absent: null }, [{ key: "role", value: "B" }]), true);
+      assert.equal(await adapter.compareAndSaveSetting("config", "winner", "invalid", { role: "A" }), false);
+      assert.equal((await adapter.settings(["config", "role"])).role, "B");
       database.exec("CREATE TRIGGER reject_fixture BEFORE INSERT ON system_settings WHEN NEW.key = 'reject' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
       await assert.rejects(adapter.saveSettings([{ key: "config", value: "rollback" }, { key: "reject", value: "fixture" }]));
       assert.deepEqual(await adapter.settings(["config", "reject"]), { config: "winner" });
@@ -108,9 +113,10 @@ describe("provider resources and business services", () => {
     return { values, repository: repository({
       settings: async keys => Object.fromEntries(Object.entries(values).filter(([key]) => keys.includes(key))),
       saveSettings: async entries => { for (const { key, value } of entries) values[key] = value; },
-      compareAndSaveSetting: async (key, previous, value) => {
-        if ((values[key] ?? null) !== previous) return false;
-        values[key] = value;
+      compareAndSaveSetting: async (key, previous, value, expected = {}, entries = []) => {
+        if ((values[key] ?? null) !== previous || Object.entries(expected).some(([name, prior]) => (values[name] ?? null) !== prior)) return false;
+        if (value !== null) values[key] = value;
+        for (const entry of entries) values[entry.key] = entry.value;
         return true;
       },
     }) };
@@ -137,6 +143,8 @@ describe("provider resources and business services", () => {
     assert.equal(result.effective.vision.source, "service:vision");
     assert.deepEqual((await service.config()).chat, { apiKey: "fixture-first-secret", baseUrl: "https://one.test/v1", model: "chat-one" });
     assert.equal((await service.config()).vision.apiKey, "fixture-second-secret");
+    assert.equal((await service.legacyChatConfig()).baseUrl, "https://api.openai.com/v1");
+    assert.equal((await service.legacyChatConfig()).apiKey, "");
     assert.equal((await service.agentConfig("RECIPE")).model, "chat-two");
     assert.equal((await service.agentConfig("SUPERVISOR")).model, "chat-one");
     const update = connections();
@@ -280,15 +288,15 @@ describe("resource storage atomicity", () => {
     };
     const adapter = new PostgresAIRuntimeRepository({ connect: async () => client } as unknown as Pool);
     assert.equal(await adapter.compareAndSaveSetting(RESOURCE_SETTING_KEY, null, "first"), true);
-    assert.match(statements[1].sql, /ON CONFLICT\(key\) DO NOTHING/);
-    assert.deepEqual(statements.map(item => item.sql.split(" ")[0]), ["BEGIN", "INSERT", "COMMIT"]);
+    assert.match(statements[2].sql, /ON CONFLICT\(key\) DO NOTHING/);
+    assert.deepEqual(statements.map(item => item.sql.split(" ")[0]), ["BEGIN", "SELECT", "INSERT", "COMMIT"]);
     statements.length = 0; rowCount = 0;
     assert.equal(await adapter.compareAndSaveSetting(RESOURCE_SETTING_KEY, "stale", "second"), false);
-    assert.match(statements[1].sql, /WHERE key = \$2 AND value = \$3/);
-    assert.deepEqual(statements[1].values, ["second", RESOURCE_SETTING_KEY, "stale"]);
+    assert.match(statements[2].sql, /WHERE key = \$2 AND value = \$3/);
+    assert.deepEqual(statements[2].values, ["second", RESOURCE_SETTING_KEY, "stale"]);
     statements.length = 0; failWrite = true;
     await assert.rejects(adapter.compareAndSaveSetting(RESOURCE_SETTING_KEY, "first", "second"), /postgres failure/);
-    assert.deepEqual(statements.map(item => item.sql.split(" ")[0]), ["BEGIN", "UPDATE", "ROLLBACK"]);
+    assert.deepEqual(statements.map(item => item.sql.split(" ")[0]), ["BEGIN", "SELECT", "UPDATE", "ROLLBACK"]);
     assert.equal(released, 3);
   });
 });

@@ -33,6 +33,17 @@ export class AIRuntimeService {
     return entries.length ? this.repository.saveSettings(entries) : Promise.resolve();
   }
 
+  async saveValidatedSettings(entries: Array<{ key: string; value: string }>, values: Record<string, string>) {
+    const previous = values[RESOURCE_SETTING_KEY] ?? null;
+    if (!await this.repository.compareAndSaveSetting(RESOURCE_SETTING_KEY, previous, previous, this.validationSnapshot(values), entries)) throw new AIResourceConflictError();
+  }
+
+  private validationSnapshot(values: Record<string, string>) {
+    return Object.fromEntries(AI_SETTING_KEYS.map(key => [key, values[key] ?? null]));
+  }
+
+  async legacyChatConfig() { return this.resolveConfig(await this.settings()).chat; }
+
   async config(settings?: Record<string, string>): Promise<AIConfig> {
     const values = settings || await this.settings();
     const legacy = this.resolveConfig(values);
@@ -106,7 +117,7 @@ export class AIRuntimeService {
         thinkingParameters(effective.baseUrl, effective.model, modelPolicy);
       }
     } catch { throw new AIResourceValidationError(); }
-    if (!await this.repository.compareAndSaveSetting(RESOURCE_SETTING_KEY, values[RESOURCE_SETTING_KEY] ?? null, JSON.stringify(next))) {
+    if (!await this.repository.compareAndSaveSetting(RESOURCE_SETTING_KEY, values[RESOURCE_SETTING_KEY] ?? null, JSON.stringify(next), this.validationSnapshot(values))) {
       throw new AIResourceConflictError();
     }
     return this.resourceConfiguration();

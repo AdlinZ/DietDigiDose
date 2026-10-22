@@ -163,3 +163,26 @@ test("raw legacy editing over HTTP never leaks keys or writes effective resource
   assert.equal((await runtime.settings()).AI_RECIPE_MODEL, '');
   assert.equal((await runtime.agentConfig('RECIPE')).model, 'review-model');
 });
+
+test("legacy clearing and chat-policy rejection keep server validation authoritative", async () => {
+  const login = await request('/auth/login', 'POST', undefined, { identifier: 'admin', password: 'AdminPassword1234' });
+  const token = login.body.token;
+  const runtime = (await import('../src/modules/aiRuntime/runtime.js')).aiRuntimeService();
+  const old = await runtime.settings();
+  const cleared = await request('/admin/ai-config', 'PUT', token, { chatApiKey: '', visionApiKey: '', asrApiKey: '', apiKey: '' });
+  assert.equal(cleared.status, 200);
+  for (const key of ['AI_API_KEY', 'AI_CHAT_API_KEY', 'AI_VISION_API_KEY', 'AI_ASR_API_KEY']) assert.equal((await runtime.settings())[key], '');
+  assert.equal((await runtime.legacyChatConfig()).baseUrl, 'https://legacy-chat.invalid/v1');
+  assert.equal((await runtime.config()).chat.baseUrl, 'https://fixture.invalid/v1');
+  const current = (await request('/admin/ai-config/resources', 'GET', token)).body as ResourceConfiguration;
+  const update = writableConfiguration(current);
+  update.resources.push({ id: 'thinking', name: 'Thinking fixture', kind: 'connection', protocol: 'openai-compatible', baseUrl: 'https://api.siliconflow.cn/v1', models: [{ id: 'Pro/deepseek-ai/DeepSeek-V4', capabilities: ['chat'] }], credential: { action: 'clear' } });
+  for (const role of ['supervisor', 'nutrition', 'recipe', 'operations'] as const) update.services[role] = { resourceId: 'thinking', model: 'Pro/deepseek-ai/DeepSeek-V4' };
+  assert.equal((await request('/admin/ai-config/resources', 'PUT', token, update)).status, 200);
+  const policy = (await request('/admin/ai-config', 'GET', token)).body.runtimePolicy;
+  assert.equal((await request('/admin/ai-config', 'PUT', token, { runtimePolicy: { ...policy, main: { ...policy.main, thinking: 'high' } } })).status, 400);
+  const invalidRecipe = await request('/admin/recipes/1/execution', 'PUT', token, { recipeKey: 'a'.repeat(64), reviewKey: 'b'.repeat(64), profile: { version: 1, reference: '', maxBatchServings: 0, tools: [], tasks: [] } });
+  assert.equal(invalidRecipe.status, 400); assert.equal(invalidRecipe.body.code, 'VALIDATION_ERROR');
+  assert.ok(invalidRecipe.body.details.some((issue: { path: string }) => issue.path.startsWith('profile')));
+  await assert.rejects(runtime.saveValidatedSettings([{ key: 'AI_MODEL', value: 'stale' }], old), /版本/);
+});

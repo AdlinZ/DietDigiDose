@@ -5,7 +5,7 @@ import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { cancelCookingQueueRemindersForUser } from "./cookingReminders";
 import { daysUntilDateKey } from "./inventory";
-import { getUserStorageKey } from "./userStorage";
+import { getPrivateStorageGeneration, isPrivateStorageCurrent, getUserStorageKey } from "./userStorage";
 
 export type NotificationPreferences = {
   expiring_alert: boolean;
@@ -78,12 +78,25 @@ function parseStoredNotificationIds(saved: string | null) {
   }
 }
 
-async function clearScheduledNotifications(storageKey: string) {
-  const ids = parseStoredNotificationIds(await AsyncStorage.getItem(storageKey));
+async function clearScheduledNotifications(storageKey: string, additionalIds: string[] = []) {
+  const ids = [...new Set([...parseStoredNotificationIds(await AsyncStorage.getItem(storageKey)), ...additionalIds])];
   if (Platform.OS !== "web") {
-    await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+    const results = await Promise.allSettled(ids.map(id => Notifications.cancelScheduledNotificationAsync(id)));
+    const remaining = ids.filter((_, index) => results[index].status === "rejected");
+    if (remaining.length) {
+      await AsyncStorage.setItem(storageKey, JSON.stringify(remaining));
+      throw new Error("部分本地提醒取消失败，请重试");
+    }
   }
   await AsyncStorage.removeItem(storageKey);
+}
+
+async function clearRoutineSchedules(userId: number) {
+  // Native ownership also recovers IDs lost after a storage failure or account-storage purge.
+  const scheduled = Platform.OS === "web" ? [] : await Notifications.getAllScheduledNotificationsAsync().catch(() => []);
+  const ids = scheduled.filter(item => item.content.data?.type === "routine_reminder"
+    && String(item.content.data?.userId) === String(userId)).map(item => item.identifier);
+  await clearScheduledNotifications(notificationStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, userId)!, ids);
 }
 
 function notificationStorageKey(baseKey: string, userId?: number | null) {
@@ -92,7 +105,8 @@ function notificationStorageKey(baseKey: string, userId?: number | null) {
 
 /** Removes schedules created by older builds because their owner cannot be identified safely. */
 export async function cancelLegacyUnscopedLocalNotifications() {
-  await Promise.all([
+  // Authentication must survive best-effort legacy cleanup; failed IDs remain stored for retry.
+  await Promise.allSettled([
     clearScheduledNotifications(NOTIFICATION_SCHEDULE_IDS_KEY),
     clearScheduledNotifications(EXPIRING_STOCK_ALERT_IDS_KEY),
   ]);
@@ -123,17 +137,33 @@ async function scheduleWeekly(
   time: string,
   weekdays: number[],
   data: Record<string, string>,
+  ids: string[],
 ) {
   const { hour, minute } = timeParts(time);
-  return Promise.all(weekdays.map((weekday) => Notifications.scheduleNotificationAsync({
-    content: { title, body, sound: "default", data: { ...data, sourceId: `${data.kind}:${weekday}:${time}` } },
-    trigger: { type: Notifications.SchedulableTriggerInputTypes.CALENDAR, repeats: true, weekday, hour, minute },
-  })));
+  for (const weekday of weekdays) {
+    ids.push(await Notifications.scheduleNotificationAsync({
+      content: { title, body, sound: "default", data: { ...data, sourceId: `${data.kind}:${weekday}:${time}` } },
+      trigger: Platform.OS === "android"
+        ? { type: Notifications.SchedulableTriggerInputTypes.WEEKLY, weekday, hour, minute }
+        : { type: Notifications.SchedulableTriggerInputTypes.CALENDAR, repeats: true, weekday, hour, minute },
+    }));
+  }
 }
 
 function minutesToTime(total: number) {
   const normalized = ((total % 1440) + 1440) % 1440;
   return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+}
+
+// Serialize replacement and logout cleanup so an in-flight native schedule cannot escape cancellation.
+const routineOperations = new Map<number, Promise<void>>();
+function withRoutineSchedules(userId: number, operation: () => Promise<void>) {
+  const pending = (routineOperations.get(userId) ?? Promise.resolve()).catch(() => undefined).then(operation);
+  routineOperations.set(userId, pending);
+  void pending.finally(() => {
+    if (routineOperations.get(userId) === pending) routineOperations.delete(userId);
+  }).catch(() => undefined);
+  return pending;
 }
 
 /** Keeps on-device meal and hydration reminders aligned with the saved preferences. */
@@ -143,45 +173,56 @@ export async function syncLocalNotificationSchedules(
 ) {
   const storageKey = notificationStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, userId);
   if (!storageKey) return;
-  await clearScheduledNotifications(storageKey);
-  if (!preferences.expiring_alert) await cancelExpiringStockAlerts(userId);
-  if (Platform.OS === "web" || !Device.isDevice) return;
-  const permission = await Notifications.getPermissionsAsync();
-  if (permission.status !== "granted") return;
-  const ids: string[] = [];
-  const weekdays = enabledWeekdays(preferences);
-  if (preferences.meal_reminder) {
-    const meals = [
-      ["早餐打卡提醒", "记下早餐，让今天的营养规划有个好开始。", preferences.breakfast_time, "breakfast"],
-      ["午餐打卡提醒", "记下这一餐，食光会继续为你安排接下来的饮食。", preferences.lunch_time, "lunch"],
-      ["晚餐打卡提醒", "晚餐后花一分钟记录，让今日营养更完整。", preferences.dinner_time, "dinner"],
-    ] as const;
-    for (const [title, body, time, meal] of meals) {
-      if (!isQuietTime(timeParts(time).total, preferences)) {
-        ids.push(...await scheduleWeekly(title, body, time, weekdays, {
-          type: "routine_reminder",
-          kind: "meal",
-          meal,
-          userId: String(userId),
-        }));
+  const owner = userId!;
+  const generation = getPrivateStorageGeneration(owner);
+  return withRoutineSchedules(owner, async () => {
+    if (!isPrivateStorageCurrent(owner, generation)) return;
+    await clearRoutineSchedules(owner);
+    if (!preferences.expiring_alert) await cancelExpiringStockAlerts(userId);
+    if (Platform.OS === "web" || !Device.isDevice) return;
+    const permission = await Notifications.getPermissionsAsync();
+    if (permission.status !== "granted") return;
+    const ids: string[] = [];
+    const weekdays = enabledWeekdays(preferences);
+    try {
+      if (preferences.meal_reminder) {
+        const meals = [
+          ["早餐打卡提醒", "记下早餐，让今天的营养规划有个好开始。", preferences.breakfast_time, "breakfast"],
+          ["午餐打卡提醒", "记下这一餐，食光会继续为你安排接下来的饮食。", preferences.lunch_time, "lunch"],
+          ["晚餐打卡提醒", "晚餐后花一分钟记录，让今日营养更完整。", preferences.dinner_time, "dinner"],
+        ] as const;
+        for (const [title, body, time, meal] of meals) {
+          if (!isQuietTime(timeParts(time).total, preferences)) {
+            await scheduleWeekly(title, body, time, weekdays, {
+              type: "routine_reminder",
+              kind: "meal",
+              meal,
+              userId: String(userId),
+            }, ids);
+          }
+        }
       }
-    }
-  }
-  if (preferences.water_reminder) {
-    const start = timeParts(preferences.water_start_time).total;
-    const end = timeParts(preferences.water_end_time).total;
-    for (let total = start; total <= end; total += preferences.water_interval_minutes) {
-      if (!isQuietTime(total, preferences)) {
-        const time = minutesToTime(total);
-        ids.push(...await scheduleWeekly("补充一杯水", "该补充约 250ml 水分了。", time, weekdays, {
-          type: "routine_reminder",
-          kind: "water",
-          userId: String(userId),
-        }));
+      if (preferences.water_reminder) {
+        const start = timeParts(preferences.water_start_time).total;
+        const end = timeParts(preferences.water_end_time).total;
+        for (let total = start; total <= end; total += preferences.water_interval_minutes) {
+          if (!isQuietTime(total, preferences)) {
+            const time = minutesToTime(total);
+            await scheduleWeekly("补充一杯水", "该补充约 250ml 水分了。", time, weekdays, {
+              type: "routine_reminder",
+              kind: "water",
+              userId: String(userId),
+            }, ids);
+          }
+        }
       }
+      await AsyncStorage.setItem(storageKey, JSON.stringify(ids));
+      if (!isPrivateStorageCurrent(owner, generation)) await clearScheduledNotifications(storageKey);
+    } catch (error) {
+      await clearScheduledNotifications(storageKey, ids);
+      throw error;
     }
-  }
-  await AsyncStorage.setItem(storageKey, JSON.stringify(ids));
+  });
 }
 
 export async function cancelExpiringStockAlerts(userId?: number | null) {
@@ -241,12 +282,16 @@ export async function scheduleExpiringStockAlerts(
 
 export async function cancelAllLocalNotificationsForUser(userId?: number | null) {
   if (!Number.isInteger(userId) || Number(userId) <= 0) return;
-  await Promise.all([
-    clearScheduledNotifications(notificationStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, userId)!),
+  const results = await Promise.allSettled([
+    withRoutineSchedules(userId!, () => clearRoutineSchedules(userId!)),
     clearScheduledNotifications(notificationStorageKey(EXPIRING_STOCK_ALERT_IDS_KEY, userId)!),
     cancelCookingQueueRemindersForUser(userId),
-    Platform.OS === "web" ? Promise.resolve() : Notifications.getAllScheduledNotificationsAsync().then(items =>
-      Promise.all(items.filter(item => item.content.data?.type === "cooking_timer" && item.content.data?.userId === userId)
-        .map(item => Notifications.cancelScheduledNotificationAsync(item.identifier)))),
+    Platform.OS === "web" ? Promise.resolve() : Notifications.getAllScheduledNotificationsAsync().catch(() => []).then(async items => {
+      const cancellations = await Promise.allSettled(items.filter(item => item.content.data?.type === "cooking_timer" && item.content.data?.userId === userId)
+        .map(item => Notifications.cancelScheduledNotificationAsync(item.identifier)));
+      if (cancellations.some(result => result.status === "rejected")) throw new Error("部分本地提醒取消失败，请重试");
+    }),
   ]);
+  // Wait for every stored-ID cancellation before callers purge account storage.
+  if (results.some(result => result.status === "rejected")) throw new Error("部分本地提醒取消失败，请重试");
 }

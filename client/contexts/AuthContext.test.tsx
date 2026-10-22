@@ -189,3 +189,15 @@ it("keeps SMS-only recovery/deletion metadata after offline restore without reta
   expect(auth.user).toEqual({ ...userA, hasPassword: false, phone_verified_at: "2026-09-20" });
   expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual({ id: 1, username: "A", hasPassword: false, phone_verified_at: "2026-09-20" });
 });
+
+
+it("cancels the previous account's local reminders on direct account switch and logout", async () => {
+  const { cancelAllLocalNotificationsForUser } = jest.requireMock("@/utils/notifications");
+  await mount();
+  jest.mocked(authApi.login).mockResolvedValue({ token: "token-A", user: userA });
+  await act(async () => { await auth.login("A", "password"); });
+  await loginAsB();
+  expect(cancelAllLocalNotificationsForUser).toHaveBeenCalledWith(userA.id);
+  await act(async () => { await auth.logout(); });
+  expect(cancelAllLocalNotificationsForUser).toHaveBeenCalledWith(userB.id);
+});

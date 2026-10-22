@@ -1,7 +1,5 @@
 # DietDigiDose (食光烙记)
 
-> **October 12 status:** It is W42 (October 12–18). Android `26w41a / 264101` is built; server `fbd9b1a4` is deployed with backup restoration, migrations and HTTPS smoke checks verified. See the [deployment record](docs/server-update-2026-10-11.md). Website changes are included in this branch but are not deployed. Real SMS recovery, APK download configuration and device acceptance remain pending.
-
 <p align="center">
   <img src="client/assets/logo.svg" alt="DietDigiDose logo" width="160" />
 </p>
@@ -26,7 +24,7 @@ Record household ingredients
   → identify available or expiring food
   → match recipes that can actually be cooked
   → finish cooking and deduct inventory
-  → create a diet record automatically
+  → confirm actual consumption and create a diet record
 ```
 
 The repository currently includes:
@@ -39,19 +37,11 @@ The repository currently includes:
 - AI nutrition Q&A, ingredient and meal recognition, receipt scanning, and voice interaction
 - An admin console for users, recipes, community content, Agent runs, AI configuration, and security audits
 
-## Version and status
+## Project status
 
-- **Current week:** `26w42` (ISO week 42 in Asia/Shanghai, October 12–18, 2026)
-- **Repository version metadata:** `1.0.6` / `26w36a` / build `263601` (not the latest build artifact)
-- **Latest successful Android build:** [`26w41a` / build `264101`](https://github.com/AdlinZ/DietDigiDose/actions/runs/38143602557), source commit `f4ba92c3`
-- **Stage:** trusted Beta hardening
-- **Last updated:** October 12, 2026
+See the [status and evidence index](docs/status.md) for issue tracking, build results, deployment records, and device acceptance. These are separate milestones: merged code or a successful build does not establish deployment or real-device acceptance.
 
-Main at `f4ba92c3` includes merged [PR #248](https://github.com/AdlinZ/DietDigiDose/pull/248): nutrition provenance, data import, dependency security, phone recovery and APK update support. [Main CI](https://github.com/AdlinZ/DietDigiDose/actions/runs/38143565538) passed, and Android preview `26w41a` was built successfully. Earlier review and validation records remain in the W41 history; the server was updated on October 11, while real-device acceptance remains pending.
-
-On October 11, all **20 unfinished W41 issues** were carried into [W42](https://github.com/AdlinZ/DietDigiDose/milestone/12) (October 12–18), and W41 was archived as a weekly schedule. The scope includes: 18 carried over from W40, plus [#221 self-service password recovery](https://github.com/AdlinZ/DietDigiDose/issues/221) and [#219 in-app updates](https://github.com/AdlinZ/DietDigiDose/issues/219), added on October 7. Both are merged and included in 26w41a, and the server is deployed; real SMS delivery and Android device acceptance remain pending. Recovery supports verified phone bindings but not email; updates use complete APK packages, with OTA left for a later phase. See the [implementation and acceptance record](docs/w41-account-recovery-and-app-updates.md). Another 21 Backlog issues remain unscheduled. [W40](https://github.com/AdlinZ/DietDigiDose/milestone/10) retains its 4 closed issues as history. The website, admin console, API, PostgreSQL, and workers have recorded public deployment evidence; the latest server deployment is `w41-fbd9b1a4` (October 11), while the website and App web build retain their previous versions. Independent environment and persistence acceptance, a complete recovery exercise for the same candidate, and Android/iOS candidates from the same commit with real-device workflow evidence (#105, #106, and #107) remain the three P0 gates. Scheduling does not establish acceptance or promise completion of all 20 this week.
-
-See the [W42 packaging readiness and execution plan](docs/milestone-26w42-progress.md), [development and Beta hardening checklist](TODO.md), and [device Beta checklist](docs/device-beta-checklist.md). The [W40 acceptance history](docs/milestone-26w40-progress.md) and [historical candidate records](docs/release-candidate-26w37a.md) retain existing evidence and original version metadata. Repository build metadata is allocated only before a new build; documentation updates do not create a candidate or increment its snapshot.
+[Main CI](https://github.com/AdlinZ/DietDigiDose/actions/workflows/ci.yml?query=branch%3Amain) · [Android APK builds](https://github.com/AdlinZ/DietDigiDose/actions/workflows/android-apk.yml) · [Open milestones](https://github.com/AdlinZ/DietDigiDose/milestones)
 
 ## Live services
 
@@ -74,7 +64,7 @@ This repository is a pnpm workspace monorepo:
 | `admin` | React, Vite, Tailwind CSS | Moderation and system administration console |
 | `deploy` | Docker Compose, Caddy | HTTPS deployment, persistence, and recovery exercises |
 
-Local development uses SQLite by default, while the current public service uses PostgreSQL. Supabase remains optional object storage for community media; acceptance of an independent staging bucket is still pending.
+Local development uses SQLite by default; deployment supports PostgreSQL. Supabase is optional object storage for community media. Environment-specific evidence belongs in the [status index](docs/status.md).
 
 ## Repository layout
 
@@ -91,10 +81,11 @@ Dietdigidose/
 
 ## Quick start
 
+<!-- BEGIN GENERATED:toolchain -->
 ### Requirements
 
-- Node.js 22.23.2 (as specified in `.nvmrc` and `.node-version`)
-- pnpm 10.18.0
+- Node.js 22.23.2 (source: [.nvmrc](.nvmrc))
+- pnpm 10.18.0 (source: [package.json](package.json))
 
 ### Install and configure
 
@@ -105,6 +96,7 @@ pnpm install --frozen-lockfile
 cp client/.env.example client/.env
 cp server/.env.example server/.env
 ```
+<!-- END GENERATED:toolchain -->
 
 When using nvm, fnm, mise, or asdf, load the repository's Node version files first. Regular CI, Android builds, and the recommended local environment must use the same Node version; upgrades must update the version files, root package `engines`, and all workflows in one PR.
 
@@ -158,6 +150,8 @@ The local SQLite database is created automatically at `server/data/dietdigidose.
 | `pnpm validate:toolchain` | Validate Node/pnpm versions against CI declarations |
 | `pnpm validate:release` | Validate versions, snapshot, and native build numbers |
 | `pnpm audit:prod` | Audit production dependencies |
+| `pnpm docs:generate` | Refresh generated README toolchain blocks |
+| `pnpm docs:check` | Check README drift, local link targets, and listed commands |
 
 See [layered testing and quality gates](docs/testing.md) for test layers, coverage, artifact budgets, and flaky/quarantine handling.
 
@@ -165,7 +159,7 @@ See [layered testing and quality gates](docs/testing.md) for test layers, covera
 
 `client/eas.json` contains iOS and Android preview and production profiles, and every distributable build requires an HTTPS API. Only local simulator development may explicitly use localhost HTTP, and it must not use real sensitive data.
 
-A passing dependency audit does not mean “zero vulnerabilities.” As of October 6, 2026, main at `a22c6cb5` configures three narrow temporary audit exceptions and includes the project patch for `node-forge`. Draft PR #248 at `258d0dba` adds the `braces` patch and mandatory regression checks, bringing the exception count to four; that additional fix has not been merged or deployed. See [layered testing and quality gates](docs/testing.md) and [`pnpm-workspace.yaml`](pnpm-workspace.yaml) for exception rationale, patch validation, and review requirements. Review them after every dependency upgrade and before candidate acceptance.
+A passing dependency audit does not mean “zero vulnerabilities.” The current audit exceptions and dependency patches are defined in [`pnpm-workspace.yaml`](pnpm-workspace.yaml); rationale, regression checks, and review requirements belong in [layered testing and quality gates](docs/testing.md). Review them after every dependency upgrade and before candidate acceptance.
 
 Read these documents before deployment:
 

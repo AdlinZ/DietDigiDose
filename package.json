@@ -47,7 +47,10 @@
     "quality:build-budgets": "node scripts/check-build-budgets.mjs",
     "test:dependency-security": "node --test scripts/node-forge-security.test.mjs scripts/braces-security.test.mjs scripts/nyc-config-compatibility.test.mjs",
     "audit:prod": "pnpm test:dependency-security && pnpm audit --prod --registry=https://registry.npmjs.org",
-    "test:staging-smoke": "node --test deploy/staging-smoke.test.mjs deploy/p0-report.test.mjs"
+    "test:staging-smoke": "node --test deploy/staging-smoke.test.mjs deploy/p0-report.test.mjs",
+    "docs:generate": "node scripts/readme-docs.mjs --write",
+    "docs:check": "node scripts/readme-docs.mjs",
+    "test:docs": "node --test scripts/readme-docs.test.mjs"
   },
   "dependencies": {},
   "devDependencies": {},

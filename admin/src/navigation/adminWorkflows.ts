@@ -10,7 +10,9 @@ export const adminWorkflows = {
     { path: '/admin/user-level-rule', label: '等级规则' },
   ] },
   configuration: { label: 'AI 服务配置', tabs: [
-    { path: '/admin/ai-config', label: '模型配置' },
+    { path: '/admin/ai-providers', label: '服务提供商' },
+    { path: '/admin/ai-services', label: '业务服务' },
+    { path: '/admin/ai-config', label: '旧配置与策略' },
     { path: '/admin/voice-packs', label: '音色目录' },
   ] },
   diagnostics: { label: 'AI 诊断', tabs: [

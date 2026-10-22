@@ -288,10 +288,10 @@ export default function AIConfig() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-text-main flex items-center gap-2">
-            <Bot className="text-primary" size={28} /> AI 大模型多接入点配置
+            <Bot className="text-primary" size={28} /> 旧配置与策略
           </h2>
           <p className="text-sm text-text-muted mt-1">
-            支持为文本对话、识图以及语音识别指定独立的服务接入商 (Base URL & API Key) 或共享全局默认接入点。
+            兼容入口：保留原配置、角色模型、提示词与调用预算。新连接和业务绑定请使用「服务提供商」「业务服务」。保存立即生效。
           </p>
         </div>
       </div>

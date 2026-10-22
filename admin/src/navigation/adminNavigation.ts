@@ -15,7 +15,7 @@ export const adminGroups: AdminGroup[] = [
     { path: '/admin/analytics', label: '数据概览' }, { path: '/admin/core-loops', label: '每周核心闭环' },
   ] },
   { id: 'ai', technical: true, label: 'AI 服务', icon: Bot, pages: [
-    { path: '/admin/ai-config', label: 'AI 服务配置' }, { path: '/admin/ai-usage', label: '模型用量' },
+    { path: '/admin/ai-providers', label: 'AI 服务配置' }, { path: '/admin/ai-usage', label: '模型用量' },
     { path: '/admin/ai-conversations', label: 'AI 诊断' },
   ] },
   { id: 'system', technical: true, label: '系统设置', icon: Settings, pages: [
@@ -24,9 +24,11 @@ export const adminGroups: AdminGroup[] = [
   ] },
 ];
 const nestedPages: (AdminPage & { parent: string })[] = [
+  { path: '/admin/ai-config', label: '旧配置与策略', parent: '/admin/ai-providers' },
+  { path: '/admin/ai-services', label: '业务服务', parent: '/admin/ai-providers' },
   { path: '/admin/kitchenware-mapping-reviews', label: '厨具映射审核', parent: '/admin/kitchenware' },
   { path: '/admin/user-level-rule', label: '等级规则', parent: '/admin/users' },
-  { path: '/admin/voice-packs', label: '音色目录', parent: '/admin/ai-config' },
+  { path: '/admin/voice-packs', label: '音色目录', parent: '/admin/ai-providers' },
   { path: '/admin/agent-runs', label: '任务运行', parent: '/admin/ai-conversations' },
 ];
 export const adminPages = [workbench, ...adminGroups.flatMap(group => group.pages), ...nestedPages];

@@ -39,7 +39,7 @@ export class AIRuntimeService {
       return { apiKey, baseUrl, model };
     };
     const chat = resolve("chat"), vision = resolve("vision"), asr = resolve("asr");
-    return { ...legacy, model: chat.model, visionModel: vision.model, asrModel: asr.model, chat, vision, asr };
+    return { ...legacy, visionModel: vision.model, asrModel: asr.model, chat, vision, asr };
   }
 
   async runtimePolicy() {

@@ -1,11 +1,12 @@
 import { resolveKitchenPreferences, type KitchenPreferences } from "@dietdigidose/contracts";
 import type { PreparedMeal } from "@dietdigidose/contracts";
-import dayjs from "dayjs";
+import { currentBusinessClock } from "../utils/date.js";
 import { aiContextService } from "../modules/aiContext/runtime.js";
 import { recommendationsService } from "../modules/recommendations/runtime.js";
 
 export interface UserContext {
   userId: number;
+  clock?: ReturnType<typeof currentBusinessClock>;
   preparedMeals?: PreparedMeal[];
   username?: string;
   dailyCaloriesTarget: number;
@@ -71,10 +72,10 @@ const OUTPUT_DEVELOPER_PROMPT = `【固定规则：输出】
 /**
  * 获取并组装指定用户的上下文数据
  */
-export async function buildUserContext(userId: number): Promise<UserContext> {
-  const todayStr = dayjs().format("YYYY-MM-DD");
+export async function buildUserContext(userId: number, now = new Date()): Promise<UserContext> {
+  const clock = currentBusinessClock(now);
   const [context, recommendationPage] = await Promise.all([
-    aiContextService().load(userId, todayStr),
+    aiContextService().load(userId, clock.local_date),
     recommendationsService().compute(userId, { surface: "ai", matchStatus: "all" }),
   ]);
   const recommendedRecipes = recommendationPage.results.slice(0, 12).map((item) => ({
@@ -88,6 +89,7 @@ export async function buildUserContext(userId: number): Promise<UserContext> {
   return {
     userId,
     ...context,
+    clock,
     recommendedRecipes,
   };
 }
@@ -107,7 +109,7 @@ export function buildAIPromptMessages(ctx: UserContext, requestPreferences: Kitc
   const nutritionTargets = ctx.healthProfile?.nutrition_targets || {};
   const kitchen = resolveKitchenPreferences(ctx.healthProfile?.kitchen_constraints, requestPreferences);
   const runtimeContext = {
-    current_time: dayjs().format(),
+    ...(ctx.clock ?? currentBusinessClock()),
     user_profile: {
       user_id: ctx.userId,
       username: ctx.username || null,
@@ -136,6 +138,7 @@ export function buildAIPromptMessages(ctx: UserContext, requestPreferences: Kitc
       carbohydrate_g: null, fat_g: null, fiber_g: null,
     },
     today_intake: {
+      date: ctx.clock?.local_date ?? null,
       energy_kcal: totalCaloriesToday, protein_g: totalProteinToday,
       carbohydrate_g: ctx.todayDiet.reduce((sum, item) => sum + (item.carbs || 0), 0),
       fat_g: ctx.todayDiet.reduce((sum, item) => sum + (item.fat || 0), 0),

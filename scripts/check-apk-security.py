@@ -14,6 +14,23 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 ANDROID = '{http://schemas.android.com/apk/res/android}'
+FIREBASE_RECEIVER = 'com.google.firebase.iid.FirebaseInstanceIdReceiver'
+FIREBASE_SEND_PERMISSION = 'com.google.android.c2dm.permission.SEND'
+FIREBASE_RECEIVE_ACTION = 'com.google.android.c2dm.intent.RECEIVE'
+FIREBASE_HANDLED_METADATA = 'com.google.android.gms.cloudmessaging.FINISHED_AFTER_HANDLED'
+# Framework IDs from the official Android 36 android.jar resource table. Manifest
+# parsing uses these IDs, so matching printed attribute names alone is not enough.
+ANDROID_ATTRIBUTE_IDS = {ANDROID + name: identifier for name, identifier in {
+    'versionCode': '0x0101021b', 'versionName': '0x0101021c',
+    'minSdkVersion': '0x0101020c', 'targetSdkVersion': '0x01010270',
+    'debuggable': '0x0101000f', 'testOnly': '0x01010272',
+    'usesCleartextTraffic': '0x010104ec', 'networkSecurityConfig': '0x01010527',
+    'allowBackup': '0x01010280', 'backupAgent': '0x0101027f',
+    'fullBackupContent': '0x010104eb', 'dataExtractionRules': '0x0101063e',
+    'name': '0x01010003', 'exported': '0x01010010', 'permission': '0x01010006',
+    'authorities': '0x01010018', 'scheme': '0x01010027', 'resource': '0x01010025',
+    'value': '0x01010024', 'protectionLevel': '0x01010009',
+}.items()}
 ROOT = Path(__file__).resolve().parent.parent
 DOMAINS = {'root', 'file', 'database', 'sharedpref', 'external',
            'device_root', 'device_file', 'device_database', 'device_sharedpref'}
@@ -34,6 +51,11 @@ def require(condition, message):
 
 def attr(element, name, default=None):
     return element.get(ANDROID + name, default)
+
+
+def android_trim(value):
+    """Match Java String.trim(), not Python's broader Unicode whitespace trim."""
+    return value.strip(''.join(chr(code) for code in range(0x21)))
 
 
 def boolean(value, label, default=None):
@@ -91,45 +113,127 @@ def check_typed_xml(root, dump, table):
 
     apkanalyzer prefers raw attribute strings when present. AAPT2 prints compiled
     values first, so a crafted raw=false/typed=true must not satisfy the gate.
-    Compare per-element in document order, never aggregate boolean counts.
+    Compare each element's parent as well as order, never aggregate values. AAPT2
+    indents attributes by two spaces and child elements/text by four; namespace
+    declarations wrap an element with another two spaces. Never infer text from
+    source XML: some apkanalyzer versions omit compiled XML text entirely.
     """
-    names = {'package', 'cleartextTrafficPermitted', 'domain', 'path'} | {
+    names = {'package', 'cleartextTrafficPermitted', 'includeSubdomains', 'domain', 'path'} | {
         ANDROID + name for name in ('versionCode', 'versionName', 'minSdkVersion', 'targetSdkVersion',
                                    'debuggable', 'testOnly', 'usesCleartextTraffic', 'networkSecurityConfig',
                                    'allowBackup', 'backupAgent', 'fullBackupContent', 'dataExtractionRules',
                                    'name', 'exported', 'permission', 'authorities', 'scheme')}
-    elements, current = [], None
+    elements, scopes = [], []
     for line in dump.splitlines():
-        line = line.strip()
-        if not line or line.startswith(('N: ', 'T: ')):
+        if not line.strip():
             continue
-        element = re.fullmatch(r'E: ([^ ]+) \(line=\d+\)', line)
-        if element:
-            current = (element.group(1), {})
-            elements.append(current)
+        indent = len(line) - len(line.lstrip(' '))
+        record = line[indent:]
+        # Attributes must immediately follow their own element, before content.
+        attribute = re.fullmatch(r'A: ([^\s(=]+)(?:\((0x[0-9a-fA-F]{8})\))?=(.*)', record)
+        if attribute:
+            require(scopes and scopes[-1]['kind'] == 'E'
+                    and indent == scopes[-1]['indent'] + 2 and not scopes[-1]['children'],
+                    'Misplaced compiled XML attribute')
+            attributes = elements[scopes[-1]['index']][1]
+            name, identifier, value = attribute.groups()
+            identifier = identifier.lower() if identifier is not None else None
+            if name.startswith('http://schemas.android.com/apk/res/android:'):
+                name = ANDROID + name.rsplit(':', 1)[1]
+            require(name not in attributes, 'Duplicate compiled XML attribute')
+            if root.tag == 'manifest':
+                require(identifier in (None, '0x00000000')
+                        or all(identifier != entry[0] for entry in attributes.values()),
+                        'Duplicate compiled XML attribute resource ID')
+                if name in ANDROID_ATTRIBUTE_IDS or identifier in ANDROID_ATTRIBUTE_IDS.values():
+                    require(identifier == ANDROID_ATTRIBUTE_IDS.get(name),
+                            'Compiled manifest Android attribute resource ID mismatch: ' + name.removeprefix(ANDROID))
+                # Android's AttributeFinder requires contiguous package groups
+                # and increasing IDs inside each group. Shared-library package
+                # remapping means the groups themselves need not be sorted.
+                identifiers = [int(entry[0] or '0', 16) for entry in attributes.values()]
+                current = int(identifier or '0', 16)
+                if identifiers:
+                    group, previous_group = current >> 24, identifiers[-1] >> 24
+                    require(group == previous_group or all(group != item >> 24 for item in identifiers),
+                            'Compiled manifest attribute package groups must be contiguous')
+                    require(group != previous_group or current >= identifiers[-1],
+                            'Compiled manifest attribute IDs must increase within each package group')
+            attributes[name] = (identifier, value)
             continue
-        attribute = re.fullmatch(r'A: ([^\s(=]+)(?:\(0x[0-9a-fA-F]{8}\))?=(.*)', line)
-        require(attribute is not None and current is not None, 'Unrecognized compiled XML dump')
-        name, value = attribute.groups()
-        if name.startswith('http://schemas.android.com/apk/res/android:'):
-            name = ANDROID + name.rsplit(':', 1)[1]
-        require(name not in current[1], 'Duplicate compiled XML attribute')
-        current[1][name] = value
+        element = re.fullmatch(r'E: ([^\s]+) \(line=\d+\)', record)
+        namespace = re.fullmatch(r'N: ([^\s=]+)=([^\s]+) \(line=\d+\)', record)
+        text = re.fullmatch(r"T: '([^'\r\n]*)'", record)
+        require(element is not None or namespace is not None or text is not None,
+                'Unrecognized or ambiguous compiled XML dump')
+        while scopes and scopes[-1]['indent'] >= indent:
+            scope = scopes.pop()
+            require(scope['kind'] != 'N' or scope['children'] == 1,
+                    'Ambiguous compiled XML namespace scope')
+        expected_indent = scopes[-1]['indent'] + (2 if scopes[-1]['kind'] == 'N' else 4) if scopes else 0
+        require(indent == expected_indent, 'Unrecognized compiled XML indentation')
+        if scopes:
+            scopes[-1]['children'] += 1
+        parent = next((scope['index'] for scope in reversed(scopes) if scope['kind'] == 'E'), None)
+        if text:
+            require(scopes and scopes[-1]['kind'] == 'E', 'Misplaced compiled XML text')
+            elements[parent][3].append(text.group(1))
+        else:
+            index = None
+            if element:
+                require(parent is not None or not elements, 'Multiple compiled XML roots')
+                index = len(elements)
+                elements.append((element.group(1), {}, parent, []))
+            scopes.append({'kind': 'E' if element else 'N', 'indent': indent, 'index': index, 'children': 0})
+    require(all(scope['kind'] != 'N' or scope['children'] == 1 for scope in scopes),
+            'Ambiguous compiled XML namespace scope')
     decoded = list(root.iter())
+    parents = {child: index for index, node in enumerate(decoded) for child in node}
+    firebase_nodes = {node for receiver in root.iter('receiver')
+                      if attr(receiver, 'name') == FIREBASE_RECEIVER for node in receiver.iter()}
     require(len(decoded) == len(elements), 'Compiled/decoded XML element count differs')
-    for node, (tag, attributes) in zip(decoded, elements):
+    for node, (tag, attributes, parent, texts) in zip(decoded, elements):
         require(node.tag == tag, 'Compiled/decoded XML element order differs')
+        require(parents.get(node) == parent, 'Compiled/decoded XML hierarchy differs')
+        # AAPT2 does not escape text. Reject network text outside domain leaves:
+        # otherwise a crafted quote/newline could forge an outer T: record and
+        # make an invalid domain appear to be a single 'localhost' record.
+        if root.tag == 'network-security-config' and node.tag != 'domain':
+            require(not texts, 'Unexpected compiled network text outside domain')
+        if root.tag == 'network-security-config' and node.tag == 'domain':
+            require(not list(node), 'Unsupported nested network domain structure')
+            require(len(texts) == 1 and bool(android_trim(texts[0])),
+                    'Compiled network domain text is missing or duplicated')
+            compiled_text = android_trim(texts[0])
+            require(not any(char in compiled_text for char in ('\\', '"'))
+                    and all(ord(char) >= 32 and ord(char) != 127 for char in texts[0]),
+                    'Ambiguous compiled network domain text')
+            decoded_text = android_trim(node.text or '')
+            require(not decoded_text or decoded_text == compiled_text,
+                    'Compiled/decoded network domain text mismatch')
+            # Fill only a decoder omission, after binding this actual APK text to
+            # the same leaf element. Existing nonempty decoded text must agree.
+            if not decoded_text:
+                node.text = texts[0]
         selected = names.copy()
+        if node in firebase_nodes:
+            # This exception admits one exact SDK subtree. Bind ALL of its
+            # attributes, including compiled-only extras and metadata values.
+            selected.update(node.attrib.keys() | attributes.keys())
+            require(not texts, 'Unexpected compiled Firebase receiver text')
         if node.tag == 'meta-data' and attr(node, 'name') == 'expo.modules.clipboard.CLIPBOARD_FILE_PROVIDER_PATHS':
             selected.add(ANDROID + 'resource')
         for name in selected & (node.attrib.keys() | attributes.keys()):
-            raw, encoded = node.get(name), attributes.get(name)
-            require(raw is not None and encoded is not None, 'Compiled/decoded security attribute is missing')
+            raw, compiled = node.get(name), attributes.get(name)
+            require(raw is not None and compiled is not None, 'Compiled/decoded security attribute is missing')
+            encoded = compiled[1]
             # AAPT2 does not escape quoted strings. Reject ambiguity before stripping
             # Raw, including a forged second Raw suffix inside the compiled string.
             parsed = re.fullmatch(r'(?:"([^"\r\n]*)"|([^\s"()]+))(?: \(Raw: "[^"\r\n]*"\))?', encoded)
             require(parsed is not None, 'Ambiguous compiled security attribute')
             typed = parsed.group(1) if parsed.group(1) is not None else parsed.group(2)
+            if node in firebase_nodes and name in {ANDROID + 'exported', ANDROID + 'value'}:
+                require(parsed.group(1) is None, 'Firebase boolean attributes must use compiled booleans')
             require(not any(char in raw or char in typed for char in ('\n', '\r', '"')),
                     'Ambiguous compiled/decoded security attribute')
             if raw == typed:
@@ -150,6 +254,7 @@ class Inspector:
         self.apk, self.analyzer, self.aapt2, self.runner = str(apk), analyzer, aapt2, runner
         self.table = resource_table(runner([aapt2, 'dump', 'resources', self.apk]))
         self.evidence = {}
+        self.compiled_evidence = {}
         with zipfile.ZipFile(apk) as archive:
             self.paths = set(archive.namelist())
 
@@ -176,6 +281,7 @@ class Inspector:
     def check_typed(self, root, path):
         dump = self.runner([self.aapt2, 'dump', 'xmltree', '--file', path, self.apk])
         check_typed_xml(root, dump, self.table)
+        self.compiled_evidence[path] = hashlib.sha256(dump.encode()).hexdigest()
 
 
 def check_network(application, inspector):
@@ -196,7 +302,7 @@ def check_network(application, inspector):
             config = pending.pop()
             domains.extend(config.findall('domain'))
             pending.extend(config.findall('domain-config'))
-        require(any((node.text or '').strip() == 'localhost' for node in domains),
+        require(any(android_trim(node.text or '') == 'localhost' for node in domains),
                 'Explicit localhost policy is required to suppress newer runtime defaults')
         # Every nested domain override must be safe; absent values inherit the safe base.
         for node in root.iter():
@@ -247,7 +353,45 @@ def intent_filter(element):
     return sorted(actions), sorted(categories), sorted(data)
 
 
-def check_exports(application, package, target_sdk, inspector, policy):
+def check_firebase_receiver(component, manifest, package):
+    """Validate only the existing firebase-messaging 24.0.1 manifest integration.
+
+    This is not evidence of installed-device permission ownership, receiver code
+    identity or reliable Google Play services delivery. Do not generalize it to
+    other Firebase classes, filters or permission-protected exported components.
+    """
+    require(component.attrib == {
+        ANDROID + 'name': FIREBASE_RECEIVER,
+        ANDROID + 'exported': 'true',
+        ANDROID + 'permission': FIREBASE_SEND_PERMISSION,
+    }, 'Unreviewed Firebase receiver attributes')
+    filters, metadata = component.findall('intent-filter'), component.findall('meta-data')
+    require(len(component) == 2 and len(filters) == 1 and len(metadata) == 1,
+            'Firebase receiver must have exactly its approved filter and metadata')
+    require(intent_filter(filters[0]) == ([FIREBASE_RECEIVE_ACTION], [], []),
+            'Unreviewed Firebase receiver intent-filter')
+    require(metadata[0].attrib == {
+        ANDROID + 'name': FIREBASE_HANDLED_METADATA,
+        ANDROID + 'value': 'true',
+    } and not list(metadata[0]), 'Unreviewed Firebase receiver metadata')
+    require(all(not (node.text or '').strip() and not (node.tail or '').strip()
+                for node in component.iter()), 'Unexpected decoded Firebase receiver text')
+    # A literal SEND requirement is insufficient if this APK defines that name
+    # itself or claims a parent permission tree. This does not inspect ownership
+    # of permissions on an installed device.
+    for declaration in manifest.iter():
+        if declaration.tag not in ('permission', 'permission-tree'):
+            continue
+        value = attr(declaration, 'name')
+        require(bool(value) and not value.startswith('@') and not any(char.isspace() for char in value),
+                'Unresolved manifest permission definition')
+        name = class_name(value, package)
+        shadows = name == FIREBASE_SEND_PERMISSION or (declaration.tag == 'permission-tree'
+                                                      and FIREBASE_SEND_PERMISSION.startswith(name + '.'))
+        require(not shadows, 'App-local permission definition shadows Firebase SEND permission')
+
+
+def check_exports(application, package, target_sdk, inspector, policy, manifest):
     allowed = {(entry['type'], entry['name'].replace('${applicationId}', package)): entry
                for entry in policy['exportedComponents']}
     evidence, seen = [], set()
@@ -258,6 +402,12 @@ def check_exports(application, package, target_sdk, inspector, policy):
         key = (component.tag, name)
         require(key not in seen, 'Duplicate manifest component')
         seen.add(key)
+        if key == ('receiver', FIREBASE_RECEIVER):
+            check_firebase_receiver(component, manifest, package)
+            evidence.append({'type': component.tag, 'name': name,
+                             'reason': 'Exact existing Firebase messaging receiver integration, with SEND permission, '
+                                       'one RECEIVE action and official metadata; static manifest validation only.'})
+            continue
         filters = component.findall('intent-filter')
         implicit = (target_sdk < 17) if component.tag == 'provider' else bool(filters)
         exported = boolean(attr(component, 'exported'), name + ' exported', implicit)
@@ -390,7 +540,7 @@ def inspect_apk(args, runner=run_tool):
     check_network(application, inspector)
     check_backup(application, inspector)
     policy = json.loads((ROOT / 'scripts/apk-security-policy.json').read_text())
-    exports = check_exports(application, args.application_id, int(target), inspector, policy)
+    exports = check_exports(application, args.application_id, int(target), inspector, policy, manifest)
     require(digest(apk) == before, 'APK changed while being inspected')
     return {
         'schemaVersion': 1, 'status': 'passed', 'sourceCommit': args.source_sha,
@@ -399,7 +549,8 @@ def inspect_apk(args, runner=run_tool):
         'signerCertificateSha256': args.certificate_sha256.lower(),
         'policySha256': digest(ROOT / 'scripts/apk-security-policy.json'),
         'manifestSha256': hashlib.sha256(manifest_text.encode()).hexdigest(),
-        'decodedResourcesSha256': inspector.evidence, 'archiveEntriesInspected': entries,
+        'decodedResourcesSha256': inspector.evidence, 'compiledXmlSha256': inspector.compiled_evidence,
+        'archiveEntriesInspected': entries,
         'exportedComponents': exports,
         'checks': ['signature', 'identity', 'release-flags', 'cleartext-policy', 'backup-exclusions',
                    'exported-components', 'packaged-secret-and-source-map-patterns'],

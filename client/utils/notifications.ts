@@ -78,12 +78,25 @@ function parseStoredNotificationIds(saved: string | null) {
   }
 }
 
-async function clearScheduledNotifications(storageKey: string) {
-  const ids = parseStoredNotificationIds(await AsyncStorage.getItem(storageKey));
+async function clearScheduledNotifications(storageKey: string, additionalIds: string[] = []) {
+  const ids = [...new Set([...parseStoredNotificationIds(await AsyncStorage.getItem(storageKey)), ...additionalIds])];
   if (Platform.OS !== "web") {
-    await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+    const results = await Promise.allSettled(ids.map(id => Notifications.cancelScheduledNotificationAsync(id)));
+    const remaining = ids.filter((_, index) => results[index].status === "rejected");
+    if (remaining.length) {
+      await AsyncStorage.setItem(storageKey, JSON.stringify(remaining));
+      throw new Error("部分本地提醒取消失败，请重试");
+    }
   }
   await AsyncStorage.removeItem(storageKey);
+}
+
+async function clearRoutineSchedules(userId: number) {
+  // Native ownership also recovers IDs lost after a storage failure or account-storage purge.
+  const scheduled = Platform.OS === "web" ? [] : await Notifications.getAllScheduledNotificationsAsync();
+  const ids = scheduled.filter(item => item.content.data?.type === "routine_reminder"
+    && String(item.content.data?.userId) === String(userId)).map(item => item.identifier);
+  await clearScheduledNotifications(notificationStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, userId)!, ids);
 }
 
 function notificationStorageKey(baseKey: string, userId?: number | null) {
@@ -163,7 +176,7 @@ export async function syncLocalNotificationSchedules(
   const generation = getPrivateStorageGeneration(owner);
   return withRoutineSchedules(owner, async () => {
     if (!isPrivateStorageCurrent(owner, generation)) return;
-    await clearScheduledNotifications(storageKey);
+    await clearRoutineSchedules(owner);
     if (!preferences.expiring_alert) await cancelExpiringStockAlerts(userId);
     if (Platform.OS === "web" || !Device.isDevice) return;
     const permission = await Notifications.getPermissionsAsync();
@@ -205,8 +218,7 @@ export async function syncLocalNotificationSchedules(
       await AsyncStorage.setItem(storageKey, JSON.stringify(ids));
       if (!isPrivateStorageCurrent(owner, generation)) await clearScheduledNotifications(storageKey);
     } catch (error) {
-      await Promise.all(ids.map(id => Notifications.cancelScheduledNotificationAsync(id)));
-      await AsyncStorage.removeItem(storageKey);
+      await clearScheduledNotifications(storageKey, ids);
       throw error;
     }
   });
@@ -270,7 +282,7 @@ export async function scheduleExpiringStockAlerts(
 export async function cancelAllLocalNotificationsForUser(userId?: number | null) {
   if (!Number.isInteger(userId) || Number(userId) <= 0) return;
   await Promise.all([
-    withRoutineSchedules(userId!, () => clearScheduledNotifications(notificationStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, userId)!)),
+    withRoutineSchedules(userId!, () => clearRoutineSchedules(userId!)),
     clearScheduledNotifications(notificationStorageKey(EXPIRING_STOCK_ALERT_IDS_KEY, userId)!),
     cancelCookingQueueRemindersForUser(userId),
     Platform.OS === "web" ? Promise.resolve() : Notifications.getAllScheduledNotificationsAsync().then(items =>

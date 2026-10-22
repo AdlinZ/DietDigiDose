@@ -54,6 +54,7 @@ describe("user-scoped local notifications", () => {
   beforeEach(() => {
     mockStorage.clear();
     jest.clearAllMocks();
+    jest.mocked(Notifications.getAllScheduledNotificationsAsync).mockResolvedValue([]);
     Platform.OS = "android";
     activatePrivateStorage(101);
     activatePrivateStorage(202);
@@ -130,6 +131,7 @@ describe("weekly routine compatibility", () => {
   beforeEach(() => {
     mockStorage.clear();
     jest.clearAllMocks();
+    jest.mocked(Notifications.getAllScheduledNotificationsAsync).mockResolvedValue([]);
     Platform.OS = "android";
     activatePrivateStorage(101);
     activatePrivateStorage(202);
@@ -185,6 +187,37 @@ describe("weekly routine compatibility", () => {
     expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("first");
     expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("second");
     expect(mockStorage.has(getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 101)!)).toBe(false);
+  });
+  it("retains failed rollback IDs so disabling reminders retries cancellation", async () => {
+    const key = getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 101)!;
+    jest.mocked(Notifications.scheduleNotificationAsync).mockResolvedValueOnce("first").mockResolvedValueOnce("second").mockRejectedValueOnce(new Error("schedule failed"));
+    jest.mocked(Notifications.cancelScheduledNotificationAsync).mockRejectedValueOnce(new Error("cancel failed"));
+    await expect(syncLocalNotificationSchedules(preferences, 101)).rejects.toThrow("取消失败");
+    expect(JSON.parse(mockStorage.get(key)!)).toEqual(["first"]);
+    await syncLocalNotificationSchedules({ ...preferences, meal_reminder: false }, 101);
+    expect(jest.mocked(Notifications.cancelScheduledNotificationAsync).mock.calls.filter(([id]) => id === "first")).toHaveLength(2);
+    expect(mockStorage.get(key)).toBe("[]");
+  });
+  it("keeps previous IDs when cancellation fails and allows logout to retry", async () => {
+    const key = getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 101)!;
+    mockStorage.set(key, '["old"]');
+    jest.mocked(Notifications.cancelScheduledNotificationAsync).mockRejectedValueOnce(new Error("cancel failed"));
+    await expect(syncLocalNotificationSchedules(preferences, 101)).rejects.toThrow("取消失败");
+    expect(mockStorage.get(key)).toBe('["old"]');
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+    await cancelAllLocalNotificationsForUser(101);
+    expect(mockStorage.has(key)).toBe(false);
+    expect(jest.mocked(Notifications.cancelScheduledNotificationAsync).mock.calls.filter(([id]) => id === "old")).toHaveLength(2);
+  });
+  it.each(["disable", "logout"])("recovers untracked native routine reminders on %s without touching another user", async action => {
+    jest.mocked(Notifications.getAllScheduledNotificationsAsync).mockResolvedValue([
+      { identifier: "orphan", content: { data: { type: "routine_reminder", userId: "101" } } },
+      { identifier: "other", content: { data: { type: "routine_reminder", userId: "202" } } },
+    ] as Notifications.NotificationRequest[]);
+    if (action === "disable") await syncLocalNotificationSchedules({ ...preferences, meal_reminder: false }, 101);
+    else await cancelAllLocalNotificationsForUser(101);
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("orphan");
+    expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalledWith("other");
   });
   it("rolls back native schedules if persisting their IDs fails", async () => {
     jest.mocked(AsyncStorage.setItem).mockRejectedValueOnce(new Error("storage failed"));

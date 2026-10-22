@@ -21,6 +21,17 @@ FIXTURES = Path(__file__).with_name('fixtures') / 'apk-security'
 CERT = 'ab' * 32
 
 
+class AndroidNetworkPolicySourceTest(unittest.TestCase):
+    def test_localhost_domain_declares_exact_match_for_android_release_lint(self):
+        policy = ET.parse(gate.ROOT / 'client/plugins/android-security/ddd_network_security_config.xml').getroot()
+        domains = policy.findall('.//domain')
+        self.assertEqual(len(domains), 1)
+        self.assertEqual((domains[0].text or '').strip(), 'localhost')
+        self.assertEqual(domains[0].attrib, {'includeSubdomains': 'false'})
+        self.assertEqual(policy.find('base-config').get('cleartextTrafficPermitted'), 'false')
+        self.assertEqual(policy.find('domain-config').get('cleartextTrafficPermitted'), 'false')
+
+
 class ApkSecurityTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

@@ -51,7 +51,7 @@ class ApkSecurityTest(unittest.TestCase):
                        'assets/expo-updates.pem': b'-----BEGIN CERTIFICATE-----\n' + b'A' * 96 + b'\n-----END CERTIFICATE-----',
                        'assets/app.config.json': b'{"EXPO_PUBLIC_BACKEND_BASE_URL":"https://example.org"}',
                        'classes.dex': b'crypto code: -----BEGIN PRIVATE KEY----- (no key material)'}
-        self.signature = f'Verifies\nSigner #1 certificate SHA-256 digest: {CERT}\n'
+        self.signature = f'Verifies\nNumber of signers: 1\nSigner #1 certificate SHA-256 digest: {CERT}\n'
         self.args = SimpleNamespace(apk=str(self.apk), source_sha='12' * 20, application_id='com.dietdigidose.app.preview',
                                     version_code='264101', version_name='1.0.6', certificate_sha256=CERT,
                                     apkanalyzer='apkanalyzer', aapt2='aapt2', apksigner='apksigner')
@@ -142,6 +142,60 @@ class ApkSecurityTest(unittest.TestCase):
         for signature in ['', self.signature + f'Signer #2 certificate SHA-256 digest: {CERT}\n']:
             with self.subTest(signature=signature):
                 self.signature = signature
+                self.rejects('signer')
+
+    def test_current_apksigner_v2_output_preserves_trusted_identity(self):
+        # Current Android SDK output observed in preview build #130.
+        self.signature = ('Verifies\n'
+                          'Verified using v1 scheme (JAR signing): false\n'
+                          'Verified using v2 scheme (APK Signature Scheme v2): true\n'
+                          'Verified using v3 scheme (APK Signature Scheme v3): false\n'
+                          'Verified using v3.1 scheme (APK Signature Scheme v3.1): false\n'
+                          'Verified using v3.2 scheme (APK Signature Scheme v3.2): false\n'
+                          'Verified using v4 scheme (APK Signature Scheme v4): false\n'
+                          'Verified for SourceStamp: false\n'
+                          'Number of signers: 1\n'
+                          'V2 Signer: certificate DN: CN=DietDigiDose HTTPS Preview\n'
+                          f'V2 Signer: certificate SHA-256 digest: {CERT.upper()}\n')
+        self.assertEqual(self.inspect()['signerCertificateSha256'], CERT)
+
+    def test_signature_requires_unambiguous_success_and_single_signer_count(self):
+        original = self.signature
+        cases = [original.replace('Verifies\n', ''), original.replace('Verifies', 'DOES NOT VERIFY'),
+                 original.replace('Number of signers: 1\n', ''),
+                 original.replace('Number of signers: 1', 'Number of signers: 2'),
+                 original + 'Number of signers: 1\n', original + 'Number of signers: unknown\n',
+                 original + 'Verifies\n']
+        for signature in cases:
+            with self.subTest(signature=signature):
+                self.signature = signature
+                self.rejects('signer')
+
+    def test_current_signer_wrong_malformed_or_mixed_evidence_fails_closed(self):
+        prefix = ('Verifies\n'
+                  'Verified using v2 scheme (APK Signature Scheme v2): true\n'
+                  'Number of signers: 1\n')
+        trusted = f'V2 Signer: certificate SHA-256 digest: {CERT}\n'
+        stamp = f'Source Stamp Signer: certificate SHA-256 digest: {CERT}\n'
+        cases = [trusted.replace(CERT, 'cd' * 32), trusted.replace(CERT, 'g' * 64), trusted.replace(CERT, CERT[:-1]),
+                 trusted + trusted, trusted + f'Signer #1 certificate SHA-256 digest: {CERT}\n',
+                 trusted.replace('V2 Signer:', 'Unknown Signer:'),
+                 trusted + f'Unknown Signer: certificate SHA-256 digest: {CERT}\n',
+                 trusted.replace('V2 Signer:', 'V2 Signer #1:') + trusted.replace('V2 Signer:', 'V2 Signer #2:'),
+                 trusted.replace('V2 Signer:', 'V3.1 Signer: (minSdkVersion=33, maxSdkVersion=35)'),
+                 stamp, trusted + stamp, trusted.replace(CERT, 'cd' * 32) + stamp]
+        for evidence in cases:
+            with self.subTest(evidence=evidence):
+                self.signature = prefix + evidence
+                self.rejects('signer')
+
+    def test_current_signer_requires_verified_v2_scheme(self):
+        verified = 'Verified using v2 scheme (APK Signature Scheme v2): true\n'
+        for scheme in ['', 'Verified using v2 scheme (APK Signature Scheme v2): false\n',
+                       verified + 'Verified using v2 scheme (APK Signature Scheme v2): false\n', verified * 2,
+                       'Verified using v3 scheme (APK Signature Scheme v3): true\n']:
+            with self.subTest(scheme=scheme):
+                self.signature = f'Verifies\n{scheme}Number of signers: 1\nV2 Signer: certificate SHA-256 digest: {CERT}\n'
                 self.rejects('signer')
 
     def test_candidate_package_and_relative_main_activity(self):
@@ -342,7 +396,7 @@ class ApkSecurityTest(unittest.TestCase):
     def test_wrong_signature_identity_and_instrumentation_fail(self):
         self.signature = self.signature.replace(CERT, 'cd' * 32)
         self.rejects('signer')
-        self.signature = f'Signer #1 certificate SHA-256 digest: {CERT}\n'
+        self.signature = f'Verifies\nNumber of signers: 1\nSigner #1 certificate SHA-256 digest: {CERT}\n'
         self.args.version_code = '264102'
         self.rejects('package/version')
         self.args.version_code = '264101'

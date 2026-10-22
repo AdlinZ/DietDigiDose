@@ -21,8 +21,14 @@ const connectionFields = {
 const legacyResourceSchema = z.object({
   id: idSchema, name: z.string(), kind: z.literal("legacy"), scope: capabilitySchema,
 }).strict();
+const toolFields = {
+  id: idSchema, name: z.string().trim().min(1).max(100), kind: z.literal("tool"),
+  protocol: z.literal("deepseek-tools"), baseUrl: z.literal("https://api.deepseek.com"),
+  tools: z.array(z.enum(["search", "fetch"])).min(1).max(2),
+};
 const storedResourceSchema = z.union([
   legacyResourceSchema,
+  z.object({ ...toolFields, apiKey: z.string().max(4096) }).strict(),
   z.object({ ...connectionFields, apiKey: z.string().max(4096) }).strict(),
 ]);
 const credentialSchema = z.discriminatedUnion("action", [
@@ -32,17 +38,22 @@ const credentialSchema = z.discriminatedUnion("action", [
 ]);
 const editableResourceSchema = z.union([
   legacyResourceSchema,
+  z.object({ ...toolFields, credential: credentialSchema.optional() }).strict(),
   z.object({ ...connectionFields, credential: credentialSchema.optional() }).strict(),
 ]);
 const targetSchema = z.object({ resourceId: idSchema, model: modelSchema.optional() }).strict();
 const bindingSchema = z.union([
   z.object({ inherit: z.literal(true) }).strict(), targetSchema,
 ]);
+const toolTargetSchema = z.object({ resourceId: idSchema }).strict();
+const toolBindingSchema = z.union([toolTargetSchema, z.object({ disabled: z.literal(true) }).strict(), z.object({ inherit: z.literal(true) }).strict()]);
+export const toolServiceIds = ["search", "fetch"] as const;
+export type ToolServiceId = typeof toolServiceIds[number];
 const documentFields = {
   schemaVersion: z.literal(1), revision: z.number().int().nonnegative(),
-  defaults: z.object({ chat: targetSchema, vision: targetSchema, asr: targetSchema }).strict(),
+  defaults: z.object({ chat: targetSchema, vision: targetSchema, asr: targetSchema, search: toolTargetSchema.optional(), fetch: toolTargetSchema.optional() }).strict(),
   services: z.object({ chat: bindingSchema, vision: bindingSchema, asr: bindingSchema,
-    supervisor: bindingSchema, nutrition: bindingSchema, recipe: bindingSchema, operations: bindingSchema }).strict(),
+    supervisor: bindingSchema, nutrition: bindingSchema, recipe: bindingSchema, operations: bindingSchema, search: toolBindingSchema.optional(), fetch: toolBindingSchema.optional() }).strict(),
 };
 export const resourceDocumentSchema = z.object({ ...documentFields, resources: z.array(storedResourceSchema).max(100) }).strict();
 export const resourceUpdateSchema = z.object({ ...documentFields, resources: z.array(editableResourceSchema).max(100) }).strict();
@@ -86,6 +97,7 @@ export function resolveResourceService(document: ResourceDocument, service: Serv
     if (resource.scope !== capability) throw new Error("资源能力与业务服务不兼容");
     return { ...legacy[resource.scope], ...(target.model ? { model: target.model } : {}), source, resourceId: resource.id };
   }
+  if (resource.kind === "tool") throw new Error("工具资源不能绑定模型服务");
   const model = resource.models.find(item => item.id === target.model);
   if (!model || !model.capabilities.includes(capability)) throw new Error("模型能力与业务服务不兼容");
   return { apiKey: resource.apiKey, baseUrl: resource.baseUrl.replace(/\/$/, ""), model: model.id, source, resourceId: resource.id };
@@ -95,6 +107,10 @@ export function validateResourceDocument(document: ResourceDocument) {
   if (new Set(document.resources.map(item => item.id)).size !== document.resources.length) throw new Error("资源标识重复");
   for (const resource of document.resources) {
     if (resource.kind === "connection" && new Set(resource.models.map(item => item.id)).size !== resource.models.length) throw new Error("模型标识重复");
+  }
+  for (const service of toolServiceIds) {
+    resolveToolService(document, service);
+    resolveToolService({ ...document, services: { ...document.services, [service]: { inherit: true } } }, service);
   }
   const dummy = { apiKey: "", baseUrl: "https://legacy.invalid", model: "legacy" };
   const legacy = { chat: dummy, vision: dummy, asr: dummy };
@@ -109,7 +125,7 @@ export function applyResourceUpdate(input: ResourceUpdate, previous: ResourceDoc
     const { credential, ...fields } = resource;
     const old = previous.resources.find(item => item.id === resource.id);
     const apiKey = credential?.action === "replace" ? credential.value : credential?.action === "clear" ? ""
-      : old?.kind === "connection" ? old.apiKey : "";
+      : old && old.kind !== "legacy" && old.kind === resource.kind ? old.apiKey : "";
     return { ...fields, apiKey };
   });
   const document = resourceDocumentSchema.parse({ ...input, resources, revision: previous.revision + 1 });
@@ -124,3 +140,17 @@ export function publicResourceDocument(document: ResourceDocument) {
     return { ...fields, hasApiKey: !!apiKey, maskedKey: apiKey ? "********" : "", verification: "unverified" as const };
   }) };
 }
+
+/** Tool bindings never fall back to chat endpoints, models or environment credentials. */
+export function resolveToolService(document: ResourceDocument, service: ToolServiceId) {
+  const binding = document.services[service];
+  const target = binding && "inherit" in binding ? document.defaults[service] : binding;
+  if (!target || "disabled" in target) return { status: "disabled" as const, service, revision: document.revision };
+  const resource = document.resources.find(item => item.id === target.resourceId);
+  if (resource?.kind !== "tool" || !resource.tools.includes(service)) throw new Error("工具资源与业务服务不兼容");
+  return { service, revision: document.revision, resourceId: resource.id, baseUrl: resource.baseUrl, apiKey: resource.apiKey,
+    source: binding && "inherit" in binding ? `default:${service}` : `service:${service}`,
+    status: service === "fetch" ? "disabled" as const : resource.apiKey ? "unverified" as const : "unconfigured" as const,
+    reason: service === "fetch" ? "redirect-safety-unavailable" : undefined };
+}
+export const toolServiceCatalog = toolServiceIds.map(id => ({ id, capability: id, kind: "tool", input: id === "search" ? "public-query" : "public-url", output: "untrusted-web-results", automaticExecution: false }));

@@ -1,5 +1,5 @@
 import { sanitizeAIErrorMessage } from "../../services/aiErrors.js";
-import { RESOURCE_SETTING_KEY, legacyResourceDocument, resourceDocumentSchema, resourceUpdateSchema, applyResourceUpdate, publicResourceDocument, resolveResourceService, serviceIds, serviceCatalog, validateResourceDocument, type ServiceId } from "./resources.js";
+import { RESOURCE_SETTING_KEY, legacyResourceDocument, resourceDocumentSchema, resourceUpdateSchema, applyResourceUpdate, publicResourceDocument, resolveResourceService, serviceIds, serviceCatalog, validateResourceDocument, type ServiceId, resolveToolService, toolServiceIds, toolServiceCatalog, type ToolServiceId } from "./resources.js";
 import { thinkingParameters, runtimePolicySchema } from "./policy.js";
 import type { AIRuntimeRepository } from "./repository.js";
 import type { AIConfig, AIUsageInput } from "./types.js";
@@ -66,6 +66,10 @@ export class AIRuntimeService {
     return this.resourceConfiguration();
   }
 
+  async toolConfig(service: ToolServiceId) {
+    return resolveToolService(this.resourceDocument(await this.settings()), service);
+  }
+
   async resourceConfiguration() {
     const values = await this.settings();
     const document = this.resourceDocument(values);
@@ -74,7 +78,11 @@ export class AIRuntimeService {
       const { apiKey, ...resolved } = resolveResourceService(document, service, legacy, values);
       return [service, { ...resolved, hasApiKey: !!apiKey, maskedKey: apiKey ? "********" : "" }];
     }));
-    return { ...publicResourceDocument(document), migrated: !!values[RESOURCE_SETTING_KEY], catalog: serviceCatalog, effective };
+    for (const service of toolServiceIds) {
+      const { apiKey, ...resolved } = resolveToolService(document, service);
+      Object.assign(effective, { [service]: { ...resolved, hasApiKey: !!apiKey, maskedKey: apiKey ? "********" : "" } });
+    }
+    return { ...publicResourceDocument(document), migrated: !!values[RESOURCE_SETTING_KEY], catalog: [...serviceCatalog, ...toolServiceCatalog], effective };
   }
 
   async saveResourceConfiguration(input: unknown) {

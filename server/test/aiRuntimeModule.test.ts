@@ -162,7 +162,7 @@ describe("provider resources and business services", () => {
       await assert.rejects(service.saveResourceConfiguration(update));
       assert.equal(store.values[RESOURCE_SETTING_KEY], undefined);
     }
-    await assert.rejects(service.saveResourceConfiguration({ ...connections(), services: { ...connections().services, search: { inherit: true } } }));
+    await assert.rejects(service.saveResourceConfiguration({ ...connections(), services: { ...connections().services, unsupported_service: { inherit: true } } }));
     const badProtocol = connections();
     await assert.rejects(service.saveResourceConfiguration({ ...badProtocol, resources: [{ ...badProtocol.resources[3], protocol: "search" }] }));
     store.values.AI_SUPERVISOR_MODEL = "unknown-role-model";

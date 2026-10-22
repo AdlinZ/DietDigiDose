@@ -55,9 +55,15 @@ test("resource routes require a current admin session and never serialize creden
   const update = { ...document, resources: [...document.resources, {
     id: "review", kind: "connection", name: "review", protocol: "openai-compatible", baseUrl: "https://fixture.invalid/v1",
     models: [{ id: "review-model", capabilities: ["chat"] }], credential: { action: "replace", value: secret },
-  }], services: { ...document.services, chat: { resourceId: "review", model: "review-model" } } };
+  }, {
+    id: "web", kind: "tool", name: "Synthetic web", protocol: "deepseek-tools", baseUrl: "https://api.deepseek.com",
+    tools: ["search", "fetch"], credential: { action: "replace", value: secret },
+  }], services: { ...document.services, chat: { resourceId: "review", model: "review-model" }, search: { resourceId: "web" }, fetch: { resourceId: "web" } } };
   const saved = await request("/admin/ai-config/resources", "PUT", token, update);
   assert.equal(saved.status, 200);
+  const publicTools = await request("/admin/ai-config/resources", "GET", token);
+  assert.equal(publicTools.body.effective.search.status, "unverified");
+  assert.equal(publicTools.body.effective.fetch.status, "disabled");
   for (const result of [saved, await request("/admin/ai-config/resources", "GET", token), await request("/admin/ai-config", "GET", token)]) {
     assert.equal(result.status, 200);
     assert.equal(JSON.stringify(result.body).includes(secret), false);

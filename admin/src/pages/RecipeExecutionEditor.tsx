@@ -1,5 +1,5 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
-import { recipeExecutionProfileSchema, type RecipeExecutionProfile, type RecipeSubstitution, type RecipeTaskGraph } from '@dietdigidose/contracts/recipe-execution';
+import type { RecipeExecutionProfile, RecipeSubstitution, RecipeTaskGraph } from '@dietdigidose/contracts/recipe-execution';
 import api from '../services/api';
 
 type Variant = Omit<RecipeSubstitution, 'recipeId'> & { recipeId: string; preview?: { title: string; servingSize: number; ingredients: Array<{ name: string; amount: string }>; steps: string[] } };
@@ -78,7 +78,9 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
       if (reheating && (!reheating.servings.trim() || reheating.tasks.some(task => !task.minutes.trim()) || reheating.tools.some(tool => !tool.catalogId || (tool.capacityKind === 'volume' && !tool.mlPerServing.trim())))) {
         setMessage('请填写复热批次份量、每项时间与设备容量依据；没有依据时取消复热审核。'); return;
       }
-      const parsed = recipeExecutionProfileSchema.safeParse({ version: 1, reference, maxBatchServings: Number(servings),
+      // The existing save endpoint validates the complete shared schema. Keep
+      // immediate required-field checks here without shipping a duplicate validator.
+      profile = { version: 1, reference, maxBatchServings: Number(servings),
         tools: tools.map(tool => ({ key: tool.key, name: catalog.find(item => String(item.id) === tool.catalogId)?.name ?? '', catalogId: Number(tool.catalogId),
           capacity: tool.capacityKind === 'volume' ? { kind: 'volume', mlPerServing: Number(tool.mlPerServing) } : { kind: 'not_applicable' } })),
         ...(handling.storage ? { handling: { storage: handling.storage, maxHoldHours: handling.storage === 'fresh_only' ? 0 : Number(handling.hours), coldServingAllowed: handling.cold === 'yes', carryAllowed: handling.carry === 'yes', sourceUrl: handling.sourceUrl, reference: handling.reference, instructions: handling.instructions } } : {}),
@@ -87,16 +89,18 @@ export function RecipeExecutionEditor({ recipeId }: { recipeId: number }) {
           tasks: reheating.tasks.map(task => ({ ...task, minutes: Number(task.minutes) })) } } : {}),
         ...(variants.length ? { substitutions: variants.map(({ preview: _preview, ...rule }) => ({ ...rule, recipeId: Number(rule.recipeId) })) } : {}),
         tasks: tasks.map(task => ({ ...task, minutes: Number(task.minutes) })),
-      });
-      if (!parsed.success) { setMessage(parsed.error.issues.map(issue => issue.message).join('；')); return; }
-      profile = parsed.data;
+      };
     }
     setBusy(true);
     try {
       const response = await api.put(`/admin/recipes/${recipeId}/execution`, { recipeKey, reviewKey, profile });
       setReviewKey(response.data.reviewKey);
       setMessage(remove ? '制作流程审核已撤销，后续推荐将重新标为待核对。' : '制作流程审核已保存。食材、份数、步骤或厨具改变后会失效。');
-    } catch (error: any) { setMessage(error.response?.data?.error || '审核保存失败，请重试。'); }
+    } catch (error: any) {
+      const issues = error.response?.data?.details;
+      const messages = Array.isArray(issues) ? issues.map(issue => typeof issue?.message === 'string' ? issue.message : '').filter(Boolean) : [];
+      setMessage(messages.join('；') || error.response?.data?.error || '审核保存失败，请重试。');
+    }
     finally { setBusy(false); }
   };
   return <section className="space-y-3 border-t pt-4">

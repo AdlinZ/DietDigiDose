@@ -6,10 +6,15 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
+    minify: 'terser',
+    terserOptions: { module: true, compress: { passes: 2 } },
     rollupOptions: {
       output: {
         // Share icon definitions instead of emitting dozens of tiny icon chunks.
-        manualChunks(id) { if (id.includes('/lucide-react/')) return 'icons'; },
+        manualChunks(id) {
+          if (id.includes('/lucide-react/')) return 'icons';
+          if (['/react/', '/react-dom/', '/scheduler/'].some(module => id.includes(module))) return 'react-vendor';
+        },
       },
     },
   },

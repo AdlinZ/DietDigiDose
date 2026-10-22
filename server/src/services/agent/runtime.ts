@@ -648,7 +648,7 @@ async function operationsNode(state: SupervisorGraphState) {
 字段使用 camelCase。餐单 create_meal_plan payload 为 {title,startDate,endDate,constraints,items:[{date,mealType,title,ingredients,steps,calories,protein,carbs,fat}]}；采购 add_shopping_items payload 为 {items:[{name,amount,category}]}；饮食打卡 record_diet_meal payload 必须为 {foodName,mealType,amount,recordedAt?,recordedTime?,calories?,protein?,carbs?,fat?}，禁止使用 dishName、portion 或 date 代替这些字段。`, operationSchema),
   });
   const result = await invokeStructured(
-    () => agent.invoke({ messages: [{ role: "user", content: `用户完整请求：${requestText(state)}\n目标：${state.goal}\n专业 Agent 结果：${JSON.stringify(state.outputs)}\n本次有效备餐条件：${JSON.stringify(resolveKitchenPreferences(mealContext.healthProfile?.kitchen_constraints, state.kitchenOverride))}\n偏好设置版本：${preferenceVersion}\n当前库存批次：${JSON.stringify(inventoryContext)}\n待吃餐：${JSON.stringify(mealContext.preparedMeals || [])}` }] }, { recursionLimit: agentRecursionLimit() }),
+    () => agent.invoke({ messages: [{ role: "user", content: `用户完整请求：${requestText(state)}\n本次业务时钟：${JSON.stringify(mealContext.clock)}\n目标：${state.goal}\n专业 Agent 结果：${JSON.stringify(state.outputs)}\n本次有效备餐条件：${JSON.stringify(resolveKitchenPreferences(mealContext.healthProfile?.kitchen_constraints, state.kitchenOverride))}\n偏好设置版本：${preferenceVersion}\n当前库存批次：${JSON.stringify(inventoryContext)}\n待吃餐：${JSON.stringify(mealContext.preparedMeals || [])}` }] }, { recursionLimit: agentRecursionLimit() }),
     operationSchema,
     { runId: state.runId, userId: state.userId, agentName: "OperationsAgent", phase: "operations", model: await modelNameFor("OPERATIONS") },
   );
@@ -656,7 +656,7 @@ async function operationsNode(state: SupervisorGraphState) {
   try {
     actions = validateAgentActions((result.actions || []).filter(action => !["update_kitchen_preferences","update_recipe_preference"].includes(action.actionType)
       || persistentIntent).map(action => action.actionType === "update_recipe_preference"
-        ? { ...action,payload: { ...action.payload,version: preferenceVersion } } : action), await buildUserContext(state.userId));
+        ? { ...action,payload: { ...action.payload,version: preferenceVersion } } : action), { ...await buildUserContext(state.userId), clock: mealContext.clock });
   } catch (error) {
     if (error instanceof InventoryActionClarificationError) {
       return { actions: [], outputs: { ...state.outputs, PolicyGate: { warning: error.message } } };

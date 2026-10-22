@@ -20,6 +20,15 @@ export class SqliteAIRuntimeRepository implements AIRuntimeRepository {
     this.database.transaction(() => entries.forEach((entry) => statement.run(entry.key, entry.value)))();
   }
 
+  async compareAndSaveSetting(key: string, previous: string | null, value: string) {
+    return this.database.transaction(() => {
+      const result = previous === null
+        ? this.database.prepare("INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO NOTHING").run(key, value)
+        : this.database.prepare("UPDATE system_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ? AND value = ?").run(value, key, previous);
+      return result.changes === 1;
+    })();
+  }
+
   async recordUsage(input: AIUsageWrite) {
     this.database.prepare(`INSERT INTO ai_usage_logs (user_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens,
       latency_ms, success, estimated_cost_usd, failure_reason, run_id, agent_name, phase) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)

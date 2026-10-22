@@ -11,10 +11,34 @@ import { auditAdminAction } from "./shared.js";
 export function createAdminAIConfigRouter() {
   const router = Router();
 
+  // Phase one configuration boundary: saving applies immediately, matching the legacy API.
+  // Draft/test/publish lifecycle and provider verification are deliberately not claimed here.
+  router.get("/ai-config/resources", async (_req, res) => {
+    try { res.json(await aiRuntimeService().resourceConfiguration()); }
+    catch { res.status(500).json({ error: "获取资源配置失败" }); }
+  });
+  router.post("/ai-config/resources/migrate", async (req: AuthRequest, res) => {
+    try {
+      const result = await aiRuntimeService().migrateResources();
+      await auditAdminAction(req, { action: "ai_resources.migrate", resourceType: "ai_config", resourceId: "global", summary: "迁移 AI 资源配置" });
+      res.json(result);
+    } catch { res.status(400).json({ error: "迁移资源配置失败，请重新读取配置确认状态" }); }
+  });
+  router.put("/ai-config/resources", async (req: AuthRequest, res) => {
+    try {
+      const result = await aiRuntimeService().saveResourceConfiguration(req.body);
+      await auditAdminAction(req, { action: "ai_resources.update", resourceType: "ai_config", resourceId: "global", summary: "更新 AI 资源与业务服务配置" });
+      res.json(result);
+    } catch { res.status(400).json({ error: "保存资源配置失败，请检查版本、能力绑定与策略配置" }); }
+  });
+
   router.get("/ai-config", async (_req, res) => {
     try {
       const settings = await aiRuntimeService().settings();
       const config = await aiRuntimeService().config(settings);
+      const [supervisor, nutrition, recipe, operations] = await Promise.all(
+        (["SUPERVISOR", "NUTRITION", "RECIPE", "OPERATIONS"] as const).map(role => aiRuntimeService().agentConfig(role, settings)),
+      );
       const formatMasked = (key?: string) =>
         key ? (key.length > 8 ? `${key.slice(0, 4)}****${key.slice(-4)}` : "********") : "";
 
@@ -27,16 +51,16 @@ export function createAdminAIConfigRouter() {
         asrModel: config.asrModel,
         runtimePolicy: await aiRuntimeService().runtimePolicy(),
         effectiveModels: [
-          { role: "主助手", model: settings.AI_SUPERVISOR_MODEL?.trim() || config.chat.model, source: settings.AI_SUPERVISOR_MODEL?.trim() ? "角色设置" : "继承文本模型", baseUrl: config.chat.baseUrl },
-          { role: "规划", model: settings.AI_NUTRITION_MODEL?.trim() || config.chat.model, source: settings.AI_NUTRITION_MODEL?.trim() ? "角色设置" : "继承文本模型", baseUrl: config.chat.baseUrl },
-          { role: "图片", model: config.vision.model, source: settings.AI_VISION_MODEL ? "图片设置" : "环境变量或内置默认", baseUrl: config.vision.baseUrl },
-          { role: "转写", model: config.asr.model, source: settings.AI_ASR_MODEL ? "转写设置" : "环境变量或内置默认", baseUrl: config.asr.baseUrl },
+          { role: "主助手", model: supervisor.model, source: "有效业务服务配置", baseUrl: supervisor.baseUrl },
+          { role: "规划", model: nutrition.model, source: "有效业务服务配置", baseUrl: nutrition.baseUrl },
+          { role: "图片", model: config.vision.model, source: settings.AI_RESOURCE_CONFIG_V1 ? "有效业务服务配置" : settings.AI_VISION_MODEL ? "图片设置" : "环境变量或内置默认", baseUrl: config.vision.baseUrl },
+          { role: "转写", model: config.asr.model, source: settings.AI_RESOURCE_CONFIG_V1 ? "有效业务服务配置" : settings.AI_ASR_MODEL ? "转写设置" : "环境变量或内置默认", baseUrl: config.asr.baseUrl },
         ],
         agents: {
-          supervisorModel: settings.AI_SUPERVISOR_MODEL?.trim() || config.chat.model,
-          nutritionModel: settings.AI_NUTRITION_MODEL?.trim() || config.chat.model,
-          recipeModel: settings.AI_RECIPE_MODEL?.trim() || config.chat.model,
-          operationsModel: settings.AI_OPERATIONS_MODEL?.trim() || config.chat.model,
+          supervisorModel: supervisor.model,
+          nutritionModel: nutrition.model,
+          recipeModel: recipe.model,
+          operationsModel: operations.model,
         },
 
         chat: {
@@ -104,8 +128,10 @@ export function createAdminAIConfigRouter() {
         const merged = { ...current, ...Object.fromEntries(entries.map((entry) => [entry.key, entry.value])) };
         const effective = await aiRuntimeService().config(merged);
         const policy = req.body.runtimePolicy || await aiRuntimeService().runtimePolicy();
-        for (const role of ["SUPERVISOR", "RECIPE", "OPERATIONS"]) thinkingParameters(effective.chat.baseUrl, merged[`AI_${role}_MODEL`] || effective.chat.model, policy.main);
-        thinkingParameters(effective.chat.baseUrl, merged.AI_NUTRITION_MODEL || effective.chat.model, policy.planner);
+        for (const role of ["SUPERVISOR", "RECIPE", "OPERATIONS", "NUTRITION"] as const) {
+          const agent = await aiRuntimeService().agentConfig(role, merged);
+          thinkingParameters(agent.baseUrl, agent.model, role === "NUTRITION" ? policy.planner : policy.main);
+        }
         thinkingParameters(effective.vision.baseUrl, effective.vision.model, policy.vision);
         if (policy.asr.thinking !== "default") throw new Error("语音转写不支持思考策略，请选择提供商默认");
         entries.push({ key: "AI_RUNTIME_POLICY", value: JSON.stringify(policy) });

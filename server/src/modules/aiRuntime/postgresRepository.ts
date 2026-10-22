@@ -24,6 +24,21 @@ export class PostgresAIRuntimeRepository implements AIRuntimeRepository {
     } finally { client.release(); }
   }
 
+  async compareAndSaveSetting(key: string, previous: string | null, value: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = previous === null
+        ? await client.query("INSERT INTO system_settings (key, value, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP) ON CONFLICT(key) DO NOTHING", [key, value])
+        : await client.query("UPDATE system_settings SET value = $1, updated_at = CURRENT_TIMESTAMP WHERE key = $2 AND value = $3", [value, key, previous]);
+      await client.query("COMMIT");
+      return result.rowCount === 1;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
   async recordUsage(input: AIUsageWrite) {
     await this.pool.query(`INSERT INTO ai_usage_logs (user_id, endpoint, model, prompt_tokens, completion_tokens, total_tokens,
       latency_ms, success, estimated_cost_usd, failure_reason, run_id, agent_name, phase)

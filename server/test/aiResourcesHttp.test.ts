@@ -177,6 +177,8 @@ test("legacy clearing and chat-policy rejection keep server validation authorita
   const old = await runtime.settings();
   const cleared = await request('/admin/ai-config', 'PUT', token, { chatApiKey: '', visionApiKey: '', asrApiKey: '', apiKey: '' });
   assert.equal(cleared.status, 200);
+  const audit = db.prepare("SELECT details_json FROM admin_audit_logs WHERE action='ai_config.update' ORDER BY id DESC LIMIT 1").get() as { details_json: string };
+  assert.equal(JSON.parse(audit.details_json).apiKeyChanged, true);
   for (const key of ['AI_API_KEY', 'AI_CHAT_API_KEY', 'AI_VISION_API_KEY', 'AI_ASR_API_KEY']) assert.equal((await runtime.settings())[key], '');
   assert.equal((await runtime.legacyChatConfig()).baseUrl, 'https://legacy-chat.invalid/v1');
   assert.equal((await runtime.config()).chat.baseUrl, 'https://fixture.invalid/v1');

@@ -105,3 +105,15 @@ test("transport errors are sanitized and do not retry", async () => {
   await assert.rejects(adapter.search(config, input, options()), errorCode("upstream_unavailable"));
   assert.equal(calls, 1);
 });
+
+
+test("non-JSON stalled response bodies are cancelled before rejection", async () => {
+  for (const contentType of [undefined, "text/html"]) {
+    let cancelled = false;
+    const adapter = new DeepSeekTools({ reserve() {}, transport: async () => new Response(new ReadableStream({
+      cancel() { cancelled = true; },
+    }), { headers: contentType ? { "content-type": contentType } : {} }) });
+    await assert.rejects(adapter.search(config, input, options()), errorCode("invalid_response"));
+    assert.equal(cancelled, true);
+  }
+});

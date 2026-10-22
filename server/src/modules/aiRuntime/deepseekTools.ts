@@ -50,7 +50,10 @@ function reserveAttempt() {
   windowCalls++;
 }
 async function readJson(response: Response, signal: AbortSignal) {
-  if (!response.headers.get("content-type")?.toLowerCase().includes("application/json") || !response.body) throw new WebToolError("invalid_response");
+  if (!response.headers.get("content-type")?.toLowerCase().includes("application/json") || !response.body) {
+    await response.body?.cancel().catch(() => {});
+    throw new WebToolError("invalid_response");
+  }
   const reader = response.body.getReader(), chunks: Uint8Array[] = [];
   const abort = () => { void reader.cancel().catch(() => {}); };
   signal.addEventListener("abort", abort, { once: true });

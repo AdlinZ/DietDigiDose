@@ -165,7 +165,7 @@ export function createAdminAIConfigRouter() {
           resourceId: "global",
           summary: "更新 AI 模型服务配置",
           details: {
-            apiKeyChanged: typeof apiKey === "string" && !!apiKey.trim(),
+            apiKeyChanged: apiKey !== undefined,
             baseUrlChanged: baseUrl !== undefined,
             modelChanged: model !== undefined,
             visionModelChanged: visionModel !== undefined,

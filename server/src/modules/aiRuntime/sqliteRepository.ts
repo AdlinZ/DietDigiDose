@@ -7,6 +7,10 @@ export class SqliteAIRuntimeRepository implements AIRuntimeRepository {
   constructor(database: Database.Database) { this.database = database; }
 
   async settings(keys: string[]) {
+    return this.readSettings(keys);
+  }
+
+  private readSettings(keys: string[]) {
     if (!keys.length) return {};
     const placeholders = keys.map(() => "?").join(",");
     const rows = this.database.prepare(`SELECT key, value FROM system_settings WHERE key IN (${placeholders})`)
@@ -15,18 +19,23 @@ export class SqliteAIRuntimeRepository implements AIRuntimeRepository {
   }
 
   async saveSettings(entries: Array<{ key: string; value: string }>) {
-    const statement = this.database.prepare(`INSERT INTO system_settings (key, value, updated_at)
-      VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`);
-    this.database.transaction(() => entries.forEach((entry) => statement.run(entry.key, entry.value)))();
+    this.writeSettings(entries);
   }
 
   async compareAndSaveSetting(key: string, previous: string | null, value: string) {
+    return this.writeSettings([{ key, value }], { key, previous });
+  }
+
+  private writeSettings(entries: Array<{ key: string; value: string }>, expected?: { key: string; previous: string | null }) {
+    const statement = this.database.prepare(`INSERT INTO system_settings (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`);
+    // Acquire the write lock before reading the expected value. Legacy batch
+    // writes and resource CAS share the same atomic repository write boundary.
     return this.database.transaction(() => {
-      const result = previous === null
-        ? this.database.prepare("INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO NOTHING").run(key, value)
-        : this.database.prepare("UPDATE system_settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ? AND value = ?").run(value, key, previous);
-      return result.changes === 1;
-    })();
+      if (expected && (this.readSettings([expected.key])[expected.key] ?? null) !== expected.previous) return false;
+      for (const entry of entries) statement.run(entry.key, entry.value);
+      return true;
+    }).immediate();
   }
 
   async recordUsage(input: AIUsageWrite) {

@@ -57,6 +57,26 @@ describe("AI runtime module", () => {
     finally { console.error = originalError; }
   });
 
+  test("SQLite CAS distinguishes missing, empty and stale values and rolls back batch failures", async () => {
+    const database = new Database(":memory:");
+    database.exec("CREATE TABLE system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT)");
+    const adapter = new SqliteAIRuntimeRepository(database);
+    try {
+      assert.equal(await adapter.compareAndSaveSetting("config", "missing", "wrong"), false);
+      assert.equal(await adapter.compareAndSaveSetting("config", null, ""), true);
+      assert.equal(await adapter.compareAndSaveSetting("config", null, "wrong"), false);
+      assert.equal(await adapter.compareAndSaveSetting("config", "", "first"), true);
+      assert.equal(await adapter.compareAndSaveSetting("config", "", "stale"), false);
+      assert.deepEqual(await Promise.all([
+        adapter.compareAndSaveSetting("config", "first", "winner"),
+        adapter.compareAndSaveSetting("config", "first", "loser"),
+      ]), [true, false]);
+      database.exec("CREATE TRIGGER reject_fixture BEFORE INSERT ON system_settings WHEN NEW.key = 'reject' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
+      await assert.rejects(adapter.saveSettings([{ key: "config", value: "rollback" }, { key: "reject", value: "fixture" }]));
+      assert.deepEqual(await adapter.settings(["config", "reject"]), { config: "winner" });
+    } finally { database.close(); }
+  });
+
   test("SQLite adapter atomically saves settings and structured usage", async () => {
     const database = new Database(":memory:");
     database.exec(`

@@ -89,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await clearInventorySnapshots(previousUser.id).catch(() => undefined);
       }
       if (previousUser?.id && previousUser.id !== data.user.id) {
+        await cancelAllLocalNotificationsForUser(previousUser.id).catch(() => undefined);
         await purgeVoiceAudioCacheForUser(previousUser.id).catch(() => undefined);
         await purgeUserPrivateStorage(previousUser.id).catch(() => undefined);
       }

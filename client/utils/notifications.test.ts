@@ -19,7 +19,7 @@ jest.mock("expo-constants", () => ({ expoConfig: null, easConfig: null }));
 jest.mock("expo-device", () => ({ isDevice: true }));
 jest.mock("expo-notifications", () => ({
   AndroidImportance: { HIGH: 4 },
-  SchedulableTriggerInputTypes: { CALENDAR: "calendar", DATE: "date", DAILY: "daily" },
+  SchedulableTriggerInputTypes: { CALENDAR: "calendar", WEEKLY: "weekly", DATE: "date", DAILY: "daily" },
   setNotificationHandler: jest.fn(),
   setNotificationChannelAsync: jest.fn(),
   setNotificationCategoryAsync: jest.fn(),
@@ -35,6 +35,7 @@ jest.mock("./cookingReminders", () => ({
   cancelCookingQueueRemindersForUser: jest.fn(() => Promise.resolve()),
 }));
 
+import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import { cancelCookingQueueRemindersForUser } from "./cookingReminders";
@@ -47,12 +48,18 @@ import {
   scheduleExpiringStockAlerts,
   syncLocalNotificationSchedules,
 } from "./notifications";
-import { getUserStorageKey } from "./userStorage";
+import { activatePrivateStorage, invalidatePrivateStorage, getUserStorageKey } from "./userStorage";
 
 describe("user-scoped local notifications", () => {
   beforeEach(() => {
     mockStorage.clear();
     jest.clearAllMocks();
+    Platform.OS = "android";
+    activatePrivateStorage(101);
+    activatePrivateStorage(202);
+    jest.mocked(Notifications.getPermissionsAsync).mockResolvedValue({ status: "granted" } as Notifications.NotificationPermissionsStatus);
+    let id = 0;
+    jest.mocked(Notifications.scheduleNotificationAsync).mockImplementation(async () => `scheduled-${++id}`);
   });
 
   it("stores routine schedule ids under the current account only", async () => {
@@ -114,5 +121,102 @@ describe("user-scoped local notifications", () => {
     expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("routine");
     expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("inventory");
     expect(cancelCookingQueueRemindersForUser).toHaveBeenCalledWith(101);
+  });
+});
+
+
+describe("weekly routine compatibility", () => {
+  const preferences = { ...DEFAULT_NOTIFICATION_PREFERENCES, water_reminder: false };
+  beforeEach(() => {
+    mockStorage.clear();
+    jest.clearAllMocks();
+    Platform.OS = "android";
+    activatePrivateStorage(101);
+    activatePrivateStorage(202);
+    jest.mocked(Notifications.getPermissionsAsync).mockResolvedValue({ status: "granted" } as Notifications.NotificationPermissionsStatus);
+    let id = 0;
+    jest.mocked(Notifications.scheduleNotificationAsync).mockImplementation(async () => `scheduled-${++id}`);
+  });
+  it.each(["android", "ios"] as const)("maps all seven weekdays on %s", async platform => {
+    Platform.OS = platform;
+    await syncLocalNotificationSchedules(preferences, 101);
+    const calls = jest.mocked(Notifications.scheduleNotificationAsync).mock.calls;
+    expect(calls).toHaveLength(21);
+    expect(calls.slice(0, 7).map(([request]) => request.trigger)).toEqual([2, 3, 4, 5, 6, 1, 7].map(weekday => ({
+      type: platform === "android" ? "weekly" : "calendar", weekday, hour: 8, minute: 0,
+      ...(platform === "ios" ? { repeats: true } : {}),
+    })));
+  });
+  it("filters weekends and respects overnight quiet hours for meals and water", async () => {
+    await syncLocalNotificationSchedules({ ...preferences, weekends_enabled: false, breakfast_time: "06:59",
+      dinner_time: "22:00", water_reminder: true, water_start_time: "06:00", water_end_time: "08:00", water_interval_minutes: 60 }, 101);
+    const triggers = jest.mocked(Notifications.scheduleNotificationAsync).mock.calls.map(([request]) => request.trigger);
+    expect(triggers).toHaveLength(15);
+    expect(triggers).toEqual(expect.arrayContaining([12, 7, 8].flatMap(hour => [2, 3, 4, 5, 6].map(weekday => ({ type: "weekly", weekday, hour, minute: 0 })))));
+  });
+  it("supports weekend-only schedules and daytime quiet windows", async () => {
+    await syncLocalNotificationSchedules({ ...preferences, weekdays_enabled: false, quiet_start_time: "08:00", quiet_end_time: "18:00" }, 101);
+    expect(jest.mocked(Notifications.scheduleNotificationAsync).mock.calls.map(([request]) => request.trigger))
+      .toEqual([1, 7].map(weekday => ({ type: "weekly", weekday, hour: 18, minute: 0 })));
+  });
+  it("cancels old reminders but schedules nothing after permission denial", async () => {
+    mockStorage.set(getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 101)!, '["old"]');
+    jest.mocked(Notifications.getPermissionsAsync).mockResolvedValueOnce({ status: "denied" } as Notifications.NotificationPermissionsStatus);
+    await syncLocalNotificationSchedules(preferences, 101);
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("old");
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+  });
+  it("replaces old schedules, then cancels when disabled without touching another account", async () => {
+    const key = getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 101)!;
+    mockStorage.set(getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 202)!, '["other"]');
+    await syncLocalNotificationSchedules(preferences, 101);
+    const old: string[] = JSON.parse(mockStorage.get(key)!);
+    await syncLocalNotificationSchedules({ ...preferences, breakfast_time: "09:30" }, 101);
+    old.forEach(id => expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith(id));
+    expect(jest.mocked(Notifications.scheduleNotificationAsync).mock.calls[21][0].trigger).toMatchObject({ hour: 9, minute: 30 });
+    await syncLocalNotificationSchedules({ ...preferences, meal_reminder: false }, 101);
+    expect(mockStorage.get(key)).toBe("[]");
+    expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalledWith("other");
+  });
+  it("rolls back every successful schedule when a later weekday fails", async () => {
+    jest.mocked(Notifications.scheduleNotificationAsync).mockResolvedValueOnce("first").mockResolvedValueOnce("second").mockRejectedValueOnce(new Error("native schedule failed"));
+    await expect(syncLocalNotificationSchedules(preferences, 101)).rejects.toThrow("native schedule failed");
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("first");
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("second");
+    expect(mockStorage.has(getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 101)!)).toBe(false);
+  });
+  it("rolls back native schedules if persisting their IDs fails", async () => {
+    jest.mocked(AsyncStorage.setItem).mockRejectedValueOnce(new Error("storage failed"));
+    await expect(syncLocalNotificationSchedules(preferences, 101)).rejects.toThrow("storage failed");
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledTimes(21);
+  });
+  it("serializes concurrent edits so only the latest schedule remains", async () => {
+    await Promise.all([
+      syncLocalNotificationSchedules(preferences, 101),
+      syncLocalNotificationSchedules({ ...preferences, meal_reminder: false }, 101),
+    ]);
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledTimes(21);
+    expect(mockStorage.get(getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 101)!)).toBe("[]");
+  });
+  it("waits for an in-flight native schedule before logout cleanup", async () => {
+    let finish!: (id: string) => void;
+    let started!: () => void;
+    const scheduling = new Promise<void>(resolve => { started = resolve; });
+    jest.mocked(Notifications.scheduleNotificationAsync).mockImplementationOnce(() => {
+      started();
+      return new Promise(resolve => { finish = resolve; });
+    });
+    const pending = syncLocalNotificationSchedules(preferences, 101);
+    await scheduling;
+    invalidatePrivateStorage(101);
+    const cleanup = cancelAllLocalNotificationsForUser(101);
+    finish("late-id");
+    await Promise.all([pending, cleanup]);
+    expect(Notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith("late-id");
+    expect(mockStorage.has(getUserStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, 101)!)).toBe(false);
+    jest.mocked(Notifications.scheduleNotificationAsync).mockClear();
+    await syncLocalNotificationSchedules(preferences, 101);
+    expect(Notifications.scheduleNotificationAsync).not.toHaveBeenCalled();
   });
 });

@@ -83,7 +83,7 @@ export default function SettingsScreen() {
         const platform = Platform.OS === "android" ? "android" : "ios";
         await authApi.registerPushDevice(token, { expo_push_token: pushToken, platform });
       }
-      if (Platform.OS !== "web") {
+      if (Platform.OS !== "web" && user && isSessionCurrent(user.id, sessionGeneration)) {
         await syncLocalNotificationSchedules(next, user?.id);
       }
       if (requestPermission && Platform.OS !== "web" && !pushToken) {

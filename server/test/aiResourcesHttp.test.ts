@@ -144,6 +144,12 @@ test("raw legacy editing over HTTP never leaks keys or writes effective resource
   const response = await request('/admin/ai-config', 'GET', token);
   assert.equal(response.status, 200);
   const data = response.body;
+  const effective = (await request('/admin/ai-config/resources', 'GET', token)).body.effective;
+  for (const [role, service] of Object.entries({ 对话: 'chat', 主助手: 'supervisor', 菜谱: 'recipe', 运营: 'operations', 规划: 'nutrition', 图片: 'vision' })) {
+    const entry = data.effectiveModels.find((item: { role: string }) => item.role === role);
+    assert.equal(entry.model, effective[service].model);
+    assert.equal(entry.baseUrl, effective[service].baseUrl);
+  }
   assert.equal(data.chat.model, 'review-model'); assert.equal(data.editable.chatModel, 'raw-chat-model');
   assert.equal(data.editable.model, 'raw-global-model'); assert.equal(data.editable.supervisorModel, '');
   assert.equal(data.editable.visionModel, ''); assert.equal(data.maskedKey, '********');

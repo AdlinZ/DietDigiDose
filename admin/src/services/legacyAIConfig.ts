@@ -6,8 +6,8 @@ export function legacyConfigPatch(current: Record<string, unknown>, initial: Rec
     if (JSON.stringify(current[field]) !== JSON.stringify(initial[field])) patch[field] = current[field];
   }
   for (const field of ['apiKey', 'chatApiKey', 'visionApiKey', 'asrApiKey']) {
-    if (clear.includes(field)) patch[field] = "";
-    else if (credentials[field]?.trim()) patch[field] = credentials[field].trim();
+    if (credentials[field]?.trim()) patch[field] = credentials[field].trim();
+    else if (clear.includes(field)) patch[field] = "";
   }
   return patch;
 }

@@ -10,7 +10,7 @@ const PROVIDER_PRESETS = [
     model: "deepseek-ai/DeepSeek-V3",
     visionModel: "Qwen/Qwen2.5-VL-72B-Instruct",
     asrModel: "FunAudioLLM/SenseVoiceSmall",
-    desc: "全能型：文本 + 识图 + 语音转文字（免费额度多，推荐作为默认接入）",
+    desc: "文本与多模态接口；能力需逐项验证。",
   },
   {
     name: "阿里云百炼 (DashScope)",
@@ -18,7 +18,7 @@ const PROVIDER_PRESETS = [
     model: "qwen-max",
     visionModel: "qwen-vl-max",
     asrModel: "sensevoice-v1",
-    desc: "国内极速：适合作为多模态识图或通义千问对话服务商",
+    desc: "兼容接口；模型能力需逐项验证。",
   },
   {
     name: "DeepSeek 官方 API",
@@ -26,7 +26,7 @@ const PROVIDER_PRESETS = [
     model: "deepseek-chat",
     visionModel: "deepseek-chat",
     asrModel: "FunAudioLLM/SenseVoiceSmall",
-    desc: "文本专项：性价比极高，适合专门绑定为【文本对话服务】",
+    desc: "文本接口；不表示支持视觉或 ASR。",
   },
   {
     name: "OpenAI 官方 API",
@@ -34,7 +34,7 @@ const PROVIDER_PRESETS = [
     model: "gpt-4o-mini",
     visionModel: "gpt-4o-mini",
     asrModel: "whisper-1",
-    desc: "国际大厂：支持标准 Whisper 语音转文字与 GPT-4o 多模态",
+    desc: "文本、视觉及 ASR 接口；能力需逐项验证。",
   },
 ];
 
@@ -145,6 +145,11 @@ export default function AIConfig() {
     if (preset.asrModel) setAsrModel(preset.asrModel);
     setStatusMsg(`已应用【${preset.name}】的基准配置，请输入该平台的 API Key`);
     setTimeout(() => setStatusMsg(""), 3500);
+  };
+
+  const editKey = (set: (value: string) => void, key: string, value: string) => {
+    set(value);
+    if (value.trim()) setClearKeys(current => current.filter(item => item !== key));
   };
 
   const handleSave = async () => {
@@ -291,7 +296,7 @@ export default function AIConfig() {
                 <input
                   type={showKeys ? "text" : "password"}
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => editKey(setApiKey, "apiKey", e.target.value)}
                   placeholder={hasApiKey ? `${maskedKey}（留空保持不变）` : "请输入全局 API Key"}
                   className="w-full px-3.5 py-2 rounded-xl border border-gray-200 focus:outline-none focus:border-primary text-xs"
                 />
@@ -331,9 +336,8 @@ export default function AIConfig() {
                 <select aria-label={`${role} 思考模式`} value={runtimePolicy[role].thinking} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [role]: { ...value[role], thinking: event.target.value } }))} className="w-full border rounded p-2">
                   <option value="default">提供商默认</option>
                   {role !== "asr" && (() => {
-                    const url = role === "vision" ? visionBaseUrl || baseUrl : chatBaseUrl || baseUrl;
-                    const models = role === "vision" ? [visionModel] : role === "planner" ? [nutritionModel] : [supervisorModel, recipeModel, operationsModel];
-                    const supported = /^https:\/\/api\.siliconflow\.(cn|com)(\/|$)/.test(url) && models.every((name) => ["Pro/deepseek-ai/DeepSeek-V4", "deepseek-ai/DeepSeek-V4-Flash", "Pro/zai-org/GLM-5.2"].includes(name));
+                    const roles = role === "main" ? ["对话", "主助手", "菜谱", "运营"] : role === "planner" ? ["规划"] : ["图片"];
+                    const supported = roles.every(name => effectiveModels.some(entry => entry.role === name && /^https:\/\/api\.siliconflow\.(cn|com)(\/|$)/.test(entry.baseUrl) && ["Pro/deepseek-ai/DeepSeek-V4", "deepseek-ai/DeepSeek-V4-Flash", "Pro/zai-org/GLM-5.2"].includes(entry.model)));
                     return supported ? <><option value="off">关闭</option><option value="high">高强度</option><option value="max">最大强度</option></> : null;
                   })()}
                 </select>
@@ -427,7 +431,7 @@ export default function AIConfig() {
                     <input
                       type={showKeys ? "text" : "password"}
                       value={chatApiKey}
-                      onChange={(e) => setChatApiKey(e.target.value)}
+                      onChange={(e) => editKey(setChatApiKey, "chatApiKey", e.target.value)}
                       placeholder={hasChatApiKey ? `专有 Key: ${chatMaskedKey}` : "专有 API Key (留空保持不变)"}
                       className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white"
                     />
@@ -472,7 +476,7 @@ export default function AIConfig() {
                     <input
                       type={showKeys ? "text" : "password"}
                       value={visionApiKey}
-                      onChange={(e) => setVisionApiKey(e.target.value)}
+                      onChange={(e) => editKey(setVisionApiKey, "visionApiKey", e.target.value)}
                       placeholder={hasVisionApiKey ? `专有 Key: ${visionMaskedKey}` : "专有 API Key (留空保持不变)"}
                       className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white"
                     />
@@ -517,7 +521,7 @@ export default function AIConfig() {
                     <input
                       type={showKeys ? "text" : "password"}
                       value={asrApiKey}
-                      onChange={(e) => setAsrApiKey(e.target.value)}
+                      onChange={(e) => editKey(setAsrApiKey, "asrApiKey", e.target.value)}
                       placeholder={hasAsrApiKey ? `专有 Key: ${asrMaskedKey}` : "专有 API Key (留空保持不变)"}
                       className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white"
                     />
@@ -585,7 +589,7 @@ export default function AIConfig() {
             <legend>清除已存密钥覆盖（保存后生效）</legend>
             <p>空输入保持不变。清除数据库覆盖后，仍按旧配置规则回退到全局或环境凭据。</p>
             {([['apiKey', '全局'], ['chatApiKey', '对话'], ['visionApiKey', '识图'], ['asrApiKey', '转写']] as const).map(([key, label]) =>
-              <label key={key}><input type="checkbox" disabled={!storedKeys[key]} checked={clearKeys.includes(key)} onChange={event => setClearKeys(current => event.target.checked ? [...current, key] : current.filter(item => item !== key))} />清除{label}密钥覆盖</label>)}
+              <label key={key}><input type="checkbox" disabled={!storedKeys[key] || !!({ apiKey, chatApiKey, visionApiKey, asrApiKey } as Record<string, string>)[key].trim()} checked={clearKeys.includes(key)} onChange={event => setClearKeys(current => event.target.checked ? [...current, key] : current.filter(item => item !== key))} />清除{label}密钥覆盖</label>)}
           </fieldset>
           <button
             type="button"

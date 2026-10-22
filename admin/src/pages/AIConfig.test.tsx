@@ -45,3 +45,27 @@ it('offers explicit confirmed key clearing without displaying environment secret
   confirm.mockReturnValue(true); await act(async () => saveButton().click());
   expect(put.mock.calls[0][1]).toEqual({ chatApiKey: '' }); confirm.mockRestore();
 });
+
+it('uses effective bindings for thinking options without copying them into editable fields', async () => {
+  const effectiveModels = ['对话', '主助手', '菜谱', '运营', '规划', '图片'].map(role => ({ role, baseUrl: 'https://api.siliconflow.cn/v1', model: 'Pro/deepseek-ai/DeepSeek-V4', source: '有效业务服务配置' }));
+  get.mockResolvedValue({ data: { ...data, editable: Object.fromEntries(legacyTextFields.map(k => [k, ''])), effectiveModels } });
+  put.mockResolvedValue({ data: {} }); await mount();
+  for (const role of ['main', 'planner', 'vision']) expect([...host.querySelector<HTMLSelectElement>(`select[aria-label="${role} 思考模式"]`)!.options].map(o => o.value)).toEqual(['default', 'off', 'high', 'max']);
+  expect([...host.querySelectorAll('input')].some(i => i.value === effectiveModels[0].model)).toBe(false);
+  await changeBudget(); await act(async () => saveButton().click());
+  expect(put.mock.calls[0][1]).toEqual({ runtimePolicy: { ...policy, maxToolCalls: 7 } });
+});
+it('requires every effective main binding to support thinking options', async () => {
+  get.mockResolvedValue({ data: { ...data, effectiveModels: ['对话', '主助手', '菜谱', '运营'].map(role => ({ role, baseUrl: role === '运营' ? 'https://example.test/v1' : 'https://api.siliconflow.cn/v1', model: 'Pro/deepseek-ai/DeepSeek-V4', source: '有效业务服务配置' })) } });
+  await mount(); expect(host.querySelector<HTMLSelectElement>('select[aria-label="main 思考模式"]')!.options).toHaveLength(1);
+});
+it('replacement cancels clearing and cannot be silently discarded', async () => {
+  put.mockResolvedValue({ data: {} }); await mount();
+  const checkbox = [...host.querySelectorAll('label')].find(l => l.textContent === '清除全局密钥覆盖')!.querySelector('input')!;
+  await act(async () => checkbox.click()); expect(checkbox.checked).toBe(true);
+  const input = host.querySelector<HTMLInputElement>('input[type=password]')!;
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'demo-rotation'); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  expect(checkbox.checked).toBe(false); expect(checkbox.disabled).toBe(true);
+  await act(async () => saveButton().click()); expect(put.mock.calls[0][1]).toEqual({ apiKey: 'demo-rotation' });
+  expect(legacyConfigPatch({}, {}, { apiKey: 'demo-rotation' }, ['apiKey'])).toEqual({ apiKey: 'demo-rotation' });
+});

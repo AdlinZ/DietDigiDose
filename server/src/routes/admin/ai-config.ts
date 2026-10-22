@@ -67,6 +67,9 @@ export function createAdminAIConfigRouter() {
         asrModel: config.asrModel,
         runtimePolicy: await aiRuntimeService().runtimePolicy(),
         effectiveModels: [
+          { role: "对话", model: config.chat.model, source: "有效业务服务配置", baseUrl: config.chat.baseUrl },
+          { role: "菜谱", model: recipe.model, source: "有效业务服务配置", baseUrl: recipe.baseUrl },
+          { role: "运营", model: operations.model, source: "有效业务服务配置", baseUrl: operations.baseUrl },
           { role: "主助手", model: supervisor.model, source: "有效业务服务配置", baseUrl: supervisor.baseUrl },
           { role: "规划", model: nutrition.model, source: "有效业务服务配置", baseUrl: nutrition.baseUrl },
           { role: "图片", model: config.vision.model, source: settings.AI_RESOURCE_CONFIG_V1 ? "有效业务服务配置" : settings.AI_VISION_MODEL ? "图片设置" : "环境变量或内置默认", baseUrl: config.vision.baseUrl },

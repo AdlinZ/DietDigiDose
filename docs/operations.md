@@ -1,8 +1,8 @@
 # Staging 与生产运维手册
 
-> 更新于 2026-09-01。staging/production 运行时目标是 PostgreSQL 16 + Drizzle；SQLite 仅保留本地兼容和最终迁移/回滚窗口。完成发布阻断项之前，本手册是部署目标和演练步骤，不代表仓库已经具备公开生产能力。
+> 本手册维护部署目标和操作步骤，具体环境状态与有日期的执行证据见[状态导航](status.md)。staging/production 运行时目标是 PostgreSQL 16 + Drizzle；SQLite 仅保留本地兼容和最终迁移/回滚窗口。完成发布阻断项之前，本手册是部署目标和演练步骤，不代表仓库已经具备公开生产能力。
 
-## 当前部署边界
+## 部署要求
 
 - API 与 worker 独立运行并共享 PostgreSQL；worker lease 和业务幂等允许安全重启，扩容仍须先测量连接池和锁竞争。
 - 显式设置 `DATABASE_DRIVER=postgresql` 与服务端 `DATABASE_URL`，PostgreSQL 数据目录必须使用持久卷。数据库、备份和上传媒体都视为用户数据。
@@ -36,12 +36,12 @@
 
 每个候选版本都要同时验证“空 PostgreSQL 初始化”和“旧库迁移/升级”，不能只在开发者现有数据库上启动成功：
 
-1. 用 migration 账号对空目标执行 `node dist/apply-postgres-schema.js`，确认 92 个业务表与 4 个 LangGraph 表均由 Drizzle migration 创建。
+1. 用 migration 账号对空目标执行 `node dist/apply-postgres-schema.js`，按该提交的 [baseline manifest](../server/src/storage/database/postgres/baseline-manifest.json)、[Drizzle migrations](../server/drizzle/) 与运行时 schema 校验核对业务表和 PostgreSQL 扩展表；不要沿用旧文档的固定表数。
 2. 用无 DDL 权限的应用账号启动 API/worker，验证 health 中 `databaseDriver=postgresql`、注册、登录、库存和饮食记录。
 3. 提交一条自定义食物，使用管理员完成审核，再打开管理统计。
 4. 对脱敏上一候选 SQLite 快照执行 `docs/postgresql-migration.md` 的只读 export、schema、重复 import 和全量 validate。
 5. 对迁移后的目标重复核心读取、写入、并发幂等与管理统计，并验证 checkpoint 恢复。
-6. 保留 migration 日志、提交 SHA、Drizzle journal、96 表清单和执行结果；任何差异都阻断候选发布。
+6. 保留 migration 日志、提交 SHA、Drizzle journal、该候选实际表清单和执行结果；任何差异都阻断候选发布。
 
 CI 会在干净 PostgreSQL 16 上完成全量 schema/import/validate、所有仓储行为、API runtime health、最小权限和回滚检查；候选发布仍需按上述步骤在实际 staging 完成。
 
@@ -60,7 +60,7 @@ sha256sum /secure-backups/dietdigidose/staging.dump
 
 每次备份记录时间、版本、文件大小、校验值和保存位置。只有实际恢复并通过验证的备份才算可用。
 
-同时记录源 PostgreSQL 版本、Drizzle migration、96 表数量、关键表行数和 archive 清单：
+同时记录源 PostgreSQL 版本、Drizzle migration、实际表数量与表清单、关键表行数和 archive 清单：
 
 ```bash
 pg_restore --list /secure-backups/dietdigidose/staging.dump > /secure-backups/dietdigidose/staging.list
@@ -88,10 +88,12 @@ pg_restore --dbname="$ISOLATED_RESTORE_URL" --single-transaction --exit-on-error
 
 旧版 SQLite 最终切换前，仓库演练入口仍用于验证 SQLite 在线备份、上一候选 migration、恢复安全副本与 export 来源完整性；PostgreSQL 上线后的日常备份必须使用上面的 `pg_dump`/`pg_restore` 演练。
 
+先将 `PREVIOUS_MIGRATION_VERSION` 设为上一候选记录中的实际 SQLite migration 版本；脚本默认值是历史测试基线，不能代替候选升级起点。
+
 ```bash
 pnpm --dir server db:rehearse -- \
   --owner=release-owner \
-  --previous-version=58 \
+  --previous-version="$PREVIOUS_MIGRATION_VERSION" \
   --output=/secure-reports/database-rehearsal.json
 ```
 

@@ -15,6 +15,9 @@ import MealPlansScreen from "./index";
 const item = { id: "item", planId: "plan", title: "旧菜", version: 2, plannedDate: "2026-10-21", mealType: "午餐", status: "planned", recipeId: 1, recipeAvailable: true, nutrition: {}, ingredients: [], steps: [] };
 const preview = { fingerprint: "proof", planVersion: 3, itemVersion: 2, canApply: true, scope: { kind: "current_plan_window", startDate: "2026-10-21", endDate: "2026-10-23" }, checks: [] };
 function press(tree: renderer.ReactTestRenderer, label: string) { tree.root.findAllByType(TouchableOpacity).find(node => node.findAllByType(Text).some(text => text.props.children === label))!.props.onPress(); }
+// Keep the selected day aligned with the fixture, regardless of the real clock or timezone.
+beforeEach(() => { jest.useFakeTimers({ now: new Date(2026, 9, 21, 12) }); });
+afterEach(() => { jest.useRealTimers(); });
 beforeEach(() => { jest.clearAllMocks(); mockUserId = 1; mockList.mockResolvedValue([{ id: "plan", title: "餐单", startDate: "2026-10-21", endDate: "2026-10-23", status: "active", constraints: {}, items: [item] }]); mockPreview.mockResolvedValue(preview); mockUpdate.mockResolvedValue({ ...item, version: 3, title: "新菜" }); });
 test("replacement selection previews, confirmation submits identical patch and fingerprint", async () => {
   let tree!: renderer.ReactTestRenderer;

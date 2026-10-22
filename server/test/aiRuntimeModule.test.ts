@@ -285,9 +285,11 @@ test("legacy admin GET reports independently bound role models from the same set
   const { createAdminAIConfigRouter } = await import("../src/routes/admin/ai-config.js");
   configureAIRuntimeService(service);
   const router = createAdminAIConfigRouter();
-  const layer = router.stack.find(layer => layer.route?.path === "/ai-config" && layer.route.methods.get);
+  const layer = router.stack.find(layer => layer.route?.path === "/ai-config");
   let response: Record<string, any> = {};
-  await layer!.route.stack[0].handle({}, { json: (body: Record<string, any>) => { response = body; } });
+  assert.ok(layer?.route);
+  await layer.route.stack[0].handle({} as import("express").Request,
+    { json: (body: Record<string, any>) => { response = body; } } as import("express").Response, () => {});
   assert.equal(response.agents.supervisorModel, "independent-model");
   assert.equal(response.agents.nutritionModel, "independent-model");
   assert.equal(response.agents.recipeModel, "legacy-model");

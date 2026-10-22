@@ -93,7 +93,7 @@ async function clearScheduledNotifications(storageKey: string, additionalIds: st
 
 async function clearRoutineSchedules(userId: number) {
   // Native ownership also recovers IDs lost after a storage failure or account-storage purge.
-  const scheduled = Platform.OS === "web" ? [] : await Notifications.getAllScheduledNotificationsAsync();
+  const scheduled = Platform.OS === "web" ? [] : await Notifications.getAllScheduledNotificationsAsync().catch(() => []);
   const ids = scheduled.filter(item => item.content.data?.type === "routine_reminder"
     && String(item.content.data?.userId) === String(userId)).map(item => item.identifier);
   await clearScheduledNotifications(notificationStorageKey(NOTIFICATION_SCHEDULE_IDS_KEY, userId)!, ids);
@@ -105,7 +105,8 @@ function notificationStorageKey(baseKey: string, userId?: number | null) {
 
 /** Removes schedules created by older builds because their owner cannot be identified safely. */
 export async function cancelLegacyUnscopedLocalNotifications() {
-  await Promise.all([
+  // Authentication must survive best-effort legacy cleanup; failed IDs remain stored for retry.
+  await Promise.allSettled([
     clearScheduledNotifications(NOTIFICATION_SCHEDULE_IDS_KEY),
     clearScheduledNotifications(EXPIRING_STOCK_ALERT_IDS_KEY),
   ]);
@@ -281,12 +282,16 @@ export async function scheduleExpiringStockAlerts(
 
 export async function cancelAllLocalNotificationsForUser(userId?: number | null) {
   if (!Number.isInteger(userId) || Number(userId) <= 0) return;
-  await Promise.all([
+  const results = await Promise.allSettled([
     withRoutineSchedules(userId!, () => clearRoutineSchedules(userId!)),
     clearScheduledNotifications(notificationStorageKey(EXPIRING_STOCK_ALERT_IDS_KEY, userId)!),
     cancelCookingQueueRemindersForUser(userId),
-    Platform.OS === "web" ? Promise.resolve() : Notifications.getAllScheduledNotificationsAsync().then(items =>
-      Promise.all(items.filter(item => item.content.data?.type === "cooking_timer" && item.content.data?.userId === userId)
-        .map(item => Notifications.cancelScheduledNotificationAsync(item.identifier)))),
+    Platform.OS === "web" ? Promise.resolve() : Notifications.getAllScheduledNotificationsAsync().catch(() => []).then(async items => {
+      const cancellations = await Promise.allSettled(items.filter(item => item.content.data?.type === "cooking_timer" && item.content.data?.userId === userId)
+        .map(item => Notifications.cancelScheduledNotificationAsync(item.identifier)));
+      if (cancellations.some(result => result.status === "rejected")) throw new Error("部分本地提醒取消失败，请重试");
+    }),
   ]);
+  // Wait for every stored-ID cancellation before callers purge account storage.
+  if (results.some(result => result.status === "rejected")) throw new Error("部分本地提醒取消失败，请重试");
 }

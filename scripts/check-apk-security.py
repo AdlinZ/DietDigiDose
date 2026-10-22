@@ -354,9 +354,21 @@ def inspect_apk(args, runner=run_tool):
     before = digest(apk)
     entries = check_archive(apk)
     signature = runner([args.apksigner, 'verify', '--verbose', '--print-certs', str(apk)])
-    signers = re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$', signature, re.MULTILINE)
-    require([value.lower() for value in signers] == [args.certificate_sha256.lower()],
+    require(signature.splitlines().count('Verifies') == 1
+            and re.findall(r'^Number of signers: (.*)$', signature, re.MULTILINE) == ['1'],
+            'APK signer verification/count evidence is missing or ambiguous')
+    # Support the observed current SDK V2 label without accepting unknown,
+    # mixed-scheme or duplicate certificate evidence, even for the same key.
+    certificate_lines = [line for line in signature.splitlines() if ' certificate SHA-256 digest:' in line]
+    signers = [re.fullmatch(r'(?:Signer #1|V2 Signer:) certificate SHA-256 digest: ([0-9a-fA-F]{64})', line)
+               for line in certificate_lines]
+    require(len(signers) == 1 and signers[0] is not None
+            and signers[0][1].lower() == args.certificate_sha256.lower(),
             'APK signer does not match the trusted release certificate')
+    if certificate_lines[0].startswith('V2 Signer:'):
+        require(re.findall(r'^Verified using v2 scheme \(APK Signature Scheme v2\): (.*)$',
+                           signature, re.MULTILINE) == ['true'],
+                'APK signer V2 verification evidence is missing or ambiguous')
     manifest_text = runner([args.apkanalyzer, 'manifest', 'print', str(apk)])
     manifest = xml(manifest_text, 'AndroidManifest.xml')
     require(manifest.tag == 'manifest', 'Invalid APK manifest root')

@@ -125,3 +125,42 @@ jobs:
       - run: pnpm -w build:admin
       - run: pnpm -w quality:build-budgets
       - run: pnpm -w audit:prod
+
+  ai-resource-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.18.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.2
+          cache: pnpm
+      - run: pnpm -w validate:toolchain
+      - run: pnpm install --frozen-lockfile
+      - name: Configuration, credentials and business-clock regressions
+        working-directory: server
+        run: node --import tsx --test test/aiResourcesHttp.test.ts test/aiRuntimeModule.test.ts test/aiProviderCredentials.test.ts test/deepseekTools.test.ts test/contextClock.test.ts test/agentProposalClock.test.ts
+      - name: Admin form and notification regressions
+        run: |
+          pnpm --dir admin test
+          pnpm --dir client exec jest utils/notifications.test.ts contexts/AuthContext.test.tsx --runInBand
+      - name: Install isolated PostgreSQL server tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-16
+      - name: Real PostgreSQL resource CAS, credentials, rollback and restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/16/bin:$PATH"
+          export AI_RESOURCE_TEST_PG_SOCKET="$(mktemp -d /tmp/ddd-review-pg.XXXXXX)"
+          trap 'pg_ctl -D "$AI_RESOURCE_TEST_PG_SOCKET/data" -m immediate stop || true; rm -rf "$AI_RESOURCE_TEST_PG_SOCKET"' EXIT
+          initdb -D "$AI_RESOURCE_TEST_PG_SOCKET/data" -A trust --no-locale
+          pg_ctl -D "$AI_RESOURCE_TEST_PG_SOCKET/data" -l "$AI_RESOURCE_TEST_PG_SOCKET/postgres.log" -o "-k $AI_RESOURCE_TEST_PG_SOCKET -p 55439 -c listen_addresses=''" -w start
+          createdb -h "$AI_RESOURCE_TEST_PG_SOCKET" -p 55439 ddd_ai_resources_review
+          (cd server && node --import tsx test/aiResourcesPostgres.integration.ts)
+          pg_ctl -D "$AI_RESOURCE_TEST_PG_SOCKET/data" -m fast -w restart
+          (cd server && node --import tsx test/aiResourcesPostgres.integration.ts --verify-restart)

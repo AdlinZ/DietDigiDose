@@ -1,5 +1,6 @@
 import { sanitizeAIErrorMessage } from "../../services/aiErrors.js";
-import { runtimePolicySchema } from "./policy.js";
+import { RESOURCE_SETTING_KEY, legacyResourceDocument, resourceDocumentSchema, resourceUpdateSchema, applyResourceUpdate, publicResourceDocument, resolveResourceService, serviceIds, serviceCatalog, validateResourceDocument, type ServiceId, resolveToolService, toolServiceIds, toolServiceCatalog, type ToolServiceId } from "./resources.js";
+import { thinkingParameters, runtimePolicySchema } from "./policy.js";
 import type { AIRuntimeRepository } from "./repository.js";
 import type { AIConfig, AIUsageInput } from "./types.js";
 
@@ -9,10 +10,13 @@ export const AI_SETTING_KEYS = [
   "AI_VISION_API_KEY", "AI_VISION_BASE_URL", "AI_VISION_MODEL",
   "AI_ASR_API_KEY", "AI_ASR_BASE_URL", "AI_ASR_MODEL",
   "AI_SUPERVISOR_MODEL", "AI_NUTRITION_MODEL", "AI_RECIPE_MODEL", "AI_OPERATIONS_MODEL",
-  "AI_SYSTEM_PROMPT", "AI_RUNTIME_POLICY",
+  "AI_SYSTEM_PROMPT", "AI_RUNTIME_POLICY", RESOURCE_SETTING_KEY,
 ] as const;
 
 export type AIAgentRole = "SUPERVISOR" | "NUTRITION" | "RECIPE" | "OPERATIONS";
+
+export class AIResourceConflictError extends Error { constructor() { super("配置版本已变更，请重新读取"); } }
+export class AIResourceValidationError extends Error { constructor() { super("资源、能力绑定、角色模型或策略配置无效"); } }
 
 export class AIRuntimeService {
   private readonly repository: AIRuntimeRepository;
@@ -29,9 +33,27 @@ export class AIRuntimeService {
     return entries.length ? this.repository.saveSettings(entries) : Promise.resolve();
   }
 
+  async saveValidatedSettings(entries: Array<{ key: string; value: string }>, values: Record<string, string>) {
+    const previous = values[RESOURCE_SETTING_KEY] ?? null;
+    if (!await this.repository.compareAndSaveSetting(RESOURCE_SETTING_KEY, previous, previous, this.validationSnapshot(values), entries)) throw new AIResourceConflictError();
+  }
+
+  private validationSnapshot(values: Record<string, string>) {
+    return Object.fromEntries(AI_SETTING_KEYS.map(key => [key, values[key] ?? null]));
+  }
+
+  async legacyChatConfig() { return this.resolveConfig(await this.settings()).chat; }
+
   async config(settings?: Record<string, string>): Promise<AIConfig> {
     const values = settings || await this.settings();
-    return this.resolveConfig(values);
+    const legacy = this.resolveConfig(values);
+    const document = this.resourceDocument(values);
+    const resolve = (service: ServiceId) => {
+      const { apiKey, baseUrl, model } = resolveResourceService(document, service, legacy, values);
+      return { apiKey, baseUrl, model };
+    };
+    const chat = resolve("chat"), vision = resolve("vision"), asr = resolve("asr");
+    return { ...legacy, visionModel: vision.model, asrModel: asr.model, chat, vision, asr };
   }
 
   async runtimePolicy() {
@@ -39,10 +61,66 @@ export class AIRuntimeService {
     return runtimePolicySchema.parse(values.AI_RUNTIME_POLICY ? JSON.parse(values.AI_RUNTIME_POLICY) : {});
   }
 
-  async agentConfig(agent: AIAgentRole) {
+  async agentConfig(agent: AIAgentRole, settings?: Record<string, string>) {
+    const values = settings || await this.settings();
+    const resolved = resolveResourceService(this.resourceDocument(values), agent.toLowerCase() as ServiceId, this.resolveConfig(values), values);
+    return { apiKey: resolved.apiKey, baseUrl: resolved.baseUrl, model: resolved.model };
+  }
+
+  private resourceDocument(values: Record<string, string>) {
+    const document = values[RESOURCE_SETTING_KEY]
+      ? resourceDocumentSchema.parse(JSON.parse(values[RESOURCE_SETTING_KEY])) : legacyResourceDocument();
+    validateResourceDocument(document);
+    return document;
+  }
+
+  /** Idempotent, atomic metadata migration; secrets and legacy/env fallback remain in their existing storage. */
+  async migrateResources() {
+    await this.repository.compareAndSaveSetting(RESOURCE_SETTING_KEY, null, JSON.stringify(legacyResourceDocument()));
+    return this.resourceConfiguration();
+  }
+
+  async toolConfig(service: ToolServiceId) {
+    return resolveToolService(this.resourceDocument(await this.settings()), service);
+  }
+
+  async resourceConfiguration() {
     const values = await this.settings();
-    const config = this.resolveConfig(values);
-    return { ...config.chat, model: values[`AI_${agent}_MODEL`]?.trim() || config.chat.model };
+    const document = this.resourceDocument(values);
+    const legacy = this.resolveConfig(values);
+    const effective = Object.fromEntries(serviceIds.map(service => {
+      const { apiKey, ...resolved } = resolveResourceService(document, service, legacy, values);
+      return [service, { ...resolved, hasApiKey: !!apiKey, maskedKey: apiKey ? "********" : "" }];
+    }));
+    for (const service of toolServiceIds) {
+      const { apiKey, ...resolved } = resolveToolService(document, service);
+      Object.assign(effective, { [service]: { ...resolved, hasApiKey: !!apiKey, maskedKey: apiKey ? "********" : "" } });
+    }
+    return { ...publicResourceDocument(document), migrated: !!values[RESOURCE_SETTING_KEY], catalog: [...serviceCatalog, ...toolServiceCatalog], effective };
+  }
+
+  async saveResourceConfiguration(input: unknown) {
+    let update: ReturnType<typeof resourceUpdateSchema.parse>;
+    try { update = resourceUpdateSchema.parse(input); }
+    catch { throw new AIResourceValidationError(); }
+    const values = await this.settings();
+    const previous = this.resourceDocument(values);
+    if (update.revision !== previous.revision) throw new AIResourceConflictError();
+    let next: ReturnType<typeof applyResourceUpdate>;
+    try {
+      next = applyResourceUpdate(update, previous);
+      const policy = runtimePolicySchema.parse(values.AI_RUNTIME_POLICY ? JSON.parse(values.AI_RUNTIME_POLICY) : {});
+      for (const service of serviceIds) {
+        const effective = resolveResourceService(next, service, this.resolveConfig(values), values);
+        const modelPolicy = service === "vision" ? policy.vision : service === "asr" ? policy.asr : service === "nutrition" ? policy.planner : policy.main;
+        if (service === "asr" && modelPolicy.thinking !== "default") throw new Error("语音转写不支持思考策略");
+        thinkingParameters(effective.baseUrl, effective.model, modelPolicy);
+      }
+    } catch { throw new AIResourceValidationError(); }
+    if (!await this.repository.compareAndSaveSetting(RESOURCE_SETTING_KEY, values[RESOURCE_SETTING_KEY] ?? null, JSON.stringify(next), this.validationSnapshot(values))) {
+      throw new AIResourceConflictError();
+    }
+    return this.resourceConfiguration();
   }
 
   private resolveConfig(values: Record<string, string>): AIConfig {

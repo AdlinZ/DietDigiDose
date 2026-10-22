@@ -16,6 +16,7 @@ const Users = lazy(() => import('./pages/Users'));
 const Recipes = lazy(() => import('./pages/Recipes'));
 const Community = lazy(() => import('./pages/Community'));
 const Ingredients = lazy(() => import('./pages/Ingredients'));
+const AIResources = lazy(() => import('./pages/AIResources'));
 const AIConfig = lazy(() => import('./pages/AIConfig'));
 const AIUsage = lazy(() => import('./pages/AIUsage'));
 const AIConversations = lazy(() => import('./pages/AIConversations'));
@@ -119,6 +120,8 @@ function App() {
         </Route>
         <Route element={<AdminWorkflowLayout workflow="configuration" />}>
           <Route path="ai-config" element={<AIConfig />} />
+          <Route path="ai-providers" element={<AIResources key="providers" page="providers" />} />
+          <Route path="ai-services" element={<AIResources key="services" page="services" />} />
           <Route path="voice-packs" element={<VoicePacks />} />
         </Route>
         <Route element={<AdminWorkflowLayout workflow="diagnostics" />}>

@@ -700,17 +700,17 @@ export const adminAIConfigSchema = z.object({
   runtimePolicy: runtimePolicySchema.optional(),
   apiKey: z.string().trim().max(1000).optional(),
   baseUrl: optionalUrlSchema,
-  model: z.string().trim().min(1).max(200).optional(),
-  visionModel: z.string().trim().min(1).max(200).optional(),
-  asrModel: z.string().trim().min(1).max(200).optional(),
-  supervisorModel: z.string().trim().min(1).max(200).optional(),
-  nutritionModel: z.string().trim().min(1).max(200).optional(),
-  recipeModel: z.string().trim().min(1).max(200).optional(),
-  operationsModel: z.string().trim().min(1).max(200).optional(),
+  model: z.string().trim().max(200).optional(),
+  visionModel: z.string().trim().max(200).optional(),
+  asrModel: z.string().trim().max(200).optional(),
+  supervisorModel: z.string().trim().max(200).optional(),
+  nutritionModel: z.string().trim().max(200).optional(),
+  recipeModel: z.string().trim().max(200).optional(),
+  operationsModel: z.string().trim().max(200).optional(),
 
   chatApiKey: z.string().trim().max(1000).optional(),
   chatBaseUrl: optionalUrlSchema,
-  chatModel: z.string().trim().min(1).max(200).optional(),
+  chatModel: z.string().trim().max(200).optional(),
 
   visionApiKey: z.string().trim().max(1000).optional(),
   visionBaseUrl: optionalUrlSchema,
@@ -718,9 +718,10 @@ export const adminAIConfigSchema = z.object({
   asrApiKey: z.string().trim().max(1000).optional(),
   asrBaseUrl: optionalUrlSchema,
 
-  systemPrompt: z.string().trim().min(20, "人设提示词至少需要 20 个字符").max(12_000, "人设提示词不能超过 12000 个字符").optional(),
+  systemPrompt: z.string().trim().max(12_000, "人设提示词不能超过 12000 个字符").refine(value => !value || value.length >= 20, "人设提示词至少需要 20 个字符，或留空恢复默认").optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "至少提供一个需要更新的字段");
 export const adminAIConfigTestSchema = z.object({
+  service: z.enum(["chat", "vision", "asr"]).optional(),
   apiKey: z.string().trim().max(1000).optional(),
   baseUrl: optionalUrlSchema,
   model: z.string().trim().min(1).max(200).optional(),

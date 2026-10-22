@@ -22,7 +22,9 @@ describe('consolidated admin workflows', () => {
     for (const [path, parent, technical] of [
       ['/admin/kitchenware-mapping-reviews', '/admin/kitchenware', false],
       ['/admin/user-level-rule', '/admin/users', false],
-      ['/admin/voice-packs', '/admin/ai-config', true],
+      ['/admin/voice-packs', '/admin/ai-providers', true],
+      ['/admin/ai-services', '/admin/ai-providers', true],
+      ['/admin/ai-config', '/admin/ai-providers', true],
       ['/admin/agent-runs', '/admin/ai-conversations', true],
     ] as const) {
       expect(adminParentPath(`${path}/`)).toBe(parent);

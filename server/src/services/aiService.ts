@@ -310,9 +310,10 @@ export async function chatCompletion(
   options: ChatCompletionOptions = {}
 ): Promise<ChatCompletionResult> {
   const chatConfig = await getChatConfig();
-  const apiKey = (options.apiKey || chatConfig.apiKey).trim();
-  const baseUrl = (options.baseUrl || chatConfig.baseUrl).replace(/\/$/, "").trim();
-  const model = options.model || chatConfig.model;
+  // An explicit empty credential disables this connection; never borrow another service's key.
+  const apiKey = (options.apiKey ?? chatConfig.apiKey).trim();
+  const baseUrl = (options.baseUrl ?? chatConfig.baseUrl).replace(/\/$/, "").trim();
+  const model = options.model ?? chatConfig.model;
   const policy = (await aiRuntimeService().runtimePolicy())[options.policyRole || "main"];
   const thinking = thinkingParameters(baseUrl, model, policy);
   const startedAt = Date.now();
@@ -543,11 +544,14 @@ export async function chatCompletion(
  * 真实连通性测试 (不使用 getFallbackResponse 降级，严格抛出真实 API 错误)
  */
 export async function testAIConnection(overrideConfig?: {
+  service?: "chat" | "vision" | "asr";
   apiKey?: string;
   baseUrl?: string;
   model?: string;
 }): Promise<{ reply: string; latencyMs: number }> {
-  const currentConfig = await getAIConfig();
+  const config = await getAIConfig();
+  const currentConfig = overrideConfig?.service ? config[overrideConfig.service] : config;
+  if (overrideConfig?.service) overrideConfig = undefined;
   const apiKey = (overrideConfig?.apiKey || currentConfig.apiKey).trim();
   const baseUrl = (overrideConfig?.baseUrl || currentConfig.baseUrl).replace(/\/$/, "").trim();
   const model = (overrideConfig?.model || currentConfig.model).trim();
@@ -605,9 +609,9 @@ export async function analyzeImage(
   options: ChatCompletionOptions = {}
 ): Promise<string> {
   const visionConfig = await getVisionConfig();
-  const model = options.model || visionConfig.model;
-  const apiKey = options.apiKey || visionConfig.apiKey;
-  const baseUrl = options.baseUrl || visionConfig.baseUrl;
+  const model = options.model ?? visionConfig.model;
+  const apiKey = options.apiKey ?? visionConfig.apiKey;
+  const baseUrl = options.baseUrl ?? visionConfig.baseUrl;
 
   const imageUrl = imageBase64OrUrl.startsWith("http") || imageBase64OrUrl.startsWith("data:")
     ? imageBase64OrUrl
@@ -623,7 +627,7 @@ export async function analyzeImage(
     },
   ];
 
-  const res = await chatCompletion(messages, { apiKey, baseUrl, model, ...options, policyRole: "vision" });
+  const res = await chatCompletion(messages, { ...options, apiKey, baseUrl, model, policyRole: "vision" });
   if (res.fallback) {
     throw new Error(res.fallbackReason === "AI_NOT_CONFIGURED" ? "视觉模型尚未配置" : "视觉模型调用失败");
   }

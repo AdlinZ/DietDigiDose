@@ -1,5 +1,7 @@
 # DeepSeek web tools — isolated server adapter
 
+> This document records its original implementation slice. For the subsequent local UI/tool integration, typed HTTP conflicts and safe legacy editing, see [integrated admin verification](ai-resources-admin-ui.md).
+
 ## Scope and protocol
 
 This extends #261 phase-one resources on baseline `15b0102390ea65970ef54629638042219ae1930f`. No admin UI, Agent registration, execution HTTP endpoint, deployment, credentials or paid calls are included. Search is independently testable; real account availability remains **unverified**. Fetch is **disabled**, not implemented as an unsafe remote fetch.

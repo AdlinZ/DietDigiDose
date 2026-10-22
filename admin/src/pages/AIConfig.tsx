@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { legacyConfigPatch } from "../services/legacyAIConfig";
+import { useEffect, useRef, useState } from "react";
 import { Bot, Key, Globe, Cpu, Zap, Save, CheckCircle2, AlertCircle, RefreshCw, Mic, SlidersHorizontal, Image } from "lucide-react";
 import api from "../services/api";
 
@@ -85,6 +86,10 @@ export default function AIConfig() {
   const [isSystemPromptCustomized, setIsSystemPromptCustomized] = useState(false);
 
   // UI 状态
+  const initial = useRef<Record<string, unknown>>({});
+  const saveBusy = useRef(false);
+  const [needsReload, setNeedsReload] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -97,56 +102,26 @@ export default function AIConfig() {
       setLoading(true);
       const { data } = await api.get("/admin/ai-config");
 
+      if (!data.editable) throw new Error('Editable configuration unavailable');
+      const fields = data.editable;
+      const displayedModel = fields.chatModel || fields.model || '';
+      initial.current = { ...fields, model: displayedModel, chatModel: displayedModel, runtimePolicy: data.runtimePolicy };
       setEffectiveModels(data.effectiveModels || []);
-      // 全局默认
-      setApiKey("");
-      setMaskedKey(data.maskedKey || "");
-      setHasApiKey(Boolean(data.hasApiKey));
-      if (data.baseUrl) setBaseUrl(data.baseUrl);
-      if (data.model) setModel(data.model);
-      if (data.visionModel) setVisionModel(data.visionModel);
-      if (data.asrModel) setAsrModel(data.asrModel);
-      if (data.agents) {
-        setSupervisorModel(data.agents.supervisorModel || data.model);
-        if (data.runtimePolicy) setRuntimePolicy(data.runtimePolicy);
-        setNutritionModel(data.agents.nutritionModel || data.model);
-        setRecipeModel(data.agents.recipeModel || data.model);
-        setOperationsModel(data.agents.operationsModel || data.model);
-      }
-
-      // 文本对话服务
-      if (data.chat) {
-        setChatMaskedKey(data.chat.maskedKey || "");
-        setHasChatApiKey(Boolean(data.chat.hasApiKey));
-        setChatBaseUrl(data.chat.isCustomUrl ? data.chat.baseUrl : "");
-        if (data.chat.model) setModel(data.chat.model);
-      }
-
-      // 识图服务
-      if (data.vision) {
-        setVisionMaskedKey(data.vision.maskedKey || "");
-        setHasVisionApiKey(Boolean(data.vision.hasApiKey));
-        setVisionBaseUrl(data.vision.isCustomUrl ? data.vision.baseUrl : "");
-        if (data.vision.model) setVisionModel(data.vision.model);
-      }
-
-      // 语音服务
-      if (data.asr) {
-        setAsrMaskedKey(data.asr.maskedKey || "");
-        setHasAsrApiKey(Boolean(data.asr.hasApiKey));
-        setAsrBaseUrl(data.asr.isCustomUrl ? data.asr.baseUrl : "");
-        if (data.asr.model) setAsrModel(data.asr.model);
-      }
-
-      // 如果有任何一个子服务配置了自定义 Key / URL，则默认展开多接入点面板
-      if (data.chat?.isCustomKey || data.chat?.isCustomUrl || data.vision?.isCustomKey || data.vision?.isCustomUrl || data.asr?.isCustomKey || data.asr?.isCustomUrl) {
-        setEnablePerServiceProviders(true);
-      }
-
-      if (data.systemPrompt) setSystemPrompt(data.systemPrompt);
-      setIsSystemPromptCustomized(Boolean(data.isSystemPromptCustomized));
-    } catch (err) {
-      console.error("Fetch AI Config error", err);
+      setApiKey(''); setChatApiKey(''); setVisionApiKey(''); setAsrApiKey('');
+      setBaseUrl(fields.baseUrl); setModel(displayedModel); setVisionModel(fields.visionModel); setAsrModel(fields.asrModel);
+      setChatBaseUrl(fields.chatBaseUrl); setVisionBaseUrl(fields.visionBaseUrl); setAsrBaseUrl(fields.asrBaseUrl);
+      setSupervisorModel(fields.supervisorModel); setNutritionModel(fields.nutritionModel);
+      setRecipeModel(fields.recipeModel); setOperationsModel(fields.operationsModel);
+      setSystemPrompt(fields.systemPrompt); setIsSystemPromptCustomized(!!fields.systemPrompt);
+      setRuntimePolicy(data.runtimePolicy);
+      const keys = data.credentialState;
+      setHasApiKey(!!keys.global); setHasChatApiKey(!!keys.chat); setHasVisionApiKey(!!keys.vision); setHasAsrApiKey(!!keys.asr);
+      setMaskedKey(keys.global ? '********' : ''); setChatMaskedKey(keys.chat ? '********' : '');
+      setVisionMaskedKey(keys.vision ? '********' : ''); setAsrMaskedKey(keys.asr ? '********' : '');
+      setEnablePerServiceProviders(!!(keys.chat || keys.vision || keys.asr || fields.chatBaseUrl || fields.visionBaseUrl || fields.asrBaseUrl));
+      setLoadError(false); setNeedsReload(false);
+    } catch {
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -170,62 +145,23 @@ export default function AIConfig() {
   };
 
   const handleSave = async () => {
+    if (saveBusy.current || loadError || needsReload) return;
+    const patch = legacyConfigPatch({ baseUrl, model, chatModel: model, visionModel, asrModel,
+      supervisorModel, nutritionModel, recipeModel, operationsModel, chatBaseUrl, visionBaseUrl, asrBaseUrl,
+      systemPrompt, runtimePolicy }, initial.current, { apiKey, chatApiKey, visionApiKey, asrApiKey });
+    if (!Object.keys(patch).length) { setStatusMsg('没有需要保存的修改。'); return; }
+    saveBusy.current = true;
     try {
       setSaving(true);
-      await api.put("/admin/ai-config", {
-        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-        baseUrl,
-        model,
-        visionModel,
-        asrModel,
-        supervisorModel,
-        runtimePolicy,
-        nutritionModel,
-        recipeModel,
-        operationsModel,
-
-        // 独立接入点
-        chatApiKey: enablePerServiceProviders ? chatApiKey.trim() : "",
-        chatBaseUrl: enablePerServiceProviders ? chatBaseUrl.trim() : "",
-        chatModel: model,
-
-        visionApiKey: enablePerServiceProviders ? visionApiKey.trim() : "",
-        visionBaseUrl: enablePerServiceProviders ? visionBaseUrl.trim() : "",
-
-        asrApiKey: enablePerServiceProviders ? asrApiKey.trim() : "",
-        asrBaseUrl: enablePerServiceProviders ? asrBaseUrl.trim() : "",
-
-        systemPrompt,
-      });
-
-      if (apiKey.trim()) {
-        setApiKey("");
-        setHasApiKey(true);
-        setMaskedKey(`${apiKey.slice(0, 4)}****${apiKey.slice(-4)}`);
-      }
-      if (chatApiKey.trim()) {
-        setChatApiKey("");
-        setHasChatApiKey(true);
-        setChatMaskedKey(`${chatApiKey.slice(0, 4)}****${chatApiKey.slice(-4)}`);
-      }
-      if (visionApiKey.trim()) {
-        setVisionApiKey("");
-        setHasVisionApiKey(true);
-        setVisionMaskedKey(`${visionApiKey.slice(0, 4)}****${visionApiKey.slice(-4)}`);
-      }
-      if (asrApiKey.trim()) {
-        setAsrApiKey("");
-        setHasAsrApiKey(true);
-        setAsrMaskedKey(`${asrApiKey.slice(0, 4)}****${asrApiKey.slice(-4)}`);
-      }
-
+      await api.put('/admin/ai-config', patch);
       await fetchConfig();
       setStatusMsg("模型与调用策略已保存。");
       setIsSystemPromptCustomized(true);
       setTimeout(() => setStatusMsg(""), 4000);
-    } catch (err: any) {
-      alert("保存失败: " + (err.response?.data?.error || err.message));
+    } catch {
+      setNeedsReload(true);
     } finally {
+      saveBusy.current = false;
       setSaving(false);
     }
   };
@@ -281,10 +217,13 @@ export default function AIConfig() {
     }
   };
 
+  if (loadError) return <div role="alert">无法读取原始可编辑配置，已停止编辑。<button onClick={() => void fetchConfig()}>重新读取</button></div>;
   if (loading) return <div className="text-center py-20 text-text-muted">加载 AI 服务配置中...</div>;
 
   return (
     <div className="space-y-6">
+      {needsReload && <div role="alert">保存未确认，请重新读取核对；不会自动重试。<button onClick={() => void fetchConfig()}>重新读取</button></div>}
+      <fieldset disabled={saving || needsReload} className="contents">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-text-main flex items-center gap-2">
@@ -443,7 +382,7 @@ export default function AIConfig() {
               }`}
             >
               <SlidersHorizontal size={14} />
-              {enablePerServiceProviders ? "多接入点模式已开启 (点击折叠)" : "开启按能力分配独立接入商 (如 DeepSeek+OpenAI)"}
+              {enablePerServiceProviders ? "独立接入点已展开 (点击折叠)" : "展开独立接入点（折叠不清除设置）"}
             </button>
           </div>
 
@@ -470,7 +409,7 @@ export default function AIConfig() {
 
               {enablePerServiceProviders && (
                 <div className="pt-2 border-t border-gray-200/60 space-y-2">
-                  <span className="text-[10px] text-primary font-bold block">独立接入配置 (留空则继承全局)</span>
+                  <span className="text-[10px] text-primary font-bold block">地址留空继承全局；密钥留空保留已有值</span>
                   <div>
                     <input
                       type="text"
@@ -485,7 +424,7 @@ export default function AIConfig() {
                       type={showKeys ? "text" : "password"}
                       value={chatApiKey}
                       onChange={(e) => setChatApiKey(e.target.value)}
-                      placeholder={hasChatApiKey ? `专有 Key: ${chatMaskedKey}` : "专有 API Key (留空继承全局)"}
+                      placeholder={hasChatApiKey ? `专有 Key: ${chatMaskedKey}` : "专有 API Key (留空保持不变)"}
                       className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white"
                     />
                   </div>
@@ -515,7 +454,7 @@ export default function AIConfig() {
 
               {enablePerServiceProviders && (
                 <div className="pt-2 border-t border-gray-200/60 space-y-2">
-                  <span className="text-[10px] text-secondary font-bold block">独立接入配置 (留空则继承全局)</span>
+                  <span className="text-[10px] text-secondary font-bold block">地址留空继承全局；密钥留空保留已有值</span>
                   <div>
                     <input
                       type="text"
@@ -530,7 +469,7 @@ export default function AIConfig() {
                       type={showKeys ? "text" : "password"}
                       value={visionApiKey}
                       onChange={(e) => setVisionApiKey(e.target.value)}
-                      placeholder={hasVisionApiKey ? `专有 Key: ${visionMaskedKey}` : "专有 API Key (留空继承全局)"}
+                      placeholder={hasVisionApiKey ? `专有 Key: ${visionMaskedKey}` : "专有 API Key (留空保持不变)"}
                       className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white"
                     />
                   </div>
@@ -560,7 +499,7 @@ export default function AIConfig() {
 
               {enablePerServiceProviders && (
                 <div className="pt-2 border-t border-gray-200/60 space-y-2">
-                  <span className="text-[10px] text-orange-500 font-bold block">独立接入配置 (留空则继承全局)</span>
+                  <span className="text-[10px] text-orange-500 font-bold block">地址留空继承全局；密钥留空保留已有值</span>
                   <div>
                     <input
                       type="text"
@@ -575,7 +514,7 @@ export default function AIConfig() {
                       type={showKeys ? "text" : "password"}
                       value={asrApiKey}
                       onChange={(e) => setAsrApiKey(e.target.value)}
-                      placeholder={hasAsrApiKey ? `专有 Key: ${asrMaskedKey}` : "专有 API Key (留空继承全局)"}
+                      placeholder={hasAsrApiKey ? `专有 Key: ${asrMaskedKey}` : "专有 API Key (留空保持不变)"}
                       className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white"
                     />
                   </div>
@@ -666,6 +605,7 @@ export default function AIConfig() {
           </div>
         )}
       </div>
+      </fieldset>
     </div>
   );
 }

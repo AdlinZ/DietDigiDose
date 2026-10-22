@@ -15,6 +15,9 @@ export const AI_SETTING_KEYS = [
 
 export type AIAgentRole = "SUPERVISOR" | "NUTRITION" | "RECIPE" | "OPERATIONS";
 
+export class AIResourceConflictError extends Error { constructor() { super("配置版本已变更，请重新读取"); } }
+export class AIResourceValidationError extends Error { constructor() { super("资源、能力绑定、角色模型或策略配置无效"); } }
+
 export class AIRuntimeService {
   private readonly repository: AIRuntimeRepository;
   private readonly environment: NodeJS.ProcessEnv;
@@ -86,20 +89,25 @@ export class AIRuntimeService {
   }
 
   async saveResourceConfiguration(input: unknown) {
-    const update = resourceUpdateSchema.parse(input);
+    let update: ReturnType<typeof resourceUpdateSchema.parse>;
+    try { update = resourceUpdateSchema.parse(input); }
+    catch { throw new AIResourceValidationError(); }
     const values = await this.settings();
     const previous = this.resourceDocument(values);
-    if (update.revision !== previous.revision) throw new Error("配置版本已变更，请重新加载");
-    const next = applyResourceUpdate(update, previous);
-    const policy = runtimePolicySchema.parse(values.AI_RUNTIME_POLICY ? JSON.parse(values.AI_RUNTIME_POLICY) : {});
-    for (const service of serviceIds) {
-      const effective = resolveResourceService(next, service, this.resolveConfig(values), values);
-      const modelPolicy = service === "vision" ? policy.vision : service === "asr" ? policy.asr : service === "nutrition" ? policy.planner : policy.main;
-      if (service === "asr" && modelPolicy.thinking !== "default") throw new Error("语音转写不支持思考策略");
-      thinkingParameters(effective.baseUrl, effective.model, modelPolicy);
-    }
+    if (update.revision !== previous.revision) throw new AIResourceConflictError();
+    let next: ReturnType<typeof applyResourceUpdate>;
+    try {
+      next = applyResourceUpdate(update, previous);
+      const policy = runtimePolicySchema.parse(values.AI_RUNTIME_POLICY ? JSON.parse(values.AI_RUNTIME_POLICY) : {});
+      for (const service of serviceIds) {
+        const effective = resolveResourceService(next, service, this.resolveConfig(values), values);
+        const modelPolicy = service === "vision" ? policy.vision : service === "asr" ? policy.asr : service === "nutrition" ? policy.planner : policy.main;
+        if (service === "asr" && modelPolicy.thinking !== "default") throw new Error("语音转写不支持思考策略");
+        thinkingParameters(effective.baseUrl, effective.model, modelPolicy);
+      }
+    } catch { throw new AIResourceValidationError(); }
     if (!await this.repository.compareAndSaveSetting(RESOURCE_SETTING_KEY, values[RESOURCE_SETTING_KEY] ?? null, JSON.stringify(next))) {
-      throw new Error("配置版本已变更，请重新加载");
+      throw new AIResourceConflictError();
     }
     return this.resourceConfiguration();
   }

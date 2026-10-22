@@ -1,50 +1,69 @@
-# #261 — resource and service admin UI slice
+# #261 — integrated resource and service administration
 
-Baseline: `15b0102390ea65970ef54629638042219ae1930f`. This slice does not complete #261 and does not deploy or change production configuration.
+This local integration starts at `15b0102390ea65970ef54629638042219ae1930f` and applies UI `6d20a554fe5f9dc870ccf7aee19bbf6cc4273e11` and Search adapter `65f86fe0e87a42a95794f390bc2732b04858819c` in a separate worktree. The original branches remain unchanged. It supersedes the earlier UI-only document's temporary tool-field editing blockade and generic-400 limitation. It does not complete #261 or imply deployment.
 
-## Pages and compatibility
+## Pages and write contract
 
-- `/admin/ai-providers`: legacy references and editable OpenAI-compatible connections; endpoint, manual model/capability catalog, credential keep/replace/clear. Stable connection IDs are generated locally. Persisted secrets and masks never populate inputs; replacement uses a password field. Clear requires explicit confirmation.
-- `/admin/ai-services`: capability defaults and the seven implemented v1 catalog services; capability-filtered resource/model selection, inheritance versus override, and server-returned effective model/endpoint/source. Effective values are explicitly the last read snapshot, not a prediction of unsaved changes. Inherited role model overrides remain server-owned.
-- `/admin/ai-config`: original compatible settings, persona and runtime budgets remain reachable under “旧配置与策略”; voice packs remain reachable. No backend, client, runtime, TTS, voice policy or public contract changes.
-- Saving immediately affects subsequent configuration reads. There is no draft/publish, test, discovery or availability claim. Connection success cannot prove vision/ASR capability. No arbitrary service creation or workflow editor.
+- `/admin/ai-providers` manages model connections and DeepSeek tool resources. Model capabilities are declarations, not remote verification. Tool resources use the fixed official endpoint, a tool list, and no model field. New tool resources declare Search; imported Fetch declarations are preserved but cannot enable Fetch execution.
+- `/admin/ai-services` edits capability defaults and seven existing model services, plus Search default/disabled/inherit/explicit binding. It displays last-read effective configuration/source, separately from unsaved edits. Fetch is explicitly unavailable and its existing fields are preserved unchanged. Search is an isolated adapter: no Agent automatic invocation or execution route exists.
+- `/admin/ai-config` remains the old settings/persona/budget editor. `/admin/voice-packs` remains available. Runtime budgets, role inheritance, TTS fallback, local voice policy, approvals and business execution are not replaced.
 
-## Write and lifecycle boundary
+Saving replaces the document and applies to subsequent configuration reads immediately. There is no draft/test/publish or request-version lifecycle. The writable mapper includes only schemaVersion/revision/resources/defaults/services; it retains optional Search/Fetch fields and tool resources without sending GET-only metadata, masks, effective results or raw keys. Unknown future fields still fail closed. A pure mapping module is shared with the real HTTP contract test; HTTP calls live separately in `aiResourcesApi.ts`.
 
-`admin/src/services/aiResources.ts` explicitly projects the five writable document fields. GET metadata, masks, effective results, and any unexpected raw `apiKey` are excluded. A full-document save preserves the other page's bindings/resources and all v1 inherited targets. Client validation covers IDs, name/model/secret length, URL credentials/query/fragment, duplicate models, capabilities and references; the server remains authoritative for role and runtime-policy compatibility.
+Connections and tools share credential keep/replace/clear semantics. Empty replacement is invalid, keep never echoes a saved key, clear requires confirmation and does not fall back to global credentials. Pending saves have a synchronous duplicate guard and lock editing/navigation. Cancellation before dispatch discards local edits. Late read/save completions cannot modify a new page. Uncertain failures require deliberate reread instead of automatic retry. Native unload warns but does not claim to roll back an already dispatched request.
 
-Saving uses a synchronous duplicate guard, preflight revision read and backend CAS. A changed revision stops the write. Any failed/uncertain write disables retry until a deliberate reread; errors never render server response bodies or credential values. The preflight is a UX check, not a replacement for backend atomic concurrency control. Pending saves cannot be canceled or navigated away from inside the app. Before saving, cancellation discards only local changes. Reads are abortable and stale completions are ignored; save ownership ends on unmount. Browser unload warns without pretending a dispatched PUT can be rolled back.
+## Backend integration fixes
 
-The root now uses React Router's browser data router with the existing App routes unchanged, enabling `useBlocker` for internal links and history navigation. Existing guards still protect the admin subtree.
+`PUT /api/v1/admin/ai-config/resources` now distinguishes typed outcomes:
 
-## Integration needs / backend limitations
+| HTTP | code | meaning |
+| --- | --- | --- |
+| 409 | AI_RESOURCE_CONFLICT | revision mismatch or atomic CAS rejection |
+| 400 | AI_RESOURCE_INVALID | schema, reference, capability, inherited role model or runtime policy rejection |
+| 500 | AI_RESOURCE_SAVE_FAILED | storage/audit/readback failure; reread to establish outcome |
 
-1. The existing resources PUT returns the same generic HTTP 400 for revision conflicts, validation, policy rejection and storage errors. UI intentionally does not infer a particular cause from that response. A future compatible extension should expose a stable conflict code / HTTP 409, validation codes and safe field paths. No backend change was made here.
-2. New-connection test/model discovery and capability-specific verification are not supplied by v1. Do not call the legacy test endpoint with omitted resource credentials: its global fallback is not resource-aware. Future operations should accept resource identity / explicit credential intent and return separate chat/vision/ASR verification evidence.
-3. Search integration must extend the service catalog, resource/tool discrimination, read/write mapper and selection controls intentionally. Current UI types and allowlist are v1-specific and cannot safely round-trip an expanded contract. Tool-only search must not be forced to have a model. Integrate before exposing new schema fields/services to this UI.
-4. The legacy configuration GET includes resolved effective values; it is not an API for reading raw legacy settings independently of active resource bindings. This slice preserves that existing page/behavior. A future legacy-settings editor should receive raw editable values and field provenance separately to avoid copying effective new-resource values into old fields when saving unrelated legacy settings.
-5. Draft/test/publish, request-version pinning, real provider availability and physical-device behavior remain later acceptance work.
+Messages are fixed and contain no payload, provider reply, secret or storage exception. The server remains authoritative after the UI preflight revision read.
 
-## Local verification
+The existing authenticated `GET /admin/ai-config` adds `editable`, a strict whitelist of non-secret stored URL/model/role/persona fields. Empty values stay empty, preserving inheritance. It also adds boolean `credentialState` for independently stored legacy credentials. It never spreads the settings map or resource document; masks are fixed, not secret prefixes/suffixes. Existing effective display fields remain compatible.
 
-Tools used here: Node 25.2.1 (the installed host version), existing lockfile dependencies, no dependency additions. The repository pins Node 22.23.2; verification under that exact version remains for integration/CI. Node 25 exposes experimental global localStorage incompatible with one existing test, so disable that experiment for the suite:
+The old editor populates from `editable` and sends only changed fields. Blank key inputs are omitted; folding the independent-provider section only changes presentation. Changing a budget no longer erases independent keys or copies an effective resource model into legacy storage. Explicit empty model/role fields restore legacy fallback; empty persona restores its built-in default. Save failure locks retry until reread, and a missing raw-editable interface fails closed.
+
+## Verification and independent review
+
+The installed host is Node **25.2.1**. Homebrew and the checked nvm/fnm/mise/asdf/volta/pnpm locations did not contain Node **22.23.2**. This report makes no Node 22 verification claim. Existing dependency directories were reused through ignored symlinks; no dependency or lockfile changes were made. Run binaries through `node .../node_modules/<package>/...` with these symlinks, because generated `.bin` wrappers resolve relative paths against the new worktree.
+
+From the integration root:
 
 ```sh
-cd admin
-NODE_OPTIONS=--no-experimental-webstorage ./node_modules/.bin/vitest run
-./node_modules/.bin/tsc -b
-./node_modules/.bin/oxlint
-./node_modules/.bin/vite build
+NODE_OPTIONS=--no-experimental-webstorage node admin/node_modules/vitest/vitest.mjs run --root admin
+node admin/node_modules/typescript/bin/tsc -b admin
+node server/node_modules/typescript/bin/tsc --noEmit -p server
+node admin/node_modules/oxlint/bin/oxlint admin/src admin/scripts
+node admin/node_modules/vite/bin/vite.js build admin
+node --import ./server/node_modules/tsx/dist/loader.mjs --test server/test/aiResourcesHttp.test.ts
+node --import ./server/node_modules/tsx/dist/loader.mjs --test server/test/deepseekTools.test.ts server/test/aiRuntimeModule.test.ts server/test/aiProviderCredentials.test.ts server/test/agentArchitecture.test.ts server/test/agentOperationsModule.test.ts server/test/agentProposalClock.test.ts
 ```
 
-The 21 new tests cover writable projection/redaction, validation, all credential actions, cancellation, same-tick duplicate submission, generic backend rejection, preflight conflict, stale success/failure/read handling, independent capability-filtered connections, unsaved navigation, pending-save ownership, beforeunload and unmount during preflight. The complete admin suite passed 115 tests across 18 files; TypeScript, oxlint (no warnings) and the Vite production build passed. Existing admin tests are included in the suite. This is mock-backed UI verification, not a live database/provider integration test.
+Results:
 
-For reproducible visual review, run `node scripts/preview-ai-resources.mjs` from `admin`. This binds only `127.0.0.1:5186`, injects a clearly fake demo token, intercepts all `/api/` traffic, rejects writes, and uses `.invalid` endpoints with no secrets. Open `/admin/ai-providers` and `/admin/ai-services`. Never use this demonstration harness as a production server.
+- Admin: **124 tests / 19 files passed**; includes 26 resource UI/mapping cases and 4 old-editor cases. Covers cancellation, duplicate submissions, late responses, tool field preservation, capability selection, all credential actions, clear confirmation, unsupported future data, 409 handling and uncertain outcomes.
+- Real HTTP: **3 scenarios passed** using the real application/authentication, random loopback port and fresh temporary SQLite. The tests import the actual UI projection/difference functions, then send their output over HTTP. They verify untouched tools/defaults/bindings, keep/replace/clear in storage, two simultaneous same-revision PUTs yielding 200/409, invalid model/tool bindings yielding 400, trigger-induced storage failure yielding 500 with rollback, and old-budget-only changes preserving all legacy fields/keys. Authorization and response/error/audit redaction are included. These are not full-browser save tests; component interactions are tested separately with mocked transport.
+- Focused adapter/runtime/credential/Agent safety regression: **46 tests passed**. Search transport is synthetic; Fetch makes no calls. Existing SQLite persistence/rollback and PostgreSQL transaction mocks are included; no live PostgreSQL run was performed in this integration.
+- Both TypeScript checks, admin oxlint (no warnings), production Vite build and `git diff --check` passed.
+- Independent read-only code reviewer found no blocking issues, independently passed **30 focused UI tests** and **3 real HTTP scenarios**. Review-found tool-clear confirmation, blank legacy key overwrite and uncertain-write replay risks were fixed. Independent runs overlap the counts above, not additional test coverage.
 
-Screenshot evidence is outside the Git worktree at `/Users/adlin/Documents/Codex/2026-10-23/task/evidence-261/`: `providers-top.png`, `providers-detail.png`, `services-top.png`, `services-detail.png`, `providers-mobile-top.png`, `providers-mobile-detail.png`. Desktop viewport 1440×1200; mobile viewport 390×844. All three inspected views loaded, no document horizontal overflow, no browser exceptions. Screenshots contain demonstration data only.
+A sandboxed initial HTTP run stalled and was cancelled. The completed runs had loopback permission and cleaned their dedicated databases. No paid API, real credential, existing database or online configuration was used. A generated local test JWT key was removed rather than committed.
 
-### Read-only inspection of the search branch
+## Visual evidence and remaining boundaries
 
-Reviewed `codex/deepseek-tools` commit `65f86fe0e87a42a95794f390bc2732b04858819c` and its `docs/architecture/deepseek-tools.md`; no merge or edits to that worktree. Its additive schema-v1 tool resources use `kind: tool`, `protocol: deepseek-tools`, `tools`, optional `defaults.search/fetch`, and `services.search/fetch` targets/inherit/disabled, plus extended catalog/effective data. Search has an isolated adapter but no Agent automatic invocation or execution route; Fetch is always disabled. `toolConfig()` is server-only and credential-bearing, never a UI endpoint.
+`cd admin && node scripts/preview-ai-resources.mjs` starts a loopback-only read-only demo at `127.0.0.1:5186`. It intercepts all `/api/` requests, rejects writes and uses a fake token with synthetic configuration. The tool endpoint is display-only; nothing calls it. Never deploy this harness.
 
-Until independent integration, this UI rejects an extended configuration at read, preflight and serialization boundaries with an explicit unsupported-configuration message. It does not display Search/Fetch as usable or drop their fields in PUT. Even an extended catalog with disabled/omitted tool bindings is blocked. Integration must add a discriminated model/tool editor and preserve the optional tool fields; it must not just relax this guard. Five regression tests cover tool resources, disabled search bindings, extended catalog, a backend extension between initial load and save, and an unsupported save response.
+Screenshots are outside Git at `/Users/adlin/Documents/Codex/2026-10-23/task/evidence-261-integrated/`:
+
+- `providers-top.png`, `providers-detail.png` — model and tool provider forms.
+- `services-top.png`, `services-detail.png` — Search inheritance/status and Fetch unavailable.
+- `services-mobile-top.png`, `services-mobile-detail.png` — 390×844 layout.
+
+Desktop viewport: 1440×1200. All inspected views loaded with no horizontal overflow or browser exceptions. Only demo data is shown. Test/build logs are in the same evidence directory.
+
+This limited change is ready for the next PR/review step, subject to project CI (especially pinned Node 22). No PR has been created, no remote merge/push or deployment performed. Real provider/DeepSeek account availability, live PostgreSQL integration, device regressions, draft/publish and request-version pinning remain unverified or unimplemented. Fetch remains disabled; Agent automatic external search is intentionally absent. #261 remains incomplete.

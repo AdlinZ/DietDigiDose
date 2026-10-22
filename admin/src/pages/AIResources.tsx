@@ -1,15 +1,16 @@
+import { readResources, saveResources } from '../services/aiResourcesApi';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useBlocker } from 'react-router';
 import { PageHeader } from '../components/admin/PageHeader';
 import { Section } from '../components/admin/Section';
 import { createLatestRequest } from '../utils/latestRequest';
-import { capabilities, readResources, saveResources, UnsupportedResourceConfiguration, validateConfiguration, writableConfiguration,
-  type Capability, type Resource, type ResourceConfiguration, type ResourceUpdate, type Target } from '../services/aiResources';
+import { capabilities, UnsupportedResourceConfiguration, validateConfiguration, writableConfiguration,
+  type Capability, type ServiceId, type Resource, type ResourceConfiguration, type ResourceUpdate, type Target } from '../services/aiResources';
 import './AIResources.css';
 
 const labels: Record<string, string> = { chat: '对话', vision: '图像分析', asr: '语音转写', supervisor: '主助手', nutrition: '营养规划', recipe: '食谱', operations: '操作执行' };
 function TargetFields({ value, capability, resources, onChange }: { value: Target; capability: Capability; resources: Resource[]; onChange: (t: Target) => void }) {
-  const available = resources.filter(r => r.kind === 'legacy' ? r.scope === capability : r.models.some(m => m.capabilities.includes(capability)));
+  const available = resources.filter(r => r.kind === 'legacy' ? r.scope === capability : r.kind === 'connection' && r.models.some(m => m.capabilities.includes(capability)));
   const selected = resources.find(r => r.id === value.resourceId);
   return <div className="ai-target"><label>提供商资源<select value={value.resourceId} onChange={e => {
     const r = resources.find(r => r.id === e.target.value);
@@ -62,7 +63,7 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
   async function save() {
     if (!draft || busy.current || needsReload) return;
     const validation = validateConfiguration(draft); if (validation) { setError(validation); return; }
-    if (draft.resources.some(r => r.kind === 'connection' && r.credential?.action === 'clear') && !window.confirm('确定清空所选资源的密钥？保存后立即生效。')) return;
+    if (draft.resources.some(r => r.kind !== 'legacy' && r.credential?.action === 'clear') && !window.confirm('确定清空所选资源的密钥？保存后立即生效。')) return;
     busy.current = true; setSaving(true); setError(''); setNotice(''); reads.current.cancel();
     const owner = lifecycle.current.generation;
     try {
@@ -73,7 +74,7 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
       if (owner !== lifecycle.current.generation) return;
       setSaved(result); setDraft(writableConfiguration(result)); setNotice('已保存，后续配置读取立即生效。');
     } catch (failure) {
-      if (owner === lifecycle.current.generation) { setNeedsReload(true); setError(failure instanceof UnsupportedResourceConfiguration ? failure.message : '保存未确认：可能存在版本冲突、能力/旧角色模型或策略不兼容，也可能已保存但响应丢失。请重新读取核对；不会自动重试。'); }
+      if (owner === lifecycle.current.generation) { setNeedsReload(true); setError(failure instanceof UnsupportedResourceConfiguration ? failure.message : (failure as { response?: { status?: number; data?: { code?: string } } })?.response?.status === 409 && (failure as { response?: { data?: { code?: string } } })?.response?.data?.code === 'AI_RESOURCE_CONFLICT' ? '配置版本冲突：未覆盖他人修改，请重新读取后核对。' : '保存未确认：可能存在版本冲突、能力/旧角色模型或策略不兼容，也可能已保存但响应丢失。请重新读取核对；不会自动重试。'); }
     } finally { if (owner === lifecycle.current.generation) { busy.current = false; setSaving(false); } }
   }
   function updateResource(index: number, resource: Resource) { if (draft) setDraft({ ...draft, resources: draft.resources.map((r, i) => i === index ? resource : r) }); }
@@ -85,6 +86,10 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
       <p className="admin-muted">版本 {saved.revision} · {saved.migrated ? '资源配置已保存' : '沿用旧配置（首次保存创建资源文档）'} · {dirty ? '有未保存修改' : '与读取结果一致'}</p>
       <fieldset disabled={saving || loading || needsReload}>
         {page === 'providers' ? <>
+          <button type="button" className="admin-button" onClick={() => {
+            let i = 1; while (draft.resources.some(r => r.id === `web-${i}`)) i++;
+            setDraft({ ...draft, resources: [...draft.resources, { id: `web-${i}`, name: '', kind: 'tool', protocol: 'deepseek-tools', baseUrl: 'https://api.deepseek.com', tools: ['search'], credential: { action: 'keep' } }] });
+          }}>新增搜索工具资源</button>
           <Section title="连接与模型目录" action={<button type="button" className="admin-button" onClick={() => {
             let i = 1; while (draft.resources.some(r => r.id === `provider-${i}`)) i++;
             setDraft({ ...draft, resources: [...draft.resources, { id: `provider-${i}`, name: '', kind: 'connection', protocol: 'openai-compatible', baseUrl: '', models: [{ id: '', capabilities: ['chat'] }], credential: { action: 'keep' } }] });
@@ -92,22 +97,23 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
             {draft.resources.map((r, index) => <article className="ai-resource-card" key={r.id}>
               <div className="ai-card-heading"><h3>{r.name || '新连接'} <small>{r.id}</small></h3><span className="ai-status">{r.kind === 'legacy' ? '旧配置引用' : '未验证'}</span></div>
               {r.kind === 'legacy' ? <p>保留 {labels[r.scope]} 的原地址、密钥及环境变量优先级。可在「旧配置与策略」维护。</p> : <>
-                <div className="ai-target"><label>连接名称<input required maxLength={100} value={r.name} onChange={e => updateResource(index, { ...r, name: e.target.value })} /></label><label>连接协议<select value={r.protocol} onChange={() => {}}><option value="openai-compatible">OpenAI compatible</option></select></label></div>
-                <label>API 地址<input required type="url" placeholder="https://provider.example/v1" value={r.baseUrl} onChange={e => updateResource(index, { ...r, baseUrl: e.target.value })} /></label>
+                <div className="ai-target"><label>连接名称<input required maxLength={100} value={r.name} onChange={e => updateResource(index, { ...r, name: e.target.value })} /></label><label>连接协议<select value={r.protocol} onChange={() => {}}>{r.kind === 'tool' ? <option value="deepseek-tools">DeepSeek tools</option> : <option value="openai-compatible">OpenAI compatible</option>}</select></label></div>
+                <label>API 地址<input required readOnly={r.kind === 'tool'} type="url" placeholder="https://provider.example/v1" value={r.baseUrl} onChange={e => updateResource(index, { ...r, baseUrl: e.target.value })} /></label>
                 <div className="ai-target"><label>密钥操作<select value={r.credential?.action || 'keep'} onChange={e => updateResource(index, { ...r, credential: e.target.value === 'replace' ? { action: 'replace', value: '' } : { action: e.target.value as 'keep' | 'clear' } })}><option value="keep">保留已有密钥（新连接为空）</option><option value="replace">替换密钥</option><option value="clear">明确清空密钥</option></select></label>
-                  <p className="admin-muted">{saved.resources.some(item => item.id === r.id && item.kind === 'connection' && item.hasApiKey) ? '服务端已配置密钥，不回显。' : '未配置密钥。'} 清空后不回退到全局密钥。</p></div>
+                  <p className="admin-muted">{saved.resources.some(item => item.id === r.id && item.kind !== 'legacy' && item.hasApiKey) ? '服务端已配置密钥，不回显。' : '未配置密钥。'} 清空后不回退到全局密钥。</p></div>
                 {r.credential?.action === 'replace' && <label>新密钥<input type="password" autoComplete="new-password" required maxLength={4096} value={r.credential.value} onChange={e => updateResource(index, { ...r, credential: { action: 'replace', value: e.target.value } })} /></label>}
-                <h4>模型 / 声明能力</h4>{r.models.map((m, mi) => <div className="ai-model" key={mi}><label>模型标识<input required maxLength={200} value={m.id} onChange={e => updateResource(index, { ...r, models: r.models.map((old, j) => j === mi ? { ...m, id: e.target.value } : old) })} /></label>
+                {r.kind === 'connection' ? <><h4>模型 / 声明能力</h4>{r.models.map((m, mi) => <div className="ai-model" key={mi}><label>模型标识<input required maxLength={200} value={m.id} onChange={e => updateResource(index, { ...r, models: r.models.map((old, j) => j === mi ? { ...m, id: e.target.value } : old) })} /></label>
                   <div className="ai-capabilities">{capabilities.map(c => <label key={c}><input type="checkbox" checked={m.capabilities.includes(c)} onChange={e => updateResource(index, { ...r, models: r.models.map((old, j) => j === mi ? { ...m, capabilities: e.target.checked ? [...m.capabilities, c] : m.capabilities.filter(v => v !== c) } : old) })} />{labels[c]}</label>)}</div>
                   <button type="button" className="admin-button" onClick={() => updateResource(index, { ...r, models: r.models.filter((_, j) => j !== mi) })}>移除模型</button></div>)}
-                <div className="admin-actions"><button type="button" className="admin-button" onClick={() => updateResource(index, { ...r, models: [...r.models, { id: '', capabilities: ['chat'] }] })}>添加模型</button>
+                <button type="button" className="admin-button" onClick={() => updateResource(index, { ...r, models: [...r.models, { id: '', capabilities: ['chat'] }] })}>添加模型</button></> : <div className="ai-note">工具目录：{r.tools.join(' / ')}。Search 仅配置独立适配器，未接入 Agent 自动执行或执行路由；Fetch 始终禁用。此资源不使用模型字段，地址固定为官方端点。</div>}
+                <div className="admin-actions">
                 <button type="button" className="admin-button" onClick={() => { if (window.confirm('移除连接？仍被引用的连接将无法保存。')) setDraft({ ...draft, resources: draft.resources.filter((_, i) => i !== index) }); }}>移除连接</button></div>
               </>}
             </article>)}
           </Section>
         </> : <>
           <Section title="按能力默认配置">{capabilities.map(c => <article className="ai-resource-card" key={c}><h3>{labels[c]}默认</h3><TargetFields value={draft.defaults[c]} capability={c} resources={draft.resources} onChange={target => setDraft({ ...draft, defaults: { ...draft.defaults, [c]: target } })} /></article>)}</Section>
-          <Section title="已实现的业务服务">{saved.catalog.map(service => {
+          <Section title="已实现的业务服务">{saved.catalog.filter((service): service is { id: ServiceId; capability: Capability; input: string; output: string } => !('kind' in service)).map(service => {
             const binding = draft.services[service.id], effective = saved.effective[service.id];
             return <article className="ai-resource-card" key={service.id}><div className="ai-card-heading"><h3>{labels[service.id]} <small>{service.id}</small></h3><span>{labels[service.capability]}</span></div>
               <p className="admin-muted">输入：{service.input} → 输出：{service.output}</p>
@@ -116,7 +122,22 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
               <div className="ai-effective"><strong>已读取的有效配置{dirty ? '（不含未保存修改）' : ''}</strong><p>{saved.resources.find(r => r.id === effective.resourceId)?.name || effective.resourceId} / {effective.model}</p><p>{effective.baseUrl}</p><p>来源：{effective.source} · 密钥{effective.hasApiKey ? '已配置' : '未配置'}</p></div>
             </article>;
           })}</Section>
-          <p className="admin-muted">继承角色可能保留旧模型覆盖；新连接目录需包含该模型，否则请独立绑定。调用预算、提示词、工具权限、TTS 回退与本地语音优先策略沿用现有设置。搜索服务待独立后端适配。</p>
+          <Section title="工具服务配置（非 Agent 启用）">
+            <article className="ai-resource-card"><h3>Search · 独立搜索适配器</h3>
+              <p>仅保存工具配置；未接入 Agent 自动调用或执行路由。账号可用性未验证。</p>
+              <label>搜索默认资源<select value={draft.defaults.search?.resourceId || ''} onChange={e => {
+                const defaults = { ...draft.defaults }; if (e.target.value) defaults.search = { resourceId: e.target.value }; else delete defaults.search;
+                setDraft({ ...draft, defaults });
+              }}><option value="">不配置默认</option>{draft.resources.filter(r => r.kind === 'tool' && r.tools.includes('search')).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
+              <label>搜索绑定方式<select value={!draft.services.search || 'disabled' in draft.services.search ? 'disabled' : 'inherit' in draft.services.search ? 'inherit' : 'override'} onChange={e => setDraft({ ...draft, services: { ...draft.services, search: e.target.value === 'disabled' ? { disabled: true } : e.target.value === 'inherit' ? { inherit: true } : { resourceId: draft.defaults.search?.resourceId || '' } } })}>
+                <option value="disabled">禁用</option><option value="inherit">继承搜索默认（无默认则禁用）</option><option value="override">独立绑定</option>
+              </select></label>
+              {draft.services.search && 'resourceId' in draft.services.search && <label>搜索资源<select value={draft.services.search.resourceId} onChange={e => setDraft({ ...draft, services: { ...draft.services, search: { resourceId: e.target.value } } })}><option value="">请选择工具资源</option>{draft.resources.filter(r => r.kind === 'tool' && r.tools.includes('search')).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>}
+              <div className="ai-effective">已读取状态：{saved.effective.search?.status === 'unverified' ? '已配置，未验证' : saved.effective.search?.status === 'unconfigured' ? '缺少密钥' : '禁用'} · 来源：{saved.effective.search?.source || '无绑定'} · 资源：{saved.effective.search?.resourceId || '无'}{dirty && '（不含未保存修改）'}</div>
+            </article>
+            <article className="ai-resource-card"><h3>Fetch · 不可用</h3><p>始终禁用：提供商重定向安全保障尚不满足要求。现有 Fetch 字段原样保留，本页不提供启用操作。</p></article>
+          </Section>
+          <p className="admin-muted">继承角色可能保留旧模型覆盖；新连接目录需包含该模型，否则请独立绑定。调用预算、提示词、工具权限、TTS 回退与本地语音优先策略沿用现有设置。工具配置不改变 Agent 的批准与外传策略。</p>
         </>}
       </fieldset>
       <div className="ai-savebar"><span>{saving ? '正在保存，请勿离开…' : '保存整份配置，后续读取立即生效'}</span><button type="button" className="admin-button" disabled={saving || loading || !dirty} onClick={() => { if (window.confirm('放弃未保存修改？')) { setDraft(writableConfiguration(saved)); setError(''); setNotice(''); } }}>取消修改</button><button className="admin-button" type="submit" disabled={saving || loading || needsReload || !dirty}>保存并立即生效</button></div>

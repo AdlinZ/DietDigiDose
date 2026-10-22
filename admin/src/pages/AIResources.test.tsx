@@ -15,7 +15,7 @@ function fixture(): ResourceConfiguration {
     defaults: { chat: { resourceId: 'demo', model: 'demo-chat' }, vision: { resourceId: 'legacy-vision' }, asr: { resourceId: 'legacy-asr' } },
     services: Object.fromEntries(serviceIds.map(s => [s, { inherit: true }])) as ResourceConfiguration['services'],
     catalog: serviceIds.map(id => ({ id, capability: id === 'vision' || id === 'asr' ? id : 'chat', input: 'messages', output: 'chat-completion' })),
-    effective: Object.fromEntries(serviceIds.map(s => [s, { resourceId: 'demo', model: 'demo-chat', baseUrl: 'https://demo.invalid/v1', source: s === 'nutrition' ? 'service:chat+legacy-role-model' : 'default:chat', hasApiKey: true }])) as ResourceConfiguration['effective'],
+    effective: Object.fromEntries(serviceIds.map(s => [s, { resourceId: 'demo', model: 'demo-chat', baseUrl: 'https://demo.invalid/v1', source: s === 'nutrition' ? 'service:chat+legacy-role-model' : 'default:chat', hasApiKey: true }])) as unknown as ResourceConfiguration['effective'],
   };
 }
 const deferred = () => { let resolve!: (value: any) => void, reject!: (value: any) => void; const promise = new Promise<any>((yes, no) => { resolve = value => yes({ data: value }); reject = no; }); return { promise, resolve, reject }; };
@@ -104,17 +104,51 @@ it('keeps pending saves owned, blocks navigation, and warns on browser close', a
 it('does not send a save when unmounted during the revision preflight', async () => {
   await mount(); await change('连接名称', 'Pending'); const pending = deferred(); get.mockReturnValue(pending.promise); await submit(); await act(async () => root.render(null)); await act(async () => pending.resolve(fixture())); expect(put).not.toHaveBeenCalled();
 });
-it.each(['resource', 'binding', 'catalog'])('refuses additive search/tool %s fields instead of discarding them', async kind => {
+it.each(['resource', 'binding', 'catalog'])('refuses unknown future %s fields instead of discarding them', async kind => {
   const data = fixture();
-  if (kind === 'resource') (data.resources as any[]).push({ id: 'web', name: 'Web', kind: 'tool', protocol: 'deepseek-tools', baseUrl: 'https://api.deepseek.com', tools: ['search', 'fetch'] });
-  if (kind === 'binding') (data.services as any).search = { disabled: true };
-  if (kind === 'catalog') (data.catalog as any[]).push({ id: 'search', capability: 'search', kind: 'tool', automaticExecution: false });
+  if (kind === 'resource') (data.resources as any[]).push({ id: 'web', name: 'Web', kind: 'tool', protocol: 'future-tools', baseUrl: 'https://api.deepseek.com', tools: ['search', 'fetch'] });
+  if (kind === 'binding') (data.services as any).futureSearch = { disabled: true };
+  if (kind === 'catalog') (data.catalog as any[]).push({ id: 'futureSearch', capability: 'futureSearch', kind: 'tool', automaticExecution: false });
   expect(() => writableConfiguration(data)).toThrow('已停止编辑'); get.mockResolvedValue({ data }); await mount(); expect(host.textContent).toContain('已停止编辑'); expect(host.querySelector('form')).toBeNull(); expect(put).not.toHaveBeenCalled();
 });
-it('stops a write if a tool-aware backend appears during preflight', async () => {
-  await mount(); await change('连接名称', 'Renamed'); const data = fixture(); (data.defaults as any).search = { resourceId: 'web' }; get.mockResolvedValue({ data }); await submit(); expect(put).not.toHaveBeenCalled(); expect(host.textContent).toContain('已停止编辑');
+it('stops a write if a unknown future backend appears during preflight', async () => {
+  await mount(); await change('连接名称', 'Renamed'); const data = fixture(); (data.defaults as any).futureSearch = { resourceId: 'web' }; get.mockResolvedValue({ data }); await submit(); expect(put).not.toHaveBeenCalled(); expect(host.textContent).toContain('已停止编辑');
 });
 it('does not render an unsupported save response as a model-only document', async () => {
-  await mount(); await change('连接名称', 'Renamed'); const data = fixture(); (data.services as any).fetch = { disabled: true }; put.mockResolvedValue({ data }); await submit();
+  await mount(); await change('连接名称', 'Renamed'); const data = fixture(); (data.services as any).futureFetch = { disabled: true }; put.mockResolvedValue({ data }); await submit();
   expect(host.textContent).toContain('已停止编辑'); expect(host.textContent).not.toContain('已保存，后续'); expect((host.querySelector('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
+});
+function toolFixture() {
+  const data = fixture();
+  data.resources.push({ id: 'web', name: 'Web tools', kind: 'tool', protocol: 'deepseek-tools', baseUrl: 'https://api.deepseek.com', tools: ['search', 'fetch'], hasApiKey: true });
+  data.defaults.search = { resourceId: 'web' }; data.defaults.fetch = { resourceId: 'web' };
+  data.services.search = { inherit: true }; data.services.fetch = { resourceId: 'web' };
+  data.catalog.push({ id: 'search', capability: 'search', kind: 'tool', input: 'public-query', output: 'untrusted-web-results', automaticExecution: false }, { id: 'fetch', capability: 'fetch', kind: 'tool', input: 'public-url', output: 'untrusted-web-results', automaticExecution: false });
+  data.effective.search = { status: 'unverified', resourceId: 'web', source: 'default:search', hasApiKey: true };
+  data.effective.fetch = { status: 'disabled', resourceId: 'web', reason: 'redirect-safety-unavailable' };
+  return data;
+}
+it('allows model edits while preserving untouched tool defaults, bindings and credentials', async () => {
+  const data = toolFixture(); get.mockResolvedValue({ data }); put.mockResolvedValue({ data: { ...data, revision: 4 } });
+  await mount(); await change('连接名称', 'Renamed model resource'); await submit();
+  const body = put.mock.calls[0][1] as ReturnType<typeof writableConfiguration>;
+  expect(body.defaults.search).toEqual(data.defaults.search); expect(body.defaults.fetch).toEqual(data.defaults.fetch);
+  expect(body.services.search).toEqual(data.services.search); expect(body.services.fetch).toEqual(data.services.fetch);
+  expect(body.resources.at(-1)).toEqual({ id: 'web', name: 'Web tools', kind: 'tool', protocol: 'deepseek-tools', baseUrl: 'https://api.deepseek.com', tools: ['search', 'fetch'], credential: { action: 'keep' } });
+});
+it.each(['replace', 'clear'])('supports tool credential %s and confirms clearing', async action => {
+  const data = toolFixture(); data.resources = data.resources.filter(r => r.kind !== 'connection'); data.defaults.chat = { resourceId: 'legacy-chat' };
+  get.mockResolvedValue({ data }); put.mockResolvedValue({ data: { ...data, revision: 4 } }); await mount(); await change('密钥操作', action);
+  if (action === 'replace') await change('新密钥', 'synthetic-tool-secret');
+  if (action === 'clear') { vi.mocked(window.confirm).mockReturnValue(false); await submit(); expect(put).not.toHaveBeenCalled(); vi.mocked(window.confirm).mockReturnValue(true); }
+  await submit(); expect((put.mock.calls[0][1] as ReturnType<typeof writableConfiguration>).resources.at(-1)).toHaveProperty('credential', action === 'replace' ? { action, value: 'synthetic-tool-secret' } : { action });
+});
+it('edits Search without a model, retains Fetch disabled and does not claim Agent execution', async () => {
+  const data = toolFixture(); get.mockResolvedValue({ data }); put.mockResolvedValue({ data: { ...data, revision: 4 } }); await mount('services');
+  expect(host.textContent).toContain('未接入 Agent 自动调用或执行路由'); expect(host.textContent).toContain('Fetch · 不可用');
+  await change('搜索绑定方式', 'override'); await change('搜索资源', 'web'); await submit();
+  const body = put.mock.calls[0][1] as ReturnType<typeof writableConfiguration>; expect(body.services.search).toEqual({ resourceId: 'web' }); expect(body.services.fetch).toEqual(data.services.fetch);
+});
+it('recognizes real HTTP conflict codes without exposing response bodies', async () => {
+  await mount(); await change('连接名称', 'Renamed'); put.mockRejectedValue({ response: { status: 409, data: { code: 'AI_RESOURCE_CONFLICT', error: 'not-for-display' } } }); await submit(); expect(host.textContent).toContain('配置版本冲突'); expect(host.textContent).not.toContain('not-for-display'); await submit(); expect(put).toHaveBeenCalledTimes(1);
 });

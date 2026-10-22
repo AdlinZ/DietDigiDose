@@ -1,3 +1,4 @@
+import { AIResourceConflictError, AIResourceValidationError } from "../../modules/aiRuntime/service.js";
 import { thinkingParameters } from "../../modules/aiRuntime/policy.js";
 import { Router } from "express";
 import { aiRuntimeService } from "../../modules/aiRuntime/runtime.js";
@@ -29,7 +30,11 @@ export function createAdminAIConfigRouter() {
       const result = await aiRuntimeService().saveResourceConfiguration(req.body);
       await auditAdminAction(req, { action: "ai_resources.update", resourceType: "ai_config", resourceId: "global", summary: "更新 AI 资源与业务服务配置" });
       res.json(result);
-    } catch { res.status(400).json({ error: "保存资源配置失败，请检查版本、能力绑定与策略配置" }); }
+    } catch (error) {
+      if (error instanceof AIResourceConflictError) res.status(409).json({ code: "AI_RESOURCE_CONFLICT", error: "配置版本已变更，请重新读取" });
+      else if (error instanceof AIResourceValidationError) res.status(400).json({ code: "AI_RESOURCE_INVALID", error: "资源、能力绑定或策略不兼容" });
+      else res.status(500).json({ code: "AI_RESOURCE_SAVE_FAILED", error: "保存未确认，请重新读取核对" });
+    }
   });
 
   router.get("/ai-config", async (_req, res) => {
@@ -40,9 +45,20 @@ export function createAdminAIConfigRouter() {
         (["SUPERVISOR", "NUTRITION", "RECIPE", "OPERATIONS"] as const).map(role => aiRuntimeService().agentConfig(role, settings)),
       );
       const formatMasked = (key?: string) =>
-        key ? (key.length > 8 ? `${key.slice(0, 4)}****${key.slice(-4)}` : "********") : "";
+        key ? "********" : "";
 
+      // Only non-secret editable values. Never spread settings: it includes credential
+      // values and the credential-bearing resource document.
+      const editableNames = {
+        baseUrl: "AI_BASE_URL", model: "AI_MODEL", chatBaseUrl: "AI_CHAT_BASE_URL", chatModel: "AI_CHAT_MODEL",
+        visionBaseUrl: "AI_VISION_BASE_URL", visionModel: "AI_VISION_MODEL", asrBaseUrl: "AI_ASR_BASE_URL", asrModel: "AI_ASR_MODEL",
+        supervisorModel: "AI_SUPERVISOR_MODEL", nutritionModel: "AI_NUTRITION_MODEL", recipeModel: "AI_RECIPE_MODEL", operationsModel: "AI_OPERATIONS_MODEL",
+        systemPrompt: "AI_SYSTEM_PROMPT",
+      };
+      const editable = Object.fromEntries(Object.entries(editableNames).map(([name, key]) => [name, settings[key] ?? ""]));
       res.json({
+        editable,
+        credentialState: { global: !!settings.AI_API_KEY, chat: !!settings.AI_CHAT_API_KEY, vision: !!settings.AI_VISION_API_KEY, asr: !!settings.AI_ASR_API_KEY },
         maskedKey: formatMasked(config.apiKey),
         hasApiKey: !!config.apiKey,
         baseUrl: config.baseUrl,

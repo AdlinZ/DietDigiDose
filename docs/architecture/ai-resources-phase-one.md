@@ -1,5 +1,7 @@
 # AI resources and business bindings — #261 phase one
 
+> This document records its original implementation slice. For the subsequent local UI/tool integration, typed HTTP conflicts and safe legacy editing, see [integrated admin verification](ai-resources-admin-ui.md).
+
 This is the resource/contract/resolution and compatibility phase only. It does not complete #261: the two-page admin UI, verification/model discovery, draft/test/publish workflow, request-wide version pinning, and production acceptance remain follow-up work. Saving here takes effect on subsequent configuration reads, matching the existing settings API; it is not a publish operation. No remote model calls are made during migration or saving.
 
 ## Backend boundary

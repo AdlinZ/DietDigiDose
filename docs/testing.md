@@ -12,7 +12,11 @@
 | migration/recovery | `pnpm -w test:migrations` | 空库、上一 migration、在线备份、独立恢复和安全副本回滚 |
 | 全量回归 | `pnpm -w test:all` | client、server、admin 的全部自动化测试 |
 
-测试数据库必须位于各测试创建的系统临时目录；不得读取开发、staging 或 production 数据库。未来 PostgreSQL 测试必须为每个 job 创建独立数据库或 schema，并在结束时清理，不能让并行任务共享可写 schema。
+SQLite 测试数据库必须位于各测试创建的系统临时目录；PostgreSQL 集成测试使用独立测试服务及专用数据库。不得读取开发、staging 或 production 数据库。每个 job 必须使用隔离数据库或 schema，并在结束时清理，不能让并行任务共享可写 schema。现有 CI 的 PostgreSQL 服务和测试环境变量见 [CI workflow](../.github/workflows/ci.yml)。
+
+## 文档入口检查
+
+运行 `pnpm -w docs:generate` 更新中英 README 的工具链区块；`pnpm -w docs:check` 检查生成漂移、选定文档的本地链接目标和 README 命令表；`pnpm -w test:docs` 验证这些检查。CI 独立执行文档检查与测试，不依赖应用依赖安装，也不代表线上验收。维护范围见[状态导航](status.md)。
 
 ## 覆盖率
 
@@ -47,6 +51,8 @@ CI 的 `stability` job 从同一提交连续运行两轮全量测试，并上传
 
 若安全版本改变模块格式而旧版上游消费者尚未兼容，可用 `patchedDependencies` 仅恢复模块互操作层；不得回退安全实现，并必须同时验证真实消费路径、客户端构建与生产依赖审计。
 
+以下有日期的小节是历史修复与复核要求，不代表刚刚查询过上游或重新运行过审计。当前配置以 [pnpm-workspace.yaml](../pnpm-workspace.yaml) 为准；到期复核必须补充实际证据，不能仅更新日期。
+
 ### W41 新增告警修复（2026-10-07）
 
 10 月 7 日重新运行审计发现 5 项新增告警，旧提交的 CI 结果不能覆盖新披露的依赖问题。本轮通过现有 overrides 更新以下依赖及锁文件，没有新增补丁或审计例外：
@@ -65,9 +71,9 @@ NYC 消费者使用 `load()`，可兼容 YAML v4；开发工具 `depcheck` 仍�
 
 ### node-forge 临时安全回补（2026-10-02）
 
-- `CVE-2026-85393` / [GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv)：RSA PKCS#1 v1.5 验签未拒绝嵌套 `DigestAlgorithm` 中的额外元素。当前 npm 最新版 `1.4.0` 仍受影响。
+- `CVE-2026-85393` / [GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv)：RSA PKCS#1 v1.5 验签未拒绝嵌套 `DigestAlgorithm` 中的额外元素。2026-10-02 核对时 npm 最新版 `1.4.0` 仍受影响。
 - 实际依赖来自 Expo CLI 和 `@expo/code-signing-certificates`；后者在证书、CSR 和 manifest 签名验证中调用该解析器，不能仅按开发工具豁免。
-- `patches/node-forge@1.4.0.patch` 回补[上游 PR #1152](https://github.com/digitalbazaar/forge/pull/1152) 提交 `ceba34402e329f0365134f23fe19898756527d65` 的 `lib/rsa.js` 修复，增加嵌套元素数量校验。上游跟踪：[issue #1149](https://github.com/digitalbazaar/forge/issues/1149)。这是项目本地回补，上游尚未发布修复版本。
+- `patches/node-forge@1.4.0.patch` 回补[上游 PR #1152](https://github.com/digitalbazaar/forge/pull/1152) 提交 `ceba34402e329f0365134f23fe19898756527d65` 的 `lib/rsa.js` 修复，增加嵌套元素数量校验。上游跟踪：[issue #1149](https://github.com/digitalbazaar/forge/issues/1149)。这是项目本地回补；记录当日上游尚未发布修复版本。
 - 版本审计无法识别 pnpm 补丁，因此仅对该 CVE 设置临时精确例外。`audit:prod` 必须先运行 `test:dependency-security`：沿两个真实消费者解析依赖，验证有/无 NULL 参数时拒绝额外元素，并验证正常证书、CSR、manifest 签名和 Node 原生验签兼容。原版有 4 项回归失败，应用补丁后全部通过；移除补丁会阻止审计命令继续。完整测试也包含此检查。
 - 维护责任：仓库依赖维护者。上游发布修复后，升级 `node-forge` override，同时移除补丁、`patchedDependencies` 条目与该 CVE 例外，保留回归测试并重新运行完整 CI。其他新漏洞仍直接阻止合并。
 
@@ -78,4 +84,4 @@ NYC 消费者使用 `load()`，可兼容 YAML v4；开发工具 `depcheck` 仍�
 - `scripts/braces-security.test.mjs` 沿 Expo/Metro、Jest、开发代理和依赖检查工具的 8 条真实消费链解析 `micromatch` / `braces`，对每个实际副本验证深层字符串、未闭合括号、直接 AST、循环节点/父节点、嵌套数组及正常匹配；危险输入在有超时的独立子进程执行。原版 2 组安全回归失败、1 组兼容回归通过；修补后全部通过。固定界限不能由 `maxDepth: Infinity/NaN` 绕过。
 - 额外兼容检查使用官方 `3.0.3` 标签提交 `74b2db2938fad48a2ea54a9c8bf27a37a62c350d` 的全部 12 个测试文件、764 项测试，原版和修补版均通过。临时 runner 使用 Node 内置断言并禁止 shell 调用，没有给项目增加测试依赖；这些外部 fixtures 不替代仓库内的持续安全回归。
 - 审计只识别版本号，因此沿用现有机制，仅为该 CVE 添加精确临时例外；`audit:prod` 和 `test:all` 都先执行安全回归，补丁缺失或任何实际消费副本未修复都会失败。没有放宽其他告警或使用通配忽略。
-- 维护责任：仓库依赖维护者。最迟于 2026-10-19 复核上游状态；上游发布修复后升级到兼容安全版本，删除补丁、`patchedDependencies` 条目及该 CVE 例外，保留回归测试并重新运行完整 CI。
+- 维护责任：仓库依赖维护者。最迟于 2026-10-19 复核上游状态（原定期限保留；本节尚未补充该期限后的复核结论，需另核对证据，不等于已证明存在新增漏洞）；上游发布修复后升级到兼容安全版本，删除补丁、`patchedDependencies` 条目及该 CVE 例外，保留回归测试并重新运行完整 CI。

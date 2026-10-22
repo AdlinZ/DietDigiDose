@@ -1,8 +1,8 @@
 # SQLite to PostgreSQL migration
 
-PostgreSQL 16+ and the generated Drizzle schema are the target database authority. The checked-in baseline covers the final result of `initDatabase()` plus all 59 SQLite migrations: 92 migrated tables, 133 unique/secondary indexes, and 138 foreign keys. Drizzle migration `0001` adds four PostgreSQL-native LangGraph checkpoint tables, for 96 target tables in total. `server/src/storage/database/schema.ts` is the application schema entry point; the obsolete parallel schema has been removed.
+PostgreSQL 16+ and the generated Drizzle schema are the target database authority. The checked-in baseline covers the final result of `initDatabase()` and the checked-in SQLite migrations. Use the candidate commit's [baseline manifest](../server/src/storage/database/postgres/baseline-manifest.json) for business tables, indexes, and foreign keys, and its [Drizzle migration journal](../server/drizzle/meta/_journal.json) and runtime schema checks for PostgreSQL extensions and the full target schema. Do not reuse a table count from an older rehearsal. `server/src/storage/database/schema.ts` is the application schema entry point; the obsolete parallel schema has been removed.
 
-The API and worker now select one database explicitly with `DATABASE_DRIVER=sqlite|postgresql`. PostgreSQL startup requires `DATABASE_URL`, validates the migrated application and LangGraph schema, and never executes runtime DDL. API and worker use the same repository composition and close their pools during graceful shutdown. Keep SQLite selected until both staging rehearsals below pass.
+The API and worker now select one database explicitly with `DATABASE_DRIVER=sqlite|postgresql`. PostgreSQL startup requires `DATABASE_URL`, validates the migrated application and LangGraph schema, and never executes runtime DDL. API and worker use the same repository composition and close their pools during graceful shutdown. For an environment migrating from SQLite, keep its source database selected until both staging rehearsals below pass. This runbook does not assert which database any live environment currently uses; see the [evidence index](status.md).
 
 ## Runtime adapter progress
 
@@ -47,7 +47,7 @@ Each migrated domain keeps SQL inside its driver adapter; routes and services de
 
 The exhaustive per-table/per-column mapping is generated at `server/src/storage/database/postgres/baseline-manifest.json`. Changes are made in `server/src/storage/db.ts`/SQLite migrations only during the transition, followed by `pnpm -w database:schema:generate` and a Drizzle migration. Once the runtime cutover is complete, SQLite schema generation is deleted and Drizzle migrations become the only schema-change entry point.
 
-The PostgreSQL checkpointer is pinned to `@langchain/langgraph-checkpoint-postgres` 1.0.5. Its schema version `4` is seeded by Drizzle migration `0001`; application startup validates that version and must not call `PostgresSaver.setup()`, because runtime DDL would bypass the migration authority. Migration archive v2 includes the 92 canonical SQLite business tables plus raw typed SQLiteSaver checkpoints and pending writes. Import decodes them through the pinned LangGraph serializer, rebuilds PostgreSQL channel blobs, preserves parents/task indexes, rejects orphan Agent threads, and validates semantic checkpoint content after repeated imports.
+The PostgreSQL checkpointer is pinned to `@langchain/langgraph-checkpoint-postgres` 1.0.5. Its schema version `4` is seeded by Drizzle migration `0001`; application startup validates that version and must not call `PostgresSaver.setup()`, because runtime DDL would bypass the migration authority. Migration archive v2 includes the canonical SQLite business tables listed by that candidate's baseline manifest plus raw typed SQLiteSaver checkpoints and pending writes. Import decodes them through the pinned LangGraph serializer, rebuilds PostgreSQL channel blobs, preserves parents/task indexes, rejects orphan Agent threads, and validates semantic checkpoint content after repeated imports.
 
 ## Commands
 
@@ -80,9 +80,9 @@ DATABASE_URL='postgresql://…' pnpm --dir server db:postgres:migrate -- rehears
 
 Archives contain production records and must use encrypted, access-controlled storage. They are not application backups and must not be committed. Delete them under the deployment retention policy after the observation window. The exporter opens SQLite read-only, runs `integrity_check` and `foreign_key_check`, records the source checksum before/after, and detects concurrent writes through SQLite `data_version`.
 
-## Staging rehearsal record
+## Staging rehearsal record template
 
-Run twice against production-shaped, access-controlled staging data. Attach both generated reports to issue #97.
+Run twice against production-shaped, access-controlled staging data. Attach both generated reports to the applicable migration or release acceptance issue; [#97](https://github.com/AdlinZ/DietDigiDose/issues/97) is the original migration tracking reference. The blank table below is a template, not a current environment status.
 
 | Rehearsal | Operator | Dataset/date | Export | Schema + import | Validation | Result |
 | --- | --- | --- | ---: | ---: | ---: | --- |

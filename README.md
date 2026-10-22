@@ -1,7 +1,5 @@
 # 食光烙记（DietDigiDose）
 
-> **2026-10-12 状态：** 当前为 W42（10 月 12–18 日）。Android `26w41a / 264101` 已构建，服务端 `fbd9b1a4` 已部署并通过备份恢复、迁移与 HTTPS 烟测，详见[服务端更新记录](docs/server-update-2026-10-11.md)。官网页面与素材改动随本分支同步，尚未部署。真实短信、APK 下载源配置与双端真机验收仍待完成；下方明确标注的旧记录保留作历史。
-
 <p align="center">
   <img src="client/assets/logo.svg" alt="食光烙记 Logo" width="160" />
 </p>
@@ -26,7 +24,7 @@
   → 识别临期或可用食材
   → 匹配真正能做的菜谱
   → 完成烹饪并扣减库存
-  → 自动形成饮食记录
+  → 确认实际食用并形成饮食记录
 ```
 
 围绕这条主线，仓库当前包含：
@@ -39,19 +37,11 @@
 - AI 营养问答、食材/餐食识别、票据扫描和语音交互
 - 用户、菜谱、社区、Agent 运行、AI 配置与安全审计管理后台
 
-## 当前版本与完成度
+## 项目状态
 
-- **当前周：** `26w42`（上海时区 ISO 第 42 周，2026-10-12～10-18）
-- **仓库版本元数据：** `1.0.6` / `26w36a` / build `263601`（不是最新构建产物）
-- **最近成功 Android 构建：** [`26w41a` / build `264101`](https://github.com/AdlinZ/DietDigiDose/actions/runs/38143602557)，源码 `f4ba92c3`
-- **阶段：** 可信 Beta 收口
-- **最近更新：** 2026-10-12
+进度与证据统一从[状态导航](docs/status.md)查看，包括任务、构建、部署记录与真机验收。这些状态分别确认：代码合并或构建成功不代表已经部署或通过真机验收。
 
-主分支 `f4ba92c3` 已合并 [PR #248](https://github.com/AdlinZ/DietDigiDose/pull/248)，包含营养来源、数据导入、依赖安全修复、手机恢复和 APK 更新实现。[main CI](https://github.com/AdlinZ/DietDigiDose/actions/runs/38143565538) 全部通过，`26w41a` 预览包已生成。此前分轮审阅及测试记录保留在 W41 文档；服务端已于 10 月 11 日更新，真实设备验收仍待完成。
-
-10 月 11 日已将 W41 的 **20 项未完成 Issue** 结转至 [W42 里程碑](https://github.com/AdlinZ/DietDigiDose/milestone/12)（10 月 12–18 日），W41 按周归档。范围包括：W40 结转 18 项，10 月 7 日新增 [#221 自助找回密码](https://github.com/AdlinZ/DietDigiDose/issues/221) 和 [#219 应用内更新](https://github.com/AdlinZ/DietDigiDose/issues/219)。两项代码已合并并随 41a 打包，服务端已更新，仍待真实短信与 Android 真机验收；Android 更新模块原生编译已通过。恢复一期支持已验证绑定手机，不支持邮箱；更新一期为完整 APK，OTA 留待二期，详见[实现与验收记录](docs/w41-account-recovery-and-app-updates.md)。Backlog 剩余 21 项待排期。[W40](https://github.com/AdlinZ/DietDigiDose/milestone/10) 保留 4 项已关闭 Issue 作为历史记录。官网、管理端、API、PostgreSQL 与 workers 已有公网运行记录，最新服务端部署为 `w41-fbd9b1a4`（10 月 11 日），官网与 App 网页保持原版本。独立环境与持久化验收、同候选完整恢复演练、同提交双端候选与真机闭环（#105、#106、#107）仍是三项 P0 门槛；排期不代表验收通过或承诺本周完成全部 20 项。
-
-当前打包检查与下周安排见 [W42 进度与执行计划](docs/milestone-26w42-progress.md)、[开发与 Beta 收口清单](TODO.md) 与 [真机验收清单](docs/device-beta-checklist.md)。[W40 历史验收记录](docs/milestone-26w40-progress.md) 和 [历史候选验收记录](docs/release-candidate-26w37a.md) 保留既有证据及当时的版本号；仓库元数据仅在新打包前分配更新，文档更新不会生成候选包或递增快照。
+[主分支 CI](https://github.com/AdlinZ/DietDigiDose/actions/workflows/ci.yml?query=branch%3Amain) · [Android APK 构建](https://github.com/AdlinZ/DietDigiDose/actions/workflows/android-apk.yml) · [开放里程碑](https://github.com/AdlinZ/DietDigiDose/milestones)
 
 ## 在线服务
 
@@ -74,7 +64,7 @@
 | `admin` | React、Vite、Tailwind CSS | 运营审核与系统管理后台 |
 | `deploy` | Docker Compose、Caddy | HTTPS 部署、持久化与恢复演练 |
 
-本地开发默认使用 SQLite，当前公网服务使用 PostgreSQL；Supabase 用于可选的社区媒体对象存储，独立 staging bucket 仍待验收。
+本地开发默认使用 SQLite，部署支持 PostgreSQL；Supabase 用于可选的社区媒体对象存储。具体环境的验收证据见[状态导航](docs/status.md)。
 
 ## 仓库结构
 
@@ -91,10 +81,11 @@ Dietdigidose/
 
 ## 快速开始
 
+<!-- BEGIN GENERATED:toolchain -->
 ### 环境要求
 
-- Node.js 22.23.2（以 `.nvmrc` 和 `.node-version` 为准）
-- pnpm 10.18.0
+- Node.js 22.23.2 (来源: [.nvmrc](.nvmrc))
+- pnpm 10.18.0 (来源: [package.json](package.json))
 
 ### 安装与配置
 
@@ -105,6 +96,7 @@ pnpm install --frozen-lockfile
 cp client/.env.example client/.env
 cp server/.env.example server/.env
 ```
+<!-- END GENERATED:toolchain -->
 
 使用 nvm、fnm、mise 或 asdf 时，请先让版本管理器读取仓库中的 Node 版本文件。普通 CI、Android 构建和本地推荐环境必须使用同一 Node 版本；升级时应在一个 PR 中同步更新版本文件、根包 `engines` 与全部工作流。
 
@@ -158,6 +150,8 @@ pnpm dev:admin
 | `pnpm validate:toolchain` | 校验 Node/pnpm 与 CI 声明一致 |
 | `pnpm validate:release` | 校验版本、快照和双端构建号 |
 | `pnpm audit:prod` | 审计生产依赖 |
+| `pnpm docs:generate` | 更新 README 自动生成的工具链区块 |
+| `pnpm docs:check` | 检查生成区块、本地链接目标与命令是否有效 |
 
 测试分层、覆盖率、产物预算和 flaky/quarantine 处理规则见 [分层测试与质量门禁](docs/testing.md)。
 
@@ -165,7 +159,7 @@ pnpm dev:admin
 
 `client/eas.json` 提供 iOS/Android 的 preview 与 production 配置，所有可分发构建都必须连接 HTTPS API。只有本机 simulator 调试可显式使用 localhost HTTP，不得使用真实敏感数据。
 
-依赖审计通过不代表“零漏洞”。截至 2026-10-06，主分支 `a22c6cb5` 配置了三项精确临时审计例外，并包含 `node-forge` 项目补丁；草稿 PR #248 的 `258d0dba` 增加 `braces` 补丁及强制回归后共四项例外，该新增修复尚未合并或部署。例外原因、补丁校验和复查要求见 [分层测试与质量门禁](docs/testing.md) 与 [`pnpm-workspace.yaml`](pnpm-workspace.yaml)，每次依赖升级和候选验收都必须重新检查。
+依赖审计通过不代表“零漏洞”。当前审计例外与依赖补丁以 [`pnpm-workspace.yaml`](pnpm-workspace.yaml) 为准；原因、回归检查和复查要求见[分层测试与质量门禁](docs/testing.md)。每次依赖升级和候选验收都必须重新检查。
 
 部署前请阅读：
 

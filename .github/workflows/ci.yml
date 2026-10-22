@@ -38,6 +38,8 @@ jobs:
           node-version: 22.23.2
           cache: pnpm
       - run: pnpm -w validate:toolchain
+      - run: pnpm -w docs:check
+      - run: pnpm -w test:docs
       - run: pnpm install --frozen-lockfile
       - name: Verify base-data evidence and reproducible build
         run: |

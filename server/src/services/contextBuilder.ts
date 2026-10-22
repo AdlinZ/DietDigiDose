@@ -76,7 +76,7 @@ export async function buildUserContext(userId: number, now = new Date()): Promis
   const clock = currentBusinessClock(now);
   const [context, recommendationPage] = await Promise.all([
     aiContextService().load(userId, clock.local_date),
-    recommendationsService().compute(userId, { surface: "ai", matchStatus: "all" }),
+    recommendationsService().compute(userId, { surface: "ai", matchStatus: "all" }, {}, clock.local_date),
   ]);
   const recommendedRecipes = recommendationPage.results.slice(0, 12).map((item) => ({
     recipeId: item.recipeId,

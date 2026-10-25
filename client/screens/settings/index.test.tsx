@@ -15,6 +15,7 @@ jest.mock("@/contexts/AuthContext", () => ({
 }));
 jest.mock("@/components/Screen", () => ({ Screen: ({ children }: { children: React.ReactNode }) => children }));
 jest.mock("@/components/ThemedFontAwesome6", () => "Icon");
+jest.mock("@/components/PhoneBindingSettings", () => ({ PhoneBindingSettings: () => null }));
 jest.mock("@/components/AccountSmsVerification", () => ({ AccountSmsVerification: () => null }));
 jest.mock("@/hooks/useSafeRouter", () => ({ useSafeRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: jest.fn() }) }));
 jest.mock("@/contexts/ThemeContext", () => ({ useThemePreference: () => ({ preference: "system", setPreference: jest.fn() }) }));

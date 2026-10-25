@@ -13,6 +13,7 @@ import {
   Share,
 } from "react-native";
 import { Screen } from "@/components/Screen";
+import { PhoneBindingSettings } from "@/components/PhoneBindingSettings";
 import { AccountSmsVerification } from "@/components/AccountSmsVerification";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
@@ -588,6 +589,7 @@ export default function SettingsScreen() {
         </View>
 
         <TouchableOpacity accessibilityRole="button" onPress={() => router.push("/password")} className="mb-4 rounded-2xl border border-line bg-surface p-4"><Text className="font-bold text-ink">{user?.hasPassword === false ? "设置登录密码" : "修改密码"}</Text><Text className="text-sm text-copy-muted">{user?.hasPassword === false ? "可选：通过手机验证设置备用登录方式" : "验证身份后修改，完成后重新登录"}</Text></TouchableOpacity>
+        {user && <PhoneBindingSettings key={`${user.id}:${sessionGeneration}`} />}
         {/* Section 1: 账号与目标 */}
         <View className="mb-6">
           <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">

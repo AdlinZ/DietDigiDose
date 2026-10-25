@@ -326,6 +326,15 @@ test("HTTP Agent keeps model and credential version through a tool round trip wh
 
 
 test('automatic recovery never replaces a lost accepted snapshot; explicit retry starts a new segment', async () => {
+  const settings = (await import('../src/modules/aiRuntime/runtime.js')).aiRuntimeService();
+  const { legacyResourceDocument } = await import('../src/modules/aiRuntime/resources.js');
+  const legacy = legacyResourceDocument();
+  const current = await settings.resourceConfiguration();
+  const draft = await settings.saveResourceConfiguration({ ...legacy, revision: current.revision,
+    resources: [...legacy.resources, { id: 'recovery', name: 'Recovery fixture', kind: 'connection', protocol: 'openai-compatible', baseUrl: process.env.AI_BASE_URL!,
+      models: [{ id: 'recovery-model', capabilities: ['chat'] }], credential: { action: 'replace', value: 'recovery-synthetic' } }],
+    defaults: { ...legacy.defaults, chat: { resourceId: 'recovery', model: 'recovery-model' } } });
+  await settings.testDraft(draft.revision); await settings.publishDraft(draft.revision);
   const { createAgentRun } = await import('../src/services/agent/repository.js');
   const lost = await createAgentRun(userId, { modality: 'text', prompt: '只读咨询，不执行操作。', metadata: { runtimeVersion: 2, configurationSnapshotRequired: true, mainAssistantEnabled: true } });
   db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(lost.id);
@@ -337,5 +346,5 @@ test('automatic recovery never replaces a lost accepted snapshot; explicit retry
   answers = [{ goal: '明确重试', specialists: [], reply: '新的执行完成。', candidates: [] }];
   const retried = await runtime.retrySupervisorRun(userId, lost.id, 10000);
   assert.equal(retried.status, 'completed', JSON.stringify(retried.error));
-  assert.equal(calls.at(-1)?.model, 'fixture-after'); assert.equal(providerKeys.at(-1), 'Bearer fixture-after-publish');
+  assert.equal(calls.at(-1)?.model, 'recovery-model'); assert.equal(providerKeys.at(-1), 'Bearer recovery-synthetic');
 });

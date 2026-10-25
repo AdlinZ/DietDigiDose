@@ -36,8 +36,13 @@ Snapshots are process-local. Cancelling or finishing an execution releases its c
 - Module boundaries, frozen SQLite boundary, PostgreSQL generated baseline (120 tables/192 foreign keys), Drizzle schema checks and `git diff --check` passed.
 - Independent read-only code review found and prompted fixes for inconsistent legacy GET version reads, initial revision regression, inherited queued snapshots, misleading test labels, and false tool impact changes; final review found no remaining explicit blocker.
 
-## Not verified / environment blockers
+## Local verification limitations (before PR CI)
 
 A test runner was initially invoked from repository root and collected listener-dependent tests. Local `listen(127.0.0.1)` failed with sandbox `EPERM`; the process was stopped. No different port, tunnel, alternate listener or permission escalation was used to bypass this restriction. HTTP integration, full Agent conversation/e2e, browser visual validation and the HTTP-dependent full migration rehearsal are therefore not verified. Their tests were updated where necessary, but are not claimed passing.
 
 The real PostgreSQL lifecycle/restart integration script was updated but not executed; only repository transaction contract and schema/migration unit checks ran. No real provider/media capability, paid API, production deployment, APK, push, PR, merge or Issue-state change was performed. Existing local dependency caches were copied/relinked into the isolated checkout; no software was installed and lockfiles were not changed. A clean lockfile-based CI run is still needed in an environment that permits the omitted integrations.
+
+
+## PR CI coverage
+
+PR #271 extends the existing `ai-resource-integration` job without reducing its checks. It runs the real HTTP/Agent suites against a local mock provider, including two calls in one request across a publication and an explicit retry after fail-closed automatic recovery. The isolated PostgreSQL cluster checks draft isolation, stale probe rejection, publish CAS, credential snapshots, atomic failure rollback and actual cluster restart. All fixtures use synthetic accounts/keys and no paid provider. Test gates have bounded waits and release on failure. The PR check results are the source of truth for remote execution; the local limitations above are retained as historical evidence.

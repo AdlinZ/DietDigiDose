@@ -78,3 +78,21 @@ it('labels saved draft validation without claiming a provider connection', async
   expect(host.textContent).toContain('未调用供应商');
   expect(host.textContent).not.toContain('延迟 undefined');
 });
+
+it('keeps mapped provider model, URL and replacement credentials independent', async () => {
+  put.mockResolvedValue({ data: {} }); await mount();
+  const expected: Record<string, unknown> = { draftRevision: 3, chatModel: "chat-model" };
+  for (const [title, modelKey, prefix] of [['文本对话服务', 'model', 'chat'], ['多模态识图服务', 'visionModel', 'vision'], ['语音识别服务', 'asrModel', 'asr']]) {
+    const card = [...host.querySelectorAll('span')].find(span => span.textContent?.trim() === title)!.parentElement!.parentElement!;
+    const inputs = [...card.querySelectorAll('input')];
+    expect(inputs).toHaveLength(3);
+    const values = [`${prefix}-model`, `https://${prefix}.example.test/v1`, `${prefix}-synthetic-key`];
+    for (let i = 0; i < inputs.length; i++) await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(inputs[i], values[i]);
+      inputs[i].dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    Object.assign(expected, { [modelKey]: values[0], [`${prefix}BaseUrl`]: values[1], [`${prefix}ApiKey`]: values[2] });
+  }
+  await act(async () => saveButton().click());
+  expect(put.mock.calls[0][1]).toEqual(expected);
+});

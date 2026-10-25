@@ -39,6 +39,20 @@ const PROVIDER_PRESETS = [
   },
 ];
 
+const sectionTitleClass = "text-base font-bold text-text-main flex items-center gap-2";
+const modelGridClass = "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3";
+const sectionHeaderClass = "flex items-center justify-between pb-3 border-b border-gray-100";
+const hintBadgeClass = "text-xs text-text-muted bg-background-alt px-2.5 py-1 rounded-lg";
+const fieldLabelClass = "block text-xs font-semibold text-text-main mb-1 flex items-center gap-1";
+const modelLabelClass = "text-[11px] font-semibold text-text-main";
+const modelInputClass = "mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono";
+
+const rowClass = "flex items-center justify-between";
+
+const mutedClass = "text-xs text-text-muted";
+
+const policyInputClass = "w-full border rounded p-2";
+
 export default function AIConfig() {
   // 全局默认配置
   const [apiKey, setApiKey] = useState("");
@@ -188,7 +202,7 @@ export default function AIConfig() {
     }
   };
 
-  const handleTestConnection = async (targetService: "global" | "chat" | "vision" | "asr" = "global") => {
+  const handleTestConnection = async () => {
     if (testBusy.current || saveBusy.current || needsReload || loadError) return;
     testBusy.current = true;
     const owner = lifecycle.current, revision = draftRevision.current;
@@ -198,7 +212,7 @@ export default function AIConfig() {
 
       const { data } = await api.post("/admin/ai-config/resources/test", { revision });
       if (owner !== lifecycle.current) return;
-      setTestResult({ success: !!data.lifecycle?.test?.success, message: `草稿版本 ${revision} 配置校验；未调用供应商，不验证 ${targetService} 生产能力。` });
+      setTestResult({ success: !!data.lifecycle?.test?.success, message: `草稿版本 ${revision} 配置校验；未调用供应商，不验证生产能力。` });
     } catch {
       if (owner !== lifecycle.current) return;
       setTestResult({
@@ -217,7 +231,7 @@ export default function AIConfig() {
     <div className="space-y-6" onChangeCapture={() => setTestResult(null)}>
       {needsReload && <div role="alert">保存未确认，请重新读取核对；不会自动重试。<button onClick={() => void fetchConfig()}>重新读取</button></div>}
       <fieldset disabled={saving || testing || needsReload} className="contents">
-      <div className="flex items-center justify-between">
+      <div className={rowClass}>
         <div>
           <h2 className="text-2xl font-bold text-text-main flex items-center gap-2">
             <Bot className="text-primary" size={28} /> 旧配置与策略
@@ -237,10 +251,10 @@ export default function AIConfig() {
 
       {/* 快捷配置推荐卡片 */}
       <div className="bg-white p-6 rounded-[24px] shadow-sm space-y-4">
-        <h3 className="text-base font-bold text-text-main flex items-center gap-2">
+        <h3 className={sectionTitleClass}>
           <Zap className="text-yellow-500" size={18} /> 一键应用推荐服务商
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className={modelGridClass}>
           {PROVIDER_PRESETS.map((preset, i) => (
             <button
               key={i}
@@ -262,18 +276,18 @@ export default function AIConfig() {
       <div className="bg-white p-6 rounded-[24px] shadow-sm space-y-6">
         {/* 1. 默认全局共享接入点 */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-            <h3 className="text-base font-bold text-text-main flex items-center gap-2">
+          <div className={sectionHeaderClass}>
+            <h3 className={sectionTitleClass}>
               <Globe className="text-primary" size={18} /> 1. 全局默认共享服务接入点 (Fallback Provider)
             </h3>
-            <span className="text-xs text-text-muted bg-background-alt px-2.5 py-1 rounded-lg">
+            <span className={hintBadgeClass}>
               当子服务未指定独立接入点时，自动使用此配置
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-text-main mb-1 flex items-center gap-1">
+              <label className={fieldLabelClass}>
                 <Key size={14} className="text-primary" /> 全局默认 API Key
               </label>
               <div className="relative flex items-center">
@@ -295,7 +309,7 @@ export default function AIConfig() {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-text-main mb-1 flex items-center gap-1">
+              <label className={fieldLabelClass}>
                 <Globe size={14} className="text-primary" /> 全局默认 API Base URL
               </label>
               <input
@@ -312,12 +326,12 @@ export default function AIConfig() {
         <section className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
           <h2 className="font-semibold">调用策略与预算</h2>
           <div className="grid gap-2 text-xs text-gray-600">{effectiveModels.map((entry) => <div key={entry.role}><strong>{entry.role}草稿解析：</strong>{entry.model}（{entry.source}）<div className="break-all">接入点：{entry.baseUrl}</div></div>)}</div>
-          <p className="text-xs text-amber-700">真实模型的工具、结构化输出、流式和媒体能力尚未验证；连接测试成功不能代表这些能力全部可用。</p>
-          <p className="text-xs text-text-muted">显示已保存的草稿策略；模型能力仍需真实连接验证。未确认支持的思考参数会拒绝保存。输出长度不等于思考预算。</p>
+          <p className="text-xs text-amber-700">连接成功不证明工具、结构化输出、流式或媒体能力可用。</p>
+          <p className={mutedClass}>已保存的草稿策略；不支持的思考参数会拒绝保存。输出长度不等于思考预算。</p>
           {(["main", "planner", "vision", "asr"] as const).map((role) => (
             <div key={role} className="grid grid-cols-4 gap-2">
               <label>{ { main: "主助手", planner: "复杂规划", vision: "图片识别", asr: "语音转写" }[role] }
-                <select aria-label={`${role} 思考模式`} value={runtimePolicy[role].thinking} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [role]: { ...value[role], thinking: event.target.value } }))} className="w-full border rounded p-2">
+                <select aria-label={`${role} 思考模式`} value={runtimePolicy[role].thinking} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [role]: { ...value[role], thinking: event.target.value } }))} className={policyInputClass}>
                   <option value="default">提供商默认</option>
                   {role !== "asr" && (() => {
                     const roles = role === "main" ? ["对话", "主助手", "菜谱", "运营"] : role === "planner" ? ["规划"] : ["图片"];
@@ -326,41 +340,37 @@ export default function AIConfig() {
                   })()}
                 </select>
               </label>
-              {((role === "asr" ? ["timeoutMs", "retries"] : ["maxTokens", "timeoutMs", "retries"]) as Array<"maxTokens" | "timeoutMs" | "retries">).map((field) => <label key={field} className="text-xs">{{ maxTokens: "输出 token 上限", timeoutMs: "单次超时（毫秒）", retries: "瞬时错误重试次数" }[field]}<input type="number" value={runtimePolicy[role][field]} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [role]: { ...value[role], [field]: Number(event.target.value) } }))} className="w-full border rounded p-2" /></label>)}
+              {((role === "asr" ? ["timeoutMs", "retries"] : ["maxTokens", "timeoutMs", "retries"]) as Array<"maxTokens" | "timeoutMs" | "retries">).map((field) => <label key={field} className="text-xs">{{ maxTokens: "输出 token 上限", timeoutMs: "单次超时（毫秒）", retries: "瞬时错误重试次数" }[field]}<input type="number" value={runtimePolicy[role][field]} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [role]: { ...value[role], [field]: Number(event.target.value) } }))} className={policyInputClass} /></label>)}
             </div>
           ))}
-          <div className="grid grid-cols-3 gap-2">{(["deadlineMs", "maxModelCalls", "maxToolCalls"] as const).map((field) => <label key={field} className="text-xs">{{ deadlineMs: "整轮截止时间（毫秒）", maxModelCalls: "总模型调用上限", maxToolCalls: "工具调用上限" }[field]}<input type="number" value={runtimePolicy[field]} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [field]: Number(event.target.value) }))} className="w-full border rounded p-2" /></label>)}</div>
+          <div className="grid grid-cols-3 gap-2">{(["deadlineMs", "maxModelCalls", "maxToolCalls"] as const).map((field) => <label key={field} className="text-xs">{{ deadlineMs: "整轮截止时间（毫秒）", maxModelCalls: "总模型调用上限", maxToolCalls: "工具调用上限" }[field]}<input type="number" value={runtimePolicy[field]} onChange={(event) => setRuntimePolicy((value) => ({ ...value, [field]: Number(event.target.value) }))} className={policyInputClass} /></label>)}</div>
         </section>
 
         {/* 2. Supervisor Runtime 模型 */}
         <div className="space-y-4 pt-2">
-          <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-            <h3 className="text-base font-bold text-text-main flex items-center gap-2">
+          <div className={sectionHeaderClass}>
+            <h3 className={sectionTitleClass}>
               <Bot className="text-primary" size={18} /> 2. 主助手与按需规划
             </h3>
-            <span className="text-xs text-text-muted bg-background-alt px-2.5 py-1 rounded-lg">留空策略由服务端继承 Chat Model</span>
+            <span className={hintBadgeClass}>留空策略由服务端继承 Chat Model</span>
           </div>
-          <p className="text-xs text-text-muted">主助手直接处理普通问答，复杂规划按需调用规划能力；首页规则推荐保持独立。旧角色配置保留，未单独配置的文本角色继承聊天接入点。Vision 与 Voice 使用各自接入点。</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            <label className="text-[11px] font-semibold text-text-main">主助手（兼容 Supervisor 配置）
-              <input value={supervisorModel} onChange={(event) => setSupervisorModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
-            </label>
-            <label className="text-[11px] font-semibold text-text-main">复杂规划（Nutrition）
-              <input value={nutritionModel} onChange={(event) => setNutritionModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
-            </label>
-            <label className="text-[11px] font-semibold text-text-main">Recipe Cooking
-              <input value={recipeModel} onChange={(event) => setRecipeModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
-            </label>
-            <label className="text-[11px] font-semibold text-text-main">Operations
-              <input value={operationsModel} onChange={(event) => setOperationsModel(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-mono" />
-            </label>
+          <p className={mutedClass}>主助手处理问答，按需规划；首页推荐独立。旧文本角色默认继承聊天接入点，视觉和语音使用独立接入点。</p>
+          <div className={modelGridClass}>
+            {[
+              { label: '主助手（兼容 Supervisor 配置）', value: supervisorModel, set: setSupervisorModel },
+              { label: '复杂规划（Nutrition）', value: nutritionModel, set: setNutritionModel },
+              { label: 'Recipe Cooking', value: recipeModel, set: setRecipeModel },
+              { label: 'Operations', value: operationsModel, set: setOperationsModel },
+            ].map(field => <label key={field.label} className={modelLabelClass}>{field.label}
+              <input value={field.value} onChange={event => field.set(event.target.value)} className={modelInputClass} />
+            </label>)}
           </div>
         </div>
 
         {/* 3. 各能力模型配置 */}
         <div className="space-y-4 pt-2">
-          <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-            <h3 className="text-base font-bold text-text-main flex items-center gap-2">
+          <div className={sectionHeaderClass}>
+            <h3 className={sectionTitleClass}>
               <Cpu className="text-secondary" size={18} /> 3. 各 AI 服务能力模型名称与独立接入点
             </h3>
 
@@ -379,140 +389,24 @@ export default function AIConfig() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-            {/* Card A: 文本对话服务 */}
-            <div className="p-4 rounded-2xl border border-gray-100 bg-background-alt/50 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-text-main flex items-center gap-1.5">
-                  <Bot size={16} className="text-primary" aria-hidden="true" /> 文本对话服务
-                </span>
-                <span className="text-[10px] text-text-muted">Chat / Agent</span>
+            {[
+              { id: 'chat', title: '文本对话服务', description: 'Chat / Agent', Icon: Bot, color: 'text-primary', modelLabel: 'Chat', modelValue: model, setModelValue: setModel, modelPlaceholder: 'deepseek-ai/DeepSeek-V3', url: chatBaseUrl, setUrl: setChatBaseUrl, urlPlaceholder: 'api.deepseek.com', keyValue: chatApiKey, setKey: setChatApiKey, keyName: 'chatApiKey', keyConfigured: hasChatApiKey, maskedKey: chatMaskedKey },
+              { id: 'vision', title: '多模态识图服务', description: 'Vision / OCR', Icon: Image, color: 'text-secondary', modelLabel: 'Vision', modelValue: visionModel, setModelValue: setVisionModel, modelPlaceholder: 'Qwen/Qwen2.5-VL-72B-Instruct', url: visionBaseUrl, setUrl: setVisionBaseUrl, urlPlaceholder: 'dashscope.aliyuncs.com', keyValue: visionApiKey, setKey: setVisionApiKey, keyName: 'visionApiKey', keyConfigured: hasVisionApiKey, maskedKey: visionMaskedKey },
+              { id: 'asr', title: '语音识别服务', description: 'ASR / Whisper', Icon: Mic, color: 'text-orange-500', modelLabel: 'ASR', modelValue: asrModel, setModelValue: setAsrModel, modelPlaceholder: 'FunAudioLLM/SenseVoiceSmall', url: asrBaseUrl, setUrl: setAsrBaseUrl, urlPlaceholder: 'api.openai.com', keyValue: asrApiKey, setKey: setAsrApiKey, keyName: 'asrApiKey', keyConfigured: hasAsrApiKey, maskedKey: asrMaskedKey },
+            ].map(service => <div key={service.id} className="p-4 rounded-2xl border border-gray-100 bg-background-alt/50 space-y-3">
+              <div className={rowClass}>
+                <span className="text-xs font-bold text-text-main flex items-center gap-1.5"><service.Icon size={16} className={service.color} aria-hidden="true" /> {service.title}</span>
+                <span className="text-[10px] text-text-muted">{service.description}</span>
               </div>
-
-              <div>
-                <label className="block text-[11px] text-text-muted mb-1">模型名称 (Chat Model)</label>
-                <input
-                  type="text"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="deepseek-ai/DeepSeek-V3"
-                  className="w-full px-3 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-xs font-mono bg-white"
-                />
+              <div><label className="block text-[11px] text-text-muted mb-1">模型名称 ({service.modelLabel} Model)</label>
+                <input type="text" value={service.modelValue} onChange={e => service.setModelValue(e.target.value)} placeholder={service.modelPlaceholder} className="w-full px-3 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-xs font-mono bg-white" />
               </div>
-
-              {enablePerServiceProviders && (
-                <div className="pt-2 border-t border-gray-200/60 space-y-2">
-                  <span className="text-[10px] text-primary font-bold block">地址留空继承全局；密钥留空保留已有值</span>
-                  <div>
-                    <input
-                      type="text"
-                      value={chatBaseUrl}
-                      onChange={(e) => setChatBaseUrl(e.target.value)}
-                      placeholder="专有 Base URL (如 api.deepseek.com)"
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] font-mono bg-white"
-                    />
-                  </div>
-                  <div>
-                    <input
-                      type={showKeys ? "text" : "password"}
-                      value={chatApiKey}
-                      onChange={(e) => editKey(setChatApiKey, "chatApiKey", e.target.value)}
-                      placeholder={hasChatApiKey ? `专有 Key: ${chatMaskedKey}` : "专有 API Key (留空保持不变)"}
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Card B: 多模态识图服务 */}
-            <div className="p-4 rounded-2xl border border-gray-100 bg-background-alt/50 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-text-main flex items-center gap-1.5">
-                  <Image size={16} className="text-secondary" aria-hidden="true" /> 多模态识图服务
-                </span>
-                <span className="text-[10px] text-text-muted">Vision / OCR</span>
-              </div>
-
-              <div>
-                <label className="block text-[11px] text-text-muted mb-1">模型名称 (Vision Model)</label>
-                <input
-                  type="text"
-                  value={visionModel}
-                  onChange={(e) => setVisionModel(e.target.value)}
-                  placeholder="Qwen/Qwen2.5-VL-72B-Instruct"
-                  className="w-full px-3 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-xs font-mono bg-white"
-                />
-              </div>
-
-              {enablePerServiceProviders && (
-                <div className="pt-2 border-t border-gray-200/60 space-y-2">
-                  <span className="text-[10px] text-secondary font-bold block">地址留空继承全局；密钥留空保留已有值</span>
-                  <div>
-                    <input
-                      type="text"
-                      value={visionBaseUrl}
-                      onChange={(e) => setVisionBaseUrl(e.target.value)}
-                      placeholder="专有 Base URL (如 dashscope.aliyuncs.com)"
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] font-mono bg-white"
-                    />
-                  </div>
-                  <div>
-                    <input
-                      type={showKeys ? "text" : "password"}
-                      value={visionApiKey}
-                      onChange={(e) => editKey(setVisionApiKey, "visionApiKey", e.target.value)}
-                      placeholder={hasVisionApiKey ? `专有 Key: ${visionMaskedKey}` : "专有 API Key (留空保持不变)"}
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Card C: 语音识别服务 */}
-            <div className="p-4 rounded-2xl border border-gray-100 bg-background-alt/50 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-text-main flex items-center gap-1.5">
-                  <Mic size={16} className="text-orange-500" aria-hidden="true" /> 语音识别服务
-                </span>
-                <span className="text-[10px] text-text-muted">ASR / Whisper</span>
-              </div>
-
-              <div>
-                <label className="block text-[11px] text-text-muted mb-1">模型名称 (ASR Model)</label>
-                <input
-                  type="text"
-                  value={asrModel}
-                  onChange={(e) => setAsrModel(e.target.value)}
-                  placeholder="FunAudioLLM/SenseVoiceSmall"
-                  className="w-full px-3 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-xs font-mono bg-white"
-                />
-              </div>
-
-              {enablePerServiceProviders && (
-                <div className="pt-2 border-t border-gray-200/60 space-y-2">
-                  <span className="text-[10px] text-orange-500 font-bold block">地址留空继承全局；密钥留空保留已有值</span>
-                  <div>
-                    <input
-                      type="text"
-                      value={asrBaseUrl}
-                      onChange={(e) => setAsrBaseUrl(e.target.value)}
-                      placeholder="专有 Base URL (如 api.openai.com)"
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] font-mono bg-white"
-                    />
-                  </div>
-                  <div>
-                    <input
-                      type={showKeys ? "text" : "password"}
-                      value={asrApiKey}
-                      onChange={(e) => editKey(setAsrApiKey, "asrApiKey", e.target.value)}
-                      placeholder={hasAsrApiKey ? `专有 Key: ${asrMaskedKey}` : "专有 API Key (留空保持不变)"}
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
+              {enablePerServiceProviders && <div className="pt-2 border-t border-gray-200/60 space-y-2">
+                <span className={`text-[10px] ${service.color} font-bold block`}>地址留空继承全局；密钥留空保留已有值</span>
+                <div><input type="text" value={service.url} onChange={e => service.setUrl(e.target.value)} placeholder={`专有 Base URL (如 ${service.urlPlaceholder})`} className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] font-mono bg-white" /></div>
+                <div><input type={showKeys ? 'text' : 'password'} value={service.keyValue} onChange={e => editKey(service.setKey, service.keyName, e.target.value)} placeholder={service.keyConfigured ? `专有 Key: ${service.maskedKey}` : '专有 API Key (留空保持不变)'} className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:border-primary text-[11px] bg-white" /></div>
+              </div>}
+            </div>)}
           </div>
         </div>
 
@@ -540,37 +434,18 @@ export default function AIConfig() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => handleTestConnection("global")}
+              onClick={() => handleTestConnection()}
               disabled={testing}
               className="px-4 py-2 rounded-xl border border-primary text-primary hover:bg-green-50 font-bold text-xs flex items-center gap-1.5 transition-colors active:scale-95 disabled:opacity-50"
             >
               {testing ? <RefreshCw className="animate-spin" size={14} /> : <Zap size={14} />}
               校验已保存草稿
             </button>
-            {enablePerServiceProviders && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => handleTestConnection("vision")}
-                  disabled={testing}
-                  className="px-4 py-2 rounded-xl border border-secondary text-secondary hover:bg-emerald-50 font-bold text-xs flex items-center gap-1.5 transition-colors active:scale-95 disabled:opacity-50"
-                >
-                  <Zap size={14} /> 校验草稿（不验证识图能力）
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleTestConnection("asr")}
-                  disabled={testing}
-                  className="px-4 py-2 rounded-xl border border-orange-500 text-orange-500 hover:bg-orange-50 font-bold text-xs flex items-center gap-1.5 transition-colors active:scale-95 disabled:opacity-50"
-                >
-                  <Zap size={14} /> 校验草稿（不验证转写能力）
-                </button>
-              </>
-            )}
+
           </div>
 
           <fieldset disabled={saving} className="text-xs space-y-2">
-            <legend>清除已存密钥覆盖（保存后生效）</legend>
+            <legend>清除已存密钥覆盖（发布后生效）</legend>
             <p>空输入保持不变。清除数据库覆盖后，仍按旧配置规则回退到全局或环境凭据。</p>
             {([['apiKey', '全局'], ['chatApiKey', '对话'], ['visionApiKey', '识图'], ['asrApiKey', '转写']] as const).map(([key, label]) =>
               <label key={key}><input type="checkbox" disabled={!storedKeys[key] || !!({ apiKey, chatApiKey, visionApiKey, asrApiKey } as Record<string, string>)[key].trim()} checked={clearKeys.includes(key)} onChange={event => setClearKeys(current => event.target.checked ? [...current, key] : current.filter(item => item !== key))} />清除{label}密钥覆盖</label>)}

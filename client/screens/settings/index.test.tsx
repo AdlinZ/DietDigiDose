@@ -304,3 +304,48 @@ it("releases the cross-instance lock after failure and rereads before allowing r
   await clickText("保存并重排提醒");
   expect(mockSaveNotifications).toHaveBeenCalledTimes(2);
 });
+
+it("native scheduling failure releases the remounted page and permits a clean retry", async () => {
+  jest.replaceProperty(Platform, "OS", "android");
+  let failSchedule!: (error: Error) => void;
+  mockSaveNotifications.mockResolvedValueOnce(undefined);
+  mockScheduleNotifications.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { failSchedule = reject; }));
+  await clickText("保存并重排提醒");
+  expect(mockScheduleNotifications).toHaveBeenCalledTimes(1);
+  act(() => tree.unmount());
+  await act(async () => { tree = renderer.create(<SettingsScreen />); });
+  expect(tree.root.findAllByType(SmartDateInput).every(field => field.props.disabled)).toBe(true);
+  await act(async () => { failSchedule(new Error("native schedule unavailable")); });
+  expect(tree.root.findAllByType(SmartDateInput).every(field => !field.props.disabled)).toBe(true);
+  mockSaveNotifications.mockResolvedValueOnce(undefined);
+  await clickText("保存并重排提醒");
+  expect(mockSaveNotifications).toHaveBeenCalledTimes(2);
+  expect(mockScheduleNotifications).toHaveBeenCalledTimes(2);
+});
+it("reauthentication of the same user has a separate lock and ignores the old response", async () => {
+  jest.replaceProperty(Platform, "OS", "android");
+  mockCurrent.mockImplementation((id?: number, generation?: number) => id === mockUser.id && generation === mockSessionGeneration);
+  let finishOld!: () => void;
+  mockSaveNotifications.mockImplementationOnce(() => new Promise<void>(resolve => { finishOld = resolve; }));
+  await clickText("保存并重排提醒");
+  act(() => tree.unmount());
+  mockSessionGeneration = 6; mockToken = "token-A-new";
+  mockReadNotifications.mockResolvedValue({ ...mockPreferences, breakfast_time: "10:00" });
+  await act(async () => { tree = renderer.create(<SettingsScreen />); });
+  expect(tree.root.findAllByType(SmartDateInput).every(field => !field.props.disabled)).toBe(true);
+  mockSaveNotifications.mockResolvedValueOnce(undefined);
+  await clickText("保存并重排提醒");
+  await act(async () => { finishOld(); });
+  expect(mockSaveNotifications).toHaveBeenLastCalledWith("token-A-new", { ...mockPreferences, breakfast_time: "10:00" });
+  expect(mockScheduleNotifications.mock.calls.map(call => call[0].breakfast_time)).toEqual(["10:00"]);
+});
+it("logout before a pending response prevents any late native scheduling", async () => {
+  jest.replaceProperty(Platform, "OS", "android");
+  let finishOld!: () => void;
+  mockSaveNotifications.mockImplementationOnce(() => new Promise<void>(resolve => { finishOld = resolve; }));
+  await clickText("保存并重排提醒");
+  act(() => tree.unmount());
+  mockCurrent.mockReturnValue(false);
+  await act(async () => { finishOld(); });
+  expect(mockScheduleNotifications).not.toHaveBeenCalled();
+});

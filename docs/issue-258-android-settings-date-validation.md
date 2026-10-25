@@ -23,7 +23,7 @@ Existing dependencies copied into this workspace from the prior task, after conf
 
 | Check | Result |
 | --- | --- |
-| `jest --runInBand` | PASS: 116 suites, 809 tests |
+| `jest --runInBand` | PASS: 116 suites, 812 tests |
 | `tsc --noEmit` | PASS |
 | `eslint ./ --quiet` | PASS |
 | `CI=1 EXPO_OFFLINE=1 expo export --platform web` | PASS; static export only, no APK |
@@ -41,7 +41,7 @@ Logs outside the tracked repository: `../client-tests.log`, `../client-tsc.log`,
 - Same-device light/dark/large-font screenshots, actual hardware back/native cancel interactions, landscape/keyboard/safe-area touch checks and browser visual regression remain pending. Web export and native-input component tests are not browser/Android visual evidence.
 - No iOS build/device test, APK build, backend/admin builds or server integration tests run; those implementations are unchanged. Full-repository build budget script requires unrelated server/admin build outputs, so only the affected client budget was checked.
 - Initial `git fetch origin main` failed with `Could not resolve host: github.com`. No retry/escalation was used; the read-only connector verified main and the complete commit already existed in the local clone.
-- Independent review of `a07a2a9` found one P2: the component-local reminder lock allowed a new mounted instance to save/schedule before an older response, after which old scheduling could win. The follow-up fix coordinates the entire write-through-schedule operation across instances and preserves scheduling for a successful same-session write after unmount. Review recheck of the follow-up commit remains coordinated by the parent thread. No push, PR, merge, deployment, Issue edits, real SMS, paid API calls or real device data operations were performed.
+- Independent review of `a07a2a9` found one P2: the component-local reminder lock allowed a new mounted instance to save/schedule before an older response, after which old scheduling could win. The follow-up fix coordinates the entire write-through-schedule operation across instances and preserves scheduling for a successful same-session write after unmount. The original reviewer independently rechecked `c78b01ef6498454c4b64b4ca9fefcbc7e50e34a1`, closed that P2 and found no new blockers; this does not close the pending visual/device acceptance items. No push, PR, merge, deployment, Issue edits, real SMS, paid API calls or real device data operations were performed.
 
 
 ## Independent review follow-up
@@ -50,3 +50,11 @@ Logs outside the tracked repository: `../client-tests.log`, `../client-tsc.log`,
 - The task-4 review report is `/Users/adlin/Documents/Codex/2026-10-25/task-4/review-258-a07a2a9.md`. Its actual unmount/create race is covered with the corrected expectation: a recreated form remains disabled through both delayed HTTP response and delayed native scheduling, rereads the committed 09:00, then accepts 10:00. Schedule order is 09:00 then 10:00, never the reverse.
 - Additional cases verify a lone successful request still schedules after unmount, a failed pending request releases the lock and permits reread/retry, and switching from account A/session 4/token A to B/session 5/token B lets B save while A's late response cannot schedule.
 - Full client regression after the fix: 116 suites / 809 tests PASS. The final strengthened A-to-B account-switch test was additionally rerun with the 16-test settings suite; TypeScript and full client ESLint were rerun. Web export, client budget and architecture checks passed again. These are still mock/native-property checks, not real-device verification.
+
+
+## Final independent review and retained edge regressions
+
+- Read-only review report: `/Users/adlin/Documents/Codex/2026-10-25/task-4/review-258-c78b01ef.md`; the reviewer independently passed 7 related suites / 84 tests on the frozen implementation, then 19 settings tests after adding three edge cases in the isolated snapshot.
+- Those three cases are now retained in this branch's `client/screens/settings/index.test.tsx`: native scheduling failure releases the remounted form for retry; reauthentication of the same user creates a separate session lock and ignores the old response; logout without a replacement settings instance prevents late scheduling.
+- Final full client test run: 116 suites / 812 tests PASS (including all 19 settings cases). Full client TypeScript, ESLint and diff checks pass. This final retention change affects only tests and this validation record; product implementation stays exactly at reviewed `c78b01ef`, so the successful Web export, budget and architecture checks above remain applicable and were not needlessly repeated.
+- Independent code review is complete with no outstanding blocker. The visual, browser and Android/iOS device limitations above remain explicit and unchanged; no issue checkboxes or release actions were performed.

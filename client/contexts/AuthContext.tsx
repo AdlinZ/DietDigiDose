@@ -22,6 +22,7 @@ interface User {
   daily_calories_target?: number | null;
   phone_verified_at?: string | null;
   hasPassword?: boolean;
+  role?: string;
 }
 
 type PendingSmsRegistration = {
@@ -48,7 +49,7 @@ interface AuthContextType {
   isSessionCurrent: (userId: number, generation: number) => boolean;
   updateProfile: (data: Partial<User>) => Promise<{ success: boolean; error?: string }>;
   deleteAccount: (proof: string | AccountDeletionProof) => Promise<{ success: boolean; error?: string }>;
-  refreshUser: () => Promise<void>;
+  refreshUser: () => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -284,10 +285,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [token, user, logout, sessionGeneration]);
 
   const refreshUser = useCallback(async () => {
-    if (!token) return;
+    if (!token) return false;
     try {
       const data = await authApi.me<User>(token);
-      await sessionCoordinator.current.updateIfCurrent(sessionGeneration, async () => {
+      return await sessionCoordinator.current.updateIfCurrent(sessionGeneration, async () => {
         await AsyncStorage.setItem(AUTH_USER_KEY, JSON.stringify(storedAuthIdentity(data)));
         setUser(data);
       });
@@ -295,7 +296,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (e instanceof ApiError && (e.status === 401 || e.code === 'ACCOUNT_DISABLED')) {
         await logout(e.code === 'ACCOUNT_DISABLED' ? '账号已停用，请联系管理员了解详情。' : '登录会话已失效，请重新登录。');
       }
-      // Ignore
+      return false;
     }
   }, [token, logout, sessionGeneration]);
 

@@ -201,3 +201,17 @@ it("cancels the previous account's local reminders on direct account switch and 
   await act(async () => { await auth.logout(); });
   expect(cancelAllLocalNotificationsForUser).toHaveBeenCalledWith(userB.id);
 });
+
+it("reports refresh completion and keeps bound contact details out of durable storage", async () => {
+  await mount();
+  await expect(auth.refreshUser()).resolves.toBe(false);
+  await loginAsB();
+  const boundUser = { ...userB, phone: "13800000000", email: "b@example.invalid", hasPassword: true, phone_verified_at: "2026-10-25", role: "user" };
+  jest.mocked(authApi.me).mockResolvedValueOnce(boundUser);
+  await act(async () => { expect(await auth.refreshUser()).toBe(true); });
+  expect(auth.user).toEqual(boundUser);
+  expect(JSON.parse((await AsyncStorage.getItem(AUTH_USER_KEY))!)).toEqual({ id: 2, username: "B", hasPassword: true, phone_verified_at: "2026-10-25" });
+  jest.mocked(authApi.me).mockRejectedValueOnce(new Error("offline"));
+  await act(async () => { expect(await auth.refreshUser()).toBe(false); });
+  expect(auth.user).toEqual(boundUser);
+});

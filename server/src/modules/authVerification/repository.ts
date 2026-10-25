@@ -1,4 +1,5 @@
 import type {
+  PhoneBindingUser, PhoneBindingInput, PhoneBindingResult,
   ChallengeCreate,
   DeliveryReport,
   EventFilters,
@@ -13,6 +14,8 @@ import type {
 } from "./types.js";
 
 export interface AuthVerificationRepository {
+  phoneBindingUser(userId: number): Promise<PhoneBindingUser | null>;
+  bindPhone(input: PhoneBindingInput): Promise<PhoneBindingResult>;
   settings(keys: string[]): Promise<Record<string, string>>;
   saveSettings(entries: Array<{ key: string; value: string }>): Promise<void>;
   findOrCreateSubject(input: Omit<VerificationSubject, "id" | "user_id"> & { provider: string }): Promise<VerificationSubject>;

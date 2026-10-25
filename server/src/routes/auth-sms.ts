@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
-import { ACCOUNT_PASSWORD_REQUIREMENTS, accountPasswordSchema, ACCOUNT_SECURITY_CAPABILITY, reauthSendSchema, reauthVerifySchema, passwordRecoverySendSchema, passwordRecoveryVerifySchema, type ReauthPurpose } from "@dietdigidose/contracts";
+import { ACCOUNT_PASSWORD_REQUIREMENTS, accountPasswordSchema, ACCOUNT_SECURITY_CAPABILITY, reauthSendSchema, reauthVerifySchema, passwordRecoverySendSchema, passwordRecoveryVerifySchema, phoneBindingSendSchema, phoneBindingVerifySchema, type ReauthPurpose } from "@dietdigidose/contracts";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import type { ReauthUser } from "../modules/authVerification/types.js";
 import bcrypt from "bcryptjs";
@@ -28,7 +28,8 @@ import { getRateLimitClientIp, sharedRateLimit } from "../middleware/sharedRateL
 
 const router = Router();
 export const passwordRecoveryRouter = Router();
-type SmsPurpose = "login" | ReauthPurpose | "password_recovery";
+type SmsPurpose = "login" | ReauthPurpose | "password_recovery" | "phone_bind";
+export const phoneBindingRouter = Router();
 const recoveryRateLimit = (namespace: string, limit: number, key: (req: Request) => string = getRateLimitClientIp) =>
   sharedRateLimit({ namespace: `password-recovery-${namespace}`, limit, windowMs: 15 * 60_000, key,
     message: "恢复请求过于频繁，请稍后重试", code: "PASSWORD_RECOVERY_RATE_LIMITED" });
@@ -132,7 +133,7 @@ async function sendSms(req: Request, res: Response, purpose: SmsPurpose = "login
         eventType: "send_rejected",
         outcome: "provider_error",
         providerCode: result.code,
-        providerMessage: purpose === "password_recovery" ? undefined : result.message,
+        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" ? undefined : result.message,
         providerRequestId: result.requestId,
         bizId: result.bizId,
         outId,
@@ -150,7 +151,7 @@ async function sendSms(req: Request, res: Response, purpose: SmsPurpose = "login
         eventType: "send_accepted",
         outcome: "accepted",
         providerCode: result.code,
-        providerMessage: purpose === "password_recovery" ? undefined : result.message,
+        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" ? undefined : result.message,
         providerRequestId: result.requestId,
         bizId: result.bizId,
         outId,
@@ -228,7 +229,7 @@ async function verifySms(req: Request, res: Response, purpose: SmsPurpose = "log
         eventType: "verify_failed",
         outcome: "provider_error",
         providerCode: result.code,
-        providerMessage: purpose === "password_recovery" ? undefined : result.message,
+        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" ? undefined : result.message,
         sourceIp,
         userAgent,
         outId: challenge.out_id,
@@ -245,7 +246,7 @@ async function verifySms(req: Request, res: Response, purpose: SmsPurpose = "log
         eventType: "verify_failed",
         outcome: "mismatch",
         providerCode: result.code,
-        providerMessage: purpose === "password_recovery" ? undefined : result.message,
+        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" ? undefined : result.message,
         sourceIp,
         userAgent,
         outId: challenge.out_id,
@@ -255,6 +256,17 @@ async function verifySms(req: Request, res: Response, purpose: SmsPurpose = "log
     }
 
     await incrementDailyUsage("verify_passed");
+    if (purpose === "phone_bind") {
+      if (!boundUser) return sendError(res,403,"绑定验证已失效","PHONE_BINDING_INVALID");
+      const result = await authVerificationService().bindPhone({ userId: boundUser.id,
+        sessionVersion: boundUser.session_version, challengeId, phone });
+      if (result !== "bound") {
+        await authVerificationService().failChallenge(challengeId);
+        return sendError(res, result === "phone_exists" ? 409 : 403,
+          "绑定已失效或手机号已被占用，请重新验证", result === "phone_exists" ? "PHONE_EXISTS" : "PHONE_BINDING_INVALID");
+      }
+      return res.json({ success: true, phoneMasked: maskedSubjectPhone(subject) });
+    }
     if (purpose === "password_recovery") {
       if (!boundUser || !boundUser.phone_verified_at || boundUser.is_disabled || challenge.reauth_user_id !== boundUser.id
         || challenge.reauth_session_version !== boundUser.session_version || phone !== boundUser.phone) {
@@ -354,6 +366,38 @@ passwordRecoveryRouter.post("/verify", recoveryRateLimit("verify-ip", 30), async
     const challenge = await authVerificationService().challenge(parsed.data.challengeId);
     const user = challenge?.reauth_user_id ? await authVerificationService().reauthUser(challenge.reauth_user_id) : null;
     return await verifySms(req,res,"password_recovery",user ?? undefined);
+  } catch (error) { return next(error); }
+});
+
+phoneBindingRouter.use(authMiddleware);
+phoneBindingRouter.use(sharedRateLimit({ namespace: "phone-binding-ip", key: getRateLimitClientIp, limit: 30, windowMs: 15 * 60_000,
+  message: "绑定请求过于频繁，请稍后重试", code: "PHONE_BINDING_RATE_LIMITED" }));
+phoneBindingRouter.post("/send", sharedRateLimit({ namespace: "phone-binding-password", limit: 5, windowMs: 15 * 60_000,
+  key: (req) => String((req as AuthRequest).userId), message: "绑定请求过于频繁，请稍后重试", code: "PHONE_BINDING_RATE_LIMITED" }), async (req: AuthRequest,res,next) => {
+  try {
+    const parsed = phoneBindingSendSchema.safeParse(req.body);
+    if (!parsed.success) return sendError(res,400,"请输入当前密码和有效的中国大陆手机号","INVALID_PHONE_BINDING_INPUT");
+    const user = await authVerificationService().phoneBindingUser(req.userId!);
+    if (!user || user.phone !== null || !user.email || !user.password_hash || user.role !== "user" || user.is_disabled)
+      return sendError(res,403,"此账号不支持首次绑定手机号","PHONE_BINDING_INELIGIBLE");
+    if (!await bcrypt.compare(parsed.data.currentPassword,user.password_hash))
+      return sendError(res,403,"当前密码不正确","INVALID_PASSWORD");
+    if (await authVerificationService().userByPhone(parsed.data.phone))
+      return sendError(res,409,"该手机号已被使用","PHONE_EXISTS");
+    return await sendSms(req,res,"phone_bind",{ ...user, phone: parsed.data.phone });
+  } catch (error) { return next(error); }
+});
+phoneBindingRouter.post("/verify", async (req: AuthRequest,res,next) => {
+  try {
+    const parsed = phoneBindingVerifySchema.safeParse(req.body);
+    if (!parsed.success) return sendError(res,400,"请输入有效的验证码","INVALID_VERIFICATION_INPUT");
+    const user = await authVerificationService().phoneBindingUser(req.userId!);
+    if (!user || user.phone !== null || !user.email || !user.password_hash || user.role !== "user" || user.is_disabled)
+      return sendError(res,403,"此账号不支持首次绑定手机号","PHONE_BINDING_INELIGIBLE");
+    const challenge = await authVerificationService().challenge(parsed.data.challengeId);
+    if (!challenge || challenge.purpose !== "phone_bind" || challenge.reauth_user_id !== user.id || challenge.reauth_session_version !== user.session_version)
+      return sendError(res,403,"绑定验证已失效，请重新获取","PHONE_BINDING_INVALID");
+    return await verifySms(req,res,"phone_bind",{ ...user, phone: decryptSubjectPhone(challengeSubject(challenge)) });
   } catch (error) { return next(error); }
 });
 

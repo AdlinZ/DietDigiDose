@@ -1,3 +1,4 @@
+import { verifyPhoneBindingHttp } from "./phoneBindingHttpAssertions.js";
 import { verifyPasswordRecoveryHttp } from "./passwordRecoveryHttpAssertions.js";
 import assert from "node:assert/strict";
 import type Database from "better-sqlite3";
@@ -66,6 +67,7 @@ export async function verifyAccountSecurityHttp(api: Api, db: Database.Database)
     assert.equal((await request("/account",{reauthToken:directDelete,confirmation:"DELETE"},noPassword.token,"DELETE")).status,200);
     assert.equal(db.prepare("SELECT id FROM users WHERE id=?").get(noPassword.user.id),undefined);
     await verifyPasswordRecoveryHttp(api,db);
+    await verifyPhoneBindingHttp(api,db);
   } finally {
     setSmsProviderForTests(null);
     if(previousKey===undefined) delete process.env.ALIYUN_ACCESS_KEY_ID;else process.env.ALIYUN_ACCESS_KEY_ID=previousKey;

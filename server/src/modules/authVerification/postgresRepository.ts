@@ -3,12 +3,49 @@ import type { AuthVerificationRepository } from "./repository.js";
 import type {
   ChallengeCreate, DeliveryReport, EventFilters, RegistrationResult, UsageCounter,
   VerificationChallenge, VerificationEventInput, VerificationSubject,
-  ReauthUser, ReauthGrantInput,
+  ReauthUser, ReauthGrantInput, PhoneBindingUser, PhoneBindingInput, PhoneBindingResult,
 } from "./types.js";
 
 export class PostgresAuthVerificationRepository implements AuthVerificationRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+
+  async phoneBindingUser(userId: number) {
+    return (await this.pool.query("SELECT id,email,phone,password_hash,phone_verified_at,session_version,is_disabled,role FROM users WHERE id=$1", [userId])).rows[0] as PhoneBindingUser | undefined ?? null;
+  }
+
+  async bindPhone(input: PhoneBindingInput): Promise<PhoneBindingResult> {
+    try {
+      return await this.tx(async (client) => {
+        // Same user-first lock order as password changes/deletion; phone lock also coordinates registration.
+        await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [input.userId]);
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`auth:phone:${input.phone}`]);
+        // Acquire challenge/subject locks before evaluating time-sensitive predicates.
+        await client.query(`SELECT c.id FROM auth_verification_challenges c
+          JOIN auth_verification_subjects s ON s.id=c.subject_id WHERE c.id=$1 FOR UPDATE OF c,s`, [input.challengeId]);
+        const valid = await client.query(`SELECT c.subject_id,s.provider FROM users u
+          JOIN auth_verification_challenges c ON c.reauth_user_id=u.id
+          JOIN auth_verification_subjects s ON s.id=c.subject_id
+          WHERE u.id=$1 AND u.phone IS NULL AND u.email IS NOT NULL AND u.password_hash IS NOT NULL
+          AND u.role='user' AND NOT COALESCE(u.is_disabled,FALSE) AND u.session_version=$2
+          AND c.id=$3 AND c.purpose='phone_bind' AND c.reauth_session_version=u.session_version
+          AND c.status='verifying' AND c.consumed_at IS NULL AND c.expires_at>clock_timestamp()
+          AND s.subject_hmac=$4 AND s.channel='sms' AND s.user_id IS NULL FOR UPDATE OF c,s`,
+          [input.userId,input.sessionVersion,input.challengeId,input.subjectHmac]);
+        if (!valid.rowCount) return "invalid";
+        if ((await client.query("SELECT 1 FROM users WHERE phone=$1", [input.phone])).rowCount) return "phone_exists";
+        await client.query("UPDATE users SET phone=$1,phone_verified_at=clock_timestamp() WHERE id=$2", [input.phone,input.userId]);
+        await client.query("UPDATE auth_verification_subjects SET user_id=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2", [input.userId,valid.rows[0].subject_id]);
+        await client.query("UPDATE auth_verification_challenges SET status='consumed',verified_at=CURRENT_TIMESTAMP,consumed_at=CURRENT_TIMESTAMP WHERE id=$1", [input.challengeId]);
+        await this.insertEvent(client, valid.rows[0].provider, { subjectId: Number(valid.rows[0].subject_id), challengeId: input.challengeId, eventType: "phone_bind", outcome: "succeeded" });
+        return "bound";
+      });
+    } catch (error) {
+      // tx rolls back before translating a uniqueness race to a public conflict.
+      if ((error as {code?: string; constraint?: string}).code === "23505" && (error as {constraint?: string}).constraint?.includes("phone")) return "phone_exists";
+      throw error;
+    }
+  }
 
   async settings(keys: string[]) {
     if (!keys.length) return {};

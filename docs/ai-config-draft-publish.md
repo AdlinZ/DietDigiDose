@@ -24,7 +24,7 @@ The resource/service pages preserve the existing design system, distinguish draf
 
 HTTP AI requests capture settings and environment fallbacks before route execution. Model bindings, policies, prompt and credentials resolve from that snapshot throughout the async execution. Accepted queued Agent requests retain their own in-memory snapshot; later accepted requests see the new published version. No credentials are added to Agent checkpoints or event logs.
 
-Snapshots are process-local. Cancelling or finishing an execution releases its captured configuration. Restart recovery, cross-process takeover, explicit resume and retry are new execution segments and read current published configuration; this change does not promise historical credential retention across process death. Agent Search remains unconnected and Fetch remains disabled.
+Snapshots are process-local. Cancelling or finishing an execution releases its captured configuration. New requests carry a server-owned marker requiring their accepted snapshot. Automatic recovery or cross-process takeover without that snapshot fails with AI_CONFIGURATION_SNAPSHOT_LOST before any model call, rather than silently continuing the old request under new credentials. Explicit user resume/retry begins a new execution segment using current published configuration. Legacy runs created before this marker retain their existing recovery behavior. No historical credentials are persisted in checkpoints. Agent Search remains unconnected and Fetch remains disabled.
 
 ## Verification (local, Node 22.23.2)
 

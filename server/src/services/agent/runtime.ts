@@ -829,9 +829,12 @@ function createSupervisorGraph() {
 let graph: ReturnType<typeof createSupervisorGraph> | undefined;
 function supervisorGraph() { return graph ||= createSupervisorGraph(); }
 
-async function invokeRun(runId: string, resume?: AgentResumePayload) {
+async function invokeRun(runId: string, resume?: AgentResumePayload, explicitRetry = false) {
   const stored = await getAgentRunInput(runId);
   if (!stored) throw new Error("Agent Run 不存在");
+  if (stored.input.metadata?.configurationSnapshotRequired === true && !acceptedConfigurations.has(runId) && !resume && !explicitRetry) {
+    throw new Error("AI_CONFIGURATION_SNAPSHOT_LOST");
+  }
   let legacyInputResume = false;
   if (resume && "input" in resume) {
     const checkpoint = await agentCheckpointer().getTuple({ configurable: { thread_id: stored.threadId, checkpoint_ns: "" } });
@@ -888,11 +891,11 @@ async function invokeRun(runId: string, resume?: AgentResumePayload) {
 
 // Queued requests keep the configuration captured on acceptance; secrets stay in memory, never checkpoints.
 const acceptedConfigurations = new Map<string, (work: () => Promise<void>) => Promise<void>>();
-function kickOff(runId: string, resume?: AgentResumePayload) {
+function kickOff(runId: string, resume?: AgentResumePayload, explicitRetry = false) {
   const existing = activeRuns.get(runId);
   if (existing) return existing;
   const execute = acceptedConfigurations.get(runId) || ((work: () => Promise<void>) => aiRuntimeService().withConfigurationSnapshot(work));
-  const promise = execute(() => invokeRun(runId, resume)).catch(async (error: unknown) => {
+  const promise = execute(() => invokeRun(runId, resume, explicitRetry)).catch(async (error: unknown) => {
     const current = await getAgentRunRow(runId);
     if (current?.status === "cancelled") return;
     const classified = classifyAIError(error);
@@ -943,7 +946,7 @@ export async function startSupervisorRun(
 ): Promise<AgentResponse> {
   const configuration = await aiRuntimeService().captureConfigurationSnapshot();
   const reusable = input.idempotencyKey ? await findReusableAgentRun(userId, input.idempotencyKey) : undefined;
-  const created = reusable || await createAgentRun(userId, { ...input, metadata: { ...input.metadata, runtimeVersion: 2, mainAssistantEnabled: process.env.AI_MAIN_ASSISTANT_ENABLED === "true", replyStreamEnabled: process.env.AI_REPLY_STREAM_ENABLED === "true" } });
+  const created = reusable || await createAgentRun(userId, { ...input, metadata: { ...input.metadata, runtimeVersion: 2, configurationSnapshotRequired: true, mainAssistantEnabled: process.env.AI_MAIN_ASSISTANT_ENABLED === "true", replyStreamEnabled: process.env.AI_REPLY_STREAM_ENABLED === "true" } });
   if (!reusable) acceptedConfigurations.set(created.id, configuration);
   if (onReplyDelta && !/(不要保存|不要写入|不保存|只给建议|仅给建议)/.test(input.prompt || "")) {
     replyDeltaListeners.set(created.id, onReplyDelta);
@@ -1010,7 +1013,7 @@ export async function retrySupervisorRun(userId: number, runId: string, waitMs =
   if (row.status !== "failed") throw new Error("只有失败的 Agent Run 可以重试");
   await agentCheckpointer().deleteThread(row.checkpoint_thread_id);
   await setAgentRunStatus(runId, "queued", { pendingApproval: null, pendingInput: null, errorCode: null, errorMessage: null });
-  kickOff(runId);
+  kickOff(runId, undefined, true);
   return waitForRun(runId, waitMs);
 }
 

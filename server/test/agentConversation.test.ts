@@ -298,16 +298,19 @@ test("HTTP Agent keeps model and credential version through a tool round trip wh
   const ready = new Promise<void>(resolve => { entered = resolve; });
   const gate = new Promise<void>(resolve => { release = resolve; });
   providerGate = async () => { entered(); await gate; };
-  let runId: string;
+  let runId: string | undefined;
   try {
   const http = await fetch(`http://127.0.0.1:${(appServer.address() as AddressInfo).port}/api/v1/ai/chat`, {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${userToken}` },
     body: JSON.stringify({ prompt: '读取我的营养上下文，不保存、不执行操作。' }), signal: AbortSignal.timeout(10_000),
   });
   const response = await http.json() as { run: { id: string } };
-  assert.equal(http.status, 200); runId = response.run.id; await waitForGate(ready);
+  runId = response.run?.id; assert.equal(http.status, 202); assert.ok(runId); await waitForGate(ready);
   await publish('fixture-after-publish', 'fixture-after');
-  } finally { providerGate = undefined; release(); }
+  } finally {
+    providerGate = undefined; release();
+    if (runId) await runtime.waitForSupervisorRunCompletion(runId).catch(() => undefined);
+  }
   const completed = await runtime.waitForSupervisorRunCompletion(runId!);
   assert.equal(completed.status, 'completed', JSON.stringify(completed.error));
   assert.equal(calls.length, 2);
@@ -319,4 +322,20 @@ test("HTTP Agent keeps model and credential version through a tool round trip wh
   assert.equal(calls.at(-1)?.model, 'fixture-after'); assert.equal(providerKeys.at(-1), 'Bearer fixture-after-publish');
   const serializedEvents = JSON.stringify(db.prepare('SELECT payload_json FROM agent_run_events WHERE run_id IN (?,?)').all(runId!, next.run.id));
   assert.equal(serializedEvents.includes('fixture-before-publish'), false); assert.equal(serializedEvents.includes('fixture-after-publish'), false);
+});
+
+
+test('automatic recovery never replaces a lost accepted snapshot; explicit retry starts a new segment', async () => {
+  const { createAgentRun } = await import('../src/services/agent/repository.js');
+  const lost = await createAgentRun(userId, { modality: 'text', prompt: '只读咨询，不执行操作。', metadata: { runtimeVersion: 2, configurationSnapshotRequired: true, mainAssistantEnabled: true } });
+  db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(lost.id);
+  calls = []; providerKeys = [];
+  await runtime.recoverAgentRuntime();
+  const failed = await runtime.waitForSupervisorRunCompletion(lost.id);
+  assert.equal(failed.status, 'failed'); assert.equal(failed.error?.code, 'AI_CONFIGURATION_SNAPSHOT_LOST');
+  assert.equal(calls.length, 0);
+  answers = [{ goal: '明确重试', specialists: [], reply: '新的执行完成。', candidates: [] }];
+  const retried = await runtime.retrySupervisorRun(userId, lost.id, 10000);
+  assert.equal(retried.status, 'completed', JSON.stringify(retried.error));
+  assert.equal(calls.at(-1)?.model, 'fixture-after'); assert.equal(providerKeys.at(-1), 'Bearer fixture-after-publish');
 });

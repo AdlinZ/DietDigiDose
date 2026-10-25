@@ -224,7 +224,7 @@ export function BatchReviewModal({ visible, foods, saving, locked = false, error
                           value={item.expirationDate || ""}
                           onChange={(expirationDate) => onChange(foods.map((food) => food.id === item.id ? { ...food, expirationDate, fieldEvidence: { ...food.fieldEvidence, expiration_date: { status: expirationDate ? "known" : "unknown", source: "user" } }, missingFields: expirationDate ? food.missingFields?.filter(field => !["保质期", "到期日期"].includes(field)) : food.missingFields } : food))}
                           placeholder="未知可留空"
-                          labelStyle={{ fontSize: 9 }}
+                          disabled={locked || saving}
                         />
                       </View>
                     </View>

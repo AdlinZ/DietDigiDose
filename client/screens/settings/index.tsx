@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useIsFocused } from "@react-navigation/native";
 import {
   View,
   Text,
@@ -7,11 +8,13 @@ import {
   Switch,
   Alert,
   Platform,
-  Modal,
+  Keyboard,
   TextInput,
   ActivityIndicator,
   Share,
 } from "react-native";
+import { SettingsModal } from "./SettingsModal";
+import { SmartDateInput } from "@/components/SmartDateInput";
 import { Screen } from "@/components/Screen";
 import { PhoneBindingSettings } from "@/components/PhoneBindingSettings";
 import { AccountSmsVerification } from "@/components/AccountSmsVerification";
@@ -49,52 +52,102 @@ import {
 
 export default function SettingsScreen() {
   const router = useSafeRouter();
+  const focused = useIsFocused();
   const { user, token, isAuthenticated, logout, updateProfile, deleteAccount, sessionGeneration, isSessionCurrent } = useAuth();
   const authFetch = useAuthFetch();
   const { preference: themePreference, setPreference: setThemePreference } = useThemePreference();
   const colors = useAppThemeColors();
 
+  const lifecycle = useRef(0);
+  const exitDestination = useRef({ mounted: true, focused, userId: user?.id });
+  useEffect(() => { exitDestination.current = { mounted: true, focused, userId: user?.id }; }, [focused, user?.id]);
+  useEffect(() => () => { exitDestination.current.mounted = false; }, []);
+  // Successful account removal changes auth generation itself; only a still-open,
+  // signed-out settings page should navigate after that expected change.
+  const canFinishExit = (owner: number) => exitDestination.current.mounted &&
+    exitDestination.current.focused && (owner === lifecycle.current || exitDestination.current.userId == null);
+
+  const notificationBusy = useRef<symbol | false>(false);
+  const calorieBusy = useRef<symbol | false>(false);
+  const calorieReadBusy = useRef<symbol | false>(false);
+  const deleteBusy = useRef<symbol | false>(false);
+  const logoutBusy = useRef<symbol | false>(false);
+  useEffect(() => {
+    notificationBusy.current = false;
+    setSavingNotifications(false);
+    calorieBusy.current = false; calorieReadBusy.current = false;
+    deleteBusy.current = false; logoutBusy.current = false;
+    setUpdatingCal(false); setLoadingCalorie(false); setDeletingAccount(false); setLoggingOut(false);
+  }, [token, sessionGeneration]);
+  useEffect(() => {
+    setCalorieModalOpen(false); setLogoutModalOpen(false); setDeleteModalOpen(false);
+    setDeletePassword(""); setDeleteReauthToken(null); setDeleteWithSms(false);
+    return () => { lifecycle.current++; };
+  }, [token, sessionGeneration, focused]);
+
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(DEFAULT_NOTIFICATION_PREFERENCES);
   const [savingNotifications, setSavingNotifications] = useState(false);
 
+  const [notificationReady, setNotificationReady] = useState(false);
+  const [notificationLoadAttempt, setNotificationLoadAttempt] = useState(0);
+  const [notificationError, setNotificationError] = useState("");
   useEffect(() => {
-    if (!token) return;
+    let active = true;
+    setNotificationReady(false);
+    setNotificationError("");
+    if (!token || !focused) return;
     void authApi.notificationPreferences<NotificationPreferences>(token).then((preferences) => {
-      setNotificationPreferences(preferences);
-    }).catch(() => undefined);
-  }, [token]);
+      if (active) { setNotificationPreferences(preferences); setNotificationReady(true); }
+    }).catch(() => { if (active) setNotificationError("无法读取提醒设置，请重试。"); });
+    return () => { active = false; };
+  }, [token, sessionGeneration, focused, notificationLoadAttempt]);
 
   const saveNotificationPreferences = async (next: NotificationPreferences, requestPermission = false) => {
+    if (notificationBusy.current || !notificationReady) return;
     if (!token) {
       Alert.alert("登录后开启提醒", "登录后可保存提醒偏好，并接收食材临期推送。");
       return;
     }
     const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
     if (![next.breakfast_time, next.lunch_time, next.dinner_time, next.water_start_time, next.water_end_time, next.quiet_start_time, next.quiet_end_time].every((value) => timePattern.test(value))) {
-      Alert.alert("时间格式有误", "请使用 24 小时制 HH:mm，例如 08:30。");
+      setNotificationError("请使用 24 小时制 HH:mm，例如 08:30。");
       return;
     }
+    const owner = lifecycle.current;
+    const current = () => owner === lifecycle.current && !!user && isSessionCurrent(user.id, sessionGeneration);
+    const operation = Symbol();
+    notificationBusy.current = operation;
+    setNotificationError("");
     const previous = notificationPreferences;
     setNotificationPreferences(next);
     setSavingNotifications(true);
     try {
       const pushToken = requestPermission ? await getExpoPushToken() : null;
+      if (!current()) return;
       await authApi.updateNotificationPreferences<NotificationPreferences>(token, next);
+      if (!user || !isSessionCurrent(user.id, sessionGeneration)) return;
       if (pushToken && Platform.OS !== "web") {
         const platform = Platform.OS === "android" ? "android" : "ios";
         await authApi.registerPushDevice(token, { expo_push_token: pushToken, platform });
       }
+      if (!user || !isSessionCurrent(user.id, sessionGeneration)) return;
       if (Platform.OS !== "web" && user && isSessionCurrent(user.id, sessionGeneration)) {
         await syncLocalNotificationSchedules(next, user?.id);
       }
+      if (!current()) return;
       if (requestPermission && Platform.OS !== "web" && !pushToken) {
         Alert.alert("未获得通知权限", "系统通知未授权；你仍可稍后在系统设置中允许通知后再次开启提醒。");
       }
     } catch (error) {
+      if (!current()) return;
       setNotificationPreferences(previous);
-      Alert.alert("保存失败", error instanceof Error ? error.message : "提醒设置暂未保存，请稍后重试");
+      setNotificationError(error instanceof Error ? error.message : "提醒设置暂未保存，请稍后重试");
     } finally {
-      setSavingNotifications(false);
+      if (notificationBusy.current === operation) {
+        notificationBusy.current = false; setSavingNotifications(false);
+        // A re-entered page may have read before the old write settled.
+        if (owner !== lifecycle.current) setNotificationLoadAttempt((value) => value + 1);
+      }
     }
   };
 
@@ -111,6 +164,7 @@ export default function SettingsScreen() {
   const [loadingCalorie, setLoadingCalorie] = useState(false);
 
   // Logout confirmation modal
+  const [loggingOut, setLoggingOut] = useState(false);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [clearingCache, setClearingCache] = useState(false);
   const [cacheSize, setCacheSize] = useState<number | null>(null);
@@ -244,33 +298,58 @@ export default function SettingsScreen() {
     }
   };
 
+  const closeCalorie = () => {
+    if (calorieBusy.current) return;
+    Keyboard.dismiss(); setCalorieModalOpen(false); setCalorieError("");
+  };
+  const closeDelete = () => {
+    if (deleteBusy.current) return;
+    Keyboard.dismiss(); setDeleteModalOpen(false); setDeletePassword(""); setDeleteReauthToken(null); setDeleteWithSms(false);
+  };
+  const closeLogout = () => { if (!logoutBusy.current) { Keyboard.dismiss(); setLogoutModalOpen(false); } };
+  const [calorieError, setCalorieError] = useState("");
+
   const openCalorieTarget = async () => {
-    if (!token || !user || loadingCalorie) return;
+    if (!token || !user || calorieReadBusy.current || calorieBusy.current) return;
+    const owner = lifecycle.current;
+    const operation = Symbol();
+    calorieReadBusy.current = operation;
+    setCalorieError("");
     setLoadingCalorie(true);
     try {
       const fresh = await authApi.me<{ daily_calories_target?: number | null }>(token);
-      if (!isSessionCurrent(user.id, sessionGeneration)) return;
+      if (owner !== lifecycle.current || !isSessionCurrent(user.id, sessionGeneration)) return;
       setCalorieTarget(fresh.daily_calories_target?.toString() || "");
       setCalorieModalOpen(true);
     } catch {
+      if (owner !== lifecycle.current || !isSessionCurrent(user.id, sessionGeneration)) return;
       Alert.alert("暂时无法读取热量目标", "请联网读取当前目标后再编辑，避免覆盖已有设置。");
-    } finally { setLoadingCalorie(false); }
+    } finally { if (calorieReadBusy.current === operation) { calorieReadBusy.current = false; setLoadingCalorie(false); } }
   };
 
   const handleSaveCalorie = async () => {
-    const val = parseInt(calorieTarget);
-    if (isNaN(val) || val < 1000 || val > 5000) {
-      Alert.alert("提示", "请输入 1000 ~ 5000 之间的合理热量值");
+    if (calorieBusy.current || !user) return;
+    const val = Number(calorieTarget);
+    if (!Number.isInteger(val) || val < 1000 || val > 5000) {
+      setCalorieError("请输入 1000 ~ 5000 之间的合理热量值");
       return;
     }
-    setUpdatingCal(true);
-    const res = await updateProfile({ daily_calories_target: val });
-    setUpdatingCal(false);
-    if (res.success) {
-      setCalorieModalOpen(false);
-      Alert.alert("成功", "每日目标热量已更新！");
-    } else {
-      Alert.alert("错误", res.error || "更新失败");
+    const owner = lifecycle.current;
+    const current = () => owner === lifecycle.current && isSessionCurrent(user.id, sessionGeneration);
+    const operation = Symbol();
+    calorieBusy.current = operation;
+    setUpdatingCal(true); setCalorieError(""); Keyboard.dismiss();
+    try {
+      const res = await updateProfile({ daily_calories_target: val });
+      if (!current()) return;
+      if (res.success) {
+        setCalorieModalOpen(false);
+        Alert.alert("成功", "每日目标热量已更新！");
+      } else setCalorieError(res.error || "更新失败，请重试");
+    } catch {
+      if (current()) setCalorieError("更新失败，请重试");
+    } finally {
+      if (calorieBusy.current === operation) { calorieBusy.current = false; setUpdatingCal(false); }
     }
   };
 
@@ -334,27 +413,44 @@ export default function SettingsScreen() {
   };
 
   const confirmLogout = async () => {
-    setLogoutModalOpen(false);
-    await stopVoiceOutput();
-    await logout();
-    router.replace("/login");
+    if (logoutBusy.current) return;
+    const operation = Symbol();
+    logoutBusy.current = operation;
+    setLoggingOut(true);
+    const owner = lifecycle.current;
+    try {
+      await stopVoiceOutput();
+      if (owner !== lifecycle.current) return;
+      await logout();
+      if (!canFinishExit(owner)) return;
+      setLogoutModalOpen(false);
+      router.replace("/login");
+    } catch { if (owner === lifecycle.current) Alert.alert("退出失败", "请稍后重试"); }
+    finally { if (logoutBusy.current === operation) { logoutBusy.current = false; setLoggingOut(false); } }
   };
 
   const confirmDeleteAccount = async () => {
+    if (deleteBusy.current) return;
     if (needsDeleteSms ? !deleteReauthToken : !deletePassword) {
       Alert.alert("请验证身份", needsDeleteSms ? "请通过绑定手机验证后再永久删除账号。" : "需要验证当前密码后才能永久删除账号。");
       return;
     }
+    const owner = lifecycle.current;
+    const operation = Symbol();
+    deleteBusy.current = operation;
     setDeletingAccount(true);
-    const result = await deleteAccount(needsDeleteSms ? {reauthToken:deleteReauthToken!} : deletePassword);
-    setDeletingAccount(false);
-    if (!result.success) {
-      Alert.alert("删除失败", result.error || "请稍后重试");
-      return;
-    }
-    setDeleteModalOpen(false);
-    setDeletePassword("");
-    router.replace("/login");
+    try {
+      const result = await deleteAccount(needsDeleteSms ? {reauthToken:deleteReauthToken!} : deletePassword);
+      if (!canFinishExit(owner)) return;
+      if (!result.success) {
+        Alert.alert("删除失败", result.error || "请稍后重试");
+        return;
+      }
+      setDeleteModalOpen(false);
+      setDeletePassword("");
+      router.replace("/login");
+    } catch { if (owner === lifecycle.current) Alert.alert("删除失败", "请稍后重试"); }
+    finally { if (deleteBusy.current === operation) { deleteBusy.current = false; setDeletingAccount(false); } }
   };
 
   return (
@@ -668,6 +764,7 @@ export default function SettingsScreen() {
                 </View>
               </View>
               <Switch
+                disabled={!notificationReady || savingNotifications}
                 value={notificationPreferences.expiring_alert}
                 onValueChange={(value) => void updateNotificationPreference("expiring_alert", value)}
                 trackColor={{ false: colors.line, true: colors["brand-fill"] }}
@@ -688,6 +785,7 @@ export default function SettingsScreen() {
                 </View>
               </View>
               <Switch
+                disabled={!notificationReady || savingNotifications}
                 value={notificationPreferences.meal_reminder}
                 onValueChange={(value) => void updateNotificationPreference("meal_reminder", value)}
                 trackColor={{ false: colors.line, true: colors["brand-fill"] }}
@@ -708,6 +806,7 @@ export default function SettingsScreen() {
                 </View>
               </View>
               <Switch
+                disabled={!notificationReady || savingNotifications}
                 value={notificationPreferences.water_reminder}
                 onValueChange={(value) => void updateNotificationPreference("water_reminder", value)}
                 trackColor={{ false: colors.line, true: colors["brand-fill"] }}
@@ -719,53 +818,35 @@ export default function SettingsScreen() {
               <Text className="text-sm font-black text-ink">个性化提醒计划</Text>
               <Text className="mt-1 text-[11px] leading-4 text-copy-muted">24 小时制；静默时段内不会安排三餐和饮水提醒。</Text>
 
-              <View className="mt-3 flex-row gap-2">
+              <View className="mt-3 flex-row flex-wrap gap-3">
                 {([
-                  ["早餐", "breakfast_time"],
-                  ["午餐", "lunch_time"],
-                  ["晚餐", "dinner_time"],
+                  ["早餐", "breakfast_time"], ["午餐", "lunch_time"], ["晚餐", "dinner_time"],
+                  ["饮水开始", "water_start_time"], ["饮水结束", "water_end_time"],
+                  ["静默开始", "quiet_start_time"], ["静默结束", "quiet_end_time"],
                 ] as const).map(([label, key]) => (
-                  <View key={key} className="flex-1">
-                    <Text className="mb-1 text-[10px] font-bold text-copy-muted">{label}</Text>
-                    <TextInput
-                      value={notificationPreferences[key]}
-                      onChangeText={(value) => setNotificationPreferences((current) => ({ ...current, [key]: value }))}
-                      placeholder="08:00"
-                      maxLength={5}
-                      className="rounded-xl border border-line bg-canvas px-3 py-2 text-center text-xs font-bold text-ink"
-                    />
+                  <View key={key} style={{ flexGrow: 1, flexBasis: 140 }}>
+                    <SmartDateInput label={label} mode="time" value={notificationPreferences[key]}
+                      disabled={!notificationReady || savingNotifications}
+                      onChange={(value) => { setNotificationError(""); setNotificationPreferences((current) => ({ ...current, [key]: value })); }}
+                      containerStyle={{ marginBottom: 0 }} />
                   </View>
                 ))}
               </View>
+              {!!notificationError && <Text accessibilityRole="alert" className="mt-3 text-body text-critical">{notificationError}</Text>}
+              {!notificationReady && <TouchableOpacity disabled={!token} onPress={() => setNotificationLoadAttempt((value) => value + 1)} className="min-h-touch justify-center py-3">
+                <Text className="text-body text-brand">{!token ? "登录后设置提醒" : notificationError ? "重新读取提醒设置" : "正在读取提醒设置…"}</Text>
+              </TouchableOpacity>}
 
-              <View className="mt-3 flex-row gap-2">
-                {([
-                  ["饮水开始", "water_start_time"],
-                  ["饮水结束", "water_end_time"],
-                  ["静默开始", "quiet_start_time"],
-                  ["静默结束", "quiet_end_time"],
-                ] as const).map(([label, key]) => (
-                  <View key={key} className="flex-1">
-                    <Text className="mb-1 text-center text-[9px] font-bold text-copy-muted">{label}</Text>
-                    <TextInput
-                      value={notificationPreferences[key]}
-                      onChangeText={(value) => setNotificationPreferences((current) => ({ ...current, [key]: value }))}
-                      maxLength={5}
-                      className="rounded-xl border border-line bg-canvas px-1 py-2 text-center text-[11px] font-bold text-ink"
-                    />
-                  </View>
-                ))}
-              </View>
-
-              <Text className="mb-2 mt-3 text-[10px] font-bold text-copy-muted">饮水间隔</Text>
+              <Text className="mb-2 mt-3 text-body font-bold text-copy-muted">饮水间隔</Text>
               <View className="flex-row gap-2">
                 {[60, 120, 180].map((minutes) => (
                   <TouchableOpacity
                     key={minutes}
+                    disabled={!notificationReady || savingNotifications}
                     onPress={() => setNotificationPreferences((current) => ({ ...current, water_interval_minutes: minutes }))}
-                    className={`flex-1 rounded-xl border py-2 ${notificationPreferences.water_interval_minutes === minutes ? "border-brand bg-brand/10" : "border-line bg-canvas"}`}
+                    className={`flex-1 min-h-touch justify-center rounded-xl border py-2 ${notificationPreferences.water_interval_minutes === minutes ? "border-brand bg-brand/10" : "border-line bg-canvas"}`}
                   >
-                    <Text className={`text-center text-[11px] font-bold ${notificationPreferences.water_interval_minutes === minutes ? "text-brand" : "text-copy-muted"}`}>{minutes / 60} 小时</Text>
+                    <Text className={`text-center text-body font-bold ${notificationPreferences.water_interval_minutes === minutes ? "text-brand" : "text-copy-muted"}`}>{minutes / 60} 小时</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -777,6 +858,7 @@ export default function SettingsScreen() {
                 ] as const).map(([label, key]) => (
                   <TouchableOpacity
                     key={key}
+                    disabled={!notificationReady || savingNotifications}
                     onPress={() => setNotificationPreferences((current) => ({ ...current, [key]: !current[key] }))}
                     className={`flex-1 rounded-xl border py-2.5 ${notificationPreferences[key] ? "border-brand bg-brand/10" : "border-line bg-canvas"}`}
                   >
@@ -786,7 +868,7 @@ export default function SettingsScreen() {
               </View>
 
               <TouchableOpacity
-                disabled={savingNotifications}
+                disabled={!notificationReady || savingNotifications}
                 onPress={() => void saveNotificationPreferences(notificationPreferences, notificationPreferences.meal_reminder || notificationPreferences.water_reminder || notificationPreferences.expiring_alert)}
                 className="mt-4 flex-row items-center justify-center gap-2 rounded-xl bg-brand-fill py-3 active:opacity-80"
               >
@@ -919,19 +1001,20 @@ export default function SettingsScreen() {
       </ScrollView>
 
       {/* 修改目标热量 Modal */}
-      <Modal visible={calorieModalOpen} animationType="slide" transparent>
-        <View className="flex-1 bg-black/40 justify-end">
+      <SettingsModal visible={calorieModalOpen} onClose={closeCalorie} sheet>
           <View className="bg-surface rounded-t-[36px] p-6 shadow-2xl border-t border-line">
             <View className="flex-row items-center justify-between mb-3 border-b border-background-secondary pb-3">
-              <View className="flex-row items-center gap-2.5">
+              <View className="flex-1 flex-row items-center gap-2.5">
                 <View className="w-8 h-8 rounded-xl bg-highlight/20 items-center justify-center">
                   <FontAwesome6 name="fire" size={14} colorClassName="accent-warm" />
                 </View>
-                <Text className="text-lg font-black text-ink">设置每日目标热量</Text>
+                <Text className="flex-1 text-lg font-black text-ink">设置每日目标热量</Text>
               </View>
               <TouchableOpacity
-                onPress={() => setCalorieModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-background-secondary items-center justify-center"
+                onPress={closeCalorie}
+                disabled={updatingCal}
+                accessibilityRole="button" accessibilityLabel="取消热量设置"
+                className="w-touch h-touch rounded-full bg-background-secondary items-center justify-center"
               >
                 <FontAwesome6 name="xmark" size={14} colorClassName="accent-copy-muted" />
               </TouchableOpacity>
@@ -949,8 +1032,9 @@ export default function SettingsScreen() {
                 return (
                   <TouchableOpacity
                     key={preset}
-                    onPress={() => setCalorieTarget(preset)}
-                    className={`px-4 py-2 rounded-2xl border ${
+                    disabled={updatingCal}
+                    onPress={() => { setCalorieError(""); setCalorieTarget(preset); }}
+                    className={`min-h-touch justify-center px-4 py-2 rounded-2xl border ${
                       isSelected
                         ? "bg-brand-fill border-brand"
                         : "bg-canvas border-line"
@@ -975,13 +1059,16 @@ export default function SettingsScreen() {
                   const curr = parseInt(calorieTarget) || 2000;
                   setCalorieTarget(Math.max(1000, curr - 50).toString());
                 }}
-                className="w-9 h-9 rounded-xl bg-surface border border-line items-center justify-center"
+                disabled={updatingCal}
+                className="w-touch h-touch rounded-xl bg-surface border border-line items-center justify-center"
               >
                 <FontAwesome6 name="minus" size={12} colorClassName="accent-ink" />
               </TouchableOpacity>
               <TextInput
                 value={calorieTarget}
-                onChangeText={setCalorieTarget}
+                editable={!updatingCal}
+                accessibilityLabel="每日目标热量"
+                onChangeText={(value) => { setCalorieError(""); setCalorieTarget(value); }}
                 keyboardType="numeric"
                 placeholder="2100"
                 className="flex-1 text-center text-xl font-black text-ink"
@@ -992,12 +1079,14 @@ export default function SettingsScreen() {
                   const curr = parseInt(calorieTarget) || 2000;
                   setCalorieTarget(Math.min(5000, curr + 50).toString());
                 }}
-                className="w-9 h-9 rounded-xl bg-surface border border-line items-center justify-center"
+                disabled={updatingCal}
+                className="w-touch h-touch rounded-xl bg-surface border border-line items-center justify-center"
               >
                 <FontAwesome6 name="plus" size={12} colorClassName="accent-ink" />
               </TouchableOpacity>
             </View>
 
+            {!!calorieError && <Text accessibilityRole="alert" className="mb-3 text-body text-critical">{calorieError}</Text>}
             <TouchableOpacity
               onPress={handleSaveCalorie}
               disabled={updatingCal}
@@ -1010,12 +1099,10 @@ export default function SettingsScreen() {
               )}
             </TouchableOpacity>
           </View>
-        </View>
-      </Modal>
+      </SettingsModal>
 
       {/* 退出登录确认 Modal */}
-      <Modal visible={logoutModalOpen} animationType="fade" transparent>
-        <View className="flex-1 bg-black/50 items-center justify-center p-6">
+      <SettingsModal visible={logoutModalOpen} onClose={closeLogout}>
           <View className="bg-surface rounded-[32px] p-6 w-full max-w-sm items-center shadow-2xl border border-line">
             <View className="w-16 h-16 rounded-full bg-danger-soft border border-critical/30 items-center justify-center mb-4">
               <FontAwesome6 name="arrow-right-from-bracket" size={24} colorClassName="accent-critical" />
@@ -1027,7 +1114,8 @@ export default function SettingsScreen() {
 
             <View className="flex-row gap-3 w-full">
               <TouchableOpacity
-                onPress={() => setLogoutModalOpen(false)}
+                onPress={closeLogout}
+                disabled={loggingOut}
                 className="flex-1 bg-background-secondary py-3.5 rounded-2xl items-center border border-line"
               >
                 <Text className="text-xs font-bold text-copy-muted">取消</Text>
@@ -1035,18 +1123,17 @@ export default function SettingsScreen() {
 
               <TouchableOpacity
                 onPress={confirmLogout}
+                disabled={loggingOut}
                 className="flex-1 bg-critical-fill py-3.5 rounded-2xl items-center shadow-xs active:opacity-90"
               >
-                <Text className="text-xs font-bold text-white">确认退出</Text>
+                <Text className="text-xs font-bold text-white">{loggingOut ? "正在退出…" : "确认退出"}</Text>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
-      </Modal>
+      </SettingsModal>
 
       {/* 永久删除账号 Modal */}
-      <Modal visible={deleteModalOpen} animationType="fade" transparent>
-        <View className="flex-1 bg-black/50 items-center justify-center p-6">
+      <SettingsModal visible={deleteModalOpen} onClose={closeDelete}>
           <View className="bg-surface rounded-[32px] p-6 w-full max-w-sm shadow-2xl border border-line">
             <View className="w-14 h-14 rounded-full bg-danger-soft border border-critical/40 items-center justify-center mb-3 self-center">
               <FontAwesome6 name="triangle-exclamation" size={22} colorClassName="accent-critical" />
@@ -1067,7 +1154,7 @@ export default function SettingsScreen() {
             <View className="flex-row gap-3">
               <TouchableOpacity
                 disabled={deletingAccount}
-                onPress={() => { setDeleteModalOpen(false); setDeletePassword(""); setDeleteReauthToken(null);setDeleteWithSms(false); }}
+                onPress={closeDelete}
                 className="flex-1 bg-background-secondary py-3.5 rounded-2xl items-center border border-line"
               >
                 <Text className="text-xs font-bold text-copy-muted">取消</Text>
@@ -1085,8 +1172,7 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
-      </Modal>
+      </SettingsModal>
     </Screen>
   );
 }

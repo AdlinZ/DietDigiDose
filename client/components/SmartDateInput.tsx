@@ -1,4 +1,4 @@
-import React, { useState, useMemo, createElement } from 'react';
+import React, { useState, useMemo, useRef, useEffect, createElement } from 'react';
 import { 
   View, 
   Text, 
@@ -23,6 +23,8 @@ import { useThemePreference } from '@/contexts/ThemeContext';
 // 如果需要传回给后端，我们再转回 ISO 格式。
 
 interface SmartDateInputProps {
+  disabled?: boolean;
+  accessibilityLabel?: string;
   label?: string;           // 表单标题 (可选)
   value?: string | null;    // 服务端返回的时间字符串 (ISO 8601, 带 T)
   onChange: (isoDate: string) => void; // 回调给父组件的值，依然是标准 ISO 字符串
@@ -43,7 +45,9 @@ interface SmartDateInputProps {
 }
 
 export const SmartDateInput = ({ 
-  label, 
+  label,
+  accessibilityLabel,
+  disabled = false,
   value, 
   onChange, 
   placeholder = '请选择',
@@ -60,6 +64,12 @@ export const SmartDateInput = ({
   iconSize = 18
 }: SmartDateInputProps) => {
   const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
+  const pickerSession = useRef(0);
+  const pickerOpen = useRef(false);
+  const session = pickerSession.current;
+  useEffect(() => () => { pickerOpen.current = false; pickerSession.current++; }, []);
+  if (disabled && isDatePickerVisible) setDatePickerVisibility(false);
+  useEffect(() => { if (disabled) pickerOpen.current = false; }, [disabled]);
   const colors = useAppThemeColors();
   const { resolvedTheme } = useThemePreference();
   const styles = createStyles(colors);
@@ -74,6 +84,9 @@ export const SmartDateInput = ({
   // 解析服务端值，确保无效值不传给控件；time 模式兼容仅时间字符串
   const parsedValue = useMemo(() => {
     if (!value) return null;
+    if (mode === 'time' && /^\d{2}:\d{2}$/.test(value)) {
+      return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? dayjs(`1970-01-01T${value}`) : null;
+    }
 
     const direct = dayjs(value);
     if (direct.isValid()) return direct;
@@ -105,11 +118,15 @@ export const SmartDateInput = ({
   const showDatePicker = () => {
     // 【关键点】打开日期控件前，必须强制收起键盘！
     // 否则键盘会遮挡 iOS 的底部滚轮，或者导致 Android 焦点混乱
+    if (disabled || pickerOpen.current) return;
+    pickerOpen.current = true;
+    pickerSession.current++;
     Keyboard.dismiss(); 
     setDatePickerVisibility(true);
   };
 
   const hideDatePicker = () => {
+    pickerOpen.current = false;
     setDatePickerVisibility(false);
   };
 
@@ -121,11 +138,12 @@ export const SmartDateInput = ({
   };
 
   const handleNativeChange = (event: DateTimePickerEvent, date?: Date) => {
+    if (!pickerOpen.current || session !== pickerSession.current || disabled) return;
     // Android picker closes after either confirmation or dismissal. Keeping
     // this controlled here avoids the extra modal wrapper that crashed in
     // production builds when the kitchenware form re-rendered.
     if (Platform.OS === 'android') hideDatePicker();
-    if (event.type !== 'set' || !date) return;
+    if (event.type !== 'set' || !date || !Number.isFinite(date.getTime())) return;
     handleConfirm(date);
   };
 
@@ -139,13 +157,21 @@ export const SmartDateInput = ({
         <View style={[styles.inputBox, error ? styles.inputBoxError : null, inputStyle]}>
           {createElement('input', {
             type: mode === 'time' ? 'time' : 'date',
+            disabled,
+            'aria-label': accessibilityLabel || label || placeholder,
+            'aria-invalid': !!error,
             value: displayString || '',
             onChange: (e: any) => {
+              if (disabled) return;
               if (e.target.value === '') {
                 onChange('');
                 return;
               }
               if (e.target.value) {
+                if (mode === 'time') {
+                  if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(e.target.value)) onChange(e.target.value);
+                  return;
+                }
                 const d = dayjs(e.target.value);
                 if (d.isValid()) {
                   onChange(d.format(format));
@@ -154,6 +180,8 @@ export const SmartDateInput = ({
             },
             style: {
               flex: 1,
+              minWidth: 0,
+              colorScheme: resolvedTheme,
               borderWidth: 0,
               outline: 'none',
               backgroundColor: 'transparent',
@@ -189,6 +217,11 @@ export const SmartDateInput = ({
           error ? styles.inputBoxError : null,
           inputStyle
         ]} 
+        disabled={disabled}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel || label || placeholder}
+        accessibilityValue={{ text: displayString || placeholder }}
+        accessibilityState={{ disabled, expanded: isDatePickerVisible }}
         onPress={showDatePicker}
         activeOpacity={0.7}
       >
@@ -199,7 +232,6 @@ export const SmartDateInput = ({
             !value && styles.placeholder,
             !value && placeholderTextStyle
           ]}
-          numberOfLines={1}
         >
           {displayString || placeholder}
         </Text>
@@ -219,6 +251,7 @@ export const SmartDateInput = ({
           <DateTimePicker
             value={dateObjectForPicker}
             mode={mode}
+            is24Hour={mode === 'time'}
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             locale="zh-CN"
             themeVariant={resolvedTheme}
@@ -248,7 +281,8 @@ const createStyles = (colors: ReturnType<typeof useAppThemeColors>) => StyleShee
     marginLeft: 2,
   },
   inputBox: {
-    height: 52, // 增加高度提升触控体验
+    minHeight: 52,
+    paddingVertical: 12,
     backgroundColor: colors.surface,
     borderRadius: 12, // 更圆润的角
     flexDirection: 'row',

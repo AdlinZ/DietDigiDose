@@ -178,7 +178,7 @@ export function InventoryEntryForm({
                     );
                   })}
                 </View>
-                <SmartDateInput value={expirationDate} onChange={onExpirationDateChange} containerStyle={{ marginBottom: 0 }} inputStyle={{ height: 46, shadowOpacity: 0, elevation: 0 }} iconSize={16} />
+                <SmartDateInput accessibilityLabel="到期日期" value={expirationDate} onChange={onExpirationDateChange} containerStyle={{ marginBottom: 0 }} inputStyle={{ minHeight: 52, shadowOpacity: 0, elevation: 0 }} iconSize={16} />
               </View>
             </View>
 

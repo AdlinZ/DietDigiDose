@@ -8,6 +8,67 @@ import { legacyResourceDocument, RESOURCE_SETTING_KEY, type ResourceUpdate } fro
 const socket = process.env.AI_RESOURCE_TEST_PG_SOCKET;
 assert.ok(socket?.startsWith("/tmp/ddd-review-pg."), "Use a dedicated /tmp/ddd-review-pg.* cluster");
 const pool = new Pool({ host: socket, port: 55439, user: process.env.USER, database: "ddd_ai_resources_review" });
+
+async function waitForGate(ready: Promise<void>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try { await Promise.race([ready, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Mock provider gate timed out')), 10_000); })]); }
+  finally { clearTimeout(timer); }
+}
+
+async function verifyDraftLifecycle() {
+  await pool.query('CREATE SCHEMA draft_lifecycle');
+  const isolated = new Pool({ host: socket, port: 55439, user: process.env.USER, database: "ddd_ai_resources_review", options: '-c search_path=draft_lifecycle' });
+  try {
+    await isolated.query('CREATE TABLE system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMPTZ)');
+    const adapter = new PostgresAIRuntimeRepository(isolated);
+    const runtime = new AIRuntimeService(adapter, { AI_API_KEY: 'pg-old-synthetic', AI_MODEL: 'old-model' });
+    const input = (revision: number, secret: string): ResourceUpdate => {
+      const legacy = legacyResourceDocument();
+      return { ...legacy, revision, resources: [...legacy.resources, { id: 'fixture', name: 'PG mock provider', kind: 'connection', protocol: 'openai-compatible',
+        baseUrl: 'https://mock.invalid/v1', credential: { action: 'replace', value: secret }, models: [{ id: 'new-model', capabilities: ['chat'] }] }],
+        defaults: { ...legacy.defaults, chat: { resourceId: 'fixture', model: 'new-model' } } };
+    };
+    const before = await runtime.config();
+    await runtime.saveResourceConfiguration(input(0, 'pg-draft-synthetic'));
+    assert.deepEqual(await runtime.config(), before);
+    await assert.rejects(runtime.publishDraft(1), /版本/);
+    let release!: (value: { latencyMs: number }) => void, entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    let captured: { apiKey: string; model: string } | undefined;
+    const probe = runtime.testDraft(1, { service: 'supervisor', run: async config => {
+      captured = config; entered();
+      return new Promise(resolve => { release = resolve; });
+    } });
+    try {
+      await waitForGate(ready);
+      assert.equal(captured?.apiKey, 'pg-draft-synthetic'); assert.equal(captured?.model, 'new-model');
+      await runtime.saveResourceConfiguration(input(1, 'pg-published-synthetic'));
+    } finally { release?.({ latencyMs: 1 }); }
+    await assert.rejects(probe, /版本/); await assert.rejects(runtime.publishDraft(2), /版本/);
+    const tested = await runtime.testDraft(2, { service: 'supervisor', run: async config => { assert.equal(config.apiKey, 'pg-published-synthetic'); return { latencyMs: 1 }; } });
+    assert.equal(tested.lifecycle.test?.revision, 2); assert.equal(JSON.stringify(tested).includes('pg-published-synthetic'), false);
+    await runtime.publishDraft(2); await assert.rejects(runtime.publishDraft(2), /版本/);
+    const accepted = await runtime.captureConfigurationSnapshot();
+    await runtime.saveResourceConfiguration(input(2, 'pg-next-synthetic')); await runtime.testDraft(3); await runtime.publishDraft(3);
+    await accepted(async () => assert.equal((await runtime.agentConfig('SUPERVISOR')).apiKey, 'pg-published-synthetic'));
+    assert.equal((await runtime.agentConfig('SUPERVISOR')).apiKey, 'pg-next-synthetic');
+    await runtime.saveResourceConfiguration(input(3, 'pg-rollback-synthetic')); await runtime.testDraft(4);
+    await isolated.query(`CREATE FUNCTION fail_publish() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$`);
+    await isolated.query(`CREATE TRIGGER fail_publish BEFORE UPDATE ON system_settings FOR EACH ROW WHEN (NEW.key = '${RESOURCE_SETTING_KEY}') EXECUTE FUNCTION fail_publish()`);
+    await assert.rejects(runtime.publishDraft(4), /synthetic rollback/);
+    const reopened = new AIRuntimeService(new PostgresAIRuntimeRepository(isolated), {});
+    assert.equal((await reopened.resourceConfiguration()).lifecycle.pending, true);
+    assert.equal((await reopened.config()).chat.apiKey, 'pg-next-synthetic');
+    await isolated.query('DROP TRIGGER fail_publish ON system_settings'); await reopened.publishDraft(4);
+    assert.equal((await reopened.config()).chat.apiKey, 'pg-rollback-synthetic');
+    await reopened.saveResourceConfiguration(input(4, 'pg-conflict-synthetic')); await reopened.testDraft(5);
+    await adapter.saveSettings([{ key: 'AI_MODEL', value: 'concurrent-old-writer' }]);
+    await assert.rejects(reopened.publishDraft(5), /版本/);
+    assert.equal((await reopened.config()).chat.apiKey, 'pg-rollback-synthetic');
+    console.log('Real PostgreSQL draft isolation, stale probe, publish CAS, pinned credentials and atomic rollback passed');
+  } finally { await isolated.end(); await pool.query('DROP SCHEMA draft_lifecycle CASCADE'); }
+}
+
 try {
   if (process.argv.includes("--verify-restart")) {
     const service = new AIRuntimeService(new PostgresAIRuntimeRepository(pool), { AI_API_KEY: "pg-environment-fixture" });
@@ -24,6 +85,7 @@ try {
     assert.equal((await service.toolConfig("search")).apiKey, "pg-persisted-fixture-secret");
     console.log("PostgreSQL persisted configuration after actual cluster restart passed");
   } else {
+  await verifyDraftLifecycle();
   await pool.query("CREATE TABLE system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)");
   const repository = new PostgresAIRuntimeRepository(pool);
   const service = new AIRuntimeService(repository, { AI_API_KEY: "pg-environment-fixture" });

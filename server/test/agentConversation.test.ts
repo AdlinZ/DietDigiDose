@@ -21,8 +21,18 @@ let appServer: Server;
 let db: typeof import("../src/storage/db.js").db;
 let runtime: typeof import("../src/services/agent/runtime.js");
 let userId: number;
+let userToken: string;
+let providerGate: (() => Promise<void>) | undefined;
+let providerKeys: string[] = [];
 let calls: Array<{ messages: Array<{ content: string }>; [key: string]: unknown }> = [];
 let answers: unknown[] = [];
+
+async function waitForGate(ready: Promise<void>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try { await Promise.race([ready, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Mock provider gate timed out')), 10_000); })]); }
+  finally { clearTimeout(timer); }
+}
+
 // Direct-assistant scenarios explicitly opt in; production defaults to compatibility.
 beforeEach(() => { process.env.AI_MAIN_ASSISTANT_ENABLED = "true"; });
 before(async () => {
@@ -30,6 +40,9 @@ before(async () => {
     let body = "";
     for await (const chunk of req) body += chunk;
     calls.push(JSON.parse(body));
+    providerKeys.push(String(req.headers.authorization));
+    const gate = providerGate; providerGate = undefined;
+    await gate?.();
     const answer = answers.shift() as Record<string, unknown> | undefined;
     res.setHeader("content-type", "application/json");
     if (answer?.httpStatus) { res.statusCode = Number(answer.httpStatus); res.end(JSON.stringify({ error: { message: "fixture failure" } })); return; }
@@ -58,9 +71,9 @@ before(async () => {
   const app = await createApp();
   await new Promise<void>((resolve) => { appServer = app.listen(0, "127.0.0.1", () => resolve()); });
   const response = await fetch(`http://127.0.0.1:${(appServer.address() as AddressInfo).port}/api/v1/auth/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ identifier: "agent-test@example.com", username: "Agent测试", password: "Password1234" }) });
-  const result = await response.json() as { user: { id: number } };
+  const result = await response.json() as { user: { id: number }; token: string };
   assert.equal(response.status, 201);
-  userId = result.user.id;
+  userId = result.user.id; userToken = result.token;
   runtime = await import("../src/services/agent/runtime.js");
 });
 after(async () => {
@@ -262,4 +275,48 @@ test("five turns deliver the latest constraints and plan reference without persi
     messages.push({ role: "assistant", content: result.run.reply! });
   }
   assert.deepEqual(db.prepare("SELECT allergies_json FROM user_health_profiles WHERE user_id=?").get(userId), before);
+});
+
+
+test("HTTP Agent keeps model and credential version through a tool round trip while publishing", async () => {
+  const settings = (await import('../src/modules/aiRuntime/runtime.js')).aiRuntimeService();
+  const { legacyResourceDocument } = await import('../src/modules/aiRuntime/resources.js');
+  const legacy = legacyResourceDocument();
+  const make = (revision: number, key: string, model: string) => ({ ...legacy, revision,
+    resources: [...legacy.resources, { id: 'versioned', name: 'Synthetic provider', kind: 'connection', protocol: 'openai-compatible',
+      baseUrl: process.env.AI_BASE_URL!, models: [{ id: model, capabilities: ['chat'] }], credential: { action: 'replace', value: key } }],
+    defaults: { ...legacy.defaults, chat: { resourceId: 'versioned', model } } });
+  const publish = async (key: string, model: string) => {
+    const current = await settings.resourceConfiguration();
+    const draft = await settings.saveResourceConfiguration(make(current.revision, key, model));
+    await settings.testDraft(draft.revision); await settings.publishDraft(draft.revision);
+  };
+  await publish('fixture-before-publish', 'fixture-before');
+  calls = []; providerKeys = [];
+  answers = [{ toolCall: { name: 'get_user_nutrition_context', args: {} } }, { goal: '只读咨询', specialists: [], reply: '旧请求完成。', candidates: [] }];
+  let release!: () => void, entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  providerGate = async () => { entered(); await gate; };
+  let runId: string;
+  try {
+  const http = await fetch(`http://127.0.0.1:${(appServer.address() as AddressInfo).port}/api/v1/ai/chat`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ prompt: '读取我的营养上下文，不保存、不执行操作。' }), signal: AbortSignal.timeout(10_000),
+  });
+  const response = await http.json() as { run: { id: string } };
+  assert.equal(http.status, 200); runId = response.run.id; await waitForGate(ready);
+  await publish('fixture-after-publish', 'fixture-after');
+  } finally { providerGate = undefined; release(); }
+  const completed = await runtime.waitForSupervisorRunCompletion(runId!);
+  assert.equal(completed.status, 'completed', JSON.stringify(completed.error));
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(call => call.model), ['fixture-before', 'fixture-before']);
+  assert.deepEqual(providerKeys, ['Bearer fixture-before-publish', 'Bearer fixture-before-publish']);
+  answers = [{ goal: '新请求', specialists: [], reply: '新请求完成。', candidates: [] }];
+  const next = await runtime.startSupervisorRun(userId, { modality: 'text', prompt: '你好，只给建议。' }, 10000);
+  assert.equal(next.run.status, 'completed');
+  assert.equal(calls.at(-1)?.model, 'fixture-after'); assert.equal(providerKeys.at(-1), 'Bearer fixture-after-publish');
+  const serializedEvents = JSON.stringify(db.prepare('SELECT payload_json FROM agent_run_events WHERE run_id IN (?,?)').all(runId!, next.run.id));
+  assert.equal(serializedEvents.includes('fixture-before-publish'), false); assert.equal(serializedEvents.includes('fixture-after-publish'), false);
 });

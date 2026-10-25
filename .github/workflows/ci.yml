@@ -148,7 +148,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Configuration, credentials and business-clock regressions
         working-directory: server
-        run: node --import tsx --test test/aiResourcesHttp.test.ts test/aiRuntimeModule.test.ts test/aiProviderCredentials.test.ts test/deepseekTools.test.ts test/contextClock.test.ts test/agentProposalClock.test.ts
+        run: node --import tsx --test test/aiResourcesHttp.test.ts test/aiDraftLifecycle.test.ts test/agentConversation.test.ts test/aiRuntimeModule.test.ts test/aiProviderCredentials.test.ts test/deepseekTools.test.ts test/contextClock.test.ts test/agentProposalClock.test.ts
       - name: Admin form and notification regressions
         run: |
           pnpm --dir admin test

@@ -2,6 +2,7 @@ import React from "react";
 import renderer, { act } from "react-test-renderer";
 import { Alert, Keyboard, KeyboardAvoidingView, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity } from "react-native";
 import { restoredAuthIdentity } from "@/utils/authIdentity";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
 let mockFocused = true;
 const mockReadNotifications = jest.fn();
@@ -189,4 +190,41 @@ it("keeps a pending reminder write locked across re-entry and reloads after comp
   const reads = mockReadNotifications.mock.calls.length;
   await act(async () => { finish(); });
   expect(mockReadNotifications.mock.calls.length).toBe(reads + 1);
+});
+
+it("routes native time cancellation and confirmation through the settings draft before explicit save", async () => {
+  jest.replaceProperty(Platform, "OS", "android");
+  const breakfast = () => tree.root.findAllByType(SmartDateInput).find(field => field.props.label === "早餐")!;
+  const open = () => act(() => breakfast().findByType(TouchableOpacity).props.onPress());
+  open();
+  const cancelled = tree.root.findByType(DateTimePicker).props.onChange;
+  act(() => cancelled({ type: "dismissed" }));
+  expect(breakfast().props.value).toBe("08:00");
+  expect(mockSaveNotifications).not.toHaveBeenCalled();
+  open();
+  act(() => cancelled({ type: "set" }, new Date(2026, 9, 25, 23, 59)));
+  expect(breakfast().props.value).toBe("08:00");
+  act(() => tree.root.findByType(DateTimePicker).props.onChange({ type: "set" }, new Date(2026, 9, 25, 0, 5)));
+  expect(breakfast().props.value).toBe("00:05");
+  expect(mockSaveNotifications).not.toHaveBeenCalled();
+  mockSaveNotifications.mockResolvedValueOnce({});
+  await clickText("保存并重排提醒");
+  expect(mockSaveNotifications).toHaveBeenCalledTimes(1);
+  expect(mockSaveNotifications).toHaveBeenCalledWith("token-A", { ...mockPreferences, breakfast_time: "00:05" });
+});
+
+it("ignores a previous reminder read after re-entry even when it resolves after the fresh read", async () => {
+  await act(async () => { mockFocused = false; tree.update(<SettingsScreen />); });
+  let finishOld!: (value: object) => void;
+  mockReadNotifications.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
+  await act(async () => { mockFocused = true; tree.update(<SettingsScreen />); });
+  expect(tree.root.findAllByType(SmartDateInput).every(field => field.props.disabled)).toBe(true);
+  await act(async () => { mockFocused = false; tree.update(<SettingsScreen />); });
+  mockReadNotifications.mockResolvedValueOnce({ ...mockPreferences, breakfast_time: "10:15" });
+  await act(async () => { mockFocused = true; tree.update(<SettingsScreen />); });
+  await act(async () => { finishOld({ ...mockPreferences, breakfast_time: "06:00" }); });
+  const breakfast = tree.root.findAllByType(SmartDateInput).find(field => field.props.label === "早餐")!;
+  expect(breakfast.props.value).toBe("10:15");
+  expect(breakfast.props.disabled).toBe(false);
+  expect(mockSaveNotifications).not.toHaveBeenCalled();
 });

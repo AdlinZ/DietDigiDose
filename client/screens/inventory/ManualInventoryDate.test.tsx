@@ -1,6 +1,6 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
-import { Platform, TouchableOpacity } from "react-native";
+import { Platform, StyleSheet, Text, TouchableOpacity } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { SmartDateInput } from "@/components/SmartDateInput";
 import { ManualInventoryEntry } from "./ManualInventoryEntry";
@@ -50,4 +50,41 @@ test("invalid Web input and native dismissal do not turn into clear events", () 
   act(() => tree.root.findByType(TouchableOpacity).props.onPress());
   act(() => tree.root.findByType(DateTimePicker).props.onChange({ type: "dismissed" }));
   expect(onChange).not.toHaveBeenCalled(); act(() => tree.unmount());
+});
+
+test("native calendar cancellation preserves estimated evidence until an explicit date is confirmed", async () => {
+  jest.replaceProperty(Platform, "OS", "android");
+  const saveIntake = jest.fn().mockResolvedValue({});
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<ManualInventoryEntry saveIntake={saveIntake} onSaved={jest.fn()} onPhoto={jest.fn()} photoUrl="" bottomInset={0} />); });
+  try {
+    await act(async () => { tree.root.findByProps({ nativeID: "inventory-food-name" }).props.onChangeText("番茄"); });
+    const draft = () => JSON.parse(mockStorage.get("@inventory_manual_draft_v1:user:1")!).entries[0];
+    const open = () => act(() => tree.root.findByType(SmartDateInput).findByType(TouchableOpacity).props.onPress());
+    open();
+    await act(async () => tree.root.findByType(DateTimePicker).props.onChange({ type: "dismissed" }));
+    expect(draft().expirationDate).toBe("");
+    expect(draft().fieldEvidence.expiration_date).toBeUndefined();
+    const shortcut = tree.root.findAllByType(TouchableOpacity).find(node => node.findAllByType(Text).some(text => text.props.children === "3 天"))!;
+    await act(async () => shortcut.props.onPress());
+    const estimated = draft().expirationDate;
+    open();
+    const cancelled = tree.root.findByType(DateTimePicker).props.onChange;
+    await act(async () => cancelled({ type: "dismissed" }));
+    expect(draft().expirationDate).toBe(estimated);
+    expect(draft().fieldEvidence.expiration_date).toEqual({ status: "estimated", source: "rule" });
+    open();
+    await act(async () => cancelled({ type: "set" }, new Date(2026, 10, 9)));
+    expect(draft().expirationDate).toBe(estimated);
+    expect(draft().fieldEvidence.expiration_date).toEqual({ status: "estimated", source: "rule" });
+    await act(async () => tree.root.findByType(DateTimePicker).props.onChange({ type: "set" }, new Date(2026, 10, 2)));
+    expect(draft().expirationDate).toBe("2026-11-02");
+    expect(draft().fieldEvidence.expiration_date).toEqual({ status: "known", source: "user" });
+    expect(saveIntake).not.toHaveBeenCalled();
+    const dateButton = tree.root.findByType(SmartDateInput).findByType(TouchableOpacity);
+    expect(StyleSheet.flatten(dateButton.props.style).height).toBeUndefined();
+    expect(StyleSheet.flatten(dateButton.props.style).minHeight).toBeGreaterThanOrEqual(48);
+    await act(async () => { tree.root.findByType(InventoryEntryForm).props.onSave(); });
+    expect(saveIntake.mock.calls[0][0].items[0]).toMatchObject({ expiration_date: "2026-11-02", field_evidence: { expiration_date: { status: "known", source: "user" } } });
+  } finally { act(() => tree.unmount()); }
 });

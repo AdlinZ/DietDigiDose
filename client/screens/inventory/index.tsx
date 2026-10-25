@@ -2618,7 +2618,7 @@ export default function InventoryScreen() {
 
                 <View>
                   <Text className="text-xs font-bold text-copy-muted mb-1">购买日期（可选）</Text>
-                  <SmartDateInput value={kwPurchaseDate} onChange={setKwPurchaseDate} />
+                  <SmartDateInput accessibilityLabel="购买日期（可选）" value={kwPurchaseDate} onChange={setKwPurchaseDate} />
                 </View>
 
                 <View>

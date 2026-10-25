@@ -697,6 +697,7 @@ const optionalUrlSchema = z.string().trim().max(2000).optional().refine(
 );
 
 export const adminAIConfigSchema = z.object({
+  draftRevision: z.number().int().nonnegative(),
   runtimePolicy: runtimePolicySchema.optional(),
   apiKey: z.string().trim().max(1000).optional(),
   baseUrl: optionalUrlSchema,

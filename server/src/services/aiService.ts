@@ -544,6 +544,7 @@ export async function chatCompletion(
  * 真实连通性测试 (不使用 getFallbackResponse 降级，严格抛出真实 API 错误)
  */
 export async function testAIConnection(overrideConfig?: {
+  signal?: AbortSignal;
   service?: "chat" | "vision" | "asr";
   apiKey?: string;
   baseUrl?: string;
@@ -552,9 +553,9 @@ export async function testAIConnection(overrideConfig?: {
   const config = await getAIConfig();
   const currentConfig = overrideConfig?.service ? config[overrideConfig.service] : config;
   if (overrideConfig?.service) overrideConfig = undefined;
-  const apiKey = (overrideConfig?.apiKey || currentConfig.apiKey).trim();
-  const baseUrl = (overrideConfig?.baseUrl || currentConfig.baseUrl).replace(/\/$/, "").trim();
-  const model = (overrideConfig?.model || currentConfig.model).trim();
+  const apiKey = (overrideConfig?.apiKey ?? currentConfig.apiKey).trim();
+  const baseUrl = (overrideConfig?.baseUrl ?? currentConfig.baseUrl).replace(/\/$/, "").trim();
+  const model = (overrideConfig?.model ?? currentConfig.model).trim();
 
   if (!apiKey) {
     throw new Error("请先填写 API Key 凭证");
@@ -569,6 +570,7 @@ export async function testAIConnection(overrideConfig?: {
   const startTime = Date.now();
   const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
     method: "POST",
+    signal: overrideConfig?.signal ? AbortSignal.any([overrideConfig.signal, AbortSignal.timeout(20_000)]) : undefined,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
@@ -596,7 +598,8 @@ export async function testAIConnection(overrideConfig?: {
   }
 
   const data = (await response.json()) as any;
-  const reply = data.choices?.[0]?.message?.content?.trim() || "OK";
+  const reply = data.choices?.[0]?.message?.content;
+  if (typeof reply !== "string" || !reply.trim()) throw new Error("连接探针响应格式无效");
   return { reply, latencyMs };
 }
 

@@ -6,10 +6,10 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import AIResources from './AIResources';
 import api from '../services/api';
 import { capabilities, serviceIds, writableConfiguration, validateConfiguration, type ResourceConfiguration } from '../services/aiResources';
-vi.mock('../services/api', () => ({ default: { get: vi.fn(), put: vi.fn() } }));
+vi.mock('../services/api', () => ({ default: { get: vi.fn(), put: vi.fn(), post: vi.fn() } }));
 const get = vi.mocked(api.get), put = vi.mocked(api.put);
 function fixture(): ResourceConfiguration {
-  return { schemaVersion: 1, revision: 3, migrated: true,
+  return { schemaVersion: 1, revision: 3, migrated: true, lifecycle: { pending: false, publishedRevision: 3, conflict: false, test: null, changedServices: [], changedSettings: [] },
     resources: [...capabilities.map(scope => ({ id: `legacy-${scope}`, name: `Legacy ${scope}`, kind: 'legacy' as const, scope })),
       { id: 'demo', name: 'Demo provider', kind: 'connection', protocol: 'openai-compatible', baseUrl: 'https://demo.invalid/v1', models: [{ id: 'demo-chat', capabilities: ['chat'] }], hasApiKey: true, verification: 'unverified' }],
     defaults: { chat: { resourceId: 'demo', model: 'demo-chat' }, vision: { resourceId: 'legacy-vision' }, asr: { resourceId: 'legacy-asr' } },
@@ -163,4 +163,45 @@ it.each(['connection', 'tool'])('never reuses a removed saved %s ID with credent
   await act(async () => [...card.querySelectorAll('button')].find(b => b.textContent === '移除连接')!.click());
   await click(kind === 'connection' ? '新增连接' : '新增搜索工具资源');
   expect([...host.querySelectorAll('article')].at(-1)!.querySelector('small')!.textContent).toBe(kind === 'connection' ? 'provider-2' : 'web-2');
+});
+
+function draftFixture(revision = 3): ResourceConfiguration {
+  return { ...fixture(), revision, lifecycle: { pending: true, publishedRevision: 2, conflict: false, test: null, changedServices: ['chat'], changedSettings: [] } };
+}
+it('tests the exact saved revision, invalidates results on edit, confirms impact and prevents duplicate publishes', async () => {
+  get.mockResolvedValue({ data: draftFixture() }); await mount();
+  const tested = draftFixture(); tested.lifecycle!.test = { revision: 3, scope: 'configuration-validation', success: true };
+  vi.mocked(api.post).mockResolvedValue({ data: tested }); await click('校验草稿配置');
+  expect(api.post).toHaveBeenCalledWith('/admin/ai-config/resources/test', { revision: 3 }, { signal: expect.any(AbortSignal) });
+  expect(host.textContent).toContain('不代表生产能力可用');
+  await change('连接名称', 'Edited after test');
+  expect([...host.querySelectorAll('button')].find(b => b.textContent === '确认影响并发布')!.disabled).toBe(true);
+  await click('取消修改');
+  vi.mocked(window.confirm).mockReturnValue(false); await click('确认影响并发布'); expect(api.post).toHaveBeenCalledTimes(1);
+  vi.mocked(window.confirm).mockReturnValue(true);
+  const pending = deferred(); vi.mocked(api.post).mockReturnValue(pending.promise);
+  await click('确认影响并发布'); await click('确认影响并发布'); expect(api.post).toHaveBeenCalledTimes(2);
+  expect(window.confirm).toHaveBeenLastCalledWith(expect.stringContaining('影响服务：chat'));
+  await act(async () => pending.resolve({ ...tested, lifecycle: { ...tested.lifecycle, pending: false } }));
+  expect(host.textContent).toContain('发布成功');
+});
+it.each(['test', 'publish'] as const)('ignores late %s replies after close and requires reload after uncertain errors', async action => {
+  const data = draftFixture(); data.lifecycle!.test = { revision: 3, scope: 'configuration-validation', success: true };
+  get.mockResolvedValue({ data }); const pending = deferred(); vi.mocked(api.post).mockReturnValue(pending.promise);
+  await mount(); await click(action === 'test' ? '校验草稿配置' : '确认影响并发布');
+  await act(async () => root.render(null)); await mount();
+  await act(async () => pending.resolve({ ...data, revision: 99 })); expect(host.textContent).not.toContain('99');
+  vi.mocked(api.post).mockRejectedValue(Error('secret-must-not-show'));
+  await click(action === 'test' ? '校验草稿配置' : '确认影响并发布');
+  expect(host.textContent).toContain('操作未确认'); expect(host.textContent).not.toContain('secret-must-not-show');
+});
+
+it('sends a versioned service probe, labels its limited scope, and cancels pending testing', async () => {
+  const data = draftFixture(); get.mockResolvedValue({ data }); await mount('services');
+  vi.mocked(api.post).mockResolvedValue({ data: { ...data, lifecycle: { ...data.lifecycle, test: { revision: 3, scope: 'connection-probe', service: 'chat', success: true } } } });
+  await click('测试 对话 草稿连接');
+  expect(api.post).toHaveBeenLastCalledWith('/admin/ai-config/resources/test', { revision: 3, service: 'chat' }, { signal: expect.any(AbortSignal) });
+  expect(host.textContent).toContain('不证明视觉、ASR、工具或生产能力');
+  vi.mocked(api.post).mockImplementation((_url, _body, config) => new Promise((_resolve, reject) => { config?.signal?.addEventListener?.('abort', () => reject(Error('cancelled'))); }));
+  await click('测试 对话 草稿连接'); await click('取消测试'); expect(host.textContent).toContain('操作未确认');
 });

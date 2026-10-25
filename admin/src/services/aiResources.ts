@@ -20,6 +20,10 @@ export interface ResourceUpdate {
 }
 export type ToolEffective = { status: 'disabled' | 'unconfigured' | 'unverified'; resourceId?: string; baseUrl?: string; source?: string; reason?: string; hasApiKey?: boolean };
 export interface ResourceConfiguration extends ResourceUpdate {
+  lifecycle?: { pending: boolean; publishedRevision: number; conflict: boolean;
+    test: { revision: number; scope: 'configuration-validation' | 'connection-probe'; success: boolean; service?: ServiceId; latencyMs?: number } | null;
+    publishedEffective?: Record<ServiceId, { model: string; baseUrl: string; hasApiKey: boolean }>;
+    changedServices: string[]; changedSettings: string[] };
   migrated: boolean;
   catalog: ({ id: ServiceId; capability: Capability; input: string; output: string } | { id: ToolId; capability: ToolId; kind: 'tool'; input: string; output: string; automaticExecution: false })[];
   effective: Record<ServiceId, { resourceId: string; model: string; baseUrl: string; source: string; hasApiKey: boolean }> & Partial<Record<ToolId, ToolEffective>>;
@@ -32,7 +36,7 @@ export function assertSupportedConfiguration(data: ResourceUpdate) {
   const extra = data as ResourceConfiguration;
   const allServices: readonly string[] = [...serviceIds, ...toolIds];
   if (data.schemaVersion !== 1
-    || !known(data, ['schemaVersion', 'revision', 'resources', 'defaults', 'services', 'migrated', 'catalog', 'effective'])
+    || !known(data, ['schemaVersion', 'revision', 'resources', 'defaults', 'services', 'migrated', 'catalog', 'effective', 'lifecycle'])
     || !known(data.defaults, [...capabilities, ...toolIds]) || !known(data.services, allServices)
     || extra.catalog?.some(s => !allServices.includes(s.id)) || (extra.effective && !known(extra.effective, allServices))
     || data.resources.some(r => r.kind === 'legacy'

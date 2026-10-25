@@ -7,6 +7,12 @@ import { SqliteAIRuntimeRepository } from "../src/modules/aiRuntime/sqliteReposi
 import { legacyResourceDocument, RESOURCE_SETTING_KEY, type ResourceUpdate } from "../src/modules/aiRuntime/resources.js";
 import type { AIUsageWrite } from "../src/modules/aiRuntime/types.js";
 
+async function savePublished(service: AIRuntimeService, input: unknown) {
+  const saved = await service.saveResourceConfiguration(input);
+  await service.testDraft(saved.revision);
+  await service.publishDraft(saved.revision);
+  return saved;
+}
 function repository(overrides: Partial<AIRuntimeRepository> = {}): AIRuntimeRepository {
   return {
     settings: async () => ({}),
@@ -137,7 +143,7 @@ describe("provider resources and business services", () => {
   test("two independent connections, defaults, service overrides and metadata are resolved without leaking credentials", async () => {
     const store = memory();
     const service = new AIRuntimeService(store.repository, {});
-    const result = await service.saveResourceConfiguration(connections());
+    const result = await savePublished(service, connections());
     assert.equal(JSON.stringify(result).includes("fixture-"), false);
     assert.equal(result.effective.chat.source, "default:chat");
     assert.equal(result.effective.vision.source, "service:vision");
@@ -150,16 +156,16 @@ describe("provider resources and business services", () => {
     const update = connections();
     update.revision = 1;
     update.defaults.chat = { resourceId: "second", model: "chat-two" };
-    await service.saveResourceConfiguration(update);
+    await savePublished(service, update);
     assert.equal((await service.agentConfig("SUPERVISOR")).model, "chat-two");
     assert.equal((await service.agentConfig("RECIPE")).model, "chat-two");
     assert.equal((await service.config()).vision.model, "vision-two");
-    await assert.rejects(service.saveResourceConfiguration(update), /版本/);
+    await assert.rejects(savePublished(service, update), /版本/);
   });
   test("credentials have explicit keep, replace and clear semantics; clearing never restores environment credentials", async () => {
     const store = memory();
     const service = new AIRuntimeService(store.repository, { AI_API_KEY: "env-fixture" });
-    await service.saveResourceConfiguration(connections());
+    await savePublished(service, connections());
     for (const [revision, credential, expected] of [
       [1, undefined, "fixture-first-secret"], [2, { action: "keep" }, "fixture-first-secret"],
       [3, { action: "replace", value: "replacement-fixture" }, "replacement-fixture"], [4, { action: "clear" }, ""],
@@ -168,14 +174,14 @@ describe("provider resources and business services", () => {
       update.revision = revision;
       const first = update.resources.find(item => item.id === "first")!;
       if (first.kind === "connection") first.credential = credential;
-      await service.saveResourceConfiguration(update);
+      await savePublished(service, update);
       assert.equal((await service.config()).chat.apiKey, expected);
     }
     const invalid = connections();
     invalid.revision = 5;
     const first = invalid.resources.find(item => item.id === "first")!;
     if (first.kind === "connection") first.credential = { action: "replace", value: "" };
-    await assert.rejects(service.saveResourceConfiguration(invalid));
+    await assert.rejects(savePublished(service, invalid));
     assert.equal((await service.config()).chat.apiKey, "");
   });
   test("rejects incompatible capabilities, unknown services/protocols, dangling defaults and inherited incompatible role models", async () => {
@@ -187,14 +193,14 @@ describe("provider resources and business services", () => {
       (doc: ResourceUpdate) => { doc.services.chat = { resourceId: "first" }; },
     ]) {
       const update = connections(); mutate(update);
-      await assert.rejects(service.saveResourceConfiguration(update));
+      await assert.rejects(savePublished(service, update));
       assert.equal(store.values[RESOURCE_SETTING_KEY], undefined);
     }
-    await assert.rejects(service.saveResourceConfiguration({ ...connections(), services: { ...connections().services, unsupported_service: { inherit: true } } }));
+    await assert.rejects(savePublished(service, { ...connections(), services: { ...connections().services, unsupported_service: { inherit: true } } }));
     const badProtocol = connections();
-    await assert.rejects(service.saveResourceConfiguration({ ...badProtocol, resources: [{ ...badProtocol.resources[3], protocol: "search" }] }));
+    await assert.rejects(savePublished(service, { ...badProtocol, resources: [{ ...badProtocol.resources[3], protocol: "search" }] }));
     store.values.AI_SUPERVISOR_MODEL = "unknown-role-model";
-    await assert.rejects(service.saveResourceConfiguration(connections()), /角色模型/);
+    await assert.rejects(savePublished(service, connections()), /角色模型/);
   });
   test("migration preserves field-level legacy overrides, role models, environment changes, policy and unrelated voice settings", async () => {
     const policy = JSON.stringify({ maxModelCalls: 3, maxToolCalls: 2 });
@@ -230,10 +236,10 @@ describe("provider resources and business services", () => {
     await assert.rejects(failing.migrateResources(), /transaction/);
     assert.equal((await failing.config()).chat.model, "old-model");
     assert.equal(store.values[RESOURCE_SETTING_KEY], undefined);
-    await new AIRuntimeService(store.repository, {}).saveResourceConfiguration(connections());
+    await savePublished(new AIRuntimeService(store.repository, {}), connections());
     const saved = store.values[RESOURCE_SETTING_KEY];
     const update = connections(); update.revision = 1;
-    await assert.rejects(failing.saveResourceConfiguration(update), /transaction/);
+    await assert.rejects(savePublished(failing, update), /transaction/);
     assert.equal(store.values[RESOURCE_SETTING_KEY], saved);
     assert.equal((await failing.config()).chat.model, "chat-one");
   });
@@ -267,7 +273,7 @@ describe("resource storage atomicity", () => {
       assert.equal((await service.settings())[RESOURCE_SETTING_KEY], raw);
       assert.deepEqual(await service.config(), before);
       database.exec(`CREATE TRIGGER fail_resource_update BEFORE UPDATE ON system_settings WHEN NEW.key = '${RESOURCE_SETTING_KEY}' BEGIN SELECT RAISE(ABORT, 'fixture transaction failure'); END`);
-      await assert.rejects(service.saveResourceConfiguration(legacyResourceDocument()), /transaction failure/);
+      await assert.rejects(savePublished(service, legacyResourceDocument()), /transaction failure/);
       assert.equal((await service.settings())[RESOURCE_SETTING_KEY], raw);
       assert.deepEqual(await service.config(), before);
     } finally { database.close(); rmSync(directory, { recursive: true }); }

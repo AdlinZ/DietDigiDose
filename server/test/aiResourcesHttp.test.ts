@@ -18,12 +18,22 @@ Object.assign(process.env, {
 let server: Server;
 let db: typeof import("../src/storage/db.js").db;
 let baseUrl: string;
-async function request(path: string, method = "GET", token?: string, body?: unknown) {
+async function request(path: string, method = "GET", token?: string, body?: unknown, autoPublish = true): Promise<{ status: number; body: Record<string, any> }> {
+  if (path === '/admin/ai-config' && method === 'PUT' && body && typeof body === 'object') {
+    const current = await request('/admin/ai-config', 'GET', token);
+    body = { ...body, draftRevision: current.body.draftRevision ?? 0 };
+  }
   const response = await fetch(`${baseUrl}/api/v1${path}`, {
     method, headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return { status: response.status, body: await response.json() as Record<string, any> };
+  const result = { status: response.status, body: await response.json() as Record<string, any> };
+  if (autoPublish && response.status === 200 && method === 'PUT' && ['/admin/ai-config', '/admin/ai-config/resources'].includes(path)) {
+    const draft = await request('/admin/ai-config/resources', 'GET', token);
+    assert.equal((await request('/admin/ai-config/resources/test', 'POST', token, { revision: draft.body.revision })).status, 200);
+    assert.equal((await request('/admin/ai-config/resources/publish', 'POST', token, { revision: draft.body.revision })).status, 200);
+  }
+  return result;
 }
 before(async () => {
   const { createApp } = await import("../src/app.js");
@@ -43,7 +53,7 @@ test("resource routes require a current admin session and never serialize creden
   assert.equal(regular.status, 201);
   const login = await request("/auth/login", "POST", undefined, { identifier: "admin", password: "AdminPassword1234" });
   assert.equal(login.status, 200);
-  for (const [path, method] of [["/admin/ai-config", "GET"], ["/admin/ai-config/resources", "GET"], ["/admin/ai-config/resources", "PUT"], ["/admin/ai-config/resources/migrate", "POST"]]) {
+  for (const [path, method] of [["/admin/ai-config", "GET"], ["/admin/ai-config/resources", "GET"], ["/admin/ai-config/resources", "PUT"], ["/admin/ai-config/resources/migrate", "POST"], ["/admin/ai-config/resources/test", "POST"], ["/admin/ai-config/resources/publish", "POST"], ["/admin/ai-config/resources/discard", "POST"]]) {
     assert.equal((await request(path, method)).status, 401);
     assert.equal((await request(path, method, regular.body.token)).status, 403);
     assert.equal((await request(path, method, login.body.token)).status, 403); // initial password must change
@@ -123,8 +133,12 @@ test("UI projection over real HTTP preserves tools, credential actions, atomic C
   const before = stored();
   db.exec("CREATE TRIGGER reject_resource_ui BEFORE UPDATE ON system_settings WHEN NEW.key='AI_RESOURCE_CONFIG_V1' BEGIN SELECT RAISE(ABORT, 'synthetic storage failure'); END");
   try {
-    const failure = await request('/admin/ai-config/resources', 'PUT', token, writableConfiguration(current));
-    assert.equal(failure.status, 500); assert.equal(failure.body.code, 'AI_RESOURCE_SAVE_FAILED');
+    const draft = await request('/admin/ai-config/resources', 'PUT', token, writableConfiguration(current), false);
+    assert.equal(draft.status, 200);
+    assert.equal((await request('/admin/ai-config/resources/test', 'POST', token, { revision: draft.body.revision })).status, 200);
+    const failure = await request('/admin/ai-config/resources/publish', 'POST', token, { revision: draft.body.revision });
+    assert.equal(failure.status, 500);
+    assert.equal((await request('/admin/ai-config/resources/discard', 'POST', token, { revision: draft.body.revision })).status, 200);
     assert.equal(JSON.stringify(failure.body).includes('synthetic storage failure'), false);
     assert.deepEqual(stored(), before);
   } finally { db.exec('DROP TRIGGER reject_resource_ui'); }
@@ -192,5 +206,5 @@ test("legacy clearing and chat-policy rejection keep server validation authorita
   const invalidRecipe = await request('/admin/recipes/1/execution', 'PUT', token, { recipeKey: 'a'.repeat(64), reviewKey: 'b'.repeat(64), profile: { version: 1, reference: '', maxBatchServings: 0, tools: [], tasks: [] } });
   assert.equal(invalidRecipe.status, 400); assert.equal(invalidRecipe.body.code, 'VALIDATION_ERROR');
   assert.ok(invalidRecipe.body.details.some((issue: { path: string }) => issue.path.startsWith('profile')));
-  await assert.rejects(runtime.saveValidatedSettings([{ key: 'AI_MODEL', value: 'stale' }], old), /版本/);
+  await assert.rejects(runtime.saveValidatedSettings([{ key: 'AI_MODEL', value: 'stale' }], old, -1), /版本/);
 });

@@ -10,6 +10,9 @@ import { AiContextService } from '../src/modules/aiContext/service.js';
 import type { RecommendationsService } from '../src/modules/recommendations/service.js';
 import { configureRecommendationsService } from '../src/modules/recommendations/runtime.js';
 test('diet proposals retain their context date when approved after Shanghai midnight', async t => {
+  const { configureAIRuntimeService } = await import('../src/modules/aiRuntime/runtime.js');
+  const { AIRuntimeService } = await import('../src/modules/aiRuntime/service.js');
+  configureAIRuntimeService(new AIRuntimeService({ settings: async () => ({}), saveSettings: async () => {}, compareAndSaveSetting: async () => false, recordUsage: async () => {} }, {}));
   t.mock.timers.enable({apis:['Date'], now: new Date('2026-12-31T15:59:59Z')});
   configureAiContextService(new AiContextService({load: async () => ({user:null,inventory:[],kitchenware:[],todayDiet:[],latestHealth:null,healthProfile:null,personaPrompt:''})}));
   configureRecommendationsService({compute:async()=>({results:[]})} as unknown as RecommendationsService);

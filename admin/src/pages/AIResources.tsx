@@ -1,4 +1,4 @@
-import { readResources, saveResources } from '../services/aiResourcesApi';
+import { readResources, saveResources, draftAction } from '../services/aiResourcesApi';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useBlocker } from 'react-router';
 import { PageHeader } from '../components/admin/PageHeader';
@@ -22,8 +22,10 @@ function TargetFields({ value, capability, resources, onChange }: { value: Targe
 export default function AIResources({ page }: { page: 'providers' | 'services' }) {
   const [saved, setSaved] = useState<ResourceConfiguration | null>(null);
   const [draft, setDraft] = useState<ResourceUpdate | null>(null);
+  const [testing, setTesting] = useState(false);
   const [loading, setLoading] = useState(false), [saving, setSaving] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [needsReload, setNeedsReload] = useState(false);
+  const actionController = useRef<AbortController | null>(null);
   const reads = useRef(createLatestRequest()), busy = useRef(false), lifecycle = useRef({ generation: 0 });
   const dirty = !!draft && !!saved && JSON.stringify(draft) !== JSON.stringify(writableConfiguration(saved));
   const blocker = useBlocker(dirty || saving);
@@ -58,12 +60,12 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
   useEffect(() => {
     const requests = reads.current, owner = lifecycle.current;
     void fetchConfiguration();
-    return () => { requests.cancel(); owner.generation++; };
+    return () => { requests.cancel(); actionController.current?.abort(); owner.generation++; };
   }, [fetchConfiguration]);
   async function save() {
     if (!draft || busy.current || needsReload) return;
     const validation = validateConfiguration(draft); if (validation) { setError(validation); return; }
-    if (draft.resources.some(r => r.kind !== 'legacy' && r.credential?.action === 'clear') && !window.confirm('确定清空所选资源的密钥？保存后立即生效。')) return;
+    if (draft.resources.some(r => r.kind !== 'legacy' && r.credential?.action === 'clear') && !window.confirm('确定清空所选资源的密钥？发布后生效，保存草稿不会影响当前请求。')) return;
     busy.current = true; setSaving(true); setError(''); setNotice(''); reads.current.cancel();
     const owner = lifecycle.current.generation;
     try {
@@ -72,18 +74,36 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
       if (current.revision !== draft.revision) { setNeedsReload(true); setError('配置版本已变更。未覆盖他人修改；请重新读取后核对再编辑。'); return; }
       const result = await saveResources(draft);
       if (owner !== lifecycle.current.generation) return;
-      setSaved(result); setDraft(writableConfiguration(result)); setNotice('已保存，后续配置读取立即生效。');
+      setSaved(result); setDraft(writableConfiguration(result)); setNotice('已保存草稿；已发布配置保持不变。');
     } catch (failure) {
       if (owner === lifecycle.current.generation) { setNeedsReload(true); setError(failure instanceof UnsupportedResourceConfiguration ? failure.message : (failure as { response?: { status?: number; data?: { code?: string } } })?.response?.status === 409 && (failure as { response?: { data?: { code?: string } } })?.response?.data?.code === 'AI_RESOURCE_CONFLICT' ? '配置版本冲突：未覆盖他人修改，请重新读取后核对。' : '保存未确认：可能存在版本冲突、能力/旧角色模型或策略不兼容，也可能已保存但响应丢失。请重新读取核对；不会自动重试。'); }
-    } finally { if (owner === lifecycle.current.generation) { busy.current = false; setSaving(false); } }
+    } finally { if (owner === lifecycle.current.generation) { busy.current = false; setSaving(false); setTesting(false); } }
+  }
+  async function actOnDraft(action: 'test' | 'publish' | 'discard', service?: ServiceId) {
+    if (!saved?.lifecycle?.pending || dirty || busy.current || needsReload) return;
+    if (action === 'publish' && !window.confirm(`发布草稿版本 ${saved.revision}？影响服务：${saved.lifecycle.changedServices.join('、') || '无绑定变化'}；旧配置/策略字段：${saved.lifecycle.changedSettings.join('、') || '无'}。后续请求使用新配置，在途请求保持原版本。`)) return;
+    setTesting(action === 'test');
+    if (action === 'discard' && !window.confirm('放弃整份已保存草稿（包括旧配置与策略），恢复为已发布配置？')) return;
+    busy.current = true; setSaving(true); setError(''); setNotice(''); reads.current.cancel();
+    const owner = lifecycle.current.generation;
+    try {
+      actionController.current = new AbortController();
+      const result = await draftAction(action, saved.revision, actionController.current.signal, service);
+      if (owner !== lifecycle.current.generation) return;
+      setSaved(result); setDraft(writableConfiguration(result));
+      setNotice(action === 'test' ? service ? `草稿版本 ${saved.revision} · ${service} 文本连接探针${result.lifecycle?.test?.success ? '成功' : '失败'}；不证明视觉、ASR、工具或生产能力。` : `草稿版本 ${saved.revision} 配置校验通过；未调用供应商，不代表生产能力可用。` : action === 'discard' ? '已放弃草稿，已发布配置未改变。' : '发布成功，后续请求使用新配置。');
+    } catch {
+      if (owner === lifecycle.current.generation) { setNeedsReload(true); setError('操作未确认，请重新读取核对版本及发布状态；不会自动重试。'); }
+    } finally { if (owner === lifecycle.current.generation) { busy.current = false; setSaving(false); setTesting(false); } }
   }
   function updateResource(index: number, resource: Resource) { if (draft) setDraft({ ...draft, resources: draft.resources.map((r, i) => i === index ? resource : r) }); }
   return <div className="ai-resources">
     <PageHeader title={page === 'providers' ? '服务提供商' : '业务服务'} description="统一资源与业务绑定 · v1 配置" actions={<button className="admin-button" disabled={saving || loading} onClick={() => void load()}>重新读取</button>} />
-    <div className="ai-note">保存立即生效，当前没有草稿发布流程。模型能力为人工声明；连接成功也不代表视觉 / ASR 已验证。此页不发起供应商调用。</div>
+    <div className="ai-note">保存仅更新草稿。“校验草稿配置”不调用供应商；服务连接探针使用指定草稿版本的完整绑定发送文本请求，可能产生费用，但不证明视觉 / ASR 等生产能力。测试通过后可确认影响并发布。</div>
     {loading && <p role="status">正在读取配置…</p>}{error && <p role="alert" className="admin-error">{error}</p>}{notice && <p role="status">{notice}</p>}
     {saved && draft && <form onSubmit={e => { e.preventDefault(); void save(); }}>
-      <p className="admin-muted">版本 {saved.revision} · {saved.migrated ? '资源配置已保存' : '沿用旧配置（首次保存创建资源文档）'} · {dirty ? '有未保存修改' : '与读取结果一致'}</p>
+      <p className="admin-muted">版本 {saved.revision} · {saved.lifecycle?.pending ? '草稿待发布' : '已发布 / 沿用旧配置'} · 已发布资源版本 {saved.lifecycle?.publishedRevision ?? saved.revision} · {saved.lifecycle?.test?.revision === saved.revision ? `${saved.lifecycle.test.scope === 'connection-probe' ? `${saved.lifecycle.test.service} 文本连接探针` : '配置校验'}${saved.lifecycle.test.success ? '通过' : '失败'}（非生产能力验证）` : '本版本未测试'} · {dirty ? '有未保存修改' : '与读取结果一致'}</p>
+      {saved.lifecycle && <div className="ai-note">发布影响：{saved.lifecycle.changedServices.join('、') || '无服务绑定变化'}；旧配置/策略字段：{saved.lifecycle.changedSettings.join('、') || '无'}。{saved.lifecycle.conflict && '发布基线已变更，禁止发布；请重新核对配置。'}</div>}
       <fieldset disabled={saving || loading || needsReload}>
         {page === 'providers' ? <>
           <button type="button" className="admin-button" onClick={() => {
@@ -117,9 +137,11 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
             const binding = draft.services[service.id], effective = saved.effective[service.id];
             return <article className="ai-resource-card" key={service.id}><div className="ai-card-heading"><h3>{labels[service.id]} <small>{service.id}</small></h3><span>{labels[service.capability]}</span></div>
               <p className="admin-muted">输入：{service.input} → 输出：{service.output}</p>
+              <button type="button" className="admin-button" disabled={dirty || !saved.lifecycle?.pending} onClick={() => { if (window.confirm(`使用已保存草稿版本 ${saved.revision} 的 ${service.id} 完整绑定发送文本连接探针？可能产生供应商费用，不验证媒体或生产能力。`)) void actOnDraft('test', service.id); }}>测试 {labels[service.id]} 草稿连接</button>
               <label>绑定方式<select value={'inherit' in binding ? 'inherit' : 'override'} onChange={e => setDraft({ ...draft, services: { ...draft.services, [service.id]: e.target.value === 'inherit' ? { inherit: true } : { resourceId: effective.resourceId, model: effective.model } } })}><option value="inherit">继承{service.capability === 'chat' && service.id !== 'chat' ? '对话服务（保留旧角色模型覆盖）' : '能力默认配置'}</option><option value="override">独立覆盖</option></select></label>
               {!('inherit' in binding) && <TargetFields value={binding} capability={service.capability} resources={draft.resources} onChange={target => setDraft({ ...draft, services: { ...draft.services, [service.id]: target } })} />}
-              <div className="ai-effective"><strong>已读取的有效配置{dirty ? '（不含未保存修改）' : ''}</strong><p>{saved.resources.find(r => r.id === effective.resourceId)?.name || effective.resourceId} / {effective.model}</p><p>{effective.baseUrl}</p><p>来源：{effective.source} · 密钥{effective.hasApiKey ? '已配置' : '未配置'}</p></div>
+              {saved.lifecycle?.publishedEffective?.[service.id] && <div className="ai-effective"><strong>已发布配置</strong><p>{saved.lifecycle.publishedEffective[service.id].model} / {saved.lifecycle.publishedEffective[service.id].baseUrl} · 密钥{saved.lifecycle.publishedEffective[service.id].hasApiKey ? '已配置' : '未配置'}</p></div>}
+              <div className="ai-effective"><strong>{saved.lifecycle?.pending ? '草稿解析配置（尚未发布）' : '已发布解析配置'}{dirty ? '（不含未保存修改）' : ''}</strong><p>{saved.resources.find(r => r.id === effective.resourceId)?.name || effective.resourceId} / {effective.model}</p><p>{effective.baseUrl}</p><p>来源：{effective.source} · 密钥{effective.hasApiKey ? '已配置' : '未配置'}</p></div>
             </article>;
           })}</Section>
           <Section title="工具服务配置（非 Agent 启用）">
@@ -133,14 +155,14 @@ export default function AIResources({ page }: { page: 'providers' | 'services' }
                 <option value="disabled">禁用</option><option value="inherit">继承搜索默认（无默认则禁用）</option><option value="override">独立绑定</option>
               </select></label>
               {draft.services.search && 'resourceId' in draft.services.search && <label>搜索资源<select value={draft.services.search.resourceId} onChange={e => setDraft({ ...draft, services: { ...draft.services, search: { resourceId: e.target.value } } })}><option value="">请选择工具资源</option>{draft.resources.filter(r => r.kind === 'tool' && r.tools.includes('search')).map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>}
-              <div className="ai-effective">已读取状态：{saved.effective.search?.status === 'unverified' ? '已配置，未验证' : saved.effective.search?.status === 'unconfigured' ? '缺少密钥' : '禁用'} · 来源：{saved.effective.search?.source || '无绑定'} · 资源：{saved.effective.search?.resourceId || '无'}{dirty && '（不含未保存修改）'}</div>
+              <div className="ai-effective">{saved.lifecycle?.pending ? '草稿状态（尚未发布）' : '已发布状态'}：{saved.effective.search?.status === 'unverified' ? '已配置，未验证' : saved.effective.search?.status === 'unconfigured' ? '缺少密钥' : '禁用'} · 来源：{saved.effective.search?.source || '无绑定'} · 资源：{saved.effective.search?.resourceId || '无'}{dirty && '（不含未保存修改）'}</div>
             </article>
             <article className="ai-resource-card"><h3>Fetch · 不可用</h3><p>始终禁用：提供商重定向安全保障尚不满足要求。现有 Fetch 字段原样保留，本页不提供启用操作。</p></article>
           </Section>
           <p className="admin-muted">继承角色可能保留旧模型覆盖；新连接目录需包含该模型，否则请独立绑定。调用预算、提示词、工具权限、TTS 回退与本地语音优先策略沿用现有设置。工具配置不改变 Agent 的批准与外传策略。</p>
         </>}
       </fieldset>
-      <div className="ai-savebar"><span>{saving ? '正在保存，请勿离开…' : '保存整份配置，后续读取立即生效'}</span><button type="button" className="admin-button" disabled={saving || loading || !dirty} onClick={() => { if (window.confirm('放弃未保存修改？')) { setDraft(writableConfiguration(saved)); setError(''); setNotice(''); } }}>取消修改</button><button className="admin-button" type="submit" disabled={saving || loading || needsReload || !dirty}>保存并立即生效</button></div>
+      <div className="ai-savebar">{testing && <button type="button" className="admin-button" onClick={() => actionController.current?.abort()}>取消测试</button>}<span>{saving ? '正在保存，请勿离开…' : '保存整份草稿，测试并确认影响后发布'}</span><button type="button" className="admin-button" disabled={saving || loading || !dirty} onClick={() => { if (window.confirm('放弃未保存修改？')) { setDraft(writableConfiguration(saved)); setError(''); setNotice(''); } }}>取消修改</button><button className="admin-button" type="submit" disabled={saving || loading || needsReload || !dirty}>保存草稿</button><button type="button" className="admin-button" disabled={saving || loading || needsReload || dirty || !saved.lifecycle?.pending} onClick={() => void actOnDraft('test')}>校验草稿配置</button><button type="button" className="admin-button" disabled={saving || loading || needsReload || dirty || !saved.lifecycle?.pending || saved.lifecycle.conflict || saved.lifecycle.test?.revision !== saved.revision || !saved.lifecycle.test?.success} onClick={() => void actOnDraft('publish')}>确认影响并发布</button><button type="button" className="admin-button" disabled={saving || loading || needsReload || dirty || !saved.lifecycle?.pending} onClick={() => void actOnDraft('discard')}>放弃已保存草稿</button></div>
     </form>}
   </div>;
 }

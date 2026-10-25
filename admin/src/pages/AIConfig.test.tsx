@@ -9,10 +9,10 @@ vi.mock('../services/api', () => ({ default: { get: vi.fn(), put: vi.fn(), post:
 let host: HTMLDivElement, root: Root;
 const get = vi.mocked(api.get), put = vi.mocked(api.put);
 const policy = { main: { thinking: 'default', maxTokens: 3000, timeoutMs: 60000, retries: 0 }, planner: { thinking: 'default', maxTokens: 3000, timeoutMs: 60000, retries: 0 }, vision: { thinking: 'default', maxTokens: 3000, timeoutMs: 60000, retries: 0 }, asr: { thinking: 'default', maxTokens: 3000, timeoutMs: 60000, retries: 0 }, deadlineMs: 180000, maxModelCalls: 12, maxToolCalls: 6 };
-const data = { editable: { ...Object.fromEntries(legacyTextFields.map(k => [k, ''])), model: 'global-raw', chatModel: 'chat-raw' }, credentialState: { global: true, chat: true, vision: true, asr: true }, runtimePolicy: policy, model: 'effective-model-must-not-copy', effectiveModels: [] };
+const data = { draftRevision: 3, editable: { ...Object.fromEntries(legacyTextFields.map(k => [k, ''])), model: 'global-raw', chatModel: 'chat-raw' }, credentialState: { global: true, chat: true, vision: true, asr: true }, runtimePolicy: policy, model: 'effective-model-must-not-copy', effectiveModels: [] };
 async function mount() { await act(async () => root.render(<AIConfig />)); }
 async function changeBudget() { const input = [...host.querySelectorAll('label')].find(l => l.textContent?.startsWith('工具调用上限'))!.querySelector('input')!; await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '7'); input.dispatchEvent(new Event('input', { bubbles: true })); }); }
-function saveButton() { return [...host.querySelectorAll('button')].find(b => b.textContent?.includes('保存全站'))!; }
+function saveButton() { return [...host.querySelectorAll('button')].find(b => b.textContent?.includes('保存 AI 配置草稿'))!; }
 beforeEach(() => { (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; vi.resetAllMocks(); vi.useFakeTimers(); get.mockResolvedValue({ data }); host = document.createElement('div'); document.body.append(host); root = createRoot(host); });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.clearAllTimers(); vi.useRealTimers(); });
 it('uses raw fields, retains empty inheritance and sends only changed budget without clearing any key', async () => {
@@ -20,7 +20,7 @@ it('uses raw fields, retains empty inheritance and sends only changed budget wit
   expect([...host.querySelectorAll('input')].some(i => i.value === 'effective-model-must-not-copy')).toBe(false);
   expect([...host.querySelectorAll('input[type=password]')].every(i => (i as HTMLInputElement).value === '')).toBe(true);
   await changeBudget(); await act(async () => saveButton().click());
-  expect(put.mock.calls[0][1]).toEqual({ runtimePolicy: { ...policy, maxToolCalls: 7 } });
+  expect(put.mock.calls[0][1]).toEqual({ draftRevision: 3, runtimePolicy: { ...policy, maxToolCalls: 7 } });
 });
 it('does not replay an uncertain legacy write, locks fields, and allows reread', async () => {
   put.mockRejectedValue({ response: { data: { error: 'SECRET-MUST-NOT-SHOW' } } }); await mount(); await changeBudget(); await act(async () => { saveButton().click(); saveButton().click(); });
@@ -43,7 +43,7 @@ it('offers explicit confirmed key clearing without displaying environment secret
   const checkbox = [...host.querySelectorAll('label')].find(l => l.textContent === '清除对话密钥覆盖')!.querySelector('input')!;
   await act(async () => checkbox.click()); await act(async () => saveButton().click()); expect(put).not.toHaveBeenCalled();
   confirm.mockReturnValue(true); await act(async () => saveButton().click());
-  expect(put.mock.calls[0][1]).toEqual({ chatApiKey: '' }); confirm.mockRestore();
+  expect(put.mock.calls[0][1]).toEqual({ draftRevision: 3, chatApiKey: '' }); confirm.mockRestore();
 });
 
 it('uses effective bindings for thinking options without copying them into editable fields', async () => {
@@ -53,7 +53,7 @@ it('uses effective bindings for thinking options without copying them into edita
   for (const role of ['main', 'planner', 'vision']) expect([...host.querySelector<HTMLSelectElement>(`select[aria-label="${role} 思考模式"]`)!.options].map(o => o.value)).toEqual(['default', 'off', 'high', 'max']);
   expect([...host.querySelectorAll('input')].some(i => i.value === effectiveModels[0].model)).toBe(false);
   await changeBudget(); await act(async () => saveButton().click());
-  expect(put.mock.calls[0][1]).toEqual({ runtimePolicy: { ...policy, maxToolCalls: 7 } });
+  expect(put.mock.calls[0][1]).toEqual({ draftRevision: 3, runtimePolicy: { ...policy, maxToolCalls: 7 } });
 });
 it('requires every effective main binding to support thinking options', async () => {
   get.mockResolvedValue({ data: { ...data, effectiveModels: ['对话', '主助手', '菜谱', '运营'].map(role => ({ role, baseUrl: role === '运营' ? 'https://example.test/v1' : 'https://api.siliconflow.cn/v1', model: 'Pro/deepseek-ai/DeepSeek-V4', source: '有效业务服务配置' })) } });
@@ -66,15 +66,15 @@ it('replacement cancels clearing and cannot be silently discarded', async () => 
   const input = host.querySelector<HTMLInputElement>('input[type=password]')!;
   await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'demo-rotation'); input.dispatchEvent(new Event('input', { bubbles: true })); });
   expect(checkbox.checked).toBe(false); expect(checkbox.disabled).toBe(true);
-  await act(async () => saveButton().click()); expect(put.mock.calls[0][1]).toEqual({ apiKey: 'demo-rotation' });
+  await act(async () => saveButton().click()); expect(put.mock.calls[0][1]).toEqual({ draftRevision: 3, apiKey: 'demo-rotation' });
   expect(legacyConfigPatch({}, {}, { apiKey: 'demo-rotation' }, ['apiKey'])).toEqual({ apiKey: 'demo-rotation' });
 });
 
-it('tests complete effective bindings without mixing raw fields or unsaved keys', async () => {
-  vi.mocked(api.post).mockResolvedValue({ data: { success: true, reply: 'OK' } });
+it('labels saved draft validation without claiming a provider connection', async () => {
+  vi.mocked(api.post).mockResolvedValue({ data: { lifecycle: { test: { revision: 3 } } } });
   await mount();
-  for (const [label, service] of [['测试当前生效对话连接', 'chat'], ['测试当前识图连接', 'vision'], ['测试当前转写连接', 'asr']]) {
-    await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent?.includes(label))!.click());
-    expect(api.post).toHaveBeenLastCalledWith('/admin/ai-config/test', { service });
-  }
+  await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent?.includes('校验已保存草稿'))!.click());
+  expect(api.post).toHaveBeenCalledWith('/admin/ai-config/resources/test', { revision: 3 });
+  expect(host.textContent).toContain('未调用供应商');
+  expect(host.textContent).not.toContain('延迟 undefined');
 });

@@ -886,10 +886,13 @@ async function invokeRun(runId: string, resume?: AgentResumePayload) {
   await setAgentRunStatus(runId, "completed", { result: { reply: final.reply, transcript: final.transcript, artifacts: final.artifacts || [] }, pendingApproval: null });
 }
 
+// Queued requests keep the configuration captured on acceptance; secrets stay in memory, never checkpoints.
+const acceptedConfigurations = new Map<string, (work: () => Promise<void>) => Promise<void>>();
 function kickOff(runId: string, resume?: AgentResumePayload) {
   const existing = activeRuns.get(runId);
   if (existing) return existing;
-  const promise = invokeRun(runId, resume).catch(async (error: unknown) => {
+  const execute = acceptedConfigurations.get(runId) || ((work: () => Promise<void>) => aiRuntimeService().withConfigurationSnapshot(work));
+  const promise = execute(() => invokeRun(runId, resume)).catch(async (error: unknown) => {
     const current = await getAgentRunRow(runId);
     if (current?.status === "cancelled") return;
     const classified = classifyAIError(error);
@@ -905,9 +908,10 @@ function kickOff(runId: string, resume?: AgentResumePayload) {
     });
   }).finally(async () => {
     activeRuns.delete(runId);
+    acceptedConfigurations.delete(runId);
     replyDeltaListeners.delete(runId);
     const stored = await getAgentRunInput(runId);
-    if (stored) void scheduleQueuedRuns(stored.userId).catch((error) => {
+    if (stored) void aiRuntimeService().withConfigurationSnapshot(() => scheduleQueuedRuns(stored.userId), true).catch((error) => {
       console.error("[Agent scheduling error]", error instanceof Error ? error.message : error);
     });
   });
@@ -937,8 +941,10 @@ export async function startSupervisorRun(
   waitMs = 25_000,
   onReplyDelta?: ReplyDeltaListener,
 ): Promise<AgentResponse> {
+  const configuration = await aiRuntimeService().captureConfigurationSnapshot();
   const reusable = input.idempotencyKey ? await findReusableAgentRun(userId, input.idempotencyKey) : undefined;
   const created = reusable || await createAgentRun(userId, { ...input, metadata: { ...input.metadata, runtimeVersion: 2, mainAssistantEnabled: process.env.AI_MAIN_ASSISTANT_ENABLED === "true", replyStreamEnabled: process.env.AI_REPLY_STREAM_ENABLED === "true" } });
+  if (!reusable) acceptedConfigurations.set(created.id, configuration);
   if (onReplyDelta && !/(不要保存|不要写入|不保存|只给建议|仅给建议)/.test(input.prompt || "")) {
     replyDeltaListeners.set(created.id, onReplyDelta);
   }
@@ -993,6 +999,7 @@ export async function cancelSupervisorRun(userId: number, runId: string) {
   if (!await setAgentRunStatus(runId, "cancelled", { pendingApproval: null, pendingInput: null })) {
     throw new Error("Agent Run 已结束");
   }
+  acceptedConfigurations.delete(runId);
   activeRunControllers.get(runId)?.abort(new Error("AGENT_RUN_CANCELLED"));
   await appendAgentEvent(runId, userId, "Supervisor", "run_cancelled", "用户已取消 Agent Run");
 }

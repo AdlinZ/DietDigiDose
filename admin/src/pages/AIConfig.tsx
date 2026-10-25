@@ -1,3 +1,4 @@
+import { createLatestRequest } from "../utils/latestRequest";
 import { legacyConfigPatch } from "../services/legacyAIConfig";
 import { useEffect, useRef, useState } from "react";
 import { Bot, Key, Globe, Cpu, Zap, Save, CheckCircle2, AlertCircle, RefreshCw, Mic, SlidersHorizontal, Image } from "lucide-react";
@@ -86,6 +87,9 @@ export default function AIConfig() {
   const [isSystemPromptCustomized, setIsSystemPromptCustomized] = useState(false);
 
   // UI 状态
+  const reads = useRef(createLatestRequest());
+  const lifecycle = useRef(0), testBusy = useRef(false);
+  const draftRevision = useRef(0);
   const initial = useRef<Record<string, unknown>>({});
   const saveBusy = useRef(false);
   const [clearKeys, setClearKeys] = useState<string[]>([]);
@@ -100,11 +104,14 @@ export default function AIConfig() {
   const [statusMsg, setStatusMsg] = useState("");
 
   const fetchConfig = async () => {
+    const owner = lifecycle.current, request = reads.current.begin();
     try {
       setLoading(true);
-      const { data } = await api.get("/admin/ai-config");
+      const { data } = await api.get("/admin/ai-config", { signal: request.signal });
 
-      if (!data.editable) throw new Error('Editable configuration unavailable');
+      if (owner !== lifecycle.current || !request.isLatest()) return;
+      if (!data.editable || !Number.isSafeInteger(data.draftRevision)) throw new Error('Editable configuration unavailable');
+      draftRevision.current = data.draftRevision;
       const fields = data.editable;
       const displayedModel = fields.chatModel || fields.model || '';
       initial.current = { ...fields, model: displayedModel, chatModel: displayedModel, runtimePolicy: data.runtimePolicy };
@@ -124,14 +131,17 @@ export default function AIConfig() {
       setEnablePerServiceProviders(!!(keys.chat || keys.vision || keys.asr || fields.chatBaseUrl || fields.visionBaseUrl || fields.asrBaseUrl));
       setLoadError(false); setNeedsReload(false);
     } catch {
+      if (owner !== lifecycle.current || !request.isLatest()) return;
       setLoadError(true);
     } finally {
-      setLoading(false);
+      if (owner === lifecycle.current && request.isLatest()) setLoading(false);
     }
   };
 
   useEffect(() => {
+    const owner = lifecycle, pendingReads = reads.current;
     fetchConfig();
+    return () => { owner.current++; pendingReads.cancel(); };
   }, []);
 
   const handleApplyPreset = (preset: (typeof PROVIDER_PRESETS)[0]) => {
@@ -160,50 +170,43 @@ export default function AIConfig() {
     if (!Object.keys(patch).length) { setStatusMsg('没有需要保存的修改。'); return; }
     if (clearKeys.length && !window.confirm("确定清除所选数据库密钥覆盖？已有全局或环境凭据仍按旧配置规则回退。")) return;
     saveBusy.current = true;
+    const owner = lifecycle.current;
     try {
       setSaving(true);
-      await api.put('/admin/ai-config', patch);
+      await api.put('/admin/ai-config', { ...patch, draftRevision: draftRevision.current });
+      if (owner !== lifecycle.current) return;
       await fetchConfig();
-      setStatusMsg("模型与调用策略已保存。");
+      if (owner !== lifecycle.current) return;
+      setStatusMsg("草稿已保存，请到业务服务页测试并发布。");
       setIsSystemPromptCustomized(true);
       setTimeout(() => setStatusMsg(""), 4000);
     } catch {
+      if (owner !== lifecycle.current) return;
       setNeedsReload(true);
     } finally {
-      saveBusy.current = false;
-      setSaving(false);
+      if (owner === lifecycle.current) { saveBusy.current = false; setSaving(false); }
     }
   };
 
   const handleTestConnection = async (targetService: "global" | "chat" | "vision" | "asr" = "global") => {
+    if (testBusy.current || saveBusy.current || needsReload || loadError) return;
+    testBusy.current = true;
+    const owner = lifecycle.current, revision = draftRevision.current;
     try {
       setTesting(true);
       setTestResult(null);
 
-      // Resolve the complete saved binding atomically on the server; raw edits are only for PATCH.
-      const { data } = await api.post("/admin/ai-config/test", {
-        service: targetService === 'global' ? 'chat' : targetService,
-      });
-
-      if (data.success) {
-        setTestResult({
-          success: true,
-          message: `【${targetService.toUpperCase()} 连通成功】模型回应：“${data.reply}”`,
-          latency: data.latencyMs,
-        });
-      } else {
-        setTestResult({
-          success: false,
-          message: data.error || "调用失败",
-        });
-      }
-    } catch (err: any) {
+      const { data } = await api.post("/admin/ai-config/resources/test", { revision });
+      if (owner !== lifecycle.current) return;
+      setTestResult({ success: !!data.lifecycle?.test?.success, message: `草稿版本 ${revision} 配置校验；未调用供应商，不验证 ${targetService} 生产能力。` });
+    } catch {
+      if (owner !== lifecycle.current) return;
       setTestResult({
         success: false,
-        message: err.response?.data?.error || err.response?.data?.details || err.message || "请求失败，请检查 API Key 或 Base URL",
+        message: "校验未确认，请重新读取草稿版本。",
       });
     } finally {
-      setTesting(false);
+      if (owner === lifecycle.current) { testBusy.current = false; setTesting(false); }
     }
   };
 
@@ -211,16 +214,16 @@ export default function AIConfig() {
   if (loading) return <div className="text-center py-20 text-text-muted">加载 AI 服务配置中...</div>;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" onChangeCapture={() => setTestResult(null)}>
       {needsReload && <div role="alert">保存未确认，请重新读取核对；不会自动重试。<button onClick={() => void fetchConfig()}>重新读取</button></div>}
-      <fieldset disabled={saving || needsReload} className="contents">
+      <fieldset disabled={saving || testing || needsReload} className="contents">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-text-main flex items-center gap-2">
             <Bot className="text-primary" size={28} /> 旧配置与策略
           </h2>
           <p className="text-sm text-text-muted mt-1">
-            兼容入口：保留原配置、角色模型、提示词与调用预算。新连接和业务绑定请使用「服务提供商」「业务服务」。保存立即生效。
+            兼容入口：保留原配置、角色模型、提示词与调用预算。新连接和业务绑定请使用「服务提供商」「业务服务」。保存仅更新草稿，请到业务服务页测试并发布。
           </p>
         </div>
       </div>
@@ -308,9 +311,9 @@ export default function AIConfig() {
 
         <section className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
           <h2 className="font-semibold">调用策略与预算</h2>
-          <div className="grid gap-2 text-xs text-gray-600">{effectiveModels.map((entry) => <div key={entry.role}><strong>{entry.role}当前生效：</strong>{entry.model}（{entry.source}）<div className="break-all">接入点：{entry.baseUrl}</div></div>)}</div>
+          <div className="grid gap-2 text-xs text-gray-600">{effectiveModels.map((entry) => <div key={entry.role}><strong>{entry.role}草稿解析：</strong>{entry.model}（{entry.source}）<div className="break-all">接入点：{entry.baseUrl}</div></div>)}</div>
           <p className="text-xs text-amber-700">真实模型的工具、结构化输出、流式和媒体能力尚未验证；连接测试成功不能代表这些能力全部可用。</p>
-          <p className="text-xs text-text-muted">显示已保存的生效策略；模型能力仍需真实连接验证。未确认支持的思考参数会拒绝保存。输出长度不等于思考预算。</p>
+          <p className="text-xs text-text-muted">显示已保存的草稿策略；模型能力仍需真实连接验证。未确认支持的思考参数会拒绝保存。输出长度不等于思考预算。</p>
           {(["main", "planner", "vision", "asr"] as const).map((role) => (
             <div key={role} className="grid grid-cols-4 gap-2">
               <label>{ { main: "主助手", planner: "复杂规划", vision: "图片识别", asr: "语音转写" }[role] }
@@ -542,7 +545,7 @@ export default function AIConfig() {
               className="px-4 py-2 rounded-xl border border-primary text-primary hover:bg-green-50 font-bold text-xs flex items-center gap-1.5 transition-colors active:scale-95 disabled:opacity-50"
             >
               {testing ? <RefreshCw className="animate-spin" size={14} /> : <Zap size={14} />}
-              测试当前生效对话连接
+              校验已保存草稿
             </button>
             {enablePerServiceProviders && (
               <>
@@ -552,7 +555,7 @@ export default function AIConfig() {
                   disabled={testing}
                   className="px-4 py-2 rounded-xl border border-secondary text-secondary hover:bg-emerald-50 font-bold text-xs flex items-center gap-1.5 transition-colors active:scale-95 disabled:opacity-50"
                 >
-                  <Zap size={14} /> 测试当前识图连接
+                  <Zap size={14} /> 校验草稿（不验证识图能力）
                 </button>
                 <button
                   type="button"
@@ -560,7 +563,7 @@ export default function AIConfig() {
                   disabled={testing}
                   className="px-4 py-2 rounded-xl border border-orange-500 text-orange-500 hover:bg-orange-50 font-bold text-xs flex items-center gap-1.5 transition-colors active:scale-95 disabled:opacity-50"
                 >
-                  <Zap size={14} /> 测试当前转写连接
+                  <Zap size={14} /> 校验草稿（不验证转写能力）
                 </button>
               </>
             )}
@@ -579,7 +582,7 @@ export default function AIConfig() {
             className="px-6 py-2.5 rounded-2xl bg-primary text-white hover:bg-primary-dark font-bold text-sm flex items-center gap-2 transition-all active:scale-95 shadow-sm disabled:opacity-50"
           >
             <Save size={16} />
-            {saving ? "保存中..." : "保存全站 AI 接入配置"}
+            {saving ? "保存中..." : "保存 AI 配置草稿"}
           </button>
         </div>
 
@@ -593,7 +596,7 @@ export default function AIConfig() {
             {testResult.success ? <CheckCircle2 size={20} className="mt-0.5" /> : <AlertCircle size={20} className="mt-0.5" />}
             <div>
               <div className="font-bold">
-                {testResult.success ? `连接测试成功 (延迟 ${testResult.latency}ms)` : "连接测试失败"}
+                {testResult.success ? "草稿配置校验通过（未调用供应商）" : "草稿校验失败"}
               </div>
               <div className="mt-1 font-mono text-xs opacity-90">{testResult.message}</div>
             </div>

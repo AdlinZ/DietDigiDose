@@ -21,7 +21,8 @@ export function sanitizeAIErrorMessage(value: unknown) {
 export function classifyAIError(value: unknown): AIErrorDetails {
   const adminMessage = sanitizeAIErrorMessage(value);
   let code = "AI_AGENT_FAILED";
-  if (/未配置|api key|missing.*key|authentication.*provider/i.test(adminMessage)) code = "AI_NOT_CONFIGURED";
+  if (adminMessage === "AI_CONFIGURATION_SNAPSHOT_LOST") code = "AI_CONFIGURATION_SNAPSHOT_LOST";
+  else if (/未配置|api key|missing.*key|authentication.*provider/i.test(adminMessage)) code = "AI_NOT_CONFIGURED";
   else if (/timeout|timed out|超时|aborted/i.test(adminMessage)) code = "AI_TIMEOUT";
   else if (/429|rate.?limit|限流|too many requests/i.test(adminMessage)) code = "AI_RATE_LIMITED";
   else if (/network|fetch failed|econn|enotfound|socket|网络/i.test(adminMessage)) code = "AI_NETWORK_ERROR";
@@ -31,6 +32,7 @@ export function classifyAIError(value: unknown): AIErrorDetails {
 
 export function publicAIErrorMessage(code?: string | null) {
   const messages: Record<string, string> = {
+    AI_CONFIGURATION_SNAPSHOT_LOST: "服务重启后无法恢复原请求配置，请明确重试以使用当前配置。",
     AI_NOT_CONFIGURED: "AI 服务尚未完成配置，请稍后重试或联系管理员。",
     AI_TIMEOUT: "AI 服务响应超时，请稍后重试。",
     AI_RATE_LIMITED: "AI 请求较多，请稍后再试。",
@@ -42,7 +44,7 @@ export function publicAIErrorMessage(code?: string | null) {
 }
 
 export function aiErrorTypeForCode(code?: string | null) {
-  if (code === "AI_NOT_CONFIGURED") return "configuration";
+  if (code === "AI_NOT_CONFIGURED" || code === "AI_CONFIGURATION_SNAPSHOT_LOST") return "configuration";
   if (code === "AI_TIMEOUT") return "timeout";
   if (code === "AI_RATE_LIMITED") return "rate_limit";
   if (code === "AI_NETWORK_ERROR") return "network";

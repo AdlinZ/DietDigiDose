@@ -1,3 +1,4 @@
+import { aiRuntimeService } from "./modules/aiRuntime/runtime.js";
 import express, { type RequestHandler } from "express";
 import cors from "cors";
 import path from "node:path";
@@ -52,6 +53,9 @@ export async function createApp() {
   }));
   app.use(express.json({ limit: "8mb" }));
   app.use(express.urlencoded({ limit: "1mb", extended: true }));
+  app.use("/api/v1/ai", (_req, _res, next) => {
+    void aiRuntimeService().withConfigurationSnapshot(() => next()).catch(next);
+  });
   app.use(observeOnboardingSaves(runtime.onboardingService));
   app.use("/media/uploads", express.static(uploadedMediaDir, { maxAge: "1y", immutable: true }));
   app.use("/media", express.static(staticAssetsDir, { maxAge: "7d" }));

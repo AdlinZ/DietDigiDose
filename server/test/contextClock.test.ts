@@ -8,6 +8,9 @@ import type { RecommendationsService } from "../src/modules/recommendations/serv
 
 // Run under TZ=UTC: business dates must not follow the host's calendar.
 test("each turn captures one Shanghai clock across midnight, month/year boundaries and delayed rendering", async () => {
+  const { configureAIRuntimeService } = await import('../src/modules/aiRuntime/runtime.js');
+  const { AIRuntimeService } = await import('../src/modules/aiRuntime/service.js');
+  configureAIRuntimeService(new AIRuntimeService({ settings: async () => ({}), saveSettings: async () => {}, compareAndSaveSetting: async () => false, recordUsage: async () => {} }, {}));
   const queriedDates: string[] = [];
   const recommendationDates: string[] = [];
   configureAiContextService(new AiContextService({ load: async (_userId, date) => {

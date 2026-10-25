@@ -1,19 +1,19 @@
+import { serviceIds, type ServiceId } from "../../modules/aiRuntime/resources.js";
+import { testAIConnection } from "../../services/aiService.js";
 import { AIResourceConflictError, AIResourceValidationError } from "../../modules/aiRuntime/service.js";
 import { thinkingParameters } from "../../modules/aiRuntime/policy.js";
 import { Router } from "express";
 import { aiRuntimeService } from "../../modules/aiRuntime/runtime.js";
-import { testAIConnection } from "../../services/aiService.js";
 import { DEFAULT_AI_PERSONA_PROMPT } from "../../services/contextBuilder.js";
 import { validateBody } from "../../middleware/validate.js";
-import { adminAIConfigSchema, adminAIConfigTestSchema } from "../../validation/schemas.js";
+import { adminAIConfigSchema } from "../../validation/schemas.js";
 import type { AuthRequest } from "../../middleware/auth.js";
 import { auditAdminAction } from "./shared.js";
 
 export function createAdminAIConfigRouter() {
   const router = Router();
 
-  // Phase one configuration boundary: saving applies immediately, matching the legacy API.
-  // Draft/test/publish lifecycle and provider verification are deliberately not claimed here.
+  // All mutations below save a draft; only the version-checked publish operation changes runtime values.
   router.get("/ai-config/resources", async (_req, res) => {
     try { res.json(await aiRuntimeService().resourceConfiguration()); }
     catch { res.status(500).json({ error: "获取资源配置失败" }); }
@@ -37,9 +37,29 @@ export function createAdminAIConfigRouter() {
     }
   });
 
+  for (const action of ["test", "publish", "discard"] as const) {
+    router.post(`/ai-config/resources/${action}`, async (req: AuthRequest, res) => {
+      if (!Number.isSafeInteger(req.body?.revision) || req.body.revision < 0 || Object.keys(req.body).some(key => key !== "revision" && !(action === "test" && key === "service")) || (req.body.service !== undefined && !serviceIds.includes(req.body.service))) {
+        res.status(400).json({ error: "必须指定已保存草稿版本" }); return;
+      }
+      const controller = new AbortController();
+      const cancel = () => { if (!res.writableEnded) controller.abort(); };
+      res.on("close", cancel);
+      try {
+        const service = aiRuntimeService();
+        const result = action === "test" ? await service.testDraft(req.body.revision, req.body.service ? { service: req.body.service as ServiceId, signal: controller.signal, run: config => testAIConnection({ ...config, signal: controller.signal }) } : undefined) : action === "discard" ? await service.discardDraft(req.body.revision) : await service.publishDraft(req.body.revision);
+        await auditAdminAction(req, { action: `ai_resources.${action}`, resourceType: "ai_config", resourceId: "global", summary: action === "test" ? "校验 AI 草稿（不验证供应商能力）" : action === "discard" ? "放弃 AI 草稿" : "发布 AI 配置" });
+        res.json(result);
+      } catch (error) {
+        res.status(error instanceof AIResourceConflictError ? 409 : error instanceof AIResourceValidationError ? 400 : 500)
+          .json({ error: "操作未确认：版本冲突、未测试或配置不兼容；请重新读取核对" });
+      } finally { res.off("close", cancel); }
+    });
+  }
+
   router.get("/ai-config", async (_req, res) => {
     try {
-      const settings = await aiRuntimeService().settings();
+      const { values: settings, revision: draftRevision } = await aiRuntimeService().draftSettingsSnapshot();
       const config = await aiRuntimeService().config(settings);
       const [supervisor, nutrition, recipe, operations] = await Promise.all(
         (["SUPERVISOR", "NUTRITION", "RECIPE", "OPERATIONS"] as const).map(role => aiRuntimeService().agentConfig(role, settings)),
@@ -58,6 +78,7 @@ export function createAdminAIConfigRouter() {
       const editable = Object.fromEntries(Object.entries(editableNames).map(([name, key]) => [name, settings[key] ?? ""]));
       res.json({
         editable,
+        draftRevision,
         credentialState: { global: !!settings.AI_API_KEY, chat: !!settings.AI_CHAT_API_KEY, vision: !!settings.AI_VISION_API_KEY, asr: !!settings.AI_ASR_API_KEY },
         maskedKey: formatMasked(config.apiKey),
         hasApiKey: !!config.apiKey,
@@ -65,7 +86,7 @@ export function createAdminAIConfigRouter() {
         model: config.model,
         visionModel: config.visionModel,
         asrModel: config.asrModel,
-        runtimePolicy: await aiRuntimeService().runtimePolicy(),
+        runtimePolicy: await aiRuntimeService().runtimePolicy(settings),
         effectiveModels: [
           { role: "主助手", model: supervisor.model, source: "有效业务服务配置", baseUrl: supervisor.baseUrl },
           { role: "规划", model: nutrition.model, source: "有效业务服务配置", baseUrl: nutrition.baseUrl },
@@ -142,11 +163,11 @@ export function createAdminAIConfigRouter() {
       }
       add("AI_VISION_API_KEY", visionApiKey); add("AI_VISION_BASE_URL", visionBaseUrl);
       add("AI_ASR_API_KEY", asrApiKey); add("AI_ASR_BASE_URL", asrBaseUrl); add("AI_SYSTEM_PROMPT", systemPrompt);
-      const current = await aiRuntimeService().settings();
+      const current = await aiRuntimeService().draftSettings();
       {
         const merged = { ...current, ...Object.fromEntries(entries.map((entry) => [entry.key, entry.value])) };
         const effective = await aiRuntimeService().config(merged);
-        const policy = req.body.runtimePolicy || await aiRuntimeService().runtimePolicy();
+        const policy = req.body.runtimePolicy || await aiRuntimeService().runtimePolicy(current);
         for (const role of ["SUPERVISOR", "RECIPE", "OPERATIONS", "NUTRITION"] as const) {
           const agent = await aiRuntimeService().agentConfig(role, merged);
           thinkingParameters(agent.baseUrl, agent.model, role === "NUTRITION" ? policy.planner : policy.main);
@@ -156,7 +177,7 @@ export function createAdminAIConfigRouter() {
         if (policy.asr.thinking !== "default") throw new Error("语音转写不支持思考策略，请选择提供商默认");
         entries.push({ key: "AI_RUNTIME_POLICY", value: JSON.stringify(policy) });
       }
-      await aiRuntimeService().saveValidatedSettings(entries, current);
+      await aiRuntimeService().saveValidatedSettings(entries, current, req.body.draftRevision);
 
       if (req.userId) {
         await auditAdminAction(req, {
@@ -178,22 +199,15 @@ export function createAdminAIConfigRouter() {
           },
         });
       }
-      res.json({ success: true, message: "AI 配置更新成功" });
+      res.json({ success: true, message: "AI 草稿已保存，请在业务服务页测试并发布" });
     } catch (error) {
       if (error instanceof AIResourceConflictError) res.status(409).json({ code: "AI_RESOURCE_CONFLICT", error: "配置版本已变更，请重新读取" });
       else res.status(400).json({ error: error instanceof Error && /思考|参数/.test(error.message) ? error.message : "更新 AI 配置失败，请检查模型与策略配置" });
     }
   });
 
-  router.post("/ai-config/test", validateBody(adminAIConfigTestSchema), async (req, res) => {
-    try {
-      const { apiKey, baseUrl, model, service } = req.body;
-      const result = await testAIConnection({ apiKey, baseUrl, model, service });
-      res.json({ success: true, reply: result.reply, latencyMs: result.latencyMs });
-    } catch (error) {
-      console.error("[Admin AI Connection Test Error]", error instanceof Error ? error.message : error);
-      res.status(400).json({ success: false, error: "连接测试失败，请检查地址、模型和凭据" });
-    }
+  router.post("/ai-config/test", (_req, res) => {
+    res.status(410).json({ error: "请使用带草稿版本的 /ai-config/resources/test；此接口不再执行无版本连接测试" });
   });
 
   return router;

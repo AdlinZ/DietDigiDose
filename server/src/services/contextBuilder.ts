@@ -1,3 +1,4 @@
+import { aiRuntimeService } from "../modules/aiRuntime/runtime.js";
 import { resolveKitchenPreferences, type KitchenPreferences } from "@dietdigidose/contracts";
 import type { PreparedMeal } from "@dietdigidose/contracts";
 import { currentBusinessClock } from "../utils/date.js";
@@ -89,6 +90,7 @@ export async function buildUserContext(userId: number, now = new Date()): Promis
   return {
     userId,
     ...context,
+    personaPrompt: (await aiRuntimeService().settings()).AI_SYSTEM_PROMPT || "",
     clock,
     recommendedRecipes,
   };

@@ -1,5 +1,5 @@
 import { InventoryFieldEvidence } from "@/components/InventoryFieldEvidence";
-import { approvalFields, editApprovalField } from "./approvalFields";
+import { approvalFields, editApprovalField, getActionScopeDescription, isEditableAction } from "./approvalFields";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Image, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import FontAwesome6 from "@/components/ThemedFontAwesome6";
@@ -661,8 +661,8 @@ export function AssistantMessageItem({
                           {editedActions.map((action, index) => (
                             <View key={action.id || index} className="mb-4 gap-2 border-b border-line pb-3">
                               <Text className="text-sm font-bold text-ink">{action.summary}</Text>
-                              <Text className="text-xs text-copy-muted">{action.actionType.includes("preferences") || action.actionType.includes("preference") ? "影响长期偏好" : "仅本次业务操作"} · 待批准</Text>
-                              {approvalFields(action).length ? approvalFields(action).map((field) => (
+                              <Text className="text-xs text-copy-muted">{getActionScopeDescription(action)} · 待批准</Text>
+                              {isEditableAction(action) ? approvalFields(action).map((field) => (
                                 <View key={field.key}>
                                   <Text className="text-xs text-copy-muted">{field.label}（原值：{String(agent?.run.pendingApproval?.actions.find((original) => original.id === action.id)?.payload[field.key] ?? "未填写")}）</Text>
                                   <TextInput accessibilityLabel={field.label} value={String(action.payload[field.key] ?? "")} keyboardType={field.numeric ? "decimal-pad" : "default"}

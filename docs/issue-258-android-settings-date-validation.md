@@ -29,7 +29,7 @@ Existing dependencies copied into this workspace from the prior task, after conf
 | `CI=1 EXPO_OFFLINE=1 expo export --platform web` | PASS; static export only, no APK |
 | Root `node scripts/check-module-boundaries.mjs` | PASS |
 | `git diff --check` | PASS |
-| Client Web budget, using existing `quality/build-budgets.json` limits | PASS: total 6,159,873 / 6,500,000 bytes; JS 4,351,658 / 4,500,000; largest JS 1,234,918 / 4,100,000 |
+| Client Web budget, using existing `quality/build-budgets.json` limits | PASS: total 6,158,241 / 6,500,000 bytes; JS 4,350,026 / 4,500,000; largest JS 1,234,918 / 4,100,000 |
 
 Regression coverage includes native picker open/dismiss/confirm/repeat/stale/disabled/unmount and date formatting; light/dark theme properties; Web valid/invalid/clear/recovery; growing layout properties; calorie reread/cancel/back/validation/failure/retry/double-write/late read and save/blur-re-entry locks; reminder draft/save/failure/double-write/re-entry reread; deletion verification cancellation; keyboard/scroll configuration. Full suite also includes Screen, post-detail keyboard, PhoneBindingSettings, AccountSmsVerification and existing inventory evidence tests.
 
@@ -58,3 +58,11 @@ Logs outside the tracked repository: `../client-tests.log`, `../client-tsc.log`,
 - Those three cases are now retained in this branch's `client/screens/settings/index.test.tsx`: native scheduling failure releases the remounted form for retry; reauthentication of the same user creates a separate session lock and ignores the old response; logout without a replacement settings instance prevents late scheduling.
 - Final full client test run: 116 suites / 812 tests PASS (including all 19 settings cases). Full client TypeScript, ESLint and diff checks pass. This final retention change affects only tests and this validation record; product implementation stays exactly at reviewed `c78b01ef`, so the successful Web export, budget and architecture checks above remain applicable and were not needlessly repeated.
 - Independent code review is complete with no outstanding blocker. The visual, browser and Android/iOS device limitations above remain explicit and unchanged; no issue checkboxes or release actions were performed.
+
+
+## PR CI budget follow-up
+
+- Draft PR #272 initially used head `993dc26f0bd955627e8575a74effc2aaad600dc7`, whose tree is identical to local `8b7e16e`. The four unpublished commits had only author/committer emails changed to the verified `67130535+AdlinZ@users.noreply.github.com` after GitHub GH007 rejected the first push; email protection was not changed and no force push was used.
+- CI run `40186818810` reported Windows client JS 4,500,998 bytes, 998 over the unchanged 4,500,000 limit. Windows tests and builds passed; the failure was the final budget gate. Local macOS output was smaller, so local budget success did not establish Windows budget success.
+- The necessary fix only hoists 14 repeated static className strings within the settings page. It preserves every expanded class string and all render/interaction logic, with no dependency or budget changes. Local Web JS is reduced by 1,632 bytes to 4,350,026; total export is 6,158,241 bytes. Independent read-only review passed: expanding all 14 constants at 50 use sites is byte-for-byte identical to the prior source; the existing Tailwind Oxide scanner retained all 39 extracted style tokens with no candidate loss. The new exact-head CI remains the authority for Windows acceptance.
+- After this fix, all 116 suites / 812 tests, full client TypeScript/ESLint, Web export, architecture and diff checks passed again. Visual/device limitations above still apply.

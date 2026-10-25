@@ -51,6 +51,21 @@ import {
   type VoiceSource,
 } from "@/services/voicePackManager";
 
+const settingTitleClass = "text-sm font-bold text-ink";
+const settingIconRowClass = "flex-row items-center gap-3.5";
+const settingLinkClass = "p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60 transition-colors";
+const settingHintClass = "text-[11px] text-copy-muted mt-0.5";
+const sectionTitleClass = "text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1";
+const sectionCardClass = "bg-surface rounded-3xl border border-line overflow-hidden shadow-xs";
+const brandIconClass = "w-9 h-9 rounded-2xl bg-brand/10 items-center justify-center";
+const reminderLabelRowClass = "flex-row items-center gap-3.5 flex-1 pr-2";
+const reminderHintClass = "text-[11px] text-copy-muted mt-0.5 leading-4";
+const calorieStepClass = "w-touch h-touch rounded-xl bg-surface border border-line items-center justify-center";
+const cancelButtonClass = "flex-1 bg-background-secondary py-3.5 rounded-2xl items-center border border-line";
+const sectionHeadingClass = "mb-2.5 px-1 text-xs font-bold uppercase tracking-wider text-copy-muted";
+const lastSettingLinkClass = "p-4 flex-row items-center justify-between active:bg-canvas/60 transition-colors";
+const reminderSettingRowClass = "p-4 flex-row items-center justify-between border-b border-background-secondary";
+
 export default function SettingsScreen() {
   const router = useSafeRouter();
   const focused = useIsFocused();
@@ -483,7 +498,7 @@ export default function SettingsScreen() {
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 100 }}
       >
         <View className="mb-6">
-          <Text className="mb-2.5 px-1 text-xs font-bold uppercase tracking-wider text-copy-muted">
+          <Text className={sectionHeadingClass}>
             外观
           </Text>
           <View className="rounded-3xl border border-line bg-surface p-2 shadow-xs">
@@ -525,7 +540,7 @@ export default function SettingsScreen() {
         </View>
 
         <View className="mb-6">
-          <Text className="mb-2.5 px-1 text-xs font-bold uppercase tracking-wider text-copy-muted">
+          <Text className={sectionHeadingClass}>
             做饭语音
           </Text>
           <View className="overflow-hidden rounded-3xl border border-line bg-surface shadow-xs">
@@ -536,7 +551,7 @@ export default function SettingsScreen() {
                     <FontAwesome6 name="wave-square" size={15} colorClassName="accent-info" />
                   </View>
                   <View className="flex-1">
-                    <Text className="text-sm font-bold text-ink">语音来源</Text>
+                    <Text className={settingTitleClass}>语音来源</Text>
                     <Text className="mt-0.5 text-[11px] leading-4 text-copy-muted">
                       {voiceState?.preference === "system-only"
                         ? "仅系统语音"
@@ -694,21 +709,21 @@ export default function SettingsScreen() {
         {user && <PhoneBindingSettings key={`${user.id}:${sessionGeneration}`} />}
         {/* Section 1: 账号与目标 */}
         <View className="mb-6">
-          <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">
+          <Text className={sectionTitleClass}>
             账号与目标设置
           </Text>
-          <View className="bg-surface rounded-3xl border border-line overflow-hidden shadow-xs">
+          <View className={sectionCardClass}>
             <TouchableOpacity
               onPress={() => router.push("/profile-edit")}
-              className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60 transition-colors"
+              className={settingLinkClass}
             >
-              <View className="flex-row items-center gap-3.5">
-                <View className="w-9 h-9 rounded-2xl bg-brand/10 items-center justify-center">
+              <View className={settingIconRowClass}>
+                <View className={brandIconClass}>
                   <FontAwesome6 name="user-gear" size={15} colorClassName="accent-brand" />
                 </View>
                 <View>
-                  <Text className="text-sm font-bold text-ink">修改个人资料</Text>
-                  <Text className="text-[11px] text-copy-muted mt-0.5">修改用户名、头像与联系方式</Text>
+                  <Text className={settingTitleClass}>修改个人资料</Text>
+                  <Text className={settingHintClass}>修改用户名、头像与联系方式</Text>
                 </View>
               </View>
               <View className="flex-row items-center gap-2">
@@ -723,15 +738,15 @@ export default function SettingsScreen() {
               accessibilityLabel="编辑每日热量目标"
               disabled={loadingCalorie || !isAuthenticated}
               onPress={() => void openCalorieTarget()}
-              className="p-4 flex-row items-center justify-between active:bg-canvas/60 transition-colors"
+              className={lastSettingLinkClass}
             >
-              <View className="flex-row items-center gap-3.5">
+              <View className={settingIconRowClass}>
                 <View className="w-9 h-9 rounded-2xl bg-highlight/20 items-center justify-center">
                   <FontAwesome6 name="fire" size={15} colorClassName="accent-warm" />
                 </View>
                 <View>
-                  <Text className="text-sm font-bold text-ink">每日目标摄入热量</Text>
-                  <Text className="text-[11px] text-copy-muted mt-0.5">定制专属每日卡路里控制线</Text>
+                  <Text className={settingTitleClass}>每日目标摄入热量</Text>
+                  <Text className={settingHintClass}>定制专属每日卡路里控制线</Text>
                 </View>
               </View>
               <View className="flex-row items-center gap-2">
@@ -753,18 +768,18 @@ export default function SettingsScreen() {
         </TouchableOpacity>
         {/* Section 2: 智能预警与推送 */}
         <View className="mb-6">
-          <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">
+          <Text className={sectionTitleClass}>
             智能预警与提醒
           </Text>
-          <View className="bg-surface rounded-3xl border border-line overflow-hidden shadow-xs">
-            <View className="p-4 flex-row items-center justify-between border-b border-background-secondary">
-              <View className="flex-row items-center gap-3.5 flex-1 pr-2">
+          <View className={sectionCardClass}>
+            <View className={reminderSettingRowClass}>
+              <View className={reminderLabelRowClass}>
                 <View className="w-9 h-9 rounded-2xl bg-warm/15 items-center justify-center">
                   <FontAwesome6 name="bell" size={15} colorClassName="accent-warm" />
                 </View>
                 <View className="flex-1">
-                  <Text className="text-sm font-bold text-ink">食材临期自动预警</Text>
-                  <Text className="text-[11px] text-copy-muted mt-0.5 leading-4">
+                  <Text className={settingTitleClass}>食材临期自动预警</Text>
+                  <Text className={reminderHintClass}>
                     提前 3 天推送冰箱即将过期食材，减少浪费
                   </Text>
                 </View>
@@ -778,14 +793,14 @@ export default function SettingsScreen() {
               />
             </View>
 
-            <View className="p-4 flex-row items-center justify-between border-b border-background-secondary">
-              <View className="flex-row items-center gap-3.5 flex-1 pr-2">
-                <View className="w-9 h-9 rounded-2xl bg-brand/10 items-center justify-center">
+            <View className={reminderSettingRowClass}>
+              <View className={reminderLabelRowClass}>
+                <View className={brandIconClass}>
                   <FontAwesome6 name="utensils" size={15} colorClassName="accent-brand" />
                 </View>
                 <View className="flex-1">
-                  <Text className="text-sm font-bold text-ink">每日三餐打卡提醒</Text>
-                  <Text className="text-[11px] text-copy-muted mt-0.5 leading-4">
+                  <Text className={settingTitleClass}>每日三餐打卡提醒</Text>
+                  <Text className={reminderHintClass}>
                     按时提醒记录早、午、晚餐，建立健康饮食习惯
                   </Text>
                 </View>
@@ -800,13 +815,13 @@ export default function SettingsScreen() {
             </View>
 
             <View className="p-4 flex-row items-center justify-between">
-              <View className="flex-row items-center gap-3.5 flex-1 pr-2">
+              <View className={reminderLabelRowClass}>
                 <View className="w-9 h-9 rounded-2xl bg-info/15 items-center justify-center">
                   <FontAwesome6 name="droplet" size={15} colorClassName="accent-info" />
                 </View>
                 <View className="flex-1">
-                  <Text className="text-sm font-bold text-ink">水份补给健康提醒</Text>
-                  <Text className="text-[11px] text-copy-muted mt-0.5 leading-4">
+                  <Text className={settingTitleClass}>水份补给健康提醒</Text>
+                  <Text className={reminderHintClass}>
                     间隔 2 小时定时提醒补充 250ml 饮水量
                   </Text>
                 </View>
@@ -887,22 +902,22 @@ export default function SettingsScreen() {
 
         {/* Section 3: 存储与通用偏好 */}
         <View className="mb-6">
-          <Text className="text-xs font-bold text-copy-muted uppercase tracking-wider mb-2.5 px-1">
+          <Text className={sectionTitleClass}>
             通用与数据管理
           </Text>
-          <View className="bg-surface rounded-3xl border border-line overflow-hidden shadow-xs">
+          <View className={sectionCardClass}>
             <TouchableOpacity
               onPress={() => void handleClearCache()}
               disabled={clearingCache}
-              className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60 transition-colors"
+              className={settingLinkClass}
             >
-              <View className="flex-row items-center gap-3.5">
+              <View className={settingIconRowClass}>
                 <View className="w-9 h-9 rounded-2xl bg-copy-muted/15 items-center justify-center">
                   <FontAwesome6 name="broom" size={15} colorClassName="accent-copy-muted" />
                 </View>
                 <View>
-                  <Text className="text-sm font-bold text-ink">清理本地缓存</Text>
-                  <Text className="text-[11px] text-copy-muted mt-0.5">
+                  <Text className={settingTitleClass}>清理本地缓存</Text>
+                  <Text className={settingHintClass}>
                     {cacheSize == null ? "正在统计缓存…" : `当前本地缓存 ${formatStorageBytes(cacheSize)}`}
                   </Text>
                   {__DEV__ ? (
@@ -923,13 +938,13 @@ export default function SettingsScreen() {
 
             <TouchableOpacity
               onPress={() => router.push({ pathname: "/legal", params: { type: "privacy" } })}
-              className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60 transition-colors"
+              className={settingLinkClass}
             >
-              <View className="flex-row items-center gap-3.5">
+              <View className={settingIconRowClass}>
                 <View className="w-9 h-9 rounded-2xl bg-warm/10 items-center justify-center">
                   <FontAwesome6 name="shield-halved" size={15} colorClassName="accent-warm" />
                 </View>
-                <Text className="text-sm font-bold text-ink">隐私政策</Text>
+                <Text className={settingTitleClass}>隐私政策</Text>
               </View>
               <FontAwesome6 name="chevron-right" size={12} colorClassName="accent-copy-muted" />
             </TouchableOpacity>
@@ -941,7 +956,7 @@ export default function SettingsScreen() {
                   disabled={aiDataBusy}
                   className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60"
                 >
-                  <Text className="text-sm font-bold text-ink">导出我的 AI 数据</Text>
+                  <Text className={settingTitleClass}>导出我的 AI 数据</Text>
                   <FontAwesome6 name="file-export" size={13} colorClassName="accent-brand" />
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -957,28 +972,28 @@ export default function SettingsScreen() {
 
             <TouchableOpacity
               onPress={() => router.push({ pathname: "/legal", params: { type: "terms" } })}
-              className="p-4 flex-row items-center justify-between border-b border-background-secondary active:bg-canvas/60 transition-colors"
+              className={settingLinkClass}
             >
-              <View className="flex-row items-center gap-3.5">
+              <View className={settingIconRowClass}>
                 <View className="w-9 h-9 rounded-2xl bg-info-soft items-center justify-center">
                   <FontAwesome6 name="file-contract" size={15} colorClassName="accent-info" />
                 </View>
-                <Text className="text-sm font-bold text-ink">服务与用户协议</Text>
+                <Text className={settingTitleClass}>服务与用户协议</Text>
               </View>
               <FontAwesome6 name="chevron-right" size={12} colorClassName="accent-copy-muted" />
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => router.push("/about")}
-              className="p-4 flex-row items-center justify-between active:bg-canvas/60 transition-colors"
+              className={lastSettingLinkClass}
             >
-              <View className="flex-row items-center gap-3.5">
-                <View className="w-9 h-9 rounded-2xl bg-brand/10 items-center justify-center">
+              <View className={settingIconRowClass}>
+                <View className={brandIconClass}>
                   <FontAwesome6 name="circle-info" size={15} colorClassName="accent-brand" />
                 </View>
                 <View>
-                  <Text className="text-sm font-bold text-ink">关于食光烙记</Text>
-                  <Text className="text-[11px] text-copy-muted mt-0.5">版本 {APP_RELEASE_LABEL}</Text>
+                  <Text className={settingTitleClass}>关于食光烙记</Text>
+                  <Text className={settingHintClass}>版本 {APP_RELEASE_LABEL}</Text>
                 </View>
               </View>
               <FontAwesome6 name="chevron-right" size={12} colorClassName="accent-copy-muted" />
@@ -1066,7 +1081,7 @@ export default function SettingsScreen() {
                   setCalorieTarget(Math.max(1000, curr - 50).toString());
                 }}
                 disabled={updatingCal}
-                className="w-touch h-touch rounded-xl bg-surface border border-line items-center justify-center"
+                className={calorieStepClass}
               >
                 <FontAwesome6 name="minus" size={12} colorClassName="accent-ink" />
               </TouchableOpacity>
@@ -1086,7 +1101,7 @@ export default function SettingsScreen() {
                   setCalorieTarget(Math.min(5000, curr + 50).toString());
                 }}
                 disabled={updatingCal}
-                className="w-touch h-touch rounded-xl bg-surface border border-line items-center justify-center"
+                className={calorieStepClass}
               >
                 <FontAwesome6 name="plus" size={12} colorClassName="accent-ink" />
               </TouchableOpacity>
@@ -1122,7 +1137,7 @@ export default function SettingsScreen() {
               <TouchableOpacity
                 onPress={closeLogout}
                 disabled={loggingOut}
-                className="flex-1 bg-background-secondary py-3.5 rounded-2xl items-center border border-line"
+                className={cancelButtonClass}
               >
                 <Text className="text-xs font-bold text-copy-muted">取消</Text>
               </TouchableOpacity>
@@ -1161,7 +1176,7 @@ export default function SettingsScreen() {
               <TouchableOpacity
                 disabled={deletingAccount}
                 onPress={closeDelete}
-                className="flex-1 bg-background-secondary py-3.5 rounded-2xl items-center border border-line"
+                className={cancelButtonClass}
               >
                 <Text className="text-xs font-bold text-copy-muted">取消</Text>
               </TouchableOpacity>

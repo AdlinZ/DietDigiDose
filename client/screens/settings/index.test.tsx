@@ -5,6 +5,9 @@ import { restoredAuthIdentity } from "@/utils/authIdentity";
 import DateTimePicker from "@react-native-community/datetimepicker";
 
 let mockFocused = true;
+let mockSessionGeneration = 4;
+let mockToken = "token-A";
+const mockScheduleNotifications = jest.fn();
 const mockReadNotifications = jest.fn();
 const mockSaveNotifications = jest.fn();
 const mockPreferences = { breakfast_time: "08:00", lunch_time: "12:00", dinner_time: "18:00", water_start_time: "08:00", water_end_time: "22:00", quiet_start_time: "22:00", quiet_end_time: "07:00", water_interval_minutes: 120, weekdays_enabled: true, weekends_enabled: true, meal_reminder: false, water_reminder: false, expiring_alert: false };
@@ -13,9 +16,9 @@ const mockUpdate = jest.fn();
 const mockDelete = jest.fn();
 const mockFetch = jest.fn();
 const mockCurrent = jest.fn(() => true);
-const mockUser = restoredAuthIdentity({ id: 1, username: "A", hasPassword: false, phone_verified_at: "2026-09-20", phone: "+861234", daily_calories_target: 1700 });
+let mockUser = restoredAuthIdentity({ id: 1, username: "A", hasPassword: false, phone_verified_at: "2026-09-20", phone: "+861234", daily_calories_target: 1700 });
 jest.mock("@/contexts/AuthContext", () => ({
-  useAuth: () => ({ user: mockUser, token: "token-A", isAuthenticated: true, sessionGeneration: 4, isSessionCurrent: mockCurrent, updateProfile: mockUpdate, deleteAccount: mockDelete }),
+  useAuth: () => ({ user: mockUser, token: mockToken, isAuthenticated: true, sessionGeneration: mockSessionGeneration, isSessionCurrent: mockCurrent, updateProfile: mockUpdate, deleteAccount: mockDelete }),
   useAuthFetch: () => mockFetch,
 }));
 jest.mock("@react-navigation/native", () => ({ useIsFocused: () => mockFocused }));
@@ -29,7 +32,7 @@ jest.mock("@/hooks/useSafeRouter", () => ({ useSafeRouter: () => ({ push: jest.f
 jest.mock("@/contexts/ThemeContext", () => ({ useThemePreference: () => ({ preference: "system", setPreference: jest.fn() }) }));
 jest.mock("@/hooks/useAppThemeColors", () => ({ useAppThemeColors: () => ({}) }));
 jest.mock("@/utils/appVersion", () => ({ APP_RELEASE_LABEL: "test" }));
-jest.mock("@/utils/notifications", () => ({ DEFAULT_NOTIFICATION_PREFERENCES: {}, getExpoPushToken: async () => null, syncLocalNotificationSchedules: async () => undefined }));
+jest.mock("@/utils/notifications", () => ({ DEFAULT_NOTIFICATION_PREFERENCES: {}, getExpoPushToken: async () => null, syncLocalNotificationSchedules: (...args: unknown[]) => mockScheduleNotifications(...args) }));
 jest.mock("@/utils/userStorage", () => ({ getTotalClearableCacheSize: async () => 0, formatStorageBytes: () => "0 B" }));
 jest.mock("@/services/offlineInventory", () => ({}));
 jest.mock("@/services/api/cache", () => ({ getApiCacheDiagnostics: () => ({ hitRate: 0, entries: 0, staleFallbacks: 0 }) }));
@@ -46,7 +49,9 @@ const clickText = async (label: string) => {
   await act(async () => { await button!.props.onPress(); });
 };
 beforeEach(async () => {
-  jest.clearAllMocks(); mockCurrent.mockReturnValue(true); mockFocused = true;
+  jest.clearAllMocks(); mockCurrent.mockReturnValue(true); mockFocused = true; mockSessionGeneration = 4; mockToken = "token-A";
+  mockUser = restoredAuthIdentity({ id: 1, username: "A", hasPassword: false, phone_verified_at: "2026-09-20", phone: "+861234", daily_calories_target: 1700 });
+  mockScheduleNotifications.mockResolvedValue(undefined);
   mockReadNotifications.mockResolvedValue({ ...mockPreferences });
   jest.spyOn(Keyboard, "dismiss").mockImplementation(() => undefined);
   jest.spyOn(Alert, "alert").mockImplementation(() => undefined);
@@ -227,4 +232,75 @@ it("ignores a previous reminder read after re-entry even when it resolves after 
   expect(breakfast.props.value).toBe("10:15");
   expect(breakfast.props.disabled).toBe(false);
   expect(mockSaveNotifications).not.toHaveBeenCalled();
+});
+it("holds the reminder write-through-schedule lock across actual unmount/create", async () => {
+  jest.replaceProperty(Platform, "OS", "android");
+  const breakfast = () => tree.root.findAllByType(SmartDateInput).find(field => field.props.label === "早餐")!;
+  let finishResponse!: () => void;
+  let finishSchedule!: () => void;
+  mockSaveNotifications.mockImplementationOnce(() => new Promise<void>(resolve => { finishResponse = resolve; }));
+  mockScheduleNotifications.mockImplementationOnce(() => new Promise<void>(resolve => { finishSchedule = resolve; }));
+  act(() => breakfast().props.onChange("09:00"));
+  await clickText("保存并重排提醒");
+  // Server committed 09:00; its response is still in flight.
+  mockReadNotifications.mockResolvedValue({ ...mockPreferences, breakfast_time: "09:00" });
+  const reads = mockReadNotifications.mock.calls.length;
+  act(() => tree.unmount());
+  await act(async () => { tree = renderer.create(<SettingsScreen />); });
+  expect(breakfast().props.disabled).toBe(true);
+  await clickText("保存并重排提醒");
+  expect(mockSaveNotifications).toHaveBeenCalledTimes(1);
+  expect(mockReadNotifications).toHaveBeenCalledTimes(reads);
+  await act(async () => { finishResponse(); });
+  expect(mockScheduleNotifications.mock.calls.map(call => call[0].breakfast_time)).toEqual(["09:00"]);
+  expect(breakfast().props.disabled).toBe(true); // native replacement also owns the lock
+  await act(async () => { finishSchedule(); });
+  expect(breakfast().props.disabled).toBe(false);
+  expect(breakfast().props.value).toBe("09:00");
+  act(() => breakfast().props.onChange("10:00"));
+  mockSaveNotifications.mockResolvedValueOnce(undefined);
+  await clickText("保存并重排提醒");
+  expect(mockScheduleNotifications.mock.calls.map(call => call[0].breakfast_time)).toEqual(["09:00", "10:00"]);
+  expect(breakfast().props.value).toBe("10:00");
+});
+it("finishes a successful same-session reminder schedule after the only settings instance unmounts", async () => {
+  jest.replaceProperty(Platform, "OS", "android");
+  let finish!: () => void;
+  mockSaveNotifications.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  await clickText("保存并重排提醒");
+  act(() => tree.unmount());
+  await act(async () => { finish(); });
+  expect(mockScheduleNotifications).toHaveBeenCalledWith(mockPreferences, 1);
+});
+it("does not let an old auth session schedule or block a new session", async () => {
+  jest.replaceProperty(Platform, "OS", "android");
+  mockCurrent.mockImplementation((userId?: number, generation?: number) => userId === mockUser.id && generation === mockSessionGeneration);
+  let finishOld!: () => void;
+  mockSaveNotifications.mockImplementationOnce(() => new Promise<void>(resolve => { finishOld = resolve; }));
+  await clickText("保存并重排提醒");
+  act(() => tree.unmount());
+  mockSessionGeneration = 5; mockToken = "token-B";
+  mockUser = restoredAuthIdentity({ id: 2, username: "B", hasPassword: false });
+  mockReadNotifications.mockResolvedValue({ ...mockPreferences, breakfast_time: "10:00" });
+  await act(async () => { tree = renderer.create(<SettingsScreen />); });
+  mockSaveNotifications.mockResolvedValueOnce(undefined);
+  await clickText("保存并重排提醒");
+  await act(async () => { finishOld(); });
+  expect(mockSaveNotifications).toHaveBeenCalledTimes(2);
+  expect(mockSaveNotifications).toHaveBeenLastCalledWith("token-B", { ...mockPreferences, breakfast_time: "10:00" });
+  expect(mockScheduleNotifications).toHaveBeenCalledWith({ ...mockPreferences, breakfast_time: "10:00" }, 2);
+  expect(mockScheduleNotifications.mock.calls.map(call => call[0].breakfast_time)).toEqual(["10:00"]);
+});
+it("releases the cross-instance lock after failure and rereads before allowing retry", async () => {
+  let fail!: (error: Error) => void;
+  mockSaveNotifications.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+  await clickText("保存并重排提醒");
+  act(() => tree.unmount());
+  await act(async () => { tree = renderer.create(<SettingsScreen />); });
+  expect(tree.root.findAllByType(SmartDateInput).every(field => field.props.disabled)).toBe(true);
+  await act(async () => { fail(new Error("offline")); });
+  expect(tree.root.findAllByType(SmartDateInput).every(field => !field.props.disabled)).toBe(true);
+  mockSaveNotifications.mockResolvedValueOnce(undefined);
+  await clickText("保存并重排提醒");
+  expect(mockSaveNotifications).toHaveBeenCalledTimes(2);
 });

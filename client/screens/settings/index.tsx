@@ -14,6 +14,7 @@ import {
   Share,
 } from "react-native";
 import { SettingsModal } from "./SettingsModal";
+import { startNotificationSave, waitForNotificationSave } from "./notificationSaves";
 import { SmartDateInput } from "@/components/SmartDateInput";
 import { Screen } from "@/components/Screen";
 import { PhoneBindingSettings } from "@/components/PhoneBindingSettings";
@@ -95,16 +96,19 @@ export default function SettingsScreen() {
     let active = true;
     setNotificationReady(false);
     setNotificationError("");
-    if (!token || !focused) return;
-    void authApi.notificationPreferences<NotificationPreferences>(token).then((preferences) => {
+    if (!token || !focused || !user) return;
+    void (async () => {
+      await waitForNotificationSave(user.id, sessionGeneration);
+      if (!active) return;
+      const preferences = await authApi.notificationPreferences<NotificationPreferences>(token);
       if (active) { setNotificationPreferences(preferences); setNotificationReady(true); }
-    }).catch(() => { if (active) setNotificationError("无法读取提醒设置，请重试。"); });
+    })().catch(() => { if (active) setNotificationError("无法读取提醒设置，请重试。"); });
     return () => { active = false; };
-  }, [token, sessionGeneration, focused, notificationLoadAttempt]);
+  }, [token, user?.id, sessionGeneration, focused, notificationLoadAttempt]);
 
   const saveNotificationPreferences = async (next: NotificationPreferences, requestPermission = false) => {
     if (notificationBusy.current || !notificationReady) return;
-    if (!token) {
+    if (!token || !user) {
       Alert.alert("登录后开启提醒", "登录后可保存提醒偏好，并接收食材临期推送。");
       return;
     }
@@ -115,13 +119,7 @@ export default function SettingsScreen() {
     }
     const owner = lifecycle.current;
     const current = () => owner === lifecycle.current && !!user && isSessionCurrent(user.id, sessionGeneration);
-    const operation = Symbol();
-    notificationBusy.current = operation;
-    setNotificationError("");
-    const previous = notificationPreferences;
-    setNotificationPreferences(next);
-    setSavingNotifications(true);
-    try {
+    const pending = startNotificationSave(user.id, sessionGeneration, async () => {
       const pushToken = requestPermission ? await getExpoPushToken() : null;
       if (!current()) return;
       await authApi.updateNotificationPreferences<NotificationPreferences>(token, next);
@@ -138,6 +136,16 @@ export default function SettingsScreen() {
       if (requestPermission && Platform.OS !== "web" && !pushToken) {
         Alert.alert("未获得通知权限", "系统通知未授权；你仍可稍后在系统设置中允许通知后再次开启提醒。");
       }
+    });
+    if (!pending) return;
+    const operation = Symbol();
+    notificationBusy.current = operation;
+    setNotificationError("");
+    const previous = notificationPreferences;
+    setNotificationPreferences(next);
+    setSavingNotifications(true);
+    try {
+      await pending;
     } catch (error) {
       if (!current()) return;
       setNotificationPreferences(previous);
@@ -145,8 +153,6 @@ export default function SettingsScreen() {
     } finally {
       if (notificationBusy.current === operation) {
         notificationBusy.current = false; setSavingNotifications(false);
-        // A re-entered page may have read before the old write settled.
-        if (owner !== lifecycle.current) setNotificationLoadAttempt((value) => value + 1);
       }
     }
   };

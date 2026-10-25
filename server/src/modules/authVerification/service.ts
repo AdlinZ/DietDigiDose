@@ -46,6 +46,11 @@ export class AuthVerificationService {
     };
   }
 
+  phoneBindingUser: AuthVerificationRepository["phoneBindingUser"] = (id) => this.repository.phoneBindingUser(id);
+  bindPhone(input: Omit<import("./types.js").PhoneBindingInput, "subjectHmac">) {
+    return this.repository.bindPhone({ ...input, subjectHmac: verificationSubjectHmac(input.phone) });
+  }
+
   saveSettings(entries: Array<{ key: string; value: string }>) { return this.repository.saveSettings(entries); }
 
   async findOrCreateSubject(phone: string) {

@@ -629,26 +629,18 @@
             ]
           },
           "image_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "is_available": {
             "type": "boolean"
           },
           "quantity_value": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "quantity_unit": {
@@ -674,13 +666,9 @@
             ]
           },
           "package_size_value": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "package_size_unit": {
@@ -706,13 +694,9 @@
             ]
           },
           "batch_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "version": {
@@ -785,26 +769,18 @@
               ]
             },
             "image_url": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "string",
+                "null"
               ]
             },
             "is_available": {
               "type": "boolean"
             },
             "quantity_value": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "number",
+                "null"
               ]
             },
             "quantity_unit": {
@@ -830,13 +806,9 @@
               ]
             },
             "package_size_value": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "number",
+                "null"
               ]
             },
             "package_size_unit": {
@@ -862,13 +834,9 @@
               ]
             },
             "batch_code": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "string",
+                "null"
               ]
             },
             "version": {
@@ -1412,26 +1380,18 @@
                   ]
                 },
                 "image_url": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "string",
+                    "null"
                   ]
                 },
                 "is_available": {
                   "type": "boolean"
                 },
                 "quantity_value": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "number",
+                    "null"
                   ]
                 },
                 "quantity_unit": {
@@ -1457,13 +1417,9 @@
                   ]
                 },
                 "package_size_value": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "number",
+                    "null"
                   ]
                 },
                 "package_size_unit": {
@@ -1489,13 +1445,9 @@
                   ]
                 },
                 "batch_code": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "string",
+                    "null"
                   ]
                 },
                 "version": {
@@ -1947,26 +1899,18 @@
                   ]
                 },
                 "image_url": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "string",
+                    "null"
                   ]
                 },
                 "is_available": {
                   "type": "boolean"
                 },
                 "quantity_value": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "number",
+                    "null"
                   ]
                 },
                 "quantity_unit": {
@@ -1992,13 +1936,9 @@
                   ]
                 },
                 "package_size_value": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "number",
+                    "null"
                   ]
                 },
                 "package_size_unit": {
@@ -2024,13 +1964,9 @@
                   ]
                 },
                 "batch_code": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "string",
+                    "null"
                   ]
                 },
                 "version": {
@@ -2201,13 +2137,9 @@
                         "type": "string"
                       },
                       "batch_code": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
+                        "type": [
+                          "string",
+                          "null"
                         ]
                       },
                       "mode": {
@@ -2363,23 +2295,15 @@
                   "maximum": 9007199254740991
                 },
                 "quantity_before": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "number",
+                    "null"
                   ]
                 },
                 "quantity_after": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "number",
+                    "null"
                   ]
                 },
                 "quantity_unit": {
@@ -2405,13 +2329,9 @@
                   ]
                 },
                 "consumed_value": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "number",
+                    "null"
                   ]
                 },
                 "is_available": {
@@ -2475,26 +2395,18 @@
                   ]
                 },
                 "image_url": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "string",
+                    "null"
                   ]
                 },
                 "is_available": {
                   "type": "boolean"
                 },
                 "quantity_value": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "number",
+                    "null"
                   ]
                 },
                 "quantity_unit": {
@@ -2520,13 +2432,9 @@
                   ]
                 },
                 "package_size_value": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "number",
+                    "null"
                   ]
                 },
                 "package_size_unit": {
@@ -2552,13 +2460,9 @@
                   ]
                 },
                 "batch_code": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "string",
+                    "null"
                   ]
                 },
                 "version": {
@@ -2620,23 +2524,15 @@
               "type": "string"
             },
             "quantity_before": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "number",
+                "null"
               ]
             },
             "quantity_after": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "number",
+                "null"
               ]
             },
             "quantity_unit": {
@@ -2662,13 +2558,9 @@
               ]
             },
             "delta_value": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
+              "type": [
+                "number",
+                "null"
               ]
             },
             "created_at": {

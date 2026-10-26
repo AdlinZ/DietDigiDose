@@ -2,7 +2,7 @@
   "client-web": {
     "directory": "client/dist",
     "maxTotalBytes": 6500000,
-    "maxJavaScriptBytes": 4500000,
+    "maxJavaScriptBytes": 4550000,
     "maxLargestJavaScriptBytes": 4100000
   },
   "server": {

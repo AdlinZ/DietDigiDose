@@ -8,7 +8,8 @@
 
 - **社区评论软键盘定位遮挡实机闭环（#17）**：2026-10-25 使用 `26w43d` / build `264304` 预览包在 Android 物理真机上完成实机测试。软键盘弹出后评论框与操作按钮均稳定位于键盘上方可见区域，各输入法切换正常，已正式关闭 [#17](https://github.com/AdlinZ/DietDigiDose/issues/17)。
 - **应用内更新客户端模块与 UI 交互真实验证（#219）**：真机进入“关于食光烙记”页面成功读取原生包版本身份（`1.0.6 (26w43d · build 264304 · preview)`），点击“检查应用更新”正确弹出更新检查对话框并优雅处理未配置清单的服务端返回，无崩溃闪退；已在 Issue 记录阶段性成果。
-- **AI 审批业务表单扩充与输入净化防御（#229）**：PR [#273](https://github.com/AdlinZ/DietDigiDose/pull/273) 补齐了采购清单、厨具、餐食备餐计划、菜谱提议与宏量营养素微调原生表单支持，增加数值安全净化与清空保护，8 项单测全部通过。
+- **AI 审批业务表单扩充与输入净化防御（#229）**：PR [#273](https://github.com/AdlinZ/DietDigiDose/pull/273) 补齐了采购清单（name/amount）、厨具（name/category）、餐食备餐计划（title/startDate/endDate）、菜谱提议（title/cookTime）与宏量营养素微调（calories/protein/carbs/fat）原生表单支持，增加数值安全浮点解析与清空置空保护，8 项单测全数通过，CI 全绿（verify、stability、windows-compatibility、ai-resource-integration 均通过），已合并至 `main`（commit `60354ea3`）。
+- **云端食谱审核发布接口验证（#218）**：已验证线上 Staging 环境（`https://dietdigidose.top`）公开食谱库总量已由历史的 1 条（番茄炒蛋）更新为 386 条（`official: 386, publicTotal: 386`），分类搜索（如“白菜”）能正常返回“乾隆白菜”、“香菇炒白菜”、“醋溜白菜”等结构化菜品，待 Android 端实测列表刷新。
 
 ## W44 推进顺序与核心目标
 

@@ -39,9 +39,9 @@ describe("approvalFields", () => {
       actionType: "update_shopping_item",
       riskLevel: "low",
       summary: "修改西红柿采购项",
-      payload: { name: "西红柿", quantity: 2, unit: "个" },
+      payload: { name: "西红柿", amount: "2个" },
     };
-    expect(approvalFields(shoppingAction).map((f) => f.key)).toEqual(["name", "quantity", "unit"]);
+    expect(approvalFields(shoppingAction).map((f) => f.key)).toEqual(["name", "amount"]);
   });
 
   test("returns empty array for unsupported or non-configurable action types", () => {

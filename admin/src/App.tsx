@@ -32,6 +32,7 @@ const UserLevelRule = lazy(() => import('./pages/UserLevelRule'));
 const MediaCleanup = lazy(() => import('./pages/MediaCleanup'));
 const VoicePacks = lazy(() => import('./pages/VoicePacks'));
 const SiteSettings = lazy(() => import('./pages/SiteSettings'));
+const AppUpdates = lazy(() => import('./pages/AppUpdates'));
 const Legal = lazy(() => import('./pages/Legal'));
 const Changelog = lazy(() => import('./pages/Changelog'));
 const Journal = lazy(() => import('./pages/Journal'));
@@ -142,6 +143,7 @@ function App() {
         <Route path="notifications" element={<Notifications />} />
         <Route path="media-cleanup" element={<MediaCleanup />} />
         <Route path="site-settings" element={<SiteSettings />} />
+        <Route path="app-updates" element={<AppUpdates />} />
         <Route path="auth-services/sms" element={<AuthServiceSms />} />
         <Route path="auth-services/captcha" element={<AuthServicePlaceholder />} />
         <Route path="auth-services/phone" element={<AuthServicePlaceholder />} />

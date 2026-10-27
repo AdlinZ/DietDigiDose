@@ -9,7 +9,8 @@
     "./inventory-scan": "./src/scanNormalization.ts",
     "./kitchenware-options": "./src/kitchenwareOptions.ts",
     "./quantity-decimal": "./src/quantityDecimal.ts",
-    "./recipe-execution": "./src/recipeExecution.ts"
+    "./recipe-execution": "./src/recipeExecution.ts",
+    "./app-updates": "./src/appUpdates.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

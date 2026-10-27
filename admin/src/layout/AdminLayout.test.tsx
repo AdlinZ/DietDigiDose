@@ -12,6 +12,16 @@ vi.mock('../services/api', () => ({ default: {
 it('respects manual technical collapse until re-entering from daily management', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   HTMLElement.prototype.scrollTo = () => {};
+  const storage = new Map<string, string>();
+  const mockStorage: Storage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, val: string) => { storage.set(key, String(val)); },
+    removeItem: (key: string) => { storage.delete(key); },
+    clear: () => { storage.clear(); },
+    key: (index: number) => Array.from(storage.keys())[index] ?? null,
+    get length() { return storage.size; },
+  };
+  Object.defineProperty(globalThis, 'localStorage', { value: mockStorage, configurable: true, writable: true });
   localStorage.clear();
   let navigate!: NavigateFunction;
   function Probe() { navigate = useNavigate(); return <p>Page content</p>; }

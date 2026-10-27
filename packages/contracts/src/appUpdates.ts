@@ -46,6 +46,12 @@ export const appUpdateQuerySchema = z.object({
   buildNumber: z.string().regex(/^[1-9]\d{0,9}$/).transform(Number).pipe(z.number().int().max(2_100_000_000)),
 }).strict();
 
+export function computeBuildNumberFromSnapshot(snapshot: string): number | null {
+  if (!/^\d{2}w(?:0[1-9]|[1-4]\d|5[0-3])[a-z]$/.test(snapshot)) return null;
+  const revision = snapshot.at(-1)!.charCodeAt(0) - 96;
+  return Number(`${snapshot.slice(0, 2)}${snapshot.slice(3, 5)}${String(revision).padStart(2, "0")}`);
+}
+
 export type AppUpdateRelease = z.infer<typeof appUpdateReleaseSchema>;
 export type AppUpdateChannel = z.infer<typeof appUpdateChannelSchema>;
 export type AppUpdateManifest = z.infer<typeof appUpdateManifestSchema>;

@@ -16,7 +16,7 @@ describe('consolidated admin workflows', () => {
       expect(protectedRoutes).toContain(`path="${tab.path.replace('/admin/', '')}"`);
       expect(adminLocation(tab.path).page).toBeDefined();
     }
-    expect(adminGroups.flatMap(group => group.pages)).toHaveLength(16);
+    expect(adminGroups.flatMap(group => group.pages)).toHaveLength(17);
   });
   it('selects the parent menu for hidden deep links and expands only daily groups by default', () => {
     for (const [path, parent, technical] of [

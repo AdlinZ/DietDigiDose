@@ -21,6 +21,7 @@ export const adminGroups: AdminGroup[] = [
   { id: 'system', technical: true, label: '系统设置', icon: Settings, pages: [
     { path: '/admin/site-settings', label: '网站设置' }, { path: '/admin/auth-services/sms', label: '短信认证' },
     { path: '/admin/security', label: '安全审计' }, { path: '/admin/media-cleanup', label: '媒体清理' },
+    { path: '/admin/app-updates', label: '应用发布更新' },
   ] },
 ];
 const nestedPages: (AdminPage & { parent: string })[] = [

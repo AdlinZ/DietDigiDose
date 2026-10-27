@@ -1,0 +1,81 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { describe, expect, it, vi } from 'vitest';
+import { computeBuildNumberFromSnapshot } from '@dietdigidose/contracts';
+import AppUpdates from './AppUpdates';
+
+vi.mock('../services/api', () => ({
+  default: {
+    get: vi.fn(async (url: string) => {
+      if (url === '/admin/app-updates') {
+        return {
+          data: {
+            configured: true,
+            manifestPath: '/data/app-update-manifest.json',
+            allowedOrigins: ['https://dietdigidose.top'],
+            manifest: {
+              schemaVersion: 1,
+              releases: [
+                {
+                  schemaVersion: 1,
+                  platform: 'android',
+                  applicationId: 'com.dietdigidose.app.preview',
+                  channel: 'preview',
+                  version: '1.0.6',
+                  snapshot: '26w44a',
+                  buildNumber: 264401,
+                  url: 'https://dietdigidose.top/downloads/26w44a.apk',
+                  sizeBytes: 266889032,
+                  sha256: '1460059844b4960ae95312bc9e39a419db089b3056bf4be7d267359f969b38a4',
+                  releaseNotes: '支持后台烹饪计时与离线库存修复',
+                  publishedAt: '2026-10-27T12:00:00.000Z',
+                },
+              ],
+            },
+            error: null,
+          },
+        };
+      }
+      return { data: {} };
+    }),
+    post: vi.fn(async (_url: string, body: any) => ({
+      data: { success: true, message: '操作成功', body },
+    })),
+  },
+}));
+
+describe('AppUpdates page', () => {
+  it('computes correct weekly build number from snapshot', () => {
+    expect(computeBuildNumberFromSnapshot('26w44a')).toBe(264401);
+    expect(computeBuildNumberFromSnapshot('26w44b')).toBe(264402);
+    expect(computeBuildNumberFromSnapshot('26w01a')).toBe(260101);
+    expect(computeBuildNumberFromSnapshot('invalid')).toBe(null);
+  });
+
+  it('renders app updates dashboard with configured origins and releases', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(<AppUpdates />);
+      });
+
+      expect(container.textContent).toContain('应用发布更新');
+      expect(container.textContent).toContain('https://dietdigidose.top');
+      expect(container.textContent).toContain('26w44a');
+      expect(container.textContent).toContain('Build 264401');
+      expect(container.textContent).toContain('内测预览 (Preview)');
+      expect(container.textContent).toContain('候选发布 (Candidate)');
+      expect(container.textContent).toContain('正式发布 (Production)');
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+    }
+  });
+});

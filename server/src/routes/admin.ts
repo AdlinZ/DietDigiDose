@@ -15,6 +15,7 @@ import { createAdminAuthServicesRouter } from "./admin/auth-services.js";
 import { createAdminMediaCleanupRouter } from "./admin/media-cleanup.js";
 import { createAdminNotificationsRouter } from "./admin/notifications.js";
 import { createAdminSiteSettingsRouter } from "./admin/site-settings.js";
+import { createAdminAppUpdatesRouter } from "./admin/app-updates.js";
 import { mediaCleanupService } from "../modules/mediaCleanup/index.js";
 
 const router = Router();
@@ -29,6 +30,7 @@ router.use(createAdminKitchenwareRouter());
 router.use(createAdminFoodAssetsRouter());
 router.use(createAdminNotificationsRouter());
 router.use(createAdminSiteSettingsRouter());
+router.use(createAdminAppUpdatesRouter());
 router.use(createAdminAgentRunsRouter());
 router.use(createAdminMediaCleanupRouter(mediaCleanupService));
 router.use(createAdminVoicePackRouter());

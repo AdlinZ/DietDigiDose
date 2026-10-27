@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
-import { computeBuildNumberFromSnapshot } from '@dietdigidose/contracts';
+import { computeBuildNumberFromSnapshot } from './appUpdateSnapshot';
 import AppUpdates from './AppUpdates';
 
 vi.mock('../services/api', () => ({

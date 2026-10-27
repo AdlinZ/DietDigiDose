@@ -12,13 +12,13 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import api from '../services/api';
 import {
   computeBuildNumberFromSnapshot,
   type AppUpdateChannel,
   type AppUpdateManifest,
   type AppUpdateRelease,
-} from '@dietdigidose/contracts';
-import api from '../services/api';
+} from './appUpdateSnapshot';
 
 interface AppUpdatesResponse {
   configured: boolean;

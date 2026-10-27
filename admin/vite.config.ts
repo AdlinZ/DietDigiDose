@@ -13,7 +13,8 @@ export default defineConfig({
         // Share icon definitions instead of emitting dozens of tiny icon chunks.
         manualChunks(id) {
           if (id.includes('/lucide-react/')) return 'icons';
-          if (['/react/', '/react-dom/', '/scheduler/'].some(module => id.includes(module))) return 'react-vendor';
+          if (['/react/', '/react-dom/', '/scheduler/', '/react-router/'].some(module => id.includes(module))) return 'react-vendor';
+          if (id.includes('/axios/')) return 'vendor-axios';
         },
       },
     },

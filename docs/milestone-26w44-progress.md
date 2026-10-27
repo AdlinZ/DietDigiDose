@@ -11,6 +11,9 @@
 - **AI 审批业务表单扩充与输入净化防御（#229）**：PR [#273](https://github.com/AdlinZ/DietDigiDose/pull/273) 补齐了采购清单（name/amount）、厨具（name/category）、餐食备餐计划（title/startDate/endDate）、菜谱提议（title/cookTime）与宏量营养素微调（calories/protein/carbs/fat）原生表单支持，增加数值安全浮点解析与清空置空保护，8 项单测全数通过，CI 全绿（verify、stability、windows-compatibility、ai-resource-integration 均通过），已合并至 `main`（commit `60354ea3`）。
 - **云端食谱审核发布与 Android 真实验收闭环（#218）**：已验证线上 Staging 环境（`https://dietdigidose.top`）公开食谱库总量已由历史的 1 条（番茄炒蛋）更新为 386 条（`official: 386, publicTotal: 386`），分类搜索（如“白菜”）能正常返回“乾隆白菜”、“香菇炒白菜”、“醋溜白菜”等结构化菜品；Android 物理真机（预览包 `26w43d` / build `264304`）实测下拉刷新并检索成功加载多食谱，卡片与列表展示顺畅，已正式关闭 [#218](https://github.com/AdlinZ/DietDigiDose/issues/218)。
 - **烹饪模式计时器前后台与锁屏恢复实机闭环（#220）**：Android 物理真机实测启动步骤计时后切入后台与锁屏静置，重新点亮返回 App，倒计时保持准确物理时间流逝校准，未发生任何意外重置或停滞，结合此前 PR #232 的时间基准校正与单测彻底闭环，已正式关闭 [#220](https://github.com/AdlinZ/DietDigiDose/issues/220)。
+- **26w44 首个 Android 预览候选包构建完成（#219 / #171）**：CI 工作流运行 31m55s 成功生成产物 `DietDigiDose-1.0.6-26w44a-build264401-preview-...apk`（SHA-256 `1460059844b4960ae95312bc9e39a419db089b3056bf4be7d267359f969b38a4`），构建号 `264401` 严格高于真机现存包 `264304`，且签名与现存包保持完全一致（证书 `0c7b4821...`），8 项安全门禁全部通过。
+- **根布局 Stack 路由全量显式声明（PR #277）**：PR [#277](https://github.com/AdlinZ/DietDigiDose/pull/277) 补齐了 `forgot-password`、`custom-food`、`household-*` 等 11 个应用路由在 `client/app/_layout.tsx` 中的显式注册，统一受控无标题栏与转场生命周期，已合并至 `main`（commit `fe3a9277`）。
+- **候选基准全量空库/升级库灾备演练（#106）**：本地执行 `pnpm test:migrations`（`db:rehearse`），完成全新 89 迁移空库、58$\to$89 升级库、目录治理核查、备份生成（6ms）、独立恢复（10ms）、就地覆盖恢复安全副本保留与回滚测试，全部 100% 通过。
 
 ## W44 推进顺序与核心目标
 
@@ -23,7 +26,7 @@
    - [#221](https://github.com/AdlinZ/DietDigiDose/issues/221) 验证真实短信验证码找回密码与旧会话失效。
 3. **内容、库存与烹饪体验收口**：
    - [#218](https://github.com/AdlinZ/DietDigiDose/issues/218) 云端食谱审核发布，验证移动端多食谱可见性（已完成真机实测并闭环关闭）；
-   - **烹饪模式计时器前后台与锁屏恢复实机闭环（#220）**：Android 物理真机实测启动步骤计时后退入后台/锁屏静置，重新点亮返回 App，倒计时保持准确物理时间流逝校准，未发生任何意外重置或停滞，结合此前 PR #232 的时间基准校正与单测已彻底闭环，已正式关闭 [#220](https://github.com/AdlinZ/DietDigiDose/issues/220)。
+   - [#220](https://github.com/AdlinZ/DietDigiDose/issues/220) 烹饪计时前后台与锁屏恢复真实验收（已完成真机实测并闭环关闭）；
    - [#189](https://github.com/AdlinZ/DietDigiDose/issues/189) ~ [#194](https://github.com/AdlinZ/DietDigiDose/issues/194) 库存结构化扣减、多餐制作与食用状态贯通。
 
 ## 结转清单（2 项已关闭，当前剩余 17 项）

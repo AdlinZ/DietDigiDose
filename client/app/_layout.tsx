@@ -42,12 +42,23 @@ export default function RootLayout() {
             />
             <Stack.Screen name="settings" />
             <Stack.Screen name="password" />
+            <Stack.Screen name="forgot-password" />
             <Stack.Screen name="notifications" />
             <Stack.Screen name="shopping-list" />
             <Stack.Screen name="legal" />
             <Stack.Screen name="about" />
             <Stack.Screen name="feedback" />
             <Stack.Screen name="feedback-history" />
+            <Stack.Screen name="custom-food" />
+            <Stack.Screen name="household-dining" />
+            <Stack.Screen name="household-meals" />
+            <Stack.Screen name="household-production" />
+            <Stack.Screen name="intervention-settings" />
+            <Stack.Screen name="intervention" />
+            <Stack.Screen name="maintenance-results" />
+            <Stack.Screen name="plan-maintenance" />
+            <Stack.Screen name="preference-learning" />
+            <Stack.Screen name="weekly-plan" />
           </Stack>
         </Provider>
       </ThemeProvider>

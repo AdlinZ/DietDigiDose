@@ -1696,7 +1696,7 @@ export default function AIAssistantScreen() {
       </Modal>
 
       {/* 📝 AI 对话内置即时修改打卡 Modal */}
-      <Modal visible={editModalVisible} animationType="slide" transparent>
+      <Modal visible={editModalVisible} animationType="slide" transparent onRequestClose={() => setEditModalVisible(false)}>
         <View className="flex-1 bg-black/40 justify-end">
           <View className="bg-surface rounded-t-[32px] p-6 max-h-[85%]">
             {/* Modal 标题栏 */}

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { open } from "node:fs/promises";
 import { APP_UPDATE_MANIFEST_MAX_BYTES, appUpdateManifestSchema, appUpdateQuerySchema } from "@dietdigidose/contracts";
 import { sendError } from "../utils/http.js";
+import { validateAllowedOrigins } from "../services/appUpdateManifestService.js";
 
 export function createAppUpdatesRouter(options = {
   manifestPath: process.env.APP_UPDATE_MANIFEST_PATH,
@@ -13,13 +14,9 @@ export function createAppUpdatesRouter(options = {
     const query = appUpdateQuerySchema.safeParse(req.query);
     if (!query.success) return sendError(res, 400, "更新检查参数无效", "INVALID_UPDATE_QUERY");
     const unavailable = () => sendError(res, 503, "暂时无法检查更新，请稍后重试", "APP_UPDATES_UNAVAILABLE");
-    if (!options.manifestPath || !options.allowedOrigins?.trim()) return unavailable();
+    const { origins, error: originsError } = validateAllowedOrigins(options.allowedOrigins);
+    if (!options.manifestPath || originsError || origins.length === 0) return unavailable();
     void (async () => {
-      const origins = options.allowedOrigins!.split(",").map((entry) => entry.trim());
-      for (const origin of origins) {
-        const parsed = new URL(origin);
-        if (parsed.protocol !== "https:" || parsed.origin !== origin) throw new Error("Invalid update origin");
-      }
       const file = await open(options.manifestPath!, "r");
       let contents: string;
       try {

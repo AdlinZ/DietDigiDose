@@ -10,11 +10,11 @@ import { validateBody } from "../../middleware/validate.js";
 import { sendError } from "../../utils/http.js";
 import { auditAdminAction } from "./shared.js";
 import {
-  parseAllowedOrigins,
+  mutateAppUpdateManifest,
   readAppUpdateManifest,
   replaceManifestRelease,
   revokeManifestRelease,
-  writeAppUpdateManifest,
+  validateAllowedOrigins,
 } from "../../services/appUpdateManifestService.js";
 
 const revokeBodySchema = z.object({
@@ -30,14 +30,14 @@ export function createAdminAppUpdatesRouter(options = {
 
   router.get("/app-updates", async (_req, res, next) => {
     try {
-      const allowedOrigins = parseAllowedOrigins(options.allowedOrigins);
-      const { configured, path, manifest, error } = await readAppUpdateManifest(options.manifestPath);
+      const { origins: allowedOrigins, error: originsError } = validateAllowedOrigins(options.allowedOrigins);
+      const { configured, path, manifest, error: manifestError } = await readAppUpdateManifest(options.manifestPath);
       res.json({
-        configured: configured && allowedOrigins.length > 0,
+        configured: configured && !originsError && allowedOrigins.length > 0,
         manifestPath: path,
         allowedOrigins,
         manifest,
-        error: error || null,
+        error: originsError || manifestError || null,
       });
     } catch (error) {
       next(error);
@@ -50,7 +50,10 @@ export function createAdminAppUpdatesRouter(options = {
     async (req: AuthRequest, res, next) => {
       try {
         const manifestPath = options.manifestPath;
-        const allowedOrigins = parseAllowedOrigins(options.allowedOrigins);
+        const { origins: allowedOrigins, error: originsError } = validateAllowedOrigins(options.allowedOrigins);
+        if (originsError) {
+          return sendError(res, 500, `服务端下载源白名单配置错误: ${originsError}`, "APP_UPDATE_CONFIG_INVALID");
+        }
         if (!manifestPath || allowedOrigins.length === 0) {
           return sendError(res, 400, "服务端尚未配置 APP_UPDATE_MANIFEST_PATH 或 APP_UPDATE_ALLOWED_ORIGINS", "APP_UPDATE_CONFIG_MISSING");
         }
@@ -60,20 +63,19 @@ export function createAdminAppUpdatesRouter(options = {
           return sendError(res, 400, `APK 下载域名 ${urlOrigin} 不在受信任的下载源白名单中`, "UNTRUSTED_APK_ORIGIN");
         }
 
-        const current = await readAppUpdateManifest(manifestPath);
-        if (current.error) {
-          return sendError(res, 500, `现有清单读取失败: ${current.error}`, "APP_UPDATE_READ_ERROR");
-        }
-
         let updatedManifest;
         try {
-          updatedManifest = replaceManifestRelease(current.manifest, release);
+          updatedManifest = await mutateAppUpdateManifest(manifestPath, (currentManifest) => {
+            const next = replaceManifestRelease(currentManifest, release);
+            return { result: next, manifest: next };
+          });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : "无法更新清单版本";
+          if (message.includes("清单存在错误") || message.includes("更新清单未配置")) {
+            return sendError(res, 500, message, "APP_UPDATE_READ_ERROR");
+          }
           return sendError(res, 400, message, "INVALID_RELEASE_OPERATION");
         }
-
-        await writeAppUpdateManifest(manifestPath, updatedManifest);
 
         await auditAdminAction(req, {
           action: "app_updates.publish",
@@ -114,37 +116,47 @@ export function createAdminAppUpdatesRouter(options = {
           return sendError(res, 400, "服务端尚未配置 APP_UPDATE_MANIFEST_PATH", "APP_UPDATE_CONFIG_MISSING");
         }
         const { applicationId, channel } = req.body;
-        const current = await readAppUpdateManifest(manifestPath);
-        if (current.error) {
-          return sendError(res, 500, `现有清单读取失败: ${current.error}`, "APP_UPDATE_READ_ERROR");
+        let revokedRelease: any = null;
+        let updatedManifest;
+        try {
+          const result = await mutateAppUpdateManifest(manifestPath, (currentManifest) => {
+            const target = currentManifest.releases.find(
+              (item) => item.applicationId === applicationId && item.channel === channel,
+            );
+            if (!target) {
+              const err = new Error(`未找到应用 ${applicationId} 在 ${channel} 渠道的在线版本`);
+              (err as any).code = "NOT_FOUND";
+              throw err;
+            }
+            const next = revokeManifestRelease(currentManifest, applicationId, channel);
+            return { result: { target, next }, manifest: next };
+          });
+          revokedRelease = result.target;
+          updatedManifest = result.next;
+        } catch (err: unknown) {
+          if ((err as any)?.code === "NOT_FOUND") {
+            return sendError(res, 404, (err as Error).message, "RELEASE_NOT_FOUND");
+          }
+          const message = err instanceof Error ? err.message : "无法撤下版本";
+          return sendError(res, 500, message, "APP_UPDATE_MUTATION_ERROR");
         }
-
-        const targetRelease = current.manifest.releases.find(
-          (item) => item.applicationId === applicationId && item.channel === channel,
-        );
-        if (!targetRelease) {
-          return sendError(res, 404, `未找到应用 ${applicationId} 在 ${channel} 渠道的在线版本`, "RELEASE_NOT_FOUND");
-        }
-
-        const updatedManifest = revokeManifestRelease(current.manifest, applicationId, channel);
-        await writeAppUpdateManifest(manifestPath, updatedManifest);
 
         await auditAdminAction(req, {
           action: "app_updates.revoke",
           resourceType: "app_updates",
-          resourceId: `${channel}:${targetRelease.snapshot}`,
-          summary: `撤下 ${channel} 渠道应用更新 (${targetRelease.snapshot})`,
+          resourceId: `${channel}:${revokedRelease.snapshot}`,
+          summary: `撤下 ${channel} 渠道应用更新 (${revokedRelease.snapshot})`,
           details: {
             applicationId,
             channel,
-            revokedSnapshot: targetRelease.snapshot,
-            revokedBuildNumber: targetRelease.buildNumber,
+            revokedSnapshot: revokedRelease.snapshot,
+            revokedBuildNumber: revokedRelease.buildNumber,
           },
         });
 
         res.json({
           success: true,
-          message: `已撤下 ${channel} 渠道版本 ${targetRelease.snapshot}`,
+          message: `已撤下 ${channel} 渠道版本 ${revokedRelease.snapshot}`,
           manifest: updatedManifest,
         });
       } catch (error) {

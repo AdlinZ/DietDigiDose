@@ -727,7 +727,7 @@ function ProfileContent() {
       </ScrollView>
 
       {/* 退出登录确认 Modal */}
-      <Modal visible={logoutModalOpen} animationType="fade" transparent>
+      <Modal visible={logoutModalOpen} animationType="fade" transparent onRequestClose={() => setLogoutModalOpen(false)}>
         <View className="flex-1 bg-black/50 items-center justify-center p-6">
           <View className="bg-surface rounded-[28px] p-6 w-full max-w-sm items-center shadow-lg">
             <View className="w-14 h-14 rounded-full bg-danger-soft items-center justify-center mb-3">

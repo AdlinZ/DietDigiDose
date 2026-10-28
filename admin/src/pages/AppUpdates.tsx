@@ -91,19 +91,21 @@ export default function AppUpdates() {
     if (computed) setBuildNumber(computed);
   };
 
-  const openPublishModal = (targetChannel?: AppUpdateChannel) => {
+  const openPublishModal = (targetChannel?: AppUpdateChannel, existingRelease?: AppUpdateRelease) => {
     const selected = targetChannel || 'preview';
-    handleChannelChange(selected);
-    const currentRelease = data?.manifest.releases.find((item) => item.channel === selected);
-    if (currentRelease) {
-      setVersion(currentRelease.version);
-      setSnapshot(currentRelease.snapshot);
-      setBuildNumber(currentRelease.buildNumber);
-      setUrl(currentRelease.url);
-      setSizeBytes(currentRelease.sizeBytes);
-      setSha256(currentRelease.sha256);
-      setReleaseNotes(currentRelease.releaseNotes);
+    setChannel(selected);
+    if (existingRelease) {
+      setApplicationId(existingRelease.applicationId);
+      setVersion(existingRelease.version);
+      setSnapshot(existingRelease.snapshot);
+      setBuildNumber(existingRelease.buildNumber);
+      setUrl(existingRelease.url);
+      setSizeBytes(existingRelease.sizeBytes);
+      setSha256(existingRelease.sha256);
+      setReleaseNotes(existingRelease.releaseNotes);
     } else {
+      const target = CHANNELS.find((item) => item.id === selected);
+      if (target) setApplicationId(target.defaultAppId);
       setVersion('1.0.6');
       setSnapshot('26w44a');
       setBuildNumber(264401);
@@ -268,8 +270,7 @@ export default function AppUpdates() {
         <h3 className="font-bold text-text-main">各渠道在线版本</h3>
         <div className="grid gap-6 sm:grid-cols-3">
           {CHANNELS.map((ch) => {
-            const release = data?.manifest.releases.find((item) => item.channel === ch.id);
-            const isRevoking = revoking === `${release?.applicationId}:${ch.id}`;
+            const channelReleases = data?.manifest.releases.filter((item) => item.channel === ch.id) || [];
             return (
               <div
                 key={ch.id}
@@ -280,98 +281,117 @@ export default function AppUpdates() {
                     <span className={`rounded-xl border px-2.5 py-1 text-xs font-bold ${ch.color}`}>
                       {ch.label}
                     </span>
-                    {release ? (
+                    {channelReleases.length > 0 ? (
                       <span className="flex items-center gap-1 text-xs font-bold text-emerald-600">
-                        <CheckCircle2 size={13} /> 在线
+                        <CheckCircle2 size={13} /> {channelReleases.length} 个版本在线
                       </span>
                     ) : (
                       <span className="text-xs text-text-muted">未发布</span>
                     )}
                   </div>
 
-                  {release ? (
-                    <div className="mt-4 space-y-2.5">
-                      <div>
-                        <p className="text-xl font-black text-text-main">{release.snapshot}</p>
-                        <p className="text-xs text-text-muted">
-                          v{release.version} · Build {release.buildNumber}
-                        </p>
-                      </div>
-
-                      <div className="rounded-xl bg-background-alt p-3 font-mono text-xs text-text-main">
-                        <p className="text-text-muted">包名: {release.applicationId}</p>
-                        <p className="mt-1 text-text-muted">
-                          大小: {(release.sizeBytes / (1024 * 1024)).toFixed(1)} MB
-                        </p>
-                        <div className="mt-1 flex items-center justify-between">
-                          <span className="truncate" title={release.sha256}>
-                            SHA: {release.sha256.slice(0, 12)}…
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => void navigator.clipboard.writeText(release.sha256)}
-                            className="text-primary hover:opacity-80"
-                            title="复制完整 SHA256"
+                  {channelReleases.length > 0 ? (
+                    <div className="mt-4 space-y-4">
+                      {channelReleases.map((release) => {
+                        const isRevoking = revoking === `${release.applicationId}:${ch.id}`;
+                        return (
+                          <div
+                            key={release.applicationId}
+                            className="rounded-2xl border border-gray-100 bg-background-alt p-4"
                           >
-                            <Copy size={13} />
-                          </button>
-                        </div>
-                      </div>
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <p className="text-base font-black text-text-main">{release.snapshot}</p>
+                                <p className="text-xs text-text-muted">
+                                  v{release.version} · Build {release.buildNumber}
+                                </p>
+                              </div>
+                            </div>
 
-                      {release.releaseNotes && (
-                        <div className="rounded-xl border border-gray-100 bg-white p-3 text-xs text-text-muted">
-                          <p className="font-semibold text-text-main">更新说明：</p>
-                          <p className="mt-1 whitespace-pre-wrap">{release.releaseNotes}</p>
-                        </div>
-                      )}
+                            <div className="mt-2 space-y-1 font-mono text-xs text-text-main">
+                              <p className="truncate text-text-muted" title={release.applicationId}>
+                                包名: {release.applicationId}
+                              </p>
+                              <p className="text-text-muted">
+                                大小: {(release.sizeBytes / (1024 * 1024)).toFixed(1)} MB
+                              </p>
+                              <div className="flex items-center justify-between">
+                                <span className="truncate" title={release.sha256}>
+                                  SHA: {release.sha256.slice(0, 10)}…
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => void navigator.clipboard.writeText(release.sha256)}
+                                  className="text-primary hover:opacity-80"
+                                  title="复制完整 SHA256"
+                                >
+                                  <Copy size={12} />
+                                </button>
+                              </div>
+                            </div>
 
-                      <div className="pt-1">
-                        <a
-                          href={release.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-                        >
-                          测试下载链接 <ExternalLink size={12} />
-                        </a>
-                      </div>
+                            {release.releaseNotes && (
+                              <div className="mt-2 rounded-lg border border-gray-100 bg-white p-2 text-xs text-text-muted">
+                                <p className="font-semibold text-text-main">更新说明：</p>
+                                <p className="mt-0.5 whitespace-pre-wrap">{release.releaseNotes}</p>
+                              </div>
+                            )}
+
+                            <div className="mt-3 flex items-center justify-between border-t border-gray-200/50 pt-2">
+                              <a
+                                href={release.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
+                              >
+                                测试下载 <ExternalLink size={11} />
+                              </a>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => openPublishModal(ch.id, release)}
+                                  className="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-bold text-text-main hover:bg-gray-50"
+                                >
+                                  更新
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRevoke(release.applicationId, ch.id)}
+                                  disabled={isRevoking}
+                                  className="rounded-lg border border-red-200 p-1 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                                  title="撤下此包名版本"
+                                >
+                                  {isRevoking ? (
+                                    <LoaderCircle className="animate-spin" size={13} />
+                                  ) : (
+                                    <Trash2 size={13} />
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={() => openPublishModal(ch.id)}
+                        className="w-full rounded-xl border border-dashed border-gray-300 py-2 text-center text-xs font-medium text-text-muted hover:border-gray-400 hover:text-text-main"
+                      >
+                        + 为此渠道添加其他包名版本
+                      </button>
                     </div>
                   ) : (
                     <div className="mt-6 flex flex-col items-center justify-center py-6 text-center text-text-muted">
                       <Smartphone size={32} className="stroke-1 text-gray-300" />
                       <p className="mt-2 text-xs">当前渠道尚未配置或发布 APK</p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-6 flex items-center gap-2 border-t border-gray-100 pt-4">
-                  {release ? (
-                    <>
                       <button
                         type="button"
                         onClick={() => openPublishModal(ch.id)}
-                        className="flex-1 rounded-xl bg-gray-100 py-2 text-center text-xs font-bold text-text-main hover:bg-gray-200"
+                        className="mt-4 rounded-xl bg-primary/10 px-4 py-1.5 text-center text-xs font-bold text-primary hover:bg-primary/20"
                       >
-                        更新此渠道
+                        发布首个版本
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRevoke(release.applicationId, ch.id)}
-                        disabled={isRevoking}
-                        className="rounded-xl border border-red-200 p-2 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                        title="撤下此版本"
-                      >
-                        {isRevoking ? <LoaderCircle className="animate-spin" size={14} /> : <Trash2 size={14} />}
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => openPublishModal(ch.id)}
-                      className="w-full rounded-xl bg-primary/10 py-2 text-center text-xs font-bold text-primary hover:bg-primary/20"
-                    >
-                      发布此渠道版本
-                    </button>
+                    </div>
                   )}
                 </div>
               </div>

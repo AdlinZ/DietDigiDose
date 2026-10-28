@@ -932,7 +932,7 @@ export default function CommunityScreen() {
 
 
       {/* 帖子详情查看 Modal */}
-      <Modal visible={!!selectedPost} animationType="slide" transparent>
+      <Modal visible={!!selectedPost} animationType="slide" transparent onRequestClose={() => setSelectedPost(null)}>
         <View className="flex-1 bg-black/60 justify-end">
           <View className="bg-surface rounded-t-[32px] overflow-hidden max-h-[90%]">
             {/* 顶栏关闭与作者 */}

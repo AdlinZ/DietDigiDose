@@ -8,21 +8,33 @@ import {
   type AppUpdateRelease,
 } from "@dietdigidose/contracts";
 
-export function parseAllowedOrigins(raw?: string): string[] {
-  if (!raw?.trim()) return [];
-  const origins = raw.split(",").map((entry) => entry.trim()).filter(Boolean);
+let manifestMutationQueue: Promise<unknown> = Promise.resolve();
+
+export function validateAllowedOrigins(raw?: string): { origins: string[]; error?: string } {
+  if (!raw?.trim()) return { origins: [] };
+  const entries = raw.split(",").map((entry) => entry.trim());
   const validated: string[] = [];
-  for (const origin of origins) {
+  for (const origin of entries) {
+    if (!origin) {
+      return { origins: [], error: "域名白名单包含空条目（请检查多余逗号）" };
+    }
     try {
       const parsed = new URL(origin);
-      if (parsed.protocol === "https:" && parsed.origin === origin) {
-        validated.push(origin);
+      if (parsed.protocol !== "https:" || parsed.origin !== origin) {
+        return { origins: [], error: `非法的 HTTPS 域名白名单格式: ${origin}` };
       }
+      validated.push(origin);
     } catch {
-      // Invalid origin ignored in list
+      return { origins: [], error: `非法的 HTTPS 域名白名单格式: ${origin}` };
     }
   }
-  return validated;
+  return { origins: validated };
+}
+
+export function parseAllowedOrigins(raw?: string): string[] {
+  const result = validateAllowedOrigins(raw);
+  if (result.error) return [];
+  return result.origins;
 }
 
 export async function readAppUpdateManifest(manifestPath?: string): Promise<{
@@ -143,5 +155,33 @@ export async function writeAppUpdateManifest(
   } catch (err) {
     await unlink(tempPath).catch(() => undefined);
     throw err;
+  }
+}
+
+export async function mutateAppUpdateManifest<T>(
+  manifestPath: string,
+  mutator: (current: AppUpdateManifest) => Promise<{ result: T; manifest: AppUpdateManifest }> | { result: T; manifest: AppUpdateManifest },
+): Promise<T> {
+  const previousQueue = manifestMutationQueue;
+  let releaseLock: () => void;
+  const currentLock = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+  manifestMutationQueue = previousQueue.then(() => currentLock);
+
+  await previousQueue;
+  try {
+    const current = await readAppUpdateManifest(manifestPath);
+    if (!current.configured) {
+      throw new Error("更新清单未配置文件路径");
+    }
+    if (current.error) {
+      throw new Error(`清单存在错误，拒绝写入: ${current.error}`);
+    }
+    const { result, manifest: nextManifest } = await mutator(current.manifest);
+    await writeAppUpdateManifest(manifestPath, nextManifest);
+    return result;
+  } finally {
+    releaseLock!();
   }
 }

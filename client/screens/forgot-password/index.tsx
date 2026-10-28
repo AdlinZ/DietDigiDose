@@ -60,9 +60,18 @@ export default function ForgotPasswordScreen() {
   const copyAppealTemplate = async () => {
     const accountIdentifier = phone.trim() || "（请填写您的注册邮箱或用户名）";
     const template = `【食光烙记账号人工核验申请】\n申请账号：${accountIdentifier}\n申请类型：密码找回人工核验\n问题说明：无法使用绑定手机自助恢复，申请人工核验。\n（注意：本申请不包含且切勿提供密码、验证码或健康隐私）`;
-    await Clipboard.setStringAsync(template).catch(() => undefined);
-    setCopiedTip(true);
-    setTimeout(() => { if (active.current) setCopiedTip(false); }, 3000);
+    try {
+      await Clipboard.setStringAsync(template);
+      if (!active.current) return;
+      setError("");
+      setCopiedTip(true);
+      setTimeout(() => { if (active.current) setCopiedTip(false); }, 3000);
+    } catch {
+      if (active.current) {
+        setCopiedTip(false);
+        setError("复制申诉模板失败，请直接长按下方文本手动复制");
+      }
+    }
   };
   return <Screen safeAreaEdges={["top", "bottom"]}><ScrollView contentContainerStyle={{ padding: 24, gap: 20 }} keyboardShouldPersistTaps="handled">
     <TouchableOpacity accessibilityRole="button" onPress={() => router.canGoBack() ? router.back() : router.replace("/login")}><Text className="text-brand">返回</Text></TouchableOpacity>

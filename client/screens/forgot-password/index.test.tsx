@@ -1,6 +1,7 @@
 import React from "react";
 import renderer, { act } from "react-test-renderer";
 import { Text, TextInput, TouchableOpacity } from "react-native";
+import * as Clipboard from "expo-clipboard";
 const mockSend = jest.fn();
 const mockVerify = jest.fn();
 const mockReset = jest.fn();
@@ -53,6 +54,12 @@ test("supplier failure stays retryable and unsupported email has a concrete manu
   let tree!: renderer.ReactTestRenderer;
   await act(async () => { tree = renderer.create(<ForgotPasswordScreen />); });
   expect(JSON.stringify(tree.toJSON())).toContain("联系向你提供安装包或邀请的管理员");
+  const setStringAsync = jest.spyOn(Clipboard, "setStringAsync");
+  setStringAsync.mockRejectedValueOnce(new Error("clipboard failed"));
+  await act(async () => { press(tree, "复制人工申诉说明模板"); });
+  expect(JSON.stringify(tree.toJSON())).toContain("复制申诉模板失败");
+  expect(JSON.stringify(tree.toJSON())).not.toContain("已复制申诉模板");
+  setStringAsync.mockResolvedValueOnce();
   await act(async () => { press(tree, "复制人工申诉说明模板"); });
   expect(JSON.stringify(tree.toJSON())).toContain("已复制申诉模板");
   act(() => input(tree, "绑定手机号", "email@example.com"));

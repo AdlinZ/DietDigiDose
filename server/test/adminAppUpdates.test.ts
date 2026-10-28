@@ -88,6 +88,7 @@ test("mutateAppUpdateManifest serializes concurrent mutations without race condi
     ...sampleRelease,
     channel: "candidate",
     applicationId: "com.dietdigidose.app",
+    snapshot: "26w44b",
     buildNumber: 264402,
   };
 

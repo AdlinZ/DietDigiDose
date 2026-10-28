@@ -17,6 +17,7 @@
 - **应用更新发布管理页面与服务端控制接口（PR #280 / #219）**：完成应用更新清单管理控制台开发，服务端提供 `/api/v1/admin/app-updates` 查看、发布与撤下接口，管理端提供 `/admin/app-updates` 页面并遵循构建预算（体积从 150kB 优化至 15.48kB）；同步将上游突发漏洞的 `qs` 依赖升级至 `6.16.1`，全部 CI 绿灯并合并至 `main`（commit `4e6d8232`）。
 - **应用更新并发写互斥锁与管理端多包名版本呈现**：为服务端 `appUpdateManifestService` 增加异步互斥锁，彻底杜绝并发发布与撤下的写竞争；统一严格校验白名单格式；管理端完整支持同一渠道下多个不同 `applicationId` 版本的独立展示、更新与撤下。
 - **Android 全局高频 Modal 硬件返回键统一响应规范（#258）**：补齐 `health-data`、`profile`、`inventory`、`ai-assistant`、`community` 等核心高频页面中原生 `Modal` 的 `onRequestClose` 属性，彻底解决 Android 物理返回键无法收起浮层的体验缺陷。
+- **用户端密码找回人工核验模板与未验证通道防护（#221）**：补齐未登录 `/password` 路由直达找回密码引导；在 `forgot-password` 界面增加输入邮箱地址的主动引导拦截与“一键复制人工核验申诉模板”能力，避免误填邮箱或泄露敏感凭证；服务端 `/password-recovery/send` 增加显式邮箱拦截防御与错误码 `EMAIL_RECOVERY_UNSUPPORTED`，全流程单测与 HTTP 集成测试覆盖通过。
 - **候选基准全量空库/升级库灾备演练（#106）**：本地执行 `pnpm test:migrations`（`db:rehearse`），完成全新 89 迁移空库、58$\to$89 升级库、目录治理核查、备份生成（6ms）、独立恢复（10ms）、就地覆盖恢复安全副本保留与回滚测试，全部 100% 通过。
 
 ## W44 推进顺序与核心目标

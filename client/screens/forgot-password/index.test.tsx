@@ -53,9 +53,12 @@ test("supplier failure stays retryable and unsupported email has a concrete manu
   let tree!: renderer.ReactTestRenderer;
   await act(async () => { tree = renderer.create(<ForgotPasswordScreen />); });
   expect(JSON.stringify(tree.toJSON())).toContain("联系向你提供安装包或邀请的管理员");
+  await act(async () => { press(tree, "复制人工申诉说明模板"); });
+  expect(JSON.stringify(tree.toJSON())).toContain("已复制申诉模板");
   act(() => input(tree, "绑定手机号", "email@example.com"));
   await act(async () => { press(tree, "获取恢复验证码"); });
   expect(mockSend).not.toHaveBeenCalled();
+  expect(JSON.stringify(tree.toJSON())).toContain("当前暂不支持邮箱自助找回");
   act(() => input(tree, "绑定手机号", "13800138000"));
   mockSend.mockRejectedValueOnce(new Error("短信发送失败，请稍后重试"));
   await act(async () => { press(tree, "获取恢复验证码"); });

@@ -350,6 +350,9 @@ router.post("/verify", (req,res,next) => { void verifySms(req,res).catch(next); 
 passwordRecoveryRouter.post("/send", recoveryRateLimit("send-ip", 10),
   recoveryRateLimit("send-phone", 3, (req) => normalizeMainlandPhone(req.body?.phone) || "invalid"), async (req,res,next) => {
   try {
+    if (req.body?.email || (typeof req.body?.phone === "string" && req.body.phone.includes("@"))) {
+      return sendError(res, 400, "当前暂不支持邮箱自助找回，请使用已绑定的手机号或联系管理员人工恢复", "EMAIL_RECOVERY_UNSUPPORTED");
+    }
     const parsed = passwordRecoverySendSchema.safeParse(req.body);
     if (!parsed.success) return sendError(res,400,"请输入已绑定的中国大陆手机号","INVALID_PHONE");
     const existing = await authVerificationService().userByPhone(parsed.data.phone);

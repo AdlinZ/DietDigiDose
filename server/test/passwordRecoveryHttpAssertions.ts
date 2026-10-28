@@ -39,6 +39,14 @@ export async function verifyPasswordRecoveryHttp(api: Api, db: Database.Database
   assert.equal((await api("/api/v1/auth/me",{token:oldLogin.body.token,headers:{"X-Account-Security":ACCOUNT_SECURITY_CAPABILITY}})).response.status,401);
   assert.equal((db.prepare("SELECT session_version FROM users WHERE id=?").get(userId) as {session_version:number}).session_version,2);
 
+  const emailAttempt = await post("/password-recovery/send", { phone: "user@example.com" });
+  assert.equal(emailAttempt.status, 400);
+  assert.equal(emailAttempt.body.code, "EMAIL_RECOVERY_UNSUPPORTED");
+
+  const emailBodyAttempt = await post("/password-recovery/send", { email: "user@example.com" });
+  assert.equal(emailBodyAttempt.status, 400);
+  assert.equal(emailBodyAttempt.body.code, "EMAIL_RECOVERY_UNSUPPORTED");
+
   // Identical send envelopes for absent, unverified and disabled accounts; none may receive a recovery grant.
   db.prepare("INSERT INTO users(username,phone,password_hash) VALUES('recovery-unverified','13900419102',?)").run(oldHash);
   db.prepare("INSERT INTO users(username,phone,password_hash,phone_verified_at,is_disabled) VALUES('recovery-disabled','13900419103',?,CURRENT_TIMESTAMP,1)").run(oldHash);

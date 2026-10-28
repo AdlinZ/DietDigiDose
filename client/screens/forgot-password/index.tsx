@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { Screen } from "@/components/Screen";
 import { useSafeRouter } from "@/hooks/useSafeRouter";
 import { useResendCooldown } from "@/hooks/useResendCooldown";
@@ -17,13 +18,18 @@ export default function ForgotPasswordScreen() {
   const { countdown, start: startCooldown, isCoolingDown } = useResendCooldown();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [copiedTip, setCopiedTip] = useState(false);
   const [complete, setComplete] = useState(false);
   const pending = useRef(false);
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   const perform = async (action: "send" | "verify" | "reset") => {
     if (pending.current || (action === "send" && isCoolingDown())) return;
-    const normalized = phone.replace(/[\s-]/g, "").replace(/^\+?86/, "");
+    const rawTrimmed = phone.trim();
+    if (action === "send" && rawTrimmed.includes("@")) {
+      return setError("当前暂不支持邮箱自助找回，历史注册邮箱尚未验证。请使用绑定的手机号，或参考下方人工核验流程联系管理员。");
+    }
+    const normalized = rawTrimmed.replace(/[\s-]/g, "").replace(/^\+?86/, "");
     if (action === "send" && !/^1[3-9]\d{9}$/.test(normalized)) return setError("请输入已绑定的中国大陆手机号");
     if (action === "verify" && !/^\d{6}$/.test(code)) return setError("请输入 6 位验证码");
     if (action === "reset") {
@@ -50,6 +56,23 @@ export default function ForgotPasswordScreen() {
     finally { pending.current = false; if (active.current) setBusy(false); }
   };
   const restart = () => { setGrant(null); setChallenge(""); setCode(""); setPassword(""); setConfirmation(""); setError(""); };
+
+  const copyAppealTemplate = async () => {
+    const accountIdentifier = phone.trim() || "（请填写您的注册邮箱或用户名）";
+    const template = `【食光烙记账号人工核验申请】\n申请账号：${accountIdentifier}\n申请类型：密码找回人工核验\n问题说明：无法使用绑定手机自助恢复，申请人工核验。\n（注意：本申请不包含且切勿提供密码、验证码或健康隐私）`;
+    try {
+      await Clipboard.setStringAsync(template);
+      if (!active.current) return;
+      setError("");
+      setCopiedTip(true);
+      setTimeout(() => { if (active.current) setCopiedTip(false); }, 3000);
+    } catch {
+      if (active.current) {
+        setCopiedTip(false);
+        setError("复制申诉模板失败，请直接长按下方文本手动复制");
+      }
+    }
+  };
   return <Screen safeAreaEdges={["top", "bottom"]}><ScrollView contentContainerStyle={{ padding: 24, gap: 20 }} keyboardShouldPersistTaps="handled">
     <TouchableOpacity accessibilityRole="button" onPress={() => router.canGoBack() ? router.back() : router.replace("/login")}><Text className="text-brand">返回</Text></TouchableOpacity>
     <Text accessibilityRole="header" className="text-2xl font-bold text-ink">找回密码</Text>
@@ -77,6 +100,13 @@ export default function ForgotPasswordScreen() {
     <View className="gap-2 rounded-xl border border-line p-4">
       <Text className="font-bold text-ink">无法使用绑定手机或仅有邮箱账号？</Text>
       <Text selectable className="text-copy-muted">当前不支持邮箱自助恢复；历史注册邮箱尚未完成所有权验证。请联系向你提供安装包或邀请的管理员，提供账号与问题说明，申请人工核验恢复。不要发送密码、验证码或健康资料。</Text>
+      <TouchableOpacity
+        accessibilityRole="button"
+        onPress={() => void copyAppealTemplate()}
+        className="mt-1 flex-row items-center justify-center rounded-lg border border-line bg-surface py-2.5 px-3 active:opacity-70"
+      >
+        <Text className="text-sm font-bold text-brand">{copiedTip ? "已复制申诉模板" : "复制人工申诉说明模板"}</Text>
+      </TouchableOpacity>
     </View>
   </ScrollView></Screen>;
 }

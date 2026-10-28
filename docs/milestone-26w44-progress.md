@@ -13,6 +13,10 @@
 - **烹饪模式计时器前后台与锁屏恢复实机闭环（#220）**：Android 物理真机实测启动步骤计时后切入后台与锁屏静置，重新点亮返回 App，倒计时保持准确物理时间流逝校准，未发生任何意外重置或停滞，结合此前 PR #232 的时间基准校正与单测彻底闭环，已正式关闭 [#220](https://github.com/AdlinZ/DietDigiDose/issues/220)。
 - **26w44 首个 Android 预览候选包构建完成（#219 / #171）**：CI 工作流运行 31m55s 成功生成产物 `DietDigiDose-1.0.6-26w44a-build264401-preview-...apk`（SHA-256 `1460059844b4960ae95312bc9e39a419db089b3056bf4be7d267359f969b38a4`），构建号 `264401` 严格高于真机现存包 `264304`，且签名与现存包保持完全一致（证书 `0c7b4821...`），8 项安全门禁全部通过。
 - **根布局 Stack 路由全量显式声明（PR #277）**：PR [#277](https://github.com/AdlinZ/DietDigiDose/pull/277) 补齐了 `forgot-password`、`custom-food`、`household-*` 等 11 个应用路由在 `client/app/_layout.tsx` 中的显式注册，统一受控无标题栏与转场生命周期，已合并至 `main`（commit `fe3a9277`）。
+- **Node 25 Web Storage 单测环境隔离修复（PR #279）**：修复 Node 25.2.1 引入的实验性 `globalThis.localStorage` 污染 jsdom 的问题，确保管理端测试稳定运行，已合并至 `main`（commit `185f63b9`）。
+- **应用更新发布管理页面与服务端控制接口（PR #280 / #219）**：完成应用更新清单管理控制台开发，服务端提供 `/api/v1/admin/app-updates` 查看、发布与撤下接口，管理端提供 `/admin/app-updates` 页面并遵循构建预算（体积从 150kB 优化至 15.48kB）；同步将上游突发漏洞的 `qs` 依赖升级至 `6.16.1`，全部 CI 绿灯并合并至 `main`（commit `4e6d8232`）。
+- **应用更新并发写互斥锁与管理端多包名版本呈现**：为服务端 `appUpdateManifestService` 增加异步互斥锁，彻底杜绝并发发布与撤下的写竞争；统一严格校验白名单格式；管理端完整支持同一渠道下多个不同 `applicationId` 版本的独立展示、更新与撤下。
+- **Android 全局高频 Modal 硬件返回键统一响应规范（#258）**：补齐 `health-data`、`profile`、`inventory`、`ai-assistant`、`community` 等核心高频页面中原生 `Modal` 的 `onRequestClose` 属性，彻底解决 Android 物理返回键无法收起浮层的体验缺陷。
 - **候选基准全量空库/升级库灾备演练（#106）**：本地执行 `pnpm test:migrations`（`db:rehearse`），完成全新 89 迁移空库、58$\to$89 升级库、目录治理核查、备份生成（6ms）、独立恢复（10ms）、就地覆盖恢复安全副本保留与回滚测试，全部 100% 通过。
 
 ## W44 推进顺序与核心目标

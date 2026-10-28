@@ -2513,7 +2513,7 @@ export default function InventoryScreen() {
         />
 
         {/* Kitchenware Add Modal */}
-        <Modal visible={kitchenwareModalVisible} animationType="slide" transparent>
+        <Modal visible={kitchenwareModalVisible} animationType="slide" transparent onRequestClose={() => setKitchenwareModalVisible(false)}>
           <View className="flex-1 bg-black/40 justify-end">
             <View className="bg-surface rounded-t-[32px] p-6 max-h-[85%]">
               <View className="flex-row items-center justify-between mb-4 border-b border-background-secondary pb-3">

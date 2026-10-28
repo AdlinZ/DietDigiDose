@@ -9,10 +9,12 @@ import express from "express";
 import type { AppUpdateRelease } from "@dietdigidose/contracts";
 import { createAdminAppUpdatesRouter } from "../src/routes/admin/app-updates.js";
 import {
+  mutateAppUpdateManifest,
   parseAllowedOrigins,
   readAppUpdateManifest,
   replaceManifestRelease,
   revokeManifestRelease,
+  validateAllowedOrigins,
   writeAppUpdateManifest,
 } from "../src/services/appUpdateManifestService.js";
 
@@ -54,13 +56,58 @@ async function startServer(t: TestContext, options: Parameters<typeof createAdmi
   return async (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${address.port}/admin${path}`, init);
 }
 
-test("parseAllowedOrigins extracts valid HTTPS origins and discards invalid", () => {
+test("validateAllowedOrigins and parseAllowedOrigins strictly validate HTTPS origins", () => {
   assert.deepEqual(parseAllowedOrigins(undefined), []);
   assert.deepEqual(parseAllowedOrigins(""), []);
   assert.deepEqual(
-    parseAllowedOrigins("https://dietdigidose.top, http://insecure.example.com, https://cdn.dietdigidose.top"),
+    parseAllowedOrigins("https://dietdigidose.top, https://cdn.dietdigidose.top"),
     ["https://dietdigidose.top", "https://cdn.dietdigidose.top"],
   );
+
+  const invalidHttp = validateAllowedOrigins("https://dietdigidose.top, http://insecure.example.com");
+  assert.ok(invalidHttp.error?.includes("非法的 HTTPS 域名白名单格式"));
+  assert.deepEqual(parseAllowedOrigins("https://dietdigidose.top, http://insecure.example.com"), []);
+
+  const trailingComma = validateAllowedOrigins("https://dietdigidose.top,");
+  assert.ok(trailingComma.error?.includes("空条目"));
+  assert.deepEqual(parseAllowedOrigins("https://dietdigidose.top,"), []);
+});
+
+test("mutateAppUpdateManifest serializes concurrent mutations without race conditions", async (t) => {
+  const dir = await fixture(t);
+  const manifestPath = join(dir, "manifest.json");
+  await writeAppUpdateManifest(manifestPath, { schemaVersion: 1, releases: [] });
+
+  const releaseA: AppUpdateRelease = {
+    ...sampleRelease,
+    channel: "preview",
+    applicationId: "com.dietdigidose.app.preview",
+    buildNumber: 264401,
+  };
+  const releaseB: AppUpdateRelease = {
+    ...sampleRelease,
+    channel: "candidate",
+    applicationId: "com.dietdigidose.app",
+    snapshot: "26w44b",
+    buildNumber: 264402,
+  };
+
+  // Launch both concurrent writes simultaneously
+  await Promise.all([
+    mutateAppUpdateManifest(manifestPath, (current) => {
+      const next = replaceManifestRelease(current, releaseA);
+      return { result: next, manifest: next };
+    }),
+    mutateAppUpdateManifest(manifestPath, (current) => {
+      const next = replaceManifestRelease(current, releaseB);
+      return { result: next, manifest: next };
+    }),
+  ]);
+
+  const finalManifest = await readAppUpdateManifest(manifestPath);
+  assert.equal(finalManifest.manifest.releases.length, 2);
+  assert.ok(finalManifest.manifest.releases.some((r) => r.channel === "preview"));
+  assert.ok(finalManifest.manifest.releases.some((r) => r.channel === "candidate"));
 });
 
 test("readAppUpdateManifest handles unconfigured, missing, and existing manifests", async (t) => {

@@ -19,6 +19,7 @@ auditConfig:
     # Locally patched; audit:prod runs the regression first. See docs/testing.md.
     - CVE-2026-85393
     - CVE-2026-93687
+    - CVE-2026-93753
 
 overrides:
   "@tootallnate/once": 2.0.1

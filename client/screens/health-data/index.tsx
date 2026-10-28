@@ -529,7 +529,7 @@ export default function HealthDataScreen() {
         </View>
       </ScrollView>
 
-      <Modal visible={modalVisible} animationType="slide" transparent>
+      <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           className="flex-1 bg-black/40 justify-end"

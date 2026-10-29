@@ -196,7 +196,7 @@ async function runCoreJourney(baseUrl: string, label: string, adminInitialPasswo
     token,
     body: JSON.stringify({ data_url: onePixelPng, scope: "community" }),
   });
-  const uploadedPath = new URL(upload.body.url).pathname;
+  const uploadedPath = new URL(upload.body.url, baseUrl).pathname;
   addCheck("media.upload", upload, { bytes: upload.body.bytes });
   const post = await request(baseUrl, "/api/v1/community/posts", {
     method: "POST",

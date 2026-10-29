@@ -1,3 +1,4 @@
+import { resolveMediaUrl } from "@/utils/mediaUrl";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   Animated,
@@ -1094,7 +1095,7 @@ function HomeContent() {
                     </View>
                   </View>
                   {featuredCommunityPost.image_url ? (
-                    <Image source={{ uri: featuredCommunityPost.image_url }} className="w-20 rounded-xl" resizeMode="cover" />
+                    <Image source={{ uri: resolveMediaUrl(featuredCommunityPost.image_url) }} className="w-20 rounded-xl" resizeMode="cover" />
                   ) : (
                     <View className="w-20 rounded-xl bg-brand/10 items-center justify-center">
                       <FontAwesome6 name="leaf" size={18} colorClassName="accent-brand" />

@@ -1,3 +1,4 @@
+import { resolveMediaUrl } from "@/utils/mediaUrl";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   View,
@@ -341,7 +342,7 @@ export default function CommunityScreen() {
         {/* 高清等宽不等长封面图片 */}
         {post.image_url ? (
           <Image
-            source={{ uri: post.image_url }}
+            source={{ uri: resolveMediaUrl(post.image_url) }}
             className={`w-full ${imageHeight}`}
             resizeMode="cover"
           />
@@ -434,7 +435,7 @@ export default function CommunityScreen() {
         >
           <View className="relative h-48 bg-brand-soft">
             {post.image_url ? (
-              <Image source={{ uri: post.image_url }} className="h-full w-full" resizeMode="cover" />
+              <Image source={{ uri: resolveMediaUrl(post.image_url) }} className="h-full w-full" resizeMode="cover" />
             ) : (
               <View className="h-full w-full items-center justify-center">
                 <FontAwesome6 name="trophy" size={42} colorClassName="accent-warm" />
@@ -507,7 +508,7 @@ export default function CommunityScreen() {
         </View>
 
         {post.image_url ? (
-          <Image source={{ uri: post.image_url }} className="mr-3 h-[74px] w-[74px] rounded-xl" resizeMode="cover" />
+          <Image source={{ uri: resolveMediaUrl(post.image_url) }} className="mr-3 h-[74px] w-[74px] rounded-xl" resizeMode="cover" />
         ) : (
           <View className="mr-3 h-[74px] w-[74px] items-center justify-center rounded-xl bg-background-secondary">
             <FontAwesome6 name="ranking-star" size={20} colorClassName="accent-brand" />
@@ -559,7 +560,7 @@ export default function CommunityScreen() {
         >
           <View className="relative h-44 bg-brand-soft">
             {post.image_url ? (
-              <Image source={{ uri: post.image_url }} className="h-full w-full" resizeMode="cover" />
+              <Image source={{ uri: resolveMediaUrl(post.image_url) }} className="h-full w-full" resizeMode="cover" />
             ) : (
               <View className="h-full w-full items-center justify-center">
                 <FontAwesome6 name="calendar-check" size={38} colorClassName="accent-brand" />
@@ -616,7 +617,7 @@ export default function CommunityScreen() {
         className="flex-row rounded-2xl border border-line bg-surface p-3 shadow-2xs"
       >
         {post.image_url ? (
-          <Image source={{ uri: post.image_url }} className="mr-3 h-24 w-24 rounded-xl" resizeMode="cover" />
+          <Image source={{ uri: resolveMediaUrl(post.image_url) }} className="mr-3 h-24 w-24 rounded-xl" resizeMode="cover" />
         ) : (
           <View className="mr-3 h-24 w-24 items-center justify-center rounded-xl bg-brand-soft">
             <FontAwesome6 name="calendar-check" size={23} colorClassName="accent-brand" />
@@ -667,7 +668,7 @@ export default function CommunityScreen() {
         <View className="min-w-0 flex-1">
           <View className="flex-row items-start gap-2">
             <Text className="flex-1 text-[13px] font-bold leading-5 text-ink" numberOfLines={3}>{post.content}</Text>
-            {post.image_url ? <Image source={{ uri: post.image_url }} className="h-14 w-14 rounded-lg" resizeMode="cover" /> : null}
+            {post.image_url ? <Image source={{ uri: resolveMediaUrl(post.image_url) }} className="h-14 w-14 rounded-lg" resizeMode="cover" /> : null}
           </View>
           <View className="mt-2.5 flex-row items-center justify-between">
             <View className="flex-1 flex-row items-center gap-1.5 pr-2">
@@ -965,7 +966,7 @@ export default function CommunityScreen() {
             <ScrollView showsVerticalScrollIndicator={false} className="p-5">
               {selectedPost?.image_url && (
                 <Image
-                  source={{ uri: selectedPost.image_url }}
+                  source={{ uri: resolveMediaUrl(selectedPost.image_url) }}
                   className="w-full h-72 rounded-2xl mb-4"
                   resizeMode="cover"
                 />

@@ -200,6 +200,9 @@ describe("API client", () => {
   it.each([
     ["/api/v1/diet-records/cooking-completions", "POST", ["/api/v1/inventory", "/api/v1/cooking-queue", "/api/v1/meal-plans", "/api/v1/diet-records/prepared-meals", "/api/v1/health-data", "/api/v1/insights"]],
     ["/api/v1/insights/inventory-outcomes", "POST", ["/api/v1/inventory", "/api/v1/insights"]],
+    ["/api/v1/meal-plans/plan/activate", "POST", ["/api/v1/diet-records/prepared-meals"]],
+    ["/api/v1/meal-plans/plan", "PATCH", ["/api/v1/diet-records/prepared-meals"]],
+    ["/api/v1/meal-plans/plan", "DELETE", ["/api/v1/diet-records/prepared-meals"]],
     ["/api/v1/cooking-queue/item", "DELETE", ["/api/v1/meal-plans"]],
     ["/api/v1/cooking-queue", "DELETE", ["/api/v1/meal-plans"]],
     ["/api/v1/cooking-queue/item", "PATCH", ["/api/v1/meal-plans"]],

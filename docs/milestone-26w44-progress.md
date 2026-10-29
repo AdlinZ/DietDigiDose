@@ -1,11 +1,13 @@
 # 26w44 执行计划与进度记录
 
-更新：2026-10-26（上海时区）。本周周期为 **2026-10-26 至 2026-11-01，ISO 第 44 周**。
+更新：2026-10-29（上海时区）。本周周期为 **2026-10-26 至 2026-11-01，ISO 第 44 周**。
 
-[W44 里程碑](https://github.com/AdlinZ/DietDigiDose/milestone/14) 承接 W43 的 **19 项未完成 Issue，含 3 项 P0（#105/#106/#107）**。原优先级、标签及验收标准保留；Backlog 21 项不自动纳入。W43 按周归档，已有实现、真机验证与部署证据保留在 [W43 历史记录](milestone-26w43-progress.md)。
+[W44 里程碑](https://github.com/AdlinZ/DietDigiDose/milestone/14) 承接 W43 的 **19 项未完成 Issue，含 3 项 P0（#105/#106/#107）**。原优先级、标签及验收标准保留；Backlog 项不自动纳入。W43 按周归档，已有实现、真机验证与部署证据保留在 [W43 历史记录](milestone-26w43-progress.md)。
 
-## W43 关键落地与闭环回顾
+## W44 关键落地与闭环进展
 
+- **AI 审批业务表单正式验收与结项（#229）**：PR [#273](https://github.com/AdlinZ/DietDigiDose/pull/273)（commit `60354ea3`）全面落地采购清单、厨房用具、餐食计划、菜谱提议与宏量营养素微调 5 大业务表单，输入数值安全浮点解析并空值净化。经全仓核验，8 项单测及构建预算 100% 达标，已于 2026-10-29 在 GitHub 正式关闭 [#229](https://github.com/AdlinZ/DietDigiDose/issues/229)。
+- **客户端相对媒体路径解耦与静态资源交付加固（#108）**：客户端引入 `resolveMediaUrl` 统一解析相对媒体路径与绝对路径，全面适配社区、饮食记录、主页、帖子详情及个人中心，消除对服务端硬编码 host 的依赖；服务端 `/api/v1/media/images` 返回纯净相对路径，静态路由受控挂载；数据库演练脚本完成相对路径适配，全量灾备演练 `pnpm test:migrations` 100% 通过。
 - **社区评论软键盘定位遮挡实机闭环（#17）**：2026-10-25 使用 `26w43d` / build `264304` 预览包在 Android 物理真机上完成实机测试。软键盘弹出后评论框与操作按钮均稳定位于键盘上方可见区域，各输入法切换正常，已正式关闭 [#17](https://github.com/AdlinZ/DietDigiDose/issues/17)。
 - **应用内更新客户端模块与 UI 交互真实验证（#219）**：真机进入“关于食光烙记”页面成功读取原生包版本身份（`1.0.6 (26w43d · build 264304 · preview)`），点击“检查应用更新”正确弹出更新检查对话框并优雅处理未配置清单的服务端返回，无崩溃闪退；已在 Issue 记录阶段性成果。
 - **AI 审批业务表单扩充与输入净化防御（#229）**：PR [#273](https://github.com/AdlinZ/DietDigiDose/pull/273) 补齐了采购清单（name/amount）、厨具（name/category）、餐食备餐计划（title/startDate/endDate）、菜谱提议（title/cookTime）与宏量营养素微调（calories/protein/carbs/fat）原生表单支持，增加数值安全浮点解析与清空置空保护，8 项单测全数通过，CI 全绿（verify、stability、windows-compatibility、ai-resource-integration 均通过），已合并至 `main`（commit `60354ea3`）。

@@ -1,3 +1,4 @@
+import { resolveMediaUrl } from "@/utils/mediaUrl";
 import { useFocusEffect } from "expo-router";
 import { usePostBookmark } from "./usePostBookmark";
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -629,7 +630,7 @@ export default function PostDetailScreen() {
                       accessibilityLabel={`查看第 ${index + 1} 张帖子图片大图`}
                     >
                       <Image
-                        source={{ uri: imageUrl }}
+                        source={{ uri: resolveMediaUrl(imageUrl) }}
                         className="w-full h-80"
                         resizeMode="cover"
                         onError={() => setFailedImageUrls((current) => current.includes(imageUrl) ? current : [...current, imageUrl])}
@@ -820,7 +821,7 @@ export default function PostDetailScreen() {
                       accessibilityLabel="查看评论图片大图"
                     >
                       <Image
-                        source={{ uri: comment.image_url }}
+                        source={{ uri: resolveMediaUrl(comment.image_url) }}
                         className="w-28 h-28 rounded-xl"
                         resizeMode="cover"
                       />
@@ -1083,7 +1084,7 @@ export default function PostDetailScreen() {
             accessibilityLabel="关闭图片预览"
           >
             {previewImageUrl ? (
-              <Image source={{ uri: previewImageUrl }} className="w-full h-[72%]" resizeMode="contain" />
+              <Image source={{ uri: resolveMediaUrl(previewImageUrl) }} className="w-full h-[72%]" resizeMode="contain" />
             ) : null}
             <View className="absolute right-5 top-14 w-10 h-10 rounded-full bg-surface/20 items-center justify-center">
               <FontAwesome6 name="xmark" size={17} colorClassName="accent-on-brand" />

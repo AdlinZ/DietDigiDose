@@ -379,21 +379,29 @@ export default function DietRecordScreen() {
       Alert.alert("提示", "请填写有效时间，例如 08:30");
       return;
     }
+    const parseNullableNumber = (value: string): number | null | "invalid" => {
+      if (!value.trim()) return null;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : "invalid";
+    };
+    const parsedCalories = parseNullableNumber(calories);
+    const parsedProtein = parseNullableNumber(protein);
+    const parsedCarbs = parseNullableNumber(carbs);
+    const parsedFat = parseNullableNumber(fat);
+    if (parsedCalories === "invalid" || parsedProtein === "invalid" || parsedCarbs === "invalid" || parsedFat === "invalid") {
+      Alert.alert("提示", "热量和营养素数值必须为大于等于 0 的有效数字");
+      return;
+    }
     try {
       setSaving(true);
-      const parseNullableNumber = (value: string) => {
-        if (!value.trim()) return null;
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-      };
       const payload = {
         meal_type: mealType.trim(),
         food_name: foodName,
         amount,
-        calories: parseNullableNumber(calories),
-        protein: parseNullableNumber(protein),
-        carbs: parseNullableNumber(carbs),
-        fat: parseNullableNumber(fat),
+        calories: parsedCalories,
+        protein: parsedProtein,
+        carbs: parsedCarbs,
+        fat: parsedFat,
         recorded_at: selectedDate,
         recorded_time: normalizedTime,
         image_url: imageUrl.trim() || null,

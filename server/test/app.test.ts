@@ -27,6 +27,7 @@ process.env.NODE_ENV = "test";
 process.env.DATABASE_DRIVER = "sqlite";
 process.env.DATABASE_URL = "";
 process.env.DATABASE_PATH = path.join(testDirectory, "integration.db");
+process.env.MEDIA_LOCAL_ROOT = path.join(testDirectory, "media");
 process.env.JWT_SECRET = "integration-test-jwt-secret-at-least-32-characters-long";
 process.env.ADMIN_INITIAL_PASSWORD = "AdminPassword1234";
 process.env.ENABLE_DEMO_SEED = "1";
@@ -98,6 +99,53 @@ after(async () => {
   }
   if (db) db.close();
   rmSync(testDirectory, { recursive: true, force: true });
+});
+
+test("local media upload URLs can be published in posts and comments and cleaned up", async () => {
+  const previousRoot = process.env.MEDIA_LOCAL_ROOT;
+  const previousProfile = process.env.DEPLOYMENT_PROFILE;
+  const root = path.join(testDirectory, "media");
+  try {
+    process.env.MEDIA_LOCAL_ROOT = root;
+    process.env.DEPLOYMENT_PROFILE = "china";
+    const owner = await register("media-regression@example.com");
+    const other = await register("media-other@example.com");
+    const uploaded = await api("/api/v1/media/images", { method: "POST", token: owner.token,
+      body: JSON.stringify({ scope: "community", data_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=" }) });
+    assert.equal(uploaded.response.status, 201);
+    const url = (uploaded.body as JsonObject).url as string;
+    assert.ok(url.startsWith(`/media/uploads/community/${owner.user.id}/`));
+    const imagePath = path.join(root, (uploaded.body as JsonObject).objectPath);
+    assert.equal(existsSync(imagePath), true);
+    const imageResponse = await fetch(`${baseUrl}${url}`);
+    assert.equal(imageResponse.status, 200);
+    assert.equal(imageResponse.headers.get("content-type"), "image/png");
+    assert.ok((await imageResponse.arrayBuffer()).byteLength > 0);
+    const post = await api("/api/v1/community/posts", { method: "POST", token: owner.token,
+      body: JSON.stringify({ content: "上传回归", image_urls: [url], category: "寻味" }) });
+    assert.equal(post.response.status, 201);
+    const postId = (post.body as JsonObject).id;
+    const comment = await api(`/api/v1/community/posts/${postId}/comments`, { method: "POST", token: owner.token,
+      body: JSON.stringify({ content: "图片评论", image_url: url }) });
+    assert.equal(comment.response.status, 201);
+    assert.equal((comment.body as JsonObject).image_url, url);
+    const detail = await api(`/api/v1/community/posts/${postId}`, { token: owner.token });
+    assert.deepEqual((detail.body as JsonObject).image_urls, [url]);
+    for (const rejectedUrl of [url, `https://attacker.example${url}`]) {
+      const denied = await api("/api/v1/community/posts", { method: "POST", token: other.token,
+        body: JSON.stringify({ content: "不得借用", image_urls: [rejectedUrl] }) });
+      assert.equal(denied.response.status, 400);
+    }
+    const deleted = await api("/api/v1/auth/account", { method: "DELETE", token: owner.token,
+      body: JSON.stringify({ password: "Password1234", confirmation: "DELETE" }) });
+    assert.equal(deleted.response.status, 200);
+    assert.equal(existsSync(imagePath), false);
+  } finally {
+    if (previousRoot === undefined) delete process.env.MEDIA_LOCAL_ROOT;
+    else process.env.MEDIA_LOCAL_ROOT = previousRoot;
+    if (previousProfile === undefined) delete process.env.DEPLOYMENT_PROFILE;
+    else process.env.DEPLOYMENT_PROFILE = previousProfile;
+  }
 });
 
 describe("API security baseline", () => {

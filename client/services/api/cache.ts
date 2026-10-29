@@ -289,7 +289,7 @@ function invalidationPrefixes(path: string) {
   if (path.startsWith("/api/v1/shopping-list")) return ["/api/v1/shopping-list"];
   if (path.startsWith("/api/v1/cooking-queue")) return ["/api/v1/cooking-queue", "/api/v1/meal-plans"];
   if (path.startsWith("/api/v1/meal-plans")) {
-    const prefixes = ["/api/v1/meal-plans", "/api/v1/households"];
+    const prefixes = ["/api/v1/meal-plans", "/api/v1/households", "/api/v1/diet-records/prepared-meals"];
     if (/\/items\/[^/]+\/shopping(?:\?|$)/.test(path)) prefixes.push("/api/v1/shopping-list");
     if (/\/items\/[^/]+\/queue(?:\?|$)/.test(path)) prefixes.push("/api/v1/cooking-queue");
     if (/\/items\/[^/]+\/complete(?:\?|$)/.test(path)) {

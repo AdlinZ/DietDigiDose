@@ -67,6 +67,7 @@ export default function AppUpdates() {
     try {
       const res = await api.get('/admin/app-updates');
       setData(res.data);
+      setError(res.data.error || '');
     } catch (err: any) {
       setError(err.response?.data?.error || '加载应用更新状态失败');
     } finally {

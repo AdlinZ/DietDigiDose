@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 import { computeBuildNumberFromSnapshot } from './appUpdateSnapshot';
 import AppUpdates from './AppUpdates';
+import api from '../services/api';
 
 vi.mock('../services/api', () => ({
   default: {
@@ -75,6 +76,34 @@ describe('AppUpdates page', () => {
       await act(async () => {
         root.unmount();
       });
+      container.remove();
+    }
+  });
+
+  it('shows manifest errors and clears them after a successful refresh', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ data: {
+      configured: false,
+      manifestPath: '/data/app-update-manifest.json',
+      allowedOrigins: ['https://dietdigidose.top'],
+      manifest: { schemaVersion: 1, releases: [] },
+      error: '清单文件内容格式无效',
+    } });
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(<AppUpdates />));
+      expect(container.textContent).toContain('清单文件内容格式无效');
+      expect(container.textContent).toContain('未配置或清单不可用');
+      expect(container.textContent).not.toContain('清单服务可用');
+      const refresh = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === '刷新');
+      expect(refresh).toBeDefined();
+      await act(async () => refresh!.click());
+      expect(container.textContent).not.toContain('清单文件内容格式无效');
+      expect(container.textContent).toContain('清单服务可用');
+    } finally {
+      await act(async () => root.unmount());
       container.remove();
     }
   });

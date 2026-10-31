@@ -31,13 +31,17 @@ export function createAdminAppUpdatesRouter(options = {
   router.get("/app-updates", async (_req, res, next) => {
     try {
       const { origins: allowedOrigins, error: originsError } = validateAllowedOrigins(options.allowedOrigins);
-      const { configured, path, manifest, error: manifestError } = await readAppUpdateManifest(options.manifestPath);
+      const { configured, path, manifest, missing, error: manifestError } = await readAppUpdateManifest(options.manifestPath);
+      const error = originsError || manifestError
+        || (missing ? "清单文件尚不存在，请发布首个版本或部署有效清单" : null)
+        || (manifest.releases.some((release) => !allowedOrigins.includes(new URL(release.url).origin))
+          ? "清单包含未授权的 APK 下载源，请撤下对应版本或修正下载源配置" : null);
       res.json({
-        configured: configured && !originsError && allowedOrigins.length > 0,
+        configured: configured && !error && allowedOrigins.length > 0,
         manifestPath: path,
         allowedOrigins,
         manifest,
-        error: originsError || manifestError || null,
+        error,
       });
     } catch (error) {
       next(error);

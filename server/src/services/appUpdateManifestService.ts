@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { open, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import {
   APP_UPDATE_MANIFEST_MAX_BYTES,
   appUpdateManifestSchema,
@@ -42,6 +41,7 @@ export async function readAppUpdateManifest(manifestPath?: string): Promise<{
   path: string;
   manifest: AppUpdateManifest;
   error?: string;
+  missing?: boolean;
 }> {
   if (!manifestPath?.trim()) {
     return {
@@ -89,6 +89,7 @@ export async function readAppUpdateManifest(manifestPath?: string): Promise<{
         configured: true,
         path: manifestPath,
         manifest: { schemaVersion: 1, releases: [] },
+        missing: true,
       };
     }
     return {

@@ -4,6 +4,16 @@
 
 [W44 里程碑](https://github.com/AdlinZ/DietDigiDose/milestone/14) 承接 W43 的 **19 项未完成 Issue，含 3 项 P0（#105/#106/#107）**。原优先级、标签及验收标准保留；Backlog 项不自动纳入。W43 按周归档，已有实现、真机验证与部署证据保留在 [W43 历史记录](milestone-26w43-progress.md)。
 
+## 2026-10-31 完整收口启动与邮箱恢复
+
+- 用户确认目标为剩余 17 项全部完成，允许跨周；新增 SMTP 邮箱自助恢复，旧邮箱必须先在已登录状态完成密码复核与邮箱验证码验证。灾备目标固定为 RPO 24 小时、完整 RTO 2 小时。
+- 用户确认 staging、SMTP/短信、bucket、签名/设备和语音服务资源当前均未准备；已另开资源讨论对话。完整逐项要求、责任和阻塞见 [W44 验收矩阵](w44-acceptance-matrix.md)。
+- #192 数字截断修复由 [PR #291](https://github.com/AdlinZ/DietDigiDose/pull/291) 四项 CI 通过后按预期 SHA 合并，合并提交 `508de5af87a5fb50136166f10561e3f75af14cd9`。
+- #221 本轮实现注册邮箱验证、标准 SMTP 发码、独立邮箱找回通道及复用密码重设；新增 SQLite 90/PostgreSQL 0031，历史邮箱不自动验证，管理员换邮箱清除验证并吊销旧会话。真实邮件/短信送达未验收。
+- 本轮本地验证（Node 22.23.2 / pnpm 10.18.0）：客户端 119 suites / 838 tests；服务端 750 passed / 3 skipped / 0 failed；管理端 21 files / 142 tests。邮箱恢复 SQLite/PostgreSQL 三项集成全部通过、无跳过；独立 PostgreSQL 17 完整迁移/恢复集成与 SQLite 90 演练通过。`lint:all`、契约、架构/数据库边界、schema、文档检查和 Web/服务端/管理端构建及体积预算通过。PostgreSQL 16 由 PR CI 门禁执行；本地 PG17 和模拟邮件不替代目标环境与真实送达。
+- #62 代码链路仍为 base64 音频片段→multipart `/audio/transcriptions`→完整 JSON，并非持续供应商音频上行；供应商及费用在资源对话确定后实施。
+- #187 冻结参考包审计复跑成功，仍存在大量份数/用量/设备证据缺口；未执行人工批准、正式发布或目标环境导入。
+
 ## 2026-10-31 PR #289 合并后续
 
 - PR [#289](https://github.com/AdlinZ/DietDigiDose/pull/289) 最新 head 四项 CI 全部通过，完整差异和审核线程复核无阻断项；按预期 SHA 合并为 `a7461ba00a5d419d789fc84229a220b161860ffc`。

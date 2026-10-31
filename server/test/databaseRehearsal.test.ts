@@ -42,17 +42,17 @@ test("every current migration after 58 has a rollback fixture and re-applies", (
 }));
 
 test("unknown future migrations fail closed without changing the fixture", () => withFixture(database => {
-  database.exec("INSERT INTO schema_migrations(version,name) VALUES (90,'future_test')");
+  database.exec("INSERT INTO schema_migrations(version,name) VALUES (91,'future_test')");
   const before = database.serialize();
-  assert.throws(() => rollbackPreviousCandidateFixture(database, 58), /needs rollback fixtures for migrations: 90/);
-  assert.deepEqual(database.serialize(), before);
+  assert.throws(() => rollbackPreviousCandidateFixture(database, 58), /needs rollback fixtures for migrations: 91/);
+  assert.ok(database.serialize().equals(before));
 }));
 
 test("migration 89 fixture preserves parents and restores bookmark constraints and index", () => withFixture(database => {
   database.pragma("foreign_keys = ON");
   database.exec(`INSERT INTO users(id,username,password_hash) VALUES (90001,'fixture-owner','synthetic'),(90002,'fixture-reader','synthetic');
     INSERT INTO community_posts(id,user_id,username,content) VALUES (90001,90001,'fixture-owner','synthetic post');`);
-  const users = database.prepare("SELECT * FROM users ORDER BY id").all();
+  const users = database.prepare("SELECT * FROM users ORDER BY id").all().map(row => { const { email_verified_at: _verified, ...rest } = row as Record<string, unknown>; return rest; });
   const posts = database.prepare("SELECT * FROM community_posts ORDER BY id").all();
   rollbackPreviousCandidateFixture(database, 88);
   assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE name='community_post_bookmarks' OR name='idx_community_post_bookmarks_post'").all().length, 0);
@@ -73,7 +73,7 @@ test("migration 89 fixture preserves parents and restores bookmark constraints a
   assert.ok(bookmarks.every(bookmark => Number.isFinite(Date.parse(bookmark.created_at))));
   const protectedSnapshot = database.serialize();
   assert.throws(() => rollbackPreviousCandidateFixture(database, 58), /Cannot downgrade fixture containing community bookmarks/);
-  assert.deepEqual(database.serialize(), protectedSnapshot);
+  assert.ok(database.serialize().equals(protectedSnapshot));
   assert.deepEqual(database.prepare("SELECT * FROM community_post_bookmarks ORDER BY user_id").all(), bookmarks);
   assert.ok(database.prepare("SELECT version FROM schema_migrations WHERE version=89").get());
   runMigrations(database);
@@ -83,4 +83,16 @@ test("migration 89 fixture preserves parents and restores bookmark constraints a
   database.exec("DELETE FROM community_posts WHERE id=90001");
   assert.equal((database.prepare("SELECT COUNT(*) n FROM community_post_bookmarks").get() as any).n, 0);
   assert.deepEqual(database.pragma("foreign_key_check"), []);
+}));
+
+
+test("email verification migration preserves legacy accounts as unverified and protects evidence", () => withFixture(database => {
+  database.exec("INSERT INTO users(id,username,email,password_hash) VALUES(90003,'email-owner','owner@example.invalid','synthetic')");
+  assert.equal((database.prepare("SELECT email_verified_at FROM users WHERE id=90003").get() as any).email_verified_at,null);
+  rollbackPreviousCandidateFixture(database,89);
+  runMigrations(database);
+  database.exec("UPDATE users SET email_verified_at=CURRENT_TIMESTAMP WHERE id=90003");
+  const before=database.serialize();
+  assert.throws(() => rollbackPreviousCandidateFixture(database,89),/email verification evidence/);
+  assert.ok(database.serialize().equals(before));
 }));

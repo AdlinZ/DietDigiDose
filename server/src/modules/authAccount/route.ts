@@ -5,7 +5,9 @@ import { getRateLimitClientIp, sharedRateLimit } from "../../middleware/sharedRa
 import { validateBody } from "../../middleware/validate.js";
 import { sendError } from "../../utils/http.js";
 import { changePasswordSchema, loginSchema, profileSchema, registerSchema } from "../../validation/schemas.js";
-import { ACCOUNT_SECURITY_CAPABILITY, accountDeletionSchema, passwordRecoveryResetSchema, setAccountPasswordSchema } from "@dietdigidose/contracts";
+import { ACCOUNT_SECURITY_CAPABILITY, accountDeletionSchema, passwordRecoveryResetSchema, setAccountPasswordSchema,
+  emailVerificationSendSchema, emailVerificationCodeSchema, emailRecoverySendSchema } from "@dietdigidose/contracts";
+import type { EmailVerificationService } from "./emailVerification.js";
 import { AuthAccountError } from "./errors.js";
 import type { AuthAccountService } from "./service.js";
 
@@ -26,8 +28,35 @@ function handle(error: unknown, res: Response, next: NextFunction) {
   if (!known(error,res)) next(error);
 }
 
-export function createAuthAccountRouter(service: AuthAccountService) {
+export function createAuthAccountRouter(service: AuthAccountService, email?: EmailVerificationService) {
   const router = Router();
+  const emailLimit = (namespace: string, limit: number, key: (req: AuthRequest) => string, windowMs = 15 * 60_000) => sharedRateLimit({
+    namespace: `email-${namespace}`, limit, windowMs, key, message: "邮箱验证请求过于频繁，请稍后重试", code: "EMAIL_RATE_LIMITED",
+  });
+  if (email) {
+    const sendLimits = [emailLimit("send-ip", 20, getRateLimitClientIp), emailLimit("send-global", 500, () => "all")];
+    router.post("/email-verification/send", authMiddleware, ...sendLimits,
+      emailLimit("verify-send-user", 1, req => String(req.userId), 60_000), validateBody(emailVerificationSendSchema), async (req: AuthRequest,res,next) => {
+        try { return res.json(await email.sendVerification(req.userId!,req.body.currentPassword)); }
+        catch (error) { return handle(error,res,next); }
+      });
+    router.post("/email-verification/verify", authMiddleware, emailLimit("verify-ip", 30, getRateLimitClientIp),
+      validateBody(emailVerificationCodeSchema), async (req: AuthRequest,res,next) => {
+        try { return res.json(await email.verify(req.body.challengeId,req.body.code,"email_verify",req.userId!)); }
+        catch (error) { return handle(error,res,next); }
+      });
+    router.post("/email-recovery/send", ...sendLimits, validateBody(emailRecoverySendSchema),
+      emailLimit("recovery-address-cooldown", 1, req => req.body.email, 60_000),
+      emailLimit("recovery-address", 5, req => req.body.email), async (req,res,next) => {
+        try { return res.json(await email.sendRecovery(req.body.email)); }
+        catch (error) { return handle(error,res,next); }
+      });
+    router.post("/email-recovery/verify", emailLimit("verify-ip", 30, getRateLimitClientIp),
+      validateBody(emailVerificationCodeSchema), async (req,res,next) => {
+        try { return res.json(await email.verify(req.body.challengeId,req.body.code,"email_recovery")); }
+        catch (error) { return handle(error,res,next); }
+      });
+  }
   router.post("/register", registrationIpRateLimit, registrationGlobalRateLimit, validateBody(registerSchema), async (req, res) => {
     try { return res.status(201).json(await service.register(req.body.identifier, req.body.username, req.body.password)); }
     catch (error) { if (known(error, res)) return; console.error("Register error:", error); return sendError(res, 500, "注册失败", "REGISTER_FAILED"); }
@@ -50,7 +79,7 @@ export function createAuthAccountRouter(service: AuthAccountService) {
   });
   router.post("/password-recovery/reset", sharedRateLimit({ namespace: "password-recovery-reset", limit: 30, windowMs: 15 * 60_000,
     key: getRateLimitClientIp, message: "恢复请求过于频繁，请稍后重试", code: "PASSWORD_RECOVERY_RATE_LIMITED" }), validateBody(passwordRecoveryResetSchema), async (req,res,next) => {
-    try { return res.json(await service.recoverPassword(req.body.recoveryToken, req.body.newPassword)); }
+    try { return res.json(await service.recoverPassword(req.body.recoveryToken, req.body.newPassword, req.body.channel)); }
     catch (error) { return handle(error,res,next); }
   });
   router.post("/password",authMiddleware,validateBody(setAccountPasswordSchema),async (req: AuthRequest,res) => {

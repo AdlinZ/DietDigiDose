@@ -218,6 +218,13 @@
       "when": 1792490779296,
       "tag": "0030_nostalgic_leper_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1793449900065,
+      "tag": "0031_complex_masque",
+      "breakpoints": true
     }
   ]
 }

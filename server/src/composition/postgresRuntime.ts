@@ -97,6 +97,8 @@ import { HouseholdsService } from "../modules/households/service.js";
 import { PostgresHouseholdsRepository } from "../modules/households/postgresRepository.js";
 import { createHouseholdsRouter } from "../modules/households/route.js";
 import { AuthAccountService } from "../modules/authAccount/service.js";
+import { EmailVerificationService } from "../modules/authAccount/emailVerification.js";
+import { verificationMailer } from "../services/verificationMailer.js";
 import { PostgresAuthAccountRepository } from "../modules/authAccount/postgresRepository.js";
 import { createAuthAccountRouter } from "../modules/authAccount/route.js";
 import { MediaCleanupService } from "../modules/mediaCleanup/service.js";
@@ -217,7 +219,8 @@ export async function initializePostgresApplication(): Promise<ApplicationRuntim
       communityService: community,
       onboardingService: new OnboardingService(new PostgresOnboardingRepository(pool)),
       routes: {
-        auth: createAuthRouter(createAuthAccountRouter(new AuthAccountService(new PostgresAuthAccountRepository(pool), (jobId) => mediaCleanup.process(jobId)))),
+        auth: createAuthRouter(createAuthAccountRouter(new AuthAccountService(new PostgresAuthAccountRepository(pool), (jobId) => mediaCleanup.process(jobId)),
+          new EmailVerificationService(new PostgresAuthAccountRepository(pool), verificationMailer))),
         webhooks: webhookRoutes,
         inventory: createInventoryRouter(new InventoryService(new PostgresInventoryRepository(pool))),
         dietRecords: createDietRecordsRouter(new DietRecordsService(new PostgresDietRecordsRepository(pool, consumeInventoryWithPostgresClient))),

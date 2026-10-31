@@ -1,3 +1,4 @@
+import type { EmailChallenge, EmailUser, EmailVerificationRepository } from "./emailVerification.js";
 import { createHmac } from "node:crypto";
 import type Database from "better-sqlite3";
 import { JWT_SECRET } from "../../config/security.js";
@@ -15,9 +16,39 @@ function parseUrlList(value: unknown) {
   catch { return []; }
 }
 
-export class SqliteAuthAccountRepository implements AuthAccountRepository {
+export class SqliteAuthAccountRepository implements AuthAccountRepository, EmailVerificationRepository {
   private readonly database: Database.Database;
   constructor(database: Database.Database) { this.database = database; }
+
+  async emailUser(selector: { id: number } | { email: string }) {
+    return (this.database.prepare(`SELECT id,email,email_verified_at,password_hash,session_version,is_disabled FROM users
+      WHERE ${"id" in selector ? "id=?" : "email=?"}`).get("id" in selector ? selector.id : selector.email) as EmailUser | undefined) ?? null;
+  }
+  async createEmailChallenge(input: EmailChallenge) {
+    this.database.prepare(`INSERT INTO email_auth_challenges(id,user_id,email,purpose,session_version,code_hash,expires_at)
+      VALUES(?,?,?,?,?,?,?)`).run(input.id,input.userId,input.email,input.purpose,input.sessionVersion,input.codeHash,input.expiresAt);
+  }
+  async finishEmailDelivery(id: string, sent: boolean) {
+    this.database.prepare("UPDATE email_auth_challenges SET status=? WHERE id=? AND status='pending'").run(sent ? "sent" : "failed",id);
+  }
+  async verifyEmailChallenge(input: Parameters<EmailVerificationRepository["verifyEmailChallenge"]>[0]) {
+    return this.database.transaction(() => {
+      const challenge = this.database.prepare(`UPDATE email_auth_challenges SET attempts=attempts+1
+        WHERE id=? AND purpose=? AND status='sent' AND attempts<5 AND julianday(expires_at)>julianday('now')
+        AND (? IS NULL OR user_id=?) RETURNING *`).get(input.id,input.purpose,input.userId ?? null,input.userId ?? null) as
+        { user_id: number | null; email: string; session_version: number; code_hash: string } | undefined;
+      if (!challenge || challenge.code_hash !== input.codeHash || challenge.user_id === null) return null;
+      const user = this.database.prepare(`SELECT id FROM users WHERE id=? AND email=? AND session_version=? AND COALESCE(is_disabled,0)=0
+        ${input.purpose === "email_recovery" ? "AND email_verified_at IS NOT NULL" : "AND password_hash IS NOT NULL"}`)
+        .get(challenge.user_id,challenge.email,challenge.session_version);
+      if (!user) return null;
+      if (input.purpose === "email_verify") this.database.prepare("UPDATE users SET email_verified_at=CURRENT_TIMESTAMP WHERE id=?").run(challenge.user_id);
+      this.database.prepare(`UPDATE email_auth_challenges SET status=?,recovery_hash=?,recovery_expires_at=? WHERE id=?`)
+        .run(input.purpose === "email_verify" ? "consumed" : "verified",input.purpose === "email_recovery" ? input.recoveryHash : null,
+          input.purpose === "email_recovery" ? input.recoveryExpiresAt : null,input.id);
+      return challenge.user_id;
+    })();
+  }
 
   async createUser(input: RegistrationInput): Promise<RegistrationResult> {
     return this.database.transaction(() => {
@@ -71,7 +102,7 @@ export class SqliteAuthAccountRepository implements AuthAccountRepository {
     catch (error) { console.warn("[Admin Audit Error]", error instanceof Error ? error.message : String(error)); }
   }
 
-  async getMe(userId: number) { return (this.database.prepare(`SELECT id,username,email,phone,phone_verified_at,avatar_url,bio,
+  async getMe(userId: number) { return (this.database.prepare(`SELECT id,username,email,phone,phone_verified_at,email_verified_at,avatar_url,bio,
     daily_calories_target,created_at,role,must_change_password,last_login_at,last_login_ip,password_hash IS NOT NULL AS hasPassword FROM users WHERE id=?`).get(userId) as Row | undefined) || null; }
 
   async getCredentials(userId: number) { return (this.database.prepare("SELECT username,role,password_hash FROM users WHERE id=?")
@@ -93,7 +124,7 @@ export class SqliteAuthAccountRepository implements AuthAccountRepository {
         .run(input.username,input.avatar_url,input.bio,input.daily_calories_target,userId); }
       catch (error) { if (String(error).includes("users.username")) return { status: "username_exists" as const }; throw error; }
       if (typeof input.daily_calories_target === "number") syncLegacyCaloriesSqlite(this.database,userId,input.daily_calories_target);
-      const user = this.database.prepare("SELECT id,username,email,phone,phone_verified_at,avatar_url,bio,daily_calories_target,role,password_hash IS NOT NULL AS hasPassword FROM users WHERE id=?").get(userId) as Row;
+      const user = this.database.prepare("SELECT id,username,email,phone,phone_verified_at,email_verified_at,avatar_url,bio,daily_calories_target,role,password_hash IS NOT NULL AS hasPassword FROM users WHERE id=?").get(userId) as Row;
       return { status: "updated" as const, user };
     })();
   }

@@ -4,11 +4,13 @@ import { Text, TextInput, TouchableOpacity } from "react-native";
 import * as Clipboard from "expo-clipboard";
 const mockSend = jest.fn();
 const mockVerify = jest.fn();
+const mockEmailSend = jest.fn();
+const mockEmailVerify = jest.fn();
 const mockReset = jest.fn();
 const mockReplace = jest.fn();
 jest.mock("@/components/Screen", () => ({ Screen: ({ children }: { children: React.ReactNode }) => children }));
 jest.mock("@/hooks/useSafeRouter", () => ({ useSafeRouter: () => ({ replace: mockReplace, back: jest.fn(), canGoBack: () => false }) }));
-jest.mock("@/services/api", () => ({ authApi: { sendPasswordRecovery: (...args: unknown[]) => mockSend(...args), verifyPasswordRecovery: (...args: unknown[]) => mockVerify(...args), resetPassword: (...args: unknown[]) => mockReset(...args) } }));
+jest.mock("@/services/api", () => ({ authApi: { sendEmailRecovery: (...args: unknown[]) => mockEmailSend(...args), verifyEmailRecovery: (...args: unknown[]) => mockEmailVerify(...args), sendPasswordRecovery: (...args: unknown[]) => mockSend(...args), verifyPasswordRecovery: (...args: unknown[]) => mockVerify(...args), resetPassword: (...args: unknown[]) => mockReset(...args) } }));
 import ForgotPasswordScreen from "./index";
 beforeEach(() => { jest.clearAllMocks(); });
 function press(tree: renderer.ReactTestRenderer, title: string) {
@@ -50,7 +52,7 @@ test("recovery verifies the phone, validates confirmation and clears secrets aft
   act(() => tree.unmount());
 });
 
-test("supplier failure stays retryable and unsupported email has a concrete manual path", async () => {
+test("supplier failure stays retryable and email requires the explicit recovery channel", async () => {
   let tree!: renderer.ReactTestRenderer;
   await act(async () => { tree = renderer.create(<ForgotPasswordScreen />); });
   expect(JSON.stringify(tree.toJSON())).toContain("联系向你提供安装包或邀请的管理员");
@@ -65,7 +67,7 @@ test("supplier failure stays retryable and unsupported email has a concrete manu
   act(() => input(tree, "绑定手机号", "email@example.com"));
   await act(async () => { press(tree, "获取恢复验证码"); });
   expect(mockSend).not.toHaveBeenCalled();
-  expect(JSON.stringify(tree.toJSON())).toContain("当前暂不支持邮箱自助找回");
+  expect(JSON.stringify(tree.toJSON())).toContain("请选择邮箱找回");
   act(() => input(tree, "绑定手机号", "13800138000"));
   mockSend.mockRejectedValueOnce(new Error("短信发送失败，请稍后重试"));
   await act(async () => { press(tree, "获取恢复验证码"); });
@@ -107,4 +109,25 @@ test("recovery deadline survives rerenders and phone changes, blocking duplicate
   expect(JSON.stringify(tree.toJSON())).toContain("20 秒后重发");
   act(() => tree.unmount());
   jest.useRealTimers();
+});
+
+
+test("verified email recovery uses a separate channel through reset", async () => {
+  mockEmailSend.mockResolvedValue({ challengeId: "email-challenge", resendAfter: 60 });
+  mockEmailVerify.mockResolvedValue({ recoveryToken: "email-proof", expiresIn: 300 });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<ForgotPasswordScreen />); });
+  act(() => { press(tree, "邮箱找回"); });
+  act(() => input(tree, "已验证邮箱", " User@Example.com "));
+  await act(async () => { press(tree, "获取恢复验证码"); });
+  expect(mockEmailSend).toHaveBeenCalledWith("user@example.com");
+  expect(mockSend).not.toHaveBeenCalled();
+  act(() => input(tree, "恢复验证码", "123456"));
+  await act(async () => { press(tree, "验证身份"); });
+  expect(mockEmailVerify).toHaveBeenCalledWith("email-challenge", "123456");
+  act(() => { input(tree, "新密码", "NewPass123"); input(tree, "确认新密码", "NewPass123"); });
+  await act(async () => { press(tree, "重设密码"); });
+  expect(mockReset).toHaveBeenCalledWith("email-proof", "NewPass123", "email");
+  expect(JSON.stringify(tree.toJSON())).not.toContain("email-proof");
+  act(() => tree.unmount());
 });

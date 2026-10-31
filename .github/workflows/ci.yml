@@ -67,6 +67,10 @@ jobs:
           pnpm --dir server exec tsx test/phoneBindingPostgres.integration.ts
         env:
           PHONE_BINDING_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration
+      - name: Verify email recovery on SQLite and isolated PostgreSQL databases
+        run: pnpm --dir server exec tsx --test test/emailRecovery.test.ts
+        env:
+          EMAIL_RECOVERY_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration
       - run: pnpm --dir server exec tsx --test test/cookingQueuePostgres.test.ts
         env:
           QUEUE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration

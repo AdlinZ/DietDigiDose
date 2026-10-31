@@ -21,6 +21,7 @@ interface User {
   bio: string | null;
   daily_calories_target?: number | null;
   phone_verified_at?: string | null;
+  email_verified_at?: string | null;
   hasPassword?: boolean;
   role?: string;
 }

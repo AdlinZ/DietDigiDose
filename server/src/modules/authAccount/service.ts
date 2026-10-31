@@ -102,18 +102,19 @@ export class AuthAccountService {
     return { success: true, message: "密码修改成功" };
   }
 
-  async recoverPassword(recoveryToken: string, newPassword: string) {
+  async recoverPassword(recoveryToken: string, newPassword: string, channel: "sms" | "email" = "sms") {
     if (typeof newPassword !== "string" || !accountPasswordSchema.safeParse(newPassword).success) throw new AuthAccountError(400, ACCOUNT_PASSWORD_REQUIREMENTS, "INVALID_PASSWORD");
-    if (!passwordRecoveryTokenSchema.safeParse(recoveryToken).success) throw new AuthAccountError(403, "恢复凭据已失效，请重新验证手机号", "PASSWORD_RECOVERY_INVALID");
+    if (!passwordRecoveryTokenSchema.safeParse(recoveryToken).success) throw new AuthAccountError(403, "恢复凭据已失效，请重新验证恢复方式", "PASSWORD_RECOVERY_INVALID");
     const tokenHash = hashPasswordRecoveryToken(recoveryToken);
     // The ID only locates the proof; changePassword atomically verifies its full hash and account binding.
     const userId = Number(recoveryToken.split(".")[0]);
     try {
-      if (!await this.repository.changePassword(userId, await bcrypt.hash(newPassword, 12), { tokenHash })) {
-        throw new AuthAccountError(403, "恢复凭据已失效，请重新验证手机号", "PASSWORD_RECOVERY_INVALID");
+      const proof = channel === "email" ? { emailTokenHash: hashPasswordRecoveryToken(`email:${recoveryToken.split(".")[1]}`) } : { tokenHash };
+      if (!await this.repository.changePassword(userId, await bcrypt.hash(newPassword, 12), proof)) {
+        throw new AuthAccountError(403, "恢复凭据已失效，请重新验证恢复方式", "PASSWORD_RECOVERY_INVALID");
       }
     } catch (error) {
-      if (error instanceof AuthAccountError) throw new AuthAccountError(403, "恢复凭据已失效，请重新验证手机号", "PASSWORD_RECOVERY_INVALID");
+      if (error instanceof AuthAccountError) throw new AuthAccountError(403, "恢复凭据已失效，请重新验证恢复方式", "PASSWORD_RECOVERY_INVALID");
       throw error;
     }
     return { success: true, message: "密码已重设，请使用新密码重新登录" };

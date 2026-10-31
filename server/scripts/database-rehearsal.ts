@@ -294,11 +294,18 @@ async function verifyRecoveredJourney(baseUrl: string, label: string, journey: A
 export function rollbackPreviousCandidateFixture(legacyDatabase: Database.Database, previousVersion: number) {
   const newerVersions = legacyDatabase.prepare("SELECT version FROM schema_migrations WHERE version > ? ORDER BY version DESC")
     .all(previousVersion) as Array<{ version: number }>;
-  const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 31 }, (_, index) => 59 + index).includes(migration.version));
+  const unsupportedVersions = newerVersions.filter((migration) => !Array.from({ length: 32 }, (_, index) => 59 + index).includes(migration.version));
   if (unsupportedVersions.length) {
     throw new Error(`database rehearsal needs rollback fixtures for migrations: ${unsupportedVersions.map((item) => item.version).join(", ")}`);
   }
+  legacyDatabase.transaction(() => {
   for (const migration of newerVersions) {
+    if (migration.version === 90) {
+      const challenges = legacyDatabase.prepare("SELECT COUNT(*) n FROM email_auth_challenges").get() as { n: number };
+      const verified = legacyDatabase.prepare("SELECT COUNT(*) n FROM users WHERE email_verified_at IS NOT NULL").get() as { n: number };
+      if (challenges.n || verified.n) throw new Error("Cannot downgrade fixture containing email verification evidence");
+      legacyDatabase.exec("DROP TABLE email_auth_challenges; ALTER TABLE users DROP COLUMN email_verified_at");
+    }
     if (migration.version === 89) {
       // Only discard the empty bookmark table in our synthetic drill fixture.
       const bookmarks = legacyDatabase.prepare("SELECT COUNT(*) n FROM community_post_bookmarks").get() as { n: number };
@@ -422,6 +429,7 @@ export function rollbackPreviousCandidateFixture(legacyDatabase: Database.Databa
     if (migration.version === 59) legacyDatabase.exec("DROP TABLE IF EXISTS worker_task_runs; DROP TABLE IF EXISTS worker_task_leases;");
     legacyDatabase.prepare("DELETE FROM schema_migrations WHERE version = ?").run(migration.version);
   }
+  })();
 }
 
 async function main() {

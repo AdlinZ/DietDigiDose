@@ -1,3 +1,4 @@
+import type { EmailChallenge, EmailUser, EmailVerificationRepository } from "./emailVerification.js";
 import { createHmac } from "node:crypto";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import { JWT_SECRET } from "../../config/security.js";
@@ -19,9 +20,41 @@ function rows(result: { rows: QueryResultRow[] }) { return result.rows as Row[];
 function stringifyJson(data: Row[], keys: string[]) { return data.map((row) => { const copy = { ...row };
   for (const key of keys) if (copy[key] != null && typeof copy[key] !== "string") copy[key] = JSON.stringify(copy[key]); return copy; }); }
 
-export class PostgresAuthAccountRepository implements AuthAccountRepository {
+export class PostgresAuthAccountRepository implements AuthAccountRepository, EmailVerificationRepository {
   private readonly pool: Pool;
   constructor(pool: Pool) { this.pool = pool; }
+
+  async emailUser(selector: { id: number } | { email: string }) {
+    return ((await this.pool.query(`SELECT id,email,email_verified_at,password_hash,session_version,is_disabled FROM users
+      WHERE ${"id" in selector ? "id=$1" : "email=$1"}`, ["id" in selector ? selector.id : selector.email])).rows[0] as EmailUser | undefined) ?? null;
+  }
+  async createEmailChallenge(input: EmailChallenge) {
+    await this.pool.query(`INSERT INTO email_auth_challenges(id,user_id,email,purpose,session_version,code_hash,expires_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7)`,[input.id,input.userId,input.email,input.purpose,input.sessionVersion,input.codeHash,input.expiresAt]);
+  }
+  async finishEmailDelivery(id: string, sent: boolean) {
+    await this.pool.query("UPDATE email_auth_challenges SET status=$1 WHERE id=$2 AND status='pending'",[sent ? "sent" : "failed",id]);
+  }
+  async verifyEmailChallenge(input: Parameters<EmailVerificationRepository["verifyEmailChallenge"]>[0]) {
+    return this.tx(async client => {
+      // Match password-reset lock order: account first, then challenge.
+      const candidate = (await client.query("SELECT user_id FROM email_auth_challenges WHERE id=$1",[input.id])).rows[0];
+      if (candidate?.user_id) await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[candidate.user_id]);
+      const challenge = (await client.query(`UPDATE email_auth_challenges SET attempts=attempts+1
+        WHERE id=$1 AND purpose=$2 AND status='sent' AND attempts<5 AND expires_at>CURRENT_TIMESTAMP
+        AND ($3::integer IS NULL OR user_id=$3) RETURNING *`,[input.id,input.purpose,input.userId ?? null])).rows[0];
+      if (!challenge || challenge.code_hash !== input.codeHash || challenge.user_id === null) return null;
+      const user = await client.query(`SELECT id FROM users WHERE id=$1 AND email=$2 AND session_version=$3 AND NOT COALESCE(is_disabled,FALSE)
+        ${input.purpose === "email_recovery" ? "AND email_verified_at IS NOT NULL" : "AND password_hash IS NOT NULL"}`,
+        [challenge.user_id,challenge.email,challenge.session_version]);
+      if (!user.rowCount) return null;
+      if (input.purpose === "email_verify") await client.query("UPDATE users SET email_verified_at=CURRENT_TIMESTAMP WHERE id=$1",[challenge.user_id]);
+      await client.query("UPDATE email_auth_challenges SET status=$1,recovery_hash=$2,recovery_expires_at=$3 WHERE id=$4",
+        [input.purpose === "email_verify" ? "consumed" : "verified",input.purpose === "email_recovery" ? input.recoveryHash : null,
+          input.purpose === "email_recovery" ? input.recoveryExpiresAt : null,input.id]);
+      return Number(challenge.user_id);
+    });
+  }
 
   async createUser(input: RegistrationInput): Promise<RegistrationResult> {
     return this.tx(async (client) => {
@@ -71,7 +104,7 @@ export class PostgresAuthAccountRepository implements AuthAccountRepository {
     catch (error) { console.warn("[Admin Audit Error]",error instanceof Error ? error.message : String(error)); }
   }
 
-  async getMe(userId: number) { return ((await this.pool.query(`SELECT id,username,email,phone,phone_verified_at,avatar_url,bio,
+  async getMe(userId: number) { return ((await this.pool.query(`SELECT id,username,email,phone,phone_verified_at,email_verified_at,avatar_url,bio,
     daily_calories_target,created_at,role,must_change_password,last_login_at,last_login_ip,password_hash IS NOT NULL AS "hasPassword" FROM users WHERE id=$1`,[userId])).rows[0] as Row | undefined) || null; }
   async getCredentials(userId: number) {
     const result = await this.pool.query("SELECT username,role,password_hash FROM users WHERE id=$1",[userId]);
@@ -88,7 +121,7 @@ export class PostgresAuthAccountRepository implements AuthAccountRepository {
       if ((await client.query("SELECT 1 FROM users WHERE LOWER(username)=LOWER($1) AND id<>$2",[input.username,userId])).rowCount) return { status: "username_exists" }; }
     try { const result = await client.query(`UPDATE users SET username=COALESCE($1,username),avatar_url=COALESCE($2,avatar_url),
       bio=COALESCE($3,bio),daily_calories_target=COALESCE($4,daily_calories_target) WHERE id=$5
-      RETURNING id,username,email,phone,phone_verified_at,avatar_url,bio,daily_calories_target,role,password_hash IS NOT NULL AS "hasPassword"`,
+      RETURNING id,username,email,phone,phone_verified_at,email_verified_at,avatar_url,bio,daily_calories_target,role,password_hash IS NOT NULL AS "hasPassword"`,
     [input.username,input.avatar_url,input.bio,input.daily_calories_target,userId]);
       if (typeof input.daily_calories_target === "number") {
         await syncLegacyCaloriesPostgres(client,userId,input.daily_calories_target);

@@ -104,6 +104,7 @@ import * as Crypto from "expo-crypto";
 import * as Speech from "expo-speech";
 
 import {
+  enqueueVoiceOutput,
   getVoicePackState,
   prefetchVoiceText,
   purgeVoiceAudioCache,
@@ -135,6 +136,16 @@ describe("voice audio cache account lifecycle", () => {
     mockFiles.clear();
     mockWriteHook = null;
     jest.clearAllMocks();
+  });
+
+  it("does not let a cancelled stream suppress the immediately replacing speech", async () => {
+    mockStorage.set(voicePreferenceStorageKey(101), JSON.stringify({ preference: "system-only", version: 1 }));
+    const stale = enqueueVoiceOutput(jest.fn(), "已取消的分段", { streamId: "old-stream", userId: 101 });
+    const current = speakWithVoiceFallback(jest.fn(), "现在播报", { userId: 101 });
+    await expect(stale).resolves.toBeNull();
+    await current;
+    expect(Speech.speak).toHaveBeenCalledTimes(1);
+    expect(Speech.speak).toHaveBeenCalledWith("现在播报", expect.any(Object));
   });
 
   it("keeps capture blocked when an old synthesis finishes after replacement", async () => {

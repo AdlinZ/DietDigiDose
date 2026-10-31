@@ -10,12 +10,43 @@ import unittest
 from source_coverage import ARCHIVE, EVIDENCE, TFDA_EVIDENCE, audit, read_package, review_inventory, with_supplement, ingredient_corrections
 
 
+from review_worklist import classify, markdown
+
+
 class SourceCoverageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.data = read_package(ARCHIVE)
         cls.evidence = json.loads(EVIDENCE.read_text(encoding='utf8'))
         cls.tfda_evidence = json.loads(TFDA_EVIDENCE.read_text(encoding='utf8'))
+
+    def test_complete_worklist_preserves_every_gap_and_pending_line(self):
+        expanded = with_supplement(self.data, ARCHIVE.with_name('concept-enrichment-2026-10-03.1.zip'))
+        inventory = review_inventory(expanded, self.evidence, self.tfda_evidence)
+        original = copy.deepcopy(inventory)
+        report = classify(inventory)
+        self.assertEqual(len(report['records']), 3874)
+        self.assertEqual(report['line_counts'], {'identity': 31, 'measurement': 67})
+        self.assertEqual(report['gap_counts'], inventory['gap_counts'])
+        expected = {(r['kind'], r['id'], g) for r in inventory['records'] for g in r['missing_or_unverified']}
+        actual = {(r['kind'], r['id'], t['gap']) for r in report['records'] for t in r['tasks']}
+        self.assertEqual(actual, expected)
+        self.assertFalse(report['semantic_approval'])
+        self.assertTrue(all(t['human_review_required'] and t['status'] == 'pending_review' for r in report['records'] for t in r['tasks']))
+        self.assertTrue(all(not r['automatic_execution_allowed'] for r in report['records'] + report['line_tasks']))
+        for line in report['line_tasks']:
+            self.assertIn(line['line_id'], markdown(report))
+        self.assertEqual(inventory, original)
+        self.assertEqual(report, classify(inventory))
+        self.assertEqual(markdown(report), (ARCHIVE.parents[1].parent / 'docs/w44-data-review-worklist.md').read_text())
+        bad = copy.deepcopy(inventory)
+        bad['records'][0]['missing_or_unverified'].append('future_unknown_gap')
+        with self.assertRaisesRegex(ValueError, 'Unclassified gap'):
+            classify(bad)
+        bad = copy.deepcopy(inventory)
+        bad['gap_counts']['servings'] += 1
+        with self.assertRaisesRegex(ValueError, 'summary'):
+            classify(bad)
 
     def test_shipped_evidence_and_report_are_reproducible(self):
         self.assertEqual(hashlib.sha256(EVIDENCE.read_bytes()).hexdigest(),

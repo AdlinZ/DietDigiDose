@@ -22,6 +22,28 @@ class ParserTests(unittest.TestCase):
         self.parser = r.Parser(ingredients, [dict(id='pan',name='平底锅',aliases=[])],
             dict(headings=['调料'], prepared_terms={}, bundles={'葱姜蒜':['葱','姜','蒜']}), dict(prepared_terms={}))
 
+    def test_explicit_counts_with_repeated_ingredient_names(self):
+        for source, value, unit, note in [('两根中等大小的芹菜', 2, '根', '中等大小的芹菜'),
+                                          ('一根大葱', 1, '根', '大葱'), ('7 瓣大蒜', 7, '瓣', '大蒜')]:
+            parsed = r.amount(source)
+            self.assertEqual((parsed['kind'], parsed['value'], parsed['unit']), ('exact', value, unit))
+            self.assertEqual(parsed['source_notes'], [note])
+            self.assertEqual(parsed['dimension'], 'source_unit')
+        for source in ['2根中等大小的芹菜或大葱', '一根大葱以上', '7瓣大蒜按口味加减',
+                       '7g大蒜', '2瓣大葱', '2根中等大小的芹菜共100g']:
+            self.assertEqual(r.amount(source)['kind'], 'unparsed', source)
+
+    def test_ice_identity_retains_unknown_amount_and_optional_source(self):
+        rules = json.loads((Path(r.__file__).parent / 'round1-rules.json').read_text())
+        parser = r.Parser([dict(id='ice', name='冰块', aliases=[])], [], rules, dict(prepared_terms={}))
+        for source in ['冰几块（可选）', '大冰块差不多就行']:
+            item = parser.single(source)
+            self.assertEqual(item['ingredient_id'], 'ice')
+            self.assertIsNone(item['quantity'])
+            self.assertEqual(item['measurement']['kind'], 'missing')
+            self.assertEqual(item['optional'], '可选' in source)
+            self.assertIn('数量不明确', item['preparation'])
+
     def test_length_is_not_a_mass_or_scalar_recipe_quantity(self):
         for source, value in [('10cm', 10), ('3 厘米长,拍散备用', 3)]:
             parsed = r.amount(source)

@@ -8,6 +8,15 @@ test("does not infer missing personal data or negate a denial", () => {
   expect(summarizeMealPreferences("不是两个人").preferences).toEqual({});
 });
 
+test("does not extract a valid suffix from unsupported numeric preferences", () => {
+  for (const text of ["120人", "1.5人", "1200分钟", "1.5分钟", "-2人", "-20分钟", "十二人", "二十人", "一百零二个人", "一点五人", "负二人"]) {
+    expect(summarizeMealPreferences(text).preferences).toEqual({});
+  }
+  expect(summarizeMealPreferences("我们20人，120分钟").preferences).toEqual({
+    servings: 20, meal_time_minutes: 120,
+  });
+});
+
 test("summarizes explicit regular meals, location and storage conditions", () => {
   const summary = summarizeMealPreferences("以后通常吃午餐和晚餐，在公司吃，需要带饭，有冰箱，可以加热");
   expect(summary.preferences).toEqual({ usual_meals: ["lunch", "dinner"], eating_location: "work", carry_meals: true, refrigeration_available: true, reheating_available: true });

@@ -9,7 +9,7 @@ import { errorHandler, notFoundHandler, sendError } from "./utils/http.js";
 import { requestContext, routerContext } from "./middleware/requestContext.js";
 import { errorEnvelope } from "./middleware/errorEnvelope.js";
 import { requestLogger } from "./middleware/requestLogger.js";
-import { SERVER_BUILD_TIME, SERVER_VERSION } from "./version.js";
+import { SERVER_BUILD_TIME, SERVER_GIT_SHA, SERVER_VERSION } from "./version.js";
 import { recoverAgentRuntime } from "./services/agent/runtime.js";
 import { assertNoPublicServerSecrets, getProviderProfile } from "./providers/profiles.js";
 import { createSiteSettingsRouter } from "./routes/site-settings.js";
@@ -85,6 +85,7 @@ export async function createApp() {
   app.get("/api/v1/version", (req, res) => res.status(200).json({
     serverVersion: SERVER_VERSION,
     serverBuildTime: SERVER_BUILD_TIME,
+    serverGitSha: SERVER_GIT_SHA,
     clientVersion: req.get("x-client-version") || null,
     clientBuildTime: req.get("x-client-build-time") || null,
   }));

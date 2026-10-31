@@ -24,6 +24,7 @@ import type { Express } from "express";
 
 const testDirectory = mkdtempSync(path.join(tmpdir(), "dietdigidose-api-"));
 process.env.NODE_ENV = "test";
+process.env.SERVER_GIT_SHA = "0123456789abcdef0123456789abcdef01234567";
 process.env.DATABASE_DRIVER = "sqlite";
 process.env.DATABASE_URL = "";
 process.env.DATABASE_PATH = path.join(testDirectory, "integration.db");
@@ -933,6 +934,7 @@ describe("API security baseline", () => {
     assert.equal(response.status, 200);
     assert.equal((body as JsonObject).serverVersion, SERVER_VERSION);
     assert.ok((body as JsonObject).serverBuildTime);
+    assert.equal((body as JsonObject).serverGitSha, "0123456789abcdef0123456789abcdef01234567");
     assert.equal((body as JsonObject).clientVersion, "1.0.3");
     assert.equal((body as JsonObject).clientBuildTime, "2026-08-05T08:00:00.000Z");
   });

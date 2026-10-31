@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 const baseUrl = String(process.env.STAGING_BASE_URL || "").replace(/\/$/, "");
 if (!baseUrl) throw new Error("STAGING_BASE_URL is required");
 const target = new URL(baseUrl);
+const expectedServerGitSha = process.env.EXPECTED_SERVER_GIT_SHA?.trim() || null;
+if (expectedServerGitSha && !/^[a-f0-9]{40}$/.test(expectedServerGitSha)) {
+  throw new Error("EXPECTED_SERVER_GIT_SHA must be a full lowercase 40-character commit SHA");
+}
+const startedAt = new Date().toISOString();
+let serverVersion = null;
 const localDrill = process.env.ALLOW_HTTP === "1" && target.protocol === "http:" && ["localhost","127.0.0.1","[::1]"].includes(target.hostname);
 if (target.protocol !== "https:" && !localDrill) {
   throw new Error("STAGING_BASE_URL must use HTTPS (ALLOW_HTTP=1 permits loopback drills only)");
@@ -35,7 +41,16 @@ function checked(name, result) {
 
 try {
   checked("health", await request("/api/v1/health"));
-  checked("version", await request("/api/v1/version", { headers: { "x-client-version": "staging-smoke" } }));
+  const version = checked("version", await request("/api/v1/version", { headers: { "x-client-version": "staging-smoke" } }));
+  serverVersion = {
+    serverVersion: version?.serverVersion ?? null,
+    serverBuildTime: version?.serverBuildTime ?? null,
+    serverGitSha: version?.serverGitSha ?? null,
+  };
+  // Fail before creating an account when this deployment is not the requested candidate.
+  if (expectedServerGitSha && serverVersion.serverGitSha !== expectedServerGitSha) {
+    throw new Error("Server commit does not match EXPECTED_SERVER_GIT_SHA (missing identity also fails)");
+  }
 
   const registered = checked("register", await request("/api/v1/auth/register", {
     method: "POST",
@@ -99,7 +114,7 @@ try {
   token = "";
   cleanupToken = "";
 
-  console.log(JSON.stringify({ success: true, baseUrl, checks }, null, 2));
+  console.log(JSON.stringify({ success: true, baseUrl, startedAt, serverVersion, expectedServerGitSha, checks }, null, 2));
 } catch (error) {
   let cleanup = { attempted: false,success: false };
   if (token || cleanupToken) {
@@ -114,7 +129,7 @@ try {
   }
   const message = error instanceof Error ? error.message : String(error);
   // stdout is the machine-readable report; stderr remains diagnostic-only.
-  console.log(JSON.stringify({ success: false, baseUrl, checks,cleanup, error: message }, null, 2));
+  console.log(JSON.stringify({ success: false, baseUrl, startedAt, serverVersion, expectedServerGitSha, checks,cleanup, error: message }, null, 2));
   console.error(`Staging smoke failed: ${message}`);
   if (cleanup.error) console.error(`Staging smoke cleanup failed: ${cleanup.error}`);
   process.exitCode = 1;

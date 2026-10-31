@@ -1,5 +1,20 @@
 # 26w37 P0 候选验收记录
 
+## 候选身份检查（2026-10-31 补充）
+
+当前进度见 [W44 记录](milestone-26w44-progress.md)。下方 9 月环境状态为历史快照。
+
+从干净的候选 checkout 构建 staging 时，设置 `CANDIDATE_GIT_SHA` 为该 checkout 的完整提交 SHA；`deploy/docker-compose.staging.yml` 会将它作为 `SERVER_GIT_SHA` 构建参数传入全部服务端镜像。直接构建可用 `SERVER_GIT_SHA=<完整SHA> pnpm --dir server build`，直接 Docker 构建可用 `--build-arg SERVER_GIT_SHA=<完整SHA>`。必须核对构建输入属于该提交，环境变量只是身份声明，不是内容证明；不要用旧 SHA 标记未提交修改。
+
+部署后使用同一 SHA 执行：
+
+```bash
+STAGING_BASE_URL=https://dietdigidose.top \
+EXPECTED_SERVER_GIT_SHA=<完整候选SHA> pnpm staging:smoke
+```
+
+烟测报告保存服务版本、构建时间、提交标识及开始时间。旧服务没有 `serverGitSha` 或返回其他 SHA 时，在注册测试账号之前失败；不要通过省略 `EXPECTED_SERVER_GIT_SHA` 把一般连通性测试当作同候选验收。构建标识固化在产物中，运行时再设置变量不会改变它。没有提供构建 SHA 时接口返回 null，不猜测当前工作区或服务所属提交。
+
 ## 当前状态（2026-09-13）
 
 本次目标为 #105、#106 实际 staging 验收，以及 #107 Android 验收；iOS 条件未齐备，#107 必须保持 open。

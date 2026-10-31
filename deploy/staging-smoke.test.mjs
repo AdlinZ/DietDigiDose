@@ -6,7 +6,7 @@ import { test } from "node:test";
 const script = fileURLToPath(new URL("./staging-smoke.mjs",import.meta.url));
 const warningMessage = "injected runtime warning must remain visible";
 const warningModule = `data:text/javascript,${encodeURIComponent(`process.emitWarning(${JSON.stringify(warningMessage)}, { code: "SMOKE_TEST_WARNING" });`)}`;
-const run = (baseUrl, injectWarning = false) => new Promise(resolve => execFile(process.execPath,[...(injectWarning ? ["--import",warningModule] : []),script],{ env: { ...process.env,STAGING_BASE_URL: baseUrl,ALLOW_HTTP: "1" },timeout: 10_000 },(error,stdout,stderr) => resolve({ error,stdout,stderr })));
+const run = (baseUrl, injectWarning = false, expectedSha = "") => new Promise(resolve => execFile(process.execPath,[...(injectWarning ? ["--import",warningModule] : []),script],{ env: { ...process.env,STAGING_BASE_URL: baseUrl,ALLOW_HTTP: "1",EXPECTED_SERVER_GIT_SHA: expectedSha },timeout: 10_000 },(error,stdout,stderr) => resolve({ error,stdout,stderr })));
 for (const injectWarning of [false,true]) for (const cleanupFails of [false,true]) test(`failed login retains a cleanup credential and reports cleanup ${cleanupFails ? "failure" : "success"}${injectWarning ? " with a runtime warning" : ""}`,async () => {
   let deletions = 0;
   const server = createServer((req,res) => {
@@ -41,4 +41,41 @@ test("HTTP bypass is restricted to loopback drills",async () => {
   const result = await run("http://example.invalid");
   assert.equal(result.error?.code,1); assert.match(result.stderr,/loopback drills only/);
   assert.equal(result.stdout,"");
+});
+
+for (const actualSha of [null, "b".repeat(40), "a".repeat(40)]) test(`candidate identity ${actualSha === null ? "missing" : actualSha[0]} is recorded and checked before writes`, async () => {
+  const expectedSha = "a".repeat(40);
+  const writes = [];
+  const server = createServer((req, res) => {
+    req.resume();
+    res.setHeader("content-type", "application/json");
+    if (req.method !== "GET") {
+      writes.push(req.url);
+      res.statusCode = 503;
+      res.end('{"error":"stop after identity check"}');
+    } else if (req.url === "/api/v1/version") {
+      res.end(JSON.stringify({ serverVersion: "1.0.6", serverBuildTime: "2026-10-31T00:00:00Z", serverGitSha: actualSha }));
+    } else res.end('{}');
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const result = await run(`http://127.0.0.1:${server.address().port}`, false, expectedSha);
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.error?.code, 1);
+    assert.equal(report.success, false);
+    assert.equal(report.serverVersion.serverGitSha, actualSha);
+    assert.equal(report.serverVersion.serverBuildTime, "2026-10-31T00:00:00Z");
+    assert.equal(report.expectedServerGitSha, expectedSha);
+    assert.ok(Number.isFinite(Date.parse(report.startedAt)));
+    assert.deepEqual(writes, actualSha === expectedSha ? ["/api/v1/auth/register"] : []);
+    assert.match(report.error, actualSha === expectedSha ? /stop after identity check/ : /Server commit does not match/);
+    assert.equal(report.cleanup.attempted, false);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+test("malformed expected commit is rejected before making requests", async () => {
+  const result = await run("http://127.0.0.1:1", false, "short-sha");
+  assert.equal(result.error?.code, 1);
+  assert.match(result.stderr, /EXPECTED_SERVER_GIT_SHA must be/);
+  assert.equal(result.stdout, "");
 });

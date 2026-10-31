@@ -21,6 +21,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
+      args:
+        SERVER_GIT_SHA: ${CANDIDATE_GIT_SHA:-}
     restart: "no"
     command: ["node", "dist/apply-postgres-schema.js"]
     environment:
@@ -34,6 +36,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
+      args:
+        SERVER_GIT_SHA: ${CANDIDATE_GIT_SHA:-}
     restart: unless-stopped
     env_file:
       - ${SERVER_ENV_FILE:-server.env}
@@ -69,6 +73,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
+      args:
+        SERVER_GIT_SHA: ${CANDIDATE_GIT_SHA:-}
     restart: unless-stopped
     command: ["node", "dist/worker.js"]
     env_file:
@@ -93,6 +99,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
+      args:
+        SERVER_GIT_SHA: ${CANDIDATE_GIT_SHA:-}
     restart: unless-stopped
     command: ["node", "dist/worker.js", "--task=intervention-scan"]
     env_file:
@@ -114,6 +122,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
+      args:
+        SERVER_GIT_SHA: ${CANDIDATE_GIT_SHA:-}
     restart: unless-stopped
     command: ["node", "dist/worker.js", "--task=intervention-delivery"]
     env_file:

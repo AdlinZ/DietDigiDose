@@ -69,7 +69,9 @@ NYC 消费者使用 `load()`，可兼容 YAML v4；开发工具 `depcheck` 仍�
 
 更新后冻结安装、11 项依赖安全/兼容测试和 `audit:prod` 通过；审计仍报告 **4 high（4 ignored）**，均为既有精确例外，不能称作零漏洞。回滚必须同时处理 overrides、锁文件和兼容测试；回到旧依赖会重新触发这 5 项生产审计告警，不应作为可发布候选。
 
-### node-forge 临时安全回补（2026-10-02）
+### node-forge 临时安全回补（2026-10-02，已于 10 月 31 日退出）
+
+2026-10-31 升级至上游 `node-forge@1.4.1`，移除旧本地补丁及 `CVE-2026-85393` 例外，保留原有 RSA/证书/CSR 回归。以下记录用于追溯旧版补丁。
 
 - `CVE-2026-85393` / [GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv)：RSA PKCS#1 v1.5 验签未拒绝嵌套 `DigestAlgorithm` 中的额外元素。2026-10-02 核对时 npm 最新版 `1.4.0` 仍受影响。
 - 实际依赖来自 Expo CLI 和 `@expo/code-signing-certificates`；后者在证书、CSR 和 manifest 签名验证中调用该解析器，不能仅按开发工具豁免。
@@ -85,3 +87,9 @@ NYC 消费者使用 `load()`，可兼容 YAML v4；开发工具 `depcheck` 仍�
 - 额外兼容检查使用官方 `3.0.3` 标签提交 `74b2db2938fad48a2ea54a9c8bf27a37a62c350d` 的全部 12 个测试文件、764 项测试，原版和修补版均通过。临时 runner 使用 Node 内置断言并禁止 shell 调用，没有给项目增加测试依赖；这些外部 fixtures 不替代仓库内的持续安全回归。
 - 审计只识别版本号，因此沿用现有机制，仅为该 CVE 添加精确临时例外；`audit:prod` 和 `test:all` 都先执行安全回归，补丁缺失或任何实际消费副本未修复都会失败。没有放宽其他告警或使用通配忽略。
 - 维护责任：仓库依赖维护者。最迟于 2026-10-19 复核上游状态（原定期限保留；本节尚未补充该期限后的复核结论，需另核对证据，不等于已证明存在新增漏洞）；上游发布修复后升级到兼容安全版本，删除补丁、`patchedDependencies` 条目及该 CVE 例外，保留回归测试并重新运行完整 CI。
+
+### W44 发布门禁依赖升级（2026-10-31）
+
+CI 生产审计阻断后，更新 `follow-redirects` 1.16.2、`node-forge` 1.4.1；现代 minimatch 9/10 消费者提升至 11.0.1，glob 13 消费者提升至 14.0.2；React Native 及 codegen 的两个同步 glob 消费者定向提升至 14.0.2，test-exclude 升级至 8.0.0。依据上游 [redirect 修复](https://github.com/advisories/GHSA-mrwp-f3q8-3g9p)、[minimatch 修复](https://github.com/advisories/GHSA-g3hv-75wg-m249)及 [glob 取消修复](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4)。
+
+React Native dev-middleware 的 `chromium-edge-launcher` 单独升级至 2.0.1，以移除旧 rimraf/glob/minimatch 3 的生产依赖链；未全局强制替换仍需要旧 API 的开发依赖。固定 Node 22.23.2 支持从 CommonJS 加载该 ESM 启动器；实际消费者加载回归由 Linux/Windows CI 验证，不启动浏览器。新增 `release-dependency-compatibility.test.mjs` 编入 `test:dependency-security`，覆盖真实消费者加载、原生 TypeScript spec 和 podspec 扫描、文件匹配/展开上限、取消后停止目录读取以及跨 realm 敏感头重定向清除；原有 NYC 测试验证 Babel instrumentation 排除规则，客户端 828 项覆盖率测试通过。没有新增审计例外；旧 braces/image-size 精确例外仍按原记录管理。

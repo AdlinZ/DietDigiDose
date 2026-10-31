@@ -80,6 +80,17 @@ export default function AppUpdates() {
     void loadData();
   }, []);
 
+  const copySha256 = async (value: string) => {
+    setMessage('');
+    setError('');
+    try {
+      await navigator.clipboard.writeText(value);
+      setMessage('SHA-256 已复制');
+    } catch {
+      setError(`无法自动复制，请手动复制 SHA-256：${value}`);
+    }
+  };
+
   const handleChannelChange = (nextChannel: AppUpdateChannel) => {
     setChannel(nextChannel);
     const target = CHANNELS.find((item) => item.id === nextChannel);
@@ -221,7 +232,7 @@ export default function AppUpdates() {
       {error && (
         <div className="flex items-center gap-2 rounded-2xl bg-red-50 p-4 text-sm font-medium text-red-800">
           <AlertTriangle size={16} className="text-red-600" />
-          <span>{error}</span>
+          <span className="min-w-0 break-all select-text" role="alert">{error}</span>
         </div>
       )}
 
@@ -322,7 +333,7 @@ export default function AppUpdates() {
                                 </span>
                                 <button
                                   type="button"
-                                  onClick={() => void navigator.clipboard.writeText(release.sha256)}
+                                  onClick={() => void copySha256(release.sha256)}
                                   className="text-primary hover:opacity-80"
                                   title="复制完整 SHA256"
                                 >

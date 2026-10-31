@@ -107,4 +107,36 @@ describe('AppUpdates page', () => {
       container.remove();
     }
   });
+
+  it.each(['rejected', 'unavailable'])('offers the complete checksum when clipboard is %s and can retry', async (failure) => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const writeText = vi.fn().mockRejectedValue(new Error('Permission denied'));
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: failure === 'unavailable' ? undefined : { writeText } });
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const sha = '1460059844b4960ae95312bc9e39a419db089b3056bf4be7d267359f969b38a4';
+    try {
+      await act(async () => root.render(<AppUpdates />));
+      const copy = container.querySelector<HTMLButtonElement>('button[title="复制完整 SHA256"]')!;
+      await act(async () => copy.click());
+      expect(container.querySelector('[role="alert"]')?.textContent).toBe(`无法自动复制，请手动复制 SHA-256：${sha}`);
+      expect(container.textContent).not.toContain('SHA-256 已复制');
+      let complete!: () => void;
+      writeText.mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; }));
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+      await act(async () => copy.click());
+      expect(container.textContent).not.toContain('SHA-256 已复制');
+      expect(writeText).toHaveBeenLastCalledWith(sha);
+      await act(async () => complete());
+      expect(container.textContent).toContain('SHA-256 已复制');
+      expect(container.textContent).not.toContain('无法自动复制');
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
 });

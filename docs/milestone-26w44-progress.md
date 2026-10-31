@@ -4,6 +4,13 @@
 
 [W44 里程碑](https://github.com/AdlinZ/DietDigiDose/milestone/14) 承接 W43 的 **19 项未完成 Issue，含 3 项 P0（#105/#106/#107）**。原优先级、标签及验收标准保留；Backlog 项不自动纳入。W43 按周归档，已有实现、真机验证与部署证据保留在 [W43 历史记录](milestone-26w43-progress.md)。
 
+## 2026-10-31 PR #287 合并后续
+
+- PR [#287](https://github.com/AdlinZ/DietDigiDose/pull/287) 完整差异及审核线程复核无阻断项；最新 head 的四项 CI 全部通过，按预期 SHA 合并为 `580dadadaefc5c09739b2d5ba99e357766cae795`。
+- #190/#194 待吃餐多餐选择与冲突保护的客户端/服务端逻辑核对未确认新增缺陷；保留现有规则，不把代码核对替代真实跨日验收。
+- #219 发布工具继续补齐：复制完整 APK SHA-256 遇到浏览器剪贴板缺失或权限拒绝时，捕获失败并展示可手动复制的完整校验值；仅在异步写入成功后提示已复制，允许重试。
+- 管理端全量 142 项测试、静态检查及构建通过；新增回归覆盖剪贴板不可用、拒绝、等待写入和失败后重试。没有部署、发布新 APK 或关闭外部验收事项。
+
 ## 2026-10-31 PR #286 合并后续
 
 - PR [#286](https://github.com/AdlinZ/DietDigiDose/pull/286) 已完成代码复核，最新提交的 verify、stability、windows-compatibility、ai-resource-integration 均通过；按预期 head SHA 合并至 main，合并提交 `95484a1543108d7276a9bb75aaa2a042b0d9529f`。

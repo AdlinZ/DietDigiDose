@@ -16,6 +16,11 @@ test("summarizes explicit regular meals, location and storage conditions", () =>
 test("does not turn unavailable storage or reheating into an available facility", () => {
   expect(summarizeMealPreferences("不需要带饭，不能冷藏，没有微波炉").preferences).toEqual({ carry_meals: false, refrigeration_available: false, reheating_available: false });
 });
+test("explicit cannot and will-not phrases do not match their positive substrings", () => {
+  expect(summarizeMealPreferences("不可以吃辣，不会带饭，不可以冷藏，不可以加热").preferences).toEqual({
+    avoid_spicy: true, carry_meals: false, refrigeration_available: false, reheating_available: false,
+  });
+});
 test("leaves questions, examples, unknowns and negated corrections for manual review", () => {
   for (const text of ["不知道能不能冷藏", "能不能加热", "需要带饭？", "有冰箱?", "不确定有没有微波炉", "如果有冰箱", "可以加热吗", "没说需要带饭", "不是20分钟", "比如两个人", "“有冰箱”", "不在公司吃"]) {
     expect(summarizeMealPreferences(text).preferences).toEqual({});

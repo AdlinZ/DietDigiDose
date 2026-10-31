@@ -8,14 +8,14 @@ export function summarizeMealPreferences(text: string): { preferences: KitchenPr
   // Questions, quoted examples and corrections need manual review rather than a guessed setting.
   text = (text.replace(/[“「『"][^”」』"]*[”」』"]/g, "").match(/[^，,。；;！？!?\n]+[，,。；;！？!?\n]?/g) ?? [])
     .filter(clause => !/[？?吗么]|如果|假如|比如|例如|不是|没说|没有说|不确定|不知道|是否|能否|能不能|可不可以|有没有|要不要/.test(clause)).join("，");
-  const people = text.match(/(?:我们|共|给)?\s*(\d{1,2}|[一二两三四五六七八九十])\s*个?人/);
+  const people = text.match(/(?:我们|共|给)?\s*(-?\d+(?:\.\d+)?|[负零〇一二两三四五六七八九十百千万亿点]+)\s*个?人/);
   if (people && !/(?:不是|不要|别|不按).{0,4}[\d一二两三四五六七八九十].{0,2}人/.test(text)) {
     const value = numbers[people[1]] ?? Number(people[1]);
-    if (value >= 1 && value <= 30) { preferences.servings = value; labels.push(`${value} 人用餐`); }
+    if (Number.isInteger(value) && value >= 1 && value <= 30) { preferences.servings = value; labels.push(`${value} 人用餐`); }
   }
-  const duration = text.match(/(\d{1,3})\s*分钟/);
+  const duration = text.match(/(-?\d+(?:\.\d+)?)\s*分钟/);
   const minutes = duration ? Number(duration[1]) : text.includes("半小时") ? 30 : null;
-  if (minutes !== null && minutes >= 5 && minutes <= 300) { preferences.meal_time_minutes = minutes; labels.push(`做饭时间 ${minutes} 分钟`); }
+  if (minutes !== null && Number.isInteger(minutes) && minutes >= 5 && minutes <= 300) { preferences.meal_time_minutes = minutes; labels.push(`做饭时间 ${minutes} 分钟`); }
   if (/不吃辣|不要辣|不能吃辣|不可以吃辣/.test(text) && !/(?:不是|没有说|没说).{0,4}(?:不吃辣|不要辣|不能吃辣|不可以吃辣)/.test(text)) {
     preferences.avoid_spicy = true; labels.push("不吃辣");
   }

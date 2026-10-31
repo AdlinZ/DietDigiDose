@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from source_coverage import ARCHIVE, EVIDENCE, TFDA_EVIDENCE, audit, read_package, review_inventory, with_supplement
+from source_coverage import ARCHIVE, EVIDENCE, TFDA_EVIDENCE, audit, read_package, review_inventory, with_supplement, ingredient_corrections
 
 
 class SourceCoverageTests(unittest.TestCase):
@@ -176,7 +176,7 @@ class SourceCoverageTests(unittest.TestCase):
     def test_source_serving_corrections_are_scoped_and_leave_frozen_records_unchanged(self):
         original = copy.deepcopy(self.data)
         inventory = review_inventory(self.data, self.evidence, self.tfda_evidence)
-        corrected = {r['name']: r for r in inventory['records'] if r['confirmed_source_fields']}
+        corrected = {r['name']: r for r in inventory['records'] if 'servings' in r['confirmed_source_fields']}
         expected = {'柱候牛腩': 2, '腊八粥': 1, '排骨山药玉米汤': 2, '菠菜炒鸡蛋': 1,
                     '带把肘子': 3, '银耳莲子粥': 1, '牛油果拉西': 1, '西葫芦炒鸡蛋': 2,
                     '肉蛋盖饭': 1, '烤茄子': 2, '红柚蛋糕': 1, '凉拌木耳': 1, '蒸箱鸡蛋羹': 1,
@@ -190,11 +190,11 @@ class SourceCoverageTests(unittest.TestCase):
             self.assertFalse(row['automatic_execution_allowed'])
             self.assertFalse(row['confirmed_source_fields']['servings']['runtime_applied'])
         self.assertEqual(inventory['gap_counts']['servings'], 262)
-        self.assertEqual(inventory['confirmed_source_field_counts'], {'servings': 17})
+        self.assertEqual(inventory['confirmed_source_field_counts']['servings'], 17)
         self.assertEqual(self.data, original)
         for row in inventory['records']:
             if row['kind'] == 'recipe_method' and row['record']['servings'] is None and row['name'] not in corrected:
-                self.assertEqual(row['confirmed_source_fields'], {})
+                self.assertNotIn('servings', row['confirmed_source_fields'])
                 self.assertIn('servings', row['missing_or_unverified'])
 
     def test_changed_context_does_not_confirm_stale_diner_evidence(self):
@@ -205,6 +205,45 @@ class SourceCoverageTests(unittest.TestCase):
         row = next(r for r in inventory['records'] if r['id'] == method['id'])
         self.assertEqual(row['confirmed_source_fields'], {})
         self.assertIn('servings', row['missing_or_unverified'])
+
+    def test_ingredient_evidence_preserves_units_ranges_and_shared_amounts(self):
+        original = copy.deepcopy(self.data)
+        inventory = review_inventory(self.data, self.evidence, self.tfda_evidence)
+        self.assertEqual(inventory['ingredient_line_correction_counts'], {'measurement': 7, 'mapping': 2})
+        lines = [line for row in inventory['records'] for line in row['confirmed_source_fields'].get('ingredient_lines', [])]
+        measures = {line['original_source_text']: line['fields']['measurement']['value']
+                    for line in lines if 'measurement' in line['fields']}
+        self.assertEqual({text: (m['value'], m['minimum'], m['maximum'], m['unit']) for text, m in measures.items()}, {
+            '香菜 5 条 切段': (5, None, None, '条'), '蒜 5 颗 剁成蒜蓉': (5, None, None, '颗'),
+            '洋葱 25g-40g 切成碎': (None, 25, 40, 'g'), '蒜苗 2 根 切段备用': (2, None, None, '根'),
+            '鸡蛋 8 个 普通鸡蛋即可': (8, None, None, '个'), '牛奶 200 毫升 普通袋装牛奶即可': (200, None, None, 'ml'),
+            '白砂糖 80 克 普通砂糖即可 细砂糖更优 易于融化': (80, None, None, 'g')})
+        self.assertTrue(all(m['source_notes'] for m in measures.values()))
+        mappings = [line for line in lines if 'mapping' in line['fields']]
+        self.assertEqual({line['fields']['mapping']['name'] for line in mappings}, {'猪肉', '洋葱'})
+        pork = next(line for line in mappings if line['fields']['mapping']['name'] == '猪肉')
+        self.assertIn('430', pork['shared_amount_evidence'])
+        self.assertNotIn('measurement', pork['fields'])
+        self.assertEqual(self.data, original)
+        self.assertTrue(all(not line['automatic_execution_allowed'] and not line['runtime_applied'] for line in lines))
+
+    def test_ingredient_corrections_refuse_ambiguous_or_stale_identity_and_quantity(self):
+        method = copy.deepcopy(next(m for m in self.data['catalogue']['methods'] if m['title'] == '西红柿土豆炖牛肉'))
+        rules = {'比拳头大一点的洋葱': ['洋葱', '保留原文尺寸']}
+        catalogue = copy.deepcopy(self.data['catalogue'])
+        onion = next(f for f in catalogue['ingredient-forms'] if f['display_name'] == '洋葱')
+        catalogue['ingredient-forms'].append({**onion, 'id': 'another-onion-form'})
+        self.assertEqual(ingredient_corrections(method, catalogue, rules), [])
+        line = next(i for i in method['ingredients'] if i['name'] == '比拳头大一点的洋葱')
+        line['original_source_text'] = '未确认混合蔬菜一个'
+        self.assertEqual(ingredient_corrections(method, self.data['catalogue'], rules), [])
+        method = copy.deepcopy(next(m for m in self.data['catalogue']['methods'] if m['title'] == '烤蛋挞'))
+        for line in method['ingredients']:
+            line['amount_text'] = '999g 切段'
+        self.assertEqual(ingredient_corrections(method, self.data['catalogue'], {}), [])
+        method = copy.deepcopy(next(m for m in self.data['catalogue']['methods'] if m['title'] == '奶酪培根通心粉'))
+        next(i for i in method['ingredients'] if i['amount_text'] == '25g-40g 切成碎')['amount_text'] = '5g-40g 切成碎'
+        self.assertEqual(ingredient_corrections(method, self.data['catalogue'], {}), [])
 
 
 if __name__ == '__main__':

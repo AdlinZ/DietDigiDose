@@ -22,6 +22,32 @@ class ParserTests(unittest.TestCase):
         self.parser = r.Parser(ingredients, [dict(id='pan',name='平底锅',aliases=[])],
             dict(headings=['调料'], prepared_terms={}, bundles={'葱姜蒜':['葱','姜','蒜']}), dict(prepared_terms={}))
 
+    def test_plain_preparation_notes_preserve_explicit_amounts_only(self):
+        for text, value, unit in [('5 条 切段', 5, '条'), ('200 毫升 普通袋装牛奶即可', 200, 'ml'),
+                                  ('80 克 普通砂糖即可 细砂糖更优 易于融化', 80, 'g')]:
+            parsed = r.amount(text)
+            self.assertEqual((parsed['kind'], parsed['value'], parsed['unit']), ('exact', value, unit))
+            self.assertTrue(parsed['source_notes'])
+        parsed = r.amount('25g-40g 切成碎')
+        self.assertEqual((parsed['kind'], parsed['minimum'], parsed['maximum']), ('range', 25, 40))
+        for text in ['5 条 切段或不放', '200 毫升 普通袋装牛奶即可按口味加减',
+                     '1 个 50 g', '10 + 25 ml', '半瓶 250ml', '5 条 切段以上']:
+            self.assertEqual(r.amount(text)['kind'], 'unparsed', text)
+
+    def test_explicit_source_modifiers_map_without_allocating_shared_totals(self):
+        rules = json.loads(Path(__file__).with_name('reclean').joinpath('round1-rules.json').read_bytes())
+        parser = r.Parser([{'id': name, 'name': name, 'aliases': []}
+                           for name in ['洋葱', '猪肉', '无骨肉', '牛肉', '鸡肉', '鱼丸', '火腿肠']],
+                          [], rules, {'prepared_terms': {}})
+        onion = parser.parse('比拳头大一点的洋葱一个')['items'][0]
+        self.assertEqual(onion['ingredient_id'], '洋葱')
+        self.assertEqual(onion['measurement']['unit'], '个')
+        self.assertIsNone(onion['quantity'])
+        mixed = parser.parse('无骨肉共需 430 克，其中猪肉、牛肉、鸡肉、鱼丸、火腿肠的比例按自己喜好分配即可')
+        pork = next(line for line in mixed['items'] if line['name'] == '其中猪肉')
+        self.assertEqual(pork['ingredient_id'], '猪肉')
+        self.assertTrue(all(line['quantity'] is None and line['measurement']['kind'] == 'missing' for line in mixed['items']))
+
     def test_primary_count_is_not_replaced_by_parenthetical_weight(self):
         value = r.amount('2 个(约 100g)')
         self.assertEqual((value['value'], value['unit']), (2, '个'))

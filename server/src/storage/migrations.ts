@@ -2438,6 +2438,24 @@ migrations.push(healthProfileMigration, passwordlessMigration, onboardingMigrati
     ); CREATE INDEX idx_community_post_bookmarks_post ON community_post_bookmarks(post_id);`);
   } });
 
+migrations.push({ version: 90, name: "verified_email_recovery", up(database) {
+  addColumn(database, "users", "email_verified_at", "DATETIME");
+  database.exec(`CREATE TABLE email_auth_challenges (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    purpose TEXT NOT NULL CHECK(purpose IN ('email_verify','email_recovery')),
+    session_version INTEGER,
+    code_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','verified','consumed','failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    expires_at DATETIME NOT NULL,
+    recovery_hash TEXT UNIQUE,
+    recovery_expires_at DATETIME,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ); CREATE INDEX idx_email_auth_user ON email_auth_challenges(user_id, expires_at);`);
+} });
+
 export function runMigrations(database: Database.Database) {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (

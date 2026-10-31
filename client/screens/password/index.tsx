@@ -5,6 +5,7 @@ import { useAuth, useAuthFetch } from "@/contexts/AuthContext";
 import { useSafeRouter, useSafeSearchParams } from "@/hooks/useSafeRouter";
 import { requestJson } from "@/services/api/client";
 import { AccountSmsVerification } from "@/components/AccountSmsVerification";
+import { AccountEmailVerification } from "@/components/AccountEmailVerification";
 import { accountPasswordSchema, ACCOUNT_PASSWORD_REQUIREMENTS } from "@dietdigidose/contracts";
 
 export default function PasswordScreen() {
@@ -56,6 +57,7 @@ function PasswordForm() {
       {([["新密码", newPassword, setNew], ["确认新密码", confirm, setConfirm]] as const).map(([label, value, onChange]) => <TextInput key={label} accessibilityLabel={label} placeholder={label} value={value} onChangeText={onChange} secureTextEntry autoComplete="new-password" autoCapitalize="none" autoCorrect={false} maxLength={128} editable={!busy} className="rounded-xl border border-line bg-surface p-4 text-ink" />)}
       {!!error && <Text accessibilityRole="alert" className="text-critical">{error}</Text>}
       <TouchableOpacity accessibilityRole="button" disabled={busy} onPress={() => void submit()} className="rounded-xl bg-brand-fill p-4"><Text className="text-white text-center font-bold">{busy ? "正在修改…" : "修改密码并重新登录"}</Text></TouchableOpacity>
+      <AccountEmailVerification />
     </>}
   </ScrollView></Screen>;
 }

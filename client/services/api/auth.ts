@@ -23,8 +23,14 @@ export const authApi = {
   verifyPasswordRecovery: (challengeId: string, code: string) => requestJson<{ recoveryToken: string; expiresIn: number }>(publicFetch, "/api/v1/auth/password-recovery/verify", {
     method: "POST", body: JSON.stringify({ challengeId, code }),
   }),
-  resetPassword: (recoveryToken: string, newPassword: string) => requestJson<{ success: boolean }>(publicFetch, "/api/v1/auth/password-recovery/reset", {
-    method: "POST", body: JSON.stringify({ recoveryToken, newPassword }),
+  sendEmailRecovery: (email: string) => requestJson<{ challengeId: string; resendAfter: number; expiresIn: number }>(publicFetch, "/api/v1/auth/email-recovery/send", {
+    method: "POST", body: JSON.stringify({ email }),
+  }),
+  verifyEmailRecovery: (challengeId: string, code: string) => requestJson<{ recoveryToken: string; expiresIn: number }>(publicFetch, "/api/v1/auth/email-recovery/verify", {
+    method: "POST", body: JSON.stringify({ challengeId, code }),
+  }),
+  resetPassword: (recoveryToken: string, newPassword: string, channel?: "email") => requestJson<{ success: boolean }>(publicFetch, "/api/v1/auth/password-recovery/reset", {
+    method: "POST", body: JSON.stringify({ recoveryToken, newPassword, ...(channel ? { channel } : {}) }),
   }),
   registerWithSms: <T>(registrationToken: string, username: string, password: string) => requestJson<T>(publicFetch, "/api/v1/auth/sms/register", {
     method: "POST", body: JSON.stringify({ registrationToken, username, password }),

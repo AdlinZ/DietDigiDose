@@ -33,7 +33,14 @@ export const passwordRecoverySendSchema = z.object({ phone: z.string().regex(/^1
 export const passwordRecoveryVerifySchema = z.object({ challengeId: z.string().uuid(), code: z.string().regex(/^\d{6}$/) }).strict();
 export const passwordRecoveryTokenSchema = z.string().regex(/^[1-9]\d{0,15}\.[A-Za-z0-9_-]{43}$/)
   .refine((token) => Number.isSafeInteger(Number(token.split(".")[0])));
-export const passwordRecoveryResetSchema = z.object({ recoveryToken: passwordRecoveryTokenSchema, newPassword: accountPasswordSchema }).strict();
+export const passwordRecoveryResetSchema = z.object({ recoveryToken: passwordRecoveryTokenSchema, newPassword: accountPasswordSchema,
+  channel: z.enum(["sms", "email"]).optional(),
+}).strict();
+
+export const recoveryEmailSchema = z.string().trim().toLowerCase().max(254).email();
+export const emailVerificationSendSchema = z.object({ currentPassword: z.string().min(1).max(128) }).strict();
+export const emailRecoverySendSchema = z.object({ email: recoveryEmailSchema }).strict();
+export const emailVerificationCodeSchema = passwordRecoveryVerifySchema;
 
 // First binding only: the current password proves ownership before a target SMS is sent.
 export const phoneBindingSendSchema = z.object({

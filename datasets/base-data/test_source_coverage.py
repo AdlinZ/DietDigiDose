@@ -241,6 +241,9 @@ class SourceCoverageTests(unittest.TestCase):
         for line in method['ingredients']:
             line['amount_text'] = '999g 切段'
         self.assertEqual(ingredient_corrections(method, self.data['catalogue'], {}), [])
+        method = copy.deepcopy(next(m for m in self.data['catalogue']['methods'] if m['title'] == '奶酪培根通心粉'))
+        next(i for i in method['ingredients'] if i['amount_text'] == '25g-40g 切成碎')['amount_text'] = '5g-40g 切成碎'
+        self.assertEqual(ingredient_corrections(method, self.data['catalogue'], {}), [])
 
 
 if __name__ == '__main__':

@@ -202,7 +202,8 @@ def ingredient_corrections(method, catalogue, prepared_terms):
         source = round1_parser.text(line.get('original_source_text', line.get('source_text')) or '')
         previous = line.get('measurement') or {}
         if (previous.get('kind') == 'unparsed' and not line.get('shared_amount_evidence')
-                and line.get('amount_text') and round1_parser.text(line['amount_text']) in source):
+                and line.get('amount_text') and round1_parser.text(line['amount_text']) in source
+                and round1_parser.text(previous.get('source_text') or '') == round1_parser.text(line['amount_text'])):
             parsed = round1_parser.amount(line.get('amount_text'))
             if parsed['kind'] in ('exact', 'range') and not parsed['approximate']:
                 fields['measurement'] = {'previous': previous, 'value': parsed}

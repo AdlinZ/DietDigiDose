@@ -207,6 +207,17 @@ def ingredient_corrections(method, catalogue, prepared_terms):
             parsed = round1_parser.amount(line.get('amount_text'))
             if parsed['kind'] in ('exact', 'range') and not parsed['approximate']:
                 fields['measurement'] = {'previous': previous, 'value': parsed}
+        ratio = round1_parser.syrup_ratio(source)
+        if (ratio and line.get('name') == '1' and line.get('mapping_status') == 'unresolved'
+                and not any(line.get(key) for key in ('ingredient_id', 'ingredient_form_id', 'ingredient_concept_id', 'shared_amount_evidence'))
+                and previous.get('kind') == 'unparsed'
+                and round1_parser.text(line.get('amount_text') or '') == '1 蔗糖糖浆 ' + ratio[1]
+                and round1_parser.text(previous.get('source_text') or '') == '1 蔗糖糖浆 ' + ratio[1]):
+            parsed = round1_parser.amount(ratio[1])
+            if parsed['kind'] in ('exact', 'range') and not parsed['approximate']:
+                fields['name'] = {'previous': '1', 'value': '蔗糖糖浆', 'source_ratio': '1:1',
+                                  'ratio_basis_confirmed': False, 'mapping_confirmed': False}
+                fields['measurement'] = {'previous': previous, 'value': parsed}
         if (line.get('mapping_status') == 'unresolved' and not line.get('ingredient_id')
                 and not line.get('ingredient_form_id') and not line.get('ingredient_concept_id')
                 and line['name'] in prepared_terms and round1_parser.text(line['name']) in source):

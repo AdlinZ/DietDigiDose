@@ -99,6 +99,7 @@ def amount(raw):
         parsed = base.measurement(prefix_text)
         # Only known preparation/product notes may follow without punctuation.
         plain_note = bool(re.fullmatch(r'切段(?:备用)?|剁成蒜蓉|切成碎|普通(?:鸡蛋|袋装牛奶)即可|普通砂糖即可(?: 细砂糖更优 易于融化)?', remainder))
+        plain_note = plain_note or (parsed['dimension'] == 'length' and remainder == '长,拍散备用')
         if parsed['kind'] in ('exact', 'range') and (not remainder or remainder[0] in '(,;。' or plain_note):
             parsed.update(source_text=value['source_text'], source_notes=[remainder] if remainder else [],
                           additional_measurements=[], stated_result=False)
@@ -127,6 +128,11 @@ def amount(raw):
     return value
 
 
+def syrup_ratio(raw):
+    """Recognize the literal source label, without interpreting the ratio basis."""
+    return re.fullmatch(r'1\s*:\s*1\s+蔗糖糖浆\s+(.+)', text(raw))
+
+
 class Parser:
     def __init__(self, ingredients, kitchen, rules, base_rules):
         self.ingredients = ingredients
@@ -153,7 +159,8 @@ class Parser:
         if temp:
             temperature = temp[1]
             clean = clean[len(temp[1]):].strip()
-        name, remainder = self.find_name(clean)
+        ratio = syrup_ratio(clean)
+        name, remainder = ('蔗糖糖浆', ratio[1]) if ratio else self.find_name(clean)
         prefix_quantity = None
         if not name:
             prefix = PREFIX_AMOUNT.match(clean)
@@ -188,6 +195,9 @@ class Parser:
                 quantity_text += ' ' + rest
         measure = amount(quantity_text)
         mapping = base.resolve(name, self.index, self.prepared)
+        if ratio:
+            notes.append('原文比例 1:1；比例依据及目录映射待审核')
+            mapping.update(ingredient_id=None, mapping_status='unresolved')
         tool_ids = sorted(self.kitchen_index.get(base.key(name), set()))
         literal = measure['kind'] == 'exact' and measure['dimension'] in ('mass', 'volume') and not measure['approximate']
         return dict(name=name, source_text=raw, amount_text=quantity_text, measurement=measure,

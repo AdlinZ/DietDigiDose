@@ -173,6 +173,35 @@ class SourceCoverageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Duplicate supporting evidence'):
             review_inventory(data, self.evidence, self.tfda_evidence)
 
+    def test_source_serving_corrections_are_scoped_and_leave_frozen_records_unchanged(self):
+        original = copy.deepcopy(self.data)
+        inventory = review_inventory(self.data, self.evidence, self.tfda_evidence)
+        corrected = {r['name']: r for r in inventory['records'] if r['confirmed_source_fields']}
+        self.assertEqual(set(corrected), {'柱候牛腩', '腊八粥'})
+        for name, count in [('柱候牛腩', 2), ('腊八粥', 1)]:
+            row = corrected[name]
+            self.assertEqual(row['confirmed_source_fields']['servings']['value'], count)
+            self.assertIsNone(row['record']['servings'])
+            self.assertNotIn('servings', row['missing_or_unverified'])
+            self.assertFalse(row['automatic_execution_allowed'])
+            self.assertFalse(row['confirmed_source_fields']['servings']['runtime_applied'])
+        self.assertEqual(inventory['gap_counts']['servings'], 277)
+        self.assertEqual(inventory['confirmed_source_field_counts'], {'servings': 2})
+        self.assertEqual(self.data, original)
+        for row in inventory['records']:
+            if row['kind'] == 'recipe_method' and row['record']['servings'] is None and row['name'] not in corrected:
+                self.assertEqual(row['confirmed_source_fields'], {})
+                self.assertIn('servings', row['missing_or_unverified'])
+
+    def test_changed_context_does_not_confirm_stale_diner_evidence(self):
+        data = copy.deepcopy(self.data)
+        method = next(m for m in data['catalogue']['methods'] if m['title'] == '柱候牛腩')
+        method['yield']['evidence']['context'] = '以下为三人食用的量'
+        inventory = review_inventory(data, self.evidence, self.tfda_evidence)
+        row = next(r for r in inventory['records'] if r['id'] == method['id'])
+        self.assertEqual(row['confirmed_source_fields'], {})
+        self.assertIn('servings', row['missing_or_unverified'])
+
 
 if __name__ == '__main__':
     unittest.main()

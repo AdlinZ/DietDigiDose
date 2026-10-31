@@ -7,9 +7,10 @@
 1. 将 staging 域名的 DNS 指向 Linux 主机，开放 TCP 80/443 与 UDP 443。
 2. 在本目录复制 `.env.example` 为 `.env`，复制 `server.env.example` 为 `server.env`，填写真实密钥、官网“打开 App”链接和允许的前端域名；这两个文件均被 Git 忽略。
    `DATABASE_MIGRATION_URL` 与应用 `DATABASE_URL` 应使用不同账号；应用账号不应拥有 schema/role 管理权限。若 staging 使用 `DEPLOYMENT_PROFILE=global`，同时在独立 Supabase 项目中创建 public `community-media` bucket，填写 URL、anon key 与仅服务端可见的 service-role key；社区新图片只保存对象 URL。正式迁移前先核验 bucket 的上传、读取与删除策略。
-3. 执行：
+3. 在干净的候选 checkout 中用 `git rev-parse HEAD` 取得完整 SHA，填写 `deploy/.env` 的 `CANDIDATE_GIT_SHA`。服务端构建校验 SHA 格式并固化到版本接口；该值必须对应实际源码，不能用手填标识代替源码一致性检查。先执行不启动服务的配置预检，再部署：
 
    ```bash
+   docker compose -f deploy/docker-compose.staging.yml --project-directory deploy config --quiet
    docker compose -f deploy/docker-compose.staging.yml --project-directory deploy up -d --build
    docker compose -f deploy/docker-compose.staging.yml --project-directory deploy ps
    docker compose -f deploy/docker-compose.staging.yml --project-directory deploy logs migrate
@@ -18,8 +19,10 @@
 4. 执行核心闭环烟测：
 
    ```bash
-   STAGING_BASE_URL=https://staging-api.example.com node deploy/staging-smoke.mjs
+   EXPECTED_SERVER_GIT_SHA="$(git rev-parse HEAD)" STAGING_BASE_URL=https://staging-api.example.com node deploy/staging-smoke.mjs
    ```
+
+   从同一候选 checkout 执行烟测；部署标识缺失或不匹配时在注册/写入前失败。预检只检查配置可解析与必填值，不证明数据库最小权限、隔离、TLS 或真实持久化通过；不要去掉 `--quiet` 后分享可能包含密钥的完整 Compose 输出。
 
    烟测使用临时账号录入三种合成测试食材，并验证结构化部分扣减、制作与实际食用分离、食用/制作幂等、丢弃余量及旧请求不恢复余量。未知营养必须保持未知，不使用公共菜谱的热量来猜测合成测试餐。最后删除临时账号；失败输出的 `cleanup` 表明清理是否完成，清理失败需运维跟进。`ALLOW_HTTP=1` 只允许本机回环地址演练，不能用于候选 staging。
 

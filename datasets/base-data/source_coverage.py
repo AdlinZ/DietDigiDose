@@ -205,7 +205,7 @@ def ingredient_corrections(method, catalogue, prepared_terms):
                 and line.get('amount_text') and round1_parser.text(line['amount_text']) in source
                 and round1_parser.text(previous.get('source_text') or '') == round1_parser.text(line['amount_text'])):
             parsed = round1_parser.amount(line.get('amount_text'))
-            if parsed['kind'] in ('exact', 'range') and not parsed['approximate']:
+            if parsed['kind'] in ('exact', 'range', 'lower_bound', 'upper_bound') and not parsed['approximate']:
                 fields['measurement'] = {'previous': previous, 'value': parsed}
         ratio = round1_parser.syrup_ratio(source)
         if (ratio and line.get('name') == '1' and line.get('mapping_status') == 'unresolved'

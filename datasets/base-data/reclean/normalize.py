@@ -30,7 +30,7 @@ UNITS = {
     '毫升': ('ml', 1, 'volume'), 'ml': ('ml', 1, 'volume'),
 }
 for _unit in ('个', '只', '根', '颗', '粒', '瓣', '片', '块', '条', '张', '枚', '头', '朵', '把', '滴', '段',
-              '包', '袋', '盒', '罐', '瓶', '杯', '碗', '勺', '汤匙', '茶匙', '大勺', '小勺', '斤', '两', '棵', '叶', '小块'):
+              '包', '袋', '盒', '罐', '瓶', '杯', '碗', '勺', '汤匙', '茶匙', '大勺', '小勺', '斤', '两', '棵', '叶', '小块', '份', '拇指块'):
     UNITS[_unit] = (_unit, 1, 'regional_mass' if _unit in ('斤', '两') else 'source_unit')
 UNIT = '(?:' + '|'.join(sorted(UNITS, key=len, reverse=True)) + ')'
 MEASURE = re.compile(rf'^(?P<lo>{NUMBER})\s*(?P<u1>{UNIT})?\s*'

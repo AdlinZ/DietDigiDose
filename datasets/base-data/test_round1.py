@@ -22,6 +22,22 @@ class ParserTests(unittest.TestCase):
         self.parser = r.Parser(ingredients, [dict(id='pan',name='平底锅',aliases=[])],
             dict(headings=['调料'], prepared_terms={}, bundles={'葱姜蒜':['葱','姜','蒜']}), dict(prepared_terms={}))
 
+    def test_source_bounds_and_units_do_not_become_metric_scalars(self):
+        for source, kind, lo, hi in [('160 克以上', 'lower_bound', 160, None),
+                                     ('160 克以下', 'upper_bound', None, 160)]:
+            parsed = r.amount(source)
+            self.assertEqual((parsed['kind'], parsed['value'], parsed['minimum'], parsed['maximum']), (kind, None, lo, hi))
+            self.assertIsNone(self.parser.single('水 ' + source)['quantity'])
+        for source in ['约160克以上', '160克以上按需', '160克以上以下', '0克以上', '10-20克以上']:
+            self.assertNotIn(r.amount(source)['kind'], ('lower_bound', 'upper_bound'), source)
+        thumb = r.amount('1 拇指块')
+        self.assertEqual((thumb['value'], thumb['unit'], thumb['dimension']), (1, '拇指块', 'source_unit'))
+        self.assertIsNone(self.parser.single('姜 1 拇指块')['quantity'])
+        portion = r.amount('1 份-2 份(看鸡蛋大小)')
+        self.assertEqual((portion['kind'], portion['minimum'], portion['maximum'], portion['unit']), ('range', 1, 2, '份'))
+        self.assertEqual(portion['source_notes'], ['(看鸡蛋大小)'])
+        self.assertEqual(r.amount('2份-1份')['kind'], 'invalid')
+
     def test_explicit_counts_with_repeated_ingredient_names(self):
         for source, value, unit, note in [('两根中等大小的芹菜', 2, '根', '中等大小的芹菜'),
                                           ('一根大葱', 1, '根', '大葱'), ('7 瓣大蒜', 7, '瓣', '大蒜')]:

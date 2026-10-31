@@ -121,3 +121,17 @@ DDD_TEST_HISTORICAL_DATA=1 DDD_BASE_DATA_RC7_ARCHIVE="$PWD/.cache/base-data-rc7.
 
 历史归档的哈希不因构建器或字典更新而调整。使用新代码构建的新产物不冒充旧快照；
 比较历史归档本身须使用其中附带的构建器。跨平台字符规则变化应作为新产物差异审阅。
+
+## 完整审核工作清单
+
+`review_worklist.py` 复用 `source_coverage.py --review-output` 的审核记录，将每个缺项映射到责任角色和所需证据，输出全量 JSON 和可提交的 Markdown 分类明细。未知缺项或汇总与记录不一致直接失败，不默认放行。全部分类均待人工审核，不改原包/批准状态。
+
+先按上述方法生成带营养补充包的审核清单，然后执行（JSON 输出必须使用新路径，不覆盖旧证据）：
+
+```sh
+python3 datasets/base-data/review_worklist.py artifacts/quality/w44-data-review/allocation-review.json --output artifacts/quality/w44-data-review/complete-worklist.json --markdown docs/w44-data-review-worklist.md
+```
+
+上面的输入是当前本地补证产物；新环境使用 `source_coverage.py --enrichment datasets/releases/concept-enrichment-2026-10-03.1.zip --review-output <新文件>` 先重建，替换命令输入路径。JSON 的 inventory_sha256 是输入解析后按排序键序列化的内容摘要；不是输入文件字节摘要。记录级任务覆盖所有3,874条记录的19类缺项；行级明细单列67条未解析测量和31条身份任务，可能在同一食材行重叠。缺失量、已解析但待审核的条件/关系量仍属于记录级用量审核，不能从这98项之外推断不存在缺项。
+
+仓库可继续做原文定位、解析和证据校验；人工须确认许可、身份、营养、份量、配方和设备语义；厨房实做及目标环境导入/回滚需要真实资源。分类结果不能代替这些批准或验收。

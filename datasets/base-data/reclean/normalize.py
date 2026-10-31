@@ -216,8 +216,8 @@ def serving_evidence(text):
             for m in re.finditer(pattern, context)]
     pairs = {(x['minimum'], x['maximum']) for x in hits}
     # Direction words such as 以下为/以上原料 do not qualify a diner count.
-    uncertain = bool(re.search(rf'大概|大约|约\s*{NUMBER}|至少|最多|不足', context)
-                     or re.search(rf'{NUMBER}\s*(?:个)?人(?:食用|吃|份|的份量|的量|早饭|佐餐|喝|饮用|餐|量)?\s*(?:以上|以下)', context))
+    uncertain = bool(re.search(rf'大概|大约|约\s*{NUMBER}|至少|最多|不足|饭量|本人|我自己', context)
+                     or re.search(rf'{NUMBER}\s*(?:个)?人(?:食用|吃|份|的份量|的量|早饭|佐餐|喝|饮用|餐|量)?\s*(?:及|或)?\s*(?:以上|以下)', context))
     exact = len(pairs) == 1 and next(iter(pairs))[0] == next(iter(pairs))[1] and not uncertain
     return dict(servings=next(iter(pairs))[0] if exact else None,
                 status='explicit_diners' if exact else ('range_or_qualified' if len(pairs) == 1 else 'conflicting' if pairs else 'unknown'),

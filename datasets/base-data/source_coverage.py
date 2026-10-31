@@ -3,10 +3,12 @@ import argparse
 from collections import Counter, defaultdict
 import hashlib
 import json
+import re
 from pathlib import Path
 import zipfile
 
 from reclean.enrich_core import CORE, estimate, scalar
+from reclean import normalize
 
 ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE = ROOT / 'datasets/releases/system-data-2026-09-15.2.zip'
@@ -256,10 +258,10 @@ def review_inventory(data, evidence=None, tfda_evidence=None):
                 attach(document, index, row, identities, 'existing_duplicate_candidates_not_merged')
 
     records = []
-    def add(kind, record, name, gaps, sources, related):
+    def add(kind, record, name, gaps, sources, related, corrections=None):
         records.append({'kind': kind, 'id': record['id'], 'name': name,
                         'record_sha256': digest(record), 'record': record, 'sources': sources,
-                        'related_ids': related, 'supporting_evidence': supporting[(kind, record['id'])],
+                        'related_ids': related, 'confirmed_source_fields': corrections or {}, 'supporting_evidence': supporting[(kind, record['id'])],
                         'missing_or_unverified': sorted(set(gaps)),
                         'disposition': 'pending_evidence', 'reviewer': None,
                         'reviewed_at': None, 'approval_evidence': [],
@@ -295,17 +297,32 @@ def review_inventory(data, evidence=None, tfda_evidence=None):
             gaps, concepts.get(recipe['dish_concept_id'], {}).get('sources', []), recipe['method_ids'])
 
     for method in catalogue['methods']:
+        corrections = {}
+        previous = method.get('yield', {}).get('evidence', {})
+        if method['servings'] is None and previous.get('status') in {'range_or_qualified', 'unknown'}:
+            parsed = normalize.serving_evidence(previous.get('context', ''))
+            same_evidence = parsed['evidence'] == previous.get('evidence')
+            explicit_batch = (previous.get('status') == 'unknown' and not previous.get('evidence')
+                              and re.search(r'按照|每份|一份为|一份正好够', previous.get('context', '')))
+            if (parsed['status'] == 'explicit_diners' and parsed['servings'] > 0
+                    and (same_evidence or explicit_batch)):
+                corrections['servings'] = {'previous': None, 'value': parsed['servings'],
+                    'basis': 'explicit_diners_in_preserved_source_context',
+                    'source_context': previous['context'], 'evidence': parsed['evidence'],
+                    'runtime_applied': False, 'scale_automatically': False}
         gaps = list(method['missing_fields']) + [
             'ingredient_mapping_and_amount_review', 'redistribution_license_review',
             'equipment_capacity_and_task_duration_review', 'kitchen_execution_review',
             'storage_transport_reheat_review']
+        if 'servings' in corrections:
+            gaps = [gap for gap in gaps if gap != 'servings']
         source = method['source']
         if not source.get('source_url'):
             gaps.append('source_url_missing')
         if not source.get('source_license'):
             gaps.append('declared_license_missing')
         add('recipe_method', method, concepts.get(method['dish_concept_id'], {}).get('name_zh', method['id']),
-            gaps, [source], [method['dish_concept_id']])
+            gaps, [source], [method['dish_concept_id']], corrections)
 
     missing = {p['source_food_id'] for p in report['profiles_missing_source_observations']}
     for profile in data['nutrition-profiles']:
@@ -324,11 +341,13 @@ def review_inventory(data, evidence=None, tfda_evidence=None):
             'base_archive_sha256': data['archive_sha256'],
             'supplement_sha256': data.get('supplement_sha256'),
             'builder_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            'serving_parser_sha256': hashlib.sha256(Path(normalize.__file__).read_bytes()).hexdigest(),
             'source_evidence_sha256': {'foundation': digest(evidence) if evidence else None,
                                        'tfda': digest(tfda_evidence) if tfda_evidence else None},
             'counts': dict(sorted(Counter(r['kind'] for r in records).items())),
             'gap_counts': dict(sorted(Counter(g for r in records for g in r['missing_or_unverified']).items())),
             'supporting_document_counts': {name: len(data[name]) for name in REVIEW_DOCUMENTS},
+            'confirmed_source_field_counts': dict(sorted(Counter(key for r in records for key in r['confirmed_source_fields']).items())),
             'records_with_supporting_evidence': sum(bool(r['supporting_evidence']) for r in records),
             'semantic_approval': False, 'execution_eligible': 0,
             'scope': report['scope'], 'records': records}

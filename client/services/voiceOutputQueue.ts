@@ -7,7 +7,10 @@ export class KeyedSerialQueue<T> {
     if (this.key !== key) {
       this.key = key;
       this.generation += 1;
-      this.tail = Promise.resolve().then(onBegin);
+      const generation = this.generation;
+      this.tail = Promise.resolve().then(() => {
+        if (this.key === key && this.generation === generation) return onBegin();
+      });
     }
     const generation = this.generation;
     const task = this.tail.then(() => this.key === key && this.generation === generation ? work() : null);

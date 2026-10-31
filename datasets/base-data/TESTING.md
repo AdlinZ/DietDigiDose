@@ -34,6 +34,23 @@ python3 datasets/base-data/expand_nutrition.py /tmp/rebuilt-nutrition.zip
 字符转换使用随仓库固定分发的 OpenCC 字符字典，Linux/macOS/Windows 结果一致；
 不再调用 Windows NLS。来源及许可见 `reclean/opencc/README.md`。
 
+## 当前包逐条审核清单（#187）
+
+在已有审计命令上加 `--review-output`，生成独立、不可覆盖的 JSON：
+
+```sh
+mkdir -p artifacts/quality/w44-data-review
+python3 datasets/base-data/source_coverage.py --review-output artifacts/quality/w44-data-review/review.json --output artifacts/quality/w44-data-review/summary.json
+# 可选：包含已分发的参考营养补充包，输出到另一文件
+python3 datasets/base-data/source_coverage.py --enrichment datasets/releases/concept-enrichment-2026-10-03.1.zip --review-output artifacts/quality/w44-data-review/expanded-review.json --output artifacts/quality/w44-data-review/expanded-summary.json
+```
+
+基础清单共 3,859 条：1,340 个食材/厨具概念、984 个食材形态、1,115 个菜式概念、389 个配方方法、31 个营养参考；补充包清单为 3,874 条（46 个营养参考）。这些类别有引用关系，不能相加当作食材或菜谱种数。保留原记录、稳定 ID、来源、关联 ID、规范化记录 SHA256、明确缺项、基础包/补充包和生成脚本摘要；来源证据摘要按排序紧凑 JSON 计算。
+
+审核时优先处理 `recipe_method_missing`、`ingredient_identity_or_exact_quantity`、`servings`、`equipment`、`nutrition_reference_missing` 等具体缺项。结构齐全的行仍有许可、配方、设备容量/时长、保存复热及身份语义待核实项。`pending_evidence`、空审核人/时间、`automatic_execution_allowed=false` 不因字段完整或来源链接存在而升级。
+
+原始清单用于追溯；在副本中记录审核人、结论及证据链接，不覆盖原产物。本工具不读取或导入审核结论，不写数据库，不改变运行时执行资格。需要发布正式 v1 时仍须完成来源许可/语义/实际烹饪审核和目标导入验收。清单包括完整源记录，分享时遵守各来源许可；生成清单不构成再分发授权。
+
 ## 历史完整重建
 
 历史评估和中间产物未全部公开分发，部分还包含未确认再分发授权的 CN6 来源。

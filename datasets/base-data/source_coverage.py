@@ -64,7 +64,9 @@ def with_supplement(data, path):
         profiles = load('nutrition-profiles')
         if profiles[:len(data['nutrition-profiles'])] != data['nutrition-profiles']:
             raise ValueError('References-only supplement changed existing profiles')
-        return {**data, 'version': summary['version'], 'nutrition-profiles': profiles,
+        return {**data, 'version': summary['version'],
+                'supplement_sha256': hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                'nutrition-profiles': profiles,
                 'tfda-selected-records': load('tfda-selected-records'),
                 'foundation-source-record': load('foundation-source-record')}
 
@@ -185,17 +187,113 @@ def audit(data, evidence=None, tfda_evidence=None):
     }
 
 
+def review_inventory(data, evidence=None, tfda_evidence=None):
+    """Prepare review work, never grant approval from structural completeness."""
+    report = audit(data, evidence, tfda_evidence)  # Contradicting source evidence fails closed.
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                        separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+    catalogue = data['catalogue']
+    concepts = {c['id']: c for c in catalogue['concepts']}
+    profiles = defaultdict(list)
+    for profile in data['nutrition-profiles']:
+        profiles[profile['ingredient_concept_id']].append(profile['id'])
+    records = []
+    def add(kind, record, name, gaps, sources, related):
+        records.append({'kind': kind, 'id': record['id'], 'name': name,
+                        'record_sha256': digest(record), 'record': record, 'sources': sources,
+                        'related_ids': related, 'missing_or_unverified': sorted(set(gaps)),
+                        'disposition': 'pending_evidence', 'reviewer': None,
+                        'reviewed_at': None, 'approval_evidence': [],
+                        'automatic_execution_allowed': False})
+
+    for concept in catalogue['concepts']:
+        if not concept['active_catalogue']:
+            continue
+        roles = {concept['kind'], *concept.get('application_roles', [])}
+        if not roles & {'ingredient', 'kitchenware'}:
+            continue
+        gaps = ['identity_aliases_and_classification_review', 'redistribution_license_review']
+        if 'ingredient' in roles:
+            gaps.append('nutrition_scope_review' if profiles[concept['id']] else 'nutrition_reference_missing')
+        if 'kitchenware' in roles:
+            gaps.append('capacity_and_substitution_review')
+        sources = concept.get('sources', [])
+        if not sources or any(not source.get('source_url') for source in sources):
+            gaps.append('source_url_missing')
+        if not sources or any(not source.get('source_license') for source in sources):
+            gaps.append('declared_license_missing')
+        add('catalogue_concept', concept, concept['name_zh'], gaps, sources,
+            sorted(profiles[concept['id']]))
+
+    for form in catalogue['ingredient-forms']:
+        add('ingredient_form', form, form['display_name'],
+            ['ingredient_form_identity_and_state_review'], [form['source']], [form['concept_id']])
+    for recipe in catalogue['recipe-concepts']:
+        gaps = ['dish_identity_and_method_relationship_review']
+        if not recipe['method_ids']:
+            gaps.append('recipe_method_missing')
+        add('recipe_concept', recipe, concepts.get(recipe['dish_concept_id'], {}).get('name_zh', recipe['id']),
+            gaps, concepts.get(recipe['dish_concept_id'], {}).get('sources', []), recipe['method_ids'])
+
+    for method in catalogue['methods']:
+        gaps = list(method['missing_fields']) + [
+            'ingredient_mapping_and_amount_review', 'redistribution_license_review',
+            'equipment_capacity_and_task_duration_review', 'kitchen_execution_review',
+            'storage_transport_reheat_review']
+        source = method['source']
+        if not source.get('source_url'):
+            gaps.append('source_url_missing')
+        if not source.get('source_license'):
+            gaps.append('declared_license_missing')
+        add('recipe_method', method, concepts.get(method['dish_concept_id'], {}).get('name_zh', method['id']),
+            gaps, [source], [method['dish_concept_id']])
+
+    missing = {p['source_food_id'] for p in report['profiles_missing_source_observations']}
+    for profile in data['nutrition-profiles']:
+        gaps = ['ingredient_form_scope_review', 'professional_nutrition_review', 'redistribution_license_review']
+        if profile['source_food_id'] in missing:
+            gaps.append('source_observations_missing')
+        add('nutrition_profile', profile, profile['display_name'], gaps,
+            [{key: profile[key] for key in ('source_food_id', 'source_url', 'source_license')}],
+            [profile['ingredient_concept_id'], profile['ingredient_form_id']])
+
+    identities = [(r['kind'], r['id']) for r in records]
+    if len(identities) != len(set(identities)):
+        raise ValueError('Duplicate review identity')
+    records.sort(key=lambda r: (r['kind'], r['id']))
+    return {'format_version': 1, 'package_version': data['version'],
+            'base_archive_sha256': data['archive_sha256'],
+            'supplement_sha256': data.get('supplement_sha256'),
+            'builder_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            'source_evidence_sha256': {'foundation': digest(evidence) if evidence else None,
+                                       'tfda': digest(tfda_evidence) if tfda_evidence else None},
+            'counts': dict(sorted(Counter(r['kind'] for r in records).items())),
+            'gap_counts': dict(sorted(Counter(g for r in records for g in r['missing_or_unverified']).items())),
+            'semantic_approval': False, 'execution_eligible': 0,
+            'scope': report['scope'], 'records': records}
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('archive', nargs='?', type=Path, default=ARCHIVE)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--review-output', type=Path, help='Create a new immutable per-record review inventory JSON')
     parser.add_argument('--enrichment', type=Path, help='Audit the base plus a references-only supplement ZIP')
     args = parser.parse_args()
+    if args.review_output and args.output and args.review_output.resolve() == args.output.resolve():
+        parser.error('--review-output and --output must be different files')
     data = read_package(args.archive)
     if args.enrichment:
         data = with_supplement(data, args.enrichment)
-    report = audit(data, json.loads(EVIDENCE.read_text(encoding='utf8')),
-                   json.loads(TFDA_EVIDENCE.read_text(encoding='utf8')))
+    evidence = json.loads(EVIDENCE.read_text(encoding='utf8'))
+    tfda_evidence = json.loads(TFDA_EVIDENCE.read_text(encoding='utf8'))
+    report = audit(data, evidence, tfda_evidence)
+    if args.review_output:
+        inventory = review_inventory(data, evidence, tfda_evidence)
+        with args.review_output.open('x', encoding='utf8') as output:
+            output.write(json.dumps(inventory, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n')
     text = json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + '\n'
     if args.output:
         args.output.write_text(text, encoding='utf8')

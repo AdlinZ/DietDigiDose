@@ -1,10 +1,13 @@
 import copy
 import hashlib
 import json
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 import unittest
 
-from source_coverage import ARCHIVE, EVIDENCE, TFDA_EVIDENCE, audit, read_package
+from source_coverage import ARCHIVE, EVIDENCE, TFDA_EVIDENCE, audit, read_package, review_inventory, with_supplement
 
 
 class SourceCoverageTests(unittest.TestCase):
@@ -75,6 +78,60 @@ class SourceCoverageTests(unittest.TestCase):
             nutrients['protein'], nutrients['fat'] = nutrients['fat'], nutrients['protein']
             with self.subTest(source_kind=source_kind), self.assertRaisesRegex(ValueError, 'Nutrient definition mismatch'):
                 audit(data, self.evidence)
+
+    def test_review_inventory_covers_current_records_without_promoting_complete_rows(self):
+        inventory = review_inventory(self.data, self.evidence, self.tfda_evidence)
+        self.assertEqual(inventory, review_inventory(self.data, self.evidence, self.tfda_evidence))
+        self.assertEqual(inventory['base_archive_sha256'], self.data['archive_sha256'])
+        self.assertEqual(inventory['counts'], {'catalogue_concept': 1340, 'ingredient_form': 984,
+                                              'recipe_concept': 1115, 'recipe_method': 389, 'nutrition_profile': 31})
+        self.assertFalse(inventory['semantic_approval'])
+        for row in inventory['records']:
+            self.assertEqual(row['disposition'], 'pending_evidence')
+            self.assertFalse(row['automatic_execution_allowed'])
+            self.assertTrue(row['missing_or_unverified'])
+            encoded = json.dumps(row['record'], ensure_ascii=False, sort_keys=True,
+                                 separators=(',', ':'), allow_nan=False).encode()
+            self.assertEqual(row['record_sha256'], hashlib.sha256(encoded).hexdigest())
+        complete = next(r for r in inventory['records'] if r['kind'] == 'recipe_method'
+                        and not r['record']['missing_fields'])
+        self.assertIn('kitchen_execution_review', complete['missing_or_unverified'])
+        self.assertEqual(inventory['gap_counts']['recipe_method_missing'],
+                         sum(not r['method_ids'] for r in self.data['catalogue']['recipe-concepts']))
+
+    def test_review_inventory_preserves_missing_evidence_and_rejects_contradictions(self):
+        inventory = review_inventory(self.data)
+        self.assertEqual(inventory['gap_counts']['source_observations_missing'], 5)
+        data = copy.deepcopy(self.data)
+        data['catalogue']['methods'].append(data['catalogue']['methods'][0])
+        with self.assertRaisesRegex(ValueError, 'Duplicate review identity'):
+            review_inventory(data)
+        evidence = copy.deepcopy(self.tfda_evidence)
+        evidence['records'][0]['source_position'] += 1
+        with self.assertRaisesRegex(ValueError, 'Source observation position mismatch'):
+            review_inventory(self.data, self.evidence, evidence)
+        supplement = ARCHIVE.with_name('concept-enrichment-2026-10-03.1.zip')
+        enriched = with_supplement(self.data, supplement)
+        self.assertEqual(review_inventory(enriched, self.evidence, self.tfda_evidence)['supplement_sha256'],
+                         hashlib.sha256(supplement.read_bytes()).hexdigest())
+
+    def test_review_cli_creates_reproducible_artifact_and_refuses_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'review.json'
+            summary = Path(directory) / 'summary.json'
+            command = [sys.executable, str(Path(__file__).with_name('source_coverage.py')),
+                       '--review-output', str(output), '--output', str(summary)]
+            subprocess.run(command, check=True, capture_output=True)
+            before = output.read_bytes()
+            expected = review_inventory(self.data, self.evidence, self.tfda_evidence)
+            self.assertEqual(json.loads(before), expected)
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            self.assertEqual(output.read_bytes(), before)
+            collision = Path(directory) / 'collision.json'
+            result = subprocess.run(command[:2] + ['--review-output', str(collision), '--output', str(collision)],
+                                    capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(collision.exists())
 
 
 if __name__ == '__main__':

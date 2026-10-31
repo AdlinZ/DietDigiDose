@@ -22,6 +22,20 @@ class ParserTests(unittest.TestCase):
         self.parser = r.Parser(ingredients, [dict(id='pan',name='平底锅',aliases=[])],
             dict(headings=['调料'], prepared_terms={}, bundles={'葱姜蒜':['葱','姜','蒜']}), dict(prepared_terms={}))
 
+    def test_partition_total_and_optional_note_preserve_source_constraints(self):
+        parsed = r.amount('2 根 1 根切段,1 根备用')
+        self.assertEqual((parsed['kind'], parsed['value'], parsed['unit']), ('exact', 2, '根'))
+        self.assertEqual(parsed['source_notes'], ['1 根切段,1 根备用'])
+        self.assertEqual([m['value'] for m in parsed['additional_measurements']], [1, 1])
+        for source in ['3 根 1 根切段,1 根备用', '2 根 2 根切段,1 根备用',
+                       '2 根 0 根切段,2 根备用', '2 根 1 根切段,1 根备用或不放', '2 g 1 根切段,1 根备用']:
+            self.assertEqual(r.amount(source)['kind'], 'unparsed', source)
+        optional = self.parser.single('油 20g #不喜可不加')
+        self.assertEqual(optional['measurement']['value'], 20)
+        self.assertTrue(optional['optional'])
+        self.assertEqual(optional['measurement']['source_notes'], ['#不喜可不加'])
+        self.assertEqual(r.amount('20g #不喜可不加或改10g')['kind'], 'unparsed')
+
     def test_source_bounds_and_units_do_not_become_metric_scalars(self):
         for source, kind, lo, hi in [('160 克以上', 'lower_bound', 160, None),
                                      ('160 克以下', 'upper_bound', None, 160)]:

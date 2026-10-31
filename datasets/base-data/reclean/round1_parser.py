@@ -104,6 +104,11 @@ def amount(raw):
         plain_note = bool(re.fullmatch(r'切段(?:备用)?|剁成蒜蓉|切成碎|普通(?:鸡蛋|袋装牛奶)即可|普通砂糖即可(?: 细砂糖更优 易于融化)?', remainder))
         plain_note = plain_note or (parsed['dimension'] == 'length' and remainder == '长,拍散备用')
         plain_note = plain_note or (parsed['unit'] == '根' and remainder in ('中等大小的芹菜', '大葱')) or (parsed['unit'] == '瓣' and remainder == '大蒜')
+        partition = re.fullmatch(rf'({NUM})\s*根切段,\s*({NUM})\s*根备用', remainder)
+        if partition and parsed['kind'] == 'exact' and parsed['unit'] == '根':
+            parts = [base.numeric(partition[i]) for i in (1, 2)]
+            plain_note = all(part is not None and part > 0 for part in parts) and sum(parts) == parsed['value']
+        plain_note = plain_note or remainder == '#不喜可不加'
         if parsed['kind'] in ('exact', 'range') and (not remainder or remainder[0] in '(,;。' or plain_note):
             parsed.update(source_text=value['source_text'], source_notes=[remainder] if remainder else [],
                           additional_measurements=[], stated_result=False)

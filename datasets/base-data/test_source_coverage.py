@@ -133,6 +133,46 @@ class SourceCoverageTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(collision.exists())
 
+    def test_existing_documentary_evidence_is_attached_without_approval(self):
+        inventory = review_inventory(self.data, self.evidence, self.tfda_evidence)
+        self.assertEqual(inventory['supporting_document_counts'], {
+            'recipe-weighing-contracts': 20, 'equipment-role-updates': 18,
+            'duplicate-review': 11, 'matching-decisions': 5})
+        methods = [r for r in inventory['records'] if r['kind'] == 'recipe_method']
+        self.assertEqual(sum(any(e['document'].endswith('recipe-weighing-contracts.json')
+                                 for e in r['supporting_evidence']) for r in methods), 20)
+        soy = next(r for r in inventory['records'] if r['id'] == 'FORM:DDD-I-soy')
+        decision = soy['supporting_evidence'][0]['record']
+        self.assertEqual(decision['source_food_id'], 'TFDA:P0700401')
+        self.assertEqual(decision['status'], 'not_bound')
+        for row in inventory['records']:
+            self.assertFalse(row['automatic_execution_allowed'])
+            for evidence in row['supporting_evidence']:
+                self.assertFalse(evidence['semantic_approval'])
+                document = evidence['document'].removeprefix('data/nutrition/').removesuffix('.json')
+                self.assertEqual(evidence['record'], self.data[document][evidence['record_index']])
+        expanded = with_supplement(self.data, ARCHIVE.with_name('concept-enrichment-2026-10-03.1.zip'))
+        self.assertEqual(review_inventory(expanded, self.evidence, self.tfda_evidence)['supporting_document_counts'],
+                         inventory['supporting_document_counts'])
+
+    def test_stale_or_cross_record_supporting_evidence_is_rejected(self):
+        cases = [('recipe-weighing-contracts', 'original_recipe_sha256', '0' * 64),
+                 ('recipe-weighing-contracts', 'method_id', 'missing'),
+                 ('equipment-role-updates', 'concept_id', 'missing'),
+                 ('equipment-role-updates', 'evidence', [{'step': 2, 'text': 'unrelated step'}]),
+                 ('matching-decisions', 'status', 'approved'),
+                 ('matching-decisions', 'source_name', 'wrong sample'),
+                 ('duplicate-review', 'concept_ids', ['missing', 'missing2'])]
+        for document, key, value in cases:
+            data = copy.deepcopy(self.data)
+            data[document][0][key] = value
+            with self.subTest(document=document, key=key), self.assertRaises(ValueError):
+                review_inventory(data, self.evidence, self.tfda_evidence)
+        data = copy.deepcopy(self.data)
+        data['matching-decisions'].append(data['matching-decisions'][0])
+        with self.assertRaisesRegex(ValueError, 'Duplicate supporting evidence'):
+            review_inventory(data, self.evidence, self.tfda_evidence)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -34,6 +34,25 @@ class ExpandedNutritionTests(unittest.TestCase):
                 self.assertEqual(old.read('concept-enrichment-2026-10-02.1/' + name + '.json'),
                                  current.read(VERSION + '/' + name + '.json'))
 
+    def test_supplement_cannot_rewrite_existing_review_decisions(self):
+        with zipfile.ZipFile(RELEASE) as source:
+            files = {name: source.read(name) for name in source.namelist()}
+        target = VERSION + '/matching-decisions.json'
+        decisions = json.loads(files[target])
+        decisions[0]['status'] = 'approved'
+        files[target] = json.dumps(decisions).encode()
+        manifest_name = VERSION + '/manifest.json'
+        manifest = json.loads(files[manifest_name])
+        manifest['matching-decisions.json'] = sha(files[target])
+        files[manifest_name] = json.dumps(manifest).encode()
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / 'changed.zip'
+            with zipfile.ZipFile(archive, 'w') as output:
+                for name, content in files.items():
+                    output.writestr(name, content)
+            with self.assertRaisesRegex(ValueError, 'References-only supplement changed recipes'):
+                with_supplement(self.base, archive)
+
     def test_added_samples_have_original_observations_without_changing_recipes(self):
         data = with_supplement(self.base, RELEASE)
         report = audit(data)

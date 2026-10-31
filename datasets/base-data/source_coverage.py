@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE = ROOT / 'datasets/releases/system-data-2026-09-15.2.zip'
 EVIDENCE = Path(__file__).with_name('evidence') / 'usda-foundation-2646170.json'
 TFDA_EVIDENCE = Path(__file__).with_name('evidence') / 'tfda-core-samples.json'
+REVIEW_DOCUMENTS = ('recipe-weighing-contracts', 'equipment-role-updates', 'duplicate-review', 'matching-decisions')
 TFDA_NAMES = {'calories': '熱量', 'protein': '粗蛋白', 'fat': '粗脂肪', 'carbs': '總碳水化合物'}
 
 
@@ -35,7 +36,7 @@ def read_package(path):
                 'catalogue': load('runtime-input'),
                 **{name: load('nutrition/' + name) for name in (
                     'nutrition-profiles', 'recipe-nutrition', 'recipe-inputs',
-                    'source-selected-records', 'tfda-selected-records')}}
+                    'source-selected-records', 'tfda-selected-records', *REVIEW_DOCUMENTS)}}
 
 
 def with_supplement(data, path):
@@ -58,7 +59,7 @@ def with_supplement(data, path):
         summary = load('summary')
         if summary['import_mode'] != 'scoped_reference_additions':
             raise ValueError('Unexpected supplement mode')
-        for key in ('recipe-inputs', 'recipe-nutrition'):
+        for key in ('recipe-inputs', 'recipe-nutrition', *REVIEW_DOCUMENTS):
             if load(key) != data[key]:
                 raise ValueError('References-only supplement changed recipes')
         profiles = load('nutrition-profiles')
@@ -199,11 +200,67 @@ def review_inventory(data, evidence=None, tfda_evidence=None):
     profiles = defaultdict(list)
     for profile in data['nutrition-profiles']:
         profiles[profile['ingredient_concept_id']].append(profile['id'])
+    # Bring existing documentary evidence into the review queue without upgrading its meaning.
+    methods = {m['id']: m for m in catalogue['methods']}
+    forms = {f['id']: f for f in catalogue['ingredient-forms']}
+    inputs = {m['id']: m for m in data['recipe-inputs']}
+    supporting = defaultdict(list)
+    def attach(document, index, row, identities, check):
+        entry = {'document': 'data/nutrition/' + document + '.json', 'record_index': index,
+                 'record_sha256': digest(row), 'record': row, 'check': check,
+                 'semantic_approval': False}
+        for identity in identities:
+            supporting[identity].append(entry)
+
+    for document in REVIEW_DOCUMENTS:
+        seen = set()
+        for index, row in enumerate(data[document]):
+            fingerprint = digest(row)
+            if fingerprint in seen:
+                raise ValueError('Duplicate supporting evidence: ' + document)
+            seen.add(fingerprint)
+            if document == 'recipe-weighing-contracts':
+                method = methods.get(row['method_id'])
+                if (not method or inputs.get(row['method_id']) != method
+                        or row['original_recipe_sha256'] != method['source_recipe_sha256']
+                        or row['original_amounts_unchanged'] is not True):
+                    raise ValueError('Weighing evidence recipe mismatch')
+                attach(document, index, row, [('recipe_method', method['id'])],
+                       'recipe_identity_hash_and_unchanged_inputs')
+            elif document == 'equipment-role-updates':
+                method, concept = methods.get(row['method_id']), concepts.get(row['concept_id'])
+                if not method or not concept or concept['name_zh'] != row['name']:
+                    raise ValueError('Equipment evidence identity mismatch')
+                steps = {step['order']: step['text'] for step in method['steps']}
+                if not row['evidence'] or any(steps.get(e['step']) != e['text'] for e in row['evidence']):
+                    raise ValueError('Equipment evidence step mismatch')
+                attach(document, index, row, [('recipe_method', method['id']), ('catalogue_concept', concept['id'])],
+                       'equipment_identity_and_exact_source_step')
+            elif document == 'matching-decisions':
+                if row['ingredient_form_id'] not in forms or row['status'] != 'not_bound':
+                    raise ValueError('Rejected nutrition binding evidence mismatch')
+                # Rejected candidates remain rejected even when the source has four nutrient values.
+                source_rows = [r['row'] for r in data['tfda-selected-records']
+                               if 'TFDA:' + r['row']['整合編號'] == row['source_food_id']]
+                if not source_rows or any(r['樣品名稱'] != row['source_name'] or
+                                          r['內容物描述'] != row['source_description'] for r in source_rows):
+                    raise ValueError('Rejected nutrition source identity mismatch')
+                attach(document, index, row, [('ingredient_form', row['ingredient_form_id'])],
+                       'existing_nonbinding_decision_and_source_identity')
+            else:
+                if len(set(row['concept_ids'])) < 2 or any(i not in concepts for i in row['concept_ids']):
+                    raise ValueError('Duplicate concept evidence identity mismatch')
+                identities = [('catalogue_concept', i) for i in row['concept_ids']]
+                identities += [('recipe_concept', r['id']) for r in catalogue['recipe-concepts']
+                               if r['dish_concept_id'] in row['concept_ids']]
+                attach(document, index, row, identities, 'existing_duplicate_candidates_not_merged')
+
     records = []
     def add(kind, record, name, gaps, sources, related):
         records.append({'kind': kind, 'id': record['id'], 'name': name,
                         'record_sha256': digest(record), 'record': record, 'sources': sources,
-                        'related_ids': related, 'missing_or_unverified': sorted(set(gaps)),
+                        'related_ids': related, 'supporting_evidence': supporting[(kind, record['id'])],
+                        'missing_or_unverified': sorted(set(gaps)),
                         'disposition': 'pending_evidence', 'reviewer': None,
                         'reviewed_at': None, 'approval_evidence': [],
                         'automatic_execution_allowed': False})
@@ -271,6 +328,8 @@ def review_inventory(data, evidence=None, tfda_evidence=None):
                                        'tfda': digest(tfda_evidence) if tfda_evidence else None},
             'counts': dict(sorted(Counter(r['kind'] for r in records).items())),
             'gap_counts': dict(sorted(Counter(g for r in records for g in r['missing_or_unverified']).items())),
+            'supporting_document_counts': {name: len(data[name]) for name in REVIEW_DOCUMENTS},
+            'records_with_supporting_evidence': sum(bool(r['supporting_evidence']) for r in records),
             'semantic_approval': False, 'execution_eligible': 0,
             'scope': report['scope'], 'records': records}
 

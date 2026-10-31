@@ -66,9 +66,12 @@ def amount(raw):
     raw = raw.strip(' ,:;。')
     raw = re.sub(r'^大概\s*', '约 ', raw)
     bound = re.fullmatch(r'(≥|>=|≤|<=)\s*(.+)', raw)
+    suffix_bound = re.fullmatch(r'(.+?)(以上|以下)', raw)
+    if not bound and suffix_bound:
+        bound = (None, '>=' if suffix_bound[2] == '以上' else '<=', suffix_bound[1].strip())
     if bound:
         literal = base.measurement(bound[2])
-        if literal['kind'] == 'exact':
+        if literal['kind'] == 'exact' and not literal['approximate']:
             lower = bound[1] in ('≥', '>=')
             value.update(kind='lower_bound' if lower else 'upper_bound', minimum=literal['value'] if lower else None,
                          maximum=None if lower else literal['value'], unit=literal['unit'], dimension=literal['dimension'])

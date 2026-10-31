@@ -209,11 +209,13 @@ class SourceCoverageTests(unittest.TestCase):
     def test_ingredient_evidence_preserves_units_ranges_and_shared_amounts(self):
         original = copy.deepcopy(self.data)
         inventory = review_inventory(self.data, self.evidence, self.tfda_evidence)
-        self.assertEqual(inventory['ingredient_line_correction_counts'], {'measurement': 14, 'mapping': 4, 'name': 2})
+        self.assertEqual(inventory['ingredient_line_correction_counts'], {'measurement': 17, 'mapping': 5, 'name': 2})
         lines = [line for row in inventory['records'] for line in row['confirmed_source_fields'].get('ingredient_lines', [])]
         measures = {line['original_source_text']: line['fields']['measurement']['value']
                     for line in lines if 'measurement' in line['fields']}
         self.assertEqual({text: (m['value'], m['minimum'], m['maximum'], m['unit']) for text, m in measures.items()}, {
+            '冰块 160 克以上': (None, 160, None, 'g'), '生姜 1 拇指块': (1, None, None, '拇指块'),
+            '手抓饼 1 份-2 份（看鸡蛋大小）': (None, 1, 2, '份'),
             '芹菜 两根中等大小的芹菜': (2, None, None, '根'),
             '葱 = 一根大葱': (1, None, None, '根'), '蒜 = 7 瓣大蒜': (7, None, None, '瓣'),
             '大葱 10cm': (10, None, None, 'cm'), '生姜 3 厘米长，拍散备用': (3, None, None, 'cm'),
@@ -228,11 +230,16 @@ class SourceCoverageTests(unittest.TestCase):
         self.assertEqual(len(names), 2)
         self.assertTrue(all(not line['fields']['name']['mapping_confirmed'] and 'mapping' not in line['fields'] for line in names))
         mappings = [line for line in lines if 'mapping' in line['fields']]
-        self.assertEqual({line['fields']['mapping']['name'] for line in mappings}, {'猪肉', '洋葱', '冰块'})
+        self.assertEqual({line['fields']['mapping']['name'] for line in mappings}, {'猪肉', '洋葱', '冰块', '花生油'})
         ice = [line for line in mappings if line['fields']['mapping']['name'] == '冰块']
         self.assertEqual(len(ice), 2)
         self.assertEqual({line['original_source_text']: line['optional'] for line in ice}, {'冰几块（可选）': True, '大冰块差不多就行': False})
         self.assertTrue(all('measurement' not in line['fields'] for line in ice))
+        oil = next(line for line in mappings if line['fields']['mapping']['name'] == '花生油')
+        self.assertIn('100-150ml', oil['shared_amount_evidence'])
+        self.assertNotIn('measurement', oil['fields'])
+        self.assertIn('替代选项', oil['fields']['mapping']['qualifier'])
+        self.assertEqual(measures['冰块 160 克以上']['kind'], 'lower_bound')
         pork = next(line for line in mappings if line['fields']['mapping']['name'] == '猪肉')
         self.assertIn('430', pork['shared_amount_evidence'])
         self.assertNotIn('measurement', pork['fields'])

@@ -33,6 +33,17 @@ test.each([false, true])("complete summary is previewed and requires explicit co
   act(() => tree.unmount());
 });
 
+test("negative facilities stay unavailable in the reviewed and applied summary", () => {
+  const apply = jest.fn(); let tree!: renderer.ReactTestRenderer;
+  act(() => { tree = renderer.create(<PreferenceVoiceInput onApply={apply} />); });
+  act(() => { tree.root.findByType(TextInput).props.onChangeText("不可以吃辣，不会带饭，不可以冷藏，不可以加热"); });
+  expect(tree.root.findAllByType(Text).some(node => node.props.children === "不吃辣 · 不带饭 · 不能冷藏 · 不能加热")).toBe(true);
+  expect(apply).not.toHaveBeenCalled();
+  act(() => { press(tree, "确认摘要，应用到表单"); });
+  expect(apply).toHaveBeenCalledWith({ avoid_spicy: true, carry_meals: false, refrigeration_available: false, reheating_available: false }, false);
+  act(() => tree.unmount());
+});
+
 
 test.each(["blur", "account"])("late consent read cannot start capture after %s", async reason => {
   mockFocused = true; mockUserId = 1; mockToggleRecording.mockClear();

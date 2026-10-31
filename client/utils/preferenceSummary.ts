@@ -16,7 +16,7 @@ export function summarizeMealPreferences(text: string): { preferences: KitchenPr
   const duration = text.match(/(\d{1,3})\s*分钟/);
   const minutes = duration ? Number(duration[1]) : text.includes("半小时") ? 30 : null;
   if (minutes !== null && minutes >= 5 && minutes <= 300) { preferences.meal_time_minutes = minutes; labels.push(`做饭时间 ${minutes} 分钟`); }
-  if (/不吃辣|不要辣|不能吃辣/.test(text) && !/(?:不是|没有说|没说).{0,4}(?:不吃辣|不要辣|不能吃辣)/.test(text)) {
+  if (/不吃辣|不要辣|不能吃辣|不可以吃辣/.test(text) && !/(?:不是|没有说|没说).{0,4}(?:不吃辣|不要辣|不能吃辣|不可以吃辣)/.test(text)) {
     preferences.avoid_spicy = true; labels.push("不吃辣");
   }
   if (!preferences.avoid_spicy && /可以吃辣|能吃辣|吃辣没问题/.test(text)) {
@@ -36,9 +36,9 @@ export function summarizeMealPreferences(text: string): { preferences: KitchenPr
     preferences.eating_location = location[0][0]; labels.push(`用餐地点：${location[0][1]}`);
   }
   const conditions = [
-    { key: "carry_meals", yes: /(?:需要|要|会|每天)带饭/, no: /(?:不带饭|不需要带饭|不用带饭|不要带饭)/, positive: "需要带饭", negative: "不带饭" },
-    { key: "refrigeration_available", yes: /(?:可以|能|可|有条件)冷藏|有冰箱/, no: /(?:不能|无法|不可|没法)冷藏|没有冰箱|没冰箱/, positive: "可以冷藏", negative: "不能冷藏" },
-    { key: "reheating_available", yes: /(?:可以|能|可|有条件)加热|有微波炉/, no: /(?:不能|无法|不可|没法)加热|没有微波炉|没微波炉/, positive: "可以加热", negative: "不能加热" },
+    { key: "carry_meals", yes: /(?:需要|要|会|每天)带饭/, no: /(?:不带饭|不需要带饭|不用带饭|不要带饭|不会带饭)/, positive: "需要带饭", negative: "不带饭" },
+    { key: "refrigeration_available", yes: /(?:可以|能|可|有条件)冷藏|有冰箱/, no: /(?:不能|无法|不可|不可以|没法)冷藏|没有冰箱|没冰箱/, positive: "可以冷藏", negative: "不能冷藏" },
+    { key: "reheating_available", yes: /(?:可以|能|可|有条件)加热|有微波炉/, no: /(?:不能|无法|不可|不可以|没法)加热|没有微波炉|没微波炉/, positive: "可以加热", negative: "不能加热" },
   ] as const;
   for (const condition of conditions) {
     const negative = condition.no.test(text);

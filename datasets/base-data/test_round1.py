@@ -22,6 +22,27 @@ class ParserTests(unittest.TestCase):
         self.parser = r.Parser(ingredients, [dict(id='pan',name='平底锅',aliases=[])],
             dict(headings=['调料'], prepared_terms={}, bundles={'葱姜蒜':['葱','姜','蒜']}), dict(prepared_terms={}))
 
+    def test_length_is_not_a_mass_or_scalar_recipe_quantity(self):
+        for source, value in [('10cm', 10), ('3 厘米长,拍散备用', 3)]:
+            parsed = r.amount(source)
+            self.assertEqual((parsed['value'], parsed['unit'], parsed['dimension']), (value, 'cm', 'length'))
+            self.assertIsNone(self.parser.single('姜 ' + source)['quantity'])
+        for source in ['4 厘米一小片', '3 克长,拍散备用', '3 厘米长,拍散备用或不放']:
+            self.assertEqual(r.amount(source)['kind'], 'unparsed')
+
+    def test_ratio_label_preserves_quantity_but_does_not_confirm_identity(self):
+        parser = r.Parser([dict(id='syrup', name='蔗糖糖浆', aliases=[])], [],
+                          dict(headings=[], prepared_terms={}, bundles={}), dict(prepared_terms={}))
+        for source in ['1 : 1 蔗糖糖浆 10 克（可选）', '1 : 1 蔗糖糖浆 30~40 克']:
+            item = parser.parse(source)['items'][0]
+            self.assertEqual(item['name'], '蔗糖糖浆')
+            self.assertIsNone(item['ingredient_id'])
+            self.assertEqual(item['mapping_status'], 'unresolved')
+            self.assertEqual(item['candidate_ingredient_ids'], ['syrup'])
+            self.assertIn('1:1', item['qualifiers'][-1])
+            self.assertEqual(item['optional'], '可选' in source)
+        self.assertIsNone(r.syrup_ratio('2 : 1 蔗糖糖浆 10 克'))
+
     def test_plain_preparation_notes_preserve_explicit_amounts_only(self):
         for text, value, unit in [('5 条 切段', 5, '条'), ('200 毫升 普通袋装牛奶即可', 200, 'ml'),
                                   ('80 克 普通砂糖即可 细砂糖更优 易于融化', 80, 'g')]:
@@ -121,7 +142,7 @@ class ParserTests(unittest.TestCase):
         self.assertIsNone(value['value'])
 
     def test_unknown_units_and_invalid_values_remain_unusable(self):
-        for raw in ('0g','-5g','NaN g','1/0 g','2cm','适量','少许'):
+        for raw in ('0g','-5g','NaN g','1/0 g','2mm','适量','少许'):
             self.assertIsNone(r.amount(raw)['value'], raw)
         self.assertEqual(r.amount('2 斤')['unit'],'斤')
 

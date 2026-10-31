@@ -209,16 +209,22 @@ class SourceCoverageTests(unittest.TestCase):
     def test_ingredient_evidence_preserves_units_ranges_and_shared_amounts(self):
         original = copy.deepcopy(self.data)
         inventory = review_inventory(self.data, self.evidence, self.tfda_evidence)
-        self.assertEqual(inventory['ingredient_line_correction_counts'], {'measurement': 7, 'mapping': 2})
+        self.assertEqual(inventory['ingredient_line_correction_counts'], {'measurement': 11, 'mapping': 2, 'name': 2})
         lines = [line for row in inventory['records'] for line in row['confirmed_source_fields'].get('ingredient_lines', [])]
         measures = {line['original_source_text']: line['fields']['measurement']['value']
                     for line in lines if 'measurement' in line['fields']}
         self.assertEqual({text: (m['value'], m['minimum'], m['maximum'], m['unit']) for text, m in measures.items()}, {
+            '大葱 10cm': (10, None, None, 'cm'), '生姜 3 厘米长，拍散备用': (3, None, None, 'cm'),
+            '1 : 1 蔗糖糖浆 10 克（可选）': (10, None, None, 'g'),
+            '1 : 1 蔗糖糖浆 30~40 克': (None, 30, 40, 'g'),
             '香菜 5 条 切段': (5, None, None, '条'), '蒜 5 颗 剁成蒜蓉': (5, None, None, '颗'),
             '洋葱 25g-40g 切成碎': (None, 25, 40, 'g'), '蒜苗 2 根 切段备用': (2, None, None, '根'),
             '鸡蛋 8 个 普通鸡蛋即可': (8, None, None, '个'), '牛奶 200 毫升 普通袋装牛奶即可': (200, None, None, 'ml'),
             '白砂糖 80 克 普通砂糖即可 细砂糖更优 易于融化': (80, None, None, 'g')})
-        self.assertTrue(all(m['source_notes'] for m in measures.values()))
+        self.assertEqual(measures['生姜 3 厘米长，拍散备用']['source_notes'], ['长,拍散备用'])
+        names = [line for line in lines if 'name' in line['fields']]
+        self.assertEqual(len(names), 2)
+        self.assertTrue(all(not line['fields']['name']['mapping_confirmed'] and 'mapping' not in line['fields'] for line in names))
         mappings = [line for line in lines if 'mapping' in line['fields']]
         self.assertEqual({line['fields']['mapping']['name'] for line in mappings}, {'猪肉', '洋葱'})
         pork = next(line for line in mappings if line['fields']['mapping']['name'] == '猪肉')
@@ -226,6 +232,15 @@ class SourceCoverageTests(unittest.TestCase):
         self.assertNotIn('measurement', pork['fields'])
         self.assertEqual(self.data, original)
         self.assertTrue(all(not line['automatic_execution_allowed'] and not line['runtime_applied'] for line in lines))
+
+    def test_ratio_correction_requires_matching_old_evidence(self):
+        original = next(m for m in self.data['catalogue']['methods'] if m['title'] == '耙耙柑茶')
+        for field, value in [('amount_text', '1 蔗糖糖浆 1 克(可选)'),
+                             ('original_source_text', '2 : 1 蔗糖糖浆 10 克（可选）'),
+                             ('shared_amount_evidence', '总共 10 克'), ('ingredient_id', 'already-bound')]:
+            method = copy.deepcopy(original)
+            next(i for i in method['ingredients'] if i['name'] == '1')[field] = value
+            self.assertEqual(ingredient_corrections(method, self.data['catalogue'], {}), [])
 
     def test_ingredient_corrections_refuse_ambiguous_or_stale_identity_and_quantity(self):
         method = copy.deepcopy(next(m for m in self.data['catalogue']['methods'] if m['title'] == '西红柿土豆炖牛肉'))

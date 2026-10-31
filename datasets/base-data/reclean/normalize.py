@@ -23,6 +23,7 @@ def key(value):
 
 NUMBER = r'(?:\d+(?:\.\d+)?(?:\s*/\s*\d+)?|半|[一二两三四五六七八九十]+)'
 UNITS = {
+    '厘米': ('cm', 1, 'length'), 'cm': ('cm', 1, 'length'),
     '千克': ('g', 1000, 'mass'), '公斤': ('g', 1000, 'mass'), 'kg': ('g', 1000, 'mass'),
     '克': ('g', 1, 'mass'), 'g': ('g', 1, 'mass'), '毫克': ('mg', 1, 'mass'),
     'mg': ('mg', 1, 'mass'), '升': ('ml', 1000, 'volume'), 'l': ('ml', 1000, 'volume'),

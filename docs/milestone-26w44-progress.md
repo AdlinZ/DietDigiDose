@@ -32,6 +32,12 @@
 - `source_coverage.py` 对仓库冻结包 `system-data-2026-09-15.2` 审计成功：389 个 recipe methods，其中缺份数 279、缺食材身份或精确用量 272、缺设备 290；369 个有来源 URL 和声明许可。此为该冻结参考包的范围，不是线上菜谱计数或全部新版数据结论，也不等于人工审核通过。
 - #108 当前线上仍报告 local-filesystem；本轮未取得独立 bucket 配置与真实迁移证据。#183/#62 的实际停录、连续五轮、插话和回声仍须设备及真实语音服务验证。
 
+### CI 新发现的依赖审计阻断与修复
+
+草稿 PR [#286](https://github.com/AdlinZ/DietDigiDose/pull/286) 首轮 CI 的 Windows 测试、构建和体积预算通过后，生产依赖审计失败；稳定性与 AI 配置集成通过。核对上游公告后升级 follow-redirects/node-forge、现代 glob/minimatch，并定向升级 Edge 启动器、React Native/codegen 同步 glob 和 test-exclude，移除旧生产依赖链；不将旧版 callable minimatch 全局替换为新模块 API。删除已被上游修复取代的 node-forge 本地补丁及对应 CVE 例外，没有添加新例外。
+
+新增四项兼容/安全回归编入依赖门禁，与已有用例合计 20 项；覆盖真实消费者加载、原生 TypeScript/podspec 扫描、展开上限、取消目录遍历及跨 realm 敏感头清除。升级后全量测试、三端构建/预算和客户端 828 项覆盖率检查通过；最终 PR CI 状态以 [检查页](https://github.com/AdlinZ/DietDigiDose/pull/286/checks) 为准，不把首轮失败写成全绿。详细版本与兼容边界见 [测试记录](testing.md)。
+
 ### 外部条件与下一步执行清单
 
 | Issue | 下一步所需条件及验收 |

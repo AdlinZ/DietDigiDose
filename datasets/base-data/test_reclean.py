@@ -65,10 +65,12 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(n.serving_evidence('1 人食用；3 人食用')['status'], 'conflicting')
 
     def test_direction_words_do_not_qualify_explicit_diners(self):
-        for text, count in [('以下为一份两人食用的量：', 2),
+        for text, count in [('以下为一份两人食用的量：', 2), ('按照两个人的份量：', 2),
+                            ('每份：三人量', 3), ('一份正好够 2 人喝。', 2),
+                            ('一份为一人餐，多人餐请等比例增加。', 1),
                             ('对于一人份（三小碗）的情况，一份的分量是：\n以上原料分量可以按照自己的口味偏好适当调整。', 1)]:
             self.assertEqual(n.serving_evidence(text)['servings'], count)
-        for text in ['2 人份以上', '2 人以下食用', '3 人食用以上', '最多 2 人份',
+        for text in ['2 人份以上', '2 人的份量以下', '一份正好够 4-5 个人饮用', '2 人以下食用', '3 人食用以上', '最多 2 人份',
                      '以下用量约 2 人份', '约两人份', '以下为 2-3 人食用', '以下为 2 人食用；另一版 4 人食用']:
             self.assertIsNone(n.serving_evidence(text)['servings'], text)
 

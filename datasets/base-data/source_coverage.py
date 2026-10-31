@@ -3,6 +3,7 @@ import argparse
 from collections import Counter, defaultdict
 import hashlib
 import json
+import re
 from pathlib import Path
 import zipfile
 
@@ -298,10 +299,13 @@ def review_inventory(data, evidence=None, tfda_evidence=None):
     for method in catalogue['methods']:
         corrections = {}
         previous = method.get('yield', {}).get('evidence', {})
-        if method['servings'] is None and previous.get('status') == 'range_or_qualified':
+        if method['servings'] is None and previous.get('status') in {'range_or_qualified', 'unknown'}:
             parsed = normalize.serving_evidence(previous.get('context', ''))
+            same_evidence = parsed['evidence'] == previous.get('evidence')
+            explicit_batch = (previous.get('status') == 'unknown' and not previous.get('evidence')
+                              and re.search(r'按照|每份|一份为|一份正好够', previous.get('context', '')))
             if (parsed['status'] == 'explicit_diners' and parsed['servings'] > 0
-                    and parsed['evidence'] == previous.get('evidence')):
+                    and (same_evidence or explicit_batch)):
                 corrections['servings'] = {'previous': None, 'value': parsed['servings'],
                     'basis': 'explicit_diners_in_preserved_source_context',
                     'source_context': previous['context'], 'evidence': parsed['evidence'],

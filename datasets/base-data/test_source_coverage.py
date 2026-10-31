@@ -177,16 +177,20 @@ class SourceCoverageTests(unittest.TestCase):
         original = copy.deepcopy(self.data)
         inventory = review_inventory(self.data, self.evidence, self.tfda_evidence)
         corrected = {r['name']: r for r in inventory['records'] if r['confirmed_source_fields']}
-        self.assertEqual(set(corrected), {'柱候牛腩', '腊八粥'})
-        for name, count in [('柱候牛腩', 2), ('腊八粥', 1)]:
+        expected = {'柱候牛腩': 2, '腊八粥': 1, '排骨山药玉米汤': 2, '菠菜炒鸡蛋': 1,
+                    '带把肘子': 3, '银耳莲子粥': 1, '牛油果拉西': 1, '西葫芦炒鸡蛋': 2,
+                    '肉蛋盖饭': 1, '烤茄子': 2, '红柚蛋糕': 1, '凉拌木耳': 1, '蒸箱鸡蛋羹': 1,
+                    '鸡蛋羹': 1, '黔式腊肠娃娃菜': 1, '甜辣烤全翅': 1, '商芝肉': 2}
+        self.assertEqual(set(corrected), set(expected))
+        for name, count in expected.items():
             row = corrected[name]
             self.assertEqual(row['confirmed_source_fields']['servings']['value'], count)
             self.assertIsNone(row['record']['servings'])
             self.assertNotIn('servings', row['missing_or_unverified'])
             self.assertFalse(row['automatic_execution_allowed'])
             self.assertFalse(row['confirmed_source_fields']['servings']['runtime_applied'])
-        self.assertEqual(inventory['gap_counts']['servings'], 277)
-        self.assertEqual(inventory['confirmed_source_field_counts'], {'servings': 2})
+        self.assertEqual(inventory['gap_counts']['servings'], 262)
+        self.assertEqual(inventory['confirmed_source_field_counts'], {'servings': 17})
         self.assertEqual(self.data, original)
         for row in inventory['records']:
             if row['kind'] == 'recipe_method' and row['record']['servings'] is None and row['name'] not in corrected:

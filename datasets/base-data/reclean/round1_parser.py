@@ -97,7 +97,9 @@ def amount(raw):
         prefix_text = prefix['amount'].strip()
         remainder = raw[prefix.end():].strip()
         parsed = base.measurement(prefix_text)
-        if parsed['kind'] in ('exact', 'range') and (not remainder or remainder[0] in '(,;。'):
+        # Only known preparation/product notes may follow without punctuation.
+        plain_note = bool(re.fullmatch(r'切段(?:备用)?|剁成蒜蓉|切成碎|普通(?:鸡蛋|袋装牛奶)即可|普通砂糖即可(?: 细砂糖更优 易于融化)?', remainder))
+        if parsed['kind'] in ('exact', 'range') and (not remainder or remainder[0] in '(,;。' or plain_note):
             parsed.update(source_text=value['source_text'], source_notes=[remainder] if remainder else [],
                           additional_measurements=[], stated_result=False)
             if re.search(r'按.{0,8}口味|加减|适量|至少|最多|不超过|不少于|上下|左右|以上|以下', remainder):

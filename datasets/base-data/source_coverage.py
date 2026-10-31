@@ -8,7 +8,7 @@ from pathlib import Path
 import zipfile
 
 from reclean.enrich_core import CORE, estimate, scalar
-from reclean import normalize
+from reclean import normalize, round1_parser
 
 ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE = ROOT / 'datasets/releases/system-data-2026-09-15.2.zip'
@@ -190,8 +190,50 @@ def audit(data, evidence=None, tfda_evidence=None):
     }
 
 
+def ingredient_corrections(method, catalogue, prepared_terms):
+    """Confirm literal source fields only; never allocate shared totals or bind nutrition."""
+    forms = defaultdict(list)
+    concepts = {c['id']: c for c in catalogue['concepts']}
+    for form in catalogue['ingredient-forms']:
+        forms[form['display_name']].append(form)
+    corrections = []
+    for line in method['ingredients']:
+        fields = {}
+        source = round1_parser.text(line.get('original_source_text', line.get('source_text')) or '')
+        previous = line.get('measurement') or {}
+        if (previous.get('kind') == 'unparsed' and not line.get('shared_amount_evidence')
+                and line.get('amount_text') and round1_parser.text(line['amount_text']) in source):
+            parsed = round1_parser.amount(line.get('amount_text'))
+            if parsed['kind'] in ('exact', 'range') and not parsed['approximate']:
+                fields['measurement'] = {'previous': previous, 'value': parsed}
+        if (line.get('mapping_status') == 'unresolved' and not line.get('ingredient_id')
+                and not line.get('ingredient_form_id') and not line.get('ingredient_concept_id')
+                and line['name'] in prepared_terms and round1_parser.text(line['name']) in source):
+            name, qualifier = prepared_terms[line['name']]
+            candidates = forms[name]
+            if len(candidates) == 1:
+                form = candidates[0]
+                concept = concepts.get(form['concept_id'], {})
+                if concept.get('active_catalogue') and concept.get('name_zh') == name and (concept.get('kind') == 'ingredient'
+                        or 'ingredient' in concept.get('application_roles', [])):
+                    fields['mapping'] = {'ingredient_id': form['legacy_ingredient_id'],
+                        'ingredient_form_id': form['id'], 'ingredient_concept_id': form['concept_id'],
+                        'name': name, 'qualifier': qualifier,
+                        'basis': 'explicit_source_term_and_unique_existing_form',
+                        'nutrition_binding_confirmed': False}
+        if fields:
+            corrections.append({'line_id': line['line_id'],
+                'original_source_text': line.get('original_source_text', line.get('source_text')),
+                'shared_amount_evidence': line.get('shared_amount_evidence'),
+                'optional': line.get('optional', False), 'fields': fields,
+                'runtime_applied': False, 'automatic_execution_allowed': False})
+    return corrections
+
+
 def review_inventory(data, evidence=None, tfda_evidence=None):
     """Prepare review work, never grant approval from structural completeness."""
+    prepared_rules = Path(__file__).with_name('reclean') / 'round1-rules.json'
+    prepared_terms = json.loads(prepared_rules.read_bytes())['prepared_terms']
     report = audit(data, evidence, tfda_evidence)  # Contradicting source evidence fails closed.
     def digest(value):
         return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
@@ -310,6 +352,9 @@ def review_inventory(data, evidence=None, tfda_evidence=None):
                     'basis': 'explicit_diners_in_preserved_source_context',
                     'source_context': previous['context'], 'evidence': parsed['evidence'],
                     'runtime_applied': False, 'scale_automatically': False}
+        lines = ingredient_corrections(method, catalogue, prepared_terms)
+        if lines:
+            corrections['ingredient_lines'] = lines
         gaps = list(method['missing_fields']) + [
             'ingredient_mapping_and_amount_review', 'redistribution_license_review',
             'equipment_capacity_and_task_duration_review', 'kitchen_execution_review',
@@ -342,11 +387,15 @@ def review_inventory(data, evidence=None, tfda_evidence=None):
             'supplement_sha256': data.get('supplement_sha256'),
             'builder_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'serving_parser_sha256': hashlib.sha256(Path(normalize.__file__).read_bytes()).hexdigest(),
+            'ingredient_parser_sha256': hashlib.sha256(Path(round1_parser.__file__).read_bytes()).hexdigest(),
+            'ingredient_rules_sha256': hashlib.sha256(prepared_rules.read_bytes()).hexdigest(),
             'source_evidence_sha256': {'foundation': digest(evidence) if evidence else None,
                                        'tfda': digest(tfda_evidence) if tfda_evidence else None},
             'counts': dict(sorted(Counter(r['kind'] for r in records).items())),
             'gap_counts': dict(sorted(Counter(g for r in records for g in r['missing_or_unverified']).items())),
             'supporting_document_counts': {name: len(data[name]) for name in REVIEW_DOCUMENTS},
+            'ingredient_line_correction_counts': dict(sorted(Counter(field for r in records
+                for line in r['confirmed_source_fields'].get('ingredient_lines', []) for field in line['fields']).items())),
             'confirmed_source_field_counts': dict(sorted(Counter(key for r in records for key in r['confirmed_source_fields']).items())),
             'records_with_supporting_evidence': sum(bool(r['supporting_evidence']) for r in records),
             'semantic_approval': False, 'execution_eligible': 0,

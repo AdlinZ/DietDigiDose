@@ -48,13 +48,58 @@ export function projectCoreLoops(data: CoreLoopDataset): CoreLoopFact[] {
     const key = `household:${row.id}`;
     let fact = sharedFacts.get(key);
     if (!fact) {
-      fact = { productionId: key, actorKey: actor(row.created_by_user_id), producerKey: actor(row.created_by_user_id),
-        actorClass: actorClass(row.kind), environment: "unknown", scope: "household", producedAt: utc(row.produced_at), recipeId: null,
-        selection: null, stock: [], deductions: [], intake: [] };
-      sharedFacts.set(key,fact);
+      const householdKey = row.household_id ? `household:${row.household_id}` : (row.householdKey ? String(row.householdKey) : undefined);
+      const rawSelection = row.selection ? object(row.selection) : (row.selection_evidence ? object(row.selection_evidence) : null);
+      const inventory = rawSelection ? object(rawSelection.inventory) : null;
+      const allocations = inventory ? array(inventory.allocations) : [];
+      const selection = rawSelection && rawSelection.version === 1 ? {
+        requestId: String(rawSelection.requestId || ""),
+        recipeId: Number(rawSelection.recipeId ?? row.recipe_id ?? row.recipeId),
+        selectedAt: utc(rawSelection.selectedAt ?? row.selection_created_at ?? row.produced_at),
+        matchedItemIds: inventory && inventory.version === 1 ? allocations.map(item => Number(item.itemId)) : (Array.isArray(rawSelection.matchedItemIds) ? rawSelection.matchedItemIds.map(Number) : null),
+      } : null;
+
+      const stock = Array.isArray(row.stock) ? row.stock.map(item => ({
+        itemId: Number(item.itemId),
+        confirmedAt: utc(item.confirmedAt),
+        confirmed: Boolean(item.confirmed),
+        scope: "household" as const,
+        ownerKey: String(item.ownerKey || householdKey || ""),
+      })) : [];
+
+      const deductions = Array.isArray(row.deductions) ? row.deductions.map(item => ({
+        itemId: Number(item.itemId),
+        before: amount(item.before),
+        after: amount(item.after),
+        amount: amount(item.amount),
+        verified: Boolean(item.verified),
+      })) : [];
+
+      fact = {
+        productionId: key,
+        actorKey: actor(row.created_by_user_id),
+        producerKey: actor(row.created_by_user_id),
+        actorClass: actorClass(row.kind),
+        environment: typeof row.metric_environment === "string" ? row.metric_environment : "unknown",
+        scope: "household",
+        householdKey,
+        producedAt: utc(row.produced_at),
+        recipeId: row.recipe_id == null ? (row.recipeId == null ? null : Number(row.recipeId)) : Number(row.recipe_id),
+        selection,
+        stock,
+        deductions,
+        intake: [],
+      };
+      sharedFacts.set(key, fact);
     }
-    fact.intake.push({ recordId: String(row.diet_record_id), actorKey: actor(row.created_by_user_id),
-      servings: Number(row.servings), committedAt: utc(row.intake_at), survivesCorrection: true });
+    const dinerKey = actor(row.diner_user_id ?? row.user_id ?? row.created_by_user_id);
+    fact.intake.push({
+      recordId: String(row.diet_record_id),
+      actorKey: dinerKey,
+      servings: Number(row.servings),
+      committedAt: utc(row.intake_at),
+      survivesCorrection: row.survivesCorrection !== false && !row.corrected,
+    });
   }
   facts.push(...sharedFacts.values());
   return facts;

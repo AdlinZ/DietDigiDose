@@ -154,6 +154,25 @@ test("clarification retains the original opt-in policy after the rollout flag is
   assert.ok((calls.at(-1)?.tools as unknown[]).length > 0);
 });
 
+test("awaiting_input expires after 24 hours and enforces user boundary", async () => {
+  calls = [];
+  answers = [{ goal: "人数", specialists: [], needsInput: "为几个人？" }];
+  const created = await runtime.startSupervisorRun(userId, { modality: "text", prompt: "安排备餐" }, 10000);
+  assert.equal(created.run.status, "awaiting_input");
+
+  // Foreign user cannot resume or hijack another user's awaiting run
+  await assert.rejects(runtime.resumeSupervisorRun(999999, created.run.id, { input: "外人" }), /不存在或无权/);
+
+  // Stale awaiting_input run past 24 hours fails closed and transitions to expired
+  const staleTime = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+  db.prepare("UPDATE agent_runs SET updated_at=?, created_at=? WHERE id=?").run(staleTime, staleTime, created.run.id);
+
+  await assert.rejects(runtime.resumeSupervisorRun(userId, created.run.id, { input: "过期提交" }), /待补充信息已过期/);
+  const row = db.prepare("SELECT status, error_code, error_message FROM agent_runs WHERE id=?").get(created.run.id) as { status: string; error_code: string; error_message: string };
+  assert.equal(row.status, "expired");
+  assert.equal(row.error_code, "AGENT_INPUT_EXPIRED");
+});
+
 test("allergy consultation proceeds but actual unsafe candidates are blocked", async () => {
   db.prepare("UPDATE user_health_profiles SET allergies_json = ? WHERE user_id = ?").run(JSON.stringify([{ name: "花生", severity: "severe" }]), userId);
   for (const prompt of ["花生过敏可以用什么替代", "不要加入花生"]) {
@@ -214,21 +233,43 @@ test("business proposals wait for approval and edits execute once", async () => 
 });
 
 test("history is bounded and retains latest references", () => {
-  const result = conversationContext({ modality: "text", messages: [{ role: "user", content: "旧".repeat(20000) }, { role: "assistant", content: "方案 plan-new" }, { role: "user", content: "第二份不要辣" }] }, 100);
+  const result = conversationContext({ modality: "text", messages: [{ role: "user", content: "前置方案 plan-archive-999 详细描述超长文本内容".repeat(500) }, { role: "assistant", content: "方案 plan-new" }, { role: "user", content: "第二份不要辣" }] }, 120);
   assert.match(result, /plan-new/);
   assert.match(result, /第二份不要辣/);
-  assert.ok(result.length < 400);
+  assert.match(result, /plan-archive-999/);
+  assert.ok(result.length < 500);
 });
 
 test("thinking policy serializes only documented parameters and rejects unknown support", () => {
   const policy = runtimePolicySchema.parse({}).main;
   assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V4-Flash", { ...policy, thinking: "off" }), { enable_thinking: false });
   assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V4-Flash", { ...policy, thinking: "max" }), { enable_thinking: true, reasoning_effort: "max" });
+  assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-R1", { ...policy, thinking: "high", thinkingBudget: 4096 }), { enable_thinking: true, reasoning_effort: "high", thinking_budget: 4096 });
+  assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V3", { ...policy, thinking: "default", thinkingBudget: 2048 }), { enable_thinking: true, thinking_budget: 2048 });
+  assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-R1", { ...policy, thinking: "off", thinkingBudget: 4096 }), { enable_thinking: false });
   assert.throws(() => thinkingParameters("https://unknown.test/v1", "unknown", { ...policy, thinking: "off" }), /尚未验证/);
+  assert.throws(() => thinkingParameters("https://api.siliconflow.cn/v1", "unsupported-model", { ...policy, thinking: "high" }), /尚未验证/);
+  assert.throws(() => thinkingParameters("https://api.siliconflow.cn/v1", "unsupported-model", { ...policy, thinkingBudget: 2048 }), /尚未验证/);
   assert.deepEqual(thinkingParameters("https://unknown.test/v1", "unknown", policy), {});
-  assert.equal(isTransientModelError({ status: 401 }), false);
+
+  // Transient error classification
   assert.equal(isTransientModelError({ status: 400 }), false);
+  assert.equal(isTransientModelError({ status: 401 }), false);
+  assert.equal(isTransientModelError({ status: 403 }), false);
+  assert.equal(isTransientModelError({ status: 404 }), false);
+  assert.equal(isTransientModelError({ status: 422 }), false);
   assert.equal(isTransientModelError({ status: 429 }), true);
+  assert.equal(isTransientModelError({ status: 500 }), true);
+  assert.equal(isTransientModelError({ status: 502 }), true);
+  assert.equal(isTransientModelError({ status: 503 }), true);
+  assert.equal(isTransientModelError(new Error("fetch failed")), true);
+  assert.equal(isTransientModelError(new Error("ECONNRESET")), true);
+  assert.equal(isTransientModelError(new Error("ETIMEDOUT")), true);
+  assert.equal(isTransientModelError(new Error("socket hang up")), true);
+  assert.equal(isTransientModelError(new Error("模型调用预算已用尽")), false);
+  assert.equal(isTransientModelError(new Error("工具调用预算已用尽")), false);
+  assert.equal(isTransientModelError(new Error("AGENT_RUN_CANCELLED")), false);
+  assert.equal(isTransientModelError(null), false);
 });
 
 
@@ -236,11 +277,34 @@ test("candidate safety includes aliases, compound ingredients and edited shoppin
   const { findCandidateSafetyConflict, validateAgentActions, AgentSafetyConflictError } = await import("../src/services/agent/policy.js");
   const { buildUserContext } = await import("../src/services/contextBuilder.js");
   const context = await buildUserContext(userId);
-  for (const ingredient of ["peanut butter", "落花生", "花生醬", "混合酱（配料不详）"]) {
+  for (const ingredient of ["peanut butter", "落花生", "花生醬", "混合酱（配料不详）", "秘制调料", "特调酱（未知成分）"]) {
     assert.ok(findCandidateSafetyConflict({ ingredients: [ingredient] }, context), ingredient);
   }
-  assert.equal(findCandidateSafetyConflict({ ingredients: ["番茄", "鸡蛋"] }, context), null);
+  assert.equal(findCandidateSafetyConflict({ ingredients: ["番茄", "土豆"] }, context), null);
   assert.throws(() => validateAgentActions([{ actionType: "update_shopping_item", summary: "替换食材", payload: { itemId: "shopping-1", name: "peanut butter", note: "不要花生" } }], context), AgentSafetyConflictError);
+
+  // Test expanded allergen classes: seafood, egg, soy, wheat
+  const seafoodContext = { healthProfile: { allergies: [{ name: "海鲜", severity: "severe" }] } } as Parameters<typeof findCandidateSafetyConflict>[1];
+  for (const seafood of ["三文鱼", "金枪鱼", "大明虾", "鲍鱼", "梭子蟹", "鱿鱼", "seafood salad"]) {
+    assert.ok(findCandidateSafetyConflict({ ingredients: [seafood] }, seafoodContext), seafood);
+  }
+  assert.throws(() => validateAgentActions([{ actionType: "add_shopping_items", summary: "采购海鲜", payload: { items: [{ name: "金枪鱼罐头", amount: "1罐" }] } }], seafoodContext), AgentSafetyConflictError);
+
+  const eggContext = { healthProfile: { allergies: [{ name: "鸡蛋", severity: "severe" }] } } as Parameters<typeof findCandidateSafetyConflict>[1];
+  for (const egg of ["蛋黄", "蛋清", "全蛋液", "荷包蛋", "egg whites"]) {
+    assert.ok(findCandidateSafetyConflict({ ingredients: [egg] }, eggContext), egg);
+  }
+  assert.throws(() => validateAgentActions([{ actionType: "create_meal_plan", summary: "创建餐单", payload: { title: "蛋料理", startDate: "2026-11-01", endDate: "2026-11-07", constraints: {}, items: [{ date: "2026-11-01", mealType: "breakfast", title: "荷包蛋", ingredients: ["全蛋液"], steps: ["煎熟"] }] } }], eggContext), AgentSafetyConflictError);
+
+  const soyContext = { healthProfile: { allergies: [{ name: "大豆", severity: "high" }] } } as Parameters<typeof findCandidateSafetyConflict>[1];
+  for (const soy of ["豆浆", "嫩豆腐", "腐竹", "tofu"]) {
+    assert.ok(findCandidateSafetyConflict({ ingredients: [soy] }, soyContext), soy);
+  }
+
+  const wheatContext = { healthProfile: { allergies: [{ name: "小麦", severity: "severe" }] } } as Parameters<typeof findCandidateSafetyConflict>[1];
+  for (const wheat of ["面粉", "手擀面条", "面筋", "wheat flour", "gluten free note but contains 面粉"]) {
+    assert.ok(findCandidateSafetyConflict({ ingredients: [wheat] }, wheatContext), wheat);
+  }
 });
 
 

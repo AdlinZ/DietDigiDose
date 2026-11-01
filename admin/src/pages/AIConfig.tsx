@@ -335,7 +335,7 @@ export default function AIConfig() {
                   <option value="default">提供商默认</option>
                   {role !== "asr" && (() => {
                     const roles = role === "main" ? ["对话", "主助手", "菜谱", "运营"] : role === "planner" ? ["规划"] : ["图片"];
-                    const supported = roles.every(name => effectiveModels.some(entry => entry.role === name && /^https:\/\/api\.siliconflow\.(cn|com)(\/|$)/.test(entry.baseUrl) && ["Pro/deepseek-ai/DeepSeek-V4", "deepseek-ai/DeepSeek-V4-Flash", "Pro/zai-org/GLM-5.2"].includes(entry.model)));
+                    const supported = roles.every(name => effectiveModels.some(entry => entry.role === name && /^https:\/\/api\.siliconflow\.(cn|com)(\/|$)/.test(entry.baseUrl) && ["Pro/deepseek-ai/DeepSeek-V4", "deepseek-ai/DeepSeek-V4-Flash", "Pro/zai-org/GLM-5.2", "deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-V3", "Pro/deepseek-ai/DeepSeek-R1", "Pro/deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"].includes(entry.model)));
                     return supported ? <><option value="off">关闭</option><option value="high">高强度</option><option value="max">最大强度</option></> : null;
                   })()}
                 </select>

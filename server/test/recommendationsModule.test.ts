@@ -549,3 +549,81 @@ test("recommendation recipe summaries preserve unknown nutrients and real zero",
     assert.equal(recipe.nutrition_is_estimated, false);
   }
 });
+
+test("learned taste preferences dynamically update candidate scoring, preserve non-dislike skips and honor user corrections", async () => {
+  const baseRecipe = {
+    id: 1, title: "排骨汤", status: "approved", ingredients_json: [{ name: "排骨", amount: "500g" }], steps_json: ["煮熟"],
+    serving_size: 2, cook_time: 20, prep_time: 10,
+  };
+  const recentIso = new Date(Date.now() - 3600000).toISOString();
+  const skipEvent = (id: string, reason = "dislike", scope = "long_term") => ({
+    id, recipe_id: 1, event_type: "skip", metadata_json: { reason, scope }, idempotency_key: id, created_at: recentIso,
+  });
+
+  // 1. Without learning data: normal baseline score, no skip reasons
+  let learningDataState: any = { settings: null, events: [], recipes: [baseRecipe] };
+  const service = new RecommendationsService(repository({
+    recipes: async () => [baseRecipe],
+    learningData: async () => learningDataState,
+  }), kitchenware);
+
+  const baseline = await service.compute(7, { surface: "meal_plan" });
+  assert.equal(baseline.results.length, 1);
+  const baseScore = baseline.results[0].score;
+  assert.equal(baseline.results[0].reasons.some(r => r.includes("不喜欢")), false);
+
+  // 2. Three long-term dislike skip events: score drops by 8 (skipPenalty), reason is present, recipe NOT excluded
+  learningDataState = {
+    settings: { enabled: true, overrides_json: {} },
+    events: [skipEvent("a"), skipEvent("b"), skipEvent("c")],
+    recipes: [baseRecipe],
+  };
+  const withInferredDislike = await service.compute(7, { surface: "meal_plan" });
+  assert.equal(withInferredDislike.results.length, 1);
+  assert.equal(withInferredDislike.results[0].score, Math.round((baseScore - 8) * 100) / 100);
+  assert(withInferredDislike.results[0].reasons.some(r => r.includes("近30天多次明确表示长期不喜欢，暂时降低排序；不会排除菜谱")));
+
+  // 3. User corrects preference to neutral: penalty is cleared immediately and reason is removed
+  learningDataState = {
+    settings: { enabled: true, overrides_json: { 1: { value: "neutral", updatedAt: "2026-09-12T11:00:00Z" } } },
+    events: [skipEvent("a"), skipEvent("b"), skipEvent("c")],
+    recipes: [baseRecipe],
+  };
+  const withNeutralCorrection = await service.compute(7, { surface: "meal_plan" });
+  assert.equal(withNeutralCorrection.results.length, 1);
+  assert.equal(withNeutralCorrection.results[0].score, baseScore);
+  assert.equal(withNeutralCorrection.results[0].reasons.some(r => r.includes("不喜欢")), false);
+
+  // 4. User explicitly dislikes recipe: score drops by 8 (skipPenalty), explicit reason present
+  learningDataState = {
+    settings: { enabled: true, overrides_json: { 1: { value: "dislike", updatedAt: "2026-09-12T11:00:00Z" } } },
+    events: [],
+    recipes: [baseRecipe],
+  };
+  const withExplicitDislike = await service.compute(7, { surface: "meal_plan" });
+  assert.equal(withExplicitDislike.results.length, 1);
+  assert.equal(withExplicitDislike.results[0].score, Math.round((baseScore - 8) * 100) / 100);
+  assert(withExplicitDislike.results[0].reasons.some(r => r.includes("按你明确设置的不喜欢降低排序")));
+
+  // 5. When learning is paused (enabled: false): inferred dislike is not applied
+  learningDataState = {
+    settings: { enabled: false, overrides_json: {} },
+    events: [skipEvent("a"), skipEvent("b"), skipEvent("c")],
+    recipes: [baseRecipe],
+  };
+  const withPausedLearning = await service.compute(7, { surface: "meal_plan" });
+  assert.equal(withPausedLearning.results[0].score, baseScore);
+  assert.equal(withPausedLearning.results[0].reasons.some(r => r.includes("不喜欢")), false);
+
+  // 6. Temporary skips (no_time / too_much) never penalize taste
+  for (const reason of ["no_time", "too_much"]) {
+    learningDataState = {
+      settings: { enabled: true, overrides_json: {} },
+      events: [skipEvent("a", reason, "session"), skipEvent("b", reason, "session"), skipEvent("c", reason, "session")],
+      recipes: [baseRecipe],
+    };
+    const withTempSkip = await service.compute(7, { surface: "meal_plan" });
+    assert.equal(withTempSkip.results[0].score, baseScore);
+    assert.equal(withTempSkip.results[0].reasons.some(r => r.includes("不喜欢")), false);
+  }
+});

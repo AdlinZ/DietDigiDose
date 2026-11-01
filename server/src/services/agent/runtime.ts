@@ -847,7 +847,7 @@ async function invokeRun(runId: string, resume?: AgentResumePayload, explicitRet
     }
   }
   const config = { configurable: { thread_id: stored.threadId }, recursionLimit: Math.max(20, Number(process.env.AI_AGENT_RECURSION_LIMIT) || 60) };
-  await setAgentRunStatus(runId, "running", { pendingApproval: resume ? null : undefined });
+  await setAgentRunStatus(runId, "running", { pendingApproval: resume ? null : undefined, pendingInput: resume ? null : undefined });
   const controller = new AbortController();
   activeRunControllers.set(runId, controller);
   const policy = await aiRuntimeService().runtimePolicy();
@@ -967,6 +967,11 @@ export async function resumeSupervisorRun(userId: number, runId: string, resume:
   if (!row) throw new Error("Agent Run 不存在或无权操作");
   if (row.status !== "awaiting_approval" && row.status !== "awaiting_input") throw new Error("Agent Run 当前不等待恢复");
   if (row.status === "awaiting_input") {
+    const updatedAt = Date.parse(row.updated_at || row.created_at);
+    if (!Number.isNaN(updatedAt) && updatedAt + 24 * 60 * 60 * 1000 <= Date.now()) {
+      await setAgentRunStatus(runId, "expired", { pendingInput: null, errorCode: "AGENT_INPUT_EXPIRED", errorMessage: "待补充信息已超过 24 小时有效期，请作为新任务重新发起" });
+      throw new Error("待补充信息已过期，请重新发起对话");
+    }
     if (!("input" in resume) || !resume.input.trim()) throw new Error("当前 Agent Run 需要补充信息");
     kickOff(runId, { input: resume.input.trim().slice(0, 4000) });
     return waitForRun(runId, waitMs);

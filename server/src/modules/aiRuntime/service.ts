@@ -86,7 +86,7 @@ export class AIRuntimeService {
     for (const service of serviceIds) {
       const effective = resolveResourceService(document, service, this.resolveConfig(values), values);
       const modelPolicy = service === "vision" ? policy.vision : service === "asr" ? policy.asr : service === "nutrition" ? policy.planner : policy.main;
-      if (service === "asr" && modelPolicy.thinking !== "default") throw new AIResourceValidationError();
+      if (service === "asr" && (modelPolicy.thinking !== "default" || modelPolicy.thinkingBudget !== undefined)) throw new AIResourceValidationError();
       thinkingParameters(effective.baseUrl, effective.model, modelPolicy);
     }
   }

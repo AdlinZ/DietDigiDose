@@ -4,6 +4,7 @@ import type {
   ChallengeCreate, DeliveryReport, EventFilters, RegistrationResult, UsageCounter,
   VerificationChallenge, VerificationEventInput, VerificationSubject,
   ReauthUser, ReauthGrantInput, PhoneBindingUser, PhoneBindingInput, PhoneBindingResult,
+  PhoneReplacementInput, PhoneReplacementResult,
 } from "./types.js";
 
 const totalsSql = `SELECT COALESCE(SUM(send_requests),0) AS sendRequests, COALESCE(SUM(send_api_calls),0) AS sendApiCalls,
@@ -42,6 +43,35 @@ export class SqliteAuthVerificationRepository implements AuthVerificationReposit
         this.database.prepare("UPDATE auth_verification_challenges SET status='consumed',verified_at=CURRENT_TIMESTAMP,consumed_at=CURRENT_TIMESTAMP WHERE id=?").run(input.challengeId);
         this.insertEvent(valid.provider, { subjectId: valid.subject_id, challengeId: input.challengeId, eventType: "phone_bind", outcome: "succeeded" });
         return "bound";
+      }).immediate();
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("UNIQUE constraint failed: users.phone")) return "phone_exists";
+      throw error;
+    }
+  }
+
+  async replacePhone(input: PhoneReplacementInput): Promise<PhoneReplacementResult> {
+    try {
+      return this.database.transaction(() => {
+        const valid = this.database.prepare(`SELECT c.subject_id,s.provider,s.user_id AS subject_user_id,u.phone AS old_phone FROM users u
+          JOIN auth_verification_challenges c ON c.reauth_user_id=u.id
+          JOIN auth_verification_subjects s ON s.id=c.subject_id
+          WHERE u.id=? AND u.phone IS NOT NULL AND u.phone_verified_at IS NOT NULL
+          AND u.role='user' AND COALESCE(u.is_disabled,0)=0 AND u.session_version=?
+          AND c.id=? AND c.purpose='phone_replace' AND c.reauth_session_version=u.session_version
+          AND c.status='verifying' AND c.consumed_at IS NULL AND julianday(c.expires_at)>julianday('now')
+          AND s.subject_hmac=? AND s.channel='sms'`)
+          .get(input.userId,input.sessionVersion,input.challengeId,input.subjectHmac) as { subject_id: number; provider: string; subject_user_id: number | null; old_phone: string } | undefined;
+        if (!valid) return "invalid";
+        if (valid.old_phone === input.phone) return "invalid";
+        if (valid.subject_user_id !== null || this.database.prepare("SELECT 1 FROM users WHERE phone=?").get(input.phone)) return "phone_exists";
+        this.database.prepare("UPDATE users SET phone=?,phone_verified_at=CURRENT_TIMESTAMP WHERE id=?").run(input.phone,input.userId);
+        this.database.prepare("UPDATE auth_verification_subjects SET user_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND channel='sms' AND id!=?").run(input.userId,valid.subject_id);
+        this.database.prepare("UPDATE auth_verification_subjects SET user_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(input.userId,valid.subject_id);
+        this.database.prepare("UPDATE auth_verification_challenges SET status='consumed',verified_at=CURRENT_TIMESTAMP,consumed_at=CURRENT_TIMESTAMP WHERE id=?").run(input.challengeId);
+        this.database.prepare("UPDATE account_reauth_grants SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=? AND consumed_at IS NULL").run(input.userId);
+        this.insertEvent(valid.provider, { subjectId: valid.subject_id, challengeId: input.challengeId, eventType: "phone_replace", outcome: "succeeded" });
+        return "replaced";
       }).immediate();
     } catch (error) {
       if (error instanceof Error && error.message.includes("UNIQUE constraint failed: users.phone")) return "phone_exists";

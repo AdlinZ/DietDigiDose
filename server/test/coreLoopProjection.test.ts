@@ -51,3 +51,160 @@ test("split household intakes retain all evidence but count one unresolved produ
   input.shared.push({ ...shared,id: "another-batch",diet_record_id: 23,intake_at: "2026-09-12 13:00:00" });
   assert.equal(projectCoreLoops(input).length,2);
 });
+
+test("verified household dining core loop credits producing cook who eats without inflating other members", () => {
+  const input = dataset(); input.productions = []; input.intakes = []; input.logs = [];
+  const shared = {
+    id: "household-batch-1",
+    household_id: 1,
+    created_by_user_id: 1,
+    kind: "real",
+    recipe_id: 7,
+    metric_environment: "staging",
+    produced_at: "2026-09-12 10:00:00",
+    selection_evidence: {
+      version: 1,
+      requestId: "req-1",
+      recipeId: 7,
+      selectedAt: "2026-09-12 09:00:00",
+      inventory: { version: 1, allocations: [{ itemId: 11 }] },
+    },
+    stock: [{ itemId: 11, confirmedAt: "2026-09-11 08:00:00", confirmed: true, scope: "household", ownerKey: "household:1" }],
+    deductions: [{ itemId: 11, before: 5, after: 3, amount: 2, verified: true }],
+    servings: 1,
+  };
+  input.shared = [
+    // Cook eats
+    { ...shared, diet_record_id: 101, diner_user_id: 1, intake_at: "2026-09-12 12:00:00" },
+    // Family member 2 eats
+    { ...shared, diet_record_id: 102, diner_user_id: 2, intake_at: "2026-09-12 12:30:00" },
+  ];
+  const facts = projectCoreLoops(input);
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].actorKey, "user:1");
+  assert.equal(facts[0].producerKey, "user:1");
+  assert.equal(facts[0].householdKey, "household:1");
+  assert.equal(evaluateCoreLoop(facts[0], "staging").reason, "included");
+
+  const summary = summarizeCoreLoopWeek(facts, {
+    date: "2026-09-12",
+    targetEnvironment: "staging",
+    coverageStart: "2026-09-01T00:00:00Z",
+    now: "2026-09-20T00:00:00Z",
+  });
+  assert.equal(summary.status, "complete");
+  assert.equal(summary.verifiedUsers, 1);
+  assert.equal(summary.verifiedLoops, 1);
+  assert.equal(summary.users, 1);
+  assert.equal(summary.unknown, 0);
+});
+
+test("household meal eaten only by non-cook does not count as a loop or unresolved unknown", () => {
+  const input = dataset(); input.productions = []; input.intakes = []; input.logs = [];
+  const shared = {
+    id: "household-batch-2",
+    household_id: 1,
+    created_by_user_id: 1,
+    kind: "real",
+    recipe_id: 7,
+    metric_environment: "staging",
+    produced_at: "2026-09-12 10:00:00",
+    selection_evidence: {
+      version: 1,
+      requestId: "req-1",
+      recipeId: 7,
+      selectedAt: "2026-09-12 09:00:00",
+      inventory: { version: 1, allocations: [{ itemId: 11 }] },
+    },
+    stock: [{ itemId: 11, confirmedAt: "2026-09-11 08:00:00", confirmed: true, scope: "household", ownerKey: "household:1" }],
+    deductions: [{ itemId: 11, before: 5, after: 3, amount: 2, verified: true }],
+    servings: 1,
+  };
+  input.shared = [
+    // Only non-cook (user 2) eats
+    { ...shared, diet_record_id: 103, diner_user_id: 2, intake_at: "2026-09-12 12:00:00" },
+  ];
+  const facts = projectCoreLoops(input);
+  assert.equal(facts.length, 1);
+  assert.equal(evaluateCoreLoop(facts[0], "staging").reason, "no_surviving_intake");
+
+  const summary = summarizeCoreLoopWeek(facts, {
+    date: "2026-09-12",
+    targetEnvironment: "staging",
+    coverageStart: "2026-09-01T00:00:00Z",
+    now: "2026-09-20T00:00:00Z",
+  });
+  assert.equal(summary.status, "complete");
+  assert.equal(summary.verifiedUsers, 0);
+  assert.equal(summary.verifiedLoops, 0);
+  assert.equal(summary.unknown, 0);
+});
+
+test("cook eating with unconfirmed stock or unverified deductions marks week partial", () => {
+  const input = dataset(); input.productions = []; input.intakes = []; input.logs = [];
+  const shared = {
+    id: "household-batch-3",
+    household_id: 1,
+    created_by_user_id: 1,
+    kind: "real",
+    recipe_id: 7,
+    metric_environment: "staging",
+    produced_at: "2026-09-12 10:00:00",
+    selection_evidence: {
+      version: 1,
+      requestId: "req-1",
+      recipeId: 7,
+      selectedAt: "2026-09-12 09:00:00",
+      inventory: { version: 1, allocations: [{ itemId: 11 }] },
+    },
+    // Stock is NOT confirmed
+    stock: [{ itemId: 11, confirmedAt: "2026-09-11 08:00:00", confirmed: false, scope: "household", ownerKey: "household:1" }],
+    deductions: [{ itemId: 11, before: 5, after: 3, amount: 2, verified: false }],
+    servings: 1,
+  };
+  input.shared = [
+    { ...shared, diet_record_id: 104, diner_user_id: 1, intake_at: "2026-09-12 12:00:00" },
+  ];
+  const facts = projectCoreLoops(input);
+  assert.equal(evaluateCoreLoop(facts[0], "staging").reason, "stock_evidence_missing");
+
+  const summary = summarizeCoreLoopWeek(facts, {
+    date: "2026-09-12",
+    targetEnvironment: "staging",
+    coverageStart: "2026-09-01T00:00:00Z",
+    now: "2026-09-13T00:00:00Z",
+  });
+  assert.equal(summary.status, "partial");
+  assert.equal(summary.unknown, 1);
+  assert.equal(summary.users, null);
+  assert.equal(summary.verifiedLoops, 0);
+});
+
+test("cook intake correction moves or drops household dining completion", () => {
+  const input = dataset(); input.productions = []; input.intakes = []; input.logs = [];
+  const shared = {
+    id: "household-batch-4",
+    household_id: 1,
+    created_by_user_id: 1,
+    kind: "real",
+    recipe_id: 7,
+    metric_environment: "staging",
+    produced_at: "2026-09-12 10:00:00",
+    selection_evidence: {
+      version: 1,
+      requestId: "req-1",
+      recipeId: 7,
+      selectedAt: "2026-09-12 09:00:00",
+      inventory: { version: 1, allocations: [{ itemId: 11 }] },
+    },
+    stock: [{ itemId: 11, confirmedAt: "2026-09-11 08:00:00", confirmed: true, scope: "household", ownerKey: "household:1" }],
+    deductions: [{ itemId: 11, before: 5, after: 3, amount: 2, verified: true }],
+    servings: 1,
+  };
+  input.shared = [
+    // Cook's intake is corrected
+    { ...shared, diet_record_id: 105, diner_user_id: 1, intake_at: "2026-09-12 12:00:00", corrected: true },
+  ];
+  const facts = projectCoreLoops(input);
+  assert.equal(evaluateCoreLoop(facts[0], "staging").reason, "no_surviving_intake");
+});

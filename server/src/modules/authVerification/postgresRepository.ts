@@ -4,6 +4,7 @@ import type {
   ChallengeCreate, DeliveryReport, EventFilters, RegistrationResult, UsageCounter,
   VerificationChallenge, VerificationEventInput, VerificationSubject,
   ReauthUser, ReauthGrantInput, PhoneBindingUser, PhoneBindingInput, PhoneBindingResult,
+  PhoneReplacementInput, PhoneReplacementResult,
 } from "./types.js";
 
 export class PostgresAuthVerificationRepository implements AuthVerificationRepository {
@@ -42,6 +43,39 @@ export class PostgresAuthVerificationRepository implements AuthVerificationRepos
       });
     } catch (error) {
       // tx rolls back before translating a uniqueness race to a public conflict.
+      if ((error as {code?: string; constraint?: string}).code === "23505" && (error as {constraint?: string}).constraint?.includes("phone")) return "phone_exists";
+      throw error;
+    }
+  }
+
+  async replacePhone(input: PhoneReplacementInput): Promise<PhoneReplacementResult> {
+    try {
+      return await this.tx(async (client) => {
+        await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [input.userId]);
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`auth:phone:${input.phone}`]);
+        await client.query(`SELECT c.id FROM auth_verification_challenges c
+          JOIN auth_verification_subjects s ON s.id=c.subject_id WHERE c.id=$1 FOR UPDATE OF c,s`, [input.challengeId]);
+        const valid = await client.query(`SELECT c.subject_id,s.provider,s.user_id AS subject_user_id,u.phone AS old_phone FROM users u
+          JOIN auth_verification_challenges c ON c.reauth_user_id=u.id
+          JOIN auth_verification_subjects s ON s.id=c.subject_id
+          WHERE u.id=$1 AND u.phone IS NOT NULL AND u.phone_verified_at IS NOT NULL
+          AND u.role='user' AND NOT COALESCE(u.is_disabled,FALSE) AND u.session_version=$2
+          AND c.id=$3 AND c.purpose='phone_replace' AND c.reauth_session_version=u.session_version
+          AND c.status='verifying' AND c.consumed_at IS NULL AND c.expires_at>clock_timestamp()
+          AND s.subject_hmac=$4 AND s.channel='sms' FOR UPDATE OF c,s`,
+          [input.userId,input.sessionVersion,input.challengeId,input.subjectHmac]);
+        if (!valid.rowCount) return "invalid";
+        if (valid.rows[0].old_phone === input.phone) return "invalid";
+        if (valid.rows[0].subject_user_id !== null || (await client.query("SELECT 1 FROM users WHERE phone=$1", [input.phone])).rowCount) return "phone_exists";
+        await client.query("UPDATE users SET phone=$1,phone_verified_at=clock_timestamp() WHERE id=$2", [input.phone,input.userId]);
+        await client.query("UPDATE auth_verification_subjects SET user_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE user_id=$1 AND channel='sms' AND id!=$2", [input.userId,Number(valid.rows[0].subject_id)]);
+        await client.query("UPDATE auth_verification_subjects SET user_id=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2", [input.userId,valid.rows[0].subject_id]);
+        await client.query("UPDATE auth_verification_challenges SET status='consumed',verified_at=CURRENT_TIMESTAMP,consumed_at=CURRENT_TIMESTAMP WHERE id=$1", [input.challengeId]);
+        await client.query("UPDATE account_reauth_grants SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=$1 AND consumed_at IS NULL", [input.userId]);
+        await this.insertEvent(client, valid.rows[0].provider, { subjectId: Number(valid.rows[0].subject_id), challengeId: input.challengeId, eventType: "phone_replace", outcome: "succeeded" });
+        return "replaced";
+      });
+    } catch (error) {
       if ((error as {code?: string; constraint?: string}).code === "23505" && (error as {constraint?: string}).constraint?.includes("phone")) return "phone_exists";
       throw error;
     }

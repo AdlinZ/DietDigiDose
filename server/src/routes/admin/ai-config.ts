@@ -174,7 +174,7 @@ export function createAdminAIConfigRouter() {
         }
         thinkingParameters(effective.chat.baseUrl, effective.chat.model, policy.main);
         thinkingParameters(effective.vision.baseUrl, effective.vision.model, policy.vision);
-        if (policy.asr.thinking !== "default") throw new Error("语音转写不支持思考策略，请选择提供商默认");
+        if (policy.asr.thinking !== "default" || policy.asr.thinkingBudget !== undefined) throw new Error("语音转写不支持思考策略，请选择提供商默认");
         entries.push({ key: "AI_RUNTIME_POLICY", value: JSON.stringify(policy) });
       }
       await aiRuntimeService().saveValidatedSettings(entries, current, req.body.draftRevision);

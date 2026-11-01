@@ -52,3 +52,14 @@ export const phoneBindingVerifySchema = z.object({
 }).strict();
 export type PhoneBindingSend = z.infer<typeof phoneBindingSendSchema>;
 export type PhoneBindingVerify = z.infer<typeof phoneBindingVerifySchema>;
+
+// Phone replacement: user already has a phone bound and proves identity with their current password.
+export const phoneReplacementSendSchema = z.object({
+  newPhone: z.string().regex(/^(?:\+86)?1[3-9]\d{9}$/).transform((phone) => phone.replace(/^\+86/, "")),
+  currentPassword: z.string().min(1).max(128),
+}).strict();
+export const phoneReplacementVerifySchema = z.object({
+  challengeId: z.string().uuid(), code: z.string().regex(/^\d{6}$/),
+}).strict();
+export type PhoneReplacementSend = z.infer<typeof phoneReplacementSendSchema>;
+export type PhoneReplacementVerify = z.infer<typeof phoneReplacementVerifySchema>;

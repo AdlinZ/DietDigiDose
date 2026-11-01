@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const modelPolicySchema = z.object({
   thinking: z.enum(["default", "off", "high", "max"]).default("default"),
+  thinkingBudget: z.number().int().min(1024).max(32768).optional(),
   maxTokens: z.number().int().min(128).max(16000).default(3000),
   timeoutMs: z.number().int().min(1000).max(180000).default(60000),
   retries: z.number().int().min(0).max(2).default(0),
@@ -18,20 +19,46 @@ export const runtimePolicySchema = z.object({
 }).strict();
 
 // Explicit documented parameter support, not a claim of account availability.
-// Source checked 2026-09-18: SiliconFlow chat-completions-post.
-const effortModels = new Set(["Pro/deepseek-ai/DeepSeek-V4", "deepseek-ai/DeepSeek-V4-Flash", "Pro/zai-org/GLM-5.2"]);
-export function thinkingParameters(baseUrl: string, model: string, policy: ModelPolicy) {
-  if (policy.thinking === "default") return {};
+// Source checked 2026-09-18 & 2026-10-25: SiliconFlow chat-completions-post.
+export const SILICONFLOW_THINKING_MODELS = [
+  "Pro/deepseek-ai/DeepSeek-V4",
+  "deepseek-ai/DeepSeek-V4-Flash",
+  "Pro/zai-org/GLM-5.2",
+  "deepseek-ai/DeepSeek-R1",
+  "deepseek-ai/DeepSeek-V3",
+  "Pro/deepseek-ai/DeepSeek-R1",
+  "Pro/deepseek-ai/DeepSeek-V3",
+  "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+  "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+  "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+  "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+] as const;
+
+const effortModels = new Set<string>(SILICONFLOW_THINKING_MODELS);
+export function thinkingParameters(baseUrl: string, model: string, policy: ModelPolicy): Record<string, unknown> {
+  if (policy.thinking === "default" && !policy.thinkingBudget) return {};
   const host = new URL(baseUrl).hostname;
   if (!["api.siliconflow.cn", "api.siliconflow.com"].includes(host) || !effortModels.has(model)) {
     throw new Error(`模型 ${model} 的思考参数尚未验证，请选择“提供商默认”或使用已确认支持的模型`);
   }
-  return policy.thinking === "off" ? { enable_thinking: false }
-    : { enable_thinking: true, reasoning_effort: policy.thinking };
+  if (policy.thinking === "off") {
+    return { enable_thinking: false };
+  }
+  return {
+    enable_thinking: true,
+    ...(policy.thinking !== "default" ? { reasoning_effort: policy.thinking } : {}),
+    ...(policy.thinkingBudget ? { thinking_budget: policy.thinkingBudget } : {}),
+  };
 }
 
-export function isTransientModelError(error: unknown) {
+export function isTransientModelError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/预算已用尽|CANCELLED|已取消|ABORT_ERR/i.test(message)) return false;
   const status = Number((error as { status?: unknown })?.status);
-  if (status) return status === 429 || status >= 500;
-  return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error instanceof Error ? error.message : String(error));
+  if (status) {
+    if ([400, 401, 403, 404, 422].includes(status)) return false;
+    return status === 429 || status >= 500;
+  }
+  return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(message);
 }

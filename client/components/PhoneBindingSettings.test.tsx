@@ -142,3 +142,90 @@ it.each(["send", "verify"])("reports transport failure during %s without claimin
   expect(hasText("网络连接不可用")).toBe(true); expect(hasText("手机号已绑定并验证")).toBe(false);
   if (stage === "send") expect(hasText("已受理")).toBe(false);
 });
+
+describe("phone replacement flow", () => {
+  const verifiedAccount = { ...account, phone: "+8613800000000", phone_verified_at: "2026-10-25" };
+  const openReplace = () => press("更换手机号");
+  const fillReplace = () => { input("新手机号", "+8613900000000"); input("更换当前密码", "synthetic-password"); };
+
+  it("only offers replacement for accounts with verified phone and password", async () => {
+    mockUser = { ...verifiedAccount }; await rerender();
+    expect(button("更换手机号")).toBeDefined();
+    expect(button("首次绑定手机号")).toBeUndefined();
+
+    for (const patch of [{ phone: null }, { phone_verified_at: null }, { hasPassword: false }, { role: "admin" }]) {
+      mockUser = { ...verifiedAccount, ...patch }; await rerender();
+      expect(button("更换手机号")).toBeUndefined();
+    }
+  });
+
+  it("performs replacement end-to-end and cleans up secrets", async () => {
+    mockUser = { ...verifiedAccount }; await rerender();
+    await openReplace();
+    expect(hasText("更换前需先验证当前登录密码和新手机")).toBe(true);
+
+    fillReplace();
+    mockFetch.mockResolvedValueOnce(json({ challengeId: sent.challengeId, phoneMasked: "139****0000", expiresIn: 300, resendAfter: 60 }, 201));
+    await press("发送更换验证码");
+
+    expect(mockFetch.mock.calls[0][0]).toMatch(/\/auth\/phone-binding\/replace\/send$/);
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ newPhone: "13900000000", currentPassword: "synthetic-password" });
+    expect(tree.root.findByProps({ accessibilityLabel: "更换当前密码" }).props.value).toBe("");
+
+    input("更换验证码", "123456");
+    mockFetch.mockResolvedValueOnce(json({ success: true, phoneMasked: "139****0000" }));
+    await press("确认更换");
+
+    expect(mockFetch.mock.calls[1][0]).toMatch(/\/auth\/phone-binding\/replace\/verify$/);
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({ challengeId: sent.challengeId, code: "123456" });
+    expect(hasText("手机号已更换并验证")).toBe(true);
+    expect(button("确认更换")).toBeUndefined();
+
+    await press("关闭手机号更换");
+    expect(hasText("139****0000")).toBe(true);
+    expect(button("更换手机号")).toBeDefined();
+  });
+
+  it.each([
+    [403, "INVALID_PASSWORD", "当前密码不正确"],
+    [409, "PHONE_EXISTS", "该手机号已被其他账号使用"],
+    [400, "PHONE_UNCHANGED", "新手机号不能与当前手机号相同"],
+    [429, "PHONE_BINDING_RATE_LIMITED", "换绑请求过于频繁"],
+  ])("shows real replacement send errors %s %s without success", async (status, code, error) => {
+    mockUser = { ...verifiedAccount }; await rerender();
+    await openReplace(); fillReplace();
+    mockFetch.mockResolvedValueOnce(json({ code, error }, status as number));
+    await press("发送更换验证码");
+    expect(hasText(error as string)).toBe(true);
+    expect(button("确认更换")).toBeUndefined();
+    expect(tree.root.findByProps({ accessibilityLabel: "更换当前密码" }).props.value).toBe("");
+  });
+
+  it("locks same-tick duplicate replacement sends and verifies", async () => {
+    mockUser = { ...verifiedAccount }; await rerender();
+    await openReplace(); fillReplace();
+    const sending = deferred(); mockFetch.mockReturnValueOnce(sending.promise);
+    const click = button("发送更换验证码").props.onPress;
+    act(() => { click(); click(); });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await act(async () => sending.resolve(json({ ...sent, phoneMasked: "139****0000" }, 201)));
+
+    input("更换验证码", "123456");
+    const verifying = deferred(); mockFetch.mockReturnValueOnce(verifying.promise);
+    const verify = button("确认更换").props.onPress;
+    act(() => { verify(); verify(); });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    await act(async () => verifying.resolve(json({ success: true, phoneMasked: "139****0000" })));
+  });
+
+  it.each(["cancel", "blur"])("aborts replacement in flight after %s", async mode => {
+    mockUser = { ...verifiedAccount }; await rerender();
+    await openReplace(); fillReplace();
+    const req = deferred(); mockFetch.mockReturnValueOnce(req.promise);
+    await press("发送更换验证码");
+    const signal = mockFetch.mock.calls[0][1].signal;
+    if (mode === "cancel") await press("关闭手机号更换");
+    else act(() => { [...mockBlur].forEach(c => c()); });
+    expect(signal.aborted).toBe(true);
+  });
+});

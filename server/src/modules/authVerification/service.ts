@@ -50,6 +50,9 @@ export class AuthVerificationService {
   bindPhone(input: Omit<import("./types.js").PhoneBindingInput, "subjectHmac">) {
     return this.repository.bindPhone({ ...input, subjectHmac: verificationSubjectHmac(input.phone) });
   }
+  replacePhone(input: Omit<import("./types.js").PhoneReplacementInput, "subjectHmac">) {
+    return this.repository.replacePhone({ ...input, subjectHmac: verificationSubjectHmac(input.phone) });
+  }
 
   saveSettings(entries: Array<{ key: string; value: string }>) { return this.repository.saveSettings(entries); }
 

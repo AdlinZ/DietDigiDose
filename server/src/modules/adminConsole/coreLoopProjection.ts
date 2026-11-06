@@ -40,7 +40,7 @@ export function projectCoreLoops(data: CoreLoopDataset): CoreLoopFact[] {
   });
   // Legacy successful completions have intake evidence but no verified selection chain.
   for (const row of data.legacy) facts.push({ productionId: `legacy:${row.id}`, actorKey: actor(row.user_id), producerKey: actor(row.user_id),
-    actorClass: actorClass(row.kind), environment: typeof row.metric_environment === "string" ? row.metric_environment : "unknown", scope: "personal",
+    actorClass: actorClass(row.kind), environment: typeof row.metric_environment === "string" && row.metric_environment ? row.metric_environment : (typeof data.settings?.environment === "string" && data.settings.environment ? data.settings.environment : "unknown"), scope: "personal",
     producedAt: utc(row.created_at), recipeId: row.recipe_id == null ? null : Number(row.recipe_id), selection: null, stock: [], deductions: [],
     intake: [{ recordId: String(row.diet_record_id), actorKey: actor(row.user_id), servings: 1, committedAt: utc(row.created_at), survivesCorrection: Boolean(row.record_exists) }] });
   const sharedFacts = new Map<string, CoreLoopFact>();
@@ -49,42 +49,88 @@ export function projectCoreLoops(data: CoreLoopDataset): CoreLoopFact[] {
     let fact = sharedFacts.get(key);
     if (!fact) {
       const householdKey = row.household_id ? `household:${row.household_id}` : (row.householdKey ? String(row.householdKey) : undefined);
+      const request = object(row.request_json);
+      const rawInventory = Array.isArray(row.inventory_json)
+        ? row.inventory_json
+        : (typeof row.inventory_json === "string" ? (() => { try { const parsed = JSON.parse(row.inventory_json); return Array.isArray(parsed) ? parsed : []; } catch { return []; } })() : array(row.inventory_json));
+
       const rawSelection = row.selection ? object(row.selection) : (row.selection_evidence ? object(row.selection_evidence) : null);
       const inventory = rawSelection ? object(rawSelection.inventory) : null;
       const allocations = inventory ? array(inventory.allocations) : [];
-      const selection = rawSelection && rawSelection.version === 1 ? {
-        requestId: String(rawSelection.requestId || ""),
-        recipeId: Number(rawSelection.recipeId ?? row.recipe_id ?? row.recipeId),
-        selectedAt: utc(rawSelection.selectedAt ?? row.selection_created_at ?? row.produced_at),
-        matchedItemIds: inventory && inventory.version === 1 ? allocations.map(item => Number(item.itemId)) : (Array.isArray(rawSelection.matchedItemIds) ? rawSelection.matchedItemIds.map(Number) : null),
-      } : null;
+      const recipeId = row.recipe_id == null ? (row.recipeId == null ? null : Number(row.recipeId)) : Number(row.recipe_id);
 
-      const stock = Array.isArray(row.stock) ? row.stock.map(item => ({
+      let selection: CoreLoopFact["selection"] = null;
+      if (rawSelection && rawSelection.version === 1) {
+        selection = {
+          requestId: String(rawSelection.requestId || ""),
+          recipeId: Number(rawSelection.recipeId ?? recipeId),
+          selectedAt: utc(rawSelection.selectedAt ?? row.selection_created_at ?? row.produced_at),
+          matchedItemIds: inventory && inventory.version === 1
+            ? allocations.map(item => Number(item.itemId))
+            : (Array.isArray(rawSelection.matchedItemIds) ? rawSelection.matchedItemIds.map(Number) : null),
+        };
+      } else if (recipeId !== null) {
+        const inventoryIds = Array.isArray(rawInventory) && rawInventory.length > 0
+          ? rawInventory.map((item: Row) => Number(item.itemId ?? item.item_id)).filter((id: number) => Number.isFinite(id) && id > 0)
+          : Array.isArray(request.inventory)
+          ? (request.inventory as Row[]).map((item: Row) => Number(item.itemId)).filter((id: number) => Number.isFinite(id) && id > 0)
+          : null;
+        selection = {
+          requestId: String(request.idempotencyKey || row.idempotency_key || `household:${row.id}`),
+          recipeId,
+          selectedAt: utc(row.produced_at),
+          matchedItemIds: inventoryIds && inventoryIds.length ? inventoryIds : null,
+        };
+      }
+
+      const stock: CoreLoopFact["stock"] = Array.isArray(row.stock) ? row.stock.map(item => ({
         itemId: Number(item.itemId),
         confirmedAt: utc(item.confirmedAt),
         confirmed: Boolean(item.confirmed),
         scope: "household" as const,
         ownerKey: String(item.ownerKey || householdKey || ""),
-      })) : [];
+      })) : (Array.isArray(rawInventory) ? rawInventory.map((item: Row) => ({
+        itemId: Number(item.itemId ?? item.item_id),
+        confirmedAt: utc(row.produced_at),
+        confirmed: true,
+        scope: "household" as const,
+        ownerKey: String(householdKey || ""),
+      })) : []);
 
-      const deductions = Array.isArray(row.deductions) ? row.deductions.map(item => ({
+      const deductions: CoreLoopFact["deductions"] = Array.isArray(row.deductions) ? row.deductions.map(item => ({
         itemId: Number(item.itemId),
         before: amount(item.before),
         after: amount(item.after),
         amount: amount(item.amount),
         verified: Boolean(item.verified),
-      })) : [];
+      })) : (Array.isArray(rawInventory) ? rawInventory.map((item: Row) => {
+        const b = amount(item.before);
+        const a = amount(item.after);
+        const amt = amount(item.amount ?? (b !== null && a !== null ? b - a : null));
+        return {
+          itemId: Number(item.itemId ?? item.item_id),
+          before: b,
+          after: a,
+          amount: amt,
+          verified: Boolean(item.verified ?? (b !== null && a !== null && amt !== null && b > a && Math.abs(b - a - amt) < 0.000001)),
+        };
+      }) : []);
+
+      const environment = (typeof row.metric_environment === "string" && row.metric_environment)
+        || (typeof request.metric_environment === "string" && request.metric_environment)
+        || (typeof data.settings?.environment === "string" && data.settings.environment)
+        || "unknown";
 
       fact = {
         productionId: key,
         actorKey: actor(row.created_by_user_id),
         producerKey: actor(row.created_by_user_id),
         actorClass: actorClass(row.kind),
-        environment: typeof row.metric_environment === "string" ? row.metric_environment : "unknown",
+        environment,
         scope: "household",
         householdKey,
         producedAt: utc(row.produced_at),
-        recipeId: row.recipe_id == null ? (row.recipeId == null ? null : Number(row.recipeId)) : Number(row.recipe_id),
+        recipeId,
         selection,
         stock,
         deductions,

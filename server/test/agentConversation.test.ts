@@ -163,9 +163,12 @@ test("awaiting_input expires after 24 hours and enforces user boundary", async (
   // Foreign user cannot resume or hijack another user's awaiting run
   await assert.rejects(runtime.resumeSupervisorRun(999999, created.run.id, { input: "外人" }), /不存在或无权/);
 
-  // Stale awaiting_input run past 24 hours fails closed and transitions to expired
-  const staleTime = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
-  db.prepare("UPDATE agent_runs SET updated_at=?, created_at=? WHERE id=?").run(staleTime, staleTime, created.run.id);
+  // Valid awaiting_input run with SQLite naive timestamp (without Z) 18 hours ago in UTC does not expire
+  const naiveRecentTime = new Date(Date.now() - 18 * 3600 * 1000).toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+  db.prepare("UPDATE agent_runs SET updated_at=?, created_at=? WHERE id=?").run(naiveRecentTime, naiveRecentTime, created.run.id);
+  // Stale awaiting_input run past 24 hours fails closed and transitions to expired (also testing SQLite naive format)
+  const staleNaiveTime = new Date(Date.now() - 25 * 3600 * 1000).toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+  db.prepare("UPDATE agent_runs SET updated_at=?, created_at=? WHERE id=?").run(staleNaiveTime, staleNaiveTime, created.run.id);
 
   await assert.rejects(runtime.resumeSupervisorRun(userId, created.run.id, { input: "过期提交" }), /待补充信息已过期/);
   const row = db.prepare("SELECT status, error_code, error_message FROM agent_runs WHERE id=?").get(created.run.id) as { status: string; error_code: string; error_message: string };
@@ -291,9 +294,15 @@ test("candidate safety includes aliases, compound ingredients and edited shoppin
   assert.throws(() => validateAgentActions([{ actionType: "add_shopping_items", summary: "采购海鲜", payload: { items: [{ name: "金枪鱼罐头", amount: "1罐" }] } }], seafoodContext), AgentSafetyConflictError);
 
   const eggContext = { healthProfile: { allergies: [{ name: "鸡蛋", severity: "severe" }] } } as Parameters<typeof findCandidateSafetyConflict>[1];
-  for (const egg of ["蛋黄", "蛋清", "全蛋液", "荷包蛋", "egg whites"]) {
+  for (const egg of ["蛋黄", "蛋清", "全蛋液", "荷包蛋", "egg whites", "boiled eggs", "egg"]) {
     assert.ok(findCandidateSafetyConflict({ ingredients: [egg] }, eggContext), egg);
   }
+  // Verify food-token aware matching: eggplant / egg plant does not trigger egg allergy conflict
+  assert.equal(findCandidateSafetyConflict({ ingredients: ["eggplant"] }, eggContext), null);
+  assert.equal(findCandidateSafetyConflict({ ingredients: ["egg plant"] }, eggContext), null);
+  assert.equal(findCandidateSafetyConflict({ ingredients: ["grilled eggplant with garlic"] }, eggContext), null);
+  assert.equal(findCandidateSafetyConflict({ ingredients: ["crabapple jelly"] }, seafoodContext), null);
+
   assert.throws(() => validateAgentActions([{ actionType: "create_meal_plan", summary: "创建餐单", payload: { title: "蛋料理", startDate: "2026-11-01", endDate: "2026-11-07", constraints: {}, items: [{ date: "2026-11-01", mealType: "breakfast", title: "荷包蛋", ingredients: ["全蛋液"], steps: ["煎熟"] }] } }], eggContext), AgentSafetyConflictError);
 
   const soyContext = { healthProfile: { allergies: [{ name: "大豆", severity: "high" }] } } as Parameters<typeof findCandidateSafetyConflict>[1];

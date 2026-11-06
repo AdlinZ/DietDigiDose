@@ -208,3 +208,62 @@ test("cook intake correction moves or drops household dining completion", () => 
   const facts = projectCoreLoops(input);
   assert.equal(evaluateCoreLoop(facts[0], "staging").reason, "no_surviving_intake");
 });
+
+test("decodes persisted household evidence from real inventory_json, request_json and settings environment", () => {
+  const input = dataset();
+  input.productions = [];
+  input.intakes = [];
+  input.logs = [];
+  input.settings = { environment: "staging", enabled: 1 };
+
+  const persistedSharedRow = {
+    id: "batch-persisted-123",
+    household_id: 2,
+    created_by_user_id: 5,
+    idempotency_key: "idem-batch-123",
+    kind: "real",
+    recipe_id: 18,
+    produced_at: "2026-09-12 10:00:00",
+    diet_record_id: 201,
+    diner_user_id: 5,
+    servings: 2,
+    intake_at: "2026-09-12 12:00:00",
+    request_json: JSON.stringify({
+      idempotencyKey: "idem-batch-123",
+      membershipId: 10,
+      foodName: "番茄炒蛋",
+      producedServings: 2,
+      inventory: [{ itemId: 42, version: 1, amount: 3, unit: "个" }],
+    }),
+    inventory_json: JSON.stringify([
+      { itemId: 42, foodName: "鸡蛋", before: 10, after: 7, amount: 3, unit: "个" },
+    ]),
+    dining_json: null,
+  };
+
+  input.shared = [persistedSharedRow];
+  const facts = projectCoreLoops(input);
+  assert.equal(facts.length, 1);
+  const fact = facts[0];
+  assert.equal(fact.productionId, "household:batch-persisted-123");
+  assert.equal(fact.actorKey, "user:5");
+  assert.equal(fact.producerKey, "user:5");
+  assert.equal(fact.householdKey, "household:2");
+  assert.equal(fact.environment, "staging");
+  assert.equal(fact.recipeId, 18);
+  assert.ok(fact.selection);
+  assert.equal(fact.selection?.recipeId, 18);
+  assert.deepEqual(fact.selection?.matchedItemIds, [42]);
+  assert.equal(fact.stock.length, 1);
+  assert.equal(fact.stock[0].itemId, 42);
+  assert.equal(fact.stock[0].ownerKey, "household:2");
+  assert.equal(fact.stock[0].confirmed, true);
+  assert.equal(fact.deductions.length, 1);
+  assert.equal(fact.deductions[0].itemId, 42);
+  assert.equal(fact.deductions[0].before, 10);
+  assert.equal(fact.deductions[0].after, 7);
+  assert.equal(fact.deductions[0].amount, 3);
+  assert.equal(fact.deductions[0].verified, true);
+  assert.equal(evaluateCoreLoop(fact, "staging").reason, "included");
+});
+

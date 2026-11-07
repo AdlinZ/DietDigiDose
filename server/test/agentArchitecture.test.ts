@@ -1333,3 +1333,141 @@ describe("plant-based non-dairy compound disambiguation and dairy alias coverage
     }
   });
 });
+
+describe("custom multi-word allergy whitespace handling", () => {
+  const makeCtx = (name: string) =>
+    ({
+      healthProfile: { allergies: [{ name, severity: "severe" }] },
+    }) as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  const whitespaceCases = [
+    { label: "double space", ws: "  " },
+    { label: "tab", ws: "\t" },
+    { label: "NBSP", ws: "\u00A0" },
+    { label: "U+2003", ws: "\u2003" },
+    { label: "U+3000", ws: "\u3000" },
+    { label: "U+2028", ws: "\u2028" },
+    { label: "U+2029", ws: "\u2029" },
+    { label: "newline", ws: "\n" },
+  ];
+
+  test("whitespace variants in candidate trigger conflict against single-space saved allergen across text, nested ingredients, and 5 actions", () => {
+    const ctx = makeCtx("sesame oil");
+    for (const { label, ws } of whitespaceCases) {
+      const candidate = `sesame${ws}oil`;
+      assert.ok(findAllergyConflict(candidate, ctx), `Expected text match for ${label}`);
+      assert.ok(
+        findCandidateSafetyConflict({ title: "neutral recipe", ingredients: [{ name: candidate }] }, ctx),
+        `Expected nested ingredient conflict for ${label}`
+      );
+      for (const action of buildFiveProtectedActions(candidate)) {
+        assert.throws(
+          () => validateAgentActions([action], ctx),
+          (err: unknown) => err instanceof AgentSafetyConflictError,
+          `Expected ${action.actionType} to be blocked for ${label}`
+        );
+      }
+    }
+  });
+
+  test("whitespace variants in saved allergen reverse match standard single-space candidate across text, nested ingredients, and 5 actions", () => {
+    for (const { label, ws } of whitespaceCases) {
+      const ctx = makeCtx(`sesame${ws}oil`);
+      const candidate = "sesame oil";
+      assert.ok(findAllergyConflict(candidate, ctx), `Expected text match with saved ${label}`);
+      assert.ok(
+        findCandidateSafetyConflict({ title: "neutral recipe", ingredients: [{ name: candidate }] }, ctx),
+        `Expected nested ingredient conflict with saved ${label}`
+      );
+      for (const action of buildFiveProtectedActions(candidate)) {
+        assert.throws(
+          () => validateAgentActions([action], ctx),
+          (err: unknown) => err instanceof AgentSafetyConflictError,
+          `Expected ${action.actionType} to be blocked with saved ${label}`
+        );
+      }
+    }
+  });
+
+  test("false positive boundaries do not match saved single-space or whitespace-containing allergen", () => {
+    const nonMatchingTerms = ["xsesame oil", "sesame oily", "sesame oilseed", "sesameoil", "sesame-oil"];
+    const contexts = [makeCtx("sesame oil"), makeCtx("sesame\u2028oil")];
+
+    for (const ctx of contexts) {
+      for (const term of nonMatchingTerms) {
+        assert.equal(findAllergyConflict(term, ctx), null, `Expected "${term}" not to trigger text match`);
+        assert.equal(
+          findCandidateSafetyConflict({ ingredients: [{ name: term }] }, ctx),
+          null,
+          `Expected "${term}" not to trigger candidate conflict`
+        );
+        for (const action of buildFiveProtectedActions(term)) {
+          const res = validateAgentActions([action], ctx);
+          assert.equal(res.length, 1, `Expected ${action.actionType} for "${term}" to be allowed`);
+        }
+      }
+      assert.equal(
+        findCandidateSafetyConflict({ title: "sesame", note: "oil" }, ctx),
+        null,
+        "Separate fields must not manufacture match"
+      );
+    }
+  });
+
+  test("regex metacharacters and literal backslashes remain literal and do not act as regex wildcards", () => {
+    const literalCases = [
+      {
+        name: "sesame+oil",
+        match: "sesame+oil",
+        nonMatches: ["sesame oil", "sesame  oil", "sesameoil", "sesameeeoil"],
+      },
+      {
+        name: "sesame\\oil",
+        match: "sesame\\oil",
+        nonMatches: ["sesameoil", "sesame oil", "sesameXoil"],
+      },
+      {
+        name: "sesame.oil",
+        match: "sesame.oil",
+        nonMatches: ["sesameXoil", "sesame-oil"],
+      },
+    ];
+
+    for (const { name, match, nonMatches } of literalCases) {
+      const ctx = makeCtx(name);
+      assert.ok(findAllergyConflict(match, ctx), `Expected literal match for "${name}"`);
+      assert.ok(findCandidateSafetyConflict({ ingredients: [{ name: match }] }, ctx));
+      for (const nonMatch of nonMatches) {
+        assert.equal(findAllergyConflict(nonMatch, ctx), null, `Expected "${nonMatch}" NOT to match "${name}"`);
+        assert.equal(
+          findCandidateSafetyConflict({ ingredients: [{ name: nonMatch }] }, ctx),
+          null,
+          `Expected ingredient "${nonMatch}" NOT to match "${name}"`
+        );
+      }
+    }
+
+    const sesameOilCtx = makeCtx("sesame oil");
+    assert.equal(findAllergyConflict("sesame.oil", sesameOilCtx), null);
+    assert.equal(findAllergyConflict("sesame+oil", sesameOilCtx), null);
+  });
+
+  test("Chinese multi-word allergy with whitespace continues to work", () => {
+    const zhCtx = makeCtx("黑 芝麻");
+    const variants = ["黑 芝麻", "黑  芝麻", "黑\t芝麻", "黑芝麻"];
+    for (const variant of variants) {
+      assert.ok(findAllergyConflict(variant, zhCtx), `Expected match for "${variant}"`);
+      assert.ok(findCandidateSafetyConflict({ title: "neutral recipe", ingredients: [{ name: variant }] }, zhCtx));
+      for (const action of buildFiveProtectedActions(variant)) {
+        assert.throws(
+          () => validateAgentActions([action], zhCtx),
+          (err: unknown) => err instanceof AgentSafetyConflictError
+        );
+      }
+    }
+
+    const savedZhNoSpaceCtx = makeCtx("黑芝麻");
+    assert.ok(findAllergyConflict("黑 芝麻", savedZhNoSpaceCtx));
+    assert.ok(findCandidateSafetyConflict({ ingredients: [{ name: "黑 芝麻" }] }, savedZhNoSpaceCtx));
+  });
+});

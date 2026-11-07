@@ -173,7 +173,7 @@ function normalizedSafetyText(value: string) {
 }
 
 function matchesAllergyTerm(lowerText: string, compactText: string, term: string): boolean {
-  const normTerm = term.normalize("NFKC").toLocaleLowerCase().trim();
+  const normTerm = term.normalize("NFKC").toLocaleLowerCase().trim().replace(/\s+/g, " ");
   if (!normTerm) return false;
   if (/[^\x00-\x7F]/.test(normTerm)) {
     if (normTerm === "蛋白") {
@@ -182,7 +182,7 @@ function matchesAllergyTerm(lowerText: string, compactText: string, term: string
     }
     return compactText.includes(normTerm.replace(/\s+/g, ""));
   }
-  const escaped = normTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = normTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s+");
   const leftBoundary = /^\w/.test(normTerm) ? "\\b" : "";
   const rightBoundary = /\w$/.test(normTerm) ? "s?\\b" : "";
   const regex = new RegExp(`${leftBoundary}${escaped}${rightBoundary}`, "i");

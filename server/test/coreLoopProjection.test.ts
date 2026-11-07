@@ -209,62 +209,192 @@ test("cook intake correction moves or drops household dining completion", () => 
   assert.equal(evaluateCoreLoop(facts[0], "staging").reason, "no_surviving_intake");
 });
 
-test("decodes persisted household evidence from real inventory_json, request_json and settings environment", () => {
-  const input = dataset();
-  input.productions = [];
-  input.intakes = [];
-  input.logs = [];
-  input.settings = { environment: "staging", enabled: 1 };
+for (const format of ["sqlite", "postgres"] as const) {
+  test(`household meal batches (${format}): without selection evidence evaluates to selection_missing and marks week partial`, () => {
+    const input = dataset();
+    input.productions = [];
+    input.intakes = [];
+    input.logs = [];
+    input.settings = { environment: "staging", enabled: 1 };
 
-  const persistedSharedRow = {
-    id: "batch-persisted-123",
-    household_id: 2,
-    created_by_user_id: 5,
-    idempotency_key: "idem-batch-123",
-    kind: "real",
-    recipe_id: 18,
-    produced_at: "2026-09-12 10:00:00",
-    diet_record_id: 201,
-    diner_user_id: 5,
-    servings: 2,
-    intake_at: "2026-09-12 12:00:00",
-    request_json: JSON.stringify({
-      idempotencyKey: "idem-batch-123",
+    const reqObj = {
+      idempotencyKey: `idem-batch-${format}`,
       membershipId: 10,
       foodName: "番茄炒蛋",
       producedServings: 2,
       inventory: [{ itemId: 42, version: 1, amount: 3, unit: "piece" }],
-    }),
-    inventory_json: JSON.stringify([
+    };
+    const invObj = [
       { itemId: 42, version: 1, foodName: "鸡蛋", before: "10个", after: "7个", amount: 3, unit: "piece" },
-    ]),
-    dining_json: null,
-  };
+    ];
 
-  input.shared = [persistedSharedRow];
-  const facts = projectCoreLoops(input);
-  assert.equal(facts.length, 1);
-  const fact = facts[0];
-  assert.equal(fact.productionId, "household:batch-persisted-123");
-  assert.equal(fact.actorKey, "user:5");
-  assert.equal(fact.producerKey, "user:5");
-  assert.equal(fact.householdKey, "household:2");
-  assert.equal(fact.environment, "staging");
-  assert.equal(fact.recipeId, 18);
-  assert.ok(fact.selection);
-  assert.equal(fact.selection?.recipeId, 18);
-  assert.deepEqual(fact.selection?.matchedItemIds, [42]);
-  assert.equal(fact.stock.length, 1);
-  assert.equal(fact.stock[0].itemId, 42);
-  assert.equal(fact.stock[0].ownerKey, "household:2");
-  assert.equal(fact.stock[0].confirmed, true);
-  assert.equal(fact.deductions.length, 1);
-  assert.equal(fact.deductions[0].itemId, 42);
-  assert.equal(fact.deductions[0].before, 10);
-  assert.equal(fact.deductions[0].after, 7);
-  assert.equal(fact.deductions[0].amount, 3);
-  assert.equal(fact.deductions[0].verified, true);
-  assert.equal(evaluateCoreLoop(fact, "staging").reason, "included");
+    input.shared = [{
+      id: `batch-persisted-${format}`,
+      household_id: 2,
+      created_by_user_id: 5,
+      idempotency_key: `idem-batch-${format}`,
+      kind: "real",
+      recipe_id: 18,
+      produced_at: "2026-09-12 10:00:00",
+      diet_record_id: 201,
+      diner_user_id: 5,
+      servings: 2,
+      intake_at: "2026-09-12 12:00:00",
+      request_json: format === "sqlite" ? JSON.stringify(reqObj) : reqObj,
+      inventory_json: format === "sqlite" ? JSON.stringify(invObj) : invObj,
+      dining_json: null,
+    }];
+
+    const facts = projectCoreLoops(input);
+    assert.equal(facts.length, 1);
+    const fact = facts[0];
+    assert.equal(fact.productionId, `household:batch-persisted-${format}`);
+    assert.equal(fact.actorKey, "user:5");
+    assert.equal(fact.producerKey, "user:5");
+    assert.equal(fact.householdKey, "household:2");
+    assert.equal(fact.environment, "staging");
+    assert.equal(fact.recipeId, 18);
+
+    assert.equal(fact.deductions.length, 1);
+    assert.equal(fact.deductions[0].itemId, 42);
+    assert.equal(fact.deductions[0].before, 10);
+    assert.equal(fact.deductions[0].after, 7);
+    assert.equal(fact.deductions[0].amount, 3);
+    assert.equal(fact.deductions[0].verified, true);
+
+    assert.equal(fact.selection, null);
+    assert.deepEqual(fact.stock, []);
+    assert.equal(evaluateCoreLoop(fact, "staging").reason, "selection_missing");
+
+    const summary = summarizeCoreLoopWeek(facts, {
+      date: "2026-09-12",
+      targetEnvironment: "staging",
+      coverageStart: "2026-09-01T00:00:00Z",
+      now: "2026-09-20T00:00:00Z",
+    });
+    assert.equal(summary.status, "partial");
+    assert.equal(summary.verifiedLoops, 0);
+    assert.equal(summary.verifiedUsers, 0);
+    assert.equal(summary.unknown, 1);
+    assert.equal(summary.users, null);
+    assert.equal(summary.loops, null);
+  });
+
+  test(`household meal batches (${format}): selectedAt equal to produced_at with missing stock evaluates to stock_evidence_missing and marks week partial`, () => {
+    const input = dataset();
+    input.productions = [];
+    input.intakes = [];
+    input.logs = [];
+    input.settings = { environment: "staging", enabled: 1 };
+
+    const invObj = [
+      { itemId: 42, version: 1, foodName: "鸡蛋", before: "10个", after: "7个", amount: 3, unit: "piece" },
+    ];
+    const reqObj = {
+      idempotencyKey: `idem-stock-missing-${format}`,
+      membershipId: 10,
+      foodName: "番茄炒蛋",
+      producedServings: 2,
+      inventory: [{ itemId: 42, version: 1, amount: 3, unit: "piece" }],
+    };
+
+    input.shared = [{
+      id: `batch-stock-missing-${format}`,
+      household_id: 2,
+      created_by_user_id: 5,
+      idempotency_key: `idem-stock-missing-${format}`,
+      kind: "real",
+      recipe_id: 18,
+      produced_at: "2026-09-12 10:00:00",
+      selection_evidence: {
+        version: 1,
+        requestId: `req-exact-second-${format}`,
+        recipeId: 18,
+        selectedAt: "2026-09-12 10:00:00",
+        inventory: { version: 1, allocations: [{ itemId: 42 }] },
+      },
+      diet_record_id: 202,
+      diner_user_id: 5,
+      servings: 2,
+      intake_at: "2026-09-12 12:00:00",
+      request_json: format === "sqlite" ? JSON.stringify(reqObj) : reqObj,
+      inventory_json: format === "sqlite" ? JSON.stringify(invObj) : invObj,
+      dining_json: null,
+    }];
+
+    const facts = projectCoreLoops(input);
+    assert.equal(facts.length, 1);
+    const fact = facts[0];
+
+    assert.ok(fact.selection);
+    assert.equal(fact.selection?.requestId, `req-exact-second-${format}`);
+    assert.deepEqual(fact.stock, []);
+    assert.equal(evaluateCoreLoop(fact, "staging").reason, "stock_evidence_missing");
+
+    const summary = summarizeCoreLoopWeek(facts, {
+      date: "2026-09-12",
+      targetEnvironment: "staging",
+      coverageStart: "2026-09-01T00:00:00Z",
+      now: "2026-09-20T00:00:00Z",
+    });
+    assert.equal(summary.status, "partial");
+    assert.equal(summary.verifiedLoops, 0);
+    assert.equal(summary.unknown, 1);
+  });
+}
+
+test("household meal batches: corrupted or missing inventory_json and request_json retain conservative unknown evaluation and mark week partial", () => {
+  const corruptedCases = [
+    { label: "sqlite corrupted inventory_json string", inventory_json: "{not-valid-json", request_json: "{}" },
+    { label: "sqlite corrupted request_json string", inventory_json: "[]", request_json: "{corrupted" },
+    { label: "null inventory and request", inventory_json: null, request_json: null },
+    { label: "empty string inventory and request", inventory_json: "", request_json: "" },
+    { label: "postgres non-array inventory_json", inventory_json: { invalid: true }, request_json: {} },
+    { label: "corrupted dining_json with valid deductions", inventory_json: JSON.stringify([{ itemId: 42, version: 1, foodName: "鸡蛋", before: "10个", after: "7个", amount: 3, unit: "piece" }]), request_json: "{}", dining_json: "{corrupted" },
+  ];
+
+  for (const c of corruptedCases) {
+    const input = dataset();
+    input.productions = [];
+    input.intakes = [];
+    input.logs = [];
+    input.settings = { environment: "staging", enabled: 1 };
+
+    input.shared = [{
+      id: `batch-corrupted-${c.label.replace(/\s+/g, "-")}`,
+      household_id: 2,
+      created_by_user_id: 5,
+      idempotency_key: `idem-${c.label.replace(/\s+/g, "-")}`,
+      kind: "real",
+      recipe_id: 18,
+      produced_at: "2026-09-12 10:00:00",
+      diet_record_id: 301,
+      diner_user_id: 5,
+      servings: 1,
+      intake_at: "2026-09-12 12:00:00",
+      request_json: c.request_json,
+      inventory_json: c.inventory_json,
+      dining_json: c.dining_json ?? null,
+    }];
+
+    const facts = projectCoreLoops(input);
+    assert.equal(facts.length, 1);
+    const fact = facts[0];
+    const evalResult = evaluateCoreLoop(fact, "staging");
+    assert.equal(fact.selection, null, `${c.label}: selection must be null`);
+    assert.deepEqual(fact.stock, [], `${c.label}: stock must be empty`);
+    assert.equal(evalResult.reason, "selection_missing", `${c.label}: reason must be selection_missing`);
+
+    const summary = summarizeCoreLoopWeek(facts, {
+      date: "2026-09-12",
+      targetEnvironment: "staging",
+      coverageStart: "2026-09-01T00:00:00Z",
+      now: "2026-09-20T00:00:00Z",
+    });
+    assert.equal(summary.status, "partial", `${c.label}: week status must be partial`);
+    assert.equal(summary.verifiedLoops, 0, `${c.label}: verifiedLoops must be 0`);
+    assert.equal(summary.unknown, 1, `${c.label}: unknown must be 1`);
+  }
 });
 
 function householdBatchRow(id: string, inventory: unknown, extra: {
@@ -309,6 +439,21 @@ function householdBatchRow(id: string, inventory: unknown, extra: {
     }),
     inventory_json: inventory,
     dining_json: null,
+    // Explicit test-layer evidence so deduction quantity/unit parsing tests can verify the full chain
+    selection_evidence: {
+      version: 1,
+      requestId: `req-${id}`,
+      recipeId,
+      selectedAt: "2026-09-12 09:00:00",
+      inventory: { version: 1, allocations: reqInventory.map((i: any) => ({ itemId: i.itemId })) },
+    },
+    stock: reqInventory.map((i: any) => ({
+      itemId: i.itemId,
+      confirmedAt: "2026-09-11 08:00:00",
+      confirmed: true,
+      scope: "household",
+      ownerKey: "household:2",
+    })),
   };
 }
 

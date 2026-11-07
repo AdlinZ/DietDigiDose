@@ -5,8 +5,8 @@ import Database from "better-sqlite3";
 import { Pool } from "pg";
 import { SqliteAdminConsoleRepository } from "../src/modules/adminConsole/sqliteRepository.js";
 import { PostgresAdminConsoleRepository } from "../src/modules/adminConsole/postgresRepository.js";
-import { projectCoreLoops } from "../src/modules/adminConsole/coreLoopProjection.js";
-import { coreLoopWeek, summarizeCoreLoopWeek } from "../src/modules/adminConsole/coreLoopMetric.js";
+import { projectCoreLoops, utc, type CoreLoopDataset } from "../src/modules/adminConsole/coreLoopProjection.js";
+import { coreLoopWeek, evaluateCoreLoop, summarizeCoreLoopWeek } from "../src/modules/adminConsole/coreLoopMetric.js";
 
 const VALID_INVENTORY_JSON = JSON.stringify([
   { itemId: 11, before: "10个", after: "7个", amount: 3, unit: "piece" },
@@ -238,10 +238,108 @@ for (const backend of ["sqlite", "postgres"] as const) {
           ? new SqliteAdminConsoleRepository(sqlite)
           : new PostgresAdminConsoleRepository(pool!);
 
-        const evaluateWeek = async (date: string) => {
+        const attachSyntheticTestEvidence = (data: CoreLoopDataset): CoreLoopDataset => ({
+          ...data,
+          shared: data.shared.map(row => ({
+            ...row,
+            selection_evidence: {
+              version: 1,
+              requestId: `test-synthetic-req-${row.id}`,
+              recipeId: Number(row.recipe_id ?? 7),
+              selectedAt: "2026-09-12 00:00:00",
+              inventory: { version: 1, allocations: [{ itemId: 11 }] },
+            },
+            stock: [{
+              itemId: 11,
+              confirmedAt: "2026-09-11 00:00:00",
+              confirmed: true,
+              scope: "household",
+              ownerKey: `household:${row.household_id ?? 1}`,
+            }],
+          })),
+        });
+
+        // 1. Direct assertions on raw repository queries: verify full surviving history is returned
+        const week1 = coreLoopWeek("2026-09-12");
+        const rawDataW1 = await repository.coreLoopData(week1.start, week1.end);
+
+        // batch-1: full surviving history has both Week 1 and Week 2 chef intakes
+        const batch1Events = rawDataW1.shared.filter(r => r.id === "batch-1");
+        assert.equal(batch1Events.length, 2, "batch-1 must return all surviving intakes in W1 query");
+        assert.ok(batch1Events.some(r => utc(r.intake_at).includes("15:59:59")));
+        assert.ok(batch1Events.some(r => utc(r.intake_at).includes("16:00:00")));
+
+        // batch-2: returns both diner intake and surviving chef intake
+        const batch2Events = rawDataW1.shared.filter(r => r.id === "batch-2");
+        assert.equal(batch2Events.length, 2, "batch-2 must return both diner and surviving chef intake");
+
+        // batch-3: corrected event (31) is excluded, surviving event (32) is returned
+        const batch3Events = rawDataW1.shared.filter(r => r.id === "batch-3");
+        assert.equal(batch3Events.length, 1, "batch-3 corrected intake must be excluded");
+        assert.equal(Number(batch3Events[0].diet_record_id), 302);
+
+        // batch-4: deleted diet record (41) is excluded by JOIN, surviving event (42) is returned
+        const batch4Events = rawDataW1.shared.filter(r => r.id === "batch-4");
+        assert.equal(batch4Events.length, 1, "batch-4 deleted diet record must be excluded");
+        assert.equal(Number(batch4Events[0].diet_record_id), 402);
+
+        // batch-5: all events corrected -> excluded from shared
+        const batch5Events = rawDataW1.shared.filter(r => r.id === "batch-5");
+        assert.equal(batch5Events.length, 0, "batch-5 has no surviving intake and must not appear");
+
+        // 2. Unverified raw data without recommendation selection or stock evidence marks the week partial
+        const rawFactsW1 = projectCoreLoops(rawDataW1);
+        for (const f of rawFactsW1) {
+          assert.equal(f.selection, null, `raw W1 fact ${f.productionId} selection must be null`);
+          assert.deepEqual(f.stock, [], `raw W1 fact ${f.productionId} stock must be empty`);
+          assert.equal(evaluateCoreLoop(f, "staging").reason, "selection_missing", `raw W1 fact ${f.productionId} must be selection_missing`);
+        }
+        const rawSummaryW1 = summarizeCoreLoopWeek(rawFactsW1, {
+          date: "2026-09-12",
+          targetEnvironment: "staging",
+          coverageStart: "2026-09-01T00:00:00Z",
+          now: "2026-09-28T00:00:00Z",
+        });
+        assert.equal(rawSummaryW1.status, "partial", "unverified raw W1 data must mark week partial");
+        assert.equal(rawSummaryW1.verifiedLoops, 0, "unverified raw W1 data must have verifiedLoops = 0");
+        assert.equal(rawSummaryW1.users, null, "unverified raw W1 data must have users = null");
+        assert.equal(rawSummaryW1.unknown, 2, "raw W1 unknown must be exactly 2 (batch-1 and batch-6)");
+
+        const week2 = coreLoopWeek("2026-09-14");
+        const rawDataW2 = await repository.coreLoopData(week2.start, week2.end);
+        const rawFactsW2 = projectCoreLoops(rawDataW2);
+        for (const f of rawFactsW2) {
+          assert.equal(f.selection, null, `raw W2 fact ${f.productionId} selection must be null`);
+          assert.deepEqual(f.stock, [], `raw W2 fact ${f.productionId} stock must be empty`);
+          assert.equal(evaluateCoreLoop(f, "staging").reason, "selection_missing", `raw W2 fact ${f.productionId} must be selection_missing`);
+        }
+        const rawSummaryW2 = summarizeCoreLoopWeek(rawFactsW2, {
+          date: "2026-09-14",
+          targetEnvironment: "staging",
+          coverageStart: "2026-09-01T00:00:00Z",
+          now: "2026-09-28T00:00:00Z",
+        });
+        assert.equal(rawSummaryW2.status, "partial", "unverified raw W2 data must mark week partial");
+        assert.equal(rawSummaryW2.verifiedLoops, 0, "unverified raw W2 data must have verifiedLoops = 0");
+        assert.equal(rawSummaryW2.users, null, "unverified raw W2 data must have users = null");
+        assert.equal(rawSummaryW2.unknown, 4, "raw W2 unknown must be exactly 4 (batch-1, batch-2, batch-3, batch-4)");
+
+        const week3 = coreLoopWeek("2026-09-21");
+        const rawDataW3 = await repository.coreLoopData(week3.start, week3.end);
+        const rawFactsW3 = projectCoreLoops(rawDataW3);
+        const rawSummaryW3 = summarizeCoreLoopWeek(rawFactsW3, {
+          date: "2026-09-21",
+          targetEnvironment: "staging",
+          coverageStart: "2026-09-01T00:00:00Z",
+          now: "2026-09-28T00:00:00Z",
+        });
+        assert.equal(rawSummaryW3.unknown, 0, "raw W3 unknown must be exactly 0 (no activity)");
+
+        // 3. Test-layer evidence evaluation preserving original week boundary totals (W1=2, W2=3, W3=0)
+        const evaluateWeekWithEvidence = async (date: string) => {
           const week = coreLoopWeek(date);
           const data = await repository.coreLoopData(week.start, week.end);
-          const facts = projectCoreLoops(data);
+          const facts = projectCoreLoops(attachSyntheticTestEvidence(data));
           return summarizeCoreLoopWeek(facts, {
             date,
             targetEnvironment: "staging",
@@ -250,9 +348,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
           });
         };
 
-        const reportWeek1 = await evaluateWeek("2026-09-12");
-        const reportWeek2 = await evaluateWeek("2026-09-14");
-        const reportWeek3 = await evaluateWeek("2026-09-21");
+        const reportWeek1 = await evaluateWeekWithEvidence("2026-09-12");
+        const reportWeek2 = await evaluateWeekWithEvidence("2026-09-14");
+        const reportWeek3 = await evaluateWeekWithEvidence("2026-09-21");
 
         // --- Week 1 verifications ---
         // batch-1: completes at 2026-09-13T15:59:59.000Z in Week 1

@@ -76,18 +76,6 @@ export function projectCoreLoops(data: CoreLoopDataset): CoreLoopFact[] {
             ? allocations.map(item => Number(item.itemId))
             : (Array.isArray(rawSelection.matchedItemIds) ? rawSelection.matchedItemIds.map(Number) : null),
         };
-      } else if (recipeId !== null) {
-        const inventoryIds = Array.isArray(rawInventory) && rawInventory.length > 0
-          ? rawInventory.map((item: Row) => Number(item.itemId ?? item.item_id)).filter((id: number) => Number.isFinite(id) && id > 0)
-          : Array.isArray(request.inventory)
-          ? (request.inventory as Row[]).map((item: Row) => Number(item.itemId)).filter((id: number) => Number.isFinite(id) && id > 0)
-          : null;
-        selection = {
-          requestId: String(request.idempotencyKey || row.idempotency_key || `household:${row.id}`),
-          recipeId,
-          selectedAt: utc(row.produced_at),
-          matchedItemIds: inventoryIds && inventoryIds.length ? inventoryIds : null,
-        };
       }
 
       const stock: CoreLoopFact["stock"] = Array.isArray(row.stock) ? row.stock.map(item => ({
@@ -96,13 +84,7 @@ export function projectCoreLoops(data: CoreLoopDataset): CoreLoopFact[] {
         confirmed: Boolean(item.confirmed),
         scope: "household" as const,
         ownerKey: String(item.ownerKey || householdKey || ""),
-      })) : (Array.isArray(rawInventory) ? rawInventory.map((item: Row) => ({
-        itemId: Number(item.itemId ?? item.item_id),
-        confirmedAt: utc(row.produced_at),
-        confirmed: true,
-        scope: "household" as const,
-        ownerKey: String(householdKey || ""),
-      })) : []);
+      })) : [];
 
       const deductions: CoreLoopFact["deductions"] = Array.isArray(row.deductions) ? row.deductions.map(item => ({
         itemId: Number(item.itemId),

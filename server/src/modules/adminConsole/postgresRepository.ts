@@ -42,10 +42,15 @@ export class PostgresAdminConsoleRepository implements AdminConsoleRepository {
       const legacy = (await client.query(`SELECT m.id,m.user_id,m.recipe_id,m.diet_record_id,m.created_at,c.kind,d.id IS NOT NULL AS record_exists
         FROM cooking_completions m JOIN users u ON u.id=m.user_id LEFT JOIN core_loop_actor_classifications c ON c.user_id=m.user_id
         LEFT JOIN diet_records d ON d.id=m.diet_record_id AND d.user_id=m.user_id WHERE m.created_at>=$1::timestamptz AND m.created_at<$2::timestamptz`,[start,end])).rows as Row[];
-      const shared = (await client.query(`SELECT m.id,m.created_by_user_id,m.created_at AS produced_at,c.kind,e.diet_record_id,e.servings,e.created_at AS intake_at
-        FROM household_meal_batches m JOIN household_meal_events e ON e.meal_id=m.id AND e.user_id=m.created_by_user_id
-        JOIN diet_records d ON d.id=e.diet_record_id AND d.user_id=e.user_id LEFT JOIN core_loop_actor_classifications c ON c.user_id=e.user_id
-        WHERE e.created_at>=$1::timestamptz AND e.created_at<$2::timestamptz AND NOT EXISTS(SELECT 1 FROM household_meal_intake_corrections x WHERE x.event_id=e.id)`,[start,end])).rows as Row[];
+      const shared = (await client.query(`SELECT m.id,m.household_id,m.created_by_user_id,m.idempotency_key,m.created_at AS produced_at,c.kind,p.recipe_id,
+        e.diet_record_id,e.user_id AS diner_user_id,e.servings,e.created_at AS intake_at,
+        m.inventory_json,m.request_json,m.dining_json
+        FROM household_meal_batches m JOIN household_meal_events e ON e.meal_id=m.id
+        JOIN diet_records d ON d.id=e.diet_record_id AND d.user_id=e.user_id
+        LEFT JOIN meal_plan_items p ON p.id=m.plan_item_id
+        LEFT JOIN core_loop_actor_classifications c ON c.user_id=m.created_by_user_id
+        WHERE EXISTS(SELECT 1 FROM household_meal_events candidate WHERE candidate.meal_id=m.id AND candidate.created_at>=$1::timestamptz AND candidate.created_at<$2::timestamptz)
+          AND NOT EXISTS(SELECT 1 FROM household_meal_intake_corrections x WHERE x.event_id=e.id)`,[start,end])).rows as Row[];
       const settings = (await client.query("SELECT * FROM core_loop_metric_settings WHERE id=1")).rows[0] ?? { enabled: 0,version: 1,coverage_start: null };
       await client.query("COMMIT"); return { productions,intakes,logs,legacy,shared,settings };
     } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }

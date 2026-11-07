@@ -40,3 +40,36 @@ test("shows zero remaining portions as an observation without calling it a taste
   expect(JSON.stringify(tree.toJSON())).toContain("余量本身不说明是否喜欢或份量过大");
   act(() => tree.unmount());
 });
+
+test("pausing and resuming learning sends the displayed version and toggles state",async () => {
+  mockRequest.mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial,version: 4,enabled: false });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<PreferenceLearningScreen />); });
+  await act(async () => { tree.root.findAllByType(TouchableOpacity).find(node => node.findAllByType(Text).some(text => text.props.children === "暂停从行为学习"))!.props.onPress(); });
+  expect(JSON.parse(mockRequest.mock.calls[1][2].body)).toEqual({ kind: "learning",version: 3,enabled: false });
+  expect(JSON.stringify(tree.toJSON())).toContain("恢复从行为学习");
+  act(() => tree.unmount());
+});
+
+test("confirming an inferred dislike sends explicit dislike patch",async () => {
+  mockRequest.mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial,version: 4,items: [{ ...initial.items[0],origin: "explicit",explanation: "你明确设置为不喜欢" }] });
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<PreferenceLearningScreen />); });
+  await act(async () => { tree.root.findAllByType(TouchableOpacity).find(node => node.findAllByType(Text).some(text => text.props.children === "确认：我确实不喜欢"))!.props.onPress(); });
+  expect(JSON.parse(mockRequest.mock.calls[1][2].body)).toEqual({ kind: "recipe",version: 3,recipeId: 1,value: "dislike" });
+  expect(JSON.stringify(tree.toJSON())).toContain("你明确设置为不喜欢");
+  act(() => tree.unmount());
+});
+
+test("displays error message and handles unauthenticated state",async () => {
+  mockRequest.mockRejectedValueOnce(new Error("网络异常"));
+  let tree!: renderer.ReactTestRenderer;
+  await act(async () => { tree = renderer.create(<PreferenceLearningScreen />); });
+  expect(JSON.stringify(tree.toJSON())).toContain("网络异常");
+  act(() => tree.unmount());
+
+  mockUser = null as any;
+  await act(async () => { tree = renderer.create(<PreferenceLearningScreen />); });
+  expect(JSON.stringify(tree.toJSON())).toContain("请登录后查看个人偏好。");
+  act(() => tree.unmount());
+});

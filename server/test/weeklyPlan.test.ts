@@ -111,3 +111,109 @@ test("legacy weekly windows recover preserved dates rather than shrinking to coo
   assert.deepEqual(updated.draft.shoppingWindow,{ startDate,endDate: "2099-09-18" });
   assert.deepEqual(updated.shopping?.map(item => [item.required,item.covered,item.missing]),[[8,7,1]]);
 });
+
+test("prepared meals respect handling hold limits and are not allocated beyond safe dates", () => {
+  const batch = {
+    id: "19600000-0000-4000-8000-000000000002",
+    recipe_id: 1,
+    food_name: "短保冷藏蛋羹",
+    remaining_servings: 2,
+    produced_at: "2099-09-12T08:00:00Z",
+    version: 1,
+    is_reserved: false,
+    planned_date: null,
+    storage_location: "refrigerator",
+  } as PreparedMeal;
+
+  const rules = new Map([[1, {
+    storage: "refrigerated" as const,
+    maxHoldHours: 24,
+    coldServingAllowed: true,
+    carryAllowed: true,
+    instructions: "冷藏保存24小时内食用",
+    reference: "测试标准",
+    sourceUrl: "https://example.com/test",
+  }]]);
+
+  // When day 1 is preserved, day 2 (targetDate 2099-09-13, 24-48h) cannot safely use this 24h batch
+  const existing = [{
+    id: "existing:day1",
+    planned_date: startDate,
+    meal_type: "午餐",
+    title: "第一天自带饭",
+    status: "planned",
+    ingredients_json: [],
+  }];
+
+  const plan = buildWeeklyPlan(
+    input,
+    { meal_time_minutes: 30, refrigeration_available: true },
+    [candidate],
+    [stock(1, 10)],
+    [batch],
+    existing,
+    [],
+    [],
+    [],
+    rules,
+  );
+
+  // Day 1 was preserved
+  assert.equal(plan.slots[0].state, "preserved");
+  // Day 2 target date 2099-09-13 exceeds 24h maxHoldHours, so it must cook instead of reusing unsafe batch
+  const day2Slot = plan.slots[1];
+  assert.equal(day2Slot.date, "2099-09-13");
+  assert.equal(plan.draft?.meals[0].preparedServings, 0);
+  assert.equal(plan.draft?.meals[0].cookServings, 1);
+  assert(plan.draft?.handlingChecks?.some(check => check.status === "conflict" && check.reasons.some(r => r.includes("24 小时冷藏期限"))));
+});
+
+test("items beyond position 15 in inventory participate in planning and missing expiry triggers uncertainty", () => {
+  // Create 20 inventory items, with eggs placed at position 18 (index 17)
+  const inventory = Array.from({ length: 20 }, (_, index) => {
+    if (index === 17) {
+      return stock(18, 10, "2099-09-30");
+    }
+    return {
+      id: index + 1,
+      food_name: `原料${index + 1}`,
+      quantity_value: 5,
+      quantity_unit: "g",
+      // Item 2 has unknown expiration date
+      expiration_date: index === 1 ? null : "2099-10-31",
+      version: 1,
+      batch_code: null,
+    };
+  });
+
+  const plan = buildWeeklyPlan(input, { meal_time_minutes: 30 }, [candidate], inventory, [], [], []);
+
+  // Eggs at item 18 successfully covered 7 days of lunch
+  assert.equal(plan.shopping.length, 1);
+  assert.equal(plan.shopping[0].foodName, "鸡蛋");
+  assert.equal(plan.shopping[0].required, 7);
+  assert.equal(plan.shopping[0].covered, 7);
+  assert.equal(plan.shopping[0].missing, 0);
+
+  // Missing expiration date on item 2 produces uncertainty warning in checksPending
+  assert(plan.checksPending.some(check => check.includes("部分库存缺少可用期限，未来餐次使用前需核对")));
+});
+
+test("inconvertible units mark shopping as uncertain and do not invent quantities", () => {
+  // Recipe demands 1 "个" (piece), but stock has unit "ml" which cannot convert
+  const inconvertibleStock = [{
+    id: 1,
+    food_name: "鸡蛋",
+    quantity_value: 500,
+    quantity_unit: "ml",
+    expiration_date: "2099-09-30",
+    version: 1,
+    batch_code: null,
+  }];
+
+  const plan = buildWeeklyPlan(input, { meal_time_minutes: 30 }, [candidate], inconvertibleStock, [], [], []);
+
+  // Unknown unit status marks the aggregate shopping entry as uncertain
+  assert.equal(plan.shopping[0].uncertain, true);
+  assert(plan.checksPending.some(check => check.includes("鸡蛋 的数量或规格无法换算，请核对采购缺口")));
+});

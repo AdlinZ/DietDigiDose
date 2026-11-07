@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
-import { ACCOUNT_PASSWORD_REQUIREMENTS, accountPasswordSchema, ACCOUNT_SECURITY_CAPABILITY, reauthSendSchema, reauthVerifySchema, passwordRecoverySendSchema, passwordRecoveryVerifySchema, phoneBindingSendSchema, phoneBindingVerifySchema, type ReauthPurpose } from "@dietdigidose/contracts";
+import { ACCOUNT_PASSWORD_REQUIREMENTS, accountPasswordSchema, ACCOUNT_SECURITY_CAPABILITY, reauthSendSchema, reauthVerifySchema, passwordRecoverySendSchema, passwordRecoveryVerifySchema, phoneBindingSendSchema, phoneBindingVerifySchema, phoneReplacementSendSchema, phoneReplacementVerifySchema, type ReauthPurpose } from "@dietdigidose/contracts";
 import { authMiddleware, type AuthRequest } from "../middleware/auth.js";
 import type { ReauthUser } from "../modules/authVerification/types.js";
 import bcrypt from "bcryptjs";
@@ -28,7 +28,7 @@ import { getRateLimitClientIp, sharedRateLimit } from "../middleware/sharedRateL
 
 const router = Router();
 export const passwordRecoveryRouter = Router();
-type SmsPurpose = "login" | ReauthPurpose | "password_recovery" | "phone_bind";
+type SmsPurpose = "login" | ReauthPurpose | "password_recovery" | "phone_bind" | "phone_replace";
 export const phoneBindingRouter = Router();
 const recoveryRateLimit = (namespace: string, limit: number, key: (req: Request) => string = getRateLimitClientIp) =>
   sharedRateLimit({ namespace: `password-recovery-${namespace}`, limit, windowMs: 15 * 60_000, key,
@@ -133,7 +133,7 @@ async function sendSms(req: Request, res: Response, purpose: SmsPurpose = "login
         eventType: "send_rejected",
         outcome: "provider_error",
         providerCode: result.code,
-        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" ? undefined : result.message,
+        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" || purpose === "phone_replace" ? undefined : result.message,
         providerRequestId: result.requestId,
         bizId: result.bizId,
         outId,
@@ -151,7 +151,7 @@ async function sendSms(req: Request, res: Response, purpose: SmsPurpose = "login
         eventType: "send_accepted",
         outcome: "accepted",
         providerCode: result.code,
-        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" ? undefined : result.message,
+        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" || purpose === "phone_replace" ? undefined : result.message,
         providerRequestId: result.requestId,
         bizId: result.bizId,
         outId,
@@ -229,7 +229,7 @@ async function verifySms(req: Request, res: Response, purpose: SmsPurpose = "log
         eventType: "verify_failed",
         outcome: "provider_error",
         providerCode: result.code,
-        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" ? undefined : result.message,
+        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" || purpose === "phone_replace" ? undefined : result.message,
         sourceIp,
         userAgent,
         outId: challenge.out_id,
@@ -246,7 +246,7 @@ async function verifySms(req: Request, res: Response, purpose: SmsPurpose = "log
         eventType: "verify_failed",
         outcome: "mismatch",
         providerCode: result.code,
-        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" ? undefined : result.message,
+        providerMessage: purpose === "password_recovery" || purpose === "phone_bind" || purpose === "phone_replace" ? undefined : result.message,
         sourceIp,
         userAgent,
         outId: challenge.out_id,
@@ -264,6 +264,17 @@ async function verifySms(req: Request, res: Response, purpose: SmsPurpose = "log
         await authVerificationService().failChallenge(challengeId);
         return sendError(res, result === "phone_exists" ? 409 : 403,
           "绑定已失效或手机号已被占用，请重新验证", result === "phone_exists" ? "PHONE_EXISTS" : "PHONE_BINDING_INVALID");
+      }
+      return res.json({ success: true, phoneMasked: maskedSubjectPhone(subject) });
+    }
+    if (purpose === "phone_replace") {
+      if (!boundUser) return sendError(res,403,"换绑验证已失效","PHONE_REPLACEMENT_INVALID");
+      const result = await authVerificationService().replacePhone({ userId: boundUser.id,
+        sessionVersion: boundUser.session_version, challengeId, phone });
+      if (result !== "replaced") {
+        await authVerificationService().failChallenge(challengeId);
+        return sendError(res, result === "phone_exists" ? 409 : 403,
+          "换绑已失效或手机号已被占用，请重新验证", result === "phone_exists" ? "PHONE_EXISTS" : "PHONE_REPLACEMENT_INVALID");
       }
       return res.json({ success: true, phoneMasked: maskedSubjectPhone(subject) });
     }
@@ -373,7 +384,7 @@ passwordRecoveryRouter.post("/verify", recoveryRateLimit("verify-ip", 30), async
 });
 
 phoneBindingRouter.use(authMiddleware);
-phoneBindingRouter.use(sharedRateLimit({ namespace: "phone-binding-ip", key: getRateLimitClientIp, limit: 30, windowMs: 15 * 60_000,
+phoneBindingRouter.use(sharedRateLimit({ namespace: "phone-binding-ip", key: getRateLimitClientIp, limit: 60, windowMs: 15 * 60_000,
   message: "绑定请求过于频繁，请稍后重试", code: "PHONE_BINDING_RATE_LIMITED" }));
 phoneBindingRouter.post("/send", sharedRateLimit({ namespace: "phone-binding-password", limit: 5, windowMs: 15 * 60_000,
   key: (req) => String((req as AuthRequest).userId), message: "绑定请求过于频繁，请稍后重试", code: "PHONE_BINDING_RATE_LIMITED" }), async (req: AuthRequest,res,next) => {
@@ -401,6 +412,36 @@ phoneBindingRouter.post("/verify", async (req: AuthRequest,res,next) => {
     if (!challenge || challenge.purpose !== "phone_bind" || challenge.reauth_user_id !== user.id || challenge.reauth_session_version !== user.session_version)
       return sendError(res,403,"绑定验证已失效，请重新获取","PHONE_BINDING_INVALID");
     return await verifySms(req,res,"phone_bind",{ ...user, phone: decryptSubjectPhone(challengeSubject(challenge)) });
+  } catch (error) { return next(error); }
+});
+phoneBindingRouter.post("/replace/send", sharedRateLimit({ namespace: "phone-replace-password", limit: 5, windowMs: 15 * 60_000,
+  key: (req) => String((req as AuthRequest).userId), message: "换绑请求过于频繁，请稍后重试", code: "PHONE_REPLACEMENT_RATE_LIMITED" }), async (req: AuthRequest,res,next) => {
+  try {
+    const parsed = phoneReplacementSendSchema.safeParse(req.body);
+    if (!parsed.success) return sendError(res,400,"请输入当前密码和有效的中国大陆新手机号","INVALID_PHONE_REPLACEMENT_INPUT");
+    const user = await authVerificationService().phoneBindingUser(req.userId!);
+    if (!user || user.phone === null || !user.phone_verified_at || !user.password_hash || user.role !== "user" || user.is_disabled)
+      return sendError(res,403,"此账号不支持更换绑定手机号","PHONE_REPLACEMENT_INELIGIBLE");
+    if (!await bcrypt.compare(parsed.data.currentPassword,user.password_hash))
+      return sendError(res,403,"当前密码不正确","INVALID_PASSWORD");
+    if (parsed.data.newPhone === user.phone)
+      return sendError(res,400,"新手机号不能与当前绑定的手机号相同","PHONE_UNCHANGED");
+    if (await authVerificationService().userByPhone(parsed.data.newPhone))
+      return sendError(res,409,"该手机号已被使用","PHONE_EXISTS");
+    return await sendSms(req,res,"phone_replace",{ ...user, phone: parsed.data.newPhone });
+  } catch (error) { return next(error); }
+});
+phoneBindingRouter.post("/replace/verify", async (req: AuthRequest,res,next) => {
+  try {
+    const parsed = phoneReplacementVerifySchema.safeParse(req.body);
+    if (!parsed.success) return sendError(res,400,"请输入有效的验证码","INVALID_VERIFICATION_INPUT");
+    const user = await authVerificationService().phoneBindingUser(req.userId!);
+    if (!user || user.phone === null || !user.phone_verified_at || !user.password_hash || user.role !== "user" || user.is_disabled)
+      return sendError(res,403,"此账号不支持更换绑定手机号","PHONE_REPLACEMENT_INELIGIBLE");
+    const challenge = await authVerificationService().challenge(parsed.data.challengeId);
+    if (!challenge || challenge.purpose !== "phone_replace" || challenge.reauth_user_id !== user.id || challenge.reauth_session_version !== user.session_version)
+      return sendError(res,403,"换绑验证已失效，请重新获取","PHONE_REPLACEMENT_INVALID");
+    return await verifySms(req,res,"phone_replace",{ ...user, phone: decryptSubjectPhone(challengeSubject(challenge)) });
   } catch (error) { return next(error); }
 });
 

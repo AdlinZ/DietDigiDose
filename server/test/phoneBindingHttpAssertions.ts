@@ -7,6 +7,7 @@ type Api = (path:string,options?:RequestInit & {token?:string}) => Promise<{resp
 export async function verifyPhoneBindingHttp(api: Api, db: Database.Database) {
   let sends = 0;
   let duringVerify: (() => void) | undefined;
+  const initialMaxEventId = (db.prepare("SELECT MAX(id) AS m FROM auth_verification_events").get() as { m: number | null }).m ?? 0;
   setSmsProviderForTests({id:"binding-test",send:async (_phone,outId) => { sends++; return {success:true,code:"OK",message:"accepted",outId,requestId:null,bizId:null}; },
     verify:async (_phone,outId,code) => { duringVerify?.(); return {success:true,passed:code==="123456",code:"OK",message:"secret 123456 must not be logged",outId}; }});
   const request=async (path:string,body:unknown,token?:string,method="POST") => {
@@ -82,7 +83,57 @@ export async function verifyPhoneBindingHttp(api: Api, db: Database.Database) {
   assert.equal((db.prepare("SELECT phone FROM users WHERE id=?").get(limited.user.id) as {phone:null}).phone,null);
   assert.equal(db.prepare("SELECT 1 FROM auth_verification_events WHERE provider_message LIKE '%123456%'").get(),undefined);
   assert.ok(db.prepare("SELECT 1 FROM auth_verification_events WHERE event_type='phone_bind' AND outcome='succeeded'").get());
+
+  // Phone replacement assertions
+  const replaceSend = (token: string, newPhone: string, currentPassword = "Password1234") =>
+    request("/phone-binding/replace/send", { newPhone, currentPassword }, token);
+  const replaceVerify = (token: string, challengeId: string, code = "123456") =>
+    request("/phone-binding/replace/verify", { challengeId, code }, token);
+
+  assert.equal((await replaceSend("", "13800223009")).status, 401);
+  assert.equal((await replaceSend(other.token, "13800223009")).status, 403);
+  assert.equal((await replaceSend(first.token, "13800223009", "wrong")).status, 403);
+  assert.equal((await replaceSend(first.token, "+14155550123")).status, 400);
+  assert.equal((await replaceSend(first.token, phone)).status, 400);
+
+  const otherPhone = "13800223008";
+  const otherSent = await send(other.token, otherPhone);
+  assert.equal(otherSent.status, 201);
+  assert.equal((await verify(other.token, otherSent.body.challengeId)).status, 200);
+  assert.equal((await replaceSend(first.token, otherPhone)).status, 409);
+
+  const newTargetPhone = "13800223009";
+  const replaceSent = await replaceSend(first.token, `+86${newTargetPhone}`);
+  assert.equal(replaceSent.status, 201);
+  assert.ok(replaceSent.body.challengeId);
+
+  assert.equal((await replaceVerify(other.token, replaceSent.body.challengeId)).status, 403);
+  assert.equal((await request("/sms/verify", { challengeId: replaceSent.body.challengeId, code: "123456" })).status, 403);
+  assert.equal((await replaceVerify(first.token, replaceSent.body.challengeId, "000000")).status, 400);
+
+  const replaceResult = await replaceVerify(first.token, replaceSent.body.challengeId);
+  assert.equal(replaceResult.status, 200);
+  assert.equal(replaceResult.body.success, true);
+  assert.equal((await replaceVerify(first.token, replaceSent.body.challengeId)).status, 409);
+
+  assert.deepEqual(db.prepare("SELECT * FROM inventory_items WHERE user_id=?").all(first.user.id), inventory);
+  assert.deepEqual(db.prepare("SELECT * FROM diet_records WHERE user_id=?").all(first.user.id), diet);
+
+  const oldLoginCode = await request("/sms/send", { phone });
+  assert.equal(oldLoginCode.status, 201);
+  const oldLogin = await request("/sms/verify", { challengeId: oldLoginCode.body.challengeId, code: "123456" });
+  assert.notEqual(oldLogin.body.user?.id, first.user.id);
+
+  const newLoginCode = await request("/sms/send", { phone: newTargetPhone });
+  assert.equal(newLoginCode.status, 201);
+  const newLogin = await request("/sms/verify", { challengeId: newLoginCode.body.challengeId, code: "123456" });
+  assert.equal(newLogin.status, 200);
+  assert.equal(newLogin.body.user.id, first.user.id);
+  assert.equal(newLogin.body.isNewUser, false);
+  assert.ok(db.prepare("SELECT 1 FROM auth_verification_events WHERE event_type='phone_replace' AND outcome='succeeded'").get());
   } finally {
+    db.prepare("DELETE FROM auth_verification_events WHERE id > ?").run(initialMaxEventId);
+    db.prepare("DELETE FROM auth_verification_usage_daily WHERE provider='binding-test'").run();
     db.prepare("DELETE FROM system_settings WHERE key LIKE 'auth.sms.limit.%'").run();
     for (const row of savedLimits) db.prepare("INSERT INTO system_settings(key,value) VALUES(?,?)").run(row.key,row.value);
   }

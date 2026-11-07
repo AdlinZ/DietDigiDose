@@ -59,6 +59,82 @@ it('requires every effective main binding to support thinking options', async ()
   get.mockResolvedValue({ data: { ...data, effectiveModels: ['对话', '主助手', '菜谱', '运营'].map(role => ({ role, baseUrl: role === '运营' ? 'https://example.test/v1' : 'https://api.siliconflow.cn/v1', model: 'Pro/deepseek-ai/DeepSeek-V4', source: '有效业务服务配置' })) } });
   await mount(); expect(host.querySelector<HTMLSelectElement>('select[aria-label="main 思考模式"]')!.options).toHaveLength(1);
 });
+it('does not offer high or max thinking options for legacy R1, V3, and distill bindings', async () => {
+  const legacyModels = [
+    'deepseek-ai/DeepSeek-R1',
+    'deepseek-ai/DeepSeek-V3',
+    'Pro/deepseek-ai/DeepSeek-R1',
+    'Pro/deepseek-ai/DeepSeek-V3',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+    'deepseek-ai/DeepSeek-R1-Distill-Llama-70B',
+  ];
+  for (let i = 0; i < legacyModels.length; i++) {
+    if (i > 0) {
+      await act(async () => root.unmount());
+      host.remove();
+      host = document.createElement('div');
+      document.body.append(host);
+      root = createRoot(host);
+    }
+    const model = legacyModels[i];
+    get.mockResolvedValue({
+      data: {
+        ...data,
+        effectiveModels: ['对话', '主助手', '菜谱', '运营', '规划', '图片'].map(role => ({
+          role,
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          model,
+          source: '有效业务服务配置',
+        })),
+      },
+    });
+    await mount();
+    for (const role of ['main', 'planner', 'vision']) {
+      const options = [...host.querySelector<HTMLSelectElement>(`select[aria-label="${role} 思考模式"]`)!.options].map(o => o.value);
+      expect(options).toContain('off');
+      expect(options).not.toContain('high');
+      expect(options).not.toContain('max');
+    }
+  }
+});
+it('does not offer high or max thinking options when main bindings are mixed with non-effort models', async () => {
+  const nonEffortModels = [
+    'deepseek-ai/DeepSeek-V3',
+    'deepseek-ai/DeepSeek-R1',
+    'Pro/deepseek-ai/DeepSeek-V3',
+    'Pro/deepseek-ai/DeepSeek-R1',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B',
+    'deepseek-ai/DeepSeek-R1-Distill-Llama-70B',
+  ];
+  for (let i = 0; i < nonEffortModels.length; i++) {
+    if (i > 0) {
+      await act(async () => root.unmount());
+      host.remove();
+      host = document.createElement('div');
+      document.body.append(host);
+      root = createRoot(host);
+    }
+    get.mockResolvedValue({
+      data: {
+        ...data,
+        effectiveModels: [
+          { role: '对话', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Pro/deepseek-ai/DeepSeek-V4', source: '有效业务服务配置' },
+          { role: '主助手', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Pro/deepseek-ai/DeepSeek-V4', source: '有效业务服务配置' },
+          { role: '菜谱', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Pro/deepseek-ai/DeepSeek-V4', source: '有效业务服务配置' },
+          { role: '运营', baseUrl: 'https://api.siliconflow.cn/v1', model: nonEffortModels[i], source: '有效业务服务配置' },
+        ],
+      },
+    });
+    await mount();
+    const options = [...host.querySelector<HTMLSelectElement>('select[aria-label="main 思考模式"]')!.options].map(o => o.value);
+    expect(options).not.toContain('high');
+    expect(options).not.toContain('max');
+  }
+});
 it('replacement cancels clearing and cannot be silently discarded', async () => {
   put.mockResolvedValue({ data: {} }); await mount();
   const checkbox = [...host.querySelectorAll('label')].find(l => l.textContent === '清除全局密钥覆盖')!.querySelector('input')!;
@@ -95,4 +171,20 @@ it('keeps mapped provider model, URL and replacement credentials independent', a
   }
   await act(async () => saveButton().click());
   expect(put.mock.calls[0][1]).toEqual(expected);
+});
+
+it.each(['high', 'max'])('keeps unsupported saved effort %s visible and allows correction', async (thinking) => {
+  const savedPolicy = { ...policy, main: { ...policy.main, thinking } };
+  const effectiveModels = ['对话', '主助手', '菜谱', '运营'].map(role => ({ role, baseUrl: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-R1', source: '有效业务服务配置' }));
+  get.mockResolvedValue({ data: { ...data, runtimePolicy: savedPolicy, effectiveModels } });
+  put.mockResolvedValue({ data: {} });
+  await mount();
+  const select = host.querySelector<HTMLSelectElement>('select[aria-label="main 思考模式"]')!;
+  expect(select.value).toBe(thinking);
+  expect(select.selectedOptions[0].disabled).toBe(true);
+  expect(select.selectedOptions[0].textContent).toContain('请改为提供商默认');
+  expect([...select.options].filter(option => !option.disabled).map(option => option.value)).toEqual(['default', 'off']);
+  await act(async () => { select.value = 'default'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await act(async () => saveButton().click());
+  expect(put.mock.calls[0][1]).toEqual({ draftRevision: 3, runtimePolicy: { ...savedPolicy, main: { ...savedPolicy.main, thinking: 'default' } } });
 });

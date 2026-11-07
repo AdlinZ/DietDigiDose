@@ -233,10 +233,10 @@ test("decodes persisted household evidence from real inventory_json, request_jso
       membershipId: 10,
       foodName: "番茄炒蛋",
       producedServings: 2,
-      inventory: [{ itemId: 42, version: 1, amount: 3, unit: "个" }],
+      inventory: [{ itemId: 42, version: 1, amount: 3, unit: "piece" }],
     }),
     inventory_json: JSON.stringify([
-      { itemId: 42, foodName: "鸡蛋", before: 10, after: 7, amount: 3, unit: "个" },
+      { itemId: 42, version: 1, foodName: "鸡蛋", before: "10个", after: "7个", amount: 3, unit: "piece" },
     ]),
     dining_json: null,
   };
@@ -267,3 +267,224 @@ test("decodes persisted household evidence from real inventory_json, request_jso
   assert.equal(evaluateCoreLoop(fact, "staging").reason, "included");
 });
 
+function householdBatchRow(id: string, inventory: unknown, extra: {
+  recipeId?: number;
+  foodName?: string;
+  producedAt?: string;
+  intakeAt?: string;
+  dietRecordId?: number;
+} = {}) {
+  const recipeId = extra.recipeId ?? 18;
+  const foodName = extra.foodName ?? "家常菜";
+  const producedAt = extra.producedAt ?? "2026-09-12 10:00:00";
+  const intakeAt = extra.intakeAt ?? "2026-09-12 12:00:00";
+  const dietRecordId = extra.dietRecordId ?? 201;
+  const items = Array.isArray(inventory)
+    ? inventory
+    : (typeof inventory === "string" ? JSON.parse(inventory) : []);
+  const reqInventory = items.map((item: any) => ({
+    itemId: Number(item.itemId ?? item.item_id),
+    version: Number(item.version ?? 1),
+    amount: Number(item.amount),
+    unit: item.unit,
+  }));
+  return {
+    id,
+    household_id: 2,
+    created_by_user_id: 5,
+    idempotency_key: `idem-${id}`,
+    kind: "real",
+    recipe_id: recipeId,
+    produced_at: producedAt,
+    diet_record_id: dietRecordId,
+    diner_user_id: 5,
+    servings: 2,
+    intake_at: intakeAt,
+    request_json: JSON.stringify({
+      idempotencyKey: `idem-${id}`,
+      membershipId: 10,
+      foodName,
+      producedServings: 2,
+      inventory: reqInventory,
+    }),
+    inventory_json: inventory,
+    dining_json: null,
+  };
+}
+
+test("household inventory deductions parse display quantity strings with units and allow continuing deductions", () => {
+  const input = dataset();
+  input.productions = [];
+  input.intakes = [];
+  input.logs = [];
+  input.settings = { environment: "staging", enabled: 1 };
+
+  const cases = [
+    // 10个 -> 7个 (SQLite JSON string)
+    {
+      id: "batch-piece-10-to-7",
+      inventory: JSON.stringify([{ itemId: 42, version: 1, foodName: "鸡蛋", before: "10个", after: "7个", amount: 3, unit: "piece" }]),
+      dietRecordId: 211,
+      expected: { before: 10, after: 7, amount: 3 },
+    },
+    // 7个 -> 4个 (PostgreSQL parsed array continuation)
+    {
+      id: "batch-piece-7-to-4",
+      inventory: [{ itemId: 42, version: 2, foodName: "鸡蛋", before: "7个", after: "4个", amount: 3, unit: "piece" }],
+      dietRecordId: 212,
+      expected: { before: 7, after: 4, amount: 3 },
+    },
+    // Used up: 3个 -> 0个 (SQLite JSON string)
+    {
+      id: "batch-piece-3-to-0",
+      inventory: JSON.stringify([{ itemId: 42, version: 3, foodName: "鸡蛋", before: "3个", after: "0个", amount: 3, unit: "piece" }]),
+      dietRecordId: 213,
+      expected: { before: 3, after: 0, amount: 3 },
+    },
+    // Weight conversion: 1kg -> 0.7kg with amount: 300, unit: "g"
+    {
+      id: "batch-weight-kg-to-g",
+      inventory: JSON.stringify([{ itemId: 43, version: 1, foodName: "牛肉", before: "1kg", after: "0.7kg", amount: 300, unit: "g" }]),
+      dietRecordId: 214,
+      expected: { before: 1, after: 0.7, amount: 0.3 },
+    },
+    // Volume: 1000ml -> 750ml, amount: 250, unit: "ml"
+    {
+      id: "batch-volume-ml",
+      inventory: JSON.stringify([{ itemId: 44, version: 1, foodName: "牛奶", before: "1000ml", after: "750ml", amount: 250, unit: "ml" }]),
+      dietRecordId: 215,
+      expected: { before: 1000, after: 750, amount: 250 },
+    },
+    // Packaging: 5盒 -> 3盒, amount: 2, unit: "box" (PostgreSQL parsed array)
+    {
+      id: "batch-pkg-box",
+      inventory: [{ itemId: 45, version: 1, foodName: "豆腐", before: "5盒", after: "3盒", amount: 2, unit: "box" }],
+      dietRecordId: 216,
+      expected: { before: 5, after: 3, amount: 2 },
+    },
+    // Pure numeric format compatibility: 10 -> 8, amount: 2
+    {
+      id: "batch-numeric-compat",
+      inventory: JSON.stringify([{ itemId: 46, version: 1, foodName: "大米", before: 10, after: 8, amount: 2 }]),
+      dietRecordId: 217,
+      expected: { before: 10, after: 8, amount: 2 },
+    },
+    // Strict numeric text compatibility: "10" -> "7", amount: 3
+    {
+      id: "batch-strict-numeric-string",
+      inventory: JSON.stringify([{ itemId: 47, version: 1, foodName: "大米", before: "10", after: "7", amount: 3 }]),
+      dietRecordId: 218,
+      expected: { before: 10, after: 7, amount: 3 },
+    },
+  ];
+
+  input.shared = cases.map(c => householdBatchRow(c.id, c.inventory, { dietRecordId: c.dietRecordId }));
+  const facts = projectCoreLoops(input);
+  assert.equal(facts.length, cases.length);
+
+  for (let i = 0; i < cases.length; i++) {
+    const fact = facts[i];
+    const exp = cases[i].expected;
+    assert.equal(fact.deductions.length, 1, `case ${cases[i].id} deductions length`);
+    assert.equal(fact.deductions[0].before, exp.before, `case ${cases[i].id} before`);
+    assert.equal(fact.deductions[0].after, exp.after, `case ${cases[i].id} after`);
+    assert.equal(fact.deductions[0].amount, exp.amount, `case ${cases[i].id} amount`);
+    assert.equal(fact.deductions[0].verified, true, `case ${cases[i].id} verified`);
+    assert.equal(evaluateCoreLoop(fact, "staging").reason, "included", `case ${cases[i].id} evaluation reason`);
+  }
+
+  const summary = summarizeCoreLoopWeek(facts, {
+    date: "2026-09-12",
+    targetEnvironment: "staging",
+    coverageStart: "2026-09-01T00:00:00Z",
+    now: "2026-09-20T00:00:00Z",
+  });
+  assert.equal(summary.status, "complete");
+  assert.equal(summary.verifiedLoops, cases.length);
+  assert.equal(summary.unknown, 0);
+});
+
+test("household inventory deductions reject invalid quantity strings and invalid units without verifying deduction evidence", () => {
+  const input = dataset();
+  input.productions = [];
+  input.intakes = [];
+  input.logs = [];
+  input.settings = { environment: "staging", enabled: 1 };
+
+  const negativeCases = [
+    // Explicit verified: false
+    {
+      id: "neg-explicit-unverified",
+      inventory: JSON.stringify([{ itemId: 50, version: 1, foodName: "鸡蛋", before: "10个", after: "7个", amount: 3, unit: "piece", verified: false }]),
+    },
+    // Missing unit
+    {
+      id: "neg-missing-unit",
+      inventory: JSON.stringify([{ itemId: 51, version: 1, foodName: "鸡蛋", before: "10个", after: "7个", amount: 3 }]),
+    },
+    // Corrupted / unknown unit
+    {
+      id: "neg-unknown-unit",
+      inventory: JSON.stringify([{ itemId: 52, version: 1, foodName: "鸡蛋", before: "10个", after: "7个", amount: 3, unit: "unknown" }]),
+    },
+    // Incompatible units: 1kg vs ml
+    {
+      id: "neg-incompatible-units",
+      inventory: JSON.stringify([{ itemId: 53, version: 1, foodName: "牛肉", before: "1kg", after: "0.7kg", amount: 300, unit: "ml" }]),
+    },
+    // Amount mismatch with difference: 10 - 3 != 5
+    {
+      id: "neg-amount-mismatch",
+      inventory: JSON.stringify([{ itemId: 54, version: 1, foodName: "鸡蛋", before: "10个", after: "5个", amount: 3, unit: "piece" }]),
+    },
+    // Invalid quantity string
+    {
+      id: "neg-invalid-string",
+      inventory: JSON.stringify([{ itemId: 55, version: 1, foodName: "鸡蛋", before: "invalid", after: "7个", amount: 3, unit: "piece" }]),
+    },
+    // Boolean amount coerced rejection (amount: true)
+    {
+      id: "neg-boolean-amount",
+      inventory: JSON.stringify([{ itemId: 56, version: 1, foodName: "鸡蛋", before: "10个", after: "9个", amount: true, unit: "piece" }]),
+    },
+    // Array amount coerced rejection (amount: [3])
+    {
+      id: "neg-array-amount",
+      inventory: JSON.stringify([{ itemId: 57, version: 1, foodName: "鸡蛋", before: "10个", after: "7个", amount: [3], unit: "piece" }]),
+    },
+    // Pure numeric missing amount (must NOT manufacture amount = b - a)
+    {
+      id: "neg-numeric-missing-amount",
+      inventory: JSON.stringify([{ itemId: 58, version: 1, foodName: "大米", before: 10, after: 7 }]),
+    },
+    // Strict numeric string missing amount
+    {
+      id: "neg-numeric-string-missing-amount",
+      inventory: JSON.stringify([{ itemId: 59, version: 1, foodName: "大米", before: "10", after: "7" }]),
+    },
+    // Mixed loose non-numeric string rejection
+    {
+      id: "neg-loose-prefix",
+      inventory: JSON.stringify([{ itemId: 60, version: 1, foodName: "鸡蛋", before: "10个", after: "7", amount: 3 }]),
+    },
+    // Array before/after coerced rejection (e.g. ["10个"] / ["7个"])
+    {
+      id: "neg-array-before-after",
+      inventory: JSON.stringify([{ itemId: 61, version: 1, foodName: "鸡蛋", before: ["10个"], after: ["7个"], amount: 3, unit: "piece" }]),
+    },
+    // Numeric negative inventory rejection (after < 0)
+    {
+      id: "neg-numeric-negative-inventory",
+      inventory: JSON.stringify([{ itemId: 62, version: 1, foodName: "大米", before: 2, after: -1, amount: 3 }]),
+    },
+  ];
+
+  for (const c of negativeCases) {
+    input.shared = [householdBatchRow(c.id, c.inventory)];
+    const facts = projectCoreLoops(input);
+    assert.equal(facts.length, 1);
+    const fact = facts[0];
+    assert.equal(fact.deductions[0].verified, false, `negative case ${c.id} must not be verified`);
+    assert.equal(evaluateCoreLoop(fact, "staging").reason, "deduction_evidence_missing", `negative case ${c.id} reason`);
+  }
+});

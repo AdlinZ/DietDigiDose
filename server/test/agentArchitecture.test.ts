@@ -421,3 +421,239 @@ describe("custom allergy literals", () => {
     }
   });
 });
+
+describe("egg allergy disambiguation with protein terms", () => {
+  const eggContext = {
+    healthProfile: { allergies: [{ name: "鸡蛋", severity: "severe" }] },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  const plantProteinContext = {
+    healthProfile: { allergies: [{ name: "植物蛋白", severity: "severe" }] },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  const proteinContext = {
+    healthProfile: { allergies: [{ name: "蛋白质", severity: "severe" }] },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  describe("raw text findAllergyConflict disambiguates protein nutrition from egg allergens", () => {
+    test("does not report egg conflict for high-protein, protein or plant-protein nutrition terms", () => {
+      const nonEggTexts = [
+        "高蛋白豆腐",
+        "高蛋白鸡胸肉",
+        "优质蛋白质",
+        "植物蛋白",
+        "大豆分离蛋白",
+        "建议增加高蛋白食物摄入",
+        "每日蛋白质摄入目标为60克",
+        "蛋植物蛋白白",
+      ];
+      for (const text of nonEggTexts) {
+        assert.equal(
+          findAllergyConflict(text, eggContext),
+          null,
+          `Expected "${text}" NOT to conflict with egg allergy`
+        );
+      }
+    });
+
+    test("retains conflict for true egg, egg white and egg dish mentions", () => {
+      const eggTexts = [
+        "水煮鸡蛋",
+        "西红柿炒蛋",
+        "蛋清",
+        "蛋黄",
+        "蛋白",
+        "蒸蛋白",
+        "蛋白液",
+        "高蛋白液",
+        "纯蛋白",
+        "纯蛋白液",
+        "新鲜蛋白",
+        "鸡蛋白",
+        "蛋白炒虾仁",
+        "全蛋液",
+      ];
+      for (const text of eggTexts) {
+        assert.ok(
+          findAllergyConflict(text, eggContext),
+          `Expected "${text}" to conflict with egg allergy`
+        );
+      }
+    });
+
+    test("intercepts mixed strings containing both nutrition phrases and genuine egg/egg-white terms", () => {
+      const mixedTexts = [
+        "植物蛋白加蛋白",
+        "蛋白质丰富的蛋白",
+        "高蛋白鸡蛋",
+        "补充植物蛋白同时加蛋白",
+        "蛋白质丰富的蒸蛋白",
+      ];
+      for (const text of mixedTexts) {
+        assert.ok(
+          findAllergyConflict(text, eggContext),
+          `Expected mixed text "${text}" to conflict with egg allergy`
+        );
+      }
+    });
+  });
+
+  describe("candidate safety conflict distinguishes food candidates", () => {
+    test("does not block non-egg high-protein food candidates, including suitableReason and nutrition keys", () => {
+      const safeCandidates = [
+        { recipe: { name: "高蛋白豆腐", ingredients: [{ name: "北豆腐" }, { name: "西兰花" }] } },
+        { recipe: { name: "高蛋白鸡胸肉", ingredients: [{ name: "鸡胸肉" }, { name: "西兰花" }] } },
+        { recipe: { name: "大豆植物蛋白饮", ingredients: [{ name: "大豆分离蛋白" }, { name: "燕麦奶" }] } },
+        {
+          recipe: {
+            name: "香煎高蛋白鸡胸肉",
+            suitableReason: "高蛋白",
+            nutrition: { "蛋白质": "32g", "热量": "200kcal" },
+            ingredients: [{ name: "鸡胸肉" }, { name: "黑胡椒" }, { name: "橄榄油" }],
+          },
+        },
+        { ingredients: ["高蛋白豆腐", "蛋白质粉（大豆）", "植物蛋白", "高蛋白鸡胸肉", "蛋植物蛋白白"] },
+      ];
+      for (const candidate of safeCandidates) {
+        assert.equal(
+          findCandidateSafetyConflict(candidate, eggContext),
+          null,
+          `Expected candidate ${JSON.stringify(candidate)} NOT to conflict with egg allergy`
+        );
+      }
+    });
+
+    test("blocks real egg ingredients and egg white dishes in candidates even if mixed with nutrition terms", () => {
+      const unsafeCandidates = [
+        { recipe: { name: "蛋白炒虾仁", ingredients: [{ name: "蛋白" }, { name: "虾仁" }] } },
+        { recipe: { name: "纯蛋清舒芙蕾", ingredients: [{ name: "蛋清" }, { name: "牛奶" }] } },
+        { recipe: { name: "高蛋白蒸蛋白", ingredients: [{ name: "蒸蛋白" }, { name: "香油" }] } },
+        { recipe: { name: "植物蛋白加蛋白料理", ingredients: [{ name: "植物蛋白" }, { name: "蛋白" }] } },
+        { ingredients: ["蛋白"] },
+        { ingredients: ["纯蛋白"] },
+        { ingredients: ["纯蛋白液"] },
+        { ingredients: ["蒸蛋白"] },
+        { ingredients: ["蛋白液"] },
+        { ingredients: ["高蛋白液"] },
+        { ingredients: ["鸡蛋"] },
+        { ingredients: ["蛋清"] },
+        { ingredients: ["高蛋白鸡蛋"] },
+      ];
+      for (const candidate of unsafeCandidates) {
+        assert.ok(
+          findCandidateSafetyConflict(candidate, eggContext),
+          `Expected candidate ${JSON.stringify(candidate)} to conflict with egg allergy`
+        );
+      }
+    });
+  });
+
+  describe("shopping action validation distinguishes protein food from egg purchases", () => {
+    test("allows purchasing non-egg high protein items", () => {
+      const safeActions = validateAgentActions(
+        [
+          {
+            actionType: "add_shopping_items",
+            summary: "采购高蛋白食材",
+            payload: { items: [{ name: "高蛋白豆腐" }, { name: "高蛋白鸡胸肉" }, { name: "植物蛋白饮品" }, { name: "蛋植物蛋白白" }] },
+          },
+        ],
+        eggContext
+      );
+      assert.equal(safeActions.length, 1);
+    });
+
+    test("blocks purchasing real egg, egg white or egg dishes including mixed descriptions", () => {
+      const eggItems = [
+        "鸡蛋",
+        "蛋清",
+        "蛋白",
+        "蒸蛋白",
+        "蛋白液",
+        "高蛋白液",
+        "纯蛋白",
+        "纯蛋白液",
+        "鸡蛋白",
+        "蛋白炒虾仁",
+        "植物蛋白加蛋白",
+        "蛋白质丰富的蛋白",
+        "高蛋白鸡蛋",
+      ];
+      for (const eggItem of eggItems) {
+        assert.throws(
+          () =>
+            validateAgentActions(
+              [
+                {
+                  actionType: "add_shopping_items",
+                  summary: `采购${eggItem}`,
+                  payload: { items: [{ name: eggItem }] },
+                },
+              ],
+              eggContext
+            ),
+          (err: unknown) => err instanceof AgentSafetyConflictError,
+          `Expected purchasing "${eggItem}" to throw AgentSafetyConflictError`
+        );
+      }
+    });
+  });
+
+  describe("independent custom allergy names for protein terms match literally", () => {
+    test("custom allergy for 植物蛋白 matches literally and is not bypassed by egg disambiguation", () => {
+      // Direct text
+      assert.ok(findAllergyConflict("植物蛋白饮品", plantProteinContext));
+      assert.ok(findAllergyConflict("大豆植物蛋白", plantProteinContext));
+      assert.equal(findAllergyConflict("普通鸡蛋", plantProteinContext), null);
+      assert.equal(findAllergyConflict("新鲜苹果", plantProteinContext), null);
+
+      // Candidate
+      assert.ok(findCandidateSafetyConflict({ ingredients: ["植物蛋白粉"] }, plantProteinContext));
+      assert.equal(findCandidateSafetyConflict({ ingredients: ["鸡蛋"] }, plantProteinContext), null);
+
+      // Shopping action
+      assert.throws(
+        () =>
+          validateAgentActions(
+            [
+              {
+                actionType: "add_shopping_items",
+                summary: "采购植物蛋白",
+                payload: { items: [{ name: "植物蛋白粉" }] },
+              },
+            ],
+            plantProteinContext
+          ),
+        (err: unknown) => err instanceof AgentSafetyConflictError
+      );
+    });
+
+    test("custom allergy for 蛋白质 matches literally and is not bypassed by egg disambiguation", () => {
+      // Direct text
+      assert.ok(findAllergyConflict("高蛋白质补充剂", proteinContext));
+      assert.ok(findAllergyConflict("优质蛋白质", proteinContext));
+      assert.equal(findAllergyConflict("普通鸡蛋", proteinContext), null);
+      assert.equal(findAllergyConflict("新鲜苹果", proteinContext), null);
+
+      // Candidate
+      assert.ok(findCandidateSafetyConflict({ ingredients: ["蛋白质粉"] }, proteinContext));
+      assert.equal(findCandidateSafetyConflict({ ingredients: ["鸡蛋"] }, proteinContext), null);
+
+      // Shopping action
+      assert.throws(
+        () =>
+          validateAgentActions(
+            [
+              {
+                actionType: "add_shopping_items",
+                summary: "采购蛋白质粉",
+                payload: { items: [{ name: "蛋白质粉" }] },
+              },
+            ],
+            proteinContext
+          ),
+        (err: unknown) => err instanceof AgentSafetyConflictError
+      );
+    });
+  });
+});

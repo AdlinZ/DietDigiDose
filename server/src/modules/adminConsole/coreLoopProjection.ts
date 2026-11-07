@@ -1,5 +1,7 @@
 import type { CoreLoopFact } from "./coreLoopMetric.js";
 import type { Row } from "./types.js";
+import { consumeProductionItem } from "../households/production.js";
+import { INVENTORY_UNITS, type InventoryUnit } from "../../services/inventoryQuantity.js";
 export type CoreLoopDataset = { productions: Row[]; intakes: Row[]; logs: Row[]; legacy: Row[]; shared: Row[]; settings: Row };
 export function object(value: unknown): Row {
   try { const parsed = typeof value === "string" ? JSON.parse(value) : value; return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; }
@@ -13,6 +15,11 @@ export function utc(value: unknown): string {
 const actor = (value: unknown) => `user:${Number(value)}`;
 function actorClass(value: unknown): CoreLoopFact["actorClass"] { return ["real","test","automation","demo"].includes(String(value)) ? value as CoreLoopFact["actorClass"] : "unknown"; }
 const amount = (value: unknown) => value == null ? null : Number(value);
+const isStrictNumeric = (value: unknown): value is number | string => {
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return /^\s*[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*$/.test(value) && Number.isFinite(Number(value));
+  return false;
+};
 export function projectCoreLoops(data: CoreLoopDataset): CoreLoopFact[] {
   const facts: CoreLoopFact[] = data.productions.map(row => {
     const result = object(row.result_json), selection = object(result.selection_evidence), inventory = object(selection.inventory);
@@ -104,15 +111,53 @@ export function projectCoreLoops(data: CoreLoopDataset): CoreLoopFact[] {
         amount: amount(item.amount),
         verified: Boolean(item.verified),
       })) : (Array.isArray(rawInventory) ? rawInventory.map((item: Row) => {
-        const b = amount(item.before);
-        const a = amount(item.after);
-        const amt = amount(item.amount ?? (b !== null && a !== null ? b - a : null));
+        const itemId = Number(item.itemId ?? item.item_id);
+        if (isStrictNumeric(item.before) && isStrictNumeric(item.after)) {
+          const b = Number(item.before);
+          const a = Number(item.after);
+          const amt = isStrictNumeric(item.amount) ? Number(item.amount) : null;
+          return {
+            itemId,
+            before: b,
+            after: a,
+            amount: amt,
+            verified: item.verified !== false && amt !== null && amt > 0 && b > a && a >= 0 && Math.abs(b - a - amt) < 0.000001,
+          };
+        }
+        if (typeof item.before === "string" && typeof item.after === "string") {
+          const unit = typeof item.unit === "string" && (INVENTORY_UNITS as readonly string[]).includes(item.unit)
+            ? (item.unit as InventoryUnit)
+            : undefined;
+          if (unit && typeof item.amount === "number" && Number.isFinite(item.amount) && item.amount > 0) {
+            try {
+              const foodName = typeof item.foodName === "string" ? item.foodName : (typeof item.food_name === "string" ? item.food_name : "");
+              const consumed = consumeProductionItem(
+                { id: itemId, food_name: foodName, quantity: item.before, is_available: true, version: Number(item.version ?? 1) },
+                { itemId, version: Number(item.version ?? 1), amount: item.amount, unit }
+              );
+              if (consumed.nextQuantity === item.after.trim()) {
+                const b = consumed.storedValue;
+                const a = consumed.remaining;
+                const amt = consumed.amountUsed;
+                return {
+                  itemId,
+                  before: b,
+                  after: a,
+                  amount: amt,
+                  verified: item.verified !== false && b !== null && a !== null && amt !== null && b > a && a >= 0 && Math.abs(b - a - amt) < 0.000001,
+                };
+              }
+            } catch {
+              // Replay failed; fall through to unverified result
+            }
+          }
+        }
         return {
-          itemId: Number(item.itemId ?? item.item_id),
-          before: b,
-          after: a,
-          amount: amt,
-          verified: Boolean(item.verified ?? (b !== null && a !== null && amt !== null && b > a && Math.abs(b - a - amt) < 0.000001)),
+          itemId,
+          before: amount(item.before),
+          after: amount(item.after),
+          amount: typeof item.amount === "number" && Number.isFinite(item.amount) ? item.amount : null,
+          verified: false,
         };
       }) : []);
 

@@ -176,6 +176,10 @@ function matchesAllergyTerm(lowerText: string, compactText: string, term: string
   const normTerm = term.normalize("NFKC").toLocaleLowerCase().trim();
   if (!normTerm) return false;
   if (/[^\x00-\x7F]/.test(normTerm)) {
+    if (normTerm === "蛋白") {
+      const sanitized = compactText.replace(/蛋白质|高蛋白(?!液)|植物蛋白|大豆(?:分离)?蛋白/g, " ");
+      return sanitized.includes("蛋白");
+    }
     return compactText.includes(normTerm.replace(/\s+/g, ""));
   }
   const escaped = normTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

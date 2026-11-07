@@ -4,7 +4,7 @@ import { Modal, Text, TextInput, TouchableOpacity } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 jest.mock("@react-native-async-storage/async-storage", () => require("@react-native-async-storage/async-storage/jest/async-storage-mock"));
 jest.mock("@/services/api/cache", () => ({ registerApiFetchScope: jest.fn(), invalidateApiCacheForMutation: jest.fn() }));
-const account = { id: 1, username: "Synthetic A", email: "a@example.invalid", phone: null as string | null | undefined, phone_verified_at: null as string | null, hasPassword: true, role: "user" };
+const account = { id: 1, username: "Synthetic A", email: "a@example.invalid" as string | null, phone: null as string | null | undefined, phone_verified_at: null as string | null, hasPassword: true, role: "user" };
 let mockUser: typeof account | null = { ...account };
 let mockGeneration = 1;
 const mockFetch = jest.fn();
@@ -148,15 +148,44 @@ describe("phone replacement flow", () => {
   const openReplace = () => press("更换手机号");
   const fillReplace = () => { input("新手机号", "+8613900000000"); input("更换当前密码", "synthetic-password"); };
 
-  it("only offers replacement for accounts with verified phone and password", async () => {
-    mockUser = { ...verifiedAccount }; await rerender();
+  it.each([
+    ["present", "a@example.invalid"],
+    ["null", null],
+  ])("only offers replacement for accounts with verified phone and password (email %s)", async (_, email) => {
+    const base = { ...verifiedAccount, email };
+    mockUser = { ...base }; await rerender();
     expect(button("更换手机号")).toBeDefined();
     expect(button("首次绑定手机号")).toBeUndefined();
 
     for (const patch of [{ phone: null }, { phone_verified_at: null }, { hasPassword: false }, { role: "admin" }]) {
-      mockUser = { ...verifiedAccount, ...patch }; await rerender();
+      mockUser = { ...base, ...patch }; await rerender();
       expect(button("更换手机号")).toBeUndefined();
     }
+  });
+
+  it("allows SMS-registered users without email to replace phone", async () => {
+    mockUser = { ...verifiedAccount, email: null, hasPassword: true, role: "user" };
+    await rerender();
+    expect(button("更换手机号")).toBeDefined();
+    expect(button("首次绑定手机号")).toBeUndefined();
+
+    const refreshCallsBefore = mockRefresh.mock.calls.length;
+    await openReplace();
+    expect(mockRefresh.mock.calls.length).toBe(refreshCallsBefore + 1);
+    expect(hasText("更换前需先验证当前登录密码和新手机")).toBe(true);
+
+    fillReplace();
+    expect(tree.root.findByProps({ accessibilityLabel: "新手机号" }).props.value).toBe("+8613900000000");
+    expect(tree.root.findByProps({ accessibilityLabel: "更换当前密码" }).props.value).toBe("synthetic-password");
+
+    await press("关闭手机号更换");
+    expect(hasText("更换前需先验证当前登录密码和新手机")).toBe(false);
+    expect(button("更换手机号")).toBeDefined();
+
+    await openReplace();
+    expect(hasText("更换前需先验证当前登录密码和新手机")).toBe(true);
+    expect(tree.root.findByProps({ accessibilityLabel: "新手机号" }).props.value).toBe("");
+    expect(tree.root.findByProps({ accessibilityLabel: "更换当前密码" }).props.value).toBe("");
   });
 
   it("performs replacement end-to-end and cleans up secrets", async () => {

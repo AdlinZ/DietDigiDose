@@ -49,7 +49,7 @@ export function PhoneBindingSettings() {
   if (!user) return null;
   const hasBoundPhone = !!bound || (!!user.phone && !!user.phone_verified_at);
   const eligible = user.phone === null && !bound && !!user.email && user.hasPassword === true && user.role === "user";
-  const eligibleReplace = hasBoundPhone && !!user.email && user.hasPassword === true && user.role === "user";
+  const eligibleReplace = hasBoundPhone && user.hasPassword === true && user.role === "user";
   const summary = bound ? `${bound} · 已验证` : user.phone ? `${maskedPhone(user.phone)} · ${user.phone_verified_at ? "已验证" : "未验证"}`
     : user.phone === undefined ? "联网后查看手机号状态" : "尚未绑定手机号";
   return <View className="mb-4 gap-3 rounded-2xl border border-line bg-surface p-4">

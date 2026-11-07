@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import {
+  AgentSafetyConflictError,
+  findAllergyConflict,
   findCandidateSafetyConflict,
   normalizeActionProposal,
   normalizePrivacyDisclosure,
@@ -235,5 +237,187 @@ describe("Supervisor Agent architecture", () => {
     assert.equal(cards[0].schemeTag, "主方案");
     assert.equal(cards[1].schemeTag, "备选方案");
     assert.deepEqual(cards[1].steps, ["菌菇煸香", "加豆腐煮熟"]);
+  });
+});
+
+describe("custom allergy literals", () => {
+  const makeContext = (allergyName: string) =>
+    ({ healthProfile: { allergies: [{ name: allergyName, severity: "severe" }] } }) as Parameters<
+      typeof findCandidateSafetyConflict
+    >[1];
+
+  describe("malformed regex names do not crash on unrelated text and match exact literal", () => {
+    const malformedNames = ["milk (cow", "sesame [", "nut \\"];
+    for (const name of malformedNames) {
+      test(`handles malformed regex allergy name "${name}"`, () => {
+        const ctx = makeContext(name);
+        // Unrelated food must not throw SyntaxError and must not conflict
+        assert.equal(findCandidateSafetyConflict({ ingredients: ["rice", "apple"] }, ctx), null);
+        assert.equal(findAllergyConflict("fresh rice and red apples", ctx), null);
+
+        // Exact literal name must conflict in text and ingredients
+        assert.ok(findAllergyConflict(`contains ${name} in ingredients`, ctx));
+        assert.ok(findCandidateSafetyConflict({ ingredients: [name] }, ctx));
+
+        // Unsafe add_shopping_items must throw AgentSafetyConflictError, not SyntaxError
+        assert.throws(
+          () => validateAgentActions([{ actionType: "add_shopping_items", summary: "采购", payload: { items: [{ name }] } }], ctx),
+          (err: unknown) => err instanceof AgentSafetyConflictError
+        );
+      });
+    }
+  });
+
+  describe("balanced and literal metacharacters match strictly and do not act as regex operators", () => {
+    const metacharacterCases = [
+      { name: "milk (cow)", nonMatches: ["milk cow", "milk cow)", "milk (cow"] },
+      { name: "nut[raw]", nonMatches: ["nutr", "nuta", "nutw", "nutraw"] },
+      { name: "soy+protein", nonMatches: ["soyprotein", "soyyprotein"] },
+      { name: "nut.powder", nonMatches: ["nutXpowder", "nut-powder", "nut powder"] },
+      { name: "a|b", nonMatches: ["a", "b", "a b"] },
+      { name: "nut{2}", nonMatches: ["nut", "nutt", "nut2"] },
+      { name: "nut?raw", nonMatches: ["nutraw", "nu?raw"] },
+      { name: "nut^raw", nonMatches: ["nutraw", "nut raw"] },
+      { name: "nut$raw", nonMatches: ["nutraw", "nut raw"] },
+      { name: "(soy)", nonMatches: ["soy"] },
+      { name: "[peanut]", nonMatches: ["peanut", "p", "e", "a"] },
+      { name: ".allergen.", nonMatches: ["XallergenY", "allergen"] },
+    ];
+
+    for (const { name, nonMatches } of metacharacterCases) {
+      test(`treats metacharacters literally for "${name}"`, () => {
+        const ctx = makeContext(name);
+        // Unrelated food does not conflict
+        assert.equal(findCandidateSafetyConflict({ ingredients: ["rice", "apple"] }, ctx), null);
+        assert.equal(findAllergyConflict("fresh rice and red apples", ctx), null);
+
+        // Exact literal name conflicts
+        assert.ok(findAllergyConflict(`food with ${name} included`, ctx));
+        assert.ok(findCandidateSafetyConflict({ ingredients: [name] }, ctx));
+
+        // Regex-like alternatives must NOT match
+        for (const nonMatch of nonMatches) {
+          assert.equal(
+            findAllergyConflict(`contains ${nonMatch} only`, ctx),
+            null,
+            `Expected "${nonMatch}" NOT to match allergy "${name}"`
+          );
+          assert.equal(
+            findCandidateSafetyConflict({ ingredients: [nonMatch] }, ctx),
+            null,
+            `Expected ingredient "${nonMatch}" NOT to match allergy "${name}"`
+          );
+        }
+
+        // Unsafe add_shopping_items throws AgentSafetyConflictError
+        assert.throws(
+          () => validateAgentActions([{ actionType: "add_shopping_items", summary: "采购", payload: { items: [{ name }] } }], ctx),
+          (err: unknown) => err instanceof AgentSafetyConflictError
+        );
+      });
+    }
+  });
+
+  test("raw-string fallback protects quoted and backslash names in nested candidate structures", () => {
+    const rawFallbackCases = [
+      { name: 'milk"cow', alternative: "milkcow" },
+      { name: "nut\\raw", alternative: "nutraw" },
+    ];
+    for (const { name, alternative } of rawFallbackCases) {
+      const ctx = makeContext(name);
+      // Exact raw text conflicts
+      assert.ok(findAllergyConflict(`contains ${name} safely`, ctx));
+      // Nested candidate structure conflicts
+      assert.ok(findCandidateSafetyConflict({ recipe: { ingredients: [{ name }] } }, ctx));
+
+      // Unrelated rice returns null
+      assert.equal(findCandidateSafetyConflict({ ingredients: ["rice"] }, ctx), null);
+      assert.equal(findAllergyConflict("rice only", ctx), null);
+
+      // Punctuation-removed alternatives return null
+      assert.equal(findAllergyConflict(`contains ${alternative}`, ctx), null);
+      assert.equal(findCandidateSafetyConflict({ ingredients: [alternative] }, ctx), null);
+
+      // Exact add_shopping_items throws AgentSafetyConflictError
+      assert.throws(
+        () => validateAgentActions([{ actionType: "add_shopping_items", summary: "采购", payload: { items: [{ name }] } }], ctx),
+        (err: unknown) => err instanceof AgentSafetyConflictError
+      );
+    }
+  });
+
+  test("separate fields do not manufacture a match across object boundaries", () => {
+    const ctx = makeContext("nut raw");
+    assert.equal(findCandidateSafetyConflict({ first: "nut", second: "raw" }, ctx), null);
+  });
+
+  test("normalization and literal star check for full-width characters", () => {
+    const ctx = makeContext("ｎｕｔ＊ｒａｗ");
+    // Matches literal candidate "NUT*RAW"
+    assert.ok(findAllergyConflict("contains NUT*RAW in ingredients", ctx));
+    assert.ok(findCandidateSafetyConflict({ ingredients: ["NUT*RAW"] }, ctx));
+
+    // Does not match regex-like or punctuation-removed alternatives "nutraw" or "nutttraw"
+    assert.equal(findAllergyConflict("contains nutraw", ctx), null);
+    assert.equal(findCandidateSafetyConflict({ ingredients: ["nutraw"] }, ctx), null);
+    assert.equal(findAllergyConflict("contains nutttraw", ctx), null);
+    assert.equal(findCandidateSafetyConflict({ ingredients: ["nutttraw"] }, ctx), null);
+  });
+
+  test("serialization syntax artifacts do not cause false positives while preserving positive matches", () => {
+    const serializationCases = [
+      {
+        allergy: 'milk"',
+        falseMatchTarget: "milk",
+        trueMatchTarget: 'milk"',
+      },
+      {
+        allergy: '"rice',
+        falseMatchTarget: "rice",
+        trueMatchTarget: '"rice',
+      },
+      {
+        allergy: "nut\\\\raw",
+        falseMatchTarget: "nut\\raw",
+        trueMatchTarget: "nut\\\\raw",
+      },
+    ];
+
+    for (const { allergy, falseMatchTarget, trueMatchTarget } of serializationCases) {
+      const ctx = makeContext(allergy);
+
+      // 1. Direct findAllergyConflict verification
+      assert.equal(findAllergyConflict(falseMatchTarget, ctx), null);
+      assert.ok(findAllergyConflict(trueMatchTarget, ctx));
+
+      // 2. Candidate ingredient list: false match must be null, true match must conflict
+      assert.equal(findCandidateSafetyConflict({ ingredients: [falseMatchTarget] }, ctx), null);
+      assert.ok(findCandidateSafetyConflict({ ingredients: [trueMatchTarget] }, ctx));
+
+      // 3. Nested candidate structure
+      assert.equal(
+        findCandidateSafetyConflict({ recipe: { ingredients: [{ name: falseMatchTarget }] } }, ctx),
+        null
+      );
+      assert.ok(
+        findCandidateSafetyConflict({ recipe: { ingredients: [{ name: trueMatchTarget }] } }, ctx)
+      );
+
+      // 4. add_shopping_items behavior: safe for falseMatchTarget, throws for trueMatchTarget
+      const safeAction = validateAgentActions(
+        [{ actionType: "add_shopping_items", summary: "安全采购", payload: { items: [{ name: falseMatchTarget }] } }],
+        ctx
+      );
+      assert.ok(safeAction.length > 0);
+
+      assert.throws(
+        () =>
+          validateAgentActions(
+            [{ actionType: "add_shopping_items", summary: "危险采购", payload: { items: [{ name: trueMatchTarget }] } }],
+            ctx
+          ),
+        (err: unknown) => err instanceof AgentSafetyConflictError
+      );
+    }
   });
 });

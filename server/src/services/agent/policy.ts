@@ -178,11 +178,15 @@ function matchesAllergyTerm(lowerText: string, compactText: string, term: string
   if (/[^\x00-\x7F]/.test(normTerm)) {
     return compactText.includes(normTerm.replace(/\s+/g, ""));
   }
+  const escaped = normTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const leftBoundary = /^\w/.test(normTerm) ? "\\b" : "";
+  const rightBoundary = /\w$/.test(normTerm) ? "s?\\b" : "";
+  const regex = new RegExp(`${leftBoundary}${escaped}${rightBoundary}`, "i");
   if (normTerm === "egg" || normTerm === "eggs") {
     const sanitized = lowerText.replace(/\begg[\s_-]?plants?\b/gi, "");
-    return new RegExp(`\\b${normTerm}s?\\b`, "i").test(sanitized);
+    return regex.test(sanitized);
   }
-  return new RegExp(`\\b${normTerm}s?\\b`, "i").test(lowerText);
+  return regex.test(lowerText);
 }
 
 function isSevere(value: string | undefined) {
@@ -216,9 +220,20 @@ export function findAllergyConflict(text: string, ctx: UserContext): AllergySafe
 // This guard is only for proposed food candidates / write payloads, never the
 // user's consultation text. Unknown compound ingredients require clarification.
 export function findCandidateSafetyConflict(candidate: unknown, ctx: UserContext): AllergySafetyBlock | null {
-  const text = JSON.stringify(candidate) || "";
-  const conflict = findAllergyConflict(text, ctx);
-  if (conflict) return conflict;
+  const rawStrings: string[] = [];
+  const text = JSON.stringify(candidate, (key, value) => {
+    if (key && Number.isNaN(Number(key))) {
+      rawStrings.push(key);
+    }
+    if (typeof value === "string") {
+      rawStrings.push(value);
+    }
+    return value;
+  }) || "";
+  for (const rawStr of rawStrings) {
+    const conflict = findAllergyConflict(rawStr, ctx);
+    if (conflict) return conflict;
+  }
   const allergy = ctx.healthProfile?.allergies?.find((item) => item.name.trim());
   if (allergy && /(复合调味|混合调料|混合酱|沙茶酱|沙嗲酱|satay|秘制调料|特调酱|成分不明|配料不详|未知配料|未知成分|不明配料)/i.test(text)) {
     return { allergyName: allergy.name, severe: isSevere(allergy.severity),

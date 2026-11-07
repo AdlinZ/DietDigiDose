@@ -1,6 +1,7 @@
 import type { MaintenanceInputSnapshot } from "./inputSnapshot.js";
 import type { MaintenanceScope } from "./scope.js";
 import type { MealPlanItemUpdateInput } from "../mealPlans/types.js";
+import type { PendingSuggestionEvaluation } from "./pendingSuggestions.js";
 export const MAINTENANCE_RULE_VERSION = "maintenance-2026-09-12.1";
 export const MAINTENANCE_MAX_ATTEMPTS = 3;
 export type MaintenanceJob = { id: string; userId: number; attempt: number; leaseToken: string; eventIds: string[] };
@@ -28,4 +29,4 @@ export class MaintenanceApplyConflict extends Error {
   constructor(kind: "lease_lost" | "input_conflict") { super(kind); this.kind = kind; }
 }
 
-export type MaintenanceDiagnostics = { evaluationDurationMs?: number; notes?: string[]; ruleVersion: string; inputFingerprint: string; fromDate: string; modelCalls: number; cost: number; assessments: unknown[]; checks: string[] };
+export type MaintenanceDiagnostics = { evaluationDurationMs?: number; notes?: string[]; ruleVersion: string; inputFingerprint: string; fromDate: string; modelCalls: number; cost: number; assessments: unknown[]; checks: string[]; pendingRevalidations?: PendingSuggestionEvaluation[] };

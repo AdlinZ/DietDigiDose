@@ -1,5 +1,6 @@
 import { maintenanceExplanations } from "./explanations.js";
 import { evaluateMaintenanceJob } from "./evaluate.js";
+import type { Row } from "../mealPlans/formatters.js";
 import { batchLimit, type MaintenanceQueueRepository } from "./queue.js";
 import type { WorkerTaskContext, WorkerTaskResult } from "../worker/types.js";
 
@@ -17,9 +18,13 @@ export async function processMaintenanceJobs(repository: MaintenanceQueueReposit
       const evaluation = await evaluateMaintenanceJob(repository,job,now());
       await context.assertActive();
       if (!evaluation) { failed++; continue; }
+      const previousNotes = Array.isArray((evaluation.result as Row | undefined)?.notes) ? (evaluation.result as Row).notes as string[] : [];
+      const mergedNotes = [...new Set([...previousNotes, ...(evaluation.revalidations?.notes ?? [])])];
       const result = await repository.applyChanges(job,evaluation.replacements.changes,evaluation.snapshot,{
         ...evaluation.result,fromDate: evaluation.fromDate,evaluationDurationMs: Math.max(0,Math.round(performance.now()-started)),
-        checks: maintenanceExplanations(job.userId,evaluation.snapshot,evaluation.result.assessments,evaluation.replacements.changes,[...evaluation.result.checks,...evaluation.replacements.checks]),
+        notes: mergedNotes.length ? mergedNotes : undefined,
+        pendingRevalidations: evaluation.revalidations.evaluations.length ? evaluation.revalidations.evaluations : undefined,
+        checks: maintenanceExplanations(job.userId,evaluation.snapshot,evaluation.result.assessments,evaluation.replacements.changes,[...evaluation.result.checks,...evaluation.replacements.checks,...evaluation.revalidations.checks]),
       });
       if (result.kind === "completed") succeeded++;
       else {

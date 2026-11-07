@@ -1,17 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { evaluateActiveReplacement, type ActiveReplacementArguments } from "../src/modules/mealPlans/activeReplacement.js";
-import { executionRecipeKey } from "../src/modules/recipes/execution.js";
-import { recipeExecutionProof } from "../src/modules/recipes/planExecution.js";
-import { executionFixture } from "./helpers/recipeExecution.js";
+import { revalidatePendingSuggestions, hasEffectiveMaintenanceEvents } from "../src/modules/planMaintenance/pendingSuggestions.js";
+import type { MaintenanceInputSnapshot } from "../src/modules/planMaintenance/inputSnapshot.js";
+import { activeReplacementFixture } from "./helpers/activeReplacementFixture.js";
 import type { Row } from "../src/modules/mealPlans/formatters.js";
-function fixture(): ActiveReplacementArguments {
-  const recipes: Row[] = [1, 2].map(id => ({ id, title: `菜${id}`, status: "approved", quality_status: "trusted", visibility: "public", serving_size: 2, cook_time: 10, prep_time: 5, steps_json: ["准备", "煮熟", "收尾"], ingredients_json: [{ name: "米", amount: "100g" }] }));
-  for (const row of recipes) row.execution_json = { recipeKey: executionRecipeKey(row), reviewedBy: 1, reviewedAt: "2026-10-20T00:00:00Z", profile: { ...executionFixture, handling: { storage: "fresh_only", maxHoldHours: 0, coldServingAllowed: true, carryAllowed: false, sourceUrl: "https://example.invalid/review", reference: "合成测试存放依据", instructions: "仅用于自动测试的合成依据，不代表真实食品安全保证" } } };
-  const executions = Object.fromEntries(["a", "b"].map(id => [id, { targetMealId: `old-${id}`, recipeId: 1, title: "菜1", servings: 2, recipeYield: 2, demands: [{ food_name: "米", amount_value: 100, unit: "g" }] }]));
-  const items = ["a", "b"].map(id => ({ id, version: 1, plan_id: "p", status: "planned", planned_date: "2026-10-21", meal_type: "午餐", recipe_id: 1, title: "菜1", steps_json: recipes[0].steps_json, ingredients_json: recipes[0].ingredients_json }));
-  return { userId: 1, itemId: "a", today: "2026-10-21", input: { version: 1, recipeId: 2 }, items, plan: { id: "p", user_id: 1, status: "active", start_date: "2026-10-21", end_date: "2026-10-23", constraints_json: { executionItems: executions, executionRecipeKeys: { a: recipeExecutionProof(recipes[0]), b: recipeExecutionProof(recipes[0]) }, currentCookingDraft: { productionDate: "2026-10-21", time: { budgetMinutes: 60 }, meals: [{ id: "stale", date: "1999-01-01" }], cooking: [{ recipeId: 999 }] } } }, data: { recipes, prepared_meal_allocations: [], prepared_meals: [], cooking_queue_items: [], user_health_profiles: [{ user_id: 1, kitchen_constraints_json: { meal_time_minutes: 60 } }], inventory_items: [{ id: 1, user_id: 1, is_available: 1, food_name: "米", quantity_value: 300, quantity_unit: "g", version: 1, expiration_date: "2026-11-01", quantity_evidence_status: "known" }], kitchenware_items: [{ id: 1, user_id: 1, catalog_id: 1, name: "测试锅", attributes_json: { capacityMl: 1000 } }], recipe_kitchenware_requirements: [], recipe_compatibility: [], meal_plans: [], meal_plan_items: [] } };
-}
+
+const fixture = activeReplacementFixture;
+export { activeReplacementFixture as validPendingRevalidationFixture };
 test("actual reviewed fixture passes, retains the other live meal and ignores stale draft targets", () => {
   const args = fixture(), before = structuredClone(args);
   const result = evaluateActiveReplacement(args);
@@ -110,4 +106,340 @@ test("legacy plans without production configuration cannot guess production from
   const args = fixture(); delete (args.plan.constraints_json as Row).currentCookingDraft;
   const result = evaluateActiveReplacement(args); assert.equal(result.canApply, false);
   assert(result.checks.some(check => check.code === "production_configuration_missing"));
+});
+
+function makeSnapshot(args: ActiveReplacementArguments, changeOverrides?: Partial<Row>): { snapshot: MaintenanceInputSnapshot; compatibility: Map<number, { requirements: Row[]; blocking: Row[] }> } {
+  const items = args.items.map(it => ({ ...it, user_id: 1 }));
+  const change: Row = {
+    id: "change-1",
+    user_id: 1,
+    plan_id: String(args.plan.id),
+    item_id: String(args.itemId),
+    status: "pending",
+    before_version: 1,
+    after_json: JSON.stringify({ version: 1, recipeId: 2, title: "替代菜2" }),
+    ...changeOverrides,
+  };
+  const data: Record<string, Row[]> = {
+    ...args.data,
+    meal_plans: [args.plan],
+    meal_plan_items: items,
+    meal_plan_changes: [change],
+    shopping_list_items: args.data.shopping_list_items ?? [],
+    cooking_queue_items: args.data.cooking_queue_items ?? [],
+  };
+  const compatibility = new Map<number, { requirements: Row[]; blocking: Row[] }>();
+  for (const r of args.data.recipes ?? []) {
+    compatibility.set(Number(r.id), { requirements: [], blocking: [] });
+  }
+  const snapshot: MaintenanceInputSnapshot = {
+    fingerprint: "f".repeat(64),
+    recipeIds: (args.data.recipes ?? []).map(r => Number(r.id)),
+    data,
+  };
+  return { snapshot, compatibility };
+}
+
+test("revalidatePendingSuggestions: checked writes only to notes, input deepEqual unchanged, no canApply/allocation", () => {
+  const { snapshot, compatibility } = makeSnapshot(fixture());
+  const beforeSnapshot = structuredClone(snapshot);
+  const res = revalidatePendingSuggestions(snapshot, 1, compatibility, "2026-10-21");
+  assert.deepEqual(snapshot, beforeSnapshot);
+  assert.equal(res.evaluations.length, 1);
+  const evalItem = res.evaluations[0];
+  assert.equal(evalItem.outcome, "checked");
+  assert.equal(evalItem.changeId, "change-1");
+  assert.equal(evalItem.itemId, "a");
+  assert.equal(evalItem.itemVersion, 1);
+  assert.equal(evalItem.beforeVersion, 1);
+  assert.equal(evalItem.checkedDate, "2026-10-21");
+  assert.equal(evalItem.inputFingerprint, snapshot.fingerprint);
+  assert.equal((evalItem as Record<string, unknown>).canApply, undefined);
+  assert.equal((evalItem as Record<string, unknown>).allocation, undefined);
+  assert.equal(res.checks.length, 0);
+  assert.equal(res.notes.length, 1);
+  assert.match(res.notes[0], /本次快照检查通过，仍待确认，接受时须重新预览/);
+  assert.equal(snapshot.data.meal_plan_changes[0].status, "pending");
+});
+
+test("revalidatePendingSuggestions: inventory shortage blocks revalidation", () => {
+  const args = fixture(); args.data.inventory_items[0].quantity_value = 150;
+  const { snapshot, compatibility } = makeSnapshot(args);
+  const res = revalidatePendingSuggestions(snapshot, 1, compatibility, "2026-10-21");
+  assert.equal(res.evaluations[0].outcome, "blocked");
+  assert.equal(res.checks.length, 1);
+  assert.equal(res.notes.length, 0);
+});
+
+test("revalidatePendingSuggestions: candidate disabled or soft-deleted blocks revalidation", () => {
+  const argsDisabled = fixture(); argsDisabled.data.recipes[1].status = "draft";
+  const { snapshot: s1, compatibility: c1 } = makeSnapshot(argsDisabled);
+  assert.equal(revalidatePendingSuggestions(s1, 1, c1, "2026-10-21").evaluations[0].outcome, "blocked");
+
+  const argsDeleted = fixture(); argsDeleted.data.recipes[1].deleted_at = "2026-10-21T00:00:00Z";
+  const { snapshot: s2, compatibility: c2 } = makeSnapshot(argsDeleted);
+  assert.equal(revalidatePendingSuggestions(s2, 1, c2, "2026-10-21").evaluations[0].outcome, "blocked");
+});
+
+test("revalidatePendingSuggestions: missing candidate execution profile blocks revalidation", () => {
+  const args = fixture(); delete (args.data.recipes[1] as Row).execution_json;
+  const { snapshot, compatibility } = makeSnapshot(args);
+  const res = revalidatePendingSuggestions(snapshot, 1, compatibility, "2026-10-21");
+  assert.equal(res.evaluations[0].outcome, "blocked");
+  assert.match(res.evaluations[0].checks[0], /缺少当前已审核的制作排程依据/);
+});
+
+test("revalidatePendingSuggestions: item version or payload version drift yields stale", () => {
+  const args1 = fixture(); args1.items[0].version = 2;
+  const { snapshot: s1, compatibility: c1 } = makeSnapshot(args1);
+  assert.equal(revalidatePendingSuggestions(s1, 1, c1, "2026-10-21").evaluations[0].outcome, "stale");
+
+  const { snapshot: s2, compatibility: c2 } = makeSnapshot(fixture(), { after_json: JSON.stringify({ version: 2, recipeId: 2 }) });
+  assert.equal(revalidatePendingSuggestions(s2, 1, c2, "2026-10-21").evaluations[0].outcome, "stale");
+});
+
+test("revalidatePendingSuggestions: confirmed, purchased, queue, and dining items yield protected", () => {
+  // Confirmed
+  const argsConfirmed = fixture(); argsConfirmed.items[0].confirmed_at = "2026-10-20T00:00:00Z";
+  const { snapshot: s1, compatibility: c1 } = makeSnapshot(argsConfirmed);
+  assert.equal(revalidatePendingSuggestions(s1, 1, c1, "2026-10-21").evaluations[0].outcome, "protected");
+
+  // Purchased / checked
+  const argsPurchased = fixture();
+  argsPurchased.data.shopping_list_items = [{ user_id: 1, client_id: "meal-plan:a:米", checked: 1, deleted_at: null }];
+  const { snapshot: s2, compatibility: c2 } = makeSnapshot(argsPurchased);
+  assert.equal(revalidatePendingSuggestions(s2, 1, c2, "2026-10-21").evaluations[0].outcome, "protected");
+
+  // Queued via source_plan_item_id
+  const argsQueue1 = fixture();
+  argsQueue1.data.cooking_queue_items = [{ user_id: 1, source_plan_item_id: "a", status: "preparing", deleted_at: null }];
+  const { snapshot: s3, compatibility: c3 } = makeSnapshot(argsQueue1);
+  assert.equal(revalidatePendingSuggestions(s3, 1, c3, "2026-10-21").evaluations[0].outcome, "protected");
+
+  // Queued via queue_item_id (even completed status)
+  const argsQueue2 = fixture();
+  argsQueue2.items[0].queue_item_id = "q-1";
+  argsQueue2.data.cooking_queue_items = [{ id: "q-1", user_id: 1, status: "completed", deleted_at: null }];
+  const { snapshot: s4, compatibility: c4 } = makeSnapshot(argsQueue2);
+  assert.equal(revalidatePendingSuggestions(s4, 1, c4, "2026-10-21").evaluations[0].outcome, "protected");
+
+  // Household / dining
+  const argsHousehold = fixture(); argsHousehold.items[0].household_id = 99;
+  const { snapshot: s5, compatibility: c5 } = makeSnapshot(argsHousehold);
+  assert.equal(revalidatePendingSuggestions(s5, 1, c5, "2026-10-21").evaluations[0].outcome, "protected");
+
+  // Real non-planned status (queued, cooking, completed, skipped) outputs protected
+  for (const st of ["queued", "cooking", "completed", "skipped"]) {
+    const argsStatus = fixture(); argsStatus.items[0].status = st;
+    const { snapshot: sSt, compatibility: cSt } = makeSnapshot(argsStatus);
+    assert.equal(revalidatePendingSuggestions(sSt, 1, cSt, "2026-10-21").evaluations[0].outcome, "protected");
+  }
+});
+
+test("revalidatePendingSuggestions: dining JSON handling and malformed payload protection", () => {
+  // JSON null dining is personal -> checked
+  const argsNullDining = fixture(); argsNullDining.items[0].dining_json = "null";
+  const { snapshot: s1, compatibility: c1 } = makeSnapshot(argsNullDining);
+  assert.equal(revalidatePendingSuggestions(s1, 1, c1, "2026-10-21").evaluations[0].outcome, "checked");
+
+  // Malformed dining fails closed -> protected
+  const argsBadDining = fixture(); argsBadDining.items[0].dining_json = "{not_valid_json";
+  const { snapshot: s2, compatibility: c2 } = makeSnapshot(argsBadDining);
+  assert.equal(revalidatePendingSuggestions(s2, 1, c2, "2026-10-21").evaluations[0].outcome, "protected");
+
+  // Malformed after_json records needs_review
+  const { snapshot: s3, compatibility: c3 } = makeSnapshot(fixture(), { after_json: "invalid_json{" });
+  const res3 = revalidatePendingSuggestions(s3, 1, c3, "2026-10-21");
+  assert.equal(res3.evaluations[0].outcome, "needs_review");
+  assert.match(res3.evaluations[0].checks[0], /数据无效/);
+
+  // Unknown payload keys fail strict patch schema -> needs_review
+  const { snapshot: s4, compatibility: c4 } = makeSnapshot(fixture(), { after_json: JSON.stringify({ version: 1, extraKey: "unexpected" }) });
+  const res4 = revalidatePendingSuggestions(s4, 1, c4, "2026-10-21");
+  assert.equal(res4.evaluations[0].outcome, "needs_review");
+  assert.match(res4.evaluations[0].checks[0], /格式不符合规范/);
+
+  // Normal non-replacement patch (e.g. date move only) is skipped
+  const { snapshot: s5, compatibility: c5 } = makeSnapshot(fixture(), { after_json: JSON.stringify({ version: 1, plannedDate: "2026-10-22" }) });
+  assert.equal(revalidatePendingSuggestions(s5, 1, c5, "2026-10-21").evaluations.length, 0);
+
+  // Non-pending status and other users skipped
+  const { snapshot: s6, compatibility: c6 } = makeSnapshot(fixture(), { status: "applied" });
+  assert.equal(revalidatePendingSuggestions(s6, 1, c6, "2026-10-21").evaluations.length, 0);
+
+  const { snapshot: s7, compatibility: c7 } = makeSnapshot(fixture(), { user_id: 2 });
+  assert.equal(revalidatePendingSuggestions(s7, 1, c7, "2026-10-21").evaluations.length, 0);
+
+  // Raw non-string scalar dining_json (e.g. number/boolean) is invalid/protected
+  const argsScalarDining = fixture(); argsScalarDining.items[0].dining_json = 123 as unknown as string;
+  const { snapshot: sScalar, compatibility: cScalar } = makeSnapshot(argsScalarDining);
+  assert.equal(revalidatePendingSuggestions(sScalar, 1, cScalar, "2026-10-21").evaluations[0].outcome, "protected");
+
+  // Plan with constraints_json = "null" catches evaluateActiveReplacement exception as needs_review,
+  // while another valid suggestion in the same run is still evaluated; input snapshot is deeply unchanged;
+  // neither canApply nor patch are output.
+  const brokenArgs = fixture();
+  brokenArgs.plan.constraints_json = "null";
+  const validArgs = fixture();
+  validArgs.plan.id = "p-valid";
+  validArgs.items[0].id = "item-valid";
+  validArgs.items[0].plan_id = "p-valid";
+  (validArgs.plan.constraints_json as Row).executionItems = {
+    "item-valid": { targetMealId: "item-valid", recipeId: 1, title: "菜1", servings: 2, recipeYield: 2, demands: [{ food_name: "米", amount_value: 100, unit: "g" }] },
+  };
+
+  const brokenChange: Row = {
+    id: "change-broken",
+    user_id: 1,
+    plan_id: String(brokenArgs.plan.id),
+    item_id: String(brokenArgs.itemId),
+    status: "pending",
+    before_version: 1,
+    after_json: JSON.stringify({ version: 1, recipeId: 2, title: "替代菜2" }),
+  };
+  const validChange: Row = {
+    id: "change-valid",
+    user_id: 1,
+    plan_id: "p-valid",
+    item_id: "item-valid",
+    status: "pending",
+    before_version: 1,
+    after_json: JSON.stringify({ version: 1, recipeId: 2, title: "替代菜2" }),
+  };
+
+  const dualSnapshot: MaintenanceInputSnapshot = {
+    fingerprint: "d".repeat(64),
+    recipeIds: [1, 2],
+    data: {
+      ...brokenArgs.data,
+      meal_plans: [brokenArgs.plan, validArgs.plan],
+      meal_plan_items: [
+        { ...brokenArgs.items[0], user_id: 1 },
+        { ...validArgs.items[0], user_id: 1 },
+      ],
+      meal_plan_changes: [brokenChange, validChange],
+    },
+  };
+  const dualCompat = new Map<number, { requirements: Row[]; blocking: Row[] }>([
+    [1, { requirements: [], blocking: [] }],
+    [2, { requirements: [], blocking: [] }],
+  ]);
+
+  const beforeDual = structuredClone(dualSnapshot);
+  const dualRes = revalidatePendingSuggestions(dualSnapshot, 1, dualCompat, "2026-10-21");
+
+  assert.deepEqual(dualSnapshot, beforeDual);
+  assert.equal(dualRes.evaluations.length, 2);
+
+  const brokenEval = dualRes.evaluations.find(e => e.changeId === "change-broken");
+  assert.ok(brokenEval);
+  assert.equal(brokenEval.outcome, "needs_review");
+  assert.equal(brokenEval.checks[0], "当前餐单执行依据不完整，无法完成本次检查");
+  assert.equal((brokenEval as Record<string, unknown>).canApply, undefined);
+  assert.equal((brokenEval as Record<string, unknown>).patch, undefined);
+
+  const validEval = dualRes.evaluations.find(e => e.changeId === "change-valid");
+  assert.ok(validEval);
+  assert.equal(validEval.outcome, "checked");
+  assert.equal((validEval as Record<string, unknown>).canApply, undefined);
+  assert.equal((validEval as Record<string, unknown>).patch, undefined);
+});
+
+test("revalidatePendingSuggestions: missing compatibility entry for requirement fails closed", () => {
+  const args = fixture();
+  args.data.recipe_kitchenware_requirements = [{ recipe_id: 2, role: "primary" }];
+  const { snapshot, compatibility } = makeSnapshot(args);
+  compatibility.delete(2); // Missing compatibility entry
+  const res = revalidatePendingSuggestions(snapshot, 1, compatibility, "2026-10-21");
+  assert.equal(res.evaluations[0].outcome, "needs_review");
+  assert.match(res.evaluations[0].checks[0], /缺少当前厨具治理校验结果/);
+});
+
+test("revalidatePendingSuggestions: validationFingerprint metadata handling, protection, and unknown field rejection", () => {
+  const legalFingerprint = "a".repeat(64);
+
+  // 1. 未保护合法建议（带 validationFingerprint 元数据）实际 checked，pending 状态与原餐次输入不变
+  const validArgs = fixture();
+  const originalItemBefore = structuredClone(validArgs.items[0]);
+  const { snapshot: sValid, compatibility: cValid } = makeSnapshot(validArgs, {
+    after_json: JSON.stringify({
+      version: 1,
+      recipeId: 2,
+      title: "替代菜2",
+      validationFingerprint: legalFingerprint,
+    }),
+  });
+  const resValid = revalidatePendingSuggestions(sValid, 1, cValid, "2026-10-21");
+  assert.equal(resValid.evaluations.length, 1);
+  assert.equal(resValid.evaluations[0].outcome, "checked");
+  assert.equal(resValid.evaluations[0].changeId, "change-1");
+  assert.equal(resValid.notes.length, 1);
+  assert.match(resValid.notes[0], /本次快照检查通过，仍待确认，接受时须重新预览/);
+  assert.equal(sValid.data.meal_plan_changes[0].status, "pending");
+  assert.deepEqual({ ...sValid.data.meal_plan_items[0], user_id: undefined }, { ...originalItemBefore, user_id: undefined });
+
+  // 2. 带合法 fingerprint 的已确认建议 protected，pending 状态与原餐次输入不变
+  const confirmedArgs = fixture();
+  confirmedArgs.items[0].confirmed_at = "2026-10-20T00:00:00Z";
+  const confirmedItemBefore = structuredClone(confirmedArgs.items[0]);
+  const { snapshot: sConfirmed, compatibility: cConfirmed } = makeSnapshot(confirmedArgs, {
+    after_json: JSON.stringify({
+      version: 1,
+      recipeId: 2,
+      title: "替代菜2",
+      validationFingerprint: legalFingerprint,
+    }),
+  });
+  const resConfirmed = revalidatePendingSuggestions(sConfirmed, 1, cConfirmed, "2026-10-21");
+  assert.equal(resConfirmed.evaluations[0].outcome, "protected");
+  assert.ok(resConfirmed.evaluations[0].checks.some(c => c.includes("已确认")));
+  assert.equal(sConfirmed.data.meal_plan_changes[0].status, "pending");
+  assert.deepEqual({ ...sConfirmed.data.meal_plan_items[0], user_id: undefined }, { ...confirmedItemBefore, user_id: undefined });
+
+  // 3. 带合法 fingerprint 的已采购建议 protected，pending 状态与原餐次输入不变
+  const purchasedArgs = fixture();
+  purchasedArgs.data.shopping_list_items = [
+    { user_id: 1, client_id: "meal-plan:a:米", checked: 1, deleted_at: null },
+  ];
+  const purchasedItemBefore = structuredClone(purchasedArgs.items[0]);
+  const { snapshot: sPurchased, compatibility: cPurchased } = makeSnapshot(purchasedArgs, {
+    after_json: JSON.stringify({
+      version: 1,
+      recipeId: 2,
+      title: "替代菜2",
+      validationFingerprint: legalFingerprint,
+    }),
+  });
+  const resPurchased = revalidatePendingSuggestions(sPurchased, 1, cPurchased, "2026-10-21");
+  assert.equal(resPurchased.evaluations[0].outcome, "protected");
+  assert.ok(resPurchased.evaluations[0].checks.some(c => c.includes("采购")));
+  assert.equal(sPurchased.data.meal_plan_changes[0].status, "pending");
+  assert.deepEqual({ ...sPurchased.data.meal_plan_items[0], user_id: undefined }, { ...purchasedItemBefore, user_id: undefined });
+
+  // 4. 真正未知字段（即使附带 validationFingerprint）仍被 strict parse 拒绝并记录 needs_review
+  const unknownArgs = fixture();
+  const unknownItemBefore = structuredClone(unknownArgs.items[0]);
+  const { snapshot: sUnknown, compatibility: cUnknown } = makeSnapshot(unknownArgs, {
+    after_json: JSON.stringify({
+      version: 1,
+      recipeId: 2,
+      title: "替代菜2",
+      validationFingerprint: legalFingerprint,
+      completelyUnknownField: "not_allowed",
+    }),
+  });
+  const resUnknown = revalidatePendingSuggestions(sUnknown, 1, cUnknown, "2026-10-21");
+  assert.equal(resUnknown.evaluations[0].outcome, "needs_review");
+  assert.match(resUnknown.evaluations[0].checks[0], /格式不符合规范/);
+  assert.equal(sUnknown.data.meal_plan_changes[0].status, "pending");
+  assert.deepEqual({ ...sUnknown.data.meal_plan_items[0], user_id: undefined }, { ...unknownItemBefore, user_id: undefined });
+});
+
+test("hasEffectiveMaintenanceEvents: correctly identifies event efficacy", () => {
+  assert.equal(hasEffectiveMaintenanceEvents([{ event_type: "daily_check" }], false), false);
+  assert.equal(hasEffectiveMaintenanceEvents([{ event_type: "daily_check" }], true), true);
+  assert.equal(hasEffectiveMaintenanceEvents([{ event_type: "unknown_future_event" }], true), false);
+  assert.equal(hasEffectiveMaintenanceEvents([{ event_type: "inventory_changed" }], false), true);
+  assert.equal(hasEffectiveMaintenanceEvents([], true), false);
+  assert.equal(hasEffectiveMaintenanceEvents(undefined, true), false);
 });

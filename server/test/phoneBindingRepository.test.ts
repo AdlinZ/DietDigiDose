@@ -129,3 +129,94 @@ for (const backend of ["sqlite", "postgres"] as const) test(`${backend}: first p
     if (admin) { await admin.query(`DROP DATABASE ${name}`); await admin.end(); }
   }
 });
+
+for (const backend of ["sqlite", "postgres"] as const) test(`${backend}: phone replacement severs old phone, binds new phone, and is atomic`,
+  { skip: backend === "postgres" && !process.env.PHONE_BINDING_TEST_PG_URL }, async () => {
+  const sqlite = backend === "sqlite" ? new Database(":memory:") : null;
+  const admin = backend === "postgres" ? new Pool({ connectionString: process.env.PHONE_BINDING_TEST_PG_URL }) : null;
+  const name = `phone_replace_test_${randomUUID().replaceAll("-", "")}`;
+  let pool: Pool | null = null;
+  if (admin) {
+    await admin.query(`CREATE DATABASE ${name}`);
+    const url = new URL(process.env.PHONE_BINDING_TEST_PG_URL!); url.pathname = `/${name}`;
+    pool = new Pool({ connectionString: url.toString() });
+  }
+  const exec = async (sql: string) => { if (sqlite) sqlite.exec(sql); else await pool!.query(sql); };
+  const query = async (sql: string, args: unknown[] = []) => {
+    if (sqlite) return sqlite.prepare(sql).all(...args) as Record<string, any>[];
+    let index = 0; return (await pool!.query(sql.replaceAll("?", () => `$${++index}`), args)).rows;
+  };
+  const run = async (sql: string, args: unknown[] = []) => {
+    if (sqlite) sqlite.prepare(sql).run(...args);
+    else { let index = 0; await pool!.query(sql.replaceAll("?", () => `$${++index}`), args); }
+  };
+  try {
+    const timestamp = sqlite ? "TEXT" : "TIMESTAMPTZ";
+    await exec(`CREATE TABLE users(id INTEGER PRIMARY KEY, username TEXT, email TEXT, phone TEXT UNIQUE, password_hash TEXT,
+      role TEXT DEFAULT 'user', is_disabled ${sqlite ? "INTEGER DEFAULT 0" : "BOOLEAN DEFAULT FALSE"}, session_version INTEGER DEFAULT 1, phone_verified_at ${timestamp});
+      CREATE TABLE auth_verification_subjects(id ${sqlite ? "INTEGER PRIMARY KEY AUTOINCREMENT" : "SERIAL PRIMARY KEY"}, user_id INTEGER,
+      channel TEXT, provider TEXT, subject_hmac TEXT, subject_ciphertext TEXT, subject_iv TEXT, subject_auth_tag TEXT,
+      last_seen_at ${timestamp}, updated_at ${timestamp}, UNIQUE(channel,provider,subject_hmac));
+      CREATE TABLE auth_verification_challenges(id TEXT PRIMARY KEY, subject_id INTEGER, purpose TEXT, out_id TEXT, status TEXT,
+      expires_at ${timestamp}, source_ip TEXT,user_agent TEXT,reauth_user_id INTEGER,reauth_session_version INTEGER,
+      attempt_count INTEGER DEFAULT 0, consumed_at ${timestamp}, verified_at ${timestamp},updated_at ${timestamp},biz_id TEXT,provider_request_id TEXT);
+      CREATE TABLE auth_verification_events(id ${sqlite ? "INTEGER PRIMARY KEY AUTOINCREMENT" : "SERIAL PRIMARY KEY"},subject_id INTEGER,challenge_id TEXT,channel TEXT,
+      provider TEXT,event_type TEXT,outcome TEXT,provider_code TEXT,provider_message TEXT,provider_request_id TEXT,biz_id TEXT,out_id TEXT,source_ip TEXT,user_agent TEXT,details_json TEXT);
+      CREATE TABLE account_reauth_grants(token_hash TEXT PRIMARY KEY, user_id INTEGER, purpose TEXT, phone TEXT, session_version INTEGER, expires_at ${timestamp}, consumed_at ${timestamp});
+      CREATE TABLE retained_data(user_id INTEGER, inventory TEXT, diet TEXT, preferences TEXT);
+      INSERT INTO users(id,email,phone,password_hash,phone_verified_at) VALUES(1,'one@example.invalid','13800223001','synthetic-hash',CURRENT_TIMESTAMP),(2,'two@example.invalid','13800223002','synthetic-hash',CURRENT_TIMESTAMP);
+      INSERT INTO retained_data VALUES(1,'stock','meals','preferences');`);
+    const service = new AuthVerificationService(sqlite ? new SqliteAuthVerificationRepository(sqlite) : new PostgresAuthVerificationRepository(pool!));
+    const oldSubject1 = await service.findOrCreateSubject("13800223001");
+    await run("UPDATE auth_verification_subjects SET user_id=1 WHERE id=?", [oldSubject1.id]);
+    const oldSubject2 = await service.findOrCreateSubject("13800223002");
+    await run("UPDATE auth_verification_subjects SET user_id=2 WHERE id=?", [oldSubject2.id]);
+    await run("INSERT INTO account_reauth_grants(token_hash,user_id,purpose,phone,session_version,expires_at) VALUES('grant-1',1,'password_update','13800223001',1,?)",[new Date(Date.now()+60000).toISOString()]);
+
+    const newPhone = "13800223009";
+    const newSubject = await service.findOrCreateSubject(newPhone);
+    const challenge = async (userId = 1, phone = newPhone, purpose: "phone_replace" | "phone_bind" = "phone_replace") => {
+      const id = randomUUID();
+      const subject = await service.findOrCreateSubject(phone);
+      await service.createChallenge({ id, subjectId: subject.id, purpose, outId: id, expiresAt: new Date(Date.now()+60_000).toISOString(),
+        sourceIp: null, userAgent: null, reauthUserId: userId, reauthSessionVersion: 1 });
+      await service.acceptChallenge(id,subject.id,null,null);
+      assert.equal(await service.beginVerification(id),true);
+      return { userId, sessionVersion: 1, challengeId: id, phone };
+    };
+
+    const wrongPurpose = await challenge(1, newPhone, "phone_bind");
+    assert.equal(await service.replacePhone(wrongPurpose), "invalid");
+
+    const proof = await challenge();
+    assert.equal(await service.replacePhone({...proof, userId: 2}), "invalid");
+    assert.equal(await service.replacePhone({...proof, sessionVersion: 2}), "invalid");
+    assert.equal(await service.replacePhone({...proof, phone: "13800223001"}), "invalid"); // same phone
+
+    // Trying to replace with an already taken phone (13800223002)
+    const takenProof = await challenge(1, "13800223002");
+    assert.equal(await service.replacePhone(takenProof), "phone_exists");
+
+    // Successful replacement
+    assert.equal(await service.replacePhone(proof), "replaced");
+    assert.equal(await service.replacePhone(proof), "invalid"); // already consumed
+
+    // Verify user 1 phone updated
+    assert.equal((await query("SELECT phone FROM users WHERE id=1"))[0].phone, newPhone);
+    // Old subject for user 1 must have user_id severed
+    assert.equal((await query("SELECT user_id FROM auth_verification_subjects WHERE id=?", [oldSubject1.id]))[0].user_id, null);
+    // New subject has user_id = 1
+    assert.equal((await query("SELECT user_id FROM auth_verification_subjects WHERE id=?", [newSubject.id]))[0].user_id, 1);
+    // Old reauth grants cleared
+    assert.notEqual((await query("SELECT consumed_at FROM account_reauth_grants WHERE user_id=1"))[0].consumed_at, null);
+    // Retained business data intact
+    assert.deepEqual(await query("SELECT * FROM retained_data WHERE user_id=1"), [{user_id:1,inventory:"stock",diet:"meals",preferences:"preferences"}]);
+    // Old phone no longer found for user 1
+    assert.equal(await service.userByPhone("13800223001"), null);
+    // New phone found for user 1
+    assert.equal((await service.userByPhone(newPhone))?.id, 1);
+  } finally {
+    sqlite?.close(); await pool?.end();
+    if (admin) { await admin.query(`DROP DATABASE ${name}`); await admin.end(); }
+  }
+});

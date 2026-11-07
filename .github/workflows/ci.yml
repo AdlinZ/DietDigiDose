@@ -74,6 +74,9 @@ jobs:
       - run: pnpm --dir server exec tsx --test test/cookingQueuePostgres.test.ts
         env:
           QUEUE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration
+      - run: pnpm --dir server exec tsx --test test/coreLoopRepository.test.ts
+        env:
+          CORE_LOOP_TEST_PG_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration
       - run: pnpm --dir server test:base-data-import
         env:
           TEST_BASE_DATA_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/dietdigidose_migration

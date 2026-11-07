@@ -44,7 +44,7 @@ export type UsageCounter =
 export type ChallengeCreate = {
   id: string;
   subjectId: number;
-  purpose: "login" | "admin_test" | "password_update" | "account_delete" | "password_recovery" | "phone_bind";
+  purpose: "login" | "admin_test" | "password_update" | "account_delete" | "password_recovery" | "phone_bind" | "phone_replace";
   reauthUserId?: number;
   reauthSessionVersion?: number;
   outId: string;
@@ -86,3 +86,5 @@ export type DeliveryReport = {
 export type PhoneBindingUser = Omit<ReauthUser, "phone"> & { phone: string | null; email: string | null; password_hash: string | null };
 export type PhoneBindingInput = { userId: number; sessionVersion: number; challengeId: string; phone: string; subjectHmac: string };
 export type PhoneBindingResult = "bound" | "invalid" | "phone_exists";
+export type PhoneReplacementInput = { userId: number; sessionVersion: number; challengeId: string; phone: string; subjectHmac: string };
+export type PhoneReplacementResult = "replaced" | "invalid" | "phone_exists";

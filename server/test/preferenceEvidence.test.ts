@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { repeatedDislikeRecipeIds } from "../src/modules/recommendations/preferenceEvidence.js";
+import { effectiveDislikeRecipeIds, repeatedDislikeRecipeIds } from "../src/modules/recommendations/preferenceEvidence.js";
 const now = Date.parse("2026-09-12T12:00:00Z");
 const event = (id: string,reason = "dislike",scope = "long_term") => ({ id,recipe_id: 1,event_type: "skip",metadata_json: { reason,scope },idempotency_key: id,created_at: "2026-09-12 10:00:00" });
 test("requires three distinct recent long-term dislike signals", () => {
@@ -37,4 +37,40 @@ test("explanations contain exactly the distinct evidence accepted by ranking",as
   assert.deepEqual(formatLearningState(data,now+31*24*60*60*1000).items,[]);
   assert.deepEqual(formatLearningState({ ...data,settings: { enabled: false } },now).items,[]);
   assert.deepEqual(formatLearningState({ ...data,settings: { overrides_json: { 1: { value: "neutral",updatedAt: "today" } } } },now).items,[]);
+});
+
+test("effectiveDislikeRecipeIds integrates inferred signals, user neutral tombstones, explicit dislikes and paused state", () => {
+  const events = [event("a"), event("b"), event("c")];
+  const baseData = { settings: null, events, recipes: [{ id: 1, title: "菜谱1" }] };
+
+  // 1. Inferred dislike from 3 long-term events
+  assert.deepEqual(effectiveDislikeRecipeIds(baseData, now), [1]);
+
+  // 2. User sets neutral: overrides inferred dislike and prevents regeneration from same events
+  const neutralData = {
+    ...baseData,
+    settings: { enabled: true, overrides_json: { 1: { value: "neutral" as const, updatedAt: "2026-09-12T11:00:00Z" } } },
+  };
+  assert.deepEqual(effectiveDislikeRecipeIds(neutralData, now), []);
+
+  // 3. User explicitly sets another recipe as dislike without any skip events
+  const explicitData = {
+    ...baseData,
+    settings: { enabled: true, overrides_json: { 2: { value: "dislike" as const, updatedAt: "2026-09-12T11:00:00Z" } } },
+  };
+  assert.deepEqual(effectiveDislikeRecipeIds(explicitData, now).sort((a, b) => a - b), [1, 2]);
+
+  // 4. Pausing learning removes inferred dislikes, but retains explicit dislike overrides
+  const pausedWithExplicit = {
+    ...baseData,
+    settings: { enabled: false, overrides_json: { 2: { value: "dislike" as const, updatedAt: "2026-09-12T11:00:00Z" } } },
+  };
+  assert.deepEqual(effectiveDislikeRecipeIds(pausedWithExplicit, now), [2]);
+
+  // 5. When enabled is numeric 0 (SQLite style), it also pauses inferred dislikes
+  const pausedSqlite = {
+    ...baseData,
+    settings: { enabled: 0, overrides_json: {} },
+  };
+  assert.deepEqual(effectiveDislikeRecipeIds(pausedSqlite, now), []);
 });

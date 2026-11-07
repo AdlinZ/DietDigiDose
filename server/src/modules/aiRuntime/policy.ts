@@ -18,8 +18,7 @@ export const runtimePolicySchema = z.object({
   maxToolCalls: z.number().int().min(1).max(12).default(6),
 }).strict();
 
-// Explicit documented parameter support, not a claim of account availability.
-// Source checked 2026-09-18 & 2026-10-25: SiliconFlow chat-completions-post.
+// 既有 toggle/budget 兼容名单（未做供应商实测）
 export const SILICONFLOW_THINKING_MODELS = [
   "Pro/deepseek-ai/DeepSeek-V4",
   "deepseek-ai/DeepSeek-V4-Flash",
@@ -34,15 +33,26 @@ export const SILICONFLOW_THINKING_MODELS = [
   "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
 ] as const;
 
-const effortModels = new Set<string>(SILICONFLOW_THINKING_MODELS);
+// 官方明确支持 reasoning_effort (high/max) 的模型：https://docs.siliconflow.cn/docs/api/chat-completions-post
+export const SILICONFLOW_REASONING_EFFORT_MODELS = [
+  "Pro/deepseek-ai/DeepSeek-V4",
+  "deepseek-ai/DeepSeek-V4-Flash",
+  "Pro/zai-org/GLM-5.2",
+] as const;
+
+const thinkingModels = new Set<string>(SILICONFLOW_THINKING_MODELS);
+const effortModels = new Set<string>(SILICONFLOW_REASONING_EFFORT_MODELS);
 export function thinkingParameters(baseUrl: string, model: string, policy: ModelPolicy): Record<string, unknown> {
   if (policy.thinking === "default" && !policy.thinkingBudget) return {};
   const host = new URL(baseUrl).hostname;
-  if (!["api.siliconflow.cn", "api.siliconflow.com"].includes(host) || !effortModels.has(model)) {
+  if (!["api.siliconflow.cn", "api.siliconflow.com"].includes(host) || !thinkingModels.has(model)) {
     throw new Error(`模型 ${model} 的思考参数尚未验证，请选择“提供商默认”或使用已确认支持的模型`);
   }
   if (policy.thinking === "off") {
     return { enable_thinking: false };
+  }
+  if ((policy.thinking === "high" || policy.thinking === "max") && !effortModels.has(model)) {
+    throw new Error(`模型 ${model} 的推理强度尚未验证，请选择“提供商默认”或使用支持 reasoning_effort 的模型`);
   }
   return {
     enable_thinking: true,

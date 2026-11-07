@@ -658,6 +658,51 @@ describe("egg allergy disambiguation with protein terms", () => {
   });
 });
 
+function buildFiveProtectedActions(term: string) {
+  return [
+    {
+      actionType: "create_meal_plan",
+      summary: `创建含${term}的餐单`,
+      payload: {
+        title: `周计划-${term}`,
+        items: [{ title: `料理-${term}`, ingredients: [term] }],
+      },
+    },
+    {
+      actionType: "update_meal_plan",
+      summary: `更新含${term}的餐单`,
+      payload: {
+        planId: "plan-1",
+        title: `计划标题-${term}`,
+        constraints: { note: term },
+      },
+    },
+    {
+      actionType: "add_shopping_items",
+      summary: `采购${term}`,
+      payload: {
+        items: [{ name: term }],
+      },
+    },
+    {
+      actionType: "update_shopping_item",
+      summary: `修改采购为${term}`,
+      payload: {
+        itemId: "shop-1",
+        name: term,
+      },
+    },
+    {
+      actionType: "submit_recipe",
+      summary: `提交${term}菜谱`,
+      payload: {
+        title: `自制菜谱-${term}`,
+        ingredients: [{ name: term }],
+      },
+    },
+  ];
+}
+
 describe("milk and dairy allergy compound term disambiguation", () => {
   const milkContext = {
     healthProfile: { allergies: [{ name: "milk", severity: "severe" }] },
@@ -715,51 +760,6 @@ describe("milk and dairy allergy compound term disambiguation", () => {
     { text: "egg plant", context: eggContext, desc: "vegetable egg plant for egg" },
     { text: "crabapple", context: seafoodContext, desc: "fruit crabapple for seafood" },
   ];
-
-  function buildFiveProtectedActions(term: string) {
-    return [
-      {
-        actionType: "create_meal_plan",
-        summary: `创建含${term}的餐单`,
-        payload: {
-          title: `周计划-${term}`,
-          items: [{ title: `料理-${term}`, ingredients: [term] }],
-        },
-      },
-      {
-        actionType: "update_meal_plan",
-        summary: `更新含${term}的餐单`,
-        payload: {
-          planId: "plan-1",
-          title: `计划标题-${term}`,
-          constraints: { note: term },
-        },
-      },
-      {
-        actionType: "add_shopping_items",
-        summary: `采购${term}`,
-        payload: {
-          items: [{ name: term }],
-        },
-      },
-      {
-        actionType: "update_shopping_item",
-        summary: `修改采购为${term}`,
-        payload: {
-          itemId: "shop-1",
-          name: term,
-        },
-      },
-      {
-        actionType: "submit_recipe",
-        summary: `提交${term}菜谱`,
-        payload: {
-          title: `自制菜谱-${term}`,
-          ingredients: [{ name: term }],
-        },
-      },
-    ];
-  }
 
   test("findAllergyConflict intercepts dairy compounds across cases/NFKC, preserving non-allergen words and blocking mixed text", () => {
     for (const term of positiveTerms) {
@@ -942,5 +942,394 @@ describe("milk and dairy allergy compound term disambiguation", () => {
       (err: unknown) => err instanceof AgentSafetyConflictError,
       "Expected mixed butterfly + cheesecake meal plan write to be blocked"
     );
+  });
+});
+
+describe("plant-based non-dairy compound disambiguation and dairy alias coverage", () => {
+  const milkContext = {
+    healthProfile: { allergies: [{ name: "milk", severity: "severe" }] },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  const dairyContext = {
+    healthProfile: { allergies: [{ name: "乳制品", severity: "severe" }] },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  const nutContext = {
+    healthProfile: { allergies: [{ name: "坚果", severity: "severe" }] },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  const peanutContext = {
+    healthProfile: { allergies: [{ name: "花生", severity: "severe" }] },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  const dualDairyNutContext = {
+    healthProfile: {
+      allergies: [
+        { name: "乳制品", severity: "severe" },
+        { name: "坚果", severity: "severe" },
+      ],
+    },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  const dualDairyPeanutContext = {
+    healthProfile: {
+      allergies: [
+        { name: "乳制品", severity: "severe" },
+        { name: "花生", severity: "severe" },
+      ],
+    },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  const noAllergyContext = {
+    ...milkContext,
+    healthProfile: { ...milkContext.healthProfile!, allergies: [] },
+  } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+  function assertEachActionBlocked(
+    term: string,
+    ctx: Parameters<typeof validateAgentActions>[1],
+    expectedAllergyName?: string,
+    expectedReplySubstring?: string
+  ) {
+    for (const action of buildFiveProtectedActions(term)) {
+      assert.throws(
+        () => validateAgentActions([action], ctx),
+        (err: unknown) => {
+          assert.ok(
+            err instanceof AgentSafetyConflictError,
+            `Expected AgentSafetyConflictError for ${action.actionType} with "${term}"`
+          );
+          if (expectedAllergyName) {
+            assert.equal(
+              (err as AgentSafetyConflictError).block.allergyName,
+              expectedAllergyName,
+              `Expected allergyName "${expectedAllergyName}" for ${action.actionType} with "${term}"`
+            );
+          }
+          if (expectedReplySubstring) {
+            assert.ok(
+              (err as AgentSafetyConflictError).block.reply.includes(expectedReplySubstring),
+              `Expected reply to include "${expectedReplySubstring}" for ${action.actionType} with "${term}", got: ${(err as AgentSafetyConflictError).block.reply}`
+            );
+          }
+          return true;
+        }
+      );
+    }
+  }
+
+  function assertEachActionAllowed(
+    term: string,
+    ctx: Parameters<typeof validateAgentActions>[1]
+  ) {
+    for (const action of buildFiveProtectedActions(term)) {
+      const res = validateAgentActions([action], ctx);
+      assert.equal(res.length, 1, `Expected ${action.actionType} with "${term}" to be allowed`);
+    }
+  }
+
+  // 1. Non-dairy plant terms and variations (must NOT trigger dairy conflict)
+  const nonDairyTerms = [
+    // peanut butter
+    "peanut butter",
+    "peanut-butter",
+    "peanut   butter",
+    "Peanut Butter",
+    "ＰＥＡＮＵＴ　ＢＵＴＴＥＲ",
+    // cocoa butter
+    "cocoa butter",
+    "cocoa-butter",
+    "cocoa   butter",
+    "Cocoa Butter",
+    "ＣＯＣＯＡ　ＢＵＴＴＥＲ",
+    // almond milk
+    "almond milk",
+    "almond-milk",
+    "almond   milk",
+    "Almond Milk",
+    "ＡＬＭＯＮＤ　ＭＩＬＫ",
+    // coconut cream
+    "coconut cream",
+    "coconut-cream",
+    "coconut   cream",
+    "Coconut Cream",
+    // cream of tartar
+    "cream of tartar",
+    "cream-of-tartar",
+    "cream   of   tartar",
+    "Cream of Tartar",
+  ];
+
+  // 2. Separate English dairy positive terms
+  const dairyPositiveTerms = [
+    "cream",
+    "creams",
+    "CREAM",
+    "whey",
+    "wheys",
+    "WHEY",
+    "casein",
+    "caseins",
+    "CASEIN",
+    "caseinate",
+    "caseinates",
+    "CASEINATE",
+  ];
+
+  // 3. Mixed strings containing safe non-dairy compound AND genuine dairy allergen
+  const mixedDairyStrings = [
+    "almond milk with whey",
+    "cocoa butter with cream",
+    "peanut butter and butter",
+    "almond milk and whole milk",
+    "peanut butter with buttermilk",
+    "coconut cream with heavy cream",
+    "cream of tartar with casein",
+    "almond milk with caseinate",
+    "may contain milk with almond milk",
+    "cream of mushroom soup",
+  ];
+
+  test("non-dairy plant milks and butters do not produce dairy conflict across casing, NFKC, spaces, and hyphens", () => {
+    for (const ctx of [milkContext, dairyContext]) {
+      for (const term of nonDairyTerms) {
+        assert.equal(
+          findAllergyConflict(`recipe with ${term}`, ctx),
+          null,
+          `Expected "${term}" not to trigger dairy conflict in text`
+        );
+        assert.equal(
+          findCandidateSafetyConflict({ ingredients: [term] }, ctx),
+          null,
+          `Expected candidate with "${term}" not to trigger dairy conflict`
+        );
+        assertEachActionAllowed(term, ctx);
+      }
+    }
+  });
+
+  test("newline separation and separate object fields do not exempt dairy check", () => {
+    const newlineCases = [
+      { text: "almond\nmilk", ctx: milkContext, desc: "newline separated almond and milk" },
+      { text: "peanut\nbutter", ctx: dairyContext, desc: "newline separated peanut and butter" },
+      { text: "cocoa\nbutter", ctx: dairyContext, desc: "newline separated cocoa and butter" },
+      { text: "coconut\ncream", ctx: dairyContext, desc: "newline separated coconut and cream" },
+    ];
+    for (const { text, ctx, desc } of newlineCases) {
+      assert.ok(
+        findAllergyConflict(text, ctx),
+        `Expected ${desc} to trigger dairy conflict`
+      );
+    }
+
+    // Separate object fields must not be joined to bypass
+    const fieldSeparatedCandidates = [
+      { candidate: { alt: "almond", beverage: "milk" }, ctx: milkContext },
+      { candidate: { legume: "peanut", spread: "butter" }, ctx: dairyContext },
+      { candidate: { fat: "cocoa", dairy: "butter" }, ctx: dairyContext },
+      { candidate: { fruit: "coconut", topping: "cream" }, ctx: dairyContext },
+    ];
+    for (const { candidate, ctx } of fieldSeparatedCandidates) {
+      assert.ok(
+        findCandidateSafetyConflict(candidate, ctx),
+        `Expected candidate with separate fields ${JSON.stringify(candidate)} to trigger dairy conflict`
+      );
+    }
+  });
+
+  test("dairy aliases cream, whey, casein, caseinate and mixed strings are blocked across 5 actions", () => {
+    const contexts = [
+      { ctx: milkContext, expected: "milk" },
+      { ctx: dairyContext, expected: "乳制品" },
+    ];
+
+    for (const { ctx, expected } of contexts) {
+      for (const term of dairyPositiveTerms) {
+        assert.ok(
+          findAllergyConflict(`contains ${term} ingredient`, ctx),
+          `Expected dairy alias "${term}" to trigger conflict in text`
+        );
+        assert.ok(
+          findCandidateSafetyConflict({ ingredients: [term] }, ctx),
+          `Expected candidate with "${term}" to trigger dairy conflict`
+        );
+        assertEachActionBlocked(term, ctx, expected);
+      }
+
+      for (const mixed of mixedDairyStrings) {
+        assert.ok(
+          findAllergyConflict(`serving ${mixed}`, ctx),
+          `Expected mixed text "${mixed}" to trigger dairy conflict`
+        );
+        assert.ok(
+          findCandidateSafetyConflict({ recipe: { ingredients: [{ name: mixed }] } }, ctx),
+          `Expected mixed candidate with "${mixed}" to trigger dairy conflict`
+        );
+        assertEachActionBlocked(mixed, ctx, expected);
+      }
+    }
+
+    // Multi-field candidate with safe non-dairy item + genuine dairy item
+    const multiFieldCandidates = [
+      { ingredients: [{ name: "almond milk" }, { name: "whey" }] },
+      { ingredients: [{ name: "cocoa butter" }, { name: "cream" }] },
+      { spread: "peanut butter", dairy: "butter" },
+    ];
+    for (const candidate of multiFieldCandidates) {
+      assert.ok(
+        findCandidateSafetyConflict(candidate, dairyContext),
+        `Expected multi-field candidate ${JSON.stringify(candidate)} to trigger dairy conflict`
+      );
+    }
+  });
+
+  test("nut and peanut allergy profiles block almond milk, peanut butter, and standalone nuts across 5 actions", () => {
+    const nutCases = [
+      { term: "peanut butter", ctx: peanutContext, expectedAllergy: "花生" },
+      { term: "peanut", ctx: peanutContext, expectedAllergy: "花生" },
+      { term: "peanut butter", ctx: nutContext, expectedAllergy: "坚果" },
+      { term: "peanut", ctx: nutContext, expectedAllergy: "坚果" },
+      { term: "almond milk", ctx: nutContext, expectedAllergy: "坚果" },
+      { term: "almond", ctx: nutContext, expectedAllergy: "坚果" },
+      // Dual allergy profiles must report nut/peanut allergy, NOT false dairy allergy
+      { term: "sweet almond milk", ctx: dualDairyNutContext, expectedAllergy: "坚果" },
+      { term: "creamy peanut butter", ctx: dualDairyPeanutContext, expectedAllergy: "花生" },
+    ];
+
+    for (const { term, ctx, expectedAllergy } of nutCases) {
+      const conflict = findAllergyConflict(`dish with ${term}`, ctx);
+      assert.ok(conflict, `Expected "${term}" to trigger allergy conflict`);
+      assert.equal(conflict?.allergyName, expectedAllergy, `Expected allergyName "${expectedAllergy}" for "${term}"`);
+
+      const candidateConflict = findCandidateSafetyConflict({ ingredients: [term] }, ctx);
+      assert.ok(candidateConflict, `Expected candidate with "${term}" to trigger allergy conflict`);
+      assert.equal(candidateConflict?.allergyName, expectedAllergy);
+
+      assertEachActionBlocked(term, ctx, expectedAllergy);
+    }
+  });
+
+  test("custom allergies for non-dairy terms match literally across nested candidates and 5 actions", () => {
+    const customCases = [
+      { allergyName: "peanut butter", positive: "organic peanut butter", negative: "almond milk" },
+      { allergyName: "almond milk", positive: "fresh almond milk", negative: "peanut butter" },
+      { allergyName: "cocoa butter", positive: "pure cocoa butter", negative: "almond milk" },
+      { allergyName: "cocoa", positive: "smooth cocoa butter", negative: "peanut butter" },
+    ];
+
+    for (const { allergyName, positive, negative } of customCases) {
+      const customCtx = {
+        healthProfile: { allergies: [{ name: allergyName, severity: "severe" }] },
+      } as Parameters<typeof findCandidateSafetyConflict>[1];
+
+      // Direct text matching
+      const posResult = findAllergyConflict(positive, customCtx);
+      assert.ok(posResult, `Expected "${positive}" to match custom allergy "${allergyName}"`);
+      assert.equal(posResult?.allergyName, allergyName);
+      assert.equal(findAllergyConflict(negative, customCtx), null);
+
+      // Nested candidate structures
+      const nestedCandidate = {
+        recipe: {
+          title: `特调-${allergyName}`,
+          ingredients: [{ name: positive }],
+        },
+      };
+      const nestedConflict = findCandidateSafetyConflict(nestedCandidate, customCtx);
+      assert.ok(nestedConflict, `Expected nested candidate with "${positive}" to trigger "${allergyName}"`);
+      assert.equal(nestedConflict?.allergyName, allergyName);
+
+      const noteCandidate = { constraints: { note: positive } };
+      const noteConflict = findCandidateSafetyConflict(noteCandidate, customCtx);
+      assert.ok(noteConflict, `Expected note candidate with "${positive}" to trigger "${allergyName}"`);
+      assert.equal(noteConflict?.allergyName, allergyName);
+
+      // 5 write actions
+      assertEachActionBlocked(positive, customCtx, allergyName);
+    }
+  });
+
+  test("unknown ingredients in English/Chinese require clarification across 5 actions without false dairy block", () => {
+    const englishUnknownPhrases = [
+      "unknown ingredient",
+      "unknown ingredients",
+      "ingredient unknown",
+      "ingredients unknown",
+      "ingredient list unavailable",
+      "ingredients not specified",
+      "unspecified ingredients",
+      "UNKNOWN INGREDIENTS",
+      "Ingredient Unknown",
+      "ingredients  not  specified",
+      "ingredient-list-unavailable",
+      "ＵＮＫＮＯＷＮ　ＩＮＧＲＥＤＩＥＮＴＳ",
+    ];
+
+    // 1. User with dairy/milk allergy + candidate with almond milk and unknown ingredients
+    // MUST require clarification ("成分尚未确认"), NOT trigger false dairy refusal
+    for (const ctx of [milkContext, dairyContext]) {
+      const expectedAllergy = ctx === milkContext ? "milk" : "乳制品";
+      for (const phrase of englishUnknownPhrases) {
+        const combo = `almond milk (${phrase})`;
+
+        // Candidate with combined string
+        const candidateConflict = findCandidateSafetyConflict({ ingredients: [combo] }, ctx);
+        assert.ok(candidateConflict, `Expected "${combo}" to trigger safety conflict`);
+        assert.equal(candidateConflict?.allergyName, expectedAllergy);
+        assert.ok(
+          candidateConflict?.reply.includes("成分尚未确认"),
+          `Expected clarification reply for "${combo}", got: ${candidateConflict?.reply}`
+        );
+
+        // Nested note candidate
+        const nestedConflict = findCandidateSafetyConflict(
+          { recipe: { title: "smoothie", items: [{ name: "almond milk" }], constraints: { note: phrase } } },
+          ctx
+        );
+        assert.ok(nestedConflict, `Expected nested phrase "${phrase}" to trigger safety conflict`);
+        assert.equal(nestedConflict?.allergyName, expectedAllergy);
+        assert.ok(
+          nestedConflict?.reply.includes("成分尚未确认"),
+          `Expected clarification reply for nested "${phrase}", got: ${nestedConflict?.reply}`
+        );
+
+        // 5 write actions independently
+        assertEachActionBlocked(combo, ctx, expectedAllergy, "成分尚未确认");
+      }
+    }
+
+    // 2. User with no allergy profile must NOT be blocked by unknown ingredients
+    for (const phrase of englishUnknownPhrases) {
+      const combo = `almond milk (${phrase})`;
+      assert.equal(
+        findCandidateSafetyConflict({ ingredients: [combo] }, noAllergyContext),
+        null,
+        `Expected candidate with "${combo}" to be allowed for user with no allergy profile`
+      );
+      assertEachActionAllowed(combo, noAllergyContext);
+    }
+
+    // 3. User with nut profile + unknown ingredients (without nut allergen) still requires clarification
+    for (const phrase of englishUnknownPhrases) {
+      const safeCombo = `green tea (${phrase})`;
+      const nutConflict = findCandidateSafetyConflict({ ingredients: [safeCombo] }, nutContext);
+      assert.ok(nutConflict, `Expected nut profile to require clarification for "${safeCombo}"`);
+      assert.equal(nutConflict?.allergyName, "坚果");
+      assert.ok(
+        nutConflict?.reply.includes("成分尚未确认"),
+        `Expected clarification reply for nut profile on "${safeCombo}"`
+      );
+      assertEachActionBlocked(safeCombo, nutContext, "坚果", "成分尚未确认");
+    }
+
+    // 4. Chinese unknown ingredient regression across 5 actions
+    for (const zh of ["未知配料", "复合调味", "配料不详"]) {
+      const zhCombo = `almond milk (${zh})`;
+      const zhConflict = findCandidateSafetyConflict({ ingredients: [zhCombo] }, dairyContext);
+      assert.ok(zhConflict);
+      assert.equal(zhConflict?.allergyName, "乳制品");
+      assert.ok(zhConflict?.reply.includes("成分尚未确认"));
+      assertEachActionBlocked(zhCombo, dairyContext, "乳制品", "成分尚未确认");
+    }
   });
 });

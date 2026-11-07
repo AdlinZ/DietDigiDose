@@ -409,7 +409,8 @@ test("thinking policy serializes only documented parameters and rejects unknown 
   const policy = runtimePolicySchema.parse({}).main;
   assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V4-Flash", { ...policy, thinking: "off" }), { enable_thinking: false });
   assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V4-Flash", { ...policy, thinking: "max" }), { enable_thinking: true, reasoning_effort: "max" });
-  assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-R1", { ...policy, thinking: "high", thinkingBudget: 4096 }), { enable_thinking: true, reasoning_effort: "high", thinking_budget: 4096 });
+  assert.throws(() => thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-R1", { ...policy, thinking: "high", thinkingBudget: 4096 }), /推理强度尚未验证/);
+  assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-R1", { ...policy, thinking: "default", thinkingBudget: 4096 }), { enable_thinking: true, thinking_budget: 4096 });
   assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V3", { ...policy, thinking: "default", thinkingBudget: 2048 }), { enable_thinking: true, thinking_budget: 2048 });
   assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-R1", { ...policy, thinking: "off", thinkingBudget: 4096 }), { enable_thinking: false });
   assert.throws(() => thinkingParameters("https://unknown.test/v1", "unknown", { ...policy, thinking: "off" }), /尚未验证/);
@@ -435,6 +436,34 @@ test("thinking policy serializes only documented parameters and rejects unknown 
   assert.equal(isTransientModelError(new Error("工具调用预算已用尽")), false);
   assert.equal(isTransientModelError(new Error("AGENT_RUN_CANCELLED")), false);
   assert.equal(isTransientModelError(null), false);
+});
+
+test("legacy and distill models reject high and max reasoning effort while default yields empty parameters", () => {
+  const policy = runtimePolicySchema.parse({}).main;
+  const legacyAndDistillModels = [
+    "deepseek-ai/DeepSeek-R1",
+    "deepseek-ai/DeepSeek-V3",
+    "Pro/deepseek-ai/DeepSeek-R1",
+    "Pro/deepseek-ai/DeepSeek-V3",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+  ];
+
+  for (const model of legacyAndDistillModels) {
+    assert.deepEqual(thinkingParameters("https://api.siliconflow.cn/v1", model, { ...policy, thinking: "default" }), {});
+    for (const effort of ["high", "max"] as const) {
+      assert.throws(
+        () => thinkingParameters("https://api.siliconflow.cn/v1", model, { ...policy, thinking: effort }),
+        /推理强度尚未验证/,
+      );
+      assert.throws(
+        () => thinkingParameters("https://api.siliconflow.cn/v1", model, { ...policy, thinking: effort, thinkingBudget: 2048 }),
+        /推理强度尚未验证/,
+      );
+    }
+  }
 });
 
 

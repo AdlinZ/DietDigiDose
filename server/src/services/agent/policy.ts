@@ -160,9 +160,9 @@ export type AllergySafetyBlock = {
 
 const allergyAliases: Record<string, string[]> = {
   "花生": ["peanut", "groundnut", "落花生", "花生", "花生酱", "花生醬", "花生碎", "花身", "花牲", "花生将", "花生醬料"],
-  "坚果": ["坚果", "堅果", "花生", "花生酱", "花生醬", "花生碎", "花身", "花牲", "花生将", "腰果", "核桃", "杏仁", "榛子", "开心果", "開心果", "碧根果", "板栗", "夏威夷果"],
+  "坚果": ["坚果", "堅果", "almond", "peanut", "花生", "花生酱", "花生醬", "花生碎", "花身", "花牲", "花生将", "腰果", "核桃", "杏仁", "榛子", "开心果", "開心果", "碧根果", "板栗", "夏威夷果"],
   "海鲜": ["海鲜", "海 marine", "海鮮", "虾", "蝦", "蟹", "贝", "貝", "牡蛎", "生蚝", "扇贝", "蛤蜊", "花甲", "鲍鱼", "海参", "海鱼", "三文鱼", "金枪鱼", "鳕鱼", "带鱼", "鱿鱼", "章鱼", "墨鱼", "鱼肉", "鱼片", "seafood", "shrimp", "prawn", "crab"],
-  "乳制品": ["乳制品", "乳製品", "牛奶", "奶酪", "芝士", "酸奶", "奶油", "黄油", "牛油", "炼乳", "乳清", "奶粉", "干酪", "乳糖", "milk", "cheese", "butter", "buttermilk", "milkshake", "cheesecake", "cheeseburger", "buttercream", "butterfat"],
+  "乳制品": ["乳制品", "乳製品", "牛奶", "奶酪", "芝士", "酸奶", "奶油", "黄油", "牛油", "炼乳", "乳清", "奶粉", "干酪", "乳糖", "milk", "cheese", "butter", "buttermilk", "milkshake", "cheesecake", "cheeseburger", "buttercream", "butterfat", "cream", "whey", "casein", "caseinate"],
   "鸡蛋": ["鸡蛋", "雞蛋", "蛋清", "蛋黄", "蛋液", "蛋白", "全蛋", "蛋皮", "鸡蛋碎", "荷包蛋", "炒蛋", "煎蛋", "egg", "eggs"],
   "大豆": ["大豆", "黄豆", "黑豆", "豆浆", "豆腐", "豆皮", "豆干", "腐竹", "大豆油", "soy", "soybean", "tofu"],
   "小麦": ["小麦", "小麥", "面粉", "麵粉", "面条", "麵條", "面包", "麵包", "面筋", "麵筋", "麸质", "麦麸", "wheat", "flour", "gluten"],
@@ -190,7 +190,15 @@ function matchesAllergyTerm(lowerText: string, compactText: string, term: string
     const sanitized = lowerText.replace(/\begg[\s_-]?plants?\b/gi, "");
     return regex.test(sanitized);
   }
-  return regex.test(lowerText);
+  let matchingText = lowerText;
+  if (normTerm === "milk") {
+    matchingText = lowerText.replace(/\balmond[ \t-]+milks?\b/gi, " ");
+  } else if (normTerm === "butter") {
+    matchingText = lowerText.replace(/\b(?:peanut|cocoa)[ \t-]+butters?\b/gi, " ");
+  } else if (normTerm === "cream") {
+    matchingText = lowerText.replace(/\b(?:coconut[ \t-]+creams?|creams?[ \t-]+of[ \t-]+tartars?)\b/gi, " ");
+  }
+  return regex.test(matchingText);
 }
 
 function isSevere(value: string | undefined) {
@@ -239,7 +247,15 @@ export function findCandidateSafetyConflict(candidate: unknown, ctx: UserContext
     if (conflict) return conflict;
   }
   const allergy = ctx.healthProfile?.allergies?.find((item) => item.name.trim());
-  if (allergy && /(复合调味|混合调料|混合酱|沙茶酱|沙嗲酱|satay|秘制调料|特调酱|成分不明|配料不详|未知配料|未知成分|不明配料)/i.test(text)) {
+  if (
+    allergy &&
+    (/(复合调味|混合调料|混合酱|沙茶酱|沙嗲酱|satay|秘制调料|特调酱|成分不明|配料不详|未知配料|未知成分|不明配料)/i.test(text) ||
+      rawStrings.some((rawStr) =>
+        /\b(?:unknown[ \t-]+ingredients?|ingredients?[ \t-]+unknown|ingredients?[ \t-]+list[ \t-]+unavailable|ingredients?[ \t-]+not[ \t-]+specified|unspecified[ \t-]+ingredients?)\b/i.test(
+          rawStr.normalize("NFKC")
+        )
+      ))
+  ) {
     return { allergyName: allergy.name, severe: isSevere(allergy.severity),
       reply: "这份候选包含成分尚未确认的复合食材，暂不推荐或保存。请补充完整配料标签及过敏原声明，确认符合你的过敏限制后再继续。" };
   }

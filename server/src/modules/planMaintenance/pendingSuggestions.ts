@@ -93,7 +93,7 @@ export function revalidatePendingSuggestions(
       continue;
     }
 
-    const { title: _ignoredTitle, ...patchPayload } = rawAfter as Record<string, unknown>;
+    const { title: _ignoredTitle, validationFingerprint: _ignoredFingerprint, ...patchPayload } = rawAfter as Record<string, unknown>;
     const parsedPatch = activeMealChangePatchSchema.safeParse(patchPayload);
     if (!parsedPatch.success) {
       const reason = "建议变更格式不符合规范，需人工核对";

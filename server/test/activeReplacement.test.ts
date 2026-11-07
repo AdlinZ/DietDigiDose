@@ -355,6 +355,86 @@ test("revalidatePendingSuggestions: missing compatibility entry for requirement 
   assert.match(res.evaluations[0].checks[0], /缺少当前厨具治理校验结果/);
 });
 
+test("revalidatePendingSuggestions: validationFingerprint metadata handling, protection, and unknown field rejection", () => {
+  const legalFingerprint = "a".repeat(64);
+
+  // 1. 未保护合法建议（带 validationFingerprint 元数据）实际 checked，pending 状态与原餐次输入不变
+  const validArgs = fixture();
+  const originalItemBefore = structuredClone(validArgs.items[0]);
+  const { snapshot: sValid, compatibility: cValid } = makeSnapshot(validArgs, {
+    after_json: JSON.stringify({
+      version: 1,
+      recipeId: 2,
+      title: "替代菜2",
+      validationFingerprint: legalFingerprint,
+    }),
+  });
+  const resValid = revalidatePendingSuggestions(sValid, 1, cValid, "2026-10-21");
+  assert.equal(resValid.evaluations.length, 1);
+  assert.equal(resValid.evaluations[0].outcome, "checked");
+  assert.equal(resValid.evaluations[0].changeId, "change-1");
+  assert.equal(resValid.notes.length, 1);
+  assert.match(resValid.notes[0], /本次快照检查通过，仍待确认，接受时须重新预览/);
+  assert.equal(sValid.data.meal_plan_changes[0].status, "pending");
+  assert.deepEqual({ ...sValid.data.meal_plan_items[0], user_id: undefined }, { ...originalItemBefore, user_id: undefined });
+
+  // 2. 带合法 fingerprint 的已确认建议 protected，pending 状态与原餐次输入不变
+  const confirmedArgs = fixture();
+  confirmedArgs.items[0].confirmed_at = "2026-10-20T00:00:00Z";
+  const confirmedItemBefore = structuredClone(confirmedArgs.items[0]);
+  const { snapshot: sConfirmed, compatibility: cConfirmed } = makeSnapshot(confirmedArgs, {
+    after_json: JSON.stringify({
+      version: 1,
+      recipeId: 2,
+      title: "替代菜2",
+      validationFingerprint: legalFingerprint,
+    }),
+  });
+  const resConfirmed = revalidatePendingSuggestions(sConfirmed, 1, cConfirmed, "2026-10-21");
+  assert.equal(resConfirmed.evaluations[0].outcome, "protected");
+  assert.ok(resConfirmed.evaluations[0].checks.some(c => c.includes("已确认")));
+  assert.equal(sConfirmed.data.meal_plan_changes[0].status, "pending");
+  assert.deepEqual({ ...sConfirmed.data.meal_plan_items[0], user_id: undefined }, { ...confirmedItemBefore, user_id: undefined });
+
+  // 3. 带合法 fingerprint 的已采购建议 protected，pending 状态与原餐次输入不变
+  const purchasedArgs = fixture();
+  purchasedArgs.data.shopping_list_items = [
+    { user_id: 1, client_id: "meal-plan:a:米", checked: 1, deleted_at: null },
+  ];
+  const purchasedItemBefore = structuredClone(purchasedArgs.items[0]);
+  const { snapshot: sPurchased, compatibility: cPurchased } = makeSnapshot(purchasedArgs, {
+    after_json: JSON.stringify({
+      version: 1,
+      recipeId: 2,
+      title: "替代菜2",
+      validationFingerprint: legalFingerprint,
+    }),
+  });
+  const resPurchased = revalidatePendingSuggestions(sPurchased, 1, cPurchased, "2026-10-21");
+  assert.equal(resPurchased.evaluations[0].outcome, "protected");
+  assert.ok(resPurchased.evaluations[0].checks.some(c => c.includes("采购")));
+  assert.equal(sPurchased.data.meal_plan_changes[0].status, "pending");
+  assert.deepEqual({ ...sPurchased.data.meal_plan_items[0], user_id: undefined }, { ...purchasedItemBefore, user_id: undefined });
+
+  // 4. 真正未知字段（即使附带 validationFingerprint）仍被 strict parse 拒绝并记录 needs_review
+  const unknownArgs = fixture();
+  const unknownItemBefore = structuredClone(unknownArgs.items[0]);
+  const { snapshot: sUnknown, compatibility: cUnknown } = makeSnapshot(unknownArgs, {
+    after_json: JSON.stringify({
+      version: 1,
+      recipeId: 2,
+      title: "替代菜2",
+      validationFingerprint: legalFingerprint,
+      completelyUnknownField: "not_allowed",
+    }),
+  });
+  const resUnknown = revalidatePendingSuggestions(sUnknown, 1, cUnknown, "2026-10-21");
+  assert.equal(resUnknown.evaluations[0].outcome, "needs_review");
+  assert.match(resUnknown.evaluations[0].checks[0], /格式不符合规范/);
+  assert.equal(sUnknown.data.meal_plan_changes[0].status, "pending");
+  assert.deepEqual({ ...sUnknown.data.meal_plan_items[0], user_id: undefined }, { ...unknownItemBefore, user_id: undefined });
+});
+
 test("hasEffectiveMaintenanceEvents: correctly identifies event efficacy", () => {
   assert.equal(hasEffectiveMaintenanceEvents([{ event_type: "daily_check" }], false), false);
   assert.equal(hasEffectiveMaintenanceEvents([{ event_type: "daily_check" }], true), true);

@@ -49,7 +49,8 @@ export class PostgresAdminConsoleRepository implements AdminConsoleRepository {
         JOIN diet_records d ON d.id=e.diet_record_id AND d.user_id=e.user_id
         LEFT JOIN meal_plan_items p ON p.id=m.plan_item_id
         LEFT JOIN core_loop_actor_classifications c ON c.user_id=m.created_by_user_id
-        WHERE e.created_at>=$1::timestamptz AND e.created_at<$2::timestamptz AND NOT EXISTS(SELECT 1 FROM household_meal_intake_corrections x WHERE x.event_id=e.id)`,[start,end])).rows as Row[];
+        WHERE EXISTS(SELECT 1 FROM household_meal_events candidate WHERE candidate.meal_id=m.id AND candidate.created_at>=$1::timestamptz AND candidate.created_at<$2::timestamptz)
+          AND NOT EXISTS(SELECT 1 FROM household_meal_intake_corrections x WHERE x.event_id=e.id)`,[start,end])).rows as Row[];
       const settings = (await client.query("SELECT * FROM core_loop_metric_settings WHERE id=1")).rows[0] ?? { enabled: 0,version: 1,coverage_start: null };
       await client.query("COMMIT"); return { productions,intakes,logs,legacy,shared,settings };
     } catch(error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }

@@ -46,7 +46,8 @@ export class SqliteAdminConsoleRepository implements AdminConsoleRepository {
       JOIN diet_records d ON d.id=e.diet_record_id AND d.user_id=e.user_id
       LEFT JOIN meal_plan_items p ON p.id=m.plan_item_id
       LEFT JOIN core_loop_actor_classifications c ON c.user_id=m.created_by_user_id
-      WHERE e.created_at>=datetime(?) AND e.created_at<datetime(?) AND NOT EXISTS(SELECT 1 FROM household_meal_intake_corrections x WHERE x.event_id=e.id)`).all(start,end) as Row[];
+      WHERE EXISTS(SELECT 1 FROM household_meal_events candidate WHERE candidate.meal_id=m.id AND candidate.created_at>=datetime(?) AND candidate.created_at<datetime(?))
+        AND NOT EXISTS(SELECT 1 FROM household_meal_intake_corrections x WHERE x.event_id=e.id)`).all(start,end) as Row[];
     const settings = (this.database.prepare("SELECT * FROM core_loop_metric_settings WHERE id=1").get() as Row | undefined) ?? { enabled: 0,version: 1,coverage_start: null };
     return { productions,intakes,logs,legacy,shared,settings };
   })(); }

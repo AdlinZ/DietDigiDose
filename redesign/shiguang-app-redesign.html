@@ -1066,7 +1066,11 @@ try{const v=JSON.parse(localStorage.getItem('sg_app_views')||'null');if(Array.is
 const saveViews=()=>{try{localStorage.setItem('sg_app_views',JSON.stringify(S.views));}catch(e){}};
 const recipe=id=>RECIPES.find(r=>r.id===+id);
 S.posts.forEach(p=>{p.comments=(p.cl||[]).length;});
-const expiring=()=>S.pantry.filter(i=>i.days<=S.threshold).sort((a,b)=>a.days-b.days);
+const knownDays=value=>value!=null&&String(value).trim()!==''&&Number.isFinite(+value)&&+value>=0?+value:null;
+const isExpiring=i=>knownDays(i.days)!==null&&i.days<=S.threshold;
+const expiryLabel=i=>knownDays(i.days)===null?'保鲜期待确认':i.days===0?'今天到期':isExpiring(i)?`临期 ${i.days} 天`:`${i.days} 天`;
+const qtyLabel=i=>i.qty||'数量待确认';
+const expiring=()=>S.pantry.filter(isExpiring).sort((a,b)=>a.days-b.days);
 const stores=()=>{const g={冷藏:0,冷冻:0,常温:0,位置待确认:0};S.pantry.forEach(i=>g[i.store]=(g[i.store]||0)+1);return g;};
 const consumed=()=>S.meals.reduce((s,m)=>s+(m.kcal||0),0);
 const incomplete=()=>S.meals.some(m=>m.kcal==null);
@@ -1103,17 +1107,17 @@ function periodCards(){
 }
 function smartCards(){
   const pc=periodCards();const exp=expiring();const pct=calPct();
-  const cards=pc.cards.map(c=>({...c,header:pc.title,action:c.rid?'查看安全菜谱':'让食语生成食谱'}));
-  if(exp.length)cards.push({header:'临期食材提醒',tag:'临期提醒',title:`${exp.length} 件食材临近到期`,desc:`优先消耗 ${exp.slice(0,2).map(i=>i.name).join('、')}${exp.length>2?' 等食材':''}`,kcal:'优先处理',action:'安排消耗方案',exp:true});
+  const cards=pc.cards.map(c=>({...c,header:pc.title,action:c.rid?'查看菜谱':'记录这份饮食'}));
+  if(exp.length)cards.push({header:'临期食材提醒',tag:'临期提醒',title:`${exp.length} 件食材临近到期`,desc:`优先消耗 ${exp.slice(0,2).map(i=>i.name).join('、')}${exp.length>2?' 等食材':''}`,kcal:'优先处理',action:'查看配餐示例',exp:true});
   cards.push({header:'今日饮食进度',tag:'热量进度',title:calLabel(),desc:pct==null?`参考目标 ${S.target} kcal；${S.meals.length?'记录中有热量待补全，暂不计算进度':'记录第一餐后查看进度'}`:consumed()>=S.target?'已接近今日目标，接下来优先选择清淡低热量食物':`参考目标 ${S.target} kcal，已记录 ${consumed()} kcal`,kcal:pct==null?'待补全':pct+'%',action:'规划下一餐',plan:true});
-  if(S.water<1600)cards.push({header:'今日补水提醒',tag:'补水提醒',title:`今日饮水 ${S.water} / 2000 ml`,desc:S.water===0?'今天还没有记录饮水，先喝一杯温水吧':'距离建议饮水量还有一点差距，记得分次补足',kcal:`还差 ${Math.max(0,2000-S.water)} ml`,action:'制定补水计划',water:true});
+  if(S.water<1600)cards.push({header:'今日补水提醒',tag:'补水提醒',title:`今日饮水 ${S.water} / 2000 ml`,desc:S.water===0?'今天还没有记录饮水，先喝一杯温水吧':'距离建议饮水量还有一点差距，记得分次补足',kcal:`还差 ${Math.max(0,2000-S.water)} ml`,action:'记录饮水 +250 ml',water:true});
   return cards;
 }
 function invHighlights(){
   const exp=expiring();const g=stores();const list=[];
-  if(exp.length){const i=exp[0];list.push({amber:true,eyebrow:'今日优先消耗',title:i.name,desc:`剩余 ${i.qty} · ${i.days===0?'今天到期':`还剩 ${i.days} 天`}`,icon:i.icon,exp:true});}
+  if(exp.length){const i=exp[0];list.push({amber:true,eyebrow:'今日优先消耗',title:i.name,desc:`剩余 ${qtyLabel(i)} · ${i.days===0?'今天到期':`还剩 ${i.days} 天`}`,icon:i.icon,exp:true});}
   if(S.pantry.length){list.push({eyebrow:'库存分布',title:`冷藏 ${g.冷藏} · 冷冻 ${g.冷冻} · 常温 ${g.常温} · 待确认 ${g.位置待确认}`,desc:`当前共 ${S.pantry.length} 种食材，随时可以开始配餐`,icon:'box'});
-    list.push({eyebrow:'最新备货',title:S.pantry[0].name,desc:`${S.pantry[0].store} · ${S.pantry[0].qty}，已加入你的保鲜库`,icon:'basket'});}
+    list.push({eyebrow:'最新备货',title:S.pantry[0].name,desc:`${S.pantry[0].store} · ${qtyLabel(S.pantry[0])}，已加入你的保鲜库`,icon:'basket'});}
   else list.push({eyebrow:'开始整理保鲜库',title:'还没有记录食材',desc:'添加食材后，系统会为你安排临期提醒和配餐建议',icon:'plus'});
   return list;
 }
@@ -1275,8 +1279,8 @@ function recipesHTML(){
 function pantryRows(){
   let list=[...S.pantry];
   if(S.pFilter!=='全部')list=list.filter(i=>i.store===S.pFilter);
-  if(S.pExp)list=list.filter(i=>i.days<=S.threshold);
-  if(S.pSort==='expiry')list.sort((a,b)=>a.days-b.days);
+  if(S.pExp)list=list.filter(isExpiring);
+  if(S.pSort==='expiry')list.sort((a,b)=>(knownDays(a.days)??Infinity)-(knownDays(b.days)??Infinity));
   if(S.pSort==='name')list.sort((a,b)=>a.name.localeCompare(b.name,'zh'));
   if(S.pSort==='store')list.sort((a,b)=>a.store.localeCompare(b.store,'zh'));
   return list;
@@ -1291,7 +1295,7 @@ function assetsHTML(){
     <div id="viewFormSlot"></div>
     <div class="toolbar"><div class="cats">${['全部','冷藏','冷冻','常温','位置待确认'].map(c=>`<button class="cat ${S.pFilter===c?'on':''}" data-a="p-filter" data-v="${c}">${c}</button>`).join('')}</div>
     <span class="sp"><button class="toggle ${S.pExp?'on':''}" data-a="p-exp">${icon('clock')} 临期 ≤${S.threshold}天</button><select class="sel" data-c="pSort" aria-label="排序"><option value="expiry" ${S.pSort==='expiry'?'selected':''}>临期优先</option><option value="name" ${S.pSort==='name'?'selected':''}>名称</option><option value="store" ${S.pSort==='store'?'selected':''}>存放方式</option></select></span></div>
-    <div class="plist">${list.map(i=>`<div class="prow ${S.pSel.includes(i.id)?'sel-on':''}"><input type="checkbox" data-c="p-select" data-id="${i.id}" ${S.pSel.includes(i.id)?'checked':''} aria-label="选择${esc(i.name)}"><span class="pic">${icon(i.icon)}</span><span class="nm"><b>${esc(i.name)}</b><small>${esc(i.qty)} · ${esc(i.store)}</small></span><span class="exp chip ${i.days<=S.threshold?'w':'t'}">${i.days===0?'今天到期':i.days<=S.threshold?`临期 ${i.days} 天`:`${i.days} 天`}</span><button class="ibtn" data-a="ing-edit" data-id="${i.id}" aria-label="编辑">${icon('edit')}</button><button class="ibtn danger" data-a="ing-del" data-id="${i.id}" aria-label="删除">${icon('trash')}</button></div>`).join('')||'<p class="empty">没有符合条件的食材，调整筛选或录入新食材。</p>'}</div>
+    <div class="plist">${list.map(i=>`<div class="prow ${S.pSel.includes(i.id)?'sel-on':''}"><input type="checkbox" data-c="p-select" data-id="${i.id}" ${S.pSel.includes(i.id)?'checked':''} aria-label="选择${esc(i.name)}"><span class="pic">${icon(i.icon)}</span><span class="nm"><b>${esc(i.name)}</b><small>${esc(qtyLabel(i))} · ${esc(i.store)}</small></span><span class="exp chip ${isExpiring(i)?'w':'t'}">${expiryLabel(i)}</span><button class="ibtn" data-a="ing-edit" data-id="${i.id}" aria-label="编辑">${icon('edit')}</button><button class="ibtn danger" data-a="ing-del" data-id="${i.id}" aria-label="删除">${icon('trash')}</button></div>`).join('')||'<p class="empty">没有符合条件的食材，调整筛选或录入新食材。</p>'}</div>
     ${S.pSel.length?`<div class="bulk"><b class="num">已选 ${S.pSel.length} 项</b><span class="sp"><button class="btn warm sm" data-a="bulk-shop">${icon('cart')} 加入采购单</button><button class="btn soft sm" data-a="bulk-del">${icon('trash')} 删除</button><button class="btn soft sm" data-a="bulk-cancel">取消</button></span></div>`:''}
   </div></div>
   <div class="c5 rise" style="--d:.08s"><div class="card">
@@ -1488,9 +1492,9 @@ function renderDrawer(){
     if(!S.plan)genPlan();
     const total=S.plan.reduce((s,id)=>s+recipe(id).kcal,0);
     h=`<div class="dh"><b>食语 AI 配餐</b><button class="ibtn x" data-a="drawer-close" aria-label="关闭">${icon('close')}</button></div><div class="db">
-    <p class="muted" style="font-size:11.5px;margin-bottom:12px">按参考目标 ${S.target} kcal 与保鲜库库存生成一日三餐，可逐餐换一换。</p>
+    <p class="muted" style="font-size:11.5px;margin-bottom:12px">以下为随机食谱组合示例，未按个人目标或库存优化，可逐餐换一换。</p>
     ${S.plan.map((id,i)=>{const r=recipe(id);return `<div class="planrow"><span class="chip g slot">${['早餐','午餐','晚餐'][i]}</span><span class="nm">${esc(r.title)}</span><span class="kc num">${r.kcal}</span><button class="ibtn" data-a="plan-reroll" data-i="${i}" aria-label="换一餐">${icon('reset')}</button></div>`;}).join('')}
-    <p class="muted num" style="font-size:11.5px;margin-top:6px">合计 ${total} kcal · ${total>S.target?'略高于':'贴近'}参考目标 ${S.target} kcal</p>
+    <p class="muted num" style="font-size:11.5px;margin-top:6px">合计 ${total} kcal · 参考目标 ${S.target} kcal（示例未优化）</p>
     <p class="muted" style="font-size:10.5px;margin-top:8px">AI 营养估算仅供日常健康管理，不构成医疗诊断或治疗建议。</p></div>`;
     f=`<button class="btn line" data-a="plan-regen">${icon('spark')} 重新生成</button><button class="btn fill" data-a="plan-apply">${icon('layers')} 全部加入队列</button>`;
   }
@@ -1502,7 +1506,7 @@ function genPlan(){
   S.plan=[b,l,d];
 }
 /* ---------- quick-action windows (chat / add-food / post / meal) ---------- */
-let W=null,chatBusy=false,winScanToken=0;
+let W=null,chatBusy=false,winScanToken=0,chatReplyToken=0;
 const AI_CONSENT_KEY='@dietdigidose:ai-data-consent';
 const aiConsented=()=>{try{return localStorage.getItem(AI_CONSENT_KEY)==='accepted';}catch(e){return false;}};
 const findMsg=mid=>S.chat.msgs.find(x=>x.id===mid);
@@ -1608,8 +1612,8 @@ function doChatSend(t){
   $('#chatMsgs')?.insertAdjacentHTML('beforeend',msgHTML(u));
   const ld=$('#chatLoading');if(ld)ld.hidden=false;
   chatBusy=true;syncSend();scrollChat();
-  const reply=genReply(t);
-  setTimeout(()=>{chatBusy=false;const m={id:uid('a'),role:'ai',text:reply.text,ms:reply.ms,cards:reply.cards};S.chat.msgs.push(m);
+  const reply=genReply(t),token=++chatReplyToken;
+  setTimeout(()=>{if(token!==chatReplyToken)return;chatBusy=false;const m={id:uid('a'),role:'ai',text:reply.text,ms:reply.ms,cards:reply.cards};S.chat.msgs.push(m);
     const l=$('#chatLoading');if(l)l.hidden=true;$('#chatMsgs')?.insertAdjacentHTML('beforeend',msgHTML(m));syncSend();scrollChat();},reduced?60:reply.ms);
 }
 function appendAI(text){const m={id:uid('a'),role:'ai',text,ms:320};S.chat.msgs.push(m);$('#chatMsgs')?.insertAdjacentHTML('beforeend',msgHTML(m));scrollChat();}
@@ -1664,13 +1668,13 @@ function afManualHTML(){
   <div class="frow"><label>数量（可不填）</label><input name="qty" maxlength="12" value="${i?esc(i.qty):''}" placeholder="不确定可留空">
     <div class="fchips">${['100g','1份','2盒','500g'].map(q=>`<button type="button" class="fchip" data-a="af-qty-chip" data-v="${q}">${q}</button>`).join('')}</div></div>
   <div class="frow"><label>存放位置</label><select name="store">${['冷藏','冷冻','常温','位置待确认'].map(s=>`<option ${i&&i.store===s?'selected':(!i&&s==='冷藏'?'selected':'')}>${s}</option>`).join('')}</select></div>
-  <div class="frow"><label>剩余保鲜天数</label><input name="days" type="number" min="0" max="365" value="${i?i.days:3}">
+  <div class="frow"><label>剩余保鲜天数（不确定可留空）</label><input name="days" type="number" min="0" max="365" value="${i?(i.days??''):''}">
     <div class="fchips">${[3,7,30].map(dd=>`<button type="button" class="fchip" data-a="af-days-chip" data-v="${dd}">${dd}天</button>`).join('')}</div></div>
   <p class="muted" style="font-size:10.5px">临期食材会进入首页「今日优先消耗」。</p></form>`;
 }
 function intakeRows(rows){
   const sel=rows.filter(r=>r.on&&String(r.name).trim());
-  sel.forEach(r=>S.pantry.unshift({id:uid('p'),name:String(r.name).trim(),qty:String(r.qty||'').trim()||'1 份',store:r.store||'冷藏',days:Math.max(0,+r.days||0),icon:r.icon||iconFor(r.name)}));
+  sel.forEach(r=>S.pantry.unshift({id:uid('p'),name:String(r.name).trim(),qty:String(r.qty||'').trim(),store:r.store||'位置待确认',days:knownDays(r.days),icon:r.icon||iconFor(r.name)}));
   closeWin();render();toast(`已成功将 ${sel.length} 种食材导入你的保鲜库！`);
 }
 /* ----- post window ----- */
@@ -1746,7 +1750,7 @@ document.addEventListener('click',e=>{
   if(a==='chat-chip'){if(v==='cook')setChatInput('根据现有冰箱食材推荐一份健康、简单的晚餐');else if(v==='analysis')setChatInput('分析我今天的热量和营养摄入，并给出下一餐建议');else if(v==='vision')chatSend('拍照识别食材');return;}
   if(a==='chat-more'){W.menu=true;renderWin();return;}
   if(a==='chat-menu-shop'){W.menu=false;closeWin();S.view='assets';render();return;}
-  if(a==='chat-menu-clear'){S.chat.msgs=[];W.menu=false;renderWin();return;}
+  if(a==='chat-menu-clear'){chatReplyToken++;chatBusy=false;S.chat.msgs=[];W.menu=false;renderWin();return;}
   if(a==='chat-consent-no'){W.consent=false;W.pending=null;renderWin();return;}
   if(a==='chat-consent-yes'){try{localStorage.setItem(AI_CONSENT_KEY,'accepted');}catch(e){}W.consent=false;const t=W.pending;W.pending=null;renderWin();doChatSend(t);return;}
   if(a==='chat-scan-confirm'){const m=findMsg(t.dataset.mid);const c=m.cards[+t.dataset.ci];const added=[];c.items.forEach(it=>{const pid=uid('p');S.pantry.unshift({id:pid,name:it.name,qty:it.qty,store:it.store,days:it.days,icon:it.icon});added.push(pid);});c.done='saved';c.added=added;render();refreshMsg(m.id);toast(`已成功将 ${c.items.length} 种食材导入你的保鲜库！`);return;}
@@ -1766,7 +1770,7 @@ document.addEventListener('click',e=>{
   if(a==='af-qty-chip'){const f=$('#ingForm');if(f)f.querySelector('[name=qty]').value=v;return;}
   if(a==='af-days-chip'){const f=$('#ingForm');if(f)f.querySelector('[name=days]').value=v;return;}
   if(a==='af-voice'){toast('当前环境暂不支持语音，请直接输入文字');return;}
-  if(a==='af-parse'){const parts=(W.text||'').split(/[、，,]/).map(s=>s.trim()).filter(Boolean);if(!parts.length){toast('先写下手边的食材吧');return;}W.rows=parts.map(p=>{const qm=p.match(/([\d.]+\s*(?:个|枚|盒|袋|瓶|碗|把|块|颗|头|份|g|克|kg|千克|ml|毫升))\s*$/);const qty=qm?qm[1]:'';const nm=qm?p.slice(0,qm.index).trim():p;return {name:nm||p,qty,store:'冷藏',days:3,conf:null,icon:iconFor(nm||p),on:true};});renderWin();return;}
+  if(a==='af-parse'){const parts=(W.text||'').split(/[、，,]/).map(s=>s.trim()).filter(Boolean);if(!parts.length){toast('先写下手边的食材吧');return;}W.rows=parts.map(p=>{const qm=p.match(/([\d.]+\s*(?:个|枚|盒|袋|瓶|碗|把|块|颗|头|份|g|克|kg|千克|ml|毫升))\s*$/);const qty=qm?qm[1]:'';const nm=qm?p.slice(0,qm.index).trim():p;return {name:nm||p,qty,store:'位置待确认',days:null,conf:null,icon:iconFor(nm||p),on:true};});renderWin();return;}
   if(a==='af-text-save'||a==='af-intake'){intakeRows(W.rows);return;}
   if(a==='post-img'){const pool=['tomato','egg','avocado','beef','oat','fish','bread','yogurt'];W.imgs=W.imgs||[];if(W.imgs.length<9){W.imgs.push({icon:pool[W.imgs.length%pool.length]});renderWin();}return;}
   if(a==='post-img-del'){W.imgs.splice(i,1);renderWin();return;}
@@ -1782,7 +1786,7 @@ document.addEventListener('click',e=>{
     if(W.topic==='活动'){np.evStart=W.evStart;np.evEnd=W.evEnd;np.participants=1;np.joined=true;const st=evStatus(np);S.cAct=st==='ongoing'?'进行中':st==='upcoming'?'即将开始':'往期活动';}
     if(W.topic==='问答'){np.qstatus='open';}
     S.posts.unshift(np);
-    closeWin();S.view='community';S.cTab=W.topic;S.cShown=12;S.cSearch=false;S.cQuery='';render();toast('已发布到社区');return;}
+    closeWin();S.view='community';S.cTab=np.cat;S.cShown=12;S.cSearch=false;S.cQuery='';render();toast('已发布到社区');return;}
   if(a==='meal-slot'){const f=$('#mealForm');if(f){f.querySelector('[name=slot]').value=v;const d=f.querySelector('.slot-display');if(d)d.value=v;f.querySelectorAll('.slotchips button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));}return;}
   if(a==='meal-preset'){const pr=MEAL_PRESETS.find(x=>x.name===v);if(pr)fillMeal(pr);return;}
   if(a==='meal-vision'){const pr=MEAL_PRESETS[Math.floor(Math.random()*MEAL_PRESETS.length)];fillMeal(pr);toast(`AI 识别成功：已估算【${pr.name}】的营养成分`);return;}
@@ -1809,7 +1813,7 @@ document.addEventListener('click',e=>{
   if(a==='queue-add'){if(!S.queue.includes(+id)){S.queue.push(+id);render();toast('已加入烹饪队列');}else toast('已在队列中');return;}
   if(a==='queue-rm'){destructive(()=>{S.queue=S.queue.filter(q=>q!==+id);},'已移出队列');return;}
   if(a==='queue-clear'){destructive(()=>{S.queue=[];},'队列已清空');return;}
-  if(a==='cook'){const r=recipe(id);S.queue=S.queue.filter(q=>q!==+id);render();openWin({type:'meal',prefill:r.title,kcal:r.kcal,p:r.p,c:r.c,f:r.f});return;}
+  if(a==='cook'){const r=recipe(id);openWin({type:'meal',queueId:+id,prefill:r.title,kcal:r.kcal,p:r.p,c:r.c,f:r.f});return;}
   if(a==='chat-open'){openWin({type:'chat'});return;}
   if(a==='plan-open'){openDrawer({type:'plan'});return;}
   if(a==='plan-regen'){genPlan();renderDrawer();return;}
@@ -1833,7 +1837,7 @@ document.addEventListener('click',e=>{
   if(a==='shop-toggle'){const it=S.shop.find(s=>s.id===id);it.checked=!it.checked;render();return;}
   if(a==='shop-del'){destructive(()=>{S.shop=S.shop.filter(s=>s.id!==id);},'已删除采购项');return;}
   if(a==='shop-up'||a==='shop-down'){const idx=S.shop.findIndex(s=>s.id===id);const j=idx+(a==='shop-up'?-1:1);if(j<0||j>=S.shop.length)return;[S.shop[idx],S.shop[j]]=[S.shop[j],S.shop[idx]];render();return;}
-  if(a==='shop-stock'){const done=S.shop.filter(s=>s.checked);done.forEach(s=>{if(!S.pantry.some(p=>p.name===s.name))S.pantry.unshift({id:uid('p'),name:s.name,qty:s.amount||'1 份',store:'位置待确认',days:5,icon:'leaf'});});S.shop=S.shop.filter(s=>!s.checked);render();toast(`已入库 ${done.length} 项，存放方式待确认`);return;}
+  if(a==='shop-stock'){const done=S.shop.filter(s=>s.checked);done.forEach(s=>{S.pantry.unshift({id:uid('p'),name:s.name,qty:String(s.amount||'').trim(),store:'位置待确认',days:null,icon:iconFor(s.name)});});S.shop=S.shop.filter(s=>!s.checked);render();toast(`已入库 ${done.length} 批食材，存放方式和保鲜期待确认`);return;}
   if(a==='like'){const p=S.posts.find(x=>x.id===id);if(!p)return;p.liked=!p.liked;p.likes+=p.liked?1:-1;patchCommBody();if(W&&W.type==='pd'&&W.id===id){const i=$('#pdInput');if(i)W.pdDraft=i.value;renderWin();}return;}
   if(a==='post-open'){openWin({type:'post',topic:'寻味'});return;}
   if(a==='share-day'){const names=S.meals.map(m=>m.name).join('、')||'今天还没记录';openWin({type:'post',topic:'寻味',body:`今天吃了：${names}。已知热量 ${consumed()} kcal，饮水 ${S.water} ml。好好吃饭，慢慢记录。`});return;}
@@ -1883,9 +1887,10 @@ document.addEventListener('submit',e=>{
   if(fid==='mealForm'){const id=fd.get('id');const kcal=fd.get('kcal')===''?null:+fd.get('kcal');
     const rec={id:id||uid('m'),slot:fd.get('slot'),name:String(fd.get('name')).trim(),amount:String(fd.get('amount')||'').trim(),kcal,p:+fd.get('p')||0,c:+fd.get('c')||0,f:+fd.get('f')||0,time:fd.get('time')||'12:00'};
     if(id){S.meals=S.meals.map(m=>m.id===id?rec:m);}else S.meals.unshift(rec);
+    if(W&&W.queueId!=null)S.queue=S.queue.filter(q=>q!==W.queueId);
     closeWin();closeDrawer();render();return;}
   if(fid==='ingForm'){const id=fd.get('id');const name=String(fd.get('name')).trim();
-    const rec={id:id||uid('p'),name,qty:String(fd.get('qty')).trim()||'1 份',store:fd.get('store'),days:Math.max(0,+fd.get('days')||0),icon:iconFor(name)};
+    const rec={id:id||uid('p'),name,qty:String(fd.get('qty')||'').trim(),store:fd.get('store'),days:knownDays(fd.get('days')),icon:iconFor(name)};
     if(id)S.pantry=S.pantry.map(p=>p.id===id?rec:p);else S.pantry.unshift(rec);
     closeWin();closeDrawer();render();toast(id?'食材已更新':'已录入保鲜库');return;}
   if(fid==='recipeForm'){const title=String(fd.get('title')).trim();if(!title)return;
@@ -1907,7 +1912,7 @@ q.addEventListener('input',()=>{
   const ss=S.shop.filter(x=>hit(x.name)).slice(0,3);
   const cs=S.posts.filter(p=>hit(p.content)||hit(p.user)).slice(0,3);
   pop.innerHTML=(rs.length?`<h5>菜谱</h5>`+rs.map(r=>`<button data-a="recipe" data-id="${r.id}">${icon('book')} ${esc(r.title)}<small class="num">${r.kcal} kcal</small></button>`).join(''):'')
-   +(ps.length?`<h5>食材</h5>`+ps.map(p=>`<button data-a="ing-edit" data-id="${p.id}">${icon(p.icon)} ${esc(p.name)}<small>${esc(p.store)} · ${p.days} 天</small></button>`).join(''):'')
+   +(ps.length?`<h5>食材</h5>`+ps.map(p=>`<button data-a="ing-edit" data-id="${p.id}">${icon(p.icon)} ${esc(p.name)}<small>${esc(p.store)} · ${expiryLabel(p)}</small></button>`).join(''):'')
    +(ss.length?`<h5>采购</h5>`+ss.map(x=>`<button data-a="nav" data-v="assets">${icon('cart')} ${esc(x.name)}<small>${x.checked?'已买':'待买'}</small></button>`).join(''):'')
    +(cs.length?`<h5>动态</h5>`+cs.map(p=>`<button data-a="nav" data-v="community">${icon('users')} ${esc(p.user)}<small>${p.likes} 赞</small></button>`).join(''):'')
    ||`<p class="none">没有找到「${esc(s)}」相关内容</p>`;

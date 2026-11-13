@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="食光烙记 —— 把手边的食材，做成今天的一餐。记下买来的食材，找到能做的菜，也留住每天吃过的饭。">
+<title>食光烙记 · 把日常，做成好好的一餐</title>
+<link rel="icon" type="image/png" href="https://dietdigidose.top/logo.png?v=20260728">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700;900&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<script>document.documentElement.classList.add('js');if(document.visibilityState!=='hidden')document.documentElement.classList.add('anim');</script>
+<style>
+/* ============ 色彩系统：logo 同源六色（炭 / 深绿 / 森林绿 / 橄榄绿 / 驼 / 米） ============ */
+:root{
+  --paper:#f4f1ea;        /* 米色浅调 */
+  --paper-2:#e8e2d6;      /* 米色中调 */
+  --card:#fbf9f4;         /* 卡片纸面 */
+  --ink:#333333;          /* logo 炭色 */
+  --night:#104020;        /* logo 深绿 · 夜 */
+  --night-2:#1b4a2b;
+  --green:#527334;        /* logo 森林绿 · 主色 */
+  --green-deep:#104020;
+  --leaf:#789050;         /* logo 橄榄绿 */
+  --sand:#c5b5a5;         /* logo 表盘米 */
+  --tan:#a89883;          /* logo 外环驼 */
+  --taupe:#6f6558;        /* 驼色深调 · 信息 */
+  --ok:#527334;
+  --warn:#8a7a5c;
+  --danger:#3b3b3b;
+  --line:rgba(var(--ink-rgb),.14);
+  --muted:rgba(var(--ink-rgb),.7);
+  --np:#f4f1ea;           /* 夜间纸色文字 */
+  --nm:rgba(var(--np-rgb),.62);
+  --nl:rgba(var(--np-rgb),.14);
+  --paper-rgb:244,241,234;
+  --card-rgb:251,249,244;
+  --ink-rgb:51,51,51;
+  --night-rgb:16,64,32;
+  --green-rgb:82,115,52;
+  --deep-rgb:16,64,32;
+  --leaf-rgb:120,144,80;
+  --sand-rgb:197,181,165;
+  --tan-rgb:168,152,131;
+  --np-rgb:244,241,234;
+  --ok-rgb:82,115,52;
+  --danger-rgb:59,59,59;
+  --serif:'Noto Serif SC','Songti SC','SimSun',serif;
+  --sans:'Noto Sans SC','PingFang SC','Microsoft YaHei',sans-serif;
+  --nav-h:72px;
+  --r-lg:22px;
+  --shadow:0 18px 50px -18px rgba(var(--ink-rgb),.28);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--sans);
+  background:var(--paper);
+  color:var(--ink);
+  font-size:16px;line-height:1.75;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+::selection{background:rgba(var(--sand-rgb),.45)}
+/* 滚动条：纸面轨道 + 森林绿滑块 + 橄榄绿悬停 */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:var(--paper-2)}
+::-webkit-scrollbar-thumb{background:rgba(var(--green-rgb),.55);border-radius:6px;border:2px solid var(--paper-2)}
+::-webkit-scrollbar-thumb:hover{background:var(--leaf)}
+html{scrollbar-width:thin;scrollbar-color:rgba(var(--green-rgb),.55) var(--paper-2)}
+.dark-scroll::-webkit-scrollbar-track{background:transparent}
+.dark-scroll::-webkit-scrollbar-thumb{background:rgba(var(--np-rgb),.25);border:2px solid transparent}
+.dark-scroll::-webkit-scrollbar-thumb:hover{background:var(--sand)}
+.dark-scroll{scrollbar-width:thin;scrollbar-color:rgba(var(--np-rgb),.25) transparent}
+
+img{max-width:100%;display:block}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+:focus-visible{outline:2px solid var(--leaf);outline-offset:3px;border-radius:4px}
+section{scroll-margin-top:calc(var(--nav-h) + 16px)}
+.wrap{max-width:1180px;margin:0 auto;padding:0 clamp(20px,4vw,40px)}
+.ic{width:1.15em;height:1.15em;flex:none;display:inline-block;vertical-align:-.22em}
+[data-icon]{display:inline-flex;align-items:center;justify-content:center}
+
+/* 纸纹颗粒 */
+.grain{position:fixed;inset:0;z-index:60;pointer-events:none;opacity:.05;mix-blend-mode:multiply;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");}
+
+.skip{position:fixed;top:-60px;left:16px;z-index:200;background:var(--ink);color:var(--np);padding:10px 18px;border-radius:999px;transition:top .25s}
+.skip:focus{top:12px}
+
+.demo,.menu-overlay,footer,.toast,.cta-panel,.lightbox{--ok:#789050;--ok-rgb:120,144,80;--warn:#c5b5a5;--danger:#c5b5a5;--danger-rgb:197,181,165;--taupe:#c5b5a5}
+.demo .sec-eyebrow b,.cta-panel .sec-eyebrow b{color:var(--sand)}
+
+/* ============ 导航 ============ */
+.nav{position:fixed;top:0;left:0;right:0;z-index:70;height:var(--nav-h);
+  background:rgba(var(--paper-rgb),.86);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-bottom:1px solid transparent;transition:border-color .3s, box-shadow .3s}
+.nav.scrolled{border-bottom-color:var(--line);box-shadow:0 8px 30px -18px rgba(var(--ink-rgb),.35)}
+.nav-in{max-width:1180px;margin:0 auto;height:100%;padding:0 clamp(20px,4vw,40px);display:flex;align-items:center;gap:28px}
+.brand{display:flex;align-items:center;gap:12px;flex:none}
+.logo{display:block;width:auto}
+.brand .logo{height:42px;filter:drop-shadow(0 4px 10px rgba(var(--ink-rgb),.18))}
+.logo-coin{display:grid;place-items:center;background:var(--card);border:1px solid var(--line);border-radius:50%;box-shadow:0 8px 18px -8px rgba(var(--ink-rgb),.4)}
+.foot-brand .logo-coin{width:54px;height:54px}
+.foot-brand .logo-coin .logo{height:42px}
+.brand-txt{line-height:1.25}
+.brand-txt b{font-family:var(--serif);font-size:18px;font-weight:900;letter-spacing:.06em;display:block}
+.brand-txt small{font-size:10.5px;color:var(--muted);letter-spacing:.14em}
+.nav-links{display:flex;gap:6px;margin-left:auto}
+.nav-links a{position:relative;padding:8px 14px;font-size:14.5px;font-weight:500;color:var(--muted);border-radius:999px;transition:color .25s,background .25s}
+.nav-links a:hover{color:var(--ink);background:rgba(var(--green-rgb),.08)}
+.nav-links a[aria-current="true"]{color:var(--green-deep);background:rgba(var(--green-rgb),.12)}
+.nav-cta{flex:none}
+.progress{position:absolute;left:0;bottom:-1px;height:2.5px;width:0;background:linear-gradient(90deg,var(--green),var(--sand),var(--leaf));transition:width .12s linear}
+.burger{display:none;width:44px;height:44px;position:relative;flex:none}
+.burger i{position:absolute;left:11px;right:11px;height:2px;background:var(--ink);border-radius:2px;transition:.3s}
+.burger i:nth-child(1){top:16px}.burger i:nth-child(2){top:22px}.burger i:nth-child(3){top:28px}
+.burger[aria-expanded="true"] i:nth-child(1){top:22px;transform:rotate(45deg)}
+.burger[aria-expanded="true"] i:nth-child(2){opacity:0}
+.burger[aria-expanded="true"] i:nth-child(3){top:22px;transform:rotate(-45deg)}
+
+.menu-overlay{position:fixed;inset:0;z-index:80;background:var(--night);color:var(--np);
+  display:flex;flex-direction:column;justify-content:center;padding:0 clamp(28px,8vw,80px);
+  transform:translateY(-102%);transition:transform .5s cubic-bezier(.7,0,.2,1);visibility:hidden}
+.menu-overlay.open{transform:none;visibility:visible}
+.menu-overlay a.mlink{font-family:var(--serif);font-size:clamp(28px,7vw,44px);font-weight:900;padding:14px 0;border-bottom:1px solid var(--nl);display:flex;align-items:baseline;gap:16px;opacity:0;transform:translateY(18px);transition:.5s}
+.menu-overlay.open a.mlink{opacity:1;transform:none}
+.menu-overlay a.mlink small{font-family:var(--sans);font-size:12px;color:var(--sand);letter-spacing:.2em}
+.menu-overlay .m-foot{margin-top:28px;font-size:13px;color:var(--nm)}
+.menu-close{position:absolute;top:18px;right:22px;width:46px;height:46px;border:1px solid var(--nl);border-radius:50%;display:grid;place-items:center;color:var(--np)}
+
+/* ============ 按钮 ============ */
+.btn{display:inline-flex;align-items:center;gap:9px;padding:14px 26px;border-radius:999px;font-size:15px;font-weight:700;letter-spacing:.02em;transition:transform .25s,box-shadow .25s,background .25s,border-color .25s;white-space:nowrap}
+.btn:hover{transform:translateY(-2px)}
+.btn:active{transform:translateY(0)}
+.btn-ink{background:var(--ink);color:var(--np);box-shadow:0 12px 26px -12px rgba(var(--ink-rgb),.55)}
+.btn-ink:hover{background:var(--green-deep);box-shadow:0 16px 32px -12px rgba(var(--deep-rgb),.6)}
+.btn-sand{background:var(--sand);color:var(--ink);box-shadow:0 12px 26px -12px rgba(var(--sand-rgb),.7)}
+.btn-sand:hover{background:#d6c9b9}
+.btn-ghost{border:1.5px solid rgba(var(--ink-rgb),.3);color:var(--ink)}
+.btn-ghost:hover{border-color:var(--ink);background:rgba(var(--ink-rgb),.05)}
+.btn-paper{border:1.5px solid rgba(var(--np-rgb),.4);color:var(--np)}
+.btn-paper:hover{border-color:var(--np);background:rgba(var(--np-rgb),.08)}
+.btn-sm{padding:9px 16px;font-size:13px}
+
+/* ============ Hero ============ */
+.hero{position:relative;overflow:hidden;padding:calc(var(--nav-h) + clamp(36px,7vh,84px)) 0 clamp(48px,7vh,88px);
+  background:
+    radial-gradient(900px 520px at 88% -10%, rgba(var(--leaf-rgb),.22), transparent 60%),
+    radial-gradient(760px 480px at -12% 22%, rgba(var(--sand-rgb),.20), transparent 60%),
+    radial-gradient(600px 600px at 55% 115%, rgba(var(--tan-rgb),.14), transparent 60%),
+    var(--paper);}
+.blob{position:absolute;border-radius:50%;filter:blur(70px);pointer-events:none;opacity:.5}
+.blob-a{width:420px;height:420px;background:rgba(var(--sand-rgb),.35);top:-120px;right:6%;animation:drift 16s ease-in-out infinite alternate}
+.blob-b{width:360px;height:360px;background:rgba(var(--leaf-rgb),.32);bottom:-140px;left:-80px;animation:drift 20s ease-in-out infinite alternate-reverse}
+@keyframes drift{from{transform:translate(0,0) scale(1)}to{transform:translate(46px,30px) scale(1.12)}}
+.hero-grid{position:relative;display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(32px,5vw,72px);align-items:center}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;font-size:12.5px;font-weight:700;letter-spacing:.32em;color:var(--green-deep)}
+.eyebrow::before{content:"";width:26px;height:2px;background:var(--leaf)}
+.ver-chip{display:inline-flex;align-items:center;gap:8px;margin-top:16px;padding:7px 14px;border:1px solid var(--line);border-radius:999px;font-size:12.5px;color:var(--muted);background:rgba(var(--card-rgb),.7);transition:border-color .25s,color .25s}
+.ver-chip:hover{border-color:var(--leaf);color:var(--ink)}
+.ver-chip i{width:7px;height:7px;border-radius:50%;background:var(--leaf);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(var(--leaf-rgb),.45)}55%{box-shadow:0 0 0 7px rgba(var(--leaf-rgb),0)}}
+.hero h1{font-family:var(--serif);font-weight:900;font-size:clamp(2.5rem,5.4vw,4.2rem);line-height:1.22;letter-spacing:.02em;margin:22px 0 20px}
+.mark{position:relative;white-space:nowrap;color:var(--green-deep)}
+.mark svg{position:absolute;left:-3%;bottom:-.14em;width:106%;height:.4em;overflow:visible}
+.mark svg path{stroke:var(--leaf);stroke-width:5;fill:none;stroke-linecap:round;stroke-dasharray:220;stroke-dashoffset:220;transition:stroke-dashoffset 1.1s ease .95s}
+.ready .mark svg path{stroke-dashoffset:0}
+.hero-sub{font-size:clamp(15.5px,1.6vw,18px);color:var(--muted);max-width:34em}
+.hero-cta{display:flex;flex-wrap:wrap;gap:14px;margin-top:30px}
+.hero-note{display:flex;align-items:center;gap:9px;margin-top:22px;font-size:13px;color:var(--muted)}
+.hero-note i{width:8px;height:8px;border-radius:50%;background:var(--leaf);animation:pulse 2.4s infinite;flex:none}
+
+.photo-stage{position:relative;justify-self:end;width:min(100%,480px)}
+.photo-card{position:relative;background:var(--card);border:1px solid var(--line);border-radius:26px;padding:14px 14px 16px;box-shadow:var(--shadow);transform:rotate(1.6deg)}
+.photo-card img{width:100%;aspect-ratio:4/4.6;object-fit:cover;border-radius:150px 150px 16px 16px;background:var(--paper-2)}
+.photo-cap{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 6px 0}
+.photo-cap b{font-family:var(--serif);font-size:16px}
+.photo-cap small{display:block;font-size:12px;color:var(--muted);font-weight:400;margin-top:2px}
+.ai-tag{flex:none;font-size:11px;padding:4px 10px;border-radius:999px;background:rgba(var(--tan-rgb),.14);color:var(--taupe);border:1px solid rgba(var(--tan-rgb),.45)}
+.orbit-badge{position:absolute;top:-36px;right:-22px;width:128px;height:128px;z-index:3}
+.orbit-text{width:100%;height:100%;animation:spin 22s linear infinite}
+.orbit-text text{font-size:11.5px;letter-spacing:3.5px;fill:var(--ink);font-weight:500}
+@keyframes spin{to{transform:rotate(360deg)}}
+.orbit-center{position:absolute;inset:0;display:grid;place-items:center}
+.orbit-center .logo-coin{width:60px;height:60px}
+.orbit-center .logo-coin .logo{height:48px}
+.chip-float{position:absolute;z-index:4;display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:9px 15px;font-size:13px;font-weight:500;box-shadow:0 12px 26px -12px rgba(var(--ink-rgb),.4)}
+.chip-float .ic{color:var(--green-deep);width:1.35em;height:1.35em}
+.chip-float small{color:var(--muted);font-weight:400}
+.chip-a{top:16%;left:-9%}.chip-b{bottom:30%;right:-7%}.chip-c{bottom:-5%;left:10%}
+.chip-inner{display:flex;align-items:center;gap:8px;animation:bob 5.5s ease-in-out infinite alternate}
+.chip-b .chip-inner{animation-delay:-1.8s}.chip-c .chip-inner{animation-delay:-3.4s}
+@keyframes bob{from{transform:translateY(-5px)}to{transform:translateY(6px)}}
+
+/* 跑马灯 */
+.marquee{background:var(--ink);color:var(--np);overflow:hidden;padding:15px 0;border-top:3px solid var(--leaf)}
+.marquee-track{display:flex;width:max-content;animation:mq 30s linear infinite;gap:0}
+.marquee:hover .marquee-track{animation-play-state:paused}
+.mq-set{display:flex;align-items:center;flex:none}
+.mq-set span{font-family:var(--serif);font-size:15px;font-weight:700;letter-spacing:.14em;padding:0 22px;white-space:nowrap}
+.dia{width:8px;height:8px;background:var(--sand);transform:rotate(45deg);flex:none}
+@keyframes mq{to{transform:translateX(-50%)}}
+
+/* ============ 通用 section ============ */
+.section{padding:clamp(72px,10vh,120px) 0;position:relative}
+.sec-eyebrow{display:flex;align-items:center;gap:12px;font-size:12.5px;font-weight:700;letter-spacing:.3em;color:var(--muted)}
+.sec-eyebrow b{color:var(--green);font-weight:700}
+.sec-eyebrow::after{content:"";flex:0 0 42px;height:1px;background:var(--line)}
+h2{font-family:var(--serif);font-weight:900;font-size:clamp(1.85rem,3.4vw,2.75rem);line-height:1.3;letter-spacing:.02em;margin:18px 0 16px}
+.sec-copy{color:var(--muted);max-width:36em}
+
+/* 揭示动画：仅在页面可见（.anim）时启用隐藏初态，保证冻结/后台环境下内容默认可见 */
+.js.anim [data-reveal]{opacity:0;transform:translateY(28px);transition:opacity .8s ease var(--d,0s),transform .8s cubic-bezier(.2,.7,.2,1) var(--d,0s)}
+.js.anim [data-reveal].in{opacity:1;transform:none}
+.js.anim .h-stage{opacity:0;transform:translateY(26px);transition:opacity .9s ease var(--d,0s),transform .9s cubic-bezier(.2,.7,.2,1) var(--d,0s)}
+.js.anim.ready .h-stage{opacity:1;transform:none}
+
+/* ============ 01 日常 ============ */
+.daily-grid{display:grid;grid-template-columns:5fr 7fr;gap:clamp(32px,5vw,80px);align-items:start}
+.daily-left{position:sticky;top:calc(var(--nav-h) + 32px)}
+.daily-tags{display:flex;gap:10px;margin-top:26px;flex-wrap:wrap}
+.daily-tags span{font-size:12.5px;padding:6px 14px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:var(--card)}
+.steps{display:flex;flex-direction:column;gap:22px;position:relative}
+.steps::before{content:"";position:absolute;left:31px;top:30px;bottom:30px;width:2px;background:repeating-linear-gradient(180deg,var(--line) 0 6px,transparent 6px 12px)}
+.step{position:relative;display:grid;grid-template-columns:64px 1fr;gap:20px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:26px 26px 24px;transition:transform .35s,box-shadow .35s,border-color .35s}
+.step:hover{transform:translateY(-5px);box-shadow:var(--shadow);border-color:rgba(var(--green-rgb),.4)}
+.step-num{position:relative;z-index:1;width:64px;height:64px;border-radius:18px;background:var(--paper);border:1px solid var(--line);display:grid;place-items:center;color:var(--green-deep)}
+.step-num .ic{width:26px;height:26px}
+.step-label{font-size:12px;font-weight:700;letter-spacing:.24em;color:var(--green)}
+.step h3{font-family:var(--serif);font-size:clamp(18px,2vw,21px);font-weight:700;margin:6px 0 8px}
+.step p{font-size:14.5px;color:var(--muted)}
+.step-tags{margin-top:12px;font-size:12.5px;color:var(--green-deep);font-weight:500;letter-spacing:.04em}
+.step-ghost{position:absolute;right:18px;top:10px;font-family:var(--serif);font-weight:900;font-size:64px;color:rgba(var(--ink-rgb),.06);line-height:1;pointer-events:none}
+
+/* ============ 02 深夜厨房 · 互动演示 ============ */
+.night{background:
+  radial-gradient(1000px 500px at 15% 0%, rgba(var(--green-rgb),.35), transparent 55%),
+  radial-gradient(800px 500px at 95% 100%, rgba(var(--sand-rgb),.12), transparent 55%),
+  linear-gradient(180deg,var(--night) 0%,var(--night-2) 100%);
+  color:var(--np);border-top:3px solid var(--sand)}
+.night .sec-eyebrow{color:var(--nm)}
+.night .sec-eyebrow::after{background:var(--nl)}
+.night .sec-copy{color:var(--nm)}
+.demo-hint{display:flex;align-items:center;gap:10px;margin-top:18px;font-size:13.5px;color:var(--sand)}
+.demo-hint .ic{flex:none}
+.demo-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:20px}
+.demo-controls{display:flex;align-items:center;gap:10px;position:relative}
+.ctrl-btn{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border:1px solid var(--nl);border-radius:999px;font-size:13px;font-weight:500;color:var(--np);transition:border-color .25s,background .25s}
+.ctrl-btn:hover{border-color:var(--sand);background:rgba(var(--sand-rgb),.1)}
+.queue-chip b{background:var(--sand);color:var(--ink);min-width:20px;height:20px;border-radius:999px;display:grid;place-items:center;font-size:12px;padding:0 5px}
+.queue-panel{position:absolute;top:calc(100% + 10px);right:0;width:290px;background:var(--night-2);border:1px solid var(--nl);border-radius:16px;box-shadow:0 24px 50px -18px rgba(0,0,0,.6);padding:14px;z-index:20;display:none}
+.queue-panel.open{display:block}
+.queue-panel h4{font-size:13px;letter-spacing:.1em;color:var(--nm);font-weight:500;margin-bottom:8px}
+.queue-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 6px;border-bottom:1px dashed var(--nl);font-size:14px}
+.queue-row button{color:var(--nm);width:26px;height:26px;border-radius:50%;display:grid;place-items:center}
+.queue-row button:hover{color:var(--danger);background:rgba(var(--danger-rgb),.15)}
+.queue-empty{font-size:13px;color:var(--nm);padding:8px 6px}
+.queue-clear{margin-top:10px;width:100%;font-size:12.5px;color:var(--nm);padding:7px;border:1px dashed var(--nl);border-radius:10px}
+.queue-clear:hover{color:var(--danger);border-color:var(--danger)}
+
+.demo-grid{display:grid;grid-template-columns:390px 1fr;gap:24px;margin-top:36px;align-items:start}
+.panel{background:rgba(var(--np-rgb),.045);border:1px solid var(--nl);border-radius:var(--r-lg);padding:22px}
+.panel-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:16px}
+.panel-head h3{font-family:var(--serif);font-size:19px;font-weight:700}
+.panel-head small{font-size:12.5px;color:var(--nm)}
+.fridge-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.ing{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:11px 12px;border:1px solid var(--nl);border-radius:14px;text-align:left;transition:border-color .2s,background .2s,transform .2s;color:var(--np)}
+.ing:hover{border-color:rgba(var(--sand-rgb),.55);transform:translateY(-2px)}
+.ing .ic{width:22px;height:22px;color:var(--nm);transition:color .2s}
+.ing b{font-size:13.5px;font-weight:500}
+.ing small{font-size:11px;color:var(--nm)}
+.ing[aria-pressed="true"]{background:rgba(var(--sand-rgb),.13);border-color:var(--sand)}
+.ing[aria-pressed="true"] .ic{color:var(--sand)}
+.ing[aria-pressed="true"]::after{content:"";position:absolute;top:8px;right:8px;width:8px;height:8px;border-radius:50%;background:var(--sand);box-shadow:0 0 8px rgba(var(--sand-rgb),.8)}
+.fridge-foot{margin-top:16px;font-size:12.5px;color:var(--nm);display:flex;gap:8px;align-items:center}
+.fridge-foot .ic{color:var(--sand)}
+
+.result-list{max-height:560px;overflow-y:auto;padding-right:6px;display:flex;flex-direction:column;gap:12px}
+.empty-hint{padding:14px 16px;border:1px dashed rgba(var(--sand-rgb),.4);border-radius:14px;font-size:13.5px;color:var(--sand);margin-bottom:12px}
+.recipe{background:var(--night-2);border:1px solid var(--nl);border-radius:16px;padding:15px 17px;transition:border-color .25s,transform .25s}
+.recipe:hover{border-color:rgba(var(--sand-rgb),.5);transform:translateY(-2px)}
+.recipe-top{display:flex;align-items:flex-start;gap:12px}
+.recipe-main{flex:1;text-align:left;display:block}
+.recipe-name{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.recipe-name b{font-family:var(--serif);font-size:17.5px;font-weight:700}
+.rtag{font-size:11px;padding:3px 9px;border-radius:999px;background:rgba(var(--leaf-rgb),.16);color:var(--leaf);border:1px solid rgba(var(--leaf-rgb),.35)}
+.recipe-meta{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--nm);margin-top:5px}
+.recipe-meta .ic{width:1em;height:1em}
+.match{display:flex;align-items:center;gap:10px;margin-top:11px}
+.match-bar{flex:1;height:6px;border-radius:99px;background:rgba(var(--np-rgb),.12);overflow:hidden}
+.match-bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--tan),var(--sand));transition:width .5s cubic-bezier(.2,.7,.2,1)}
+.match.ok .match-bar i{background:linear-gradient(90deg,var(--leaf),#a9bd85)}
+.match em{font-style:normal;font-size:12px;color:var(--nm);flex:none;min-width:44px;text-align:right}
+.match.ok em{color:var(--leaf);font-weight:700}
+.miss{font-size:12.5px;color:var(--nm);margin-top:8px}
+.miss b{color:var(--sand);font-weight:500}
+.miss.ok{color:var(--leaf)}
+.queue-btn{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:8px 13px;border:1px solid var(--nl);border-radius:999px;color:var(--np);transition:.25s;white-space:nowrap}
+.queue-btn:hover{border-color:var(--sand);color:var(--sand)}
+.queue-btn.added{background:rgba(var(--ok-rgb),.2);border-color:var(--ok);color:var(--sand)}
+
+/* 详情 */
+.back-link{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--nm);margin-bottom:14px;transition:color .2s}
+.back-link:hover{color:var(--sand)}
+.detail-title{font-family:var(--serif);font-size:clamp(21px,2.4vw,26px);font-weight:900}
+.detail-desc{font-size:13.5px;color:var(--nm);margin-top:6px}
+.detail-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.detail-meta span{font-size:12px;padding:5px 12px;border:1px solid var(--nl);border-radius:999px;color:var(--nm);display:inline-flex;align-items:center;gap:6px}
+.tabs{display:flex;gap:4px;background:var(--night-2);border:1px solid var(--nl);border-radius:999px;padding:4px;margin:18px 0 16px;width:max-content;max-width:100%}
+.tabs button{padding:8px 18px;border-radius:999px;font-size:13px;font-weight:500;color:var(--nm);transition:.25s;white-space:nowrap}
+.tabs button[aria-selected="true"]{background:var(--sand);color:var(--ink);font-weight:700}
+.prep-list{list-style:none;display:flex;flex-direction:column;gap:6px}
+.prep-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;cursor:pointer;transition:background .2s;border:1px solid transparent}
+.prep-row:hover{background:rgba(var(--np-rgb),.05)}
+.prep-row input{position:absolute;opacity:0;width:1px;height:1px}
+.prep-row .box{width:21px;height:21px;flex:none;border:1.5px solid var(--nl);border-radius:7px;display:grid;place-items:center;transition:.2s;color:var(--np)}
+.prep-row .box .ic{width:13px;height:13px;opacity:0;transform:scale(.5);transition:.2s}
+.prep-row input:checked + .box{background:var(--ok);border-color:var(--ok)}
+.prep-row input:checked + .box .ic{opacity:1;transform:none}
+.prep-row input:focus-visible + .box{outline:2px solid var(--leaf);outline-offset:2px}
+.prep-row .pname{flex:1;font-size:14px}
+.prep-row .pamt{font-size:12.5px;color:var(--nm)}
+.prep-row:has(input:checked) .pname{color:var(--nm);text-decoration:line-through;text-decoration-color:rgba(var(--sand-rgb),.6)}
+.prep-progress{display:flex;align-items:center;gap:12px;margin:14px 0 4px}
+.prep-progress .match-bar{flex:1}
+.prep-progress small{font-size:12.5px;color:var(--nm);flex:none}
+.pantry-note{margin-top:12px;font-size:12.5px;color:var(--nm);padding:10px 14px;border:1px dashed var(--nl);border-radius:12px}
+.pantry-note b{color:var(--np);font-weight:500}
+.steps-ol{list-style:none;counter-reset:s;display:flex;flex-direction:column;gap:14px}
+.steps-ol li{counter-increment:s;position:relative;padding-left:44px;font-size:14px;color:rgba(var(--np-rgb),.85)}
+.steps-ol li::before{content:counter(s);position:absolute;left:0;top:0;width:28px;height:28px;border-radius:50%;border:1.5px solid var(--sand);color:var(--sand);display:grid;place-items:center;font-size:13px;font-weight:700}
+.nutri-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.nutri{background:var(--night-2);border:1px solid var(--nl);border-radius:14px;padding:14px 12px;text-align:center}
+.nutri b{font-family:var(--serif);font-size:23px;font-weight:900;color:var(--sand);display:block;line-height:1.2}
+.nutri b small{font-size:12px;font-weight:400;color:var(--nm);margin-left:2px}
+.nutri span{font-size:12px;color:var(--nm)}
+.nutri.pending b{color:var(--warn);font-size:15px;font-family:var(--sans);font-weight:500;padding:6px 0}
+.nutri-note{display:flex;gap:9px;margin-top:14px;font-size:12.5px;color:var(--nm);align-items:flex-start}
+.nutri-note .ic{color:var(--taupe);flex:none;margin-top:2px}
+.estimate-tag{flex:none;font-size:11px;padding:2px 9px;border-radius:999px;background:rgba(var(--tan-rgb),.16);color:var(--taupe);border:1px solid rgba(var(--tan-rgb),.4)}
+.detail-foot{display:flex;align-items:center;gap:14px;margin-top:20px;flex-wrap:wrap}
+.detail-foot .queue-btn{font-size:13px;padding:11px 20px}
+.detail-link{font-size:13px;color:var(--sand);display:inline-flex;align-items:center;gap:6px}
+.detail-link:hover{text-decoration:underline}
+
+.mini-feats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:28px}
+.mini-feat{border:1px solid var(--nl);border-radius:16px;padding:18px;background:rgba(var(--np-rgb),.03)}
+.mini-feat .ic{width:22px;height:22px;color:var(--sand)}
+.mini-feat b{display:block;font-size:15px;margin:10px 0 5px}
+.mini-feat p{font-size:13px;color:var(--nm)}
+.shot-card{display:flex;align-items:center;gap:16px;width:100%;text-align:left;margin-top:16px;border:1px solid var(--nl);border-radius:16px;padding:14px 18px;background:rgba(var(--np-rgb),.03);transition:border-color .25s;color:var(--np)}
+.shot-card:hover{border-color:var(--sand)}
+.shot-card img{width:96px;height:70px;object-fit:cover;border-radius:10px;border:1px solid var(--nl);flex:none}
+.shot-card b{font-size:14.5px;display:block}
+.shot-card small{font-size:12.5px;color:var(--nm)}
+.shot-card .go{margin-left:auto;color:var(--sand);flex:none}
+.demo-cta{margin-top:30px;display:flex;justify-content:center}
+
+/* ============ 03 手记 ============ */
+.journal-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:18px}
+.link-arrow{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:var(--green-deep);border-bottom:1.5px solid rgba(var(--green-rgb),.35);padding-bottom:3px;transition:gap .25s,border-color .25s}
+.link-arrow:hover{gap:12px;border-color:var(--green);color:var(--green)}
+.journal-grid{display:grid;grid-template-columns:7fr 5fr;gap:22px;margin-top:40px}
+.jcard{position:relative;overflow:hidden;display:flex;flex-direction:column;background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:30px 30px 26px;transition:transform .35s,box-shadow .35s,border-color .35s}
+.jcard:hover{transform:translateY(-6px);box-shadow:var(--shadow);border-color:rgba(var(--leaf-rgb),.35)}
+.jcard::after{content:"记";position:absolute;right:-8px;bottom:-38px;font-family:var(--serif);font-weight:900;font-size:150px;color:rgba(var(--ink-rgb),.045);pointer-events:none;line-height:1}
+.jcat{align-self:flex-start;font-size:11.5px;font-weight:700;letter-spacing:.12em;padding:5px 12px;border-radius:6px;transform:rotate(-1.5deg)}
+.jcat-green{background:rgba(var(--green-rgb),.1);color:var(--green);border:1px solid rgba(var(--green-rgb),.35)}
+.jcat-taupe{background:rgba(var(--tan-rgb),.14);color:var(--taupe);border:1px solid rgba(var(--tan-rgb),.45)}
+.jcard h3{font-family:var(--serif);font-weight:900;font-size:clamp(19px,2.2vw,25px);line-height:1.45;margin:16px 0 10px}
+.jcard p{font-size:14px;color:var(--muted);flex:1}
+.jfoot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:22px;font-size:12.5px;color:var(--muted)}
+.jfoot .go{display:inline-flex;align-items:center;gap:7px;font-weight:700;color:var(--green-deep);font-size:13px;transition:gap .25s,color .25s}
+.jcard:hover .jfoot .go{gap:12px;color:var(--green)}
+
+/* ============ 04 开始 ============ */
+.start{background:linear-gradient(180deg,var(--paper) 0%,var(--paper-2) 100%)}
+.cta-panel{position:relative;overflow:hidden;background:
+  radial-gradient(700px 340px at 20% 0%, rgba(var(--green-rgb),.5), transparent 60%),
+  radial-gradient(600px 300px at 90% 110%, rgba(var(--sand-rgb),.22), transparent 55%),
+  var(--night);color:var(--np);border-radius:30px;padding:clamp(40px,6vw,72px) clamp(24px,6vw,80px);text-align:center;border:1px solid rgba(var(--sand-rgb),.25)}
+.cta-panel h2{margin-top:14px}
+.cta-panel .sec-eyebrow{justify-content:center;color:var(--nm)}
+.cta-panel .sec-eyebrow::after{display:none}
+.cta-panel p{color:var(--nm);max-width:32em;margin:0 auto}
+.cta-btns{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin-top:32px}
+.cta-note{margin-top:20px;font-size:12.5px;color:var(--nm)}
+.faq{max-width:780px;margin:52px auto 0}
+.faq-item{border-bottom:1px solid var(--line)}
+.faq-q{width:100%;display:flex;align-items:center;justify-content:space-between;gap:16px;text-align:left;padding:20px 4px;font-size:16px;font-weight:700;font-family:var(--serif);transition:color .2s}
+.faq-q:hover{color:var(--green-deep)}
+.faq-q .pm{position:relative;width:30px;height:30px;flex:none;border:1px solid var(--line);border-radius:50%;transition:.3s}
+.faq-q .pm::before,.faq-q .pm::after{content:"";position:absolute;top:50%;left:50%;width:12px;height:1.8px;background:var(--ink);transform:translate(-50%,-50%);transition:.3s}
+.faq-q .pm::after{transform:translate(-50%,-50%) rotate(90deg)}
+.faq-item.open .pm{background:var(--leaf);border-color:var(--leaf);transform:rotate(45deg)}
+.faq-item.open .pm::before,.faq-item.open .pm::after{background:#f4f1ea}
+.faq-a{display:grid;grid-template-rows:0fr;transition:grid-template-rows .4s cubic-bezier(.2,.7,.2,1)}
+.faq-item.open .faq-a{grid-template-rows:1fr}
+.faq-a-in{overflow:hidden}
+.faq-a p{padding:0 4px 22px;font-size:14.5px;color:var(--muted);max-width:56em}
+
+/* ============ 页脚 ============ */
+footer{background:var(--night);color:var(--np);padding:64px 0 30px;border-top:3px solid var(--leaf)}
+.foot-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:32px}
+.foot-brand p{color:var(--nm);font-size:13.5px;margin-top:14px;max-width:22em}
+.foot-col h4{font-size:12px;letter-spacing:.24em;color:var(--nm);font-weight:500;margin-bottom:16px}
+.foot-col a{display:block;padding:6px 0;font-size:14px;color:rgba(var(--np-rgb),.82);transition:color .2s,transform .2s}
+.foot-col a:hover{color:var(--sand);transform:translateX(4px)}
+.foot-bottom{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-top:48px;padding-top:22px;border-top:1px solid var(--nl);font-size:12px;color:var(--nm)}
+.foot-bottom a{color:var(--nm);text-decoration:underline;text-decoration-color:rgba(var(--np-rgb),.25);text-underline-offset:3px}
+.foot-bottom a:hover{color:var(--sand)}
+.foot-credit{width:100%;font-size:11.5px;color:rgba(var(--np-rgb),.4)}
+.to-top{position:fixed;right:22px;bottom:22px;z-index:65;width:46px;height:46px;border-radius:50%;background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);display:grid;place-items:center;color:var(--ink);opacity:0;pointer-events:none;transform:translateY(12px);transition:.35s}
+.to-top.show{opacity:1;pointer-events:auto;transform:none}
+.to-top:hover{background:var(--sand);border-color:var(--sand)}
+
+/* ============ 灯箱 & 通知 ============ */
+.lightbox{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:rgba(var(--night-rgb),.78);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);opacity:0;visibility:hidden;transition:.35s}
+.lightbox.open{opacity:1;visibility:visible}
+.lightbox figure{max-width:920px;width:100%;transform:translateY(20px) scale(.97);transition:.4s cubic-bezier(.2,.7,.2,1)}
+.lightbox.open figure{transform:none}
+.lightbox img{width:100%;border-radius:16px;border:1px solid var(--nl);box-shadow:0 40px 90px -30px rgba(0,0,0,.8)}
+.lightbox figcaption{display:flex;align-items:center;justify-content:space-between;gap:14px;color:var(--nm);font-size:13px;margin-top:14px}
+.lightbox-close{position:absolute;top:20px;right:22px;width:48px;height:48px;border-radius:50%;border:1px solid var(--nl);color:var(--np);display:grid;place-items:center;transition:.25s}
+.lightbox-close:hover{border-color:var(--sand);color:var(--sand);transform:rotate(90deg)}
+.toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,20px);z-index:110;display:flex;align-items:center;gap:10px;background:var(--night);color:var(--np);border:1px solid rgba(var(--sand-rgb),.45);padding:13px 22px;border-radius:999px;font-size:14px;box-shadow:0 20px 44px -14px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:.35s cubic-bezier(.2,.7,.2,1);max-width:min(92vw,480px)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast .ic{color:var(--sand);flex:none}
+
+/* ============ 响应式 ============ */
+@media (max-width:1080px){
+  .hero-grid{grid-template-columns:1fr;gap:56px}
+  .photo-stage{justify-self:center;width:min(100%,440px)}
+  .daily-grid{grid-template-columns:1fr}
+  .daily-left{position:static}
+  .demo-grid{grid-template-columns:1fr}
+  .result-list{max-height:480px}
+  .journal-grid{grid-template-columns:1fr}
+  .foot-grid{grid-template-columns:1fr 1fr}
+}
+@media (max-width:760px){
+  .nav-links{display:none}
+  .nav-cta{display:none}
+  .burger{display:block;margin-left:auto}
+  .nav-in{gap:14px}
+  .chip-a{left:-4px;top:10%}
+  .chip-b{right:-4px}
+  .chip-c{left:6%}
+  .orbit-badge{width:104px;height:104px;top:-24px;right:-8px}
+  .orbit-center .logo-coin{width:48px;height:48px}
+  .orbit-center .logo-coin .logo{height:38px}
+  .mini-feats{grid-template-columns:1fr}
+  .nutri-grid{grid-template-columns:repeat(2,1fr)}
+  .fridge-grid{grid-template-columns:repeat(3,1fr)}
+  .step{grid-template-columns:52px 1fr;padding:20px}
+  .step-num{width:52px;height:52px;border-radius:14px}
+  .steps::before{left:25px}
+  .tabs{width:100%;overflow-x:auto}
+  .tabs button{flex:1;padding:10px}
+  .ctrl-btn{padding:11px 16px}
+  .queue-btn{padding:10px 15px}
+  .foot-grid{grid-template-columns:1fr}
+  .demo-controls{flex-wrap:wrap}
+  .queue-panel{right:auto;left:0}
+  .hero-cta .btn{flex:1;justify-content:center}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  .js [data-reveal],.js .h-stage{opacity:1;transform:none}
+  .mark svg path{stroke-dashoffset:0}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<div class="grain" aria-hidden="true"></div>
+
+<!-- ============ 导航 ============ -->
+<header class="nav" id="nav">
+  <div class="nav-in">
+    <a class="brand" href="#top" aria-label="食光烙记首页">
+      <img class="logo" src="https://dietdigidose.top/logo.png?v=20260728" alt="食光烙记标志">
+      <span class="brand-txt"><b>食光烙记</b><small>把日子过进一餐一饭</small></span>
+    </a>
+    <nav class="nav-links" aria-label="主导航">
+      <a href="#daily" data-sec="daily">一餐的日常</a>
+      <a href="#demo" data-sec="demo">看看食光</a>
+      <a href="#journal" data-sec="journal">食光手记</a>
+      <a href="#start" data-sec="start">开始使用</a>
+    </nav>
+    <a class="btn btn-ink btn-sm nav-cta" href="https://dietdigidose.top/app/" target="_blank" rel="noopener">打开网页版 <span data-icon="external"></span></a>
+    <button class="burger" id="burger" aria-expanded="false" aria-controls="menuOverlay" aria-label="打开导航菜单"><i></i><i></i><i></i></button>
+  </div>
+  <div class="progress" id="progress" aria-hidden="true"></div>
+</header>
+
+<div class="menu-overlay" id="menuOverlay" aria-hidden="true">
+  <button class="menu-close" id="menuClose" aria-label="关闭导航菜单"><span data-icon="close"></span></button>
+  <a class="mlink" href="#daily" style="transition-delay:.08s"><small>01</small>一餐的日常</a>
+  <a class="mlink" href="#demo" style="transition-delay:.14s"><small>02</small>看看食光</a>
+  <a class="mlink" href="#journal" style="transition-delay:.2s"><small>03</small>食光手记</a>
+  <a class="mlink" href="#start" style="transition-delay:.26s"><small>04</small>开始使用</a>
+  <a class="mlink" href="https://dietdigidose.top/app/" target="_blank" rel="noopener" style="transition-delay:.32s"><small>↗</small>打开网页版</a>
+  <p class="m-foot">食光烙记 · 好好吃饭，慢慢记录。</p>
+</div>
+
+<main id="main">
+<!-- ============ Hero ============ -->
+<section class="hero" id="top">
+  <div class="blob blob-a" aria-hidden="true"></div>
+  <div class="blob blob-b" aria-hidden="true"></div>
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow h-stage" style="--d:.05s">给认真吃饭的每一天</p><br>
+      <a class="ver-chip h-stage" style="--d:.12s" href="https://dietdigidose.top/changelog" target="_blank" rel="noopener"><i aria-hidden="true"></i>26w41a 内测版本 · 查看足迹 →</a>
+      <h1 class="h-stage" style="--d:.2s">把手边的食材，<br>做成<span class="mark">今天的一餐<svg viewBox="0 0 200 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="220" d="M4 13 C 58 5, 142 21, 196 9"/></svg></span>。</h1>
+      <p class="hero-sub h-stage" style="--d:.3s">记下买来的食材，找到能做的菜，<br>也留住每天吃过的饭。</p>
+      <div class="hero-cta h-stage" style="--d:.4s">
+        <a class="btn btn-ink" href="https://dietdigidose.top/app/" target="_blank" rel="noopener">打开网页版 <span data-icon="external"></span></a>
+        <a class="btn btn-ghost" href="#daily">看看怎么用 <span data-icon="down"></span></a>
+      </div>
+      <p class="hero-note h-stage" style="--d:.5s"><i aria-hidden="true"></i>内测进行中 · 可先浏览食谱，登录后保存个人记录</p>
+    </div>
+    <div class="photo-stage h-stage" style="--d:.35s" id="photoStage">
+      <div data-depth="10">
+        <figure class="photo-card">
+          <img src="https://dietdigidose.top/landing/meal-bowl.webp" alt="自然光下的洋葱肥牛饭，盛在陶碗里，旁边放着筷子" fetchpriority="high">
+          <figcaption class="photo-cap">
+            <span><b>洋葱肥牛饭</b><small>一碗热饭，把今天安顿好。</small></span>
+            <span class="ai-tag">AI 示意图</span>
+          </figcaption>
+        </figure>
+      </div>
+      <div class="orbit-badge" data-depth="16" aria-hidden="true">
+        <svg class="orbit-text" viewBox="0 0 128 128">
+          <defs><path id="orbitPath" d="M64,64 m-46,0 a46,46 0 1,1 92,0 a46,46 0 1,1 -92,0"/></defs>
+          <text><textPath href="#orbitPath">好好吃饭 · 慢慢记录 · 食光烙记 · </textPath></text>
+        </svg>
+        <span class="orbit-center"><span class="logo-coin"><img class="logo" src="https://dietdigidose.top/logo.png?v=20260728" alt=""></span></span>
+      </div>
+      <div class="chip-float chip-a" data-depth="24"><span class="chip-inner"><span data-icon="onion"></span>洋葱 <small>半个</small></span></div>
+      <div class="chip-float chip-b" data-depth="32"><span class="chip-inner"><span data-icon="beef"></span>肥牛卷 <small>200 g</small></span></div>
+      <div class="chip-float chip-c" data-depth="18"><span class="chip-inner"><span data-icon="rice"></span>米饭 <small>一碗</small></span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 跑马灯 -->
+<div class="marquee" aria-hidden="true">
+  <div class="marquee-track" id="mqTrack">
+    <div class="mq-set">
+      <span>食材库存</span><i class="dia"></i><span>食谱查找</span><i class="dia"></i><span>备料清单</span><i class="dia"></i><span>烹饪队列</span><i class="dia"></i><span>饮食记录</span><i class="dia"></i><span>营养参考</span><i class="dia"></i><span>食语助手</span><i class="dia"></i>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 01 一餐的日常 ============ -->
+<section class="section" id="daily">
+  <div class="wrap daily-grid">
+    <div class="daily-left" data-reveal>
+      <p class="sec-eyebrow"><b>01</b>一餐的日常</p>
+      <h2>晚饭这件小事，<br>从打开冰箱开始。</h2>
+      <p class="sec-copy">不一定要做一桌大菜。<br>把手边的食材用好，一顿家常饭就很好。</p>
+      <div class="daily-tags"><span>食材</span><span>菜谱</span><span>饮食记录</span></div>
+    </div>
+    <div class="steps">
+      <article class="step" data-reveal style="--d:.05s">
+        <span class="step-ghost" aria-hidden="true">01</span>
+        <span class="step-num" data-icon="basket"></span>
+        <div>
+          <p class="step-label">买菜回来</p>
+          <h3>先记下，家里有什么。</h3>
+          <p>把买来的食材放进保鲜库，记好数量和存放方式。下次买菜前，先看看家里还剩什么。</p>
+          <p class="step-tags">食材库存 · 采购清单</p>
+        </div>
+      </article>
+      <article class="step" data-reveal style="--d:.15s">
+        <span class="step-ghost" aria-hidden="true">02</span>
+        <span class="step-num" data-icon="pot"></span>
+        <div>
+          <p class="step-label">准备晚饭</p>
+          <h3>用手边的食材，找一道想吃的菜。</h3>
+          <p>翻翻菜谱，看看原料和做法。缺的食材加入采购单，想做的菜留进烹饪队列。</p>
+          <p class="step-tags">食谱查找 · 备料清单 · 烹饪队列</p>
+        </div>
+      </article>
+      <article class="step" data-reveal style="--d:.25s">
+        <span class="step-ghost" aria-hidden="true">03</span>
+        <span class="step-num" data-icon="notebook"></span>
+        <div>
+          <p class="step-label">吃过以后</p>
+          <h3>今天这一餐，也留个记录。</h3>
+          <p>做了什么、吃了多少，分别记清楚。以后回头看，知道自己这些天是怎样吃饭的。</p>
+          <p class="step-tags">饮食记录 · 营养参考</p>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 02 看看食光 · 互动演示 ============ -->
+<section class="section night" id="demo">
+  <div class="wrap">
+    <div class="demo-head" data-reveal>
+      <div>
+        <p class="sec-eyebrow"><b>02</b>看看食光</p>
+        <h2>先看看做法，<br>再决定今晚吃什么。</h2>
+        <p class="sec-copy">从一道熟悉的番茄炒蛋开始。原料、步骤和饮食记录，都有可以慢慢翻看的地方。</p>
+        <p class="demo-hint"><span data-icon="flame"></span>下面这个迷你厨房可以直接上手：勾选冰箱里的食材，看看今晚能做什么（演示数据为示例）。</p>
+      </div>
+      <div class="demo-controls">
+        <button class="ctrl-btn queue-chip" id="queueChip" aria-expanded="false" aria-controls="queuePanel">
+          <span data-icon="layers"></span>烹饪队列 <b id="queueCount">0</b>
+        </button>
+        <button class="ctrl-btn" id="randomBtn"><span data-icon="spark"></span>随机一把</button>
+        <button class="ctrl-btn" id="resetBtn"><span data-icon="reset"></span>清空</button>
+        <div class="queue-panel" id="queuePanel" role="region" aria-label="烹饪队列">
+          <h4>想做的，先留着</h4>
+          <div id="queueList"></div>
+          <button class="queue-clear" id="queueClear">清空队列</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-grid">
+      <div class="panel" data-reveal style="--d:.1s">
+        <div class="panel-head"><h3>你的冰箱</h3><small id="fridgeCount">已选 0 样</small></div>
+        <div class="fridge-grid" id="fridgeGrid" role="group" aria-label="选择冰箱里的食材"></div>
+        <p class="fridge-foot"><span data-icon="info"></span>点选食材，右侧实时匹配菜谱；盐糖酱醋等常备调料默认齐全。</p>
+      </div>
+      <div class="panel" data-reveal style="--d:.2s">
+        <div class="panel-head"><h3 id="rightTitle">今晚可以做</h3><small id="rightSub"></small></div>
+        <div id="demoRight"></div>
+      </div>
+    </div>
+
+    <div class="mini-feats">
+      <div class="mini-feat" data-reveal style="--d:.05s"><span data-icon="check"></span><b>备料时，有清单</b><p>查看原料与用量，逐项标记已经备好的食材。</p></div>
+      <div class="mini-feat" data-reveal style="--d:.15s"><span data-icon="layers"></span><b>想做的，先留着</b><p>加入烹饪队列，等准备好再开始。</p></div>
+      <div class="mini-feat" data-reveal style="--d:.25s"><span data-icon="info"></span><b>营养数字，有说明</b><p>区分估算与待补全信息，查看称量条件和来源。</p></div>
+    </div>
+
+    <button class="shot-card" id="shotBtn" data-reveal style="--d:.3s">
+      <img src="https://dietdigidose.top/landing/recipe-preparation.png" alt="真实备料清单截图缩略图" loading="lazy">
+      <span><b>看看真实网页版长什么样</b><small>网页版实截 · 番茄炒蛋的备料清单，点击放大</small></span>
+      <span class="go" data-icon="external"></span>
+    </button>
+
+    <div class="demo-cta" data-reveal style="--d:.35s">
+      <a class="btn btn-sand" href="https://dietdigidose.top/app/" target="_blank" rel="noopener">去食光里翻翻菜谱 <span data-icon="arrow"></span></a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 03 食光手记 ============ -->
+<section class="section" id="journal">
+  <div class="wrap">
+    <div class="journal-head" data-reveal>
+      <div>
+        <p class="sec-eyebrow"><b>03</b>食光手记</p>
+        <h2>把日子，<br>过进一餐一饭。</h2>
+        <p class="sec-copy">做这款工具的初心、设计取舍与厨房随笔。<br>在安静的文字里，分享我们对生活与做饭的思考。</p>
+      </div>
+      <a class="link-arrow" href="https://dietdigidose.top/journal" target="_blank" rel="noopener">阅读全部食光手记 <span data-icon="arrow"></span></a>
+    </div>
+    <div class="journal-grid">
+      <a class="jcard" href="https://dietdigidose.top/journal?id=onion-in-the-fridge" target="_blank" rel="noopener" data-reveal style="--d:.1s">
+        <span class="jcat jcat-green">产品初心</span>
+        <h3>从冰箱深处烂掉的半个洋葱说起</h3>
+        <p>为什么市面上有那么多菜谱软件，我们仍然想做一个以你手边食材为中心的工具？</p>
+        <div class="jfoot"><span>4 分钟阅读</span><span class="go">阅读随笔 <span data-icon="arrow"></span></span></div>
+      </a>
+      <a class="jcard" href="https://dietdigidose.top/journal?id=honest-nutrition-estimates" target="_blank" rel="noopener" data-reveal style="--d:.2s">
+        <span class="jcat jcat-taupe">设计与科学</span>
+        <h3>关于营养数据：我们为什么坚持“估算”</h3>
+        <p>拒绝虚假精确。在充满变量的日常厨房里，如何给出一份真正坦诚的营养参考？</p>
+        <div class="jfoot"><span>5 分钟阅读</span><span class="go">阅读随笔 <span data-icon="arrow"></span></span></div>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 04 开始使用 ============ -->
+<section class="section start" id="start">
+  <div class="wrap">
+    <div class="cta-panel" data-reveal>
+      <p class="sec-eyebrow"><b>04</b>开始使用</p>
+      <h2>从下一顿饭，<br>试着用起来。</h2>
+      <p>食光烙记正在内测。<br>欢迎来用，也欢迎告诉我们哪里还不顺手。</p>
+      <div class="cta-btns">
+        <a class="btn btn-sand" href="https://dietdigidose.top/app/" target="_blank" rel="noopener">打开网页版 <span data-icon="external"></span></a>
+        <a class="btn btn-paper" href="mailto:adlinzhang@gmail.com?subject=%E9%A3%9F%E5%85%89%E7%83%99%E8%AE%B0%E5%86%85%E6%B5%8B%E7%94%B3%E8%AF%B7">想试用移动端？邮件申请内测 <span data-icon="mail"></span></a>
+      </div>
+      <p class="cta-note">网页版免安装 · 手机电脑都能开</p>
+    </div>
+
+    <div class="faq" data-reveal style="--d:.15s">
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">现在可以在哪里使用？<span class="pm" aria-hidden="true"></span></button>
+        <div class="faq-a"><div class="faq-a-in"><p>可以先打开网页版，在手机或电脑浏览器里查看公开食谱。保存库存、饮食记录等个人内容需要登录。移动端安装包仍在内测中，暂未在这里提供公开下载。</p></div></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">食语助手能帮我做什么？<span class="pm" aria-hidden="true"></span></button>
+        <div class="faq-a"><div class="faq-a-in"><p>食语是食光里的 AI 辅助入口，可以尝试询问烹饪问题。自动配餐、工具执行等能力仍在验证中，回答需要结合实际情况核对；重要操作以页面确认结果为准。</p></div></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">食谱里的营养数字准确吗？<span class="pm" aria-hidden="true"></span></button>
+        <div class="faq-a"><div class="faq-a-in"><p>营养信息是基于原料与用量的估算。资料不完整的食谱会标明待补全，不应当作精确测量或医疗建议。</p></div></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" aria-expanded="false">怎么参加内测或反馈问题？<span class="pm" aria-hidden="true"></span></button>
+        <div class="faq-a"><div class="faq-a-in"><p>可以通过上方邮件入口申请内测，告诉我们你的设备和最想试用的功能。使用中遇到的问题，也可以在 App 的反馈入口提交并查看回复。</p></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ============ 页脚 ============ -->
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#top" aria-label="回到首页顶部">
+          <span class="logo-coin"><img class="logo" src="https://dietdigidose.top/logo.png?v=20260728" alt="食光烙记标志"></span>
+          <span class="brand-txt" style="color:var(--np)"><b>食光烙记</b><small style="color:var(--nm)">DietDigiDose</small></span>
+        </a>
+        <p>好好吃饭，慢慢记录。<br>把日常，做成好好的一餐。</p>
+      </div>
+      <div class="foot-col">
+        <h4>探索</h4>
+        <a href="https://dietdigidose.top/journal" target="_blank" rel="noopener">食光手记</a>
+        <a href="https://dietdigidose.top/changelog" target="_blank" rel="noopener">更新日志</a>
+        <a href="https://dietdigidose.top/app/" target="_blank" rel="noopener">打开网页版</a>
+      </div>
+      <div class="foot-col">
+        <h4>条款</h4>
+        <a href="https://dietdigidose.top/privacy" target="_blank" rel="noopener">隐私政策</a>
+        <a href="https://dietdigidose.top/terms" target="_blank" rel="noopener">用户协议</a>
+      </div>
+      <div class="foot-col">
+        <h4>更多</h4>
+        <a href="https://github.com/AdlinZ/DietDigiDose" target="_blank" rel="noopener">开源仓库 ↗</a>
+        <a href="https://dietdigidose.top/login" target="_blank" rel="noopener">管理后台</a>
+        <a href="#top">回到顶部 ↑</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 食光烙记 · DietDigiDose</span>
+      <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">蜀ICP备2025125402号-4</a>
+      <span class="foot-credit">餐食与食谱详情示意图：Gemini 生成 · 备料清单为实际截图 · 本页为重设计演示，互动数据为示例</span>
+    </div>
+  </div>
+</footer>
+
+<button class="to-top" id="toTop" aria-label="回到顶部"><span data-icon="up"></span></button>
+
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="网页版实截大图">
+  <button class="lightbox-close" id="lightboxClose" aria-label="关闭大图"><span data-icon="close"></span></button>
+  <figure>
+    <img src="https://dietdigidose.top/landing/recipe-preparation.png" alt="真实备料清单：番茄、鸡蛋、小葱和调味料，包含用量与准备勾选项">
+    <figcaption><span>网页版实截 · 备料清单</span><span>点击图片外区域或按 Esc 关闭</span></figcaption>
+  </figure>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"><span data-icon="check"></span><span id="toastMsg"></span></div>
+
+<script>
+/* ================= 图标 ================= */
+const P = {
+  external:'<path d="M7 17L17 7M9.5 7H17v7.5"/>',
+  arrow:'<path d="M4 12h15M13 6l6 6-6 6"/>',
+  up:'<path d="M12 19V5M6 11l6-6 6 6"/>',
+  down:'<path d="M12 5v14M6 13l6 6 6-6"/>',
+  close:'<path d="M6 6l12 12M18 6L6 18"/>',
+  check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  flame:'<path d="M12 3.5c.8 3-4.2 5-4.2 9a4.2 4.2 0 0 0 8.4 0c0-1.9-.9-3.2-1.9-4.3.4 1.9-.9 2.4-.9 2.4.6-2-.4-5.1-1.4-7.1z"/>',
+  layers:'<path d="M4 7h16M4 12h16M4 17h10"/>',
+  info:'<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 7.8v.2"/>',
+  spark:'<path d="M12 4l1.8 5.2L19 11l-5.2 1.8L12 18l-1.8-5.2L5 11l5.2-1.8z"/>',
+  reset:'<path d="M4 10a8 8 0 1 1 1.5 6M4 10V4m0 6h6"/>',
+  mail:'<rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M4 7.5l8 5.5 8-5.5"/>',
+  basket:'<path d="M4.5 10h15l-1.8 9.5H6.3z"/><path d="M8.5 10l3.5-6 3.5 6M9.5 13.5v3M14.5 13.5v3"/>',
+  pot:'<path d="M4 11h16v5a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z"/><path d="M8 11a4 4 0 0 1 8 0M2 13h2M20 13h2M10 4.5c0-1.2 1-1.3 1-2.5M14 4.5c0-1.2 1-1.3 1-2.5"/>',
+  notebook:'<rect x="6" y="4" width="13" height="17" rx="2"/><path d="M9.5 9h6M9.5 13h6M6 8H4M6 12H4M6 16H4"/>',
+  tomato:'<circle cx="12" cy="13.5" r="6.5"/><path d="M12 7c-.2-2 .9-3.2 2.7-3.7M12 7c-1.7-.6-3.5-.3-4.7.8M12 7V5.5"/>',
+  egg:'<path d="M12 3.5c3 0 5.8 4.4 5.8 8.7a5.8 5.8 0 1 1-11.6 0C6.2 7.9 9 3.5 12 3.5z"/>',
+  scallion:'<path d="M8 21V9M12 21V5M16 21V10M8 9L6.5 6.5M12 5l1-2.5M16 10l1.8-2.3"/>',
+  onion:'<circle cx="12" cy="13.5" r="6.5"/><path d="M12 7c-.8-1.8-.2-3 .2-4M9 13.5a3 3 0 0 1 6 0"/>',
+  beef:'<rect x="4" y="7.5" width="16" height="9.5" rx="3"/><path d="M7.5 10.5c1.5 1 3 1 4.5 0s3-1 4.5 0M7.5 14c1.5 1 3 1 4.5 0s3-1 4.5 0"/>',
+  rice:'<path d="M4 12.5h16a8 8 0 0 1-16 0z"/><path d="M8 9h.01M12 7.5h.01M16 9h.01M9.5 20.5h5"/>',
+  tofu:'<rect x="5" y="8.5" width="14" height="10.5" rx="2"/><path d="M5 12h14M9 8.5v10.5"/>',
+  leaf:'<path d="M5 19C5 9.5 11 4.5 20 4.5c0 9-5 14.5-15 14.5z"/><path d="M5 19C9 13.5 13 9.5 17 7"/>',
+  potato:'<path d="M7 9c2-3.5 8-4 10.5-1s1.5 8-1.5 10-8 1.5-10-1.5S5 12.5 7 9z"/><path d="M10 11h.01M14 13h.01M11 15.5h.01"/>',
+  mushroom:'<path d="M4 12a8 8 0 0 1 16 0z"/><path d="M10 12.5h4l-.6 6a1.5 1.5 0 0 1-2.8 0z"/>',
+  garlic:'<path d="M12 4.5c1 2 5 3.6 5 8a5 5 0 0 1-10 0c0-4.4 4-6 5-8z"/><path d="M12 9v7"/>',
+  ginger:'<path d="M6 12c0-3 3-5 5.5-4S16 8 17 10s2 2.5 1 4.5-4 2.5-6 2-6 1-6-4.5z"/><path d="M14 8.5l2-2"/>',
+  bowl:'<path d="M4 12.5h16a8 8 0 0 1-16 0z"/><path d="M9 9c0-1.8 1.6-1.9 1.6-3.7M13.5 9c0-1.8 1.6-1.9 1.6-3.7M9.5 20.5h5"/>'
+};
+const icon = (n, cls='') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]||''}</svg>`;
+document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon); });
+
+/* ================= 数据 ================= */
+const ING = [
+  {k:'tomato', n:'番茄', q:'2 个', i:'tomato'},
+  {k:'egg', n:'鸡蛋', q:'3 枚', i:'egg'},
+  {k:'scallion', n:'小葱', q:'1 把', i:'scallion'},
+  {k:'onion', n:'洋葱', q:'1 颗', i:'onion'},
+  {k:'beef', n:'肥牛卷', q:'200 g', i:'beef'},
+  {k:'rice', n:'剩米饭', q:'1 碗', i:'rice'},
+  {k:'tofu', n:'嫩豆腐', q:'1 盒', i:'tofu'},
+  {k:'greens', n:'青菜', q:'2 棵', i:'leaf'},
+  {k:'potato', n:'土豆', q:'2 个', i:'potato'},
+  {k:'mushroom', n:'蘑菇', q:'150 g', i:'mushroom'},
+  {k:'garlic', n:'大蒜', q:'1 头', i:'garlic'},
+  {k:'ginger', n:'生姜', q:'1 块', i:'ginger'}
+];
+const ING_NAME = Object.fromEntries(ING.map(x => [x.k, x.n]));
+const RECIPES = [
+  {id:'fqcd', name:'番茄炒蛋', tag:'家常快手', time:15, serves:2, desc:'国民下饭菜，酸甜汤汁拌饭一绝。',
+   needs:[{k:'tomato',a:'2 个（约 300 g）'},{k:'egg',a:'3 枚'},{k:'scallion',a:'1 根'}],
+   pantry:'盐 2 g · 糖 3 g · 食用油 15 ml',
+   steps:['番茄切块，鸡蛋加少许盐打散，小葱切花。','热锅倒油，倒入蛋液，边缘凝固后划散，盛出备用。','锅里留底油，下番茄中火炒到出沙，加糖和盐调味。','倒回鸡蛋翻匀，撒葱花，出锅。'],
+   nutri:{kcal:210, protein:12, fat:14, carb:9}},
+  {id:'ycnrf', name:'洋葱肥牛饭', tag:'一碗端', time:20, serves:1, desc:'一锅出汁，盖在热饭上就是满足的一餐。',
+   needs:[{k:'onion',a:'半个'},{k:'beef',a:'200 g'},{k:'rice',a:'一碗'}],
+   pantry:'生抽 15 ml · 糖 5 g · 食用油 10 ml',
+   steps:['洋葱切丝；肥牛卷室温回软。','生抽、糖加两勺清水，搅匀成料汁。','热锅少油，下洋葱丝炒到透明微焦。','下肥牛大火快炒至变色，淋入料汁收浓。','盖在热米饭上，把汤汁浇上去。'],
+   nutri:{kcal:560, protein:28, fat:24, carb:58}},
+  {id:'mpdf', name:'麻婆豆腐', tag:'下饭', time:18, serves:2, desc:'家常少肉版，麻辣鲜香靠豆瓣和花椒。',
+   needs:[{k:'tofu',a:'1 盒（400 g）'},{k:'garlic',a:'2 瓣'},{k:'scallion',a:'1 根'}],
+   pantry:'豆瓣酱 15 g · 花椒 1 g · 淀粉 5 g · 食用油 15 ml',
+   steps:['豆腐切小块，淡盐水里泡 5 分钟去腥。','蒜切末，豆瓣酱剁细；花椒焙香碾碎。','少油炒香蒜末与豆瓣酱，加半碗水煮开。','下豆腐小火煨 3 分钟，水淀粉勾薄芡。','撒花椒碎和葱花，趁热盖在饭上。'],
+   nutri:{kcal:240, protein:14, fat:null, carb:12}},
+  {id:'hjdcf', name:'黄金蛋炒饭', tag:'快手', time:10, serves:1, desc:'隔夜饭的归宿，粒粒分明、金黄干香。',
+   needs:[{k:'rice',a:'一碗（隔夜）'},{k:'egg',a:'2 枚'},{k:'scallion',a:'1 根'}],
+   pantry:'盐 2 g · 食用油 15 ml',
+   steps:['蛋黄拌进米饭抓散，让每粒米裹上蛋液。','蛋白单独炒熟盛出。','热锅热油下米饭，中火炒到粒粒分明。','倒回蛋白，加盐调味，撒葱花翻匀。'],
+   nutri:{kcal:420, protein:14, fat:16, carb:52}},
+  {id:'qcdft', name:'青菜豆腐汤', tag:'汤羹', time:12, serves:2, desc:'清清爽爽，给一餐画个温柔的句号。',
+   needs:[{k:'greens',a:'2 棵'},{k:'tofu',a:'半盒'},{k:'ginger',a:'2 片'}],
+   pantry:'盐 2 g · 香油 3 ml',
+   steps:['青菜洗净切段，豆腐切小块。','锅里烧水，下姜片煮 2 分钟。','下豆腐煮 3 分钟，再下青菜烫软。','盐调味，滴几滴香油出锅。'],
+   nutri:{kcal:90, protein:7, fat:4, carb:6}},
+  {id:'sltds', name:'酸辣土豆丝', tag:'家常', time:15, serves:2, desc:'脆爽酸辣，考验刀工也考验火候。',
+   needs:[{k:'potato',a:'2 个'},{k:'garlic',a:'2 瓣'}],
+   pantry:'干辣椒 2 个 · 醋 15 ml · 盐 2 g · 食用油 15 ml',
+   steps:['土豆切细丝，清水淘掉表面淀粉，沥干。','蒜切片，干辣椒剪段。','热油爆香蒜片和辣椒，下土豆丝大火快炒。','沿锅边淋醋，加盐炒到断生仍脆。'],
+   nutri:{kcal:180, protein:4, fat:8, carb:24}},
+  {id:'mgcqc', name:'蘑菇炒青菜', tag:'时蔬', time:10, serves:2, desc:'菌菇的鲜配青菜的甜，简单就很好。',
+   needs:[{k:'mushroom',a:'150 g'},{k:'greens',a:'2 棵'},{k:'garlic',a:'2 瓣'}],
+   pantry:'盐 2 g · 食用油 12 ml',
+   steps:['蘑菇切片，青菜切段，蒜切末。','热锅少油，先下蘑菇炒到出水再收干。','下蒜末和青菜梗炒香，再下菜叶。','盐调味，全程大火不超过 3 分钟。'],
+   nutri:{kcal:120, protein:5, fat:7, carb:10}},
+  {id:'fqdfg', name:'番茄豆腐羹', tag:'汤羹', time:15, serves:2, desc:'酸香开胃，蛋花要薄如蝉翼。',
+   needs:[{k:'tomato',a:'1 个'},{k:'tofu',a:'半盒'},{k:'egg',a:'1 枚'},{k:'scallion',a:'1 根'}],
+   pantry:'盐 2 g · 淀粉 8 g · 香油 3 ml',
+   steps:['番茄去皮切小丁，豆腐切小块。','少油把番茄炒出沙，加两碗水煮开。','下豆腐煮 3 分钟，水淀粉勾薄芡。','淋入蛋液搅出蛋花，盐调味，撒葱花点香油。'],
+   nutri:{kcal:160, protein:10, fat:8, carb:12}}
+];
+
+/* ================= 状态 ================= */
+const selected = new Set(['tomato','egg','scallion','rice']);
+const queue = new Set();
+const prep = {};           // recipeId -> Set(checked need idx)
+let activeId = null;
+let activeTab = 'prep';
+
+const $ = s => document.querySelector(s);
+const fridgeGrid = $('#fridgeGrid'), demoRight = $('#demoRight'),
+      fridgeCount = $('#fridgeCount'), rightTitle = $('#rightTitle'), rightSub = $('#rightSub'),
+      queueCount = $('#queueCount'), queuePanel = $('#queuePanel'), queueList = $('#queueList'),
+      toastEl = $('#toast'), toastMsg = $('#toastMsg');
+let toastTimer = null;
+function toast(msg){
+  toastMsg.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2400);
+}
+
+/* ================= 冰箱 ================= */
+function renderFridge(){
+  fridgeGrid.innerHTML = ING.map(g => `
+    <button class="ing" data-ing="${g.k}" aria-pressed="${selected.has(g.k)}">
+      ${icon(g.i)}<b>${g.n}</b><small>${g.q}</small>
+    </button>`).join('');
+  fridgeCount.textContent = `已选 ${selected.size} 样`;
+}
+fridgeGrid.addEventListener('click', e => {
+  const btn = e.target.closest('[data-ing]');
+  if(!btn) return;
+  const k = btn.dataset.ing;
+  selected.has(k) ? selected.delete(k) : selected.add(k);
+  btn.setAttribute('aria-pressed', selected.has(k));
+  fridgeCount.textContent = `已选 ${selected.size} 样`;
+  renderRight();
+});
+$('#randomBtn').addEventListener('click', () => {
+  const keys = ING.map(g => g.k).sort(() => Math.random() - .5);
+  selected.clear();
+  keys.slice(0, 4 + Math.floor(Math.random() * 3)).forEach(k => selected.add(k));
+  renderFridge(); renderRight();
+  toast('随手抓了一把食材，看看能做什么');
+});
+$('#resetBtn').addEventListener('click', () => {
+  selected.clear();
+  renderFridge(); renderRight();
+  toast('冰箱清空了，重新勾选几样吧');
+});
+
+/* ================= 匹配与列表 ================= */
+function scored(){
+  return RECIPES.map(r => {
+    const have = r.needs.filter(n => selected.has(n.k));
+    const missing = r.needs.filter(n => !selected.has(n.k));
+    return { r, pct: have.length / r.needs.length, missing };
+  }).sort((a, b) => b.pct - a.pct || a.missing.length - b.missing.length || a.r.time - b.r.time);
+}
+function queueBtnHTML(id){
+  const added = queue.has(id);
+  return `<button class="queue-btn ${added?'added':''}" data-queue="${id}">${icon(added?'check':'plus')}${added?'已在队列':'加入队列'}</button>`;
+}
+function renderList(){
+  const prevScroll = demoRight.querySelector('.result-list')?.scrollTop || 0;
+  const rows = scored();
+  const okCount = rows.filter(x => x.pct === 1).length;
+  rightTitle.textContent = '今晚可以做';
+  rightSub.textContent = `${RECIPES.length} 道菜 · ${okCount} 道食材齐了`;
+  const hint = selected.size === 0 ? `<div class="empty-hint">冰箱空空如也 —— 先勾选几样食材，或点上方「随机一把」。</div>` : '';
+  demoRight.innerHTML = hint + `<div class="result-list dark-scroll">` + rows.map(({r, pct, missing}) => `
+    <article class="recipe">
+      <div class="recipe-top">
+        <button class="recipe-main" data-open="${r.id}" aria-label="查看${r.name}的做法">
+          <span class="recipe-name"><b>${r.name}</b><span class="rtag">${r.tag}</span></span>
+          <span class="recipe-meta">${icon('clock')}${r.time} 分钟 · ${r.serves} 人份</span>
+          <span class="match ${pct===1?'ok':''}"><span class="match-bar"><i style="width:${Math.round(pct*100)}%"></i></span><em>${pct===1?'齐了':Math.round(pct*100)+'%'}</em></span>
+          ${pct===1
+            ? `<span class="miss ok">食材齐了，可以开火。</span>`
+            : `<span class="miss">还缺：<b>${missing.map(m => ING_NAME[m.k]).join('、')}</b></span>`}
+        </button>
+        ${queueBtnHTML(r.id)}
+      </div>
+    </article>`).join('') + `</div>`;
+  const list = demoRight.querySelector('.result-list');
+  if(list) list.scrollTop = prevScroll;
+}
+
+/* ================= 详情 ================= */
+function renderDetail(){
+  const r = RECIPES.find(x => x.id === activeId);
+  if(!r){ activeId = null; renderList(); return; }
+  rightTitle.textContent = '食谱详情';
+  rightSub.textContent = '演示数据为示例';
+  const checked = prep[r.id] || new Set();
+  const pct = Math.round(checked.size / r.needs.length * 100);
+  const tabs = [['prep','备料清单'],['steps','做法步骤'],['nutri','营养参考']];
+  let body = '';
+  if(activeTab === 'prep'){
+    body = `<ul class="prep-list">${r.needs.map((n, i) => `
+      <li><label class="prep-row">
+        <input type="checkbox" data-prep="${i}" ${checked.has(i)?'checked':''}>
+        <span class="box">${icon('check')}</span>
+        <span class="pname">${ING_NAME[n.k]}</span><span class="pamt">${n.a}</span>
+      </label></li>`).join('')}</ul>
+      <div class="prep-progress"><span class="match-bar"><i id="prepBar" style="width:${pct}%"></i></span><small id="prepText">已备好 ${checked.size}/${r.needs.length}</small></div>
+      <p class="pantry-note"><b>常备调料：</b>${r.pantry}</p>`;
+  } else if(activeTab === 'steps'){
+    body = `<ol class="steps-ol">${r.steps.map(s => `<li>${s}</li>`).join('')}</ol>`;
+  } else {
+    const n = r.nutri;
+    const cell = (v, u, label) => v == null
+      ? `<div class="nutri pending"><b>待补全</b><span>${label}</span></div>`
+      : `<div class="nutri"><b>${v}<small>${u}</small></b><span>${label}</span></div>`;
+    body = `<div class="nutri-grid">${cell(n.kcal,'kcal','热量')}${cell(n.protein,'g','蛋白质')}${cell(n.fat,'g','脂肪')}${cell(n.carb,'g','碳水')}</div>
+      <p class="nutri-note">${icon('info')}<span><span class="estimate-tag">估算</span> 基于原料与用量的估算值（每份），不是精确测量；资料不全的项目会标明待补全，也不应当作医疗建议。</span></p>`;
+  }
+  demoRight.innerHTML = `
+    <button class="back-link" data-back>${icon('down')} 返回菜谱列表</button>
+    <h3 class="detail-title">${r.name}</h3>
+    <p class="detail-desc">${r.desc}</p>
+    <div class="detail-meta"><span>${icon('clock')}${r.time} 分钟</span><span>${icon('bowl')}${r.serves} 人份</span><span>${r.tag}</span></div>
+    <div class="tabs" role="tablist">${tabs.map(([k, label]) => `<button role="tab" data-tab="${k}" aria-selected="${activeTab===k}">${label}</button>`).join('')}</div>
+    <div role="tabpanel">${body}</div>
+    <div class="detail-foot">${queueBtnHTML(r.id, true)}<a class="detail-link" href="https://dietdigidose.top/app/" target="_blank" rel="noopener">去网页版看完整食谱 ${icon('external')}</a></div>`;
+  demoRight.querySelector('.back-link .ic').style.transform = 'rotate(90deg)';
+}
+function renderRight(){ activeId ? renderDetail() : renderList(); }
+
+demoRight.addEventListener('click', e => {
+  const open = e.target.closest('[data-open]');
+  if(open){ activeId = open.dataset.open; activeTab = 'prep'; renderRight();
+    if(window.innerWidth < 1080) demoRight.scrollIntoView({behavior:'smooth', block:'start'});
+    return; }
+  if(e.target.closest('[data-back]')){ activeId = null; renderRight(); return; }
+  const tab = e.target.closest('[data-tab]');
+  if(tab){ activeTab = tab.dataset.tab; renderRight(); return; }
+  const q = e.target.closest('[data-queue]');
+  if(q){ toggleQueue(q.dataset.queue); }
+});
+demoRight.addEventListener('change', e => {
+  const cb = e.target.closest('[data-prep]');
+  if(!cb || !activeId) return;
+  const set = prep[activeId] || (prep[activeId] = new Set());
+  const i = +cb.dataset.prep;
+  cb.checked ? set.add(i) : set.delete(i);
+  const r = RECIPES.find(x => x.id === activeId);
+  $('#prepBar').style.width = Math.round(set.size / r.needs.length * 100) + '%';
+  $('#prepText').textContent = `已备好 ${set.size}/${r.needs.length}`;
+  if(set.size === r.needs.length) toast('备料齐了，可以开火');
+});
+
+/* ================= 烹饪队列 ================= */
+function toggleQueue(id){
+  const r = RECIPES.find(x => x.id === id);
+  if(queue.has(id)){ queue.delete(id); toast(`已移出烹饪队列 · ${r.name}`); }
+  else { queue.add(id); toast(`已加入烹饪队列 · ${r.name}`); }
+  queueCount.textContent = queue.size;
+  renderRight(); renderQueuePanel();
+}
+function renderQueuePanel(){
+  queueList.innerHTML = queue.size === 0
+    ? `<p class="queue-empty">队列还空着，看到想做的就加进来。</p>`
+    : [...queue].map(id => {
+        const r = RECIPES.find(x => x.id === id);
+        return `<div class="queue-row"><span>${r.name}</span><button data-unqueue="${id}" aria-label="把${r.name}移出队列">${icon('close')}</button></div>`;
+      }).join('');
+}
+$('#queueChip').addEventListener('click', e => {
+  e.stopPropagation();
+  const open = queuePanel.classList.toggle('open');
+  $('#queueChip').setAttribute('aria-expanded', open);
+  renderQueuePanel();
+});
+queuePanel.addEventListener('click', e => {
+  e.stopPropagation();
+  const un = e.target.closest('[data-unqueue]');
+  if(un){ toggleQueue(un.dataset.unqueue); return; }
+  if(e.target.closest('#queueClear')){
+    if(queue.size === 0) return;
+    queue.clear(); queueCount.textContent = 0;
+    renderRight(); renderQueuePanel();
+    toast('烹饪队列已清空');
+  }
+});
+document.addEventListener('click', e => {
+  if(!e.target.closest('.demo-controls')){
+    queuePanel.classList.remove('open');
+    $('#queueChip').setAttribute('aria-expanded', 'false');
+  }
+});
+
+/* ================= 灯箱 ================= */
+const lightbox = $('#lightbox');
+function openLightbox(){ lightbox.classList.add('open'); document.body.style.overflow = 'hidden'; $('#lightboxClose').focus(); }
+function closeLightbox(){ lightbox.classList.remove('open'); document.body.style.overflow = ''; }
+$('#shotBtn').addEventListener('click', openLightbox);
+$('#lightboxClose').addEventListener('click', closeLightbox);
+lightbox.addEventListener('click', e => { if(e.target === lightbox) closeLightbox(); });
+document.addEventListener('keydown', e => { if(e.key === 'Escape'){ closeLightbox(); closeMenu(); } });
+
+/* ================= FAQ ================= */
+document.querySelectorAll('.faq-item').forEach(item => {
+  item.querySelector('.faq-q').addEventListener('click', () => {
+    const open = item.classList.toggle('open');
+    item.querySelector('.faq-q').setAttribute('aria-expanded', open);
+  });
+});
+
+/* ================= 移动菜单 ================= */
+const overlay = $('#menuOverlay'), burger = $('#burger');
+function closeMenu(){
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden', 'true');
+  burger.setAttribute('aria-expanded', 'false');
+  document.body.style.overflow = '';
+}
+burger.addEventListener('click', () => {
+  const open = overlay.classList.toggle('open');
+  overlay.setAttribute('aria-hidden', String(!open));
+  burger.setAttribute('aria-expanded', String(open));
+  document.body.style.overflow = open ? 'hidden' : '';
+});
+$('#menuClose').addEventListener('click', closeMenu);
+overlay.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
+
+/* ================= 导航状态 / 滚动 ================= */
+const nav = $('#nav'), progress = $('#progress'), toTop = $('#toTop');
+let ticking = false;
+function onScroll(){
+  const y = window.scrollY;
+  nav.classList.toggle('scrolled', y > 10);
+  const h = document.documentElement.scrollHeight - innerHeight;
+  progress.style.width = (h > 0 ? (y / h) * 100 : 0) + '%';
+  toTop.classList.toggle('show', y > 600);
+  ticking = false;
+}
+addEventListener('scroll', () => { if(!ticking){ ticking = true; requestAnimationFrame(onScroll); } }, {passive:true});
+onScroll();
+toTop.addEventListener('click', () => scrollTo({top:0, behavior:'smooth'}));
+
+const secLinks = [...document.querySelectorAll('.nav-links a')];
+const secIO = new IntersectionObserver(entries => {
+  entries.forEach(en => {
+    if(en.isIntersecting){
+      secLinks.forEach(a => a.setAttribute('aria-current', String(a.dataset.sec === en.target.id)));
+    }
+  });
+}, {rootMargin:'-40% 0px -55% 0px'});
+['daily','demo','journal','start'].forEach(id => secIO.observe(document.getElementById(id)));
+
+/* ================= 揭示动画 ================= */
+const revealEls = [...document.querySelectorAll('[data-reveal]')];
+const revealIO = new IntersectionObserver(entries => {
+  entries.forEach(en => { if(en.isIntersecting){ en.target.classList.add('in'); revealIO.unobserve(en.target); } });
+}, {threshold:.12});
+revealEls.forEach(el => revealIO.observe(el));
+/* 兜底：渲染被节流（后台标签页等）导致 IO 不回调时，仍保证内容可见 */
+const revealFallback = setInterval(() => {
+  let pending = false;
+  revealEls.forEach(el => {
+    if(el.classList.contains('in')) return;
+    const r = el.getBoundingClientRect();
+    if(r.top < innerHeight * .96 && r.bottom > 0){ el.classList.add('in'); revealIO.unobserve(el); }
+    else pending = true;
+  });
+  if(!pending) clearInterval(revealFallback);
+}, 900);
+
+/* ================= Hero 视差 ================= */
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const finePointer = matchMedia('(pointer: fine)').matches;
+const stage = $('#photoStage');
+if(!reduceMotion && finePointer && stage){
+  const layers = [...stage.querySelectorAll('[data-depth]')];
+  let tx = 0, ty = 0, cx = 0, cy = 0;
+  document.querySelector('.hero').addEventListener('mousemove', e => {
+    const r = stage.getBoundingClientRect();
+    tx = ((e.clientX - (r.left + r.width/2)) / r.width) * 2;
+    ty = ((e.clientY - (r.top + r.height/2)) / r.height) * 2;
+  });
+  (function loop(){
+    cx += (tx - cx) * .06; cy += (ty - cy) * .06;
+    layers.forEach(el => {
+      const d = +el.dataset.depth;
+      el.style.transform = `translate3d(${(-cx*d).toFixed(2)}px, ${(-cy*d).toFixed(2)}px, 0)`;
+    });
+    requestAnimationFrame(loop);
+  })();
+}
+
+/* ================= 入场 ================= */
+/* 仅在页面可见时播放入场动画；隐藏/冻结环境下不触发，内容保持默认可见 */
+function playEntrance(){ document.documentElement.classList.add('anim','ready'); }
+if(document.visibilityState !== 'hidden'){
+  addEventListener('DOMContentLoaded', () => requestAnimationFrame(playEntrance));
+  setTimeout(playEntrance, 1200);
+}else{
+  document.addEventListener('visibilitychange', function onVis(){
+    if(document.visibilityState === 'visible'){ playEntrance(); document.removeEventListener('visibilitychange', onVis); }
+  });
+}
+
+/* 跑马灯复制一份实现无缝循环 */
+const mq = $('#mqTrack');
+mq.innerHTML += mq.innerHTML;
+
+/* ================= 初始化 ================= */
+renderFridge();
+renderRight();
+renderQueuePanel();
+</script>
+</body>
+</html>

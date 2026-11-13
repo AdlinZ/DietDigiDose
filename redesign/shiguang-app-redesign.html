@@ -1506,8 +1506,8 @@ let W=null,chatBusy=false,winScanToken=0;
 const AI_CONSENT_KEY='@dietdigidose:ai-data-consent';
 const aiConsented=()=>{try{return localStorage.getItem(AI_CONSENT_KEY)==='accepted';}catch(e){return false;}};
 const findMsg=mid=>S.chat.msgs.find(x=>x.id===mid);
-function openWin(w){W=w;renderWin();document.body.classList.add('win-open');}
-function closeWin(){W=null;document.body.classList.remove('win-open');$('#win').classList.remove('pd');}
+function openWin(w){++winScanToken;W=w;renderWin();document.body.classList.add('win-open');}
+function closeWin(){++winScanToken;W=null;document.body.classList.remove('win-open');$('#win').classList.remove('pd');}
 function renderWin(){if(!W)return;$('#win').classList.toggle('pd',W.type==='pd');$('#win').innerHTML=`<div class="win-sheet">${winHTML()}</div>`;afterWin();}
 function afterWin(){
   if(W.type==='chat'){const inp=$('#chatInput');if(inp){if(W.draft!=null)inp.value=W.draft;syncSend();inp.focus();}scrollChat();}
@@ -1758,8 +1758,8 @@ document.addEventListener('click',e=>{
   if(a==='chat-meal'){const m=findMsg(t.dataset.mid);const c=m.cards[+t.dataset.ci];S.meals.unshift({id:uid('m'),slot:c.slot,name:c.name,kcal:c.kcal,p:c.p,c:c.c,f:c.f,time:new Date().toTimeString().slice(0,5),amount:c.amount});c.done=true;render();refreshMsg(m.id);toast('已记为今日已吃');return;}
   if(a==='chat-water'){const m=findMsg(t.dataset.mid);const c=m.cards[+t.dataset.ci];S.water=Math.min(2000,S.water+250);c.done=true;render();refreshMsg(m.id);toast(`已记录饮水，今日 ${S.water} ml`);return;}
   if(a==='chat-plan'){const m=findMsg(t.dataset.mid);const c=m.cards[+t.dataset.ci];genPlan();S.plan.forEach(pid=>{if(!S.queue.includes(pid))S.queue.push(pid);});c.done=true;render();refreshMsg(m.id);toast('三餐已加入烹饪队列');return;}
-  if(a==='af-mode'){if(v==='manual'){W.mode='manual';renderWin();}else{W.mode='scanning';renderWin();const tok=++winScanToken;setTimeout(()=>{if(W&&W.type==='addfood'&&tok===winScanToken){W.mode='scan';W.rows=SCAN_SAMPLE.map(x=>({...x,on:true}));renderWin();}},reduced?80:1400);}return;}
-  if(a==='af-back'){W.mode='choose';W.rows=null;renderWin();return;}
+  if(a==='af-mode'){++winScanToken;if(v==='manual'){W.mode='manual';renderWin();}else{W.mode='scanning';renderWin();const tok=++winScanToken;setTimeout(()=>{if(W&&W.type==='addfood'&&tok===winScanToken){W.mode='scan';W.rows=SCAN_SAMPLE.map(x=>({...x,on:true}));renderWin();}},reduced?80:1400);}return;}
+  if(a==='af-back'){++winScanToken;W.mode='choose';W.rows=null;renderWin();return;}
   if(a==='af-toggle'){W.rows[i].on=t.checked;renderWin();return;}
   if(a==='af-all'){const all=!W.rows.every(r=>r.on);W.rows.forEach(r=>r.on=all);renderWin();return;}
   if(a==='af-store'){W.rows[i].store=v;renderWin();return;}

@@ -484,7 +484,7 @@ function cardHTML(mid,ci,c){
 function msgHTML(m){
  const cards=(m.cards||[]).map((c,i)=>cardHTML(m.id,i,c)).join('');
  const ft=m.role==='ai'&&m.ms!=null&&!m.streaming?`<div class="ft">${icon('clock')}回复耗时 ${m.ms<1000?Math.round(m.ms)+' ms':(m.ms/1000).toFixed(2)+' 秒'}</div>`:'';
- const body=m.streaming?`<span id="streamText"></span><span class="caret"></span>`:esc(m.text).replace(/\n/g,'<br>');
+ const body=m.streaming?`<span>${esc(m.text).replace(/\n/g,'<br>')}</span><span class="caret"></span>`:esc(m.text).replace(/\n/g,'<br>');
  const att=m.img?`<img class="att" src="${m.img}" alt="附件图片">`:'';
  return `<div class="msg ${m.role}" data-mid="${m.id}"><span class="av">${m.role==='ai'?`<img src="${AV}" alt="">`:'我'}</span><div class="col"><div class="bub">${att}${body}${m.streaming?'':cards}</div>${ft}</div></div>`;
 }
@@ -523,24 +523,41 @@ function send(text,img){
  if(!aiConsented()){S.draft=t;S.pending={t,img};S.consent=true;$('#consent').classList.add('show');return;}
  doSend(t,img);
 }
+let pendingReply=null;
+function cancelReply(session){
+ if(!pendingReply||pendingReply.session!==session)return;
+ clearTimeout(pendingReply.timer);clearInterval(pendingReply.tick);
+ pendingReply=null;S.busy=false;syncSend();
+}
 function doSend(t,img){
+ const session=sess();
+ const request={session,timer:null,tick:null};pendingReply=request;
  S.draft=null;$('#input').value='';syncSend();
- const u={id:uid('u'),role:'user',text:t||'识别这张照片里的食材',img};msgs().push(u);
- if(sess().title==='新对话')sess().title=(t||'拍照识别').slice(0,14);
+ const u={id:uid('u'),role:'user',text:t||'识别这张照片里的食材',img};session.msgs.push(u);
+ if(session.title==='新对话')session.title=(t||'拍照识别').slice(0,14);
  renderHist();renderConv();
  S.busy=true;syncSend();$('#typing').hidden=false;scrollBottom();
  const reply=genReply(t||'拍照识别');
- setTimeout(()=>{
-   $('#typing').hidden=true;
-   const m={id:uid('a'),role:'ai',text:reply.text,ms:reply.ms,cards:reply.cards,streaming:!reduced};
-   msgs().push(m);renderConv();
-   if(reduced){m.streaming=false;refreshMsg(m.id);finish();}
+ const visible=()=>S.activeId===session.id;
+ function refresh(){if(visible())renderConv();}
+ function finish(){
+   if(pendingReply!==request)return;
+   pendingReply=null;S.busy=false;syncSend();renderRail();
+ }
+ request.timer=setTimeout(()=>{
+   if(pendingReply!==request)return;
+   const m={id:uid('a'),role:'ai',text:reduced?reply.text:'',ms:reply.ms,cards:reply.cards,streaming:!reduced};
+   session.msgs.push(m);refresh();
+   if(reduced){finish();}
    else{
-     let i=0;const full=reply.text;const el=$('#streamText');
-     const tick=setInterval(()=>{i+=2;if(el)el.textContent=full.slice(0,i);scrollBottom();
-       if(i>=full.length){clearInterval(tick);m.streaming=false;refreshMsg(m.id);finish();}},24);
+     let i=0;const full=reply.text;
+     request.tick=setInterval(()=>{
+       if(pendingReply!==request){clearInterval(request.tick);return;}
+       i+=2;m.text=full.slice(0,i);
+       if(i>=full.length){clearInterval(request.tick);m.streaming=false;finish();}
+       refresh();
+     },24);
    }
-   function finish(){S.busy=false;syncSend();renderRail();scrollBottom();}
  },reduced?60:reply.ms);
 }
 function appendAI(text){const m={id:uid('a'),role:'ai',text,ms:320};msgs().push(m);renderConv();}
@@ -582,7 +599,7 @@ document.addEventListener('click',e=>{
  if(a==='more'){S.menu=true;$('#menu').classList.add('show');return;}
  if(a==='close-menu'){S.menu=false;$('#menu').classList.remove('show');return;}
  if(a==='menu-shop'){S.menu=false;$('#menu').classList.remove('show');renderShop();openSheet('shopSheet');return;}
- if(a==='menu-clear'){S.menu=false;$('#menu').classList.remove('show');sess().msgs=[];renderAll();toast('当前对话已清空');return;}
+ if(a==='menu-clear'){S.menu=false;$('#menu').classList.remove('show');cancelReply(sess());sess().msgs=[];renderAll();toast('当前对话已清空');return;}
  if(a==='menu-export'){S.menu=false;$('#menu').classList.remove('show');
    const txt=msgs().map(m=>(m.role==='user'?'我：':'食语：')+m.text).join('\n\n');
    const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});const url=URL.createObjectURL(blob);
@@ -591,8 +608,8 @@ document.addEventListener('click',e=>{
  if(a==='consent-yes'){try{localStorage.setItem('@dietdigidose:ai-data-consent','accepted');}catch(x){}S.consent=false;const p=S.pending;S.pending=null;$('#consent').classList.remove('show');doSend(p.t,p.img);return;}
  if(a==='close-sheet'){closeSheets();return;}
  if(a==='water-add'){S.water=Math.min(2000,S.water+250);renderRail();toast(`已记录饮水，今日 ${S.water} ml`);return;}
- if(a==='scan-confirm'){const c=card();c.items.forEach(it=>S.pantry.unshift({id:uid('p'),name:it.name,qty:it.qty,store:it.store,days:it.days,icon:it.icon}));c.done='saved';renderRail();refreshMsg(mid);toast(`已成功将 ${c.items.length} 种食材导入你的保鲜库！`);return;}
- if(a==='scan-undo'){const c=card();S.pantry=S.pantry.slice(c.items.length);c.done='undone';renderRail();refreshMsg(mid);toast('已撤销本次入库');return;}
+ if(a==='scan-confirm'){const c=card();if(c.done)return;c.added=[];c.items.forEach(it=>{const id=uid('p');c.added.push(id);S.pantry.unshift({id,name:it.name,qty:it.qty,store:it.store,days:it.days,icon:it.icon});});c.done='saved';renderRail();refreshMsg(mid);toast(`已成功将 ${c.items.length} 种食材导入你的保鲜库！`);return;}
+ if(a==='scan-undo'){const c=card();if(c.done!=='saved')return;S.pantry=S.pantry.filter(it=>!(c.added||[]).includes(it.id));c.done='undone';renderRail();refreshMsg(mid);toast('已撤销本次入库');return;}
  if(a==='goto-pantry'){toast(`保鲜库现有 ${S.pantry.length} 项食材`);return;}
  if(a==='shop-add'){const c=card();c.missing.forEach(x=>{if(!S.shop.some(s=>s.name===x.name))S.shop.push({id:uid('s'),name:x.name,amount:x.amount,checked:false});});c.done=true;renderRail();refreshMsg(mid);toast('已存入采购清单');return;}
  if(a==='sub'){const c=card();c.done=true;refreshMsg(mid);appendAI(`可以用现有食材替代：保鲜库里有 ${S.pantry.slice(0,3).map(p=>p.name).join('、')}，试试「番茄炒蛋」或「小葱拌豆腐」这类家常做法，少采购也能吃好。`);return;}

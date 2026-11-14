@@ -101,3 +101,5 @@ React Native dev-middleware 的 `chromium-edge-launcher` 单独升级至 2.0.1�
 将 admin JS 总预算调整为 870,000 字节（+2.35%），总产物 1,800,000 字节和最大单文件 330,000 字节限制不变。
 新增示例不访问个人账户或写入业务数据；弱网实际耗时未测量，不据此宣称加载性能改善。
 首页样式与动画名称限定于首页；导航菜单、截图灯箱、队列反复操作、React StrictMode 重挂载及晚到备案响应由 `Landing.test.tsx` 覆盖。
+
+本轮 PR 的生产依赖审计发现 Forge 新公告，最小升级 override 与锁文件中的 `node-forge` 1.4.1 → 1.4.3，未新增审计忽略项。两个真实 Expo 消费者增加修补版本守卫和 Ed25519 正常/篡改消息兼容测试，并保留 RSA 证书与清单签名回归。相关上游修补发布：https://github.com/digitalbazaar/forge/releases/tag/v1.4.3 。

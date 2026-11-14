@@ -18,6 +18,16 @@ const pem = generateKeyPairSync('rsa', {
 // Resolve both real Expo consumers, so a second unpatched copy cannot pass.
 for (const [consumer, require] of [['Expo CLI', cliRequire], ['Expo certificates', signingRequire]]) {
   const forge = require('node-forge');
+  test(`${consumer}: uses the patched Forge release for TLS, HTTP and Ed25519 advisories`, () => {
+    assert.equal(require('node-forge/package.json').version, '1.4.3');
+  });
+  test(`${consumer}: Ed25519 signatures verify and reject changed messages`, () => {
+    const keyPair = forge.ed25519.generateKeyPair({ seed: Buffer.alloc(32, 7) });
+    const message = Buffer.from('local dependency compatibility check');
+    const signature = forge.ed25519.sign({ message, privateKey: keyPair.privateKey });
+    assert.equal(forge.ed25519.verify({ message, signature, publicKey: keyPair.publicKey }), true);
+    assert.equal(forge.ed25519.verify({ message: Buffer.from('changed message'), signature, publicKey: keyPair.publicKey }), false);
+  });
   const { asn1, pki, md } = forge;
   const privateKey = pki.privateKeyFromPem(pem.privateKey);
   const publicKey = pki.publicKeyFromPem(pem.publicKey);

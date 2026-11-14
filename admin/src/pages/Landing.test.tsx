@@ -92,3 +92,31 @@ it('ignores filing response from an unmounted page', async () => {
   await act(async () => resolve!({ data: { filing: { enabled: true, text: 'late', url: 'https://example.com' } } }));
   expect(old.textContent).toBe('');
 });
+it('keeps focus through recipe navigation, detail tabs and repeated queue actions', async () => {
+  await mount();
+  find('[data-open="fqcd"]').focus(); await click('[data-open="fqcd"]');
+  expect(document.activeElement).toBe(find('[data-back]'));
+  find('[data-tab="steps"]').focus(); await click('[data-tab="steps"]');
+  expect(document.activeElement).toBe(find('[data-tab="steps"]'));
+  for (let i = 0; i < 2; i++) {
+    find('[data-queue="fqcd"]').focus(); await click('[data-queue="fqcd"]');
+    expect(document.activeElement).toBe(find('[data-queue="fqcd"]'));
+  }
+  find('[data-back]').focus(); await click('[data-back]');
+  expect(document.activeElement).toBe(find('[data-open="fqcd"]'));
+  find('[data-queue="fqcd"]').focus(); await click('[data-queue="fqcd"]');
+  expect(document.activeElement).toBe(find('[data-queue="fqcd"]'));
+});
+it('moves focus to the next queue removal control or the queue trigger', async () => {
+  await mount(); await click('[data-queue="fqcd"]'); await click('[data-queue="hjdcf"]');
+  await click('#queueChip');
+  find('[data-unqueue="fqcd"]').focus(); await click('[data-unqueue="fqcd"]');
+  expect(document.activeElement).toBe(find('[data-unqueue="hjdcf"]'));
+  await click('[data-unqueue="hjdcf"]'); expect(document.activeElement).toBe(find('#queueChip'));
+});
+it('does not steal focus from ingredient or queue-clear controls when refreshing results', async () => {
+  await mount(); find('[data-ing="egg"]').focus(); await click('[data-ing="egg"]');
+  expect(document.activeElement).toBe(find('[data-ing="egg"]'));
+  await click('[data-queue="fqcd"]'); await click('#queueChip');
+  find('#queueClear').focus(); await click('#queueClear'); expect(document.activeElement).toBe(find('#queueClear'));
+});

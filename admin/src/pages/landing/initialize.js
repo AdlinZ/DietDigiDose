@@ -230,14 +230,27 @@ function renderDetail(){
     <div class="detail-foot">${queueBtnHTML(r.id, true)}<a class="detail-link" href="#start" >申请手机端内测 ${icon('external')}</a></div>`;
   demoRight.querySelector('.back-link .ic').style.transform = 'rotate(90deg)';
 }
-function renderRight(){ if(activeId) renderDetail(); else renderList(); }
+// These demo views replace their DOM. Restore only focus owned by the replaced
+// region, never steal it from ingredient controls or another part of the page.
+function renderRight(destination){
+  const focused = document.activeElement;
+  const ownedFocus = demoRight.contains(focused);
+  let selector = destination;
+  if(!selector && ownedFocus){
+    const attribute = ['data-tab', 'data-queue', 'data-prep', 'data-open', 'data-back']
+      .find(name => focused.hasAttribute(name));
+    if(attribute) selector = `[${attribute}="${focused.getAttribute(attribute)}"]`;
+  }
+  if(activeId) renderDetail(); else renderList();
+  if(ownedFocus && selector) demoRight.querySelector(selector)?.focus({preventScroll:true});
+}
 
 on(demoRight, 'click', e => {
   const open = e.target.closest('[data-open]');
-  if(open){ activeId = open.dataset.open; activeTab = 'prep'; renderRight();
+  if(open){ activeId = open.dataset.open; activeTab = 'prep'; renderRight('[data-back]');
     if(window.innerWidth < 1080) demoRight.scrollIntoView({behavior:'smooth', block:'start'});
     return; }
-  if(e.target.closest('[data-back]')){ activeId = null; renderRight(); return; }
+  if(e.target.closest('[data-back]')){ const id = activeId; activeId = null; renderRight(`[data-open="${id}"]`); return; }
   const tab = e.target.closest('[data-tab]');
   if(tab){ activeTab = tab.dataset.tab; renderRight(); return; }
   const q = e.target.closest('[data-queue]');
@@ -264,12 +277,19 @@ function toggleQueue(id){
   renderRight(); renderQueuePanel();
 }
 function renderQueuePanel(){
+  const focused = document.activeElement;
+  const buttons = [...queueList.querySelectorAll('[data-unqueue]')];
+  const focusIndex = buttons.indexOf(focused);
   queueList.innerHTML = queue.size === 0
     ? `<p class="queue-empty">队列还空着，看到想做的就加进来。</p>`
     : [...queue].map(id => {
         const r = RECIPES.find(x => x.id === id);
         return `<div class="queue-row"><span>${r.name}</span><button data-unqueue="${id}" aria-label="把${r.name}移出队列">${icon('close')}</button></div>`;
       }).join('');
+  if(focusIndex >= 0){
+    const remaining = queueList.querySelectorAll('[data-unqueue]');
+    (remaining[Math.min(focusIndex, remaining.length - 1)] || $('#queueChip')).focus({preventScroll:true});
+  }
 }
 on($('#queueChip'), 'click', e => {
   e.stopPropagation();

@@ -93,3 +93,13 @@ NYC 消费者使用 `load()`，可兼容 YAML v4；开发工具 `depcheck` 仍�
 CI 生产审计阻断后，更新 `follow-redirects` 1.16.2、`node-forge` 1.4.1；现代 minimatch 9/10 消费者提升至 11.0.1，glob 13 消费者提升至 14.0.2；React Native 及 codegen 的两个同步 glob 消费者定向提升至 14.0.2，test-exclude 升级至 8.0.0。依据上游 [redirect 修复](https://github.com/advisories/GHSA-mrwp-f3q8-3g9p)、[minimatch 修复](https://github.com/advisories/GHSA-g3hv-75wg-m249)及 [glob 取消修复](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4)。
 
 React Native dev-middleware 的 `chromium-edge-launcher` 单独升级至 2.0.1，以移除旧 rimraf/glob/minimatch 3 的生产依赖链；未全局强制替换仍需要旧 API 的开发依赖。固定 Node 22.23.2 支持从 CommonJS 加载该 ESM 启动器；实际消费者加载回归由 Linux/Windows CI 验证，不启动浏览器。新增 `release-dependency-compatibility.test.mjs` 编入 `test:dependency-security`，覆盖真实消费者加载、原生 TypeScript spec 和 podspec 扫描、文件匹配/展开上限、取消后停止目录读取以及跨 realm 敏感头重定向清除；原有 NYC 测试验证 Babel instrumentation 排除规则，客户端 828 项覆盖率测试通过。没有新增审计例外；旧 braces/image-size 精确例外仍按原记录管理。
+
+### 官网首页同步（2026-11-14）
+
+官网首页接入纸色/深绿新版布局及本地迷你厨房示例，未引入手机客户端原型或网页客户端。
+首页代码包含随页面加载的静态模板与八道示例食谱、匹配/备料/队列交互，admin JavaScript 总产物为约 858 KB，较此前 850 KB 预算高约 8 KB。
+将 admin JS 总预算调整为 870,000 字节（+2.35%），总产物 1,800,000 字节和最大单文件 330,000 字节限制不变。
+新增示例不访问个人账户或写入业务数据；弱网实际耗时未测量，不据此宣称加载性能改善。
+首页样式与动画名称限定于首页；导航菜单、截图灯箱、队列反复操作、React StrictMode 重挂载及晚到备案响应由 `Landing.test.tsx` 覆盖。
+
+本轮 PR 的生产依赖审计发现 Forge 新公告，最小升级 override 与锁文件中的 `node-forge` 1.4.1 → 1.4.3，未新增审计忽略项。两个真实 Expo 消费者增加修补版本守卫和 Ed25519 正常/篡改消息兼容测试，并保留 RSA 证书与清单签名回归。相关上游修补发布：https://github.com/digitalbazaar/forge/releases/tag/v1.4.3 。
